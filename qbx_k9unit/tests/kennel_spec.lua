@@ -197,6 +197,19 @@ local function newKennelFixture(opts)
     local hasAccessBySource = {}
     local function HasK9Access(source) return hasAccessBySource[source] == true end
 
+    -- CLOSEABLE KENNEL (this pass) -- server/kennel.lua now registers ONE
+    -- lib.callback ('qbx_k9unit:server:getOwnKennelDoorState') at file-load
+    -- time, unconditionally -- same stub shape tests/admin_spec.lua's own
+    -- LibStub already established for the identical need.
+    local registeredCallbacks = {}
+    local LibStub = {
+        callback = {
+            register = function(name, handler)
+                registeredCallbacks[name] = handler
+            end,
+        },
+    }
+
     local playersBySource = {} -- source -> citizenid string, or nil = unresolved
     local exportsStub = {
         qbx_core = {
@@ -327,6 +340,7 @@ local function newKennelFixture(opts)
         DeleteEntity = DeleteEntity,
         print = printStub,
         Config = config,
+        lib = LibStub,
     }
     if opts.withHandlerXPTierKennelDeployCooldown then
         envOverrides.GetHandlerXPTierKennelDeployCooldownMs = function(citizenid, baseCooldownMs)
@@ -352,6 +366,7 @@ local function newKennelFixture(opts)
         handlerXPTierKennelCalls = handlerXPTierKennelCalls,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
+        callbacks = registeredCallbacks,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
         setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
@@ -467,7 +482,7 @@ end
 -- documents, before trusting any test below that depends on it.
 -- ----------------------------------------------------------------------
 
-t.test('server/kennel.lua registers exactly its 7 documented server net events', function()
+t.test('server/kennel.lua registers exactly its 9 documented server net events (7 original + requestCloseKennel/requestOpenKennel, the closeable-kennel extension)', function()
     local f = newKennelFixture()
     local names = {}
     local count = 0
@@ -475,7 +490,7 @@ t.test('server/kennel.lua registers exactly its 7 documented server net events',
         names[name] = true
         count = count + 1
     end
-    t.equals(count, 7)
+    t.equals(count, 9)
     t.isTrue(names['qbx_k9unit:server:requestDeployKennel'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:confirmKennelPlaced'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:cancelKennelPlacement'] ~= nil)
@@ -483,6 +498,16 @@ t.test('server/kennel.lua registers exactly its 7 documented server net events',
     t.isTrue(names['qbx_k9unit:server:requestPutDownKennel'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:requestEnterKennel'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:requestExitKennel'] ~= nil)
+    t.isTrue(names['qbx_k9unit:server:requestCloseKennel'] ~= nil)
+    t.isTrue(names['qbx_k9unit:server:requestOpenKennel'] ~= nil)
+end)
+
+t.test('server/kennel.lua registers exactly its 1 documented lib.callback (getOwnKennelDoorState, the closeable-kennel extension)', function()
+    local f = newKennelFixture()
+    local count = 0
+    for _ in pairs(f.callbacks) do count = count + 1 end
+    t.equals(count, 1)
+    t.isNotNil(f.callbacks['qbx_k9unit:server:getOwnKennelDoorState'])
 end)
 
 t.test('server/kennel.lua registers a playerDropped and an onResourceStop handler', function()
@@ -513,7 +538,7 @@ t.test('REGRESSION: Config.DeployableKennel.deployCooldownMs = 0 no longer abort
 
     local names, count = {}, 0
     for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
-    t.equals(count, 7, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.equals(count, 9, 'every net event this file documents must still register, not just the ones textually above the bad value')
     t.isNotNil(names['qbx_k9unit:server:requestPickupKennel'],
         'the pickup/cleanup path an operator needs to un-stick a stray kennel must remain reachable no matter what an operator puts in the config')
     t.isTrue(f.eventHandlerCount('playerDropped') >= 1)
@@ -534,7 +559,7 @@ t.test('REGRESSION: Config.DeployableKennel.deployCooldownMs = NaN also no longe
     local f = newKennelFixture({ deployCooldownMs = 0 / 0 })
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
-    t.equals(count, 7)
+    t.equals(count, 9)
 end)
 
 t.test('REGRESSION: with a valid Config.DeployableKennel.deployCooldownMs, DeployCooldown genuinely uses the CONFIGURED value, not silently always the fallback', function()
@@ -2062,6 +2087,225 @@ t.test('playerDropped: also frees the DeployCooldown slot for the disconnecting 
 end)
 
 -- ----------------------------------------------------------------------
+-- CLOSEABLE KENNEL -- owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+-- extension, this pass. See this file's own header "CLOSEABLE KENNEL"
+-- section for the full design writeup. THE FOUR THINGS THAT MATTER MORE
+-- THAN THE FEATURE (owner's own framing) are each pinned by their own
+-- dedicated test below, not folded quietly into a general-purpose test.
+-- ----------------------------------------------------------------------
+
+t.test('requestCloseKennel: the OWNER can close their own kennel', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.closed_success'))
+end)
+
+t.test('requestCloseKennel: a BYSTANDER with no relationship to this kennel (not owner, not occupant) is refused', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setPlayer(9, 'RANDOM09')
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 9, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.door_not_authorized'))
+end)
+
+t.test('requestCloseKennel: the CURRENT OCCUPANT (not the owner) can also close it -- WHO MAY CLOSE IT includes both, at minimum', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.closed_success'))
+end)
+
+t.test('requestCloseKennel: closing an already-closed kennel is refused as already_closed, not silently re-accepted', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.already_closed'))
+end)
+
+t.test('requestOpenKennel: symmetric to close -- owner or occupant only, refused for a bystander, refused if already open', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    f.setPlayer(9, 'RANDOM09')
+    f.dispatchNetEvent('qbx_k9unit:server:requestOpenKennel', 9, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.door_not_authorized'))
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestOpenKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.already_open'), 'a freshly-deployed kennel starts OPEN -- nothing changes for a server that never touches this feature')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestOpenKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.opened_success'))
+end)
+
+t.test('DEFAULT BEHAVIOR UNCHANGED: a freshly-deployed kennel is open, and requestEnterKennel behaves exactly as before this pass', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'nothing changes for a server that never touches the closeable-kennel feature')
+end)
+
+t.test('requestEnterKennel: a CLOSED kennel refuses a new occupant, checked alongside every pre-existing occupancy/carrier/proximity check', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_closed'))
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'no attach instruction may be sent for a closed kennel')
+end)
+
+t.test('requestEnterKennel: reopening a closed kennel restores ordinary entry -- the gate is on the START (entering), reversible, never permanent', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestOpenKennel', 1, netId)
+
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+end)
+
+-- All three CRITICAL SAFETY tests below prove "the exit genuinely cleared
+-- KennelOccupants" by having the (now former) occupant enter a SECOND,
+-- SEPARATE, OPEN kennel afterward -- deliberately NOT by re-entering the
+-- SAME kennel it just left, which (correctly, intentionally) would stay
+-- closed and refuse re-entry on its own, confounding "did the exit work"
+-- with "is this specific kennel still closed" (the exact trap the first
+-- draft of these tests fell into: re-entering the same still-closed
+-- kennel LOOKS like a failed exit either way, for two entirely different
+-- reasons). KennelOccupants is one registry per OCCUPANT citizenid,
+-- independent of which kennel they were in, so any open kennel proves it.
+
+t.test('CRITICAL SAFETY #1: requestExitKennel ALWAYS works for the occupant of a CLOSED kennel -- a closed kennel must never trap the player inside it', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    local netId2 = deploySuccessfully(f, 3, 'OWNER03', 5003, { x = 200, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+
+    -- Proven via a SECOND, OPEN kennel elsewhere -- see this section's own
+    -- header comment for why re-entering the SAME (still-closed) kennel is
+    -- not a valid proof here.
+    f.setPed(2, 5002, { x = 201.0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId2)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed')
+    t.isNotNil(instruction, 'the occupant genuinely left -- the registry has no stale occupant entry blocking entry elsewhere')
+    t.equals(instruction.args[1], netId2, 'must be a genuinely NEW confirmation naming the SECOND kennel -- a stale registry entry would silently refuse this and leave the FIRST kennel\'s old confirmation as the last event instead')
+end)
+
+t.test('CRITICAL SAFETY #2 (the realistic way somebody ends up stuck forever): the CLOSER disconnects while the occupant is still inside a CLOSED kennel -- the occupant still gets out', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    local netId2 = deploySuccessfully(f, 3, 'OWNER03', 5003, { x = 200, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId) -- OWNER closed it from outside
+
+    -- The owner (the closer) disconnects entirely.
+    f.firePlayerDropped(1, 'left the server')
+
+    -- The occupant, still inside a still-closed kennel with its closer now
+    -- gone, must still be able to leave -- requestExitKennel reads no
+    -- field of `Kennels` at all, so this requires no special-casing;
+    -- pinned here explicitly per this task's own "write the test for the
+    -- disconnect case specifically" instruction.
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+    f.setPed(2, 5002, { x = 201.0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId2)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed')
+    t.isNotNil(instruction, 'the occupant genuinely left even though the kennel is still closed and its closer is gone')
+    t.equals(instruction.args[1], netId2, 'must be a genuinely NEW confirmation naming the SECOND kennel')
+end)
+
+t.test('CRITICAL SAFETY #2b: the feature flag being toggled off entirely never traps a CLOSED kennel\'s occupant either', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    local netId2 = deploySuccessfully(f, 3, 'OWNER03', 5003, { x = 200, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+
+    f.config.Features.DeployableKennel = false
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+    -- Re-enable so the proof kennel's own entry gate (also feature-flagged)
+    -- can fire -- this test is about requestExitKennel's own unconditional
+    -- behavior specifically, not about entry working with the feature off.
+    f.config.Features.DeployableKennel = true
+    f.setPed(2, 5002, { x = 201.0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId2)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed')
+    t.isNotNil(instruction)
+    t.equals(instruction.args[1], netId2, 'must be a genuinely NEW confirmation naming the SECOND kennel')
+end)
+
+t.test('PICKUP UNCHANGED (owner\'s own explicit instruction #4): a CLOSED, OCCUPIED kennel still cannot be picked up from across the map -- closed never routes around the walk-up-to-it rule', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+
+    f.setPed(1, 5001, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_occupied_too_far'),
+        'closed must not create a second way to bypass the occupied-kennel proximity rule')
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+    t.isNil(f.deletedEntities[handle])
+end)
+
+t.test('PICKUP UNCHANGED: walking up to a CLOSED, OCCUPIED kennel still works exactly like an open one -- closed adds no new restriction to this path either', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+
+    f.setPed(1, 5001, { x = 1.0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'), 'owner standing right next to it may still pick up their own closed, occupied kennel')
+end)
+
+t.test('getOwnKennelDoorState: reports { ok = false } for a citizenid with no deployed kennel at all', function()
+    local f = newKennelFixture()
+    f.setPlayer(1, 'NOKENNEL01')
+    local result = f.callbacks['qbx_k9unit:server:getOwnKennelDoorState'](1)
+    t.isFalse(result.ok)
+end)
+
+t.test('getOwnKennelDoorState: reports the real, live closed/occupied state for the caller\'s own kennel -- DISPLAY/DECISION AID ONLY, never itself an authorization boundary', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    local result = f.callbacks['qbx_k9unit:server:getOwnKennelDoorState'](1)
+    t.isTrue(result.ok)
+    t.isFalse(result.closed)
+    t.isFalse(result.occupied)
+
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    result = f.callbacks['qbx_k9unit:server:getOwnKennelDoorState'](1)
+    t.isTrue(result.occupied)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestCloseKennel', 1, netId)
+    result = f.callbacks['qbx_k9unit:server:getOwnKennelDoorState'](1)
+    t.isTrue(result.closed)
+end)
+
+-- ----------------------------------------------------------------------
 -- Lifecycle: onResourceStop
 -- ----------------------------------------------------------------------
 
@@ -2195,6 +2439,17 @@ local function newCombinedFixture()
     local deletedEntities = {}
     local function DeleteEntity(handle) deletedEntities[handle] = true end
 
+    -- CLOSEABLE KENNEL (this pass) -- see newKennelFixture()'s own
+    -- identical stub comment above.
+    local registeredCallbacks = {}
+    local LibStub = {
+        callback = {
+            register = function(name, handler)
+                registeredCallbacks[name] = handler
+            end,
+        },
+    }
+
     -- fetch.lua's maintenance thread is never stepped in this section (no
     -- test here needs it) -- a genuine no-op CreateThread, never calling its
     -- argument, is simpler than wiring fetch_spec.lua's own coroutine-based
@@ -2256,6 +2511,7 @@ local function newCombinedFixture()
         DeleteEntity = DeleteEntity,
         CreateThread = CreateThread,
         Config = config,
+        lib = LibStub,
     })
 
     -- Same load order fxmanifest.lua's server_scripts list requires:
@@ -2271,6 +2527,7 @@ local function newCombinedFixture()
         config = config,
         clientEvents = clientEvents,
         notifyCalls = notifyCalls,
+        callbacks = registeredCallbacks,
         deletedEntities = deletedEntities,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,

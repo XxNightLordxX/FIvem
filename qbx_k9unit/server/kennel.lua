@@ -335,6 +335,86 @@
     PASS: only ever reached for a kennel RemoveKennelForCitizenid's own new
     structural guard has already confirmed has no occupant and no carrier —
     see that function's own doc comment.
+    ======================================================================
+
+    ======================================================================
+    CLOSEABLE KENNEL (owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+    extension, this pass). Owner's own words: "Allow the kennel to close" —
+    a real K9 transport kennel is a cage that can be shut, which this
+    feature previously had no concept of at all (confirmed by reading both
+    this file and client/kennel.lua before building anything — no door/
+    open/closed state, under any name, existed anywhere in this feature).
+
+    WHAT "CLOSED" MEANS, PRECISELY, AND WHAT IT DOES NOT MEAN: `closed` is
+    a plain boolean on `Kennels[ownerCitizenId]`, defaulting to `false`
+    (open) so a server that has never touched this feature sees zero
+    behavior change. It gates exactly ONE thing: whether a NEW occupant may
+    ENTER (requestEnterKennel below now refuses with `kennel.enter_closed`
+    while `closed == true`, checked alongside — never instead of — every
+    pre-existing occupancy/carrier/proximity check that function already
+    ran). It does NOT gate, and structurally cannot gate, leaving —
+    requestExitKennel (Step 7' below) is UNCHANGED, still reads no field of
+    `Kennels` at all, still purely a registry-bookkeeping clear keyed by the
+    OCCUPANT's own citizenid. THE OCCUPANT'S OWN WAY OUT (keybind, radial,
+    ox_target "Exit Kennel", the watchdog's own automatic backstops, and
+    this same requestExitKennel event) is IDENTICAL whether the kennel is
+    open or closed, by construction, because none of those paths ever
+    reads `closed` in the first place — there was no code to add a bypass
+    to. Closing a kennel is therefore never a real restraint on the
+    OCCUPANT's own agency; it is a restraint on who else may casually get
+    IN, and a roleplay/transport-flavor state for the kennel's OWNER —
+    exactly the framing the owner's own steer asked for ("a restraint
+    mechanic, not a convenience" applied to who may CLOSE it, not to
+    whether the occupant may leave).
+
+    WHO MAY OPEN/CLOSE: the kennel's OWNER (`ownerCitizenId`, resolved via
+    the same `FindKennelOwnerByNetId` this file already uses everywhere
+    else — never a client-claimed identity) OR the CURRENT OCCUPANT
+    (`FindKennelOccupantByNetId` naming the caller's own citizenid) — both
+    checked SERVER-SIDE, from the caller's own resolved citizenid, exactly
+    like every other authorization decision in this file. Nobody else may
+    toggle it — a bystander with no relationship to this specific kennel or
+    its current occupant gets `kennel.door_not_authorized`, the same
+    "credential-blind, no bypass" posture this file's other cross-citizenid
+    actions (a different handler's pickup, a different K9's entry) already
+    use. Deliberately identical authorization for BOTH directions
+    (open and close) — opening can never make anything LESS safe than
+    closing already was (it can only ever restore the pre-existing,
+    already-safe "anyone entitled to enter, may" state), so there is no
+    asymmetric risk to gate against by requiring a different, stricter set
+    of people to open than to close.
+
+    PICKUP IS UNCHANGED, DELIBERATELY (owner's own explicit "re-read that
+    check before you touch anything nearby" instruction, honored by NOT
+    touching requestPickupKennel or its `mustBeClose`/`hadOccupant` logic
+    at all): that function's own proximity gate already keys off
+    `FindKennelOccupantByNetId` (live occupancy), never off `closed` — a
+    closed-but-occupied kennel is picked up under EXACTLY the same
+    walk-up-to-it rule as an open-but-occupied one, because `closed` was
+    never part of that decision to begin with, before or after this pass.
+
+    CLIENT-SIDE VISIBILITY GAP, AND WHY THE BARE '/k9kennel' CONTEXTUAL
+    DISPATCH NEEDS A SERVER ROUND TRIP FOR THIS ONE BRANCH ONLY: unlike
+    "am I resting" / "am I carrying" (pure client-local booleans this whole
+    feature's contextual dispatch already reads directly), "is MY deployed
+    kennel currently occupied by someone else, and is it open or closed"
+    are facts ONLY this file's own server-side state knows — this file's
+    own NETWORK OWNERSHIP section above is exactly why: the client that
+    deployed a kennel is never told when some OTHER K9 later enters it.
+    `qbx_k9unit:server:getOwnKennelDoorState` (a `lib.callback`, read-only,
+    see below) exists SOLELY so client/kennel.lua's bare-dispatch path can
+    ask "what's actually true right now" before deciding whether to
+    enter/open/close, rather than guessing blind from stale or nonexistent
+    local state — the exact "never guess when state doesn't determine one
+    action" rule, resolved here by fetching the real state instead of
+    either guessing or refusing to build the feature contextually at all.
+    This callback is a DISPLAY/DECISION AID ONLY: every real action it
+    might lead the client to request (`requestEnterKennel`,
+    `requestCloseKennel`, `requestOpenKennel`) independently re-validates
+    everything from scratch server-side regardless of what this callback
+    most recently reported, exactly like every `canInteract` predicate in
+    this codebase.
+    ======================================================================
 ]]
 
 -- Kennels[citizenid] = { netId: number, ownerSrc: number, createdAt: number }
@@ -888,6 +968,13 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         netId = netId,
         ownerSrc = src,
         createdAt = GetGameTimer(),
+        -- CLOSEABLE KENNEL (COMMAND_CONSOLIDATION_SPEC.md #5 extension,
+        -- owner-directed) -- see this file's own "CLOSEABLE KENNEL" header
+        -- section for the full design. Defaults to false (open) so a
+        -- freshly-deployed kennel behaves exactly as it always has on a
+        -- server that has never touched this feature -- nothing changes
+        -- for an existing server until somebody actually closes one.
+        closed = false,
     }
     -- Records this claim in the shared cross-feature registry so
     -- server/fetch.lua's and server/propattachment.lua's own equivalent
@@ -1175,6 +1262,15 @@ RegisterNetEvent('qbx_k9unit:server:requestEnterKennel', function(netId)
         return
     end
 
+    -- CLOSEABLE KENNEL (this pass, see this file's own header section) --
+    -- checked alongside, never instead of, every pre-existing occupancy/
+    -- carrier/proximity check below. Does not touch requestExitKennel or
+    -- requestPickupKennel at all -- see that header section for why.
+    if kennel.closed then
+        NotifyPlayer(src, locale('kennel.enter_closed'), 'error')
+        return
+    end
+
     if FindCarrierByNetId(kennel.netId, nil) then
         NotifyPlayer(src, locale('kennel.enter_being_carried'), 'error')
         return
@@ -1220,6 +1316,136 @@ RegisterNetEvent('qbx_k9unit:server:requestExitKennel', function()
     if KennelOccupants[citizenid] and KennelOccupants[citizenid].enteredSrc == src then
         KennelOccupants[citizenid] = nil
     end
+end)
+
+-- ======================================================================
+-- CLOSEABLE KENNEL -- new events, this pass. See this file's own header
+-- "CLOSEABLE KENNEL" section for the full design writeup.
+-- ======================================================================
+
+--- Shared resolve-and-authorize step for BOTH requestCloseKennel and
+--- requestOpenKennel below -- identical authorization either direction
+--- (see this file's header for why opening is never stricter than
+--- closing). Never trusts a client-claimed identity: `ownerCitizenId` is
+--- resolved via `FindKennelOwnerByNetId` (the same lookup every other
+--- cross-citizenid action in this file already uses), and "is the caller
+--- the current occupant" via `FindKennelOccupantByNetId`, both keyed
+--- purely off the caller's OWN server-resolved citizenid.
+--- @param callerCitizenid string
+--- @param netId number
+--- @return table? kennel -- Kennels[ownerCitizenId], or nil if not found/not authorized
+--- @return string? errorReason -- 'invalid_kennel' | 'not_authorized' -- only set when kennel == nil
+local function ResolveAuthorizedKennelForDoorToggle(callerCitizenid, netId)
+    local ownerCitizenId = FindKennelOwnerByNetId(netId, nil)
+    if not ownerCitizenId then
+        return nil, 'invalid_kennel'
+    end
+
+    local kennel = Kennels[ownerCitizenId]
+    local entity = ResolveNetworkEntity(kennel.netId, 3)
+    if not entity or not KennelModelHashes[GetEntityModel(entity)] then
+        return nil, 'invalid_kennel'
+    end
+
+    local isOwner = ownerCitizenId == callerCitizenid
+    local isOccupant = FindKennelOccupantByNetId(kennel.netId, nil) == callerCitizenid
+    if not isOwner and not isOccupant then
+        return nil, 'not_authorized'
+    end
+
+    return kennel, nil
+end
+
+--- The kennel's owner OR its current occupant asks to shut the door --
+--- THIS PASS. See this file's own header "CLOSEABLE KENNEL" section for
+--- the full design writeup, including exactly what this does and does not
+--- gate (does not touch requestExitKennel/requestPickupKennel at all).
+--- @param netId number
+RegisterNetEvent('qbx_k9unit:server:requestCloseKennel', function(netId)
+    local src = source
+    if type(netId) ~= 'number' then return end
+
+    local player = exports.qbx_core:GetPlayer(src)
+    local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+    if not citizenid then return end
+
+    local kennel, errorReason = ResolveAuthorizedKennelForDoorToggle(citizenid, netId)
+    if not kennel then
+        NotifyPlayer(src, errorReason == 'not_authorized' and locale('kennel.door_not_authorized') or locale('kennel.invalid_kennel'), 'error')
+        return
+    end
+
+    if kennel.closed then
+        NotifyPlayer(src, locale('kennel.already_closed'), 'error')
+        return
+    end
+
+    kennel.closed = true
+    NotifyPlayer(src, locale('kennel.closed_success'), 'success')
+
+    -- Best-effort courtesy notify to the occupant, if there is one and the
+    -- caller isn't them (a caller closing their OWN kennel from outside
+    -- while someone else rides inside) -- purely informational, never a
+    -- gate: the occupant's own exit path reads none of this state.
+    local occupantCitizenid = FindKennelOccupantByNetId(kennel.netId, nil)
+    if occupantCitizenid and occupantCitizenid ~= citizenid then
+        local occupant = KennelOccupants[occupantCitizenid]
+        if occupant and occupant.enteredSrc then
+            NotifyPlayer(occupant.enteredSrc, locale('kennel.you_have_been_closed_in'), 'inform')
+        end
+    end
+end)
+
+--- The kennel's owner OR its current occupant asks to open the door --
+--- THIS PASS. Symmetric to requestCloseKennel above -- see this file's
+--- header "CLOSEABLE KENNEL" section for why authorization is identical
+--- both directions.
+--- @param netId number
+RegisterNetEvent('qbx_k9unit:server:requestOpenKennel', function(netId)
+    local src = source
+    if type(netId) ~= 'number' then return end
+
+    local player = exports.qbx_core:GetPlayer(src)
+    local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+    if not citizenid then return end
+
+    local kennel, errorReason = ResolveAuthorizedKennelForDoorToggle(citizenid, netId)
+    if not kennel then
+        NotifyPlayer(src, errorReason == 'not_authorized' and locale('kennel.door_not_authorized') or locale('kennel.invalid_kennel'), 'error')
+        return
+    end
+
+    if not kennel.closed then
+        NotifyPlayer(src, locale('kennel.already_open'), 'error')
+        return
+    end
+
+    kennel.closed = false
+    NotifyPlayer(src, locale('kennel.opened_success'), 'success')
+end)
+
+--- Read-only decision aid for client/kennel.lua's own bare '/k9kennel'
+--- contextual dispatch -- THIS PASS. See this file's own header
+--- "CLOSEABLE KENNEL" section, "CLIENT-SIDE VISIBILITY GAP" paragraph, for
+--- why this exists at all: occupancy/door-state are facts only this file's
+--- server-side state knows. DISPLAY/DECISION AID ONLY -- every real action
+--- this might lead a caller to request independently re-validates
+--- everything from scratch regardless of what this reports.
+--- @param source number
+--- @return { ok: boolean, closed: boolean?, occupied: boolean? }
+lib.callback.register('qbx_k9unit:server:getOwnKennelDoorState', function(source)
+    local player = exports.qbx_core:GetPlayer(source)
+    local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+    if not citizenid then return { ok = false } end
+
+    local kennel = Kennels[citizenid]
+    if not kennel then return { ok = false } end
+
+    return {
+        ok = true,
+        closed = kennel.closed == true,
+        occupied = FindKennelOccupantByNetId(kennel.netId, nil) ~= nil,
+    }
 end)
 
 -- Handler-disconnect cleanup (task requirement: kennels must not leak

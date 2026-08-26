@@ -157,6 +157,23 @@ local function newKennelFixture(opts)
     local notifyCalls = {}
     local lib = { notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end }
 
+    -- CLOSEABLE KENNEL (this pass) -- `getOwnKennelDoorState` callback
+    -- stand-in, same "queue of canned responses, defaulting to a sane
+    -- value" shape as tests/clienttraining_spec.lua's own callbackAwait.
+    -- Defaults to `{ ok = true, closed = false, occupied = false }` (an
+    -- open, empty kennel) so every PRE-EXISTING "ENTERS" test written
+    -- before this callback existed keeps exercising the enter path without
+    -- needing to opt in.
+    local callbackResponseQueue = {}
+    local callbackCallLog = {}
+    local function callbackAwait(eventName, _timeout, ...)
+        callbackCallLog[#callbackCallLog + 1] = { event = eventName, args = { ... } }
+        local queued = table.remove(callbackResponseQueue, 1)
+        if queued ~= nil then return queued end
+        return { ok = true, closed = false, occupied = false }
+    end
+    lib.callback = { await = callbackAwait }
+
     local serverEvents = {}
     local function TriggerServerEvent(eventName, ...)
         serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
@@ -419,6 +436,8 @@ local function newKennelFixture(opts)
         setHeading = function(handle, heading) headingByHandle[handle] = heading end,
         setCoordsCalls = setCoordsCalls,
         setHeadingCalls = setHeadingCalls,
+        callbackCallLog = callbackCallLog,
+        queueDoorStateResponse = function(v) callbackResponseQueue[#callbackResponseQueue + 1] = v end,
         collisionCalls = collisionCalls,
         detachCalls = detachCalls,
         attachCalls = attachCalls,
@@ -1444,7 +1463,12 @@ t.test('CONTEXTUAL DISPATCH: bare /k9kennel ENTERS this client\'s own deployed k
     local f = newKennelFixture()
     local k9kennel = findK9Kennel(f)
 
-    -- Deploys at (1,0,0) -- MY_PED starts at (0,0,0), 1.0m < interactDistanceMeters (2.5).
+    -- The fixture's own CreateObject stub does not track per-entity coords
+    -- (see its own header) -- the deployed kennel object therefore reads
+    -- back at the same default (0,0,0) GetEntityCoords falls back to for
+    -- any untracked handle, exactly where MY_PED itself starts. This is
+    -- "close enough" by construction; the deploy args below are the real
+    -- production call shape, not load-bearing for the distance itself.
     f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 0.0, 0.0)
     local kennelNetId = f.lastServerEvent().args[1]
 
@@ -1452,15 +1476,23 @@ t.test('CONTEXTUAL DISPATCH: bare /k9kennel ENTERS this client\'s own deployed k
 
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel')
     t.equals(f.lastServerEvent().args[1], kennelNetId)
-    t.equals(f.notifyCalls[#f.notifyCalls - 1].description, locale('kennel.contextual_entering'), 'the decision notify fires before the request, so it is second-to-last once requestEnterKennel also notifies nothing extra')
+    -- RequestEnterOwnKennel() itself notifies nothing extra on the success
+    -- path (the server's own confirmation is what tells the player they're
+    -- resting) -- the ONE notify this whole bare dispatch produces is the
+    -- "here's what I decided" confirmation.
+    t.equals(f.lastNotify().description, locale('kennel.contextual_entering'))
 end)
 
-t.test('CONTEXTUAL DISPATCH: bare /k9kennel refuses to enter (never guesses a second deploy) when this client\'s own kennel is deployed but too far away', function()
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel refuses to enter (never guesses a second deploy) when this client\'s own kennel is too far away', function()
     local f = newKennelFixture()
     local k9kennel = findK9Kennel(f)
 
-    -- Deploys far away (50m) -- well past interactDistanceMeters (2.5).
-    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 50.0, 0.0, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 0.0, 0.0)
+    -- Move THIS CLIENT far away instead (the deployed object's own tracked
+    -- coords always read back as the untracked-handle default -- see the
+    -- "ENTERS" test's own comment) -- this is what actually varies the
+    -- computed distance in this fixture.
+    f.setCoords(MY_PED, 100.0, 0.0, 0.0)
     local eventsBefore = #f.serverEvents
 
     k9kennel(nil, {})
@@ -1481,7 +1513,7 @@ t.test('CONTEXTUAL DISPATCH: bare /k9kennel PUTS DOWN when this client is curren
     k9kennel(nil, {})
 
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestPutDownKennel')
-    t.equals(f.notifyCalls[#f.notifyCalls - 1].description, locale('kennel.contextual_putting_down'))
+    t.equals(f.lastNotify().description, locale('kennel.contextual_putting_down'))
 end)
 
 t.test('CONTEXTUAL DISPATCH: bare /k9kennel EXITS when this client is currently resting -- highest priority, overrides everything else', function()
@@ -1506,10 +1538,9 @@ t.test('EXPLICIT OVERRIDE: /k9kennel deploy|enter|exit force that exact action',
     k9kennel(nil, { 'deploy' })
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDeployKennel')
 
-    local kennelNetId = f.lastServerEvent().args[1]
     -- fake a deploy confirm so myKennelNetId is set for the 'enter' override
     f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
-    kennelNetId = f.lastServerEvent().args[1]
+    local kennelNetId = f.lastServerEvent().args[1]
 
     k9kennel(nil, { 'enter' })
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel')
@@ -1520,6 +1551,106 @@ t.test('EXPLICIT OVERRIDE: /k9kennel deploy|enter|exit force that exact action',
     f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
     k9kennel(nil, { 'exit' })
     t.isFalse(f.env.IsRestingInKennel())
+end)
+
+-- ========================================================================
+-- CLOSEABLE KENNEL (owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+-- extension, this pass). See server/kennel.lua's own "CLOSEABLE KENNEL"
+-- header section for the full design writeup.
+-- ========================================================================
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel CLOSES the door when the server reports the kennel is open and occupied', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    f.queueDoorStateResponse({ ok = true, closed = false, occupied = true })
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestCloseKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+    t.equals(f.lastNotify().description, locale('kennel.contextual_closing'))
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel OPENS the door when the server reports the kennel is closed (regardless of occupancy)', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    f.queueDoorStateResponse({ ok = true, closed = true, occupied = false })
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestOpenKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+    t.equals(f.lastNotify().description, locale('kennel.contextual_opening'))
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel ENTERS when the server reports open and unoccupied (the ordinary case, unchanged)', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    f.queueDoorStateResponse({ ok = true, closed = false, occupied = false })
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel falls back to a plain ENTER attempt if the door-state callback is unavailable/throws -- never leaves the player with no response at all', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    f.queueDoorStateResponse(nil) -- simulate a rejected/timed-out lib.callback.await
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel', 'a missing/failed door-state answer must never leave the dispatcher doing nothing at all')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+end)
+
+t.test('EXPLICIT OVERRIDE: /k9kennel close|open force that exact action, reachable by the OWNER standing outside', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+
+    k9kennel(nil, { 'close' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestCloseKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+
+    k9kennel(nil, { 'open' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestOpenKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+end)
+
+t.test('EXPLICIT OVERRIDE: /k9kennel close|open are ALSO reachable by the OCCUPANT resting inside (not just the owner outside)', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    local netId = 950
+    f.registerForeignEntity(netId, 60, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
+
+    k9kennel(nil, { 'close' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestCloseKennel')
+    t.equals(f.lastServerEvent().args[1], netId, 'the occupant has no myKennelNetId of their own -- must resolve via restState instead')
+end)
+
+t.test('/k9kennel close|open with nothing deployed and nothing entered is a silent no-op -- nothing to act on', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    k9kennel(nil, { 'close' })
+    t.equals(#f.serverEvents, 0)
+
+    k9kennel(nil, { 'open' })
+    t.equals(#f.serverEvents, 0)
 end)
 
 t.test('GATE NEVER WIDENED BY THE MERGE: bare /k9kennel (deploy branch) still refuses without CanShowK9UI, identically to /k9deploykennel', function()

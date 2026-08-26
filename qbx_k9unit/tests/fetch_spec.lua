@@ -2180,6 +2180,19 @@ local function newCombinedFixture()
     -- section has no use for.
     local function CreateThread(_fn) end
 
+    -- CLOSEABLE KENNEL (server/kennel.lua, coder-backend's own
+    -- command-consolidation pass) -- that file now registers ONE
+    -- lib.callback ('qbx_k9unit:server:getOwnKennelDoorState') at file-load
+    -- time, unconditionally -- same stub shape tests/kennel_spec.lua's own
+    -- fixtures already carry for the identical need. Not exercised by any
+    -- test in THIS section (no test here drives that callback), but must
+    -- exist so server/kennel.lua loads without erroring at all.
+    local LibStub = {
+        callback = {
+            register = function() end,
+        },
+    }
+
     local env = Sandbox.newEnv({
         GetGameTimer = GetGameTimer,
         AddEventHandler = AddEventHandler,
@@ -2202,6 +2215,7 @@ local function newCombinedFixture()
         DeleteEntity = DeleteEntity,
         CreateThread = CreateThread,
         Config = config,
+        lib = LibStub,
     })
 
     -- Same load order fxmanifest.lua's server_scripts list requires:

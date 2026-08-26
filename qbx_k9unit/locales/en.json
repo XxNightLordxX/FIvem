@@ -860,6 +860,8 @@
         "k9_profile_stamina_permanent_label": "Never runs out (permanent)",
         "k9_profile_stamina_drain_rate_template": "{rate} per tick",
         "k9_profile_session_only_badge": "session only",
+        "k9_profile_person_section_heading": "K9 Individual Override",
+        "k9_profile_person_section_intro": "Hand-tune THIS K9's sprint speed, scent range, medkit cooldown, and stamina drain rate beyond what its rank already gives it. The same override also appears in the K9 Overrides tab.",
         "permission_key_retired_badge": "Retired",
         "tab_shop_items": "Shop Items",
         "shop_items_heading": "K9 Supply Shop Items",

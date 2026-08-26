@@ -834,6 +834,12 @@ globals = {
     -- luacheck has never been told about reads as a typo forever.
     "RequestEnterOwnKennel",
     "RequestKennelContextual",
+    -- RequestCloseKennelDoor / RequestOpenKennelDoor: the closeable-kennel
+    -- extension to the same merged "/k9kennel" -- owner or current
+    -- occupant only (server-authoritative), never gates leaving. See
+    -- server/kennel.lua's own "CLOSEABLE KENNEL" header section.
+    "RequestCloseKennelDoor",
+    "RequestOpenKennelDoor",
     -- IsRestingInKennel/IsCarryingKennel: client/kennel.lua's own K9-can-
     -- ride-along pass, same "engagement predicate" shape as
     -- IsPropAttachmentEngaged/IsInK9Vehicle above -- exposed for a future

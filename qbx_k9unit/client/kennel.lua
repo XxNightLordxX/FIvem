@@ -448,6 +448,98 @@ function RequestEnterOwnKennel()
 end
 
 -- ======================================================================
+-- CLOSEABLE KENNEL (owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+-- extension, this pass) -- see server/kennel.lua's own "CLOSEABLE KENNEL"
+-- header section for the full design writeup (what closed does and does
+-- NOT gate, who may toggle it, why pickup/exit are untouched). This file's
+-- own job is thin: resolve WHICH kennel this client means (its own
+-- deployed one if it has one, else the one it's currently resting in --
+-- covers both the owner-standing-outside and the occupant-riding-inside
+-- cases with the SAME two already-existing local variables, no new state),
+-- then ask the server. The server is the sole authority on WHETHER the
+-- caller is actually allowed to toggle it (owner or current occupant) --
+-- this file adds no client-side gate of its own beyond "is there a kennel
+-- to act on at all", exactly mirroring RequestRecallFetchBall()'s own
+-- "no access gate on the way out" posture for an action whose real
+-- authorization is fully server-side.
+-- ======================================================================
+
+--- @return number? netId
+local function ResolveKennelNetIdForDoorAction()
+    if myKennelNetId then return myKennelNetId end
+    if restState then return restState.kennelNetId end
+    return nil
+end
+
+--- Explicit-only entry point (no ambient state safely disambiguates this
+--- from ENTER for a bystander with nothing deployed and nothing entered --
+--- silently does nothing in that case, same "nothing to act on" posture as
+--- every other resolve-first helper in this file).
+function RequestCloseKennelDoor()
+    local netId = ResolveKennelNetIdForDoorAction()
+    if not netId then return end
+    TriggerServerEvent('qbx_k9unit:server:requestCloseKennel', netId)
+end
+
+--- Symmetric to RequestCloseKennelDoor() above.
+function RequestOpenKennelDoor()
+    local netId = ResolveKennelNetIdForDoorAction()
+    if not netId then return end
+    TriggerServerEvent('qbx_k9unit:server:requestOpenKennel', netId)
+end
+
+--- The bare '/k9kennel' contextual dispatch's OWN-DEPLOYED-KENNEL branch,
+--- extracted so RequestKennelContextual() below stays a flat, readable
+--- priority list. Unlike every OTHER branch in that dispatcher
+--- (rest/carry are pure client-local booleans), this one genuinely cannot
+--- be resolved from local state alone -- see server/kennel.lua's own
+--- "CLIENT-SIDE VISIBILITY GAP" header paragraph for why -- so this awaits
+--- a real server round trip (`getOwnKennelDoorState`) before deciding.
+--- DISPLAY/DECISION AID ONLY: whichever real action this leads to
+--- (requestEnterKennel/requestCloseKennel/requestOpenKennel) independently
+--- re-validates everything server-side regardless of what this callback
+--- most recently reported -- a stale answer can only ever cause a
+--- harmless refusal on the follow-up request, never a security issue.
+local function RequestOwnKennelDoorOrEnter()
+    local entity = ResolveNetworkEntity(myKennelNetId, 3)
+    if not entity then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.enter_too_far'), type = 'error' })
+        return
+    end
+
+    local myCoords = GetEntityCoords(PlayerPedId())
+    local kennelCoords = GetEntityCoords(entity)
+    if #(myCoords - kennelCoords) > Config.DeployableKennel.interactDistanceMeters then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.enter_too_far'), type = 'error' })
+        return
+    end
+
+    local result
+    local ok = pcall(function()
+        result = lib.callback.await('qbx_k9unit:server:getOwnKennelDoorState', false)
+    end)
+    if not ok or not result or not result.ok then
+        -- Callback unavailable/threw/reported no kennel after all (e.g. it
+        -- was just picked up or removed in the round-trip window) -- fall
+        -- back to the plain ENTER attempt, which re-validates everything
+        -- itself and fails cleanly if there is genuinely nothing to enter.
+        RequestEnterOwnKennel()
+        return
+    end
+
+    if result.closed then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_opening'), type = 'inform' })
+        RequestOpenKennelDoor()
+    elseif result.occupied then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_closing'), type = 'inform' })
+        RequestCloseKennelDoor()
+    else
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_entering'), type = 'inform' })
+        RequestEnterOwnKennel()
+    end
+end
+
+-- ======================================================================
 -- '/k9kennel' -- COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE (not a
 -- replacement -- see this file's header for why): k9deploykennel above and
 -- k9exitkennel (client/keybinds.lua) are UNCHANGED, keep their own literal
@@ -462,26 +554,35 @@ end
 --
 -- CONTEXTUAL DISPATCH: bare '/k9kennel' reads THIS CLIENT'S OWN real local
 -- state and picks the one action that state actually implies --
---   IsRestingInKennel()  -> EXIT (ExitKennelRest()) -- highest priority:
---                           nothing else makes sense while resting.
+--   IsRestingInKennel()  -> EXIT (ExitKennelRest()) -- highest priority,
+--                           unconditional, and UNCHANGED by the closeable-
+--                           kennel addition below: nothing else makes
+--                           sense while resting, and this branch reads no
+--                           door state at all.
 --   IsCarryingKennel()   -> PUT DOWN (RequestDeployKennel(), whose own
 --                           "put it back down" branch fires first).
---   myKennelNetId ~= nil -> ENTER own kennel if in range
---                           (RequestEnterOwnKennel()), otherwise a
---                           `kennel.enter_too_far` notice -- deploying a
+--   myKennelNetId ~= nil -> genuinely undecidable from local state alone
+--                           (is it occupied? open or closed?) -- awaits a
+--                           real server round trip
+--                           (RequestOwnKennelDoorOrEnter(), see its own doc
+--                           comment) rather than guessing, then resolves to
+--                           exactly one of ENTER / CLOSE / OPEN / a
+--                           `kennel.enter_too_far` notice. Deploying a
 --                           SECOND kennel is never attempted here, matching
 --                           RequestDeployKennel()'s own
 --                           `kennel.already_deployed` refusal.
 --   none of the above    -> DEPLOY (RequestDeployKennel()).
 -- Every branch calls a function that already re-runs its own real gate
--- (CanShowK9UI()/Config.Features.DeployableKennel/etc) -- this dispatcher
--- performs no authorization check of its own to skip, so the merge cannot
--- widen access.
+-- (CanShowK9UI()/Config.Features.DeployableKennel/server-side owner-or-
+-- occupant authorization/etc) -- this dispatcher performs no authorization
+-- check of its own to skip, so the merge cannot widen access.
 --
--- EXPLICIT OVERRIDE: '/k9kennel <deploy|enter|exit>' forces that action
--- directly, regardless of current state, identical to calling the
+-- EXPLICIT OVERRIDE: '/k9kennel <deploy|enter|exit|close|open>' forces that
+-- action directly, regardless of current state, identical to calling the
 -- matching resource-global directly (deploy/exit are exactly what
--- k9deploykennel/k9exitkennel already do).
+-- k9deploykennel/k9exitkennel already do; close/open are reachable by
+-- BOTH the owner outside and the occupant inside -- see
+-- ResolveKennelNetIdForDoorAction()'s own doc comment).
 --
 -- REGISTERED UNCONDITIONALLY (NOT inside the REGISTRATION-TIME FEATURE
 -- GATE below) -- same reasoning as k9exitkennel's own unconditional
@@ -513,8 +614,12 @@ function RequestKennelContextual()
         lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_putting_down'), type = 'inform' })
         RequestDeployKennel()
     elseif myKennelNetId then
-        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_entering'), type = 'inform' })
-        RequestEnterOwnKennel()
+        -- Genuinely undecidable from local state alone (occupied? closed?)
+        -- -- see RequestOwnKennelDoorOrEnter()'s own doc comment for why
+        -- this ONE branch awaits a server round trip instead of guessing.
+        -- That function itself fires the "here's what I decided" notify,
+        -- once it actually knows the real answer.
+        RequestOwnKennelDoorOrEnter()
     else
         lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_deploying'), type = 'inform' })
         RequestDeployKennel()
@@ -525,6 +630,12 @@ local KENNEL_EXPLICIT_ACTIONS = {
     deploy = function() RequestDeployKennel() end,
     enter = function() RequestEnterOwnKennel() end,
     exit = function() ExitKennelRest() end,
+    -- CLOSEABLE KENNEL (this pass) -- explicit words, reachable by BOTH the
+    -- owner standing outside (myKennelNetId) and the occupant resting
+    -- inside (restState) -- see ResolveKennelNetIdForDoorAction()'s own
+    -- doc comment above.
+    close = function() RequestCloseKennelDoor() end,
+    open = function() RequestOpenKennelDoor() end,
 }
 
 RegisterCommand('k9kennel', function(_source, args)
