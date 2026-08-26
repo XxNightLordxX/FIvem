@@ -306,8 +306,16 @@ set +e
 "$CLI_BIN" "${CONN[@]}" --table -e \
     "SELECT TABLE_NAME AS \`qbx_k9unit table\`, TABLE_ROWS AS approx_rows
      FROM INFORMATION_SCHEMA.TABLES
-     WHERE TABLE_SCHEMA = '$DB' AND TABLE_NAME LIKE 'k9\\_%'
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'k9\\_%'
      ORDER BY TABLE_NAME;" "$DB"
+     # NOTE (sql injection review pass): "$DB" is passed as the trailing
+     # argument above, which is how the mysql/mariadb client actually
+     # picks which database to use -- so the query itself asks for
+     # DATABASE() (the database that connection is already on) instead of
+     # rebuilding the database name a second time as literal text inside
+     # the SQL string. A database name typed with a quote or backslash in
+     # it could otherwise break out of the WHERE clause; this way there is
+     # no name to break out of in the first place.
 REPORT_RC=$?
 set -e
 if [ $REPORT_RC -ne 0 ]; then

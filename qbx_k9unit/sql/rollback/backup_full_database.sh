@@ -177,8 +177,17 @@ if ! "$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e "SELECT 1" "$DB" >/d
 fi
 
 # --- how many real (base) tables does this database actually have? ------
+# NOTE (sql injection review pass): "$DB" is passed as the query's own
+# trailing argument below, the same way every mysqldump/mysql call in this
+# script already does -- that is what actually tells the client which
+# database to use. The query itself then asks for DATABASE() (the database
+# that connection is already on) instead of splicing the database name a
+# second time into the middle of the SQL text as a quoted literal. A
+# database name containing a quote or backslash could otherwise break out
+# of that literal; asking for DATABASE() instead removes the literal
+# entirely, so there is nothing for an odd name to break out of.
 TABLE_COUNT=$("$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e \
-    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$DB' AND TABLE_TYPE='BASE TABLE';" 2>/dev/null || echo 0)
+    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE';" "$DB" 2>/dev/null || echo 0)
 
 if [ "$TABLE_COUNT" = "0" ]; then
     echo "ERROR: database '$DB' has no tables at all. There is nothing to back up." >&2
@@ -195,8 +204,9 @@ fi
 # directory's filesystem does not even have room for the raw data size
 # with no margin at all; warn (but proceed) if it has less than 1.5x that.
 if [ "$SKIP_SPACE_CHECK" -eq 0 ]; then
+    # Same DATABASE()-instead-of-a-quoted-literal fix as TABLE_COUNT above.
     DB_SIZE_KB=$("$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e \
-        "SELECT IFNULL(ROUND(SUM(data_length+index_length)/1024),0) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$DB';" 2>/dev/null || echo 0)
+        "SELECT IFNULL(ROUND(SUM(data_length+index_length)/1024),0) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE();" "$DB" 2>/dev/null || echo 0)
     mkdir -p "$OUTDIR"
     FREE_KB=$(df -Pk "$OUTDIR" 2>/dev/null | awk 'NR==2 {print $4}' || echo "")
     if [ -n "$DB_SIZE_KB" ] && [ -n "$FREE_KB" ] && [ "$DB_SIZE_KB" -gt 0 ]; then
@@ -218,9 +228,10 @@ if [ "$SKIP_SPACE_CHECK" -eq 0 ]; then
 fi
 
 # --- inform about any non-InnoDB tables (single-transaction caveat) -----
+# Same DATABASE()-instead-of-a-quoted-literal fix as TABLE_COUNT/DB_SIZE_KB above.
 NON_INNODB=$("$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e \
     "SELECT GROUP_CONCAT(CONCAT(TABLE_NAME,' (',ENGINE,')') SEPARATOR ', ') FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA='$DB' AND TABLE_TYPE='BASE TABLE' AND ENGINE IS NOT NULL AND ENGINE <> 'InnoDB';" 2>/dev/null || echo "")
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_TYPE='BASE TABLE' AND ENGINE IS NOT NULL AND ENGINE <> 'InnoDB';" "$DB" 2>/dev/null || echo "")
 if [ -n "$NON_INNODB" ] && [ "$NON_INNODB" != "NULL" ]; then
     echo "NOTE: these tables are NOT InnoDB, so --single-transaction cannot" >&2
     echo "      guarantee a perfectly consistent snapshot of them if something" >&2

@@ -367,12 +367,8 @@ end
 --- Finds the nearest vehicle within Config.VehicleInteractMeters whose
 --- model is in Config.K9Vehicles, finds it the best free non-driver seat
 --- (rear preferred — see FindBestK9Seat()), opens that seat's door, and
---- seats the K9 into it for real (per DEVELOPER_REFERENCE.md §6.1 vehicle
---- bullet's intent — "enter the vehicle" — superseding that section's
---- literal Phase-1 "hidden/frozen" wording, which this file's own header
---- explains is now stale -- DEVELOPER_REFERENCE.md §6.1's own text still
---- says "hidden/frozen" and should be updated to match, not left silently
---- contradicting shipped behavior).
+--- seats the K9 into it for real, matching DEVELOPER_REFERENCE.md §6.1's
+--- vehicle bullet, which describes this real-seating behavior directly.
 function EnterNearestK9Vehicle()
     if not Config.Features.VehicleEntryExit then return end
 

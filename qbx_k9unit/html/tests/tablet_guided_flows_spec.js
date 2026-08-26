@@ -105,6 +105,13 @@ function makePersonRecord(overrides) {
         features: [
             { key: 'K9Leaderboard', label: 'Leaderboard', category: null, globallyEnabled: true, requiresGrant: true, granted: false, blocked: false, state: 'requires_grant_missing' },
         ],
+        // Onboarding flow's own K9 Role step (this pass) -- the SAME field
+        // server/tablet.lua's tabletRequestPersonSummary now sends
+        // (assignedK9Model), null until a real tablet:assignK9Role
+        // persists one. Read back by tablet:requestPersonSummary below,
+        // never by the mutation handler's own response -- exactly the
+        // property the honesty test further down exists to prove.
+        assignedK9Model: null,
     }, overrides || {});
 }
 
@@ -112,7 +119,7 @@ function baseHandlers(rec, viewer, overrides) {
     return Object.assign({
         'tablet:requestMyRecord': () => ({ ok: true, viewer: viewer, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
         'tablet:requestRoster': () => ({ ok: true, rows: [{ citizenid: rec.target.citizenid, name: rec.target.name, departmentLabel: 'Police', certified: rec.certifications.some((c) => c.active), xp: rec.xp, tierLabel: rec.tierLabel }], truncated: false }),
-        'tablet:requestPersonSummary': () => ({ ok: true, target: rec.target, certifications: rec.certifications, xp: rec.xp, tierLabel: rec.tierLabel, permissions: rec.permissions }),
+        'tablet:requestPersonSummary': () => ({ ok: true, target: rec.target, certifications: rec.certifications, xp: rec.xp, tierLabel: rec.tierLabel, permissions: rec.permissions, assignedK9Model: rec.assignedK9Model }),
         'tablet:requestPersonFeatures': () => ({ ok: true, target: rec.target, features: rec.features }),
         'tablet:certTiersList': () => ({ ok: true, tiers: [{ key: 'trainee', label: 'Trainee', ordinal: 1, capabilities: {} }, { key: 'senior', label: 'Senior', ordinal: 2, capabilities: {} }], capabilityCatalog: {} }),
         'tablet:permKeysList': () => ({ ok: true, keys: [] }),
@@ -155,6 +162,12 @@ function baseHandlers(rec, viewer, overrides) {
             return { ok: true };
         },
         'tablet:revertK9Ped': () => ({ ok: true }),
+        // Realistic default -- a real tabletAssignK9Role persists the
+        // model it was asked to apply. The honesty test below OVERRIDES
+        // this per-call (via `overrides`) to prove the Onboarding flow's
+        // own Summary reads the SEPARATE tablet:requestPersonSummary
+        // re-fetch afterward, never this response.
+        'tablet:assignK9Role': (body) => { rec.assignedK9Model = body.modelName; return { ok: true }; },
     }, overrides || {});
 }
 
@@ -205,7 +218,10 @@ t.test('a high-command viewer sees the Guided Flows tab, the Home shortcut, and 
 
 t.test('Onboarding flow: select once, then certify / set tier / grant a feature, each step carrying the SAME person forward, ending in an honest, positive summary', async () => {
     const rec = makePersonRecord();
-    const h = await openTablet(baseHandlers(rec, HIGH_COMMAND_VIEWER));
+    // peds configured (this pass) so the K9 Role step's own Assign control
+    // is genuinely present and genuinely SKIPPED below -- a real, present
+    // action turned down, not a step with nothing to do at all.
+    const h = await openTablet(baseHandlers(rec, HIGH_COMMAND_VIEWER), { peds: [{ model: 'a_c_shepherd', label: 'German Shepherd' }] });
 
     findByText(h.getRoot(), 'Guided Flows')[0].click();
     await settle();
@@ -230,10 +246,19 @@ t.test('Onboarding flow: select once, then certify / set tier / grant a feature,
     t.isTrue(rec.certifications[0].active, 'the SAME tablet:certify callback the standalone Person screen uses actually ran');
     t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:certify') && c.body.targetCitizenId === 'TARGET1' && c.body.departmentKey === 'police'));
 
-    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 2
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 2 (K9 Role)
     await settle();
 
-    // Step 2: Tier & Specializations -- context (citizenid AND the
+    // Step 2: K9 Role -- this recruit is being set up as a HANDLER, the
+    // common case, so this optional step is skipped without being touched
+    // (per this pass's own "most people onboarded are handlers, not K9s"
+    // requirement) -- proving skipping it does not block the rest of the
+    // flow. A dedicated test below covers the step actually being USED.
+    t.isTrue(findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf('TARGET1') !== -1).length >= 1, 'context still carried on the K9 Role step');
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 3 (Tier & Specializations)
+    await settle();
+
+    // Step 3: Tier & Specializations -- context (citizenid AND the
     // department just certified) is still carried, no re-selection needed.
     t.isTrue(findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf('TARGET1') !== -1).length >= 1, 'context still carried on the Tier step');
     const tierSelect = findAll(h.getRoot(), (n) => n.tagName === 'select' && n.classList.contains('k9tablet-cert-tier-select'))[0];
@@ -243,9 +268,9 @@ t.test('Onboarding flow: select once, then certify / set tier / grant a feature,
     await settle(6);
     t.equals(rec.certifications[0].tier, 'senior', 'the SAME tablet:setCertificationTier callback ran, for the SAME department chosen in the previous step');
 
-    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 3
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 4 (Feature Access)
 
-    // Step 3: Feature Access -- the one RequireGrant feature this server
+    // Step 4: Feature Access -- the one RequireGrant feature this server
     // has is offered here.
     await settle();
     t.equals(findByText(h.getRoot(), 'Leaderboard').length, 1);
@@ -253,11 +278,12 @@ t.test('Onboarding flow: select once, then certify / set tier / grant a feature,
     await settle(6);
     t.isTrue(rec.features[0].granted, 'the SAME tablet:grantFeature callback the standalone Person screen uses actually ran');
 
-    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 4 (Summary)
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // advance to step 5 (Summary)
     await settle();
 
     // 2/4. CONFIRM THE OUTCOME, NOT JUST THE ACTION.
     t.equals(findByText(h.getRoot(), 'Certified in Police.').length, 1);
+    t.equals(findByText(h.getRoot(), 'K9 role step skipped -- no change to this person\'s model.').length, 1, 'the skipped K9 Role step is reported honestly, never silently omitted nor treated as a failure');
     t.equals(findByText(h.getRoot(), 'Tier: Senior.').length, 1);
     t.equals(findByText(h.getRoot(), '1 feature(s) granted this pass.').length, 1);
     t.equals(findByText(h.getRoot(), '1 grant-required feature(s) still not granted.').length, 0, 'nothing left missing -- the one grant-required feature on this server was actually granted');
@@ -294,11 +320,12 @@ t.test('Onboarding flow: a refused Certify is shown as a real failure, and the f
     // Jump straight to the Summary step via the step nav (every step is
     // directly reachable, per this pass's own "reversible" requirement) --
     // never having set a tier or granted anything.
-    findByText(h.getRoot(), '5. Summary')[0].click();
+    findByText(h.getRoot(), '6. Summary')[0].click();
     await settle();
 
-    t.equals(findByText(h.getRoot(), 'Not certified in any department this pass -- nothing else in this flow took effect.').length, 1, 'the summary honestly reflects the real, unchanged state -- never a false "done"');
+    t.equals(findByText(h.getRoot(), 'Not certified in any department this pass.').length, 1, 'the summary honestly reflects the real, unchanged state -- never a false "done"');
     t.equals(findByText(h.getRoot(), 'Certified in Police.').length, 0);
+    t.equals(findByText(h.getRoot(), 'K9 role step skipped -- no change to this person\'s model.').length, 1, 'the K9 Role step is reported independently of the refused Certify -- never swallowed by the department guard above it');
 });
 
 // ======================================================================
@@ -319,6 +346,12 @@ t.test('Onboarding flow: skipping every step (no action taken at all) still reac
     // Skip Certify without clicking it.
     findByText(h.getRoot(), 'Skip this step')[0].click();
     await settle();
+    // Skip the K9 Role step too, without touching it -- this person has
+    // no peds configured for this test's own openData (defaults to none),
+    // so this step correctly has nothing to do either, and reads "Next".
+    t.equals(findByText(h.getRoot(), 'Next').length, 1, 'no ped models configured for this test -- the K9 Role step correctly offers nothing to do, so its own nav reads "Next"');
+    findByText(h.getRoot(), 'Next')[0].click();
+    await settle();
     // Tier & Specializations step: nothing was certified, so this step
     // correctly offers nothing to do, and its own Next button reads
     // "Next", never "Skip this step" (hasAction reflects reality here).
@@ -331,7 +364,8 @@ t.test('Onboarding flow: skipping every step (no action taken at all) still reac
     findByText(h.getRoot(), 'Skip this step')[0].click();
     await settle();
 
-    t.equals(findByText(h.getRoot(), 'Not certified in any department this pass -- nothing else in this flow took effect.').length, 1, 'GAP SURFACED: nothing was done, and the summary says so honestly rather than a blank/misleading screen');
+    t.equals(findByText(h.getRoot(), 'Not certified in any department this pass.').length, 1, 'GAP SURFACED: nothing was done, and the summary says so honestly rather than a blank/misleading screen');
+    t.equals(findByText(h.getRoot(), 'K9 role step skipped -- no change to this person\'s model.').length, 1, 'the K9 Role step\'s own gap is surfaced too, never silently folded into the certification gap above it');
 });
 
 // ======================================================================

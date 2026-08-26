@@ -26,22 +26,37 @@
     entirely, matching client/featureblocks.lua's own established rule for
     this exact class of check ("check at the point it acts, never merely at
     registration") — see each section's own "ALWAYS STARTS/REGISTERS"
-    comment for the specific gap this closes. The one exception, left as a
-    disclosed, bounded staleness rather than a correctness bug: the
-    on-demand "just became K9-modeled" snapshot-fetch thread below still
-    only starts if this client's OWN static config had at least one flag
-    true at boot — a client that shipped fully wellbeing-disabled misses
-    that one optimization and instead waits for the server's own periodic
-    tick push (bounded to `Config.Wellbeing.tickIntervalMs`). NOTE: that
-    periodic tick has the identical one-time boot-flag gate server-side
-    (server/wellbeing.lua's own CreateThread guard near the bottom of that
-    file) — an attempt to make it always start and idle was tried and
-    reverted there (see that file's own "DISCLOSED, NOT FIXED HERE"
-    comment), so a deployment where BOTH the server and this client booted
-    with every wellbeing flag false can in fact go unbounded time, not
-    merely one tick interval, before either side notices a later runtime
-    toggle-ON. This file's "bounded" framing above only holds once at least
-    one flag was already true at boot on the server.
+    comment for the specific gap this closes. The one remaining exception,
+    left as a disclosed, genuinely bounded staleness rather than a
+    correctness bug: the on-demand "just became K9-modeled" snapshot-fetch
+    thread below still only starts if this client's OWN static config had
+    at least one flag true at boot — a client that shipped fully
+    wellbeing-disabled misses that one optimization and instead waits for
+    the server's own periodic tick push (bounded to
+    `Config.Wellbeing.tickIntervalMs`).
+
+    RESOLVED (server-side fix landed this pass, coder-backend — see
+    server/wellbeing.lua's own header and its CreateThread call's resolution
+    comment for the full writeup): that periodic tick used to carry the
+    IDENTICAL one-time boot-flag gate server-side, and this paragraph used
+    to say so, naming an earlier reverted attempt to fix it and warning that
+    a deployment where BOTH the server and this client booted with every
+    wellbeing flag false could go genuinely unbounded, not merely one tick
+    interval, before either side noticed a later runtime toggle-ON. That is
+    no longer true. server/wellbeing.lua's shared tick thread now ALWAYS
+    starts at that file's own load time, re-checking all five
+    Config.Features flags fresh inside the loop before ever calling
+    TickWellbeing — a server booted with every flag off and later flipped
+    live from the tablet is picked up by that already-running thread within
+    one `Config.Wellbeing.tickIntervalMs`, never "until this resource
+    restarts." The one gap left is the narrower one stated in the paragraph
+    above (this client's own on-demand-fetch optimization, not the server's
+    periodic push), and it is genuinely bounded on its own: even a client
+    that shipped fully wellbeing-disabled still receives the server's own
+    periodic push once the server-side flag is live, within one
+    `tickIntervalMs`. This file's "bounded" framing above now holds
+    unconditionally — it no longer depends on a flag having already been
+    true at boot on the server.
 
     NOTHING BELOW IS A SECURITY BOUNDARY. Every mutating action
     (pet/feed/calm-down/distraction-item-use) is re-validated server-side in

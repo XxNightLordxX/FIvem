@@ -566,26 +566,90 @@ t.test('No TickWellbeing activity when every one of the five wellbeing feature f
     t.equals(#f.clientEvents, 0)
 end)
 
-t.test("DISCREPANCY: DistractionCooldown's own sweep thread starts unconditionally at file load, even when every one of the five wellbeing feature flags is false -- this file's own header claims 'no thread at all' in that case", function()
-    -- server/wellbeing.lua's header states: "This file starts NO thread at
-    -- all if all five flags are false (see the CreateThread guard near the
-    -- bottom)." That guard is real for the shared TickWellbeing loop, but
-    -- `DistractionCooldown.StartSweep(...)` (unconditional, right after the
-    -- tracker's own declaration) calls CreateThread unconditionally at file
-    -- load regardless of Config.Features.DistractionSystem or any other
-    -- flag. Not a correctness bug (an idle sweep over an always-empty table
-    -- costs nothing observable to a player), but a real, pinnable gap
-    -- between the header's claim and the actual runtime behavior -- same
-    -- "disclosed, regression-guarded" treatment tenure_spec.lua's own
-    -- TenureFullyCollected DISCREPANCY test already established for this
-    -- suite, not a reason to edit server/wellbeing.lua.
+t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at file load, even when every one of the five wellbeing feature flags is false -- exactly two threads always exist now, and idling over an all-off Config.Features costs nothing observable", function()
+    -- INVERTED ON PURPOSE (this pass, coder-backend). This test used to be
+    -- titled "DISCREPANCY: ..." and asserted exactly ONE CreateThread call
+    -- with every flag off, pinning server/wellbeing.lua's OWN then-true
+    -- header claim ("this file starts NO thread at all if all five flags
+    -- are false") as a real, deliberately-tested invariant -- but that
+    -- invariant was also a real, confirmed live-toggle-ON bug: a server
+    -- booting with all five wellbeing flags off and later flipping ONE on
+    -- live from the tablet (every one of them is `tier = 'live'` in
+    -- server/runtimecontrol.lua's own FEATURE_TIERS) had nothing polling to
+    -- ever start ticking that stat or pushing a single wellbeingUpdate,
+    -- until this resource restarted -- an already-connected client's stat
+    -- snapshot going stale with NO upper bound, not merely one tick
+    -- interval. That gap is fixed now (see server/wellbeing.lua's
+    -- CreateThread call and its own resolution comment for the full
+    -- writeup, and the LIVE-FLIP FIX test immediately below for the real
+    -- regression coverage) -- the tick thread starts unconditionally and
+    -- re-checks all five flags fresh every tick. A test that kept asserting
+    -- "exactly one CreateThread call with everything off" would now be
+    -- asserting the BUG's own premise, not this file's real behavior --
+    -- inverted here on purpose, mirroring tests/combat_spec.lua's own
+    -- corrected "with every combat feature flag off..." test and
+    -- tests/runtimefeaturetiers_spec.lua's "RESOLVED PARTIAL LIVENESS" test
+    -- for the identical shape. Re-reverting this back to asserting ONE
+    -- thread would need server/wellbeing.lua's own fix undone first, and
+    -- would reopen the exact unbounded-staleness gap the LIVE-FLIP FIX test
+    -- below exists to prove closed.
     local f = newWellbeingFixture() -- all features false
-    t.equals(f.createThreadCallCount(), 1, "exactly one CreateThread call happens at file-load time even with every feature off -- DistractionCooldown's own sweep, not the gated TickWellbeing loop")
+    t.equals(f.createThreadCallCount(), 2, "two CreateThread calls happen at file-load time even with every feature off -- DistractionCooldown's own always-on sweep, AND the now-unconditional TickWellbeing loop")
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, "the now-unconditional tick thread must idle cleanly with every flag off, no error")
+    t.equals(#f.clientEvents, 0, "no wellbeingUpdate is ever pushed while every flag is off, even though the thread is now genuinely running")
 end)
 
-t.test('With any one wellbeing feature on, exactly two threads are created: the gated TickWellbeing loop, plus the always-on DistractionCooldown sweep', function()
+t.test('With any one wellbeing feature on, exactly two threads are created: the (now-unconditional) TickWellbeing loop, plus the always-on DistractionCooldown sweep', function()
     local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
     t.equals(f.createThreadCallCount(), 2)
+end)
+
+-- ========================================================================
+-- CONFIRMED LIVE-FLIP BUG, FIXED (this pass, coder-backend): the shared
+-- TickWellbeing thread -- the ONLY place any wellbeing stat is ever
+-- ticked/decayed/regenerated or pushed to a client -- used to only ever
+-- start if one of FatigueSystem/MoodSystem/FearStressSystem/
+-- DistractionSystem/InjuryLimping was ALREADY true at this file's own load
+-- time. server/runtimecontrol.lua's FEATURE_TIERS registers all five as
+-- `tier = 'live'` (ApplyFeatureOverride mutates Config.Features.*
+-- immediately, no restart), so an operator could boot with all five off,
+-- flip ONE on live from the tablet, and get a fully live petK9/feedK9/
+-- applyK9Distraction/calmDownK9/relayDamageEvent/relayWeaponFire (each
+-- re-checks its own flag fresh) writing real WellbeingStats mutations, with
+-- the one thread that would ever tick/push any of it never having started
+-- -- an already-connected client's stat snapshot stuck stale forever, not
+-- merely one tick interval. This is the exact property this section proves
+-- now holds: a flag flipped on live is picked up by the already-running
+-- thread within one tick, regardless of what the flags were when this file
+-- loaded.
+-- ========================================================================
+
+t.test('LIVE-FLIP FIX: flipping MoodSystem on LIVE (booted with every wellbeing flag off) is picked up by the already-running tick thread within one tick -- no restart of this resource required', function()
+    local f = newWellbeingFixture() -- all features false at boot
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.runOneTick() -- primes, then executes pass 1 -- every flag off at boot
+    t.equals(#f.clientEvents, 0, 'still nothing while every flag is off at boot')
+
+    -- High command flips MoodSystem on LIVE, mid-session -- exactly the
+    -- scenario server/runtimecontrol.lua's own FEATURE_TIERS entry for this
+    -- flag documents (`tier = 'live'`, `restartRequired = false`).
+    f.config.Features.MoodSystem = true
+
+    -- THE ACTUAL BUG, pre-fix: the tick thread never started (it was never
+    -- true that any of the five flags were on when this file loaded in this
+    -- fixture), so nothing would ever have picked this up, for the rest of
+    -- this server's uptime. Prove the opposite now holds -- the SAME thread
+    -- that has been idling over an all-off Config.Features since load time
+    -- reads the flag fresh on its very next tick.
+    f.runOneTick()
+    t.equals(#f.clientEvents, 1, 'a live flag flip must be picked up by the already-running thread on its next tick -- no restart required')
 end)
 
 -- ========================================================================

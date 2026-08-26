@@ -415,20 +415,49 @@ end
 RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     local src = source
 
-    if not Config.Features.PropAttachments then return end -- silent no-op, matches every other feature-flag gate in this resource
-
     local citizenid = ResolveCitizenId(src)
     if not citizenid then return end
 
     -- Already active -> this request means "take it off." No round trip
     -- needed to remove something, unlike placing it. UNCONDITIONAL -- see
     -- IsPropAttachmentsPermittedForCitizenId's own doc comment above for why
-    -- this branch is never gated on a block.
+    -- this branch is never gated on a block -- AND, same reasoning, never
+    -- gated on the global Config.Features.PropAttachments flag either. Gate
+    -- the START of a thing, never the STOP -- this resource's own
+    -- established rule, stated in so many words by every comparable
+    -- mechanic's own comments: server/fetch.lua's releaseFetchBall/
+    -- reportFetchCarrierDown ("expiry enforcement must never be delayed or
+    -- conditioned on anything"), server/kennel.lua's requestExitKennel/
+    -- requestPutDownKennel ("NEVER gated on Config.Features.DeployableKennel
+    -- or any cooldown"), server/main.lua's detachLeash,
+    -- server/training.lua's setTrainingMode(false) ("OFF IS
+    -- UNCONDITIONAL"), server/sarcalls.lua's abandonSarCall,
+    -- server/scentlineup.lua's k9lineupcancel, server/scenttrail.lua's
+    -- stopScentHunt, and server/combat.lua's releaseBiteHold/
+    -- releaseTakedown/releaseDrag.
+    -- BUG FIX: the Config.Features.PropAttachments check used to run FIRST,
+    -- before this branch was ever reached, at the very top of this handler.
+    -- Sequence that produced a permanent stuck cosmetic: server boots with
+    -- the flag on -> a handler attaches the vest -> an operator flips the
+    -- flag off live (server/runtimecontrol.lua's runtimeSetFeature writes
+    -- Config.Features in place) -> that same handler fires this exact event
+    -- again to take it off -> the flag check returned before ever reaching
+    -- this branch -> silent no-op, no notify, the object never deleted,
+    -- for as long as the flag stayed off -- only death, disconnect, or a
+    -- resource restart cleared it, none of which is an acceptable way to
+    -- take off a cosmetic prop. The flag legitimately gates STARTING a new
+    -- attachment (see the ADD path below); it must never gate STOPPING an
+    -- existing one, so the check moved below this branch entirely.
     if PropAttachmentState[citizenid] then
         RemovePropAttachmentForCitizenid(citizenid)
         NotifyPlayer(src, locale('propattachment.removed_success'), 'success')
         return
     end
+
+    -- Everything from here down is the ADD path only. The global feature
+    -- flag legitimately gates STARTING a new attachment -- see the REMOVE
+    -- branch's own comment above for why it must never gate stopping one.
+    if not Config.Features.PropAttachments then return end -- silent no-op, matches every other feature-flag gate in this resource
 
     -- Eligibility is re-checked BEFORE consuming the cooldown below —
     -- mirrors server/kennel.lua's requestDeployKennel ordering exactly

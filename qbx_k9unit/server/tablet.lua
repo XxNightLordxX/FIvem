@@ -2,8 +2,8 @@
     qbx_k9unit/server/tablet.lua
 
     Config.Features.CommandTablet. THE SERVER AGGREGATION LAYER for the K9
-    Command Tablet -- html/tablet.js (coder-ui) and client/tablet.lua
-    (coder-frontend) are both complete and shipped; this file is what
+    Command Tablet -- html/tablet.js and client/tablet.lua
+    are both complete and shipped; this file is what
     unblocks them by implementing the server side of their already-agreed
     NUI contract (see html/tablet.js's own header for the byte-exact
     payload shapes this file must match).
@@ -16,8 +16,8 @@
       qbx_k9unit:server:tabletRequestRoster
       qbx_k9unit:server:tabletRequestPersonSummary
       qbx_k9unit:server:tabletRequestPersonFeatures
-      qbx_k9unit:server:tabletRequestMyPartnerships -- ADDED this pass
-        (Partners tab, coder-ui, owner-directed "both the k9 and handler
+      qbx_k9unit:server:tabletRequestMyPartnerships -- the Partners tab
+        (owner-directed "both the k9 and handler
         should be able to pull up a list of their partners and levels").
         Joins K9Store.Partner_GetHistoryByK9/ByHandler (server/partnership.lua's
         own DB-authoritative history accessors, already used by
@@ -32,8 +32,8 @@
     GrantPermission/RevokePermission, rather than here):
       qbx_k9unit:server:tabletCertify  -- server/certifications.lua,
         GrantCertificationForTablet (see that function's own doc comment
-        for the full "offline-grant asymmetry" writeup -- the headline
-        finding of this pass).
+        for the full "offline-grant asymmetry" writeup -- summarized
+        below).
       qbx_k9unit:server:tabletGiveXp   -- server/highcommand.lua,
         GrantHighCommandXp / IsAuthorizedForXpGrant (factored out of
         '/k9givexp's own command handler so neither file duplicates the
@@ -50,7 +50,7 @@
     ======================================================================
 
     ======================================================================
-    THE OFFLINE-GRANT ASYMMETRY (headline finding this pass) -- see
+    THE OFFLINE-GRANT ASYMMETRY -- see
     server/certifications.lua's GrantCertificationForTablet for the full
     writeup; summarized here since it shaped this file's own design too.
     RevokeCertificationOffline already lets an officer revoke a
@@ -113,7 +113,7 @@
     'feature.<key>' grant, same as anyone else. If that reading is wrong,
     it is a one-line change to ResolveFeatureState below, not a redesign.
 
-    RESOLVED, PREVIOUSLY A REAL GAP (coder-security, follow-up pass):
+    RESOLVED, PREVIOUSLY A REAL GAP:
     server/permissions.lua's IsValidPermissionKey originally only accepted
     an EXACT key already present in Config.Permissions (the four admin
     capabilities), with no case for the 'feature.<Name>'/'block.<Name>'
@@ -128,14 +128,14 @@
     ListPermissionRoster already do -- so 'blocked'/'requires_grant_missing'
     now reflect REAL, storable grant/block rows end to end, not merely "never
     blocked, never granted by construction" as before this fix landed. See
-    the ROUND TRIP test in tests/tabletserver_spec.lua (added this pass, at
-    coder-security's own request) for proof of the full path: a grant made
+    the ROUND TRIP test in tests/tabletserver_spec.lua
+    for proof of the full path: a grant made
     through tabletGrantPermission is visible in this file's own
     ResolveFeatureState output afterward.
     ======================================================================
 
     ======================================================================
-    ROSTER QUERY -- PERFORMANCE. A real EXPLAIN pass this session (against
+    ROSTER QUERY -- PERFORMANCE. A real EXPLAIN pass (against
     live MySQL 5.7 and 8.0 containers, seeded with 12,000 k9_certifications
     rows across 3 departments) confirmed:
       SELECT citizenid, granted_by FROM k9_certifications
@@ -145,9 +145,9 @@
     with `ORDER BY granted_at DESC` added -- server/admin.lua's own existing
     dept-roster query shape -- adds `Using filesort` on the exact same seed,
     which is almost certainly the concrete instance of the "existing admin
-    query filesorting 8,572 rows to return 50" finding flagged for this
-    session; NOT fixed here (server/admin.lua has no owner flagged for this
-    task and this file does not touch it), but independently reconfirmed
+    query filesorting 8,572 rows to return 50" finding;
+    NOT fixed here (server/admin.lua is out of scope for
+    this file and this file does not touch it), but independently reconfirmed
     and deliberately NOT repeated below: this file's own per-department
     fetch has NO ORDER BY at all -- any deterministic ordering the roster
     wants is applied AFTER fetch, in Lua, over the already-bounded result.
@@ -168,8 +168,7 @@
     ======================================================================
 
     ======================================================================
-    NAME RESOLUTION -- DISCLOSED GAP, ORIGINALLY reported in full this pass,
-    NOW ANSWERED (2026-08-25, native-api-assistant): an ONLINE citizenid's
+    NAME RESOLUTION -- DISCLOSED GAP, NOW ANSWERED: an ONLINE citizenid's
     display name resolves via qbx_core's own PlayerData.charinfo
     (firstname/lastname), falling back to the GetPlayerName native (a
     real, VERIFIED server-callable native -- ext/native-decls/GetPlayerName.md
@@ -185,7 +184,7 @@
     the one and only offline accessor, already keyed by citizenid (no
     separate ByCitizenId variant needed).
 
-    WIRED (2026-08-26, issue-closer sweep): ResolveDisplayName below now
+    WIRED: ResolveDisplayName below now
     calls `exports.qbx_core:GetOfflinePlayer(citizenid)` for an offline
     target, behind a `pcall` (the export call itself, not just its result)
     so a qbx_core build without it -- or a citizenid it does not
@@ -198,20 +197,20 @@
 
     ======================================================================
     myFeatures / features KEY LIST -- DYNAMIC, NOT HARDCODED (owner's own
-    mid-pass instruction, verbatim: "Do not hardcode a feature list in the
+    instruction, verbatim: "Do not hardcode a feature list in the
     tablet UI... render the roster from whatever Config.FeatureControl.RequireGrant
     and Config.Features actually contain at runtime, so a feature added
-    after you finish appears without a UI change"). Five new feature files
+    after you finish appears without a UI change"). Feature files
     (findalert/scenttrail/sarcalls/scentlineup/pursuitsprint) plus training
-    mode/equipment shop/a leaderboard are landing in parallel this same
-    session, each adding its own Config.Features entry and, where relevant,
-    its own Config.FeatureControl.RequireGrant entry -- a list this file
-    captured once at load/write time would already be stale by the time
-    this pass finishes. ListMyFeaturesKeys below therefore iterates
+    mode/equipment shop/a leaderboard can each add
+    their own Config.Features entry and, where relevant,
+    its own Config.FeatureControl.RequireGrant entry at any time -- a list this file
+    captured once at load/write time would already be stale the moment a
+    new one lands. ListMyFeaturesKeys below therefore iterates
     `pairs(Config.Features)` FRESH on every call (Config is a shared table
     this file never copies), sorted for a stable, deterministic output
-    order -- no per-file registry, no coordination needed with whichever
-    agent adds the next feature. `requiresGrant` is read the same way, from
+    order -- no per-file registry, no coordination needed when a new
+    feature is added. `requiresGrant` is read the same way, from
     `Config.FeatureControl.RequireGrant[key]` at resolution time. This
     necessarily includes every OTHER Config.Features flag too (HighCommand,
     CommandTablet, RuntimeFeatureControl, ...), not just K9-ability ones --
@@ -219,7 +218,7 @@
     instruction; each row's `state` is still computed correctly and
     honestly for whatever the key actually is (an administrative flag with
     no RequireGrant entry simply always resolves 'global_off'/'available',
-    which is accurate, just not necessarily a row coder-ui chooses to
+    which is accurate, just not necessarily a row the UI chooses to
     surface with a trigger button -- that display-level filtering, if
     wanted, is a UI-scope decision, not a correctness concern for this
     file's own resolution logic).
@@ -265,10 +264,10 @@
         OWN auto-revert-on-credential-loss call sites, wrong for a direct,
         forceful "make them human right now" tablet button). Calls a NEW
         primitive, ForceRevertK9Appearance(granterSrc, targetCitizenid),
-        requested from server/appearance.lua's own owner this pass rather
+        added to server/appearance.lua rather
         than hand-rolled here -- "coordinate with it, do not build a second
-        revert path" was the owner's own explicit instruction. STATUS
-        UPDATE (hardening pass, confirmed by direct read of
+        revert path" was the owner's own explicit instruction. CONFIRMED
+        (direct read of
         server/appearance.lua): ForceRevertK9Appearance HAS NOW LANDED --
         it re-verifies IsHighCommand(granterSrc) itself (never trusting
         this wrapper), consumes its own AppearanceActionCooldown (shared
@@ -291,10 +290,10 @@
     for authorization) is already model-independent by construction --
     grepped this file end to end to confirm NOTHING here reads
     GetEntityModel/IsConfiguredK9Model/an entity's ped model at all. The
-    live bug named for this pass (client/movement.lua:822's certify
+    live bug (client/movement.lua:822's certify
     predicate demanding a K9 model client-side while the server-side
-    GrantCertification does not) lives entirely in a file this pass does
-    not own and is NOT reproduced here: tabletCertify (server/certifications.lua)
+    GrantCertification does not) lives entirely in a different
+    file and is NOT reproduced here: tabletCertify (server/certifications.lua)
     and tabletAssignK9Role/tabletRevertK9Ped below all gate purely on
     CALLER authorization (IsHighCommand / IsEligibleCertifier) and
     TARGET identity (citizenid, online-resolution where needed) -- never on
@@ -319,9 +318,9 @@
       ListPermissionRoster already establish for an identical need.
     ======================================================================
 
-    LOCALE KEYS THIS FILE NEEDS (requested this pass, NOT invented inline).
-    `tablet.roster_truncated_notice` has LANDED (locales/en.json, worded by
-    the locale owner as "Showing the first %d entries -- narrow your search
+    LOCALE KEYS THIS FILE NEEDS -- real keys, NOT invented inline.
+    `tablet.roster_truncated_notice` has LANDED (locales/en.json, worded
+    as "Showing the first %d entries -- narrow your search
     to see the rest.") and is wired into tabletRequestRoster's
     `truncatedMessage` below. Still outstanding, used only as an OPTIONAL
     `message` alongside an `error` code the tablet can already render
@@ -435,7 +434,7 @@ end
 --- ResolveTargetHasK9Access below (an online target's access is read from
 --- the real, live HasK9Access(source) instead -- this is strictly a
 --- substitute for when no live source exists). Migrated onto
---- K9Store.Cert_GetActiveIdAnyJob this pass (identical SQL/index, now behind
+--- K9Store.Cert_GetActiveIdAnyJob (identical SQL/index, now behind
 --- the DatabaseEnabled() switch -- Config.Database.enabled = false answers
 --- this from K9Store's own in-memory certification rows instead of a live
 --- MySQL connection).
@@ -456,7 +455,7 @@ end
 --- direct, DB-authoritative read is correct here regardless of
 --- IsValidPermissionKey's own now-fixed namespace acceptance (see this
 --- file's header "RESOLVED, PREVIOUSLY A REAL GAP"). Migrated onto
---- K9Store.Perm_GetActiveForCitizen this pass (identical SQL, same row
+--- K9Store.Perm_GetActiveForCitizen (identical SQL, same row
 --- shape `{ permission = ... }`) -- now works correctly under
 --- Config.Database.enabled = false too.
 --- @param citizenid string
@@ -493,12 +492,12 @@ end
 --- as a citizenid-prefix scan (no LIMIT needed: bounded by the number of
 --- configured departments, a small fixed set -- at most one active row per
 --- department per this schema's own uq_one_active_cert_per_job invariant).
---- Migrated onto K9Store.Cert_GetActiveJobsForCitizen this pass (identical
+--- Migrated onto K9Store.Cert_GetActiveJobsForCitizen (identical
 --- SQL/index, now behind the DatabaseEnabled() switch) -- see that
 --- accessor's own doc comment in server/datastore.lua for why it needed to
 --- be added rather than reused from an existing one.
 ---
---- CERTIFICATION DEPTH READ-SIDE (this pass) -- tier/expiry/specializations
+--- CERTIFICATION DEPTH READ-SIDE -- tier/expiry/specializations
 --- were entirely absent from this array until now: a handler's tier and
 --- specializations did not display anywhere on the tablet, not even
 --- read-only, for the handler themselves or for high command looking them
@@ -596,7 +595,7 @@ end
 
 --- Best-effort display name -- see this file's header "NAME RESOLUTION"
 --- for the full, disclosed gap this documents rather than guesses around.
---- As of this pass, the OFFLINE branch below now consults qbx_core's own
+--- The OFFLINE branch below now consults qbx_core's own
 --- `GetOfflinePlayer` export per that header's "NOT YET WIRED" note --
 --- soft-guarded with `pcall`, exactly like every other cross-resource call
 --- in this file, so a qbx_core version without that export (or a citizenid
@@ -629,8 +628,8 @@ local function ResolveDisplayName(citizenid)
     return citizenid
 end
 
---- THE REAL EXISTENCE CHECK (this pass, coder-backend, at coder-ui's own
---- request -- see html/tablet.js's "GHOST-CITIZENID GUARD" doc comment on
+--- THE REAL EXISTENCE CHECK (see html/tablet.js's "GHOST-CITIZENID GUARD"
+--- doc comment on
 --- personSummaryLooksLikeNoRecord for the exact gap this closes): does a
 --- REAL qbx_core player row exist for `citizenid` at all, online or
 --- offline? tabletRequestPersonSummary previously returned `ok = true` for
@@ -667,13 +666,13 @@ end
 --- `grantedBy` field is a raw citizenid, and html/tablet.js already renders
 --- it directly as plain text (that file's own resolveCertRow-style renderer,
 --- class `k9tablet-cert-granter`) -- the exact "identifier where a human
---- name belongs" bug this pass exists to close. Adds ONE additive sibling
+--- name belongs" bug this closes. Adds ONE additive sibling
 --- field, `grantedByName`, to each row BuildCertificationsArray already
 --- returned, via the SAME ResolveDisplayName this file already uses for
 --- `viewer.name`/`target.name`/roster rows -- `grantedBy` itself is left
 --- completely unchanged (still the citizenid, still the only thing any
---- lookup/grant/revoke keys off; see this task's own "keep the identifier,
---- a name is never an identity" rule).
+--- lookup/grant/revoke keys off -- keep the identifier,
+--- a name is never an identity).
 ---
 --- WHY A SEPARATE POST-PROCESSING PASS, NOT FOLDED INTO
 --- BuildCertificationsArray's OWN BODY: that function is defined EARLIER in
@@ -683,7 +682,7 @@ end
 --- direct call to ResolveDisplayName from inside BuildCertificationsArray
 --- would resolve to a nil GLOBAL at runtime (there is no forward-declared
 --- local of that name), throwing the moment any active-department row was
---- built. Kept here instead, called from BOTH of this pass's own call sites
+--- built. Kept here instead, called from BOTH call sites
 --- (tabletRequestMyRecord/tabletRequestPersonSummary below), rather than
 --- reordering ~55 lines of BuildCertificationsArray's own body/doc comment
 --- purely to move it below ResolveDisplayName.
@@ -744,12 +743,12 @@ local function MeetsDepartmentRank(source, gradeField)
 end
 
 -- ======================================================================
--- PERMISSION-KEY CATALOG AWARENESS (this pass -- cross-layer contract audit
+-- PERMISSION-KEY CATALOG AWARENESS (cross-layer contract audit
 -- finding: "a custom permission key can be created and granted, and never
 -- shows as held"). server/permissionkeycatalog.lua lets high command create
 -- a permission key entirely at runtime; server/permissions.lua's own
 -- IsValidPermissionKey/HasPermission are already catalog-aware, so granting
--- one genuinely works. Until this pass, BOTH aggregation sites below this
+-- one genuinely works. Previously, BOTH aggregation sites below this
 -- section (ResolveEffectivePermissions, and tabletRequestPersonSummary's
 -- own inline `permissions` builder further down this file) instead iterated
 -- `pairs(Config.Permissions)` -- the static, four-key, config-only table --
@@ -783,7 +782,7 @@ end
 --- their OWN "Certify"/"Give XP" buttons at all (CAPABILITY_ORDER /
 --- canCertify/canGiveXp) -- hiding a real ability the tablet's own
 --- documented contract says it has, the exact opposite-direction "tablet
---- reports something that is not true" bug this pass exists to close.
+--- reports something that is not true" bug this closes.
 --- Only a CUSTOM key (anything outside this table) has no such independent
 --- route, so only a custom key's candidacy is allowed to depend on the
 --- catalog/held-state below.
@@ -831,7 +830,7 @@ local LEGACY_PERMISSION_KEYS = { ['k9.access'] = true, ['k9.certify'] = true, ['
 --- KEY STRINGS are considered, never which citizenid's activePermSet is
 --- read -- both call sites below still re-verify their own authorization
 --- gate (IsHighCommand / CallerHasConsoleAccess) BEFORE ever calling this,
---- exactly as before this pass.
+--- exactly as before.
 --- @param activePermSet table<string, boolean>
 --- @return table<string, boolean>
 local function AdminCapabilityCandidateKeys(activePermSet)
@@ -933,7 +932,7 @@ end
 local function CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller)
     if isHighCommandCaller then return true end
 
-    -- OWNER'S DECISION, 2026-08-25: NARROWED to high command, or an explicit
+    -- OWNER'S DECISION: NARROWED to high command, or an explicit
     -- 'k9.audit' grant. This used to admit any caller with ANY non-empty
     -- effective permission, and 'k9.access' resolves true for every ordinary
     -- certified handler -- so a base-rank officer could look up any citizen
@@ -1055,7 +1054,7 @@ local CLIENT_ENFORCED_FEATURES = {
 ---   specifically so nobody reading only this table mistakes Recall for
 ---   an ordinary unimplemented case.
 ---
----   K9EQUIPMENTSHOP -- REMOVED FROM THIS TABLE, this pass. A PRIOR
+---   K9EQUIPMENTSHOP -- REMOVED FROM THIS TABLE. A PRIOR
 ---   version of this comment (and of server/equipmentshop.lua's own
 ---   header) concluded K9EquipmentShop was structurally exempt, reasoning
 ---   that the buy/sell transaction never reaches this resource's own
@@ -1076,7 +1075,7 @@ local CLIENT_ENFORCED_FEATURES = {
 ---   RESOURCEAUTODETECT / HIGHCOMMAND / PERMISSIONGRANTS / COMMANDTABLET /
 ---   CERTIFICATIONEXPIRY / RUNTIMEFEATURECONTROL / TABLETTHEMING -- these
 ---   are administrative/infrastructure switches, not a K9 ability any
----   single citizenid "does" -- grepped end to end this pass for
+---   single citizenid "does" -- grepped end to end for
 ---   `block.<Name>` (literal and dynamic) across every server/*.lua file:
 ---   zero matches for any of these seven keys, in sharp contrast to
 ---   ordinary abilities like BasicBarkSounds/LeashMechanics/etc. (which
@@ -1120,14 +1119,14 @@ local NOT_ENFORCEABLE_FEATURES = {
 --- FEATURE CONTROL" convention (HasPermission(citizenid, 'block.' .. key)
 --- checked, static or via a shared `featureName`/`featureKey` parameter,
 --- before the ability's own effect runs) -- confirmed, not assumed, for
---- every key currently in Config.Features (see this pass's own report for
---- the full per-key evidence list: server/main.lua, server/search.lua,
+--- every key currently in Config.Features (full per-key evidence list:
+--- server/main.lua, server/search.lua,
 --- server/tracking.lua, server/wellbeing.lua, server/combat.lua and
 --- eighteen further single-feature files each their own `block.<Name>`
 --- check). A FUTURE feature added to Config.Features without being placed
 --- in either table above will default to 'enforced' here -- whoever adds
---- it is expected to add it to one of the two tables above in the SAME
---- pass it lands its own `block.<Name>` check (or its own reason not to),
+--- it is expected to add it to one of the two tables above AT THE SAME
+--- TIME it lands its own `block.<Name>` check (or its own reason not to),
 --- mirroring this file's existing Config.CommandTablet.ActionableFeatures
 --- convention for exactly this "a small, explicit, code-owner-maintained
 --- registry, never silently stale" reason.
@@ -1162,11 +1161,11 @@ end
 --- features KEY LIST -- DYNAMIC, NOT HARDCODED": reads the OPTIONAL,
 --- REQUESTED `Config.CommandTablet.ActionableFeatures` allowlist (same
 --- shape/spirit as the already-established Config.FeatureControl.RequireGrant
---- -- a small, explicit, config-owned table any agent adding a new
---- triggerable feature extends alongside its own client/tablet.lua wiring,
+--- -- a small, explicit, config-owned table extended alongside its own
+--- client/tablet.lua wiring whenever a new triggerable feature is added,
 --- never a list this file would need editing to keep in sync). Defaults to
---- `false` when that table does not exist yet (requested, not yet landed
---- as of this pass) -- the safe default is "no trigger shown" (a missing
+--- `false` when that table does not exist yet (requested, not yet landed)
+--- -- the safe default is "no trigger shown" (a missing
 --- button), never a phantom one that would click and do nothing.
 --- @param key string
 --- @return boolean
@@ -1348,7 +1347,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
     local xp, tierLabel = ResolveXpAndTierLabel(citizenid)
     local hasK9Access = type(HasK9Access) == 'function' and HasK9Access(source) == true
 
-    -- SERVER-TRUSTWORTHY ROLE SIGNAL (this pass, coder-ui, owner-directed
+    -- SERVER-TRUSTWORTHY ROLE SIGNAL (owner-directed
     -- "a handler and the k9 are both separate and if not fix it" /
     -- "if the server does not currently tell the page which role the
     -- viewer is in a trustworthy way, that is the first thing to fix").
@@ -1394,8 +1393,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         xp = xp,
         tierLabel = tierLabel,
         myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet),
-        -- `partnership` (this pass, at the Partnership-tab agent's own
-        -- request) -- CLOSES A REAL GAP: tabletRequestPersonSummary (the
+        -- `partnership` -- CLOSES A REAL GAP: tabletRequestPersonSummary (the
         -- high-command-only lookup path, CALLBACK 3) has called
         -- ResolvePartnershipInfo(targetCitizenId) since that callback
         -- shipped, but this record -- the one every ordinary handler/K9
@@ -1456,7 +1454,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
     -- server-produced integer LIMIT (never a client-influenced one). NO
     -- ORDER BY -- see this file's header for the filesort this
     -- deliberately avoids repeating. Migrated onto
-    -- K9Store.Cert_GetActiveRosterByJobUnordered this pass -- a NEW
+    -- K9Store.Cert_GetActiveRosterByJobUnordered -- a NEW
     -- accessor added specifically for this call site: the existing
     -- K9Store.Cert_GetActiveRosterByJob (server/datastore.lua) mirrors
     -- server/admin.lua's ORDERED shape (`ORDER BY granted_at DESC`), and
@@ -1560,7 +1558,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
     local activePermSet = QueryActivePermissionSet(targetCitizenId)
     local xp, tierLabel = ResolveXpAndTierLabel(targetCitizenId)
 
-    -- CATALOG-AWARE (this pass -- see "PERMISSION-KEY CATALOG AWARENESS"
+    -- CATALOG-AWARE (see "PERMISSION-KEY CATALOG AWARENESS"
     -- section above ResolveEffectivePermissions for the full writeup this
     -- mirrors): candidate keys now come from AdminCapabilityCandidateKeys
     -- (the four shipped keys, always, UNION the live catalog's current
@@ -1571,7 +1569,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
     -- itself is unchanged in one respect that matters: it still only ever
     -- reports a key TARGET holds an ACTUAL, active k9_permissions row for
     -- (`activePermSet[key] == true`) -- never a rank-qualification guess --
-    -- exactly like before this pass, for every key, shipped or custom.
+    -- exactly like before, for every key, shipped or custom.
     local permissions = {}
     for key in pairs(AdminCapabilityCandidateKeys(activePermSet)) do
         if activePermSet[key] == true then permissions[#permissions + 1] = key end
@@ -1580,7 +1578,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
 
     return {
         ok = true,
-        -- `exists` (this pass, at coder-ui's own request -- see
+        -- `exists` (see
         -- ResolvePlayerExists's own doc comment above for the full
         -- writeup): a REAL existence check, true only when qbx_core
         -- actually found a player row (online or offline) for this
@@ -1594,13 +1592,35 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
         xp = xp,
         tierLabel = tierLabel,
         permissions = permissions,
-        -- Owner-directed "one screen shows everything about a person" pass
+        -- Owner-directed "one screen shows everything about a person" feature
         -- (roster panel: cert+tier, rank, XP+tier, partnership, permissions).
         -- Both READ-ONLY, both nil-safe (never a guessed value) -- see
         -- ResolveJobGradeInfo/ResolvePartnershipInfo's own doc comments
         -- just above CALLBACK 1 for exactly what each does and does not do.
         job = ResolveJobGradeInfo(targetCitizenId),
         partnership = ResolvePartnershipInfo(targetCitizenId),
+        -- `assignedK9Model` (for the Onboarding flow's
+        -- new K9 Role step -- see html/tablet.js's own
+        -- buildFlowOnboardK9RoleSummaryLine() doc comment): the ONE
+        -- server-derived, model-independent-BY-NAME-ONLY signal of
+        -- whether THIS TARGET (not the caller -- HasK9Role/isK9RoleForTarget
+        -- both need a live `source` and so cannot answer for an offline
+        -- target the way this whole callback already must, see
+        -- ResolveJobGradeInfo/ResolvePartnershipInfo just above) currently
+        -- holds an active k9_ped_assignments row. server/appearance.lua's
+        -- GetAssignedK9Model was already written and exposed globally for
+        -- exactly this "future consumer" (its own doc comment says so
+        -- verbatim) and reads the SAME DB row online or offline, matching
+        -- every other field in this response. A guided-flow summary must
+        -- never re-derive "did the K9 role actually get applied" from a
+        -- mutation's own claimed `ok:true` (THE HONESTY REQUIREMENT this
+        -- whole PersonSummaryResult contract exists to satisfy) -- this
+        -- field is what that re-derivation reads. string|nil; nil both
+        -- when nothing is assigned AND when server/appearance.lua is
+        -- absent (this file's standard `type(fn) == 'function'`
+        -- soft-dependency convention -- degrades to "not shown", never an
+        -- error).
+        assignedK9Model = (type(GetAssignedK9Model) == 'function') and GetAssignedK9Model(targetCitizenId) or nil,
     }
 end)
 
@@ -1673,14 +1693,14 @@ lib.callback.register('qbx_k9unit:server:tabletAssignK9Role', function(source, t
 end)
 
 -- ======================================================================
--- CALLBACK 6 (owner's mid-pass expansion) -- tabletRevertK9Ped. See this
+-- CALLBACK 6 (an owner-directed expansion) -- tabletRevertK9Ped. See this
 -- file's header "K9 ROLE ASSIGN / DE-ASSIGN / REVERT-TO-HUMAN" for the
 -- full "no unbounded trap" writeup: this is a TERMINATION path and must
 -- NEVER be gated on the target still holding K9 access/certification --
 -- the only gate here is the CALLER's own authorization (high command),
 -- re-verified from `source` on every call, never a client-supplied flag.
--- ForceRevertK9Appearance is requested from server/appearance.lua's owner
--- this pass (not yet landed as of this file being written) -- guarded with
+-- ForceRevertK9Appearance is a soft dependency on server/appearance.lua
+-- (not yet landed as of this file being written) -- guarded with
 -- `type(fn) == 'function'` so this callback is registered (a real,
 -- honest 'not_available' response) rather than absent entirely, and
 -- activates automatically the moment that function ships, with zero
@@ -1711,8 +1731,8 @@ lib.callback.register('qbx_k9unit:server:tabletRevertK9Ped', function(source, ta
 end)
 
 -- ======================================================================
--- CALLBACKS 7-9 (this pass, coder-ui) -- THE PARTNERSHIPS TAB. Owner,
--- verbatim (two passes): "both the k9 and handler should be able to pull
+-- CALLBACKS 7-9 -- THE PARTNERSHIPS TAB. Owner's own words, in two rounds:
+-- "both the k9 and handler should be able to pull
 -- up a list of there partners and levels etc in a tab... Past
 -- partnerships matter too, not just the active one" -- then, refined --
 -- "a partnership tab should be shown on all tablets as a tab as it
@@ -1759,7 +1779,7 @@ end)
 -- small, local, one-off sort (NOT server/admin.lua's own local
 -- MergeSortedByIdDesc) -- that helper is `local` to admin.lua, not a
 -- resource global, and promoting it purely to avoid a few lines of
--- duplication here was judged not worth touching that file this pass.
+-- duplication here was judged not worth touching that file.
 --
 -- "LEVEL" IS `tenure_bonus_tier_granted` AS-IS, A PLAIN NUMBER, not a
 -- resolved title: server/tenure.lua's own milestone titles ("Bonded
@@ -1777,22 +1797,21 @@ end)
 -- here, verbatim, so a caller who lost a long-tenured partnership still
 -- sees what tier it reached; html/tablet.js renders it as a plain "Tier
 -- N" rather than inventing a title for a row this file cannot ask
--- tenure.lua about. NOT PRESENTED AS TAMPER-PROOF (coordinator-directed,
--- this pass): server/partnership.lua's own PairTenureSeed anti-farm guard
+-- tenure.lua about. NOT PRESENTED AS TAMPER-PROOF:
+-- server/partnership.lua's own PairTenureSeed anti-farm guard
 -- is disclosed as in-memory-only, reset by a resource restart -- this
 -- file adds no wording implying `tenureTierGranted` is audit-grade, and
 -- html/tablet.js is asked to do the same.
 --
 -- DURATION: `established_at_unix`/`ended_at_unix` (added to
--- K9Store.Partner_GetHistoryByK9/ByHandler this same pass, DB-mode via
+-- K9Store.Partner_GetHistoryByK9/ByHandler, DB-mode via
 -- UNIX_TIMESTAMP(), memory-mode via the pre-existing established_at_unix/
 -- new ended_at_unix stamps) let html/tablet.js compute "how long this ran"
 -- with plain arithmetic against Date.now()/1000 for a still-active row, or
 -- the two stamps directly for an ended one -- never a date-string parse.
 --
 -- NAMES, OFFLINE-SAFE: `partnerName`/`endedByName` both go through this
--- file's own ResolveDisplayName -- confirmed offline-safe this pass
--- (native-api-assistant/a3c05728358946da4's contract) via
+-- file's own ResolveDisplayName -- confirmed offline-safe via
 -- exports.qbx_core:GetOfflinePlayer, which matters MORE here than
 -- anywhere else in this file: most of a citizenid's PAST partners are, by
 -- definition, usually not the person currently holding the tablet, and
@@ -1899,7 +1918,7 @@ end)
 -- matching CALLBACK 4/tabletRequestPersonFeatures's own reasoning (an
 -- ordinary k9.audit-holding officer already sees this same history via
 -- the Person screen's partnership section if they can open the console at
--- all; the owner's own "control over it" phrasing this pass is about
+-- all; the owner's own "control over it" phrasing is about
 -- HIGH COMMAND specifically, not every console-capable officer).
 -- ======================================================================
 lib.callback.register('qbx_k9unit:server:tabletRequestPartnershipsForTarget', function(source, targetCitizenId)

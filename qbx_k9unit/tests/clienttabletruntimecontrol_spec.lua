@@ -12,8 +12,8 @@
     directly (read, not assumed -- that file is off-limits to edit from
     this pass):
       'qbx_k9unit:server:runtimeListFeatures'  (source)                    -> {ok, features?, reason?}
-      'qbx_k9unit:server:runtimeSetFeature'    (source, name, newValue)    -> {ok, appliedLive?, restartRequired?, configEditRequired?, tier?, reason?}
-      'qbx_k9unit:server:runtimeResetFeature'  (source, name)              -> {ok, value?, restartRequired?, reason?}
+      'qbx_k9unit:server:runtimeSetFeature'    (source, name, newValue, confirm?) -> {ok, appliedLive?, restartRequired?, configEditRequired?, tier?, lockoutRisk?, sessionOnly?, reason?, warning?}
+      'qbx_k9unit:server:runtimeResetFeature'  (source, name, confirm?)    -> {ok, value?, restartRequired?, lockoutRisk?, sessionOnly?, reason?, warning?}
       'qbx_k9unit:server:runtimeListTunables'  (source)                    -> {ok, tunables?, reason?}
       'qbx_k9unit:server:runtimeSetTunable'    (source, key, newValue)     -> {ok, appliedLive?, restartRequired?, value?, reason?, min?, max?}
       'qbx_k9unit:server:runtimeResetTunable'  (source, key)               -> {ok, value?, restartRequired?, reason?}
@@ -23,6 +23,12 @@
     TranslateReasonResult() already used for theme/cert-tier/shop-location
     calls, so a `reason` comes back to html/tablet.js renamed to `error`,
     exactly like every other tablet-facing surface in this file.
+
+    LOCKOUT-RISK CONFIRMATION (this pass): runtimeSetFeature/runtimeResetFeature
+    each gained a `confirm` argument (server/runtimecontrol.lua's own
+    lockoutRisk/sessionOnly/lockoutWarning mechanism, previously landed
+    server-side with no bridge reading/forwarding it) -- covered below under
+    "LOCKOUT-RISK CONFIRMATION PASSTHROUGH".
 ]]
 
 local t = dofile('testkit.lua')

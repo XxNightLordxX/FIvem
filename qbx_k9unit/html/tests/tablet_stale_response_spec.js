@@ -195,4 +195,78 @@ t.test('a late tablet:requestRoster response for a query the viewer has since ch
     t.equals(findByText(h.getRoot(), 'STALE ANA RESULT').length, 0, 'the late \'ana\' response never replaces the current \'bruno\' results');
 });
 
+t.test('a late tablet:k9ProfileGet response for a K9 profile the operator has since navigated away from never overwrites the CURRENTLY-open profile', async () => {
+    let resolveStaleA = null;
+
+    const h = createHarness({
+        fetchImpl: (url, init) => {
+            const name = url.split('/').pop();
+            const body = init && init.body ? JSON.parse(init.body) : undefined;
+
+            if (name === 'tablet:requestMyRecord') return Promise.resolve(jsonResponse(HIGH_COMMAND_MY_RECORD()));
+            if (name === 'tablet:requestRoster') return Promise.resolve(jsonResponse({ ok: true, rows: [], truncated: false }));
+            if (name === 'tablet:k9ProfilesList') return Promise.resolve(jsonResponse({ ok: true, overrides: [] }));
+            if (name === 'tablet:k9ProfileGet' && body.citizenid === 'CITIZEN_A') {
+                // Held open deliberately -- see this file's header. Resolved
+                // manually, LATE, well after the operator has moved on to
+                // CITIZEN_B via the SAME lookup box.
+                return new Promise((resolve) => {
+                    resolveStaleA = () => resolve(jsonResponse({
+                        ok: true,
+                        citizenid: 'CITIZEN_A',
+                        tierLabel: 'STALE TIER FOR A',
+                        effective: { speedMultiplier: 1.5, scentRangeMultiplier: 1.5, medkitCooldownMultiplier: 0.5, overridden: { speedMultiplier: true, scentRangeMultiplier: true, medkitCooldownMultiplier: true } },
+                        override: { speedMultiplier: 1.5, scentRangeMultiplier: 1.5, medkitCooldownMultiplier: 0.5, note: 'STALE NOTE FOR A' },
+                    }));
+                });
+            }
+            if (name === 'tablet:k9ProfileGet' && body.citizenid === 'CITIZEN_B') {
+                return Promise.resolve(jsonResponse({
+                    ok: true,
+                    citizenid: 'CITIZEN_B',
+                    tierLabel: 'TIER FOR B',
+                    effective: { speedMultiplier: 1.0, scentRangeMultiplier: 1.0, medkitCooldownMultiplier: 1.0, overridden: {} },
+                    override: null,
+                }));
+            }
+            return Promise.reject(new Error('tablet_stale_response_spec: unhandled NUI callback ' + name));
+        },
+    });
+
+    h.postMessage('tablet:open', {});
+    await settle();
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'K9 Overrides')[0].click();
+    await settle();
+
+    function lookupInput() {
+        return findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Enter a citizen ID...')[0];
+    }
+
+    // Look up A -- fires the request that will be held open.
+    lookupInput().typeValue('CITIZEN_A');
+    findByText(h.getRoot(), 'Look Up')[0].click();
+    await settle();
+    t.isDefined(resolveStaleA, 'CITIZEN_A\'s tablet:k9ProfileGet request was sent (and is being held unresolved)');
+
+    // Navigate to a DIFFERENT citizenid via the SAME lookup box, WITHOUT
+    // A's request ever resolving.
+    lookupInput().typeValue('CITIZEN_B');
+    findByText(h.getRoot(), 'Look Up')[0].click();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'CITIZEN_B').length >= 1, 'CITIZEN_B is now the profile on screen');
+    t.equals(findByText(h.getRoot(), 'CITIZEN_A').length, 0, 'CITIZEN_A is no longer shown once navigated away from');
+
+    // Only now let A's stale response land.
+    resolveStaleA();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'CITIZEN_B').length >= 1, 'CITIZEN_B\'s profile is still on screen after A\'s late response arrives');
+    t.equals(findByText(h.getRoot(), 'CITIZEN_A').length, 0, 'A\'s late response never renders its citizenid over B\'s screen');
+    t.equals(findByText(h.getRoot(), 'STALE TIER FOR A').length, 0, 'A\'s stale tier/override data never leaks into B\'s screen');
+    t.equals(findByText(h.getRoot(), 'STALE NOTE FOR A').length, 0, 'A\'s stale note never leaks into B\'s screen');
+});
+
 t.run();

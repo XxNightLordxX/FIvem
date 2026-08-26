@@ -564,6 +564,29 @@ t.test('TERMINATION PATH UNAFFECTED: the REMOVE branch still works instantly for
     t.isTrue(f.deletedEntities[handle])
 end)
 
+t.test('BUG FIX -- TERMINATION PATH UNAFFECTED BY THE GLOBAL FLAG TOO: the REMOVE branch still works instantly after Config.Features.PropAttachments is flipped off live -- taking a vest off must never be gated on the global flag, same as the per-person block check immediately above', function()
+    local f = newFixture()
+    local netId, handle = attachSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+
+    -- Simulates server/runtimecontrol.lua's runtimeSetFeature writing
+    -- Config.Features.PropAttachments = false live, with this citizenid's
+    -- vest already on. Before this fix, this exact sequence hit the
+    -- handler's OWN top-of-function `if not Config.Features.PropAttachments
+    -- then return end` before ever reaching the "already active -> remove"
+    -- branch below -- a silent no-op that left the vest attached
+    -- permanently (no notify, DeleteEntity never called), recoverable only
+    -- by death, disconnect, or a resource restart.
+    f.config.Features.PropAttachments = false
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'), 'a vest must come off even with the global feature flag now off')
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'success')
+    t.isTrue(f.deletedEntities[handle])
+    local broadcast = lastClientEvent(f, 'qbx_k9unit:client:removeK9PropAttachment')
+    t.equals(broadcast.target, -1)
+    t.equals(broadcast.args[1], netId)
+end)
+
 -- ----------------------------------------------------------------------
 -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
 -- resolution) -- IsPropAttachmentsPermittedForCitizenId, checked ONLY on

@@ -950,6 +950,65 @@ body {
 }
 
 /*
+    LOCKOUT-RISK CONFIRMATION (HighCommand/PermissionGrants/
+    RuntimeFeatureControl/TabletTheming/CommandTablet) -- see html/tablet.js's
+    own buildRuntimeFeatureRow()/buildRuntimeLockoutConfirmPanel() header
+    notes. The row itself must look different BEFORE any click (a subtle
+    left-border + tint, same red as .k9tablet-runtime-tier--protected above
+    -- both are "this is dangerous" signals), the risk badge is that same
+    red, and the session-only badge is a DELIBERATELY DIFFERENT colour
+    (the existing link-button blue) so the two are never visually confused:
+    one is a warning, the other is reassurance.
+*/
+.k9tablet-runtime-lockout-row {
+    background: rgba(224, 138, 138, 0.05);
+    border-left: 3px solid #e08a8a;
+}
+
+.k9tablet-runtime-lockout-badge,
+.k9tablet-runtime-session-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    margin-top: 6px;
+    margin-right: 6px;
+}
+
+.k9tablet-runtime-lockout-badge {
+    background: rgba(224, 138, 138, 0.22);
+    color: #e08a8a;
+}
+
+.k9tablet-runtime-session-badge {
+    background: rgba(127, 178, 224, 0.18);
+    color: #7fb2e0;
+}
+
+.k9tablet-runtime-lockout-confirm {
+    border: 1px solid #e08a8a;
+    border-radius: 6px;
+    padding: 10px;
+    background: rgba(224, 138, 138, 0.06);
+}
+
+.k9tablet-runtime-lockout-warning {
+    white-space: pre-wrap;
+    font-weight: 500;
+    color: #f2f2f2;
+}
+
+.k9tablet-runtime-lockout-confirm-input {
+    display: block;
+    width: 100%;
+    margin: 4px 0 10px 0;
+}
+
+/*
     K9 AUDIT TRAIL VIEWER (its own tab -- see html/tablet.js's own
     canViewAudit() for its distinct, non-high-command-only gate) --
     server/admin.lua's five tabletAudit* callbacks. Same "reuse, don't

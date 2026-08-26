@@ -227,6 +227,58 @@ for (const malicious of MALICIOUS_STRINGS) {
         t.equals(everyElementInnerHTMLWriteCount(h), 0);
     });
 
+    t.test(`runtime control: a lockoutRisk feature's server-authored lockoutWarning containing ${shortLabel} reaches the confirmation panel verbatim via textContent, never innerHTML, and a confirmation_required refusal's own message does too`, async () => {
+        const h = createHarness({
+            fetchImpl: routeFetch({
+                'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+                'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' } }),
+                'tablet:runtimeListFeatures': () => ({
+                    ok: true,
+                    features: [{ name: 'HighCommand', currentValue: true, tier: 'live', overridden: false, protected: false, lockoutRisk: true, sessionOnly: true, lockoutWarning: malicious }],
+                }),
+                'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+                'tablet:runtimeSetFeature': () => ({ ok: false, error: 'confirmation_required', lockoutRisk: true, warning: malicious }),
+            }),
+        });
+        h.postMessage('tablet:open', { runtimeControlEnabled: true });
+        await settle();
+
+        findByText(h.getRoot(), 'Runtime Control')[0].click();
+        await settle();
+
+        // The server's own lockoutWarning text is only shown once the
+        // confirmation panel is open -- see buildRuntimeLockoutConfirmPanel().
+        const toggleBtn = findByText(h.getRoot(), 'Disable')[0];
+        toggleBtn.click();
+        await settle();
+
+        t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length >= 1, 'the malicious lockoutWarning text is rendered verbatim in the confirmation panel');
+        t.equals(everyElementInnerHTMLWriteCount(h), 0, 'innerHTML must never be written anywhere on this page for this payload');
+
+        // Attribute-context check, same posture as the shop-locations
+        // operator-typed-field coverage below: the server-authored warning
+        // must never leak into an id/title attribute either.
+        const leaked = findAll(h.getRoot(), () => true).some((n) => {
+            const idVal = n.getAttribute ? n.getAttribute('id') : null;
+            const titleVal = n.getAttribute ? n.getAttribute('title') : null;
+            return idVal === malicious || titleVal === malicious;
+        });
+        t.isFalse(leaked, 'the malicious lockoutWarning never appears verbatim as an id or title attribute anywhere in the document');
+
+        // Type the exact feature name (the ONLY way this page's own Confirm
+        // button ever enables) and confirm -- the server refuses anyway
+        // here (confirmation_required, simulating a stale/bypassed
+        // confirm), whose OWN `warning`/error text must also render
+        // verbatim, never innerHTML.
+        const confirmInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.classList.contains('k9tablet-runtime-lockout-confirm-input'))[0];
+        confirmInput.typeValue('HighCommand');
+        await settle();
+        findByText(h.getRoot(), 'Confirm and Apply')[0].click();
+        await new Promise((r) => setTimeout(r, 30));
+
+        t.equals(everyElementInnerHTMLWriteCount(h), 0, 'innerHTML must never be written anywhere on this page after the refusal renders either');
+    });
+
     t.test(`shop locations: STORED label/ped-model/idle-scenario (table row, BOTH cfg: and db: sources, plus the Edit draft's own prefill) and a Remove-failure message containing ${shortLabel} reach the DOM verbatim via textContent/.value, never innerHTML`, async () => {
         const h = createHarness({
             fetchImpl: routeFetch({

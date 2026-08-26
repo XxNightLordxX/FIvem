@@ -967,6 +967,29 @@
         runtime_error_db_error: 'A database error occurred. Try again.',
         runtime_feature_error_invalid_feature: 'That feature no longer exists.',
         runtime_feature_error_invalid_value: 'That value was rejected by the server.',
+        // LOCKOUT-RISK CONFIRMATION (this pass) -- server/runtimecontrol.lua's
+        // own runtimeListFeatures already returned `lockoutRisk`/`sessionOnly`/
+        // `lockoutWarning` per row, and runtimeSetFeature/runtimeResetFeature
+        // already refused a `lockoutRisk` feature without a `confirm`
+        // argument matching that feature's own `name` exactly -- see
+        // buildRuntimeLockoutConfirmPanel()/openRuntimeLockoutConfirm() below
+        // for the actual UI this unlocks. `runtime_lockout_row_hint`/
+        // `runtime_session_only_hint` are THIS PAGE'S OWN plain-language
+        // rendering of the two booleans (same posture as the tier
+        // labels/descriptions above) -- NEVER a substitute for the server's
+        // own `lockoutWarning` text, which is rendered VERBATIM, unmodified,
+        // in the confirmation panel itself.
+        runtime_lockout_badge: 'Lockout Risk',
+        runtime_lockout_row_hint: 'Disabling this can immediately lock every administrator, including you, out of this tablet. Changing it requires reading a full warning and typing the feature name to confirm.',
+        runtime_session_only_badge: 'Session-Only',
+        runtime_session_only_hint: 'Not saved to the database -- a restart alone reverts this, even without a config.lua edit.',
+        runtime_lockout_confirm_heading: 'Confirm This Change',
+        runtime_lockout_confirm_instruction: 'Read the warning above carefully, then type the feature name exactly as shown to confirm.',
+        runtime_lockout_confirm_input_label: 'Type "{name}" to confirm',
+        runtime_lockout_confirm_input_placeholder: 'Feature name',
+        runtime_lockout_confirm_button: 'Confirm and Apply',
+        runtime_lockout_cancel_label: 'Cancel',
+        runtime_feature_error_confirmation_required: 'The confirmation did not match the feature name exactly. Read the warning again and re-type it to confirm.',
         runtime_tunable_edit_label: 'Edit',
         runtime_tunable_save_label: 'Save Value',
         runtime_tunable_cancel_label: 'Cancel',
@@ -1485,16 +1508,21 @@
         flow_onboard_heading: 'Set Up a New Handler',
         flow_onboard_step_select: 'Select Person',
         flow_onboard_step_certify: 'Certify',
+        flow_onboard_step_k9role: 'K9 Role',
         flow_onboard_step_tier: 'Tier & Specializations',
         flow_onboard_step_features: 'Feature Access',
         flow_onboard_step_summary: 'Summary',
         flow_onboard_certify_intro: 'Certify this person in a department below. Departments they already hold stay listed so you can adjust tier or specializations instead.',
+        flow_onboard_k9role_intro: 'Most people being onboarded are handlers, not K9s -- skip this step if that is the case. Assigning the K9 role below replaces this person\'s character with the chosen model, immediately if they are online right now or automatically the next time they log in if they are not. It is reversible at any time from the Offboarding flow\'s own Revert to Human step.',
         flow_onboard_pick_department_first: 'Certify this person in a department in the previous step first, then come back here to set a tier or add specializations.',
         flow_onboard_tier_intro: 'Set a certification tier and add any specializations this department supports.',
         flow_onboard_features_intro: 'These abilities are switched on server-wide but need an individual grant before this person can use them. Granting none of them is fine if none apply.',
         flow_onboard_summary_heading: 'What just happened',
         flow_onboard_summary_certified_template: 'Certified in {department}.',
-        flow_onboard_summary_not_certified: 'Not certified in any department this pass -- nothing else in this flow took effect.',
+        flow_onboard_summary_not_certified: 'Not certified in any department this pass.',
+        flow_onboard_summary_k9role_skipped: 'K9 role step skipped -- no change to this person\'s model.',
+        flow_onboard_summary_k9role_assigned_template: 'Assigned the K9 role this pass ({model}).',
+        flow_onboard_summary_k9role_not_applied: 'K9 role was not applied this pass.',
         flow_onboard_summary_tier_template: 'Tier: {tier}.',
         flow_onboard_summary_no_tier: 'No tier has been set for this department yet.',
         flow_onboard_summary_specializations_template: '{count} specialization(s) held in this department.',
@@ -2256,6 +2284,7 @@
         runtimeFeaturesError: null,
         runtimeFeaturesRequestId: 0, // STALE-RESPONSE GUARD -- same request-id shape as shopLocationsRequestId above (this list has no per-request identity to compare against arrival order)
         runtimeFeatureActionError: null, // { key: featureName, text } -- a Set/Reset refusal rendered inline on that specific row, same convention as certTierActionError/shopLocationActionError
+        runtimeLockoutConfirm: null, // { name, action:'toggle'|'reset', newValue:?boolean, tier, typedValue:string } -- the read-and-type confirmation gate for ONE `lockoutRisk` feature at a time (see buildRuntimeLockoutConfirmPanel()); null = no confirmation panel open. NEVER decides authorization -- see openRuntimeLockoutConfirm()'s own doc comment.
         runtimeTunables: null, // [{ key, currentValue, configLuaDefault, min, max, integer, overridden, overriddenBy, overriddenAt }, ...]
         runtimeTunablesLoading: false,
         runtimeTunablesError: null,
@@ -2302,6 +2331,16 @@
         k9ProfilesLoading: false,
         k9ProfilesError: null,
         k9ProfileLookupInput: '', // the lookup box's own raw text -- a citizenid, never validated until Look Up is pressed
+        // STALE-RESPONSE GUARD identity, same shape as state.person.citizenid
+        // for loadPersonSummary/loadPersonFeatures: set synchronously by
+        // loadK9Profile() itself (the only entry point into this panel)
+        // BEFORE its fetch even starts, and nulled by goToK9ProfilesScreen()
+        // on the way in. loadK9Profile()'s own .then() compares its
+        // captured citizenid against this field, never against
+        // k9ProfileLookupInput (that one keeps changing on every keystroke
+        // and would wrongly flag a still-in-flight, still-current request
+        // as stale the moment the operator types ahead in the box).
+        k9ProfileSelectedCitizenId: null,
         k9ProfileSelected: null, // { citizenid, tierLabel, effective: {speedMultiplier,scentRangeMultiplier,medkitCooldownMultiplier?,overridden:{...}}, override: {...}|null } -- the ONE citizenid currently loaded, straight from tablet:k9ProfileGet
         k9ProfileSelectedLoading: false,
         k9ProfileSelectedError: null,
@@ -2365,6 +2404,7 @@
         flowStep: 0, // current step index within whichever flow screen is active -- ONE shared counter is enough since only one flow screen is ever shown at a time; reset to 0 by goToFlow*Screen()/flowChangePerson() below whenever a flow (re)starts or a different person is picked
         flowBaseline: null, // snapshot of the selected person's certifications/permissions/features taken ONCE per selection (see computeFlowBaselineSnapshot()) -- the "before" half of an honest before/after summary; never itself sent anywhere, never used to gate anything
         flowOnboardDepartment: null, // the department key chosen in the Onboarding flow's own Certify step -- lets the later Tier/Specializations step focus on that ONE department instead of re-listing every configured department
+        flowOnboardK9RoleAttempted: false, // set true the INSTANT the Onboarding flow's own K9 Role step fires its Assign click, before the server has even answered -- "was this optional step used or skipped" (display-only framing) is a DIFFERENT question from "did it actually work" (which the summary re-derives from freshly reloaded state.personSummary.assignedK9Model, never from this flag or the click's own result) -- see buildFlowOnboardK9RoleSummaryLine()'s own doc comment
         flowOffboardAppearanceReverted: false, // set true ONLY after a real, server-confirmed tablet:revertK9Ped success during the Offboarding flow's own Appearance step -- never assumed from the click alone, see that step's own dedicated (non-runMutation) fetch wrapper
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit. Reset on every handleOpen() too (this pass) -- see that function's own comment on this exact field for why a stale true here must never survive a close/reopen
@@ -2542,6 +2582,29 @@
             }
         }
         return tierKey;
+    }
+
+    /** Human label for a ped MODEL name -- resolved against state.peds
+     * (Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract
+     * note), the SAME "falls back to the raw key when nothing resolves"
+     * convention as tierDisplayLabel() just above. Used by the Onboarding
+     * flow's own K9 Role summary line to show a friendly name for
+     * state.personSummary.assignedK9Model's raw model string.
+     * @param {string} model
+     * @returns {string}
+     */
+    function pedDisplayLabel(model) {
+        if (typeof model !== 'string' || model.length === 0) return String(model);
+        var peds = state.peds;
+        if (Array.isArray(peds)) {
+            for (var i = 0; i < peds.length; i++) {
+                var ped = peds[i];
+                if (ped && ped.model === model) {
+                    return (typeof ped.label === 'string' && ped.label.length > 0) ? ped.label : model;
+                }
+            }
+        }
+        return model;
     }
 
     /**
@@ -3725,6 +3788,7 @@
             var runtimeControlTab = mkButton(S('tab_runtime_control'), 'k9tablet-tab' + (state.screen === 'runtime_control' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'runtime_control';
                 state.runtimeFeatureActionError = null;
+                state.runtimeLockoutConfirm = null;
                 state.runtimeTunableDraft = null;
                 state.runtimeTunableFieldError = null;
                 render();
@@ -3910,6 +3974,7 @@
     function goToRuntimeControlScreen() {
         state.screen = 'runtime_control';
         state.runtimeFeatureActionError = null;
+        state.runtimeLockoutConfirm = null;
         state.runtimeTunableDraft = null;
         state.runtimeTunableFieldError = null;
         render();
@@ -7483,10 +7548,11 @@
     }
 
     /**
-     * @param {{name:string,currentValue:boolean,tier:string,note?:string,overridden:boolean,overriddenBy?:string,overriddenAt?:string}} feature
+     * @param {{name:string,currentValue:boolean,tier:string,note?:string,overridden:boolean,overriddenBy?:string,overriddenAt?:string,lockoutRisk?:boolean,sessionOnly?:boolean,lockoutWarning?:string}} feature
      */
     function buildRuntimeFeatureRow(feature) {
-        var tr = mk('tr');
+        var isLockoutRisk = feature.lockoutRisk === true;
+        var tr = isLockoutRisk ? mk('tr', { class: 'k9tablet-runtime-lockout-row' }) : mk('tr');
         tr.appendChild(mk('td', { text: feature.name }));
 
         var tierTd = mk('td');
@@ -7503,6 +7569,26 @@
         if (typeof feature.note === 'string' && feature.note.length > 0) {
             tierTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: feature.note }));
         }
+        // LOCKOUT-RISK / SESSION-ONLY, satisfied BEFORE any click, SAME
+        // posture as the tier explanation above: a row this dangerous must
+        // look different before it is ever clicked, not only after a
+        // refusal. `runtime_lockout_row_hint`/`runtime_session_only_hint`
+        // are THIS PAGE'S OWN plain-language rendering of the two booleans
+        // (never a substitute for the server's own `lockoutWarning`, which
+        // is shown verbatim only once the confirmation panel below opens).
+        if (isLockoutRisk) {
+            tierTd.appendChild(mk('span', { class: 'k9tablet-runtime-lockout-badge', text: S('runtime_lockout_badge') }));
+            tierTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('runtime_lockout_row_hint') }));
+            // sessionOnly is GENUINELY REASSURING, and reads very
+            // differently from a lockout-risk feature with no such escape
+            // hatch (CommandTablet is the one lockoutRisk feature that is
+            // NOT sessionOnly) -- always its own, visually distinct badge,
+            // never folded into the risk badge above.
+            if (feature.sessionOnly === true) {
+                tierTd.appendChild(mk('span', { class: 'k9tablet-runtime-session-badge', text: S('runtime_session_only_badge') }));
+                tierTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('runtime_session_only_hint') }));
+            }
+        }
         tr.appendChild(tierTd);
 
         var valueTd = mk('td');
@@ -7513,6 +7599,10 @@
         tr.appendChild(valueTd);
 
         var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        // At most ONE lockout confirmation panel open at a time, keyed by
+        // feature name -- see openRuntimeLockoutConfirm()'s own doc comment.
+        var lockoutConfirm = (isLockoutRisk && state.runtimeLockoutConfirm && state.runtimeLockoutConfirm.name === feature.name)
+            ? state.runtimeLockoutConfirm : null;
         if (feature.tier === 'protected' || feature.tier === 'unaudited') {
             // NO TOGGLE RENDERED AT ALL for these two -- server/runtimecontrol.lua
             // refuses both unconditionally (reason='protected_feature'/
@@ -7520,28 +7610,143 @@
             // back refused would be exactly the "switch that appears to
             // work" problem this task exists to fix.
             actionsTd.appendChild(mk('p', { class: 'k9tablet-muted', text: runtimeTierDescription(feature.tier) }));
+        } else if (lockoutConfirm) {
+            actionsTd.appendChild(buildRuntimeLockoutConfirmPanel(feature, lockoutConfirm));
         } else {
             var toggleLabel = feature.currentValue ? S('runtime_feature_toggle_off_label') : S('runtime_feature_toggle_on_label');
-            actionsTd.appendChild(mkConfirmButton(toggleLabel, 'k9tablet-btn' + (feature.currentValue ? ' k9tablet-btn--danger' : ''), function () {
-                toggleRuntimeFeature(feature.name, !feature.currentValue, feature.tier);
-            }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+            if (isLockoutRisk) {
+                // MORE FRICTION THAN mkConfirmButton's ordinary two-click
+                // pattern (see that function's own header) -- this single
+                // click only OPENS the read-and-type confirmation panel
+                // below; it never itself arms or sends anything. This page
+                // NEVER decides authorization either way -- the server
+                // refuses without a matching `confirm` regardless of what
+                // this click does (see toggleRuntimeFeature() below).
+                actionsTd.appendChild(mkButton(toggleLabel, 'k9tablet-btn' + (feature.currentValue ? ' k9tablet-btn--danger' : ''), function () {
+                    openRuntimeLockoutConfirm(feature, 'toggle', !feature.currentValue);
+                }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+            } else {
+                actionsTd.appendChild(mkConfirmButton(toggleLabel, 'k9tablet-btn' + (feature.currentValue ? ' k9tablet-btn--danger' : ''), function () {
+                    toggleRuntimeFeature(feature.name, !feature.currentValue, feature.tier);
+                }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+            }
 
             if (feature.overridden) {
-                actionsTd.appendChild(mkConfirmButton(S('runtime_feature_reset_label'), 'k9tablet-link-btn', function () {
-                    resetRuntimeFeature(feature.name, feature.tier);
-                }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+                if (isLockoutRisk) {
+                    actionsTd.appendChild(mkButton(S('runtime_feature_reset_label'), 'k9tablet-link-btn', function () {
+                        openRuntimeLockoutConfirm(feature, 'reset', null);
+                    }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+                } else {
+                    actionsTd.appendChild(mkConfirmButton(S('runtime_feature_reset_label'), 'k9tablet-link-btn', function () {
+                        resetRuntimeFeature(feature.name, feature.tier);
+                    }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+                }
             }
         }
 
         // A Set/Reset REFUSAL renders INLINE on THIS specific row --
         // "cannot, and here is why" -- same convention as
-        // certTierActionError/shopLocationActionError above.
+        // certTierActionError/shopLocationActionError above. Covers
+        // `reason='confirmation_required'` too (see runtimeFeatureErrorText()
+        // below) for the rare case the server refuses anyway (e.g. the
+        // feature's own `name` changed between load and click) -- this
+        // page's own Confirm button is disabled until the typed value
+        // matches, but the SERVER'S check is the one that actually matters.
         if (state.runtimeFeatureActionError && state.runtimeFeatureActionError.key === feature.name) {
             actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.runtimeFeatureActionError.text }));
         }
 
         tr.appendChild(actionsTd);
         return tr;
+    }
+
+    /**
+     * THE read-and-type lockout confirmation gate -- see
+     * buildRuntimeFeatureRow() above and this task's own brief: "this is
+     * not the two-click confirm used elsewhere in this page... the operator
+     * should have to read something, not just click twice." Renders the
+     * server's OWN `lockoutWarning` text VERBATIM (`.textContent` only --
+     * see this file's own DOM BUILD HELPERS header; a hostile/malformed
+     * string arriving over the wire here can never become markup) --
+     * NEVER this file's own wording, per server/runtimecontrol.lua's own
+     * header: "the server's text is the authoritative description of what
+     * will happen." The Confirm button stays disabled until the typed
+     * value equals `feature.name` exactly -- THIS PAGE NEVER DECIDES
+     * AUTHORIZATION: that disabled check is a UX convenience only, never
+     * the real gate -- the typed value is sent back as `confirm` and the
+     * SERVER independently refuses anything that does not match `name`
+     * exactly (server/runtimecontrol.lua's runtimeSetFeature/
+     * runtimeResetFeature), regardless of what this panel does or whether
+     * it was bypassed entirely by a hand-crafted NUI message.
+     * @param {object} feature @param {{name:string,action:'toggle'|'reset',newValue:?boolean,typedValue:string}} confirmState
+     */
+    function buildRuntimeLockoutConfirmPanel(feature, confirmState) {
+        var wrap = mk('div', { class: 'k9tablet-runtime-lockout-confirm' });
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('runtime_lockout_confirm_heading') }));
+        wrap.appendChild(mk('p', {
+            class: 'k9tablet-runtime-lockout-warning',
+            text: typeof feature.lockoutWarning === 'string' ? feature.lockoutWarning : '',
+        }));
+        if (feature.sessionOnly === true) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('runtime_session_only_hint') }));
+        }
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('runtime_lockout_confirm_instruction') }));
+
+        wrap.appendChild(mk('label', { class: 'k9tablet-cert-tier-label', text: formatTemplate(S('runtime_lockout_confirm_input_label'), { name: feature.name }) }));
+        var input = mk('input', { class: 'k9tablet-runtime-lockout-confirm-input', attrs: { type: 'text', placeholder: S('runtime_lockout_confirm_input_placeholder') } });
+        input.value = confirmState.typedValue;
+        // Re-renders on every keystroke (same "live filter" posture as the
+        // roster/command-reference search boxes -- see this file's own
+        // FOCUS + SCROLL CONTINUITY header) so the Confirm button's
+        // `disabled` state updates as the operator types, without this
+        // page ever needing to mutate an already-built button directly.
+        input.addEventListener('input', function (e) {
+            confirmState.typedValue = e.target.value;
+            render();
+        });
+        wrap.appendChild(input);
+
+        var matches = confirmState.typedValue === feature.name;
+        var actionsRow = mk('div', { class: 'k9tablet-cert-tier-actions' });
+        actionsRow.appendChild(mkButton(S('runtime_lockout_confirm_button'), 'k9tablet-btn k9tablet-btn--danger', confirmRuntimeLockoutAction, { disabled: state.pendingAction || !matches }));
+        actionsRow.appendChild(mkButton(S('runtime_lockout_cancel_label'), 'k9tablet-link-btn', closeRuntimeLockoutConfirm, { disabled: state.pendingAction }));
+        wrap.appendChild(actionsRow);
+
+        return wrap;
+    }
+
+    /**
+     * Opens the read-and-type confirmation for `feature` -- sends NOTHING
+     * to the server yet, only records what the eventual call should look
+     * like once the operator actually confirms. See
+     * buildRuntimeLockoutConfirmPanel() above for the full contract.
+     * @param {object} feature @param {'toggle'|'reset'} action
+     * @param {?boolean} newValue -- only meaningful for 'toggle'
+     */
+    function openRuntimeLockoutConfirm(feature, action, newValue) {
+        state.runtimeLockoutConfirm = { name: feature.name, action: action, newValue: newValue, tier: feature.tier, typedValue: '' };
+        state.runtimeFeatureActionError = null;
+        render();
+    }
+
+    function closeRuntimeLockoutConfirm() {
+        state.runtimeLockoutConfirm = null;
+        render();
+    }
+
+    /** Fires the actual mutation, WITH `confirm` set to the typed value --
+     * only when that value already matches the feature's own name (a
+     * defensive re-check mirroring the Confirm button's own `disabled`
+     * gate, NEVER the real one: the server re-checks this exact match
+     * itself, independently, regardless of what this function does). */
+    function confirmRuntimeLockoutAction() {
+        var confirmState = state.runtimeLockoutConfirm;
+        if (!confirmState || confirmState.typedValue !== confirmState.name) return;
+        if (confirmState.action === 'toggle') {
+            toggleRuntimeFeature(confirmState.name, confirmState.newValue, confirmState.tier, confirmState.typedValue);
+        } else {
+            resetRuntimeFeature(confirmState.name, confirmState.tier, confirmState.typedValue);
+        }
     }
 
     function buildRuntimeTunablesSection() {
@@ -7663,6 +7868,13 @@
             case 'rate_limited': return S('runtime_error_rate_limited');
             case 'invalid_feature': return S('runtime_feature_error_invalid_feature');
             case 'invalid_value': return S('runtime_feature_error_invalid_value');
+            // A refusal ("cannot, and here is why"), not a generic failure --
+            // this page's own Confirm button is disabled until the typed
+            // value matches, so this is only expected to fire for a genuine
+            // race (the feature's own `name` changing between load and
+            // click) or a caller bypassing this page entirely -- either
+            // way, told plainly rather than as a bare "action failed".
+            case 'confirmation_required': return S('runtime_feature_error_confirmation_required');
             // REFUSALS ("cannot, and here is why"), not generic failures --
             // per this task's own explicit instruction -- reuse the SAME
             // tier description this row already shows before the click,
@@ -8333,6 +8545,7 @@
 
     function goToK9ProfilesScreen() {
         state.screen = 'k9_profiles';
+        state.k9ProfileSelectedCitizenId = null;
         state.k9ProfileSelected = null;
         state.k9ProfileSelectedError = null;
         state.k9ProfileDraft = null;
@@ -8386,6 +8599,15 @@
     function loadK9Profile(citizenid) {
         if (typeof citizenid !== 'string' || citizenid.trim().length === 0) return;
         citizenid = citizenid.trim();
+        // STALE-RESPONSE GUARD identity capture -- same shape as
+        // loadPersonSummary/loadPersonFeatures capturing state.person's own
+        // citizenid before their fetch starts. Set HERE, synchronously,
+        // before the fetch even goes out, so a later call to this SAME
+        // function for a DIFFERENT citizenid (a different "Manage" row, a
+        // new lookup-box submit) updates it immediately -- the .then()
+        // below compares against whatever this field holds AT RESPONSE
+        // TIME, not what it held when this particular request was sent.
+        state.k9ProfileSelectedCitizenId = citizenid;
         state.k9ProfileSelectedLoading = true;
         state.k9ProfileSelectedError = null;
         state.k9ProfileSelected = null;
@@ -8394,6 +8616,19 @@
         state.k9ProfileActionError = null;
         render();
         fetchNui('tablet:k9ProfileGet', { citizenid: citizenid }).then(function (result) {
+            // STALE-RESPONSE GUARD: the lookup box or a different row's
+            // "Manage" button can request a DIFFERENT citizenid while this
+            // fetch is still in flight -- nothing here cancels the
+            // underlying request. Without this check, an out-of-order
+            // response for a citizenid the operator has since navigated
+            // away from would silently overwrite whatever profile is
+            // CURRENTLY on screen (wrong dog's numbers, no visible error) --
+            // same class of bug loadPersonSummary/loadPersonFeatures guard
+            // against for the Person screen. Discarding here leaves
+            // whatever the CURRENT request already wrote (or is still
+            // loading) untouched.
+            if (state.k9ProfileSelectedCitizenId !== citizenid) return;
+
             state.k9ProfileSelectedLoading = false;
             if (!result || result.ok !== true) {
                 state.k9ProfileSelectedError = result || { error: 'unknown_error' };
@@ -8914,6 +9149,7 @@
         state.flowStep = 0;
         state.flowBaseline = null;
         state.flowOnboardDepartment = null;
+        state.flowOnboardK9RoleAttempted = false;
         state.flowOffboardAppearanceReverted = false;
     }
 
@@ -8964,6 +9200,7 @@
         state.flowStep = 0;
         state.flowBaseline = null;
         state.flowOnboardDepartment = null;
+        state.flowOnboardK9RoleAttempted = false;
         state.flowOffboardAppearanceReverted = false;
         render();
     }
@@ -9226,9 +9463,28 @@
         return wrap;
     }
 
-    // ---- Onboarding: Select -> Certify -> Tier & Specializations -> Feature Access -> Summary ----
+    // ---- Onboarding: Select -> Certify -> K9 Role -> Tier & Specializations -> Feature Access -> Summary ----
+    //
+    // K9 ROLE STEP (owner-directed "BUILD THE STEP" pass) -- placed right
+    // after Certify, before Tier & Specializations: this flow's own copy
+    // promises "one guided pass instead of four separate mental steps",
+    // but until this pass it could never actually MAKE someone a K9 --
+    // that meant abandoning the flow for the standalone Person screen for
+    // the one role the owner cares most about. Uses the EXISTING
+    // tablet:assignK9Role path verbatim (buildFlowOnboardK9RoleControl()'s
+    // own doc comment) -- no new authority, only reaching authority that
+    // already existed from where this flow's own sequence says it
+    // belongs: right after deciding WHICH department/role a person holds,
+    // before any tier/specialization/feature-access decision downstream
+    // that assumes handler vs. K9. SKIPPABLE, deliberately -- most people
+    // onboarded are handlers, not K9s (buildFlowNavRow()'s own "Skip this
+    // step" vs "Next" label, gated on whether a ped model is even
+    // configured, exactly like every other optional step in this file).
+    // See buildFlowOnboardK9RoleSummaryLine() for how the Summary step
+    // reports what ACTUALLY happened here -- skipped, applied, or
+    // attempted-and-not-applied -- never what was merely attempted.
 
-    var FLOW_ONBOARD_STEP_KEYS = ['flow_onboard_step_select', 'flow_onboard_step_certify', 'flow_onboard_step_tier', 'flow_onboard_step_features', 'flow_onboard_step_summary'];
+    var FLOW_ONBOARD_STEP_KEYS = ['flow_onboard_step_select', 'flow_onboard_step_certify', 'flow_onboard_step_k9role', 'flow_onboard_step_tier', 'flow_onboard_step_features', 'flow_onboard_step_summary'];
 
     function flowOnboardStepLabels() {
         var out = [];
@@ -9279,9 +9535,147 @@
      * see this block's own header. Never claims "done"; reports the REAL,
      * currently-loaded certification/tier/specialization/feature-grant
      * state for this person, gap and all. */
+
+    /**
+     * Fires tablet:assignK9Role -- the EXACT SAME callback/payload
+     * buildRoleControl()'s own Assign button already sends on the
+     * standalone Person screen (THE SECURITY RULE at this file's own
+     * header: no new authorization path, no new mutation path -- this
+     * reaches EXISTING, already-tested server authority from a second
+     * place in the UI, nothing more). A DEDICATED wrapper, not the
+     * generic runMutation(), for the SAME reason flowOffboardRevertAppearance()
+     * just above is one: this step's own Summary needs to know a click
+     * actually happened here THIS pass. state.flowOnboardK9RoleAttempted
+     * is set the INSTANT the click fires, before the server has even
+     * answered -- "was this optional step used" (display-only framing,
+     * never a security fact) and "did it actually work" (re-derived from
+     * freshly reloaded server data, see buildFlowOnboardK9RoleSummaryLine())
+     * are deliberately two different questions, answered two different
+     * ways. Uses refreshPersonAndSelf() (not a bare loadPersonSummary())
+     * for the SAME reason buildRoleControl() does -- high command
+     * self-assigning the K9 role is a real, deliberately-supported path
+     * (owner's own instruction; see the test asserting it), and a
+     * self-assign must refresh state.myRecord/state.viewer too, not just
+     * state.personSummary, or Home/My Record would show a stale copy.
+     * @param {string} citizenid @param {string} modelName
+     */
+    function flowOnboardAssignK9Role(citizenid, modelName) {
+        if (state.pendingAction) return;
+        state.flowOnboardK9RoleAttempted = true;
+        state.pendingAction = true;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:assignK9Role', { targetCitizenId: citizenid, modelName: modelName }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.actionNotice = { kind: 'ok', text: (typeof result.message === 'string' && result.message.length > 0) ? result.message : S('action_succeeded') };
+            } else {
+                state.actionNotice = { kind: 'error', text: mutationErrorText(result) };
+            }
+            refreshPersonAndSelf(citizenid);
+        });
+    }
+
+    /**
+     * The K9 Role step's own action control -- NOT buildRoleControl()
+     * reused verbatim: that control also renders a Revert-to-Human
+     * button, which belongs to the OFFBOARDING flow's own Appearance step
+     * (this section's own header: "Offboarding: ... -> Appearance ->
+     * Summary"), not here -- Onboarding's job is turning someone INTO a
+     * K9, never back out. Same select-a-model UI, same tablet:assignK9Role
+     * callback, same S('role_assign_label')/S('role_assign_hint')/
+     * S('role_no_peds_configured') copy as the standalone Person screen's
+     * own control (buildRoleControl()) -- just without its second button,
+     * and firing through flowOnboardAssignK9Role() above instead of
+     * runMutation() directly, for this step's own honesty tracking.
+     * @returns {HTMLElement}
+     */
+    function buildFlowOnboardK9RoleControl() {
+        var wrap = mk('div', { class: 'k9tablet-role-control' });
+        var citizenid = state.person.citizenid;
+
+        if (!state.peds || state.peds.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('role_no_peds_configured') }));
+            return wrap;
+        }
+
+        var row = mk('div', { class: 'k9tablet-role-row' });
+        var select = mk('select', { class: 'k9tablet-role-select' });
+        var firstModel = null;
+        for (var i = 0; i < state.peds.length; i++) {
+            var ped = state.peds[i];
+            if (!ped || typeof ped.model !== 'string' || ped.model.length === 0) continue;
+            if (firstModel === null) firstModel = ped.model;
+            var option = mk('option', { text: (typeof ped.label === 'string' && ped.label.length > 0) ? ped.label : ped.model });
+            option.setAttribute('value', ped.model);
+            select.appendChild(option);
+        }
+        if (firstModel !== null) select.value = firstModel;
+        row.appendChild(select);
+        row.appendChild(mkButton(S('role_assign_label'), 'k9tablet-btn', function () {
+            var modelName = select.value;
+            if (!modelName) return;
+            flowOnboardAssignK9Role(citizenid, modelName);
+        }, { disabled: state.pendingAction }));
+        wrap.appendChild(row);
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('role_assign_hint') }));
+        return wrap;
+    }
+
+    /**
+     * THE HONESTY REQUIREMENT for the K9 Role step specifically (owner-
+     * directed "BUILD THE STEP" pass) -- reports what ACTUALLY happened,
+     * never what was merely attempted, and never what buildRoleControl()'s
+     * own generic success toast claimed. Exactly three outcomes, and only
+     * these three:
+     *   - the step was never used this pass at all
+     *     (state.flowOnboardK9RoleAttempted stays false from
+     *     resetFlowRunState()/flowChangePerson() until the step's own
+     *     Assign button is actually clicked) -> reported as SKIPPED, the
+     *     ordinary, unremarkable case (most people onboarded are handlers,
+     *     not K9s) -- never phrased as a warning or a failure;
+     *   - it WAS used, and the freshly reloaded
+     *     state.personSummary.assignedK9Model (server-derived -- see
+     *     server/tablet.lua's own doc comment on that field, added this
+     *     pass specifically so this line never has to trust a click) shows
+     *     an active assignment right now -> reports the model actually
+     *     applied;
+     *   - it WAS used but the reloaded record shows nothing active (the
+     *     server refused it, or -- for an online target -- the async
+     *     model-swap confirm from their own client had not yet landed by
+     *     the time this reloaded, or it was reverted again before reaching
+     *     this screen) -> reported as NOT applied, never as a false
+     *     success.
+     * Never reads state.actionNotice (the click's own claimed result) for
+     * this middle/bottom distinction -- only the re-loaded record.
+     * @returns {HTMLElement}
+     */
+    function buildFlowOnboardK9RoleSummaryLine() {
+        if (!state.flowOnboardK9RoleAttempted) {
+            return mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_summary_k9role_skipped') });
+        }
+        var model = (state.personSummary && typeof state.personSummary.assignedK9Model === 'string' && state.personSummary.assignedK9Model.length > 0)
+            ? state.personSummary.assignedK9Model
+            : null;
+        if (model) {
+            return mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: formatTemplate(S('flow_onboard_summary_k9role_assigned_template'), { model: pedDisplayLabel(model) }) });
+        }
+        return mk('p', { class: 'k9tablet-warning-note', text: S('flow_onboard_summary_k9role_not_applied') });
+    }
+
     function buildFlowOnboardSummary() {
         var wrap = mk('div', {});
         wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_onboard_summary_heading') }));
+
+        // K9 ROLE (this pass) -- ALWAYS evaluated, deliberately BEFORE the
+        // department early-return just below: assigning the K9 role acts
+        // on the WHOLE person, not one department, so it must be reported
+        // honestly even when nobody was certified this pass at all (the
+        // owner's own "for the role I care most about, the flow can't do
+        // it" complaint this step exists to fix). See
+        // buildFlowOnboardK9RoleSummaryLine()'s own doc comment.
+        wrap.appendChild(buildFlowOnboardK9RoleSummaryLine());
 
         var dept = findFlowOnboardDepartmentEntry();
         if (!dept) {
@@ -9359,6 +9753,19 @@
             body.appendChild(buildCertificationList(state.personSummary.certifications, canCertify ? flowOnboardCertAction : null));
             body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(0); }, onNext: function () { goFlowOnboardStep(2); }, hasAction: true }));
         } else if (state.flowStep === 2) {
+            // K9 ROLE (this pass) -- see this section's own header
+            // ("Onboarding: Select -> Certify -> K9 Role -> Tier &
+            // Specializations -> Feature Access -> Summary") and
+            // buildFlowOnboardK9RoleControl()'s own doc comment. Placed
+            // right after Certify: an operator has just decided WHICH
+            // department/role this person holds, so deciding whether they
+            // are the dog or the handler is the natural next question,
+            // before any tier/specialization/feature-access decision that
+            // assumes one or the other.
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_k9role_intro') }));
+            body.appendChild(buildFlowOnboardK9RoleControl());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(1); }, onNext: function () { goFlowOnboardStep(3); }, hasAction: !!(state.peds && state.peds.length > 0) }));
+        } else if (state.flowStep === 3) {
             var dept = findFlowOnboardDepartmentEntry();
             if (!dept) {
                 body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_pick_department_first') }));
@@ -9366,8 +9773,8 @@
                 body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_tier_intro') }));
                 body.appendChild(buildCertificationDetail(dept, canCertify ? flowOnboardCertAction : null));
             }
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(1); }, onNext: function () { goFlowOnboardStep(3); }, hasAction: !!dept }));
-        } else if (state.flowStep === 3) {
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(2); }, onNext: function () { goFlowOnboardStep(4); }, hasAction: !!dept }));
+        } else if (state.flowStep === 4) {
             body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_features_intro') }));
             if (state.personFeaturesLoading && !state.personFeatures) {
                 body.appendChild(mk('p', { text: S('loading') }));
@@ -9379,10 +9786,10 @@
             } else {
                 body.appendChild(mk('p', { text: S('loading') }));
             }
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(2); }, onNext: function () { goFlowOnboardStep(4); }, hasAction: true }));
-        } else if (state.flowStep === 4) {
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(3); }, onNext: function () { goFlowOnboardStep(5); }, hasAction: true }));
+        } else if (state.flowStep === 5) {
             body.appendChild(buildFlowOnboardSummary());
-            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(3); }, isLast: true, onFinish: goToFlowsScreen }));
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(4); }, isLast: true, onFinish: goToFlowsScreen }));
         }
 
         wrap.appendChild(body);
@@ -10039,6 +10446,12 @@
                 // never guessed when the server itself sent nothing usable.
                 job: (result.job && typeof result.job === 'object') ? result.job : null,
                 partnership: (result.partnership && typeof result.partnership === 'object') ? result.partnership : null,
+                // server/tablet.lua's OWN re-derivation field for the
+                // Onboarding flow's K9 Role step -- see that file's doc
+                // comment on this field and buildFlowOnboardK9RoleSummaryLine()
+                // below for why the summary reads THIS, never a click's own
+                // claimed result. string|null, never guessed.
+                assignedK9Model: (typeof result.assignedK9Model === 'string' && result.assignedK9Model.length > 0) ? result.assignedK9Model : null,
             };
             if (result.target && typeof result.target.name === 'string' && state.person) {
                 state.person.name = result.target.name;
@@ -11034,17 +11447,31 @@
      * `restartRequired = false` regardless of tier, a known asymmetry
      * flagged to main rather than relied upon here).
      * @param {string} name @param {boolean} newValue @param {string} tier
+     * @param {string} [confirm] -- REQUIRED, and must equal `name` EXACTLY,
+     * for a `lockoutRisk` feature (see buildRuntimeLockoutConfirmPanel()/
+     * confirmRuntimeLockoutAction() above) -- omitted entirely for every
+     * other feature, so the request body carries no `confirm` key at all
+     * (matches client/tablet.lua's own "ignored entirely" contract for a
+     * non-lockout-risk feature). THIS FUNCTION NEVER DECIDES AUTHORIZATION:
+     * it forwards whatever the caller already confirmed, exactly as given,
+     * and the server re-checks the match independently regardless.
      */
-    function toggleRuntimeFeature(name, newValue, tier) {
+    function toggleRuntimeFeature(name, newValue, tier, confirm) {
         if (state.pendingAction) return;
         state.pendingAction = true;
         state.runtimeFeatureActionError = null;
         state.actionNotice = { kind: 'ok', text: S('action_working') };
         render();
 
-        fetchNui('tablet:runtimeSetFeature', { name: name, value: newValue }).then(function (result) {
+        var payload = { name: name, value: newValue };
+        if (confirm !== undefined) payload.confirm = confirm;
+
+        fetchNui('tablet:runtimeSetFeature', payload).then(function (result) {
             state.pendingAction = false;
             if (result && result.ok === true) {
+                // Only close a lockout confirmation panel that is still
+                // open for THIS SAME feature -- never someone else's.
+                if (state.runtimeLockoutConfirm && state.runtimeLockoutConfirm.name === name) state.runtimeLockoutConfirm = null;
                 state.actionNotice = { kind: 'ok', text: runtimeTierDescription(tier) };
                 loadRuntimeFeatures();
             } else {
@@ -11059,20 +11486,28 @@
     /** Restores feature `name` to its config.lua-shipped default -- a
      * destructive action from an operator's point of view (discards an
      * override), hence mkConfirmButton's two-click guard at its own call
-     * site, same posture as resetThemeToDefault()/deleteCertTier() above.
+     * site, same posture as resetThemeToDefault()/deleteCertTier() above
+     * (or, for a `lockoutRisk` feature, the read-and-type panel instead --
+     * see buildRuntimeFeatureRow()).
      * @param {string} name @param {string} tier -- this row's own,
      * already-known tier, see toggleRuntimeFeature()'s own doc comment on
-     * why the response is not trusted for this. */
-    function resetRuntimeFeature(name, tier) {
+     * why the response is not trusted for this.
+     * @param {string} [confirm] -- see toggleRuntimeFeature()'s own doc
+     * comment -- identical contract. */
+    function resetRuntimeFeature(name, tier, confirm) {
         if (state.pendingAction) return;
         state.pendingAction = true;
         state.runtimeFeatureActionError = null;
         state.actionNotice = { kind: 'ok', text: S('action_working') };
         render();
 
-        fetchNui('tablet:runtimeResetFeature', { name: name }).then(function (result) {
+        var payload = { name: name };
+        if (confirm !== undefined) payload.confirm = confirm;
+
+        fetchNui('tablet:runtimeResetFeature', payload).then(function (result) {
             state.pendingAction = false;
             if (result && result.ok === true) {
+                if (state.runtimeLockoutConfirm && state.runtimeLockoutConfirm.name === name) state.runtimeLockoutConfirm = null;
                 state.actionNotice = { kind: 'ok', text: runtimeTierDescription(tier) };
                 loadRuntimeFeatures();
             } else {

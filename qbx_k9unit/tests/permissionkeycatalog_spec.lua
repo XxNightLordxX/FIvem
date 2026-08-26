@@ -977,6 +977,52 @@ end)
 -- for the fix this proves.
 -- ============================================================================
 
+local ALL_K9_TABLE_COLUMNS_FOR_SCHEMA_PROBE = {
+    k9_certifications = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+    k9_search_log = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
+    k9_partnerships = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
+    k9_progression = { 'citizenid', 'xp', 'created_at', 'updated_at' },
+    k9_permissions = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+    k9_certification_specializations = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+    k9_runtime_feature_overrides = { 'override_key', 'kind', 'value', 'updated_by', 'updated_at' },
+    k9_runtime_override_audit = { 'override_key', 'kind', 'old_value', 'new_value', 'changed_by', 'changed_at' },
+    k9_tablet_theme = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'updated_by', 'updated_at' },
+    k9_tablet_theme_audit = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'changed_by', 'changed_at' },
+    k9_ped_assignments = { 'citizenid', 'model', 'original_model_hash', 'active', 'applied_by', 'applied_at', 'revoked_at' },
+    k9_certification_tiers = { 'tier_key', 'label', 'ordinal', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+    k9_certification_tier_capabilities = { 'tier_key', 'capability_key', 'granted_by', 'granted_at' },
+    k9_certification_tier_audit = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
+    k9_equipment_shop_locations = { 'x', 'y', 'z', 'created_by' },
+    k9_equipment_shop_locations_audit = { 'location_id', 'action', 'changed_by', 'changed_at' },
+    k9_xp_tiers = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
+    k9_xp_tier_audit = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
+    k9_individual_overrides = { 'citizenid', 'speed_multiplier', 'scent_range_multiplier', 'medkit_cooldown_multiplier', 'note', 'deleted', 'updated_by' },
+    k9_individual_override_audit = { 'id', 'action', 'citizenid', 'detail', 'changed_by', 'changed_at' },
+    k9_equipment_shop_items = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
+    k9_equipment_shop_item_audit = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
+    k9_permission_keys = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+    k9_permission_key_audit = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
+}
+
+--- Builds the full INFORMATION_SCHEMA.COLUMNS-shaped row set for EVERY
+--- table this resource owns, all with their own full expected column set
+--- -- i.e. what a real, fully and currently migrated install actually
+--- returns. Added alongside server/datastore.lua's no-SQL-import fix: that
+--- fix now ALSO flags "some but not all of our tables exist" as unsafe
+--- (see VerifyTableShapesAgainstKnownSchema there), so a schema-probe stub
+--- naming only ONE table (this file's own k9_permission_keys) would
+--- otherwise look like a PARTIAL install and force memory mode, not the
+--- "clean, everything present" case the control test below means to prove.
+local function AllK9TableColumnsForSchemaProbe()
+    local rows = {}
+    for tableName, columns in pairs(ALL_K9_TABLE_COLUMNS_FOR_SCHEMA_PROBE) do
+        for _, col in ipairs(columns) do
+            rows[#rows + 1] = { tbl = tableName, col = col }
+        end
+    end
+    return rows
+end
+
 --- @param opts table? -- { foreignPermKeyRows: table? -- canned response
 ---   for this catalog's own `SELECT permission_key, label, description,
 ---   deleted FROM k9_permission_keys` if it is ever actually issued }
@@ -1118,18 +1164,12 @@ t.test('BOOT-ORDER RACE control: once the probe settles with NO collision, the c
     f.fireResourceStart()
     t.equals(f.permKeysQueryCallCount(), 0)
 
-    -- A schema response naming every column k9_permission_keys is checked
-    -- against -- a clean, non-colliding table.
-    t.isTrue(f.resumeNext({
-        { tbl = 'k9_permission_keys', col = 'permission_key' },
-        { tbl = 'k9_permission_keys', col = 'label' },
-        { tbl = 'k9_permission_keys', col = 'description' },
-        { tbl = 'k9_permission_keys', col = 'deleted' },
-        { tbl = 'k9_permission_keys', col = 'created_at' },
-        { tbl = 'k9_permission_keys', col = 'updated_by' },
-        { tbl = 'k9_permission_keys', col = 'updated_at' },
-    }))
-    t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision -- the real database stays live')
+    -- A schema response naming every column for EVERY table this resource
+    -- owns -- a clean, fully and currently migrated database, not merely
+    -- "k9_permission_keys looks fine" (see AllK9TableColumnsForSchemaProbe's
+    -- own doc comment for why this must be the full set now).
+    t.isTrue(f.resumeNext(AllK9TableColumnsForSchemaProbe()))
+    t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision, nothing missing -- the real database stays live')
 
     t.isTrue(f.resumeNext(), 'the catalog handler wakes on its next poll')
     t.equals(f.permKeysQueryCallCount(), 1, 'now that settlement confirmed no collision, the catalog performs its real read exactly once')

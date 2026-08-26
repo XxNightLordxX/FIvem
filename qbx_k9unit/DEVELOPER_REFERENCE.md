@@ -145,7 +145,9 @@ on every gated action — never cached client-side as a one-time pass.
 
 **Exception:** K9 vehicle entry/exit (`client/vehicle.lua`) is deliberately
 **client-only**, no server-side re-check — it grants no real capability
-(only freezes/hides/repositions the acting player's own ped), so a modified
+(it only seats the acting player's own ped into a real, free vehicle seat
+via client-side natives, the same kind of thing the player's ordinary
+"enter vehicle" control already lets them do to themselves), so a modified
 client gains nothing here it couldn't already get by calling the same
 client-only natives on itself. Revisit if a later feature ever conditions
 something server-authoritative on vehicle state.
@@ -393,8 +395,11 @@ selects, or possesses a ped. "Handler" means a partnered human officer (§1).
       - Exceeding the limit despite the pull-back (disconnect, teleport,
         desync) is a distinct safety-valve auto-detach, notifying both.
 - [ ] Enter/exit any `Config.K9Vehicles` model via ox_target within
-      `Config.VehicleInteractMeters`, self-administered; ped hidden/frozen
-      while "in," restored on exit.
+      `Config.VehicleInteractMeters`, self-administered; the K9 is put into
+      a real, genuinely free passenger seat (rear seats preferred, never the
+      driver's) with that seat's own door opened and closed around it — a
+      normal, visible, collidable vehicle occupant like any other passenger,
+      never hidden or frozen — and released back out on exit.
 - [ ] Basic bark sound plays on radial trigger.
 - [ ] Door interaction and full agility mode are **not** required in Phase 1
       — basic jump only.

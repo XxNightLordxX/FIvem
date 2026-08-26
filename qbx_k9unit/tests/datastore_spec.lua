@@ -1070,11 +1070,46 @@ t.test('SETTLEMENT: no AddEventHandler at all (a sandbox with no FXServer native
     t.isFalse(settled, 'honest "cannot confirm" answer, never a false positive "yes, settled"')
 end)
 
-t.test('SETTLEMENT: a clean database (every table absent -- fresh install, nothing to collide with) settles true after the probe runs, DatabaseEnabled stays true', function()
+t.test('SETTLEMENT: a database where every table already matches (a real, migrated install) settles true after the probe runs, DatabaseEnabled stays true', function()
     local eventHandlers = {}
     local env = Sandbox.newEnv({
         Config = { Database = { enabled = true } },
-        MySQL = { query = { await = function() return {} end } }, -- no rows at all -- no table this resource owns exists yet
+        MySQL = { query = { await = function()
+            -- Every table this resource owns, WITH its own full expected
+            -- column set -- the one case that must NOT flip the fallback.
+            local rows = {}
+            for tableName, columns in pairs({
+                k9_certifications = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+                k9_search_log = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
+                k9_partnerships = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
+                k9_progression = { 'citizenid', 'xp', 'created_at', 'updated_at' },
+                k9_permissions = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+                k9_certification_specializations = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+                k9_runtime_feature_overrides = { 'override_key', 'kind', 'value', 'updated_by', 'updated_at' },
+                k9_runtime_override_audit = { 'override_key', 'kind', 'old_value', 'new_value', 'changed_by', 'changed_at' },
+                k9_tablet_theme = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'updated_by', 'updated_at' },
+                k9_tablet_theme_audit = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'changed_by', 'changed_at' },
+                k9_ped_assignments = { 'citizenid', 'model', 'original_model_hash', 'active', 'applied_by', 'applied_at', 'revoked_at' },
+                k9_certification_tiers = { 'tier_key', 'label', 'ordinal', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+                k9_certification_tier_capabilities = { 'tier_key', 'capability_key', 'granted_by', 'granted_at' },
+                k9_certification_tier_audit = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
+                k9_equipment_shop_locations = { 'x', 'y', 'z', 'created_by' },
+                k9_equipment_shop_locations_audit = { 'location_id', 'action', 'changed_by', 'changed_at' },
+                k9_xp_tiers = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
+                k9_xp_tier_audit = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
+                k9_individual_overrides = { 'citizenid', 'speed_multiplier', 'scent_range_multiplier', 'medkit_cooldown_multiplier', 'note', 'deleted', 'updated_by' },
+                k9_individual_override_audit = { 'id', 'action', 'citizenid', 'detail', 'changed_by', 'changed_at' },
+                k9_equipment_shop_items = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
+                k9_equipment_shop_item_audit = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
+                k9_permission_keys = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+                k9_permission_key_audit = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
+            }) do
+                for _, col in ipairs(columns) do
+                    rows[#rows + 1] = { tbl = tableName, col = col }
+                end
+            end
+            return rows
+        end } },
         AddEventHandler = function(name, fn)
             eventHandlers[name] = eventHandlers[name] or {}
             eventHandlers[name][#eventHandlers[name] + 1] = fn
@@ -1085,8 +1120,73 @@ t.test('SETTLEMENT: a clean database (every table absent -- fresh install, nothi
     Sandbox.loadInto('../server/datastore.lua', env)
     for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
 
-    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'no table exists yet at all -- vacuously no collision')
+    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'every expected table exists with every expected column -- a real, correctly migrated install')
     t.isTrue(env.K9Store.WaitForSchemaCheckToSettle())
+end)
+
+t.test('SETTLEMENT: a clean/never-installed database (every table absent -- sql/install.sql never run) settles true, but forces DatabaseEnabled FALSE (memory-only) rather than proceeding to run real queries against tables that do not exist', function()
+    local eventHandlers = {}
+    local printedLines = {}
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function() return {} end } }, -- no rows at all -- no table this resource owns exists yet
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = function(line) printedLines[#printedLines + 1] = line end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
+
+    t.isFalse(env.K9Store.IsDatabaseEnabled(), 'no qbx_k9unit table exists yet at all -- this is "the SQL was never imported", not "nothing to collide with", and must fall back to memory mode instead of letting every real query throw ER_NO_SUCH_TABLE later, mid-session, uncaught and unexplained')
+    t.isTrue(env.K9Store.WaitForSchemaCheckToSettle())
+
+    local sawExplanation = false
+    for _, line in ipairs(printedLines) do
+        if line:find('were not found in this database', 1, true) then sawExplanation = true end
+    end
+    t.isTrue(sawExplanation, 'must print a plain-English explanation naming the actual situation (SQL not yet imported), not stay silent about why memory mode kicked in')
+end)
+
+t.test('SETTLEMENT: a PARTIAL install (some but not all of our tables exist, e.g. install.sql ran but a later migration did not) also forces DatabaseEnabled false, and names exactly which tables are missing', function()
+    local eventHandlers = {}
+    local printedLines = {}
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function()
+            -- Only k9_certifications exists (with its own full, correct
+            -- column set) -- every other table this resource owns is
+            -- absent, modelling an interrupted/out-of-date install.
+            return {
+                { tbl = 'k9_certifications', col = 'citizenid' },
+                { tbl = 'k9_certifications', col = 'job' },
+                { tbl = 'k9_certifications', col = 'granted_by' },
+                { tbl = 'k9_certifications', col = 'granted_at' },
+                { tbl = 'k9_certifications', col = 'revoked_by' },
+                { tbl = 'k9_certifications', col = 'revoked_at' },
+                { tbl = 'k9_certifications', col = 'active' },
+            }
+        end } },
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = function(line) printedLines[#printedLines + 1] = line end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
+
+    t.isFalse(env.K9Store.IsDatabaseEnabled(), 'one real table present out of many must still fall back to memory mode for EVERY feature, not just the ones whose table is missing')
+    t.isTrue(env.K9Store.WaitForSchemaCheckToSettle())
+
+    local sawMissingList = false
+    for _, line in ipairs(printedLines) do
+        if line:find('k9_search_log', 1, true) and line:find('do not', 1, true) then sawMissingList = true end
+    end
+    t.isTrue(sawMissingList, 'must name at least one of the actually-missing tables so an operator can tell which migration to run')
 end)
 
 t.test('SETTLEMENT: a real collision (a foreign table sharing one of our names) settles true, forces DatabaseEnabled false, and names the offending table', function()

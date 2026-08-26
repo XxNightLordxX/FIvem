@@ -614,4 +614,227 @@ t.test('a late tablet:runtimeListFeatures response for an OLDER request never ov
     t.equals(findByText(h.getRoot(), 'STALE_FIRST_RESULT').length, 0, 'the late, OLDER response never replaces the current, NEWER one');
 });
 
+// ======================================================================
+// LOCKOUT-RISK FEATURES (HighCommand/PermissionGrants/RuntimeFeatureControl/
+// TabletTheming/CommandTablet) -- server/runtimecontrol.lua's own
+// runtimeListFeatures already returns `lockoutRisk`/`sessionOnly`/
+// `lockoutWarning` per row, and runtimeSetFeature/runtimeResetFeature
+// already refuse a `lockoutRisk` feature without a `confirm` argument
+// matching that feature's own `name` exactly (reason='confirmation_required'
+// otherwise) -- this section covers the UI half that lets an operator
+// actually satisfy that requirement: THE ROW MUST LOOK DIFFERENT BEFORE ANY
+// CLICK, a real read-and-type confirmation (never the ordinary two-click
+// mkConfirmButton pattern used for ordinary destructive actions elsewhere
+// on this page) showing the server's OWN warning text verbatim, and a
+// clear distinction for `sessionOnly` ("a restart puts this back").
+// ======================================================================
+
+const LOCKOUT_WARNING_TEXT = 'Disabling this immediately revokes access for EVERY high-command officer, including you. Nobody can use this screen to turn it back on once it is off. RECOVERY: restart this resource.';
+
+t.test('a lockoutRisk + sessionOnly feature (e.g. HighCommand) shows the Lockout Risk AND Session-Only badges, and their own plain-language hints, BEFORE any click', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'HighCommand', currentValue: true, tier: 'live', overridden: false, protected: false, lockoutRisk: true, sessionOnly: true, lockoutWarning: LOCKOUT_WARNING_TEXT }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Lockout Risk').length >= 1, 'the Lockout Risk badge is visible before any click');
+    t.isTrue(findByText(h.getRoot(), 'Session-Only').length >= 1, 'the Session-Only badge is visible before any click');
+    t.isTrue(findByText(h.getRoot(), 'Disabling this can immediately lock every administrator, including you, out of this tablet. Changing it requires reading a full warning and typing the feature name to confirm.').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Not saved to the database -- a restart alone reverts this, even without a config.lua edit.').length >= 1, 'the reassuring session-only explanation is shown, not just the risk warning');
+    // The server's own full warning text is NOT shown yet -- only after
+    // the operator actually clicks to open the confirmation panel.
+    t.equals(findByText(h.getRoot(), LOCKOUT_WARNING_TEXT).length, 0, 'the full server warning is not rendered until the confirmation panel is opened');
+});
+
+t.test('a lockoutRisk feature that is NOT sessionOnly (e.g. CommandTablet) shows the Lockout Risk badge but NEVER the Session-Only badge', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'CommandTablet', currentValue: true, tier: 'rawtoplevel', overridden: false, protected: false, lockoutRisk: true, sessionOnly: false, lockoutWarning: 'Disabling this removes the tablet entirely once a config.lua edit and restart both happen.' }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Lockout Risk').length >= 1);
+    t.equals(findByText(h.getRoot(), 'Session-Only').length, 0, 'a persisted lockout-risk feature never claims to be session-only');
+});
+
+t.test('a non-lockoutRisk feature never shows either badge', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BiteAndHold', currentValue: true, tier: 'live', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.equals(findByText(h.getRoot(), 'Lockout Risk').length, 0);
+    t.equals(findByText(h.getRoot(), 'Session-Only').length, 0);
+});
+
+// ---- THE SAFETY PROPERTY: a click alone must never mutate; only a MATCHING typed confirmation may ----
+
+t.test('SAFETY: clicking a lockoutRisk toggle opens the confirmation panel and sends NOTHING -- the server\'s own warning is shown verbatim; a non-matching typed value keeps Confirm disabled and still sends nothing; only the EXACT feature name enables Confirm, which then sends {name, value, confirm: name}', async () => {
+    let setCalls = [];
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'HighCommand', currentValue: true, tier: 'live', overridden: false, protected: false, lockoutRisk: true, sessionOnly: true, lockoutWarning: LOCKOUT_WARNING_TEXT }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': (body) => { setCalls.push(body); return { ok: true, appliedLive: true, restartRequired: false, tier: 'live', sessionOnly: true }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    // A single click on the toggle for a lockoutRisk feature must ONLY
+    // open the confirmation panel -- never the two-click arm/confirm
+    // sequence, and never a request.
+    const disableBtn = findByText(h.getRoot(), 'Disable')[0];
+    disableBtn.click();
+    await settle();
+    t.equals(setCalls.length, 0, 'opening the confirmation panel alone never sends a request');
+    t.isTrue(findByText(h.getRoot(), 'Confirm This Change').length >= 1, 'the read-and-type confirmation panel is now open');
+    t.isTrue(findByText(h.getRoot(), LOCKOUT_WARNING_TEXT).length >= 1, 'the server\'s own lockoutWarning text is shown verbatim -- never this page\'s own wording');
+
+    const confirmInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.classList.contains('k9tablet-runtime-lockout-confirm-input'))[0];
+    t.isDefined(confirmInput, 'the type-to-confirm input is present');
+
+    // Wrong value -- Confirm must stay disabled, and clicking it (a
+    // disabled button never fires its handler, see mkButton()) must send
+    // nothing.
+    confirmInput.typeValue('HighCommnad'); // typo, deliberately close but wrong
+    await settle();
+    const confirmBtnWrong = findByText(h.getRoot(), 'Confirm and Apply')[0];
+    t.equals(confirmBtnWrong.getAttribute('disabled'), 'disabled', 'Confirm stays disabled until the typed value matches exactly');
+    confirmBtnWrong.click();
+    await settle();
+    t.equals(setCalls.length, 0, 'a non-matching typed value never sends a request, even if Confirm is clicked directly');
+
+    // Exact value -- Confirm enables, and the resulting call carries
+    // `confirm` set to the feature's own name, exactly.
+    confirmInput.typeValue('HighCommand');
+    await settle();
+    const confirmBtnRight = findByText(h.getRoot(), 'Confirm and Apply')[0];
+    t.isTrue(confirmBtnRight.getAttribute('disabled') !== 'disabled', 'Confirm enables once the typed value matches exactly');
+    confirmBtnRight.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(setCalls.length, 1, 'exactly one request was sent, only after a matching confirmation');
+    t.equals(setCalls[0].name, 'HighCommand');
+    t.equals(setCalls[0].value, false, 'currently on -- Disable requests newValue=false');
+    t.equals(setCalls[0].confirm, 'HighCommand', 'confirm carries the exact feature name');
+});
+
+t.test('SAFETY: Cancel on the confirmation panel closes it and sends nothing', async () => {
+    let setCalled = false;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'HighCommand', currentValue: true, tier: 'live', overridden: false, protected: false, lockoutRisk: true, sessionOnly: true, lockoutWarning: LOCKOUT_WARNING_TEXT }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': () => { setCalled = true; return { ok: true }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    findByText(h.getRoot(), 'Disable')[0].click();
+    await settle();
+    const confirmInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.classList.contains('k9tablet-runtime-lockout-confirm-input'))[0];
+    confirmInput.typeValue('HighCommand');
+    await settle();
+
+    findByText(h.getRoot(), 'Cancel')[0].click();
+    await settle();
+
+    t.isFalse(setCalled, 'Cancel never sends a request');
+    t.equals(findByText(h.getRoot(), 'Confirm This Change').length, 0, 'the confirmation panel is closed');
+    t.isTrue(findByText(h.getRoot(), 'Disable').length >= 1, 'the ordinary toggle button is back');
+});
+
+t.test('SAFETY: Reset (config.lua default) on a lockoutRisk feature goes through the SAME read-and-type panel, sending {name, confirm: name} -- never the ordinary two-click Reset', async () => {
+    let resetCalls = [];
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'TabletTheming', currentValue: false, tier: 'live', overridden: true, overriddenBy: 'CIT1', overriddenAt: '2026-01-01 00:00:00', protected: false, lockoutRisk: true, sessionOnly: true, lockoutWarning: 'Disabling this disables SetTheme/ResetTheme until a restart.' }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeResetFeature': (body) => { resetCalls.push(body); return { ok: true, value: true, restartRequired: false }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const resetBtn = findByText(h.getRoot(), 'Reset to config.lua default')[0];
+    resetBtn.click(); // must NOT arm a two-click confirm -- opens the read-and-type panel instead
+    await settle();
+    t.equals(resetCalls.length, 0, 'opening the confirmation panel alone never sends a request');
+    t.isTrue(findByText(h.getRoot(), 'Confirm This Change').length >= 1, 'the read-and-type panel opened, not an armed two-click button');
+
+    const confirmInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.classList.contains('k9tablet-runtime-lockout-confirm-input'))[0];
+    t.isDefined(confirmInput, 'the same read-and-type panel is used for Reset');
+    confirmInput.typeValue('TabletTheming');
+    await settle();
+    findByText(h.getRoot(), 'Confirm and Apply')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(resetCalls.length, 1);
+    t.equals(resetCalls[0].name, 'TabletTheming');
+    t.equals(resetCalls[0].confirm, 'TabletTheming');
+});
+
+t.test('a `confirmation_required` refusal (the server disagreeing with a stale/bypassed confirm) renders its OWN clear message, not a generic failure', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'HighCommand', currentValue: true, tier: 'live', overridden: false, protected: false, lockoutRisk: true, sessionOnly: true, lockoutWarning: LOCKOUT_WARNING_TEXT }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': () => ({ ok: false, error: 'confirmation_required', lockoutRisk: true, warning: LOCKOUT_WARNING_TEXT }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    findByText(h.getRoot(), 'Disable')[0].click();
+    await settle();
+    const confirmInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.classList.contains('k9tablet-runtime-lockout-confirm-input'))[0];
+    confirmInput.typeValue('HighCommand');
+    await settle();
+    findByText(h.getRoot(), 'Confirm and Apply')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.isTrue(
+        findByText(h.getRoot(), 'The confirmation did not match the feature name exactly. Read the warning again and re-type it to confirm.').length >= 1,
+        'a dedicated, clear message is shown for confirmation_required -- never a bare/generic failure'
+    );
+});
+
 t.run();

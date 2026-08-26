@@ -784,15 +784,37 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- production data (there was never any real row to lose here in the
 -- first place, since every prior write attempt failed silently at the
 -- DB layer).
+--
+-- `handler_xp` ADDED (owner-directed "partners and levels" tablet tab,
+-- handler half; server/progression.lua's AwardHandlerXP/GetHandlerXPTier,
+-- Config.Features.HandlerXPProgression). A SECOND, INDEPENDENT accumulated
+-- total on this SAME row -- not a second table, and not a shared reading
+-- of `xp` above -- because a citizenid's standing as a HANDLER (certifying,
+-- treating, deploying kennels, partnership tenure) is earned by different
+-- actions than its standing as a K9 (search/track/bite/takedown), and
+-- blending them into one number would let either role's grinding silently
+-- unlock the other role's effects with no matching effort in that role.
+-- See Config.HandlerXPTiers' own header (config.lua) for the full "why a
+-- second total, not a second reading of the same one" reasoning, and
+-- sql/migrations/0017_add_k9_progression_handler_xp.sql for the migration
+-- that adds this column to an EXISTING database (this CREATE TABLE only
+-- ever helps a brand-new install -- same "install.sql has final shape, a
+-- migration backfills an existing DB" convention this table's own header
+-- already states for `idx_xp`, migration 0009). Same UNSIGNED/DEFAULT 0
+-- shape as `xp`, for the identical reasons.
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS `k9_progression` (
   `citizenid`  VARCHAR(50)  NOT NULL,                    -- qbx_core / QBCore citizenid convention, matches every other k9_* table
-  `xp`         INT UNSIGNED NOT NULL DEFAULT 0,          -- accumulated total; source of truth for Config.XPTiers lookups
+  `xp`         INT UNSIGNED NOT NULL DEFAULT 0,          -- accumulated K9 total; source of truth for Config.XPTiers lookups
                                                           -- (server/progression.lua's ResolveTier). UNSIGNED guards against a
                                                           -- negative value at the type level, but is not a substitute for
                                                           -- app-layer clamping if a future "reduce/reset XP" admin path is
                                                           -- ever added (see phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 6
                                                           -- item 3) -- no such path exists in this codebase today.
+  `handler_xp` INT UNSIGNED NOT NULL DEFAULT 0,          -- accumulated HANDLER total, independent of `xp` above; source of truth
+                                                          -- for Config.HandlerXPTiers lookups (server/progression.lua's
+                                                          -- ResolveHandlerTier). See this table's own header note on why this
+                                                          -- is a second column, not a second reading of `xp`.
   `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                                                           -- bumped by the ON UPDATE clause AND explicitly re-set by

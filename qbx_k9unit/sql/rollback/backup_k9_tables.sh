@@ -173,8 +173,17 @@ ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_pe
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do
+    # NOTE (sql injection review pass): "$DB" is passed as this query's own
+    # trailing argument, the same way every mysqldump/mysql call in this
+    # script already does -- that is what actually selects the database.
+    # The query itself then asks for DATABASE() instead of splicing the
+    # database name a second time into the SQL text as a quoted literal, so
+    # a database name containing a quote or backslash has nothing to break
+    # out of. "$t" is not user input -- it only ever comes from the fixed
+    # ALL_TABLES list this script itself declares above, never from a
+    # command-line flag -- so it is left as a literal here.
     n=$("$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e \
-        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='$t';" 2>/dev/null || echo 0)
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='$t';" "$DB" 2>/dev/null || echo 0)
     if [ "$n" = "1" ]; then PRESENT+=("$t"); else MISSING+=("$t"); fi
 done
 
@@ -187,10 +196,12 @@ done
 # out loudly. (`k9_units` and similar tables belonging to OTHER K9
 # resources will show up here too -- that is correct and expected; they
 # are not ours to back up. This is a prompt to check, not an error.)
+# Same DATABASE()-instead-of-a-quoted-literal fix as the PRESENT/MISSING
+# loop above; "$DB" is passed positionally below instead.
 UNKNOWN=$("$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e \
     "SELECT GROUP_CONCAT(TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME LIKE 'k9\\_%'
-        AND TABLE_NAME NOT IN ($(printf "'%s'," "${ALL_TABLES[@]}" | sed 's/,$//'))" 2>/dev/null)
+      WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'k9\\_%'
+        AND TABLE_NAME NOT IN ($(printf "'%s'," "${ALL_TABLES[@]}" | sed 's/,$//'))" "$DB" 2>/dev/null)
 if [ -n "$UNKNOWN" ] && [ "$UNKNOWN" != "NULL" ]; then
     echo "NOTE: these k9_* tables are NOT backed up by this script: $UNKNOWN" >&2
     echo "      If any of them belong to qbx_k9unit, this script is out of date --" >&2

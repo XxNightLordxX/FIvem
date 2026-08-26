@@ -226,6 +226,15 @@ local function newFixture(opts)
         GetXPTier = opts.getXPTier,
         ApplyK9PedRole = opts.applyK9PedRole,
         ForceRevertK9Appearance = opts.forceRevertK9Appearance,
+        -- ASSIGNED-K9-MODEL READ-SIDE (this pass, coder-ui, for the
+        -- Onboarding flow's new K9 Role step's honest summary) --
+        -- server/appearance.lua's own already-exposed, DB-authoritative
+        -- accessor (GetAssignedK9Model), same soft-dependency contract as
+        -- every other entry in this list. Deliberately nil by default:
+        -- every EXISTING test in this file exercises tabletRequestPersonSummary's
+        -- own `assignedK9Model = nil` degrade path; only the new tests
+        -- below pass opts.getAssignedK9Model.
+        GetAssignedK9Model = opts.getAssignedK9Model,
         -- CERTIFICATION DEPTH READ-SIDE (this pass) -- server/certifications.lua's
         -- own DB-authoritative, already-exposed accessor. Deliberately nil by
         -- default (like HasPermission above): BuildCertificationsArray's own
@@ -1432,6 +1441,55 @@ t.test('tabletRequestPersonSummary: partnership -- resolves the active partner +
     t.isNotNil(handlerSide.partnership)
     t.equals(handlerSide.partnership.partnerCitizenid, 'K9-CIT')
     t.equals(handlerSide.partnership.role, 'handler')
+end)
+
+-- ============================================================================
+-- tabletRequestPersonSummary: assignedK9Model -- the re-derivation field the
+-- Onboarding flow's K9 Role step's own summary reads instead of trusting a
+-- tablet:assignK9Role click's own `ok:true` (see server/tablet.lua's own
+-- doc comment on this field, right above where it is added to the
+-- response).
+-- ============================================================================
+
+t.test('tabletRequestPersonSummary: assignedK9Model -- nil when server/appearance.lua\'s GetAssignedK9Model is not loaded (soft-dependency degrade, never an error)', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.isNil(result.assignedK9Model)
+end)
+
+t.test('tabletRequestPersonSummary: assignedK9Model -- forwards GetAssignedK9Model(targetCitizenId)\'s own string verbatim when a K9 model is actively assigned', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        getAssignedK9Model = function(citizenid) return citizenid == 'TARGET1' and 'a_c_shepherd' or nil end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.equals(result.assignedK9Model, 'a_c_shepherd')
+end)
+
+t.test('tabletRequestPersonSummary: assignedK9Model -- nil for a DIFFERENT citizenid GetAssignedK9Model does not recognize as currently assigned, never guessed from the caller\'s own', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        getAssignedK9Model = function(citizenid) return citizenid == 'SOMEONE-ELSE' and 'a_c_shepherd' or nil end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.isNil(result.assignedK9Model)
+end)
+
+t.test('tabletRequestPersonSummary: assignedK9Model -- resolves for a genuinely OFFLINE target too (never online-registered in this fixture at all), matching every other DB-authoritative field in this response', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        getAssignedK9Model = function(citizenid) return citizenid == 'OFFLINE-K9' and 'a_c_husky' or nil end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'OFFLINE-K9')
+    t.isTrue(result.ok)
+    t.equals(result.assignedK9Model, 'a_c_husky')
 end)
 
 -- ============================================================================

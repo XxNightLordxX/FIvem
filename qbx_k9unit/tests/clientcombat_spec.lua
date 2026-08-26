@@ -63,7 +63,8 @@
     landed in client/combat.lua WHILE this spec was being written (a
     concurrent, independent pass closing a QA-reported real defect: a K9
     tucked into a vehicle via client/vehicle.lua's EnterNearestK9Vehicle()
-    is frozen/invisible/attached, so none of RequestBiteHold/RequestTakedown/
+    is genuinely seated in a real vehicle seat with no body free to fight,
+    so none of RequestBiteHold/RequestTakedown/
     RequestDrag should be able to start anything against it). Tested below
     against the file as it now stands. ONE REAL, TRANSIENT FINDING while
     writing these tests, disclosed for the record even though it has since

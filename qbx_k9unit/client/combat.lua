@@ -632,23 +632,25 @@ end
 
 -- MUTUAL GUARD vs. client/vehicle.lua's VehicleEntryExit (QA-reported real
 -- defect, this pass, siblings closed proactively at the same time): a K9
--- "tucked" into a vehicle via EnterNearestK9Vehicle() is frozen, invisible,
--- collisionless, and attached to the vehicle — no live target could see or
--- reach it, and it has no body free to bite/take down/drag anything. Every
--- one of this file's three self-initiated triggers below (RequestBiteHold,
--- RequestTakedown, RequestDrag) must refuse while tucked, for two reasons
--- together: (1) the effect would be physically nonsensical (an invisible,
--- immobile K9 reaching out to restrain a target); (2) for RequestDrag
--- specifically, granting one would start the shared maintenance thread's
--- per-tick `AttachEntityToEntity(targetPed, PlayerPedId(), ...)` (see
--- "ActiveDragAsHolder" below) against a ped ALREADY attached to a vehicle as
--- ITS OWN child — a nested attach chain nobody designed for (the dragged
--- target becomes a rigid child of a ped that is itself invisible, frozen,
--- collisionless, and bolted to a vehicle). client/vehicle.lua's own
--- EnterNearestK9Vehicle() carries the symmetric guard for the opposite
--- ordering (a K9 that starts the drag/hold FIRST, then selects "Enter
--- Vehicle") — neither guard alone covers both directions, so both files
--- carry one.
+-- "tucked" into a vehicle via EnterNearestK9Vehicle() is genuinely seated in
+-- a real vehicle seat (SET_PED_INTO_VEHICLE — visible and collidable to
+-- everyone else, not frozen or hidden; see client/vehicle.lua's own header)
+-- but still has no body free to bite/take down/drag anything while sitting
+-- inside the car. Every one of this file's three self-initiated triggers
+-- below (RequestBiteHold, RequestTakedown, RequestDrag) must refuse while
+-- tucked, for two reasons together: (1) the effect would be physically
+-- nonsensical (a seated K9 reaching out through the vehicle body to
+-- restrain a target); (2) for RequestDrag specifically, granting one would
+-- start the shared maintenance thread's per-tick
+-- `AttachEntityToEntity(targetPed, PlayerPedId(), ...)` (see
+-- "ActiveDragAsHolder" below) against a ped that is already a genuine
+-- vehicle occupant — attaching a dragged target onto a ped sitting inside a
+-- car is a nested-attachment case nobody designed for (the dragged target
+-- becomes a rigid child of a ped that is itself seated inside a vehicle).
+-- client/vehicle.lua's own EnterNearestK9Vehicle() carries the symmetric
+-- guard for the opposite ordering (a K9 that starts the drag/hold FIRST,
+-- then selects "Enter Vehicle") — neither guard alone covers both
+-- directions, so both files carry one.
 --
 -- Soft dependency, `type(...) == 'function'` runtime existence guard — this
 -- resource's established convention for an optional cross-file read (see

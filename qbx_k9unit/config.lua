@@ -79,8 +79,11 @@ Config = {}
 --                                     warning before they do
 --
 -- EARNING AND RANKING UP
---   Config.XP ....................... what each action pays
---   Config.XPTiers .................. the four ranks and what they unlock
+--   Config.XP ....................... what each action pays (the K9)
+--   Config.XPTiers .................. the four K9 ranks and what they unlock
+--   Config.HandlerXP ................ what each HANDLER action pays -- a
+--                                     separate total from Config.XP, above
+--   Config.HandlerXPTiers ........... the handler ranks and what they unlock
 --   Config.Leaderboard .............. the /k9stats table
 --
 -- THE JOB ITSELF
@@ -277,6 +280,42 @@ Config.Features = {
     -- Phase 4 (inventory, progression, vitality)
     K9Inventory          = true,
     XPProgression        = true,
+
+    -- server/progression.lua's AwardHandlerXP/GetHandlerXPTier -- a SEPARATE
+    -- accumulated total from XPProgression above (own `handler_xp` column
+    -- on the existing k9_progression row, own Config.HandlerXPTiers ladder,
+    -- own Config.HandlerXP.awards table) for actions a HUMAN HANDLER
+    -- performs, as opposed to XPProgression's K9-mechanical actions
+    -- (search/track/bite/takedown). See Config.HandlerXPTiers' own header
+    -- for the full "why a second total, not the same one" reasoning.
+    --
+    -- DEFAULT FALSE, DELIBERATELY -- NOT YET SAFE TO ENABLE ON A LIVE
+    -- SERVER. The award-minting machinery (the shared cross-mechanic XP
+    -- mint budget, the per-(citizenid, actionKey) rate floor) is real and
+    -- shared with XPProgression's own AwardXP, so it is not undefended --
+    -- but TWO of the three earning hooks this pass defines
+    -- (`handlerTreatK9`, `handlerKennelDeploy` -- see Config.HandlerXP.awards
+    -- below) have NO per-actor mint cooldown of their own yet, because that
+    -- cooldown belongs in server/medkit.lua/server/kennel.lua respectively
+    -- (not owned by this pass -- see server/progression.lua's own
+    -- AwardHandlerXP doc comment for the exact contract each file's owner
+    -- needs to add). Concretely, WITHOUT that cooldown,
+    -- Config.DeployableKennel.deployCooldownMs's own 5000ms default lets a
+    -- SOLO handler mint handlerKennelDeploy's 8 XP every 5 seconds with no
+    -- accomplice and no per-actor throttle at all -- 5,760 XP/hr
+    -- uncapped, which alone would exhaust the ENTIRE shared 3,600 XP/hr
+    -- budget (the same budget XPProgression's own K9 awards rely on to
+    -- keep Elite over two hours away) in under 40 minutes. The shared
+    -- budget still caps the damage (nobody can mint UNLIMITED XP), but it
+    -- would make kennel-deploy-spam the fastest way to cap out a
+    -- citizenid's TOTAL K9+handler XP for the hour, crowding out every
+    -- legitimate award. Flip this to `true` only once the per-actor mint
+    -- cooldowns described in server/progression.lua's own AwardHandlerXP
+    -- doc comment have actually landed in those two files -- same
+    -- "landed as a foundation, reviewed before go-live" posture
+    -- Config.Features.HandlerPartnership itself went through above.
+    HandlerXPProgression = false,
+
     HealthStaminaHUD     = true,
     FatigueSystem        = true,
     MoodSystem           = true,
@@ -1360,6 +1399,68 @@ Config.XPTiers = {
 }
 
 -- ======================================================================
+-- HANDLER XP TIERS (Config.Features.HandlerXPProgression,
+-- server/progression.lua's AwardHandlerXP/GetHandlerXPTier). The owner's
+-- own ask: a "partners and levels" tablet tab for BOTH K9s and handlers.
+-- Config.XPTiers above already answers the K9 half; this is the handler
+-- half.
+--
+-- WHY A SEPARATE LADDER, NOT A SECOND READING OF Config.XPTiers: every
+-- effect on Config.XPTiers (speedMultiplier/scentRangeMultiplier/
+-- medkitCooldownMultiplier) acts on a K9's own ped -- meaningless applied
+-- to a human handler. Rather than invent effects for a handler on the SAME
+-- ladder (which would also mean a K9's own combat/search grinding
+-- silently unlocked handler perks, and a handler's own certifying/treating
+-- silently unlocked K9 speed/scent, for the SAME citizenid across two
+-- unrelated skill tracks -- see Config.HandlerXP's own header for why that
+-- was rejected), this is its own ladder, fed by its own
+-- Config.HandlerXP.awards table, walked the identical way
+-- server/progression.lua's ResolveTier already walks Config.XPTiers
+-- (ascending, first entry MUST be xp = 0 -- same mandatory baseline
+-- contract).
+--
+-- STILL ONE ROW PER CITIZENID, NOT A SECOND k9_progression-shaped TABLE:
+-- persisted as `k9_progression.handler_xp`, a second column on the SAME
+-- row XPTiers' own total (`xp`) already lives on -- see
+-- sql/migrations/0017_add_k9_progression_handler_xp.sql's own header for
+-- the full schema reasoning. One citizenid, one row, TWO independent
+-- totals -- a person who is sometimes the K9 and sometimes the handler
+-- keeps two separate standings, each earned only by that role's own
+-- actions, rather than one shared number blending unrelated skill tracks.
+--
+-- EVERY EFFECT FIELD BELOW IS OPTIONAL AND DEFENSIVELY BOUNDED, same
+-- "consulted only after an existing gate has already allowed the action,
+-- can only ever shorten a wait or lengthen a distance, never grant access"
+-- posture Config.XPTiers' own medkitCooldownMultiplier already
+-- established -- see each accessor's own doc comment in
+-- server/progression.lua (GetHandlerXPTierMedkitCooldownMs/
+-- GetHandlerXPTierKennelDeployCooldownMs/GetHandlerXPTierLeashMaxDistance)
+-- for the exact bounds and the CALLER CONTRACT each names for the file
+-- that still needs to wire it in (server/medkit.lua, server/kennel.lua,
+-- server/main.lua respectively -- none of those three are edited by this
+-- pass; see this resource's own DEVELOPER_REFERENCE.md/PROJECT_HISTORY.md
+-- for the handoff). WHY THESE THREE, and what was rejected for having no
+-- real consumer to hook (a higher /k9givexp ceiling; better equipment-shop
+-- stock) is documented in server/progression.lua's own "HANDLER XP TIER
+-- UNLOCKS" section, mirroring Config.XPTiers' own "XP TIER UNLOCKS"
+-- section exactly.
+--
+-- UNREVIEWED PLACEHOLDER NUMBERS, same status Config.XPTiers/Config.XP
+-- carry -- tune freely once a real handler-XP economy pass happens.
+-- Cumulative by design (each tier restates every lower tier's own bonus
+-- fields plus its own new one) so a handler's benefits only ever grow with
+-- rank, never drop out at a higher tier the way Config.XPTiers' own Elite
+-- row currently omits medkitCooldownMultiplier (an existing, pre-dating
+-- inconsistency on the K9 ladder this pass observed but does not touch --
+-- flagged for whoever owns that table's own tuning next).
+Config.HandlerXPTiers = {
+    { xp = 0,    label = 'Rookie Handler' },
+    { xp = 750,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
+    { xp = 2500, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.75 },
+    { xp = 6000, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60, leashRangeMultiplier = 1.25 },
+}
+
+-- ======================================================================
 -- XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
 -- Per-action award VALUES that accumulate toward Config.XPTiers' thresholds
 -- above (that table was drafted early and sat unused until this pass).
@@ -1475,6 +1576,84 @@ Config.XP = {
     -- client-supplied coordinate or distance claim.
     trackArrivalRadius = 3.0,    -- meters
     trackArrivalTTLMs  = 60000,  -- how long a resolved-but-unreached source stays eligible for a late arrival report before expiring — prevents a stale pending-arrival slot from awarding XP for a long-abandoned search
+}
+
+-- ======================================================================
+-- HANDLER XP PROGRESSION (Config.Features.HandlerXPProgression,
+-- server/progression.lua's AwardHandlerXP). Config.XP above pays the K9
+-- for K9-mechanical actions (search/track/bite/takedown/wall-clock
+-- tenure); this pays the HANDLER for handler actions -- into a SEPARATE
+-- accumulated total (`k9_progression.handler_xp`), walked against the
+-- SEPARATE Config.HandlerXPTiers ladder above.
+--
+-- WHAT COUNTS AS A HANDLER ACTION, and why each one is safe to pay for --
+-- chosen from what this codebase can actually observe server-side today,
+-- never an invented event:
+--   * handlerCertifyK9 -- server/certifications.lua's GrantCertification,
+--     at the point a NEW (not renewed/already-active) certification is
+--     granted. Rare and deliberate by nature (a K9 can only be certified
+--     once at a time; earning this again for the SAME target needs a
+--     genuine revoke in between, an action this pass does not control the
+--     cadence of) -- the highest single award here specifically because it
+--     is the hardest to repeat cheaply.
+--   * handlerTreatK9 -- server/medkit.lua's RunUseK9MedkitMutation, paid to
+--     the USING player (never the K9 being healed) on a genuine injury
+--     restore. Bounded today by that file's own per-TARGET MedkitCooldown
+--     (Config.K9Medkit.cooldownMs, 60000ms default) and by a real injury
+--     needing to exist first -- NOT YET bounded by any per-ACTOR cooldown,
+--     so a handler roaming between several simultaneously-injured K9s has
+--     no throttle of their own yet. See Config.Features.HandlerXPProgression's
+--     own comment above for why this keeps the feature off by default
+--     until that lands.
+--   * handlerKennelDeploy -- server/kennel.lua's deploy/pickup success
+--     path. Bounded ONLY by that file's own per-actor DeployCooldown
+--     (Config.DeployableKennel.deployCooldownMs, 5000ms default) today --
+--     see Config.Features.HandlerXPProgression's own comment above for the
+--     measured 5,760 XP/hr worst case this implies without a dedicated
+--     mint cooldown, and why this feature ships off until one exists.
+--   * handlerPartnershipTenure{1,7,30}Day -- paid to `handler_citizenid`
+--     by the SAME milestone-crossing check server/tenure.lua already runs
+--     for the K9 side (Config.Partnership.TenureBonus.milestones' own new
+--     `handlerActionKey` field below) -- inherits that mechanism's
+--     existing one-time-per-partnership-row CAS guard and same-pair-reform
+--     seeding for free, no new anti-farm needed. NOT YET WIRED --
+--     server/tenure.lua is not edited by this pass; see that file's own
+--     `handlerActionKey` field comment (Config.Partnership.TenureBonus.
+--     milestones, below) for the exact call this needs.
+--   * "present for a successful search/track" is DELIBERATELY NOT
+--     duplicated here -- server/search.lua's existing coopSearchBonus
+--     (Config.XP.awards above) already pays a present, Trained+ partner
+--     (which may already be a handler citizenid) through the ORIGINAL
+--     shared `xp` column, exactly as it does today. Re-routing that
+--     already-shipped, already-tested award into this SEPARATE handler
+--     total was considered and rejected: it is one of only two role-
+--     agnostic exceptions this design intentionally leaves alone (the
+--     other being /k9givexp's AwardXPDirect) -- see server/progression.lua's
+--     AwardHandlerXP doc comment for the full "why not touch these two"
+--     reasoning.
+--
+-- ANTI-FARM: every award below is minted through AwardHandlerXP, which
+-- reuses (never duplicates) server/progression.lua's existing
+-- per-(citizenid, actionKey) 500ms rate floor AND its shared,
+-- cross-mechanic XP mint budget (3,600 XP per rolling hour, PER CITIZENID,
+-- SHARED with Config.XP.awards above -- a citizenid farming both totals at
+-- once still only ever mints 3,600 XP/hr combined, never 3,600 of each).
+-- See server/progression.lua's own AwardHandlerXP doc comment for the full
+-- per-award-path anti-farm accounting (repeat-cheapest-action,
+-- accomplice-trading, break/reform-partnership, and relog, each answered).
+--
+-- UNREVIEWED PLACEHOLDER VALUES, same status as every number in Config.XP
+-- above.
+-- ======================================================================
+Config.HandlerXP = {
+    awards = {
+        handlerCertifyK9              = 50,
+        handlerTreatK9                = 12,
+        handlerKennelDeploy           = 8,
+        handlerPartnershipTenure1Day  = 15,
+        handlerPartnershipTenure7Day  = 40,
+        handlerPartnershipTenure30Day = 100,
+    },
 }
 
 -- ======================================================================
@@ -2086,10 +2265,30 @@ Config.Partnership = {
         -- Config.ContrabandAlertTiers' identical documented ordering
         -- requirement. Each actionKey must have a matching entry in
         -- Config.XP.awards above, or the award silently resolves to nothing.
+        --
+        -- `handlerActionKey` (NEW, additive field, this pass) -- OPTIONAL,
+        -- and NOT YET READ by server/tenure.lua (that file is not edited by
+        -- this pass): the matching entry in Config.HandlerXP.awards above,
+        -- to be paid to `handler_citizenid` the SAME tick
+        -- CheckTenureMilestonesForK9 pays `actionKey` to `k9Citizenid`.
+        -- Exact call server/tenure.lua's owner needs to add, immediately
+        -- after that function's existing
+        -- `AwardXP(k9Citizenid, milestone.actionKey)` line inside its
+        -- `for tier = alreadyGranted + 1, targetTier do` loop:
+        --     if type(AwardHandlerXP) == 'function' and milestone.handlerActionKey then
+        --         AwardHandlerXP(row.handler_citizenid, milestone.handlerActionKey)
+        --     end
+        -- Same soft-dependency guard shape that call site already uses for
+        -- AwardXP itself. Inherits that loop's existing one-time-per-row
+        -- CAS guard and same-pair-reform seeding for free -- no new
+        -- anti-farm state needed for this half. Until server/tenure.lua
+        -- adds that call, this field is inert data with no consumer, same
+        -- "defined, not yet wired" status as Config.HandlerXPTiers' own
+        -- three effect fields.
         milestones = {
-            { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day'  },
-            { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day'  },
-            { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day' },
+            { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day',  handlerActionKey = 'handlerPartnershipTenure1Day'  },
+            { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day',  handlerActionKey = 'handlerPartnershipTenure7Day'  },
+            { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day', handlerActionKey = 'handlerPartnershipTenure30Day' },
         },
     },
 }

@@ -2123,9 +2123,10 @@ local function RegisterDoorInteractionOxTargetOptions()
                 distance = Config.DoorInteraction.interactDistance,
                 canInteract = function(entity, distance, coords, name)
                     if not CanShowK9UI() then return false end
-                    -- qa-tester finding: a vehicle-tucked K9 (frozen/invisible/
-                    -- attached, client/vehicle.lua's EnterNearestK9Vehicle) is
-                    -- nowhere near this door in any way that should let it play
+                    -- qa-tester finding: a K9 seated inside a vehicle
+                    -- (client/vehicle.lua's EnterNearestK9Vehicle, a real
+                    -- vehicle seat via SET_PED_INTO_VEHICLE) is nowhere near
+                    -- this door in any way that should let it play
                     -- a scratch scenario and broadcast an alert — mirrors the
                     -- leash pull-back thread's own `IsInK9Vehicle and
                     -- IsInK9Vehicle()` exclusion for the identical state

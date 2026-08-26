@@ -15,11 +15,20 @@
     below is gated on its OWN Config.Features flag, not just declared —
     disabling e.g. FatigueSystem while MoodSystem stays on means fatigue is
     never ticked, never read, and never pushed to a meaningful value; it
-    simply idles at its default. This file starts NO thread at all if all
-    five flags are false (see the CreateThread guard near the bottom, and
-    its own "DISCLOSED, NOT FIXED HERE" comment for the one runtime-toggle-ON
-    gap this shape still has, and why an always-on alternative was tried
-    and reverted this pass).
+    simply idles at its default. RESOLVED (this pass, coder-backend — see
+    the CreateThread call near the bottom, and its own resolution comment,
+    for the full writeup): the shared tick thread now ALWAYS starts at this
+    file's own load time regardless of whether any of the five flags is on
+    yet, re-checking all five fresh inside the loop before ever calling
+    TickWellbeing — a server booted with every flag off and later flipped
+    live from the tablet is picked up within one
+    Config.Wellbeing.tickIntervalMs, never "not until this resource
+    restarts." This paragraph used to read the opposite ("this file starts
+    NO thread at all if all five flags are false") and pointed at a
+    "DISCLOSED, NOT FIXED HERE" comment naming a live-toggle-ON gap plus a
+    reverted attempt to close it — both are gone now; see the CreateThread
+    call's own comment for exactly why that first attempt was the wrong
+    shape to copy, and what this fix copies instead.
 
     ======================================================================
     CONFIDENCE GRADING — read before extending this file:
@@ -1939,57 +1948,114 @@ AddEventHandler('playerDropped', function(_reason)
     end
 end)
 
--- DISCLOSED, NOT FIXED HERE (audited this pass, alongside the LIVE FEATURE
--- FLAG PUSH change above): this is a ONE-TIME check, evaluated once at this
--- file's own load time -- a server that ships all five wellbeing flags
--- false starts NO thread at all. Attempted, this pass, to make this thread
--- always start and idle while every flag is false (mirroring
--- client/movement.lua's own MOVE-RATE WATCHDOG shape) so a later runtime
--- toggle-ON would have something already running to pick it up -- REVERTED
--- after it broke this file's own tests/wellbeing_spec.lua on two counts:
--- (1) the DISCREPANCY test asserting exactly ONE CreateThread call at
--- file-load with every flag off (DistractionCooldown's own always-on sweep
--- alone), and (2) the step()-per-tick harness, which assumes this thread's
--- own OWN Wait()-then-act ordering to line up one TickWellbeing pass per
--- simulated step. Both are real, already-relied-upon, deliberately-tested
--- invariants elsewhere in this codebase (this file's own established "no
--- code needed when disabled" posture, restated in this file's own header),
--- not incidental test debt -- overriding them to close this one gap was
--- the wrong trade.
+-- CONFIRMED LIVE-FLIP BUG, FIXED (this pass, coder-backend) -- this thread
+-- used to be wrapped in `if Config.Features.FatigueSystem or
+-- Config.Features.MoodSystem or Config.Features.FearStressSystem or
+-- Config.Features.DistractionSystem or Config.Features.InjuryLimping then
+-- CreateThread(...) end`, a boot-time snapshot of five flags read exactly
+-- once, at this file's own load time. server/runtimecontrol.lua's own
+-- FEATURE_TIERS registers all five as `tier = 'live'` (ApplyFeatureOverride
+-- mutates Config.Features.* immediately, no restart), so an operator could
+-- boot with all five off and flip ONE on live from the tablet in one click:
+-- every client-facing entry point (petK9/feedK9/applyK9Distraction/
+-- calmDownK9/relayDamageEvent/relayWeaponFire) re-checks its OWN flag fresh
+-- and would start mutating WellbeingStats for real immediately, but the
+-- ONLY thread that ever ticks decay/regen or pushes a `wellbeingUpdate`
+-- would never have started, for the rest of that server's uptime -- an
+-- already-connected client's last-received snapshot (and any move-rate/
+-- input-block effect client/wellbeing.lua derived from it) would then go
+-- stale with NO upper bound at all, not merely one `TICK_INTERVAL_MS`,
+-- until this resource restarts. Exactly the same bug SHAPE as
+-- server/combat.lua's own two threads (commit 0aeff52, "CONFIRMED LIVE-FLIP
+-- BUG, FIXED" -- read both of that file's comments in full before touching
+-- this one), and this fix copies that file's OWN precedent.
 --
--- THE HONEST STATE, FOR THE TIER TABLE: this is the SAME disclosed shape
--- server/runtimecontrol.lua's own FEATURE_TIERS already accepts for
--- CertificationExpiry ("the courtesy expiry-warning sweep thread only
--- starts if this was already true when server/certifications.lua loaded")
--- and PartnershipTenureBonus ("the tick thread only starts if all three
--- were already true when server/tenure.lua loaded") -- FatigueSystem/
--- MoodSystem/FearStressSystem/DistractionSystem/InjuryLimping's own
--- FEATURE_TIERS entries do NOT yet carry the equivalent note, despite
--- sharing the identical shape: if a server ships ALL FIVE of these flags
--- false at boot, a later runtime toggle-ON of ANY ONE of them has nothing
--- polling to ever begin ticking that stat, or pushing a single
--- `wellbeingUpdate`, until this resource restarts -- reported to
--- server/runtimecontrol.lua's owner (out of this pass's file-ownership
--- scope) as a FEATURE_TIERS documentation gap, not a mis-tier: the
--- OFF-direction fix immediately above (LIVE FEATURE FLAG PUSH) IS fully
--- live with no caveat whenever at least one of the five was already true
--- at boot -- the overwhelmingly likely real-world deployment shape for a
--- flagship subsystem like this one -- so `tier = 'live'` remains the
--- correct classification; it just needs the same disclosed-caveat `note`
--- CertificationExpiry/PartnershipTenureBonus already carry.
-if Config.Features.FatigueSystem or Config.Features.MoodSystem
-    or Config.Features.FearStressSystem or Config.Features.DistractionSystem
-    or Config.Features.InjuryLimping then
-    CreateThread(function()
-        while true do
-            Wait(TICK_INTERVAL_MS)
+-- AN EARLIER ATTEMPT THIS PASS WAS WRONG, NOT THE TEST SUITE -- recorded
+-- here so nobody re-tries the same shape. The first attempt mirrored
+-- client/movement.lua's own MOVE-RATE WATCHDOG instead
+-- (`if condition then act(); Wait(activeMs) else Wait(idleMs) end` --
+-- ACT-THEN-WAIT, with a SHORT idle poll interval while nothing is enabled)
+-- rather than combat.lua's own fixed-thread shape (a bare, unconditional
+-- `Wait(interval)` as the loop's literal FIRST statement, every iteration,
+-- with the flag check moved to AFTER that Wait). That broke this file's own
+-- tests/wellbeing_spec.lua on two counts, and only one of them was a reason
+-- to touch the spec rather than the code:
+--   1. The DISCREPANCY test pinning exactly ONE CreateThread call at file
+--      load with every flag off (DistractionCooldown's own always-on
+--      sweep, the only thread that existed pre-fix) went red. This one WAS
+--      a reason to update the test, not revert the code -- a test that
+--      keeps asserting "exactly one CreateThread call with everything off"
+--      is asserting the BUG's own premise once the bug is fixed. See that
+--      test's replacement in tests/wellbeing_spec.lua, mirroring
+--      tests/combat_spec.lua's own corrected "with every combat feature
+--      flag off..." test and tests/runtimefeaturetiers_spec.lua's
+--      "RESOLVED PARTIAL LIVENESS" test for the identical shape.
+--   2. tests/fixtures/sandbox.lua's coroutine thread runner (`runOneTick`/
+--      `primeIfNeeded` here, used identically by every other spec in this
+--      suite) is built on one load-bearing assumption, stated in that
+--      file's own header: "every sweep thread in this resource calls
+--      Wait(...) as its FIRST statement inside the loop" -- the FIRST
+--      step() primes (reaches that Wait and yields, having done no real
+--      work yet), and each step() after that runs exactly one full loop
+--      body. An act-before-Wait structure breaks that on the very first
+--      (priming) step -- the prime call would already have executed a real
+--      TickWellbeing() pass, silently double-counting one pass against
+--      every existing assertion in this file that counts wellbeingUpdate
+--      events per step() (POINT 2's own tests especially). THIS was a real
+--      bug in the ATTEMPT, not a wrong assumption in the test -- a
+--      production thread whose own first statement is conditional,
+--      variable-duration work rather than a plain Wait is also a strictly
+--      worse shape on its own merits (a harder-to-reason-about interval
+--      that depends on which branch fired last), not merely
+--      test-incompatible.
+--
+-- FIXED, this time, by keeping this thread's shape IDENTICAL to what it
+-- was before, other than removing the outer `if`: `Wait(TICK_INTERVAL_MS)`
+-- remains the loop's literal first statement, unconditionally, every
+-- iteration, and the five-flag check moves to immediately after it, gating
+-- only whether TickWellbeing() itself runs THIS iteration -- exactly
+-- server/combat.lua's own K9-POSITION-HISTORY thread shape, not its expiry
+-- thread's shape: TickWellbeing's own body is NOT free the way combat.lua's
+-- ActiveHolds-iterating expiry-thread body is with its flags off (a `pairs`
+-- over a table provably empty with those flags off) -- TickWellbeing
+-- unconditionally calls GetPlayers() and resolves GetPlayerPed/
+-- GetEntityModel/HasK9Access/GetEntityCoords/ResolveCitizenid for every
+-- online player BEFORE any of the five per-stat branches ever run, real
+-- per-player native calls an all-off server has no business paying for
+-- every TICK_INTERVAL_MS. So the flag check stays INSIDE the loop, read
+-- fresh every tick (never captured once), the same choice combat.lua's own
+-- K9-position-history thread made for the identical "body is real work,
+-- not a free walk" reason -- a live flip takes effect within at most one
+-- TICK_INTERVAL_MS, never "not until this resource restarts."
+--
+-- THE HONEST STATE, FOR THE TIER TABLE: checked directly against
+-- server/runtimecontrol.lua as it stands right now (coordinated with the
+-- agent actively editing that file for an unrelated feature, before
+-- touching this comment) -- FatigueSystem/MoodSystem/FearStressSystem/
+-- DistractionSystem/InjuryLimping's own FEATURE_TIERS entries are still
+-- bare `{ tier = 'live' }`, no `note` field, and no test anywhere requires
+-- one to exist. The disclosure this file's OLD text above said had been
+-- "reported to server/runtimecontrol.lua's owner... as a FEATURE_TIERS
+-- documentation gap" never actually landed as a note there -- so there is
+-- nothing to remove in that file and no test to invert, unlike
+-- server/combat.lua's BiteAndHold/NonLethalTakedown/PropDragging (which DID
+-- carry a note, since removed -- see tests/runtimefeaturetiers_spec.lua's
+-- "RESOLVED PARTIAL LIVENESS" test). `tier = 'live'` was, and remains, the
+-- correct classification either way: the gap this comment used to disclose
+-- is closed now, not merely left undocumented.
+CreateThread(function()
+    while true do
+        Wait(TICK_INTERVAL_MS)
+        if Config.Features.FatigueSystem or Config.Features.MoodSystem
+            or Config.Features.FearStressSystem or Config.Features.DistractionSystem
+            or Config.Features.InjuryLimping then
             local ok, err = pcall(TickWellbeing)
             if not ok then
                 print(('[qbx_k9unit] wellbeing tick error: %s'):format(tostring(err)))
             end
         end
-    end)
-end
+    end
+end)
 
 -- ======================================================================
 -- STARTUP VALIDATION — PLACEHOLDER ox_inventory ITEM NAMES (this pass,
