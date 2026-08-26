@@ -49,9 +49,11 @@
     server side.
     ======================================================================
 
-    - THIS FILE calls client/main.lua's CanShowK9UI()/DenyK9UIAccess() and
-      IsOwnModelK9(), same as every other gated client action in this
-      resource.
+    - THIS FILE calls client/main.lua's CanShowK9UI()/DenyK9UIAccess(), same
+      as every other gated client action in this resource. CORRECTED
+      2026-08-26: this used to also claim IsOwnModelK9() — this file never
+      calls it (grepped to confirm); CanShowK9UI() alone is the actual gate
+      used below.
 ]]
 
 -- Milliseconds to wait for RequestModel to actually finish loading before

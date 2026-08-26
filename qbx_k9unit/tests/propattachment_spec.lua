@@ -177,6 +177,15 @@ local function newFixture(opts)
         },
     }
 
+    -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+    -- tests/pursuitsprint_spec.lua's own `permissionGrants`/
+    -- `defaultHasPermission`/`grantPermission` fixture shape, for
+    -- IsPropAttachmentsPermittedForCitizenId.
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local function defaultHasPermission(citizenid, key)
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local pedBySource = {} -- source -> ped handle (unset/0 == "disconnected mid-flight")
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
@@ -222,6 +231,7 @@ local function newFixture(opts)
             pendingConfirmTtlMs = PENDING_CONFIRM_TTL_MS,
             confirmDistanceTolerance = CONFIRM_DISTANCE_TOLERANCE,
         },
+        FeatureControl = { RequireGrant = {} },
     }
 
     local env = Sandbox.newEnv({
@@ -234,6 +244,7 @@ local function newFixture(opts)
         HasK9Access = HasK9Access,
         IsConfiguredK9Model = IsConfiguredK9Model,
         HasK9Role = HasK9Role,
+        HasPermission = defaultHasPermission,
         exports = exportsStub,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
@@ -263,6 +274,12 @@ local function newFixture(opts)
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
         setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
+        -- PER-PERSON FEATURE CONTROL (this pass) -- see this fixture's own
+        -- header comment above.
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
         setPed = function(src, pedHandle, coords, modelHash)
             pedBySource[src] = pedHandle
             coordsByHandle[pedHandle] = { x = coords.x, y = coords.y, z = coords.z }
@@ -536,6 +553,73 @@ t.test('requestToggleK9PropAttachment: REMOVE path (already active) needs no rou
     local broadcast = lastClientEvent(f, 'qbx_k9unit:client:removeK9PropAttachment')
     t.equals(broadcast.target, -1)
     t.equals(broadcast.args[1], netId)
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: the REMOVE branch still works instantly for a handler who is now block.PropAttachments-blocked -- toggling a vest off must never be gated', function()
+    local f = newFixture()
+    local _, handle = attachSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'block.PropAttachments', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'), 'a blocked handler must still be able to take their own vest off')
+    t.isTrue(f.deletedEntities[handle])
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsPropAttachmentsPermittedForCitizenId, checked ONLY on
+-- the ADD branch above -- never the REMOVE branch (see the termination-path
+-- test immediately above). Mirrors tests/pursuitsprint_spec.lua's own
+-- section of the same name.
+-- ----------------------------------------------------------------------
+
+t.test('requestToggleK9PropAttachment BLOCK (ADD): an explicit block.PropAttachments grant denies, and burns NO toggle cooldown', function()
+    local f = newFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'block.PropAttachments', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:attachK9Prop'), 0)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.not_authorized_equipment'))
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed ToggleCooldown, this would now be silently rate-limited
+    -- instead of succeeding.
+    f.grantPermission('ABC123', 'block.PropAttachments', false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:attachK9Prop'), 1, 'a block must never burn the cooldown a legitimate follow-up toggle still needs')
+end)
+
+t.test('requestToggleK9PropAttachment not blocked (ADD): an ordinary handler with no grant/block row at all still attaches (default allow, step 4)', function()
+    local f = newFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:attachK9Prop'), 1)
+end)
+
+t.test('requestToggleK9PropAttachment RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newFixture()
+    f.config.FeatureControl.RequireGrant.PropAttachments = true
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:attachK9Prop'), 0)
+end)
+
+t.test('requestToggleK9PropAttachment RequireGrant listed + an active feature.PropAttachments grant -- allowed', function()
+    local f = newFixture()
+    f.config.FeatureControl.RequireGrant.PropAttachments = true
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'feature.PropAttachments', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:attachK9Prop'), 1)
 end)
 
 -- ----------------------------------------------------------------------

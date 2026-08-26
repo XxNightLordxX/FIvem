@@ -1257,6 +1257,15 @@ t.test('requestPickupKennel: the real owner succeeds, deletes the entity, broadc
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_owner'))
 end)
 
+t.test('TERMINATION PATH UNAFFECTED: requestPickupKennel still works instantly for a handler who is now block.DeployableKennel-blocked -- "exit a kennel" must never be gated', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'block.DeployableKennel', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'), 'a blocked handler must still be able to pick their own kennel back up')
+    t.isTrue(f.deletedEntities[handle])
+end)
+
 t.test('requestPickupKennel: a stale registry entry (entity already gone) is still cleanly cleared, without erroring', function()
     local f = newKennelFixture()
     local netId, handle = deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })

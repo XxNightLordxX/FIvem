@@ -618,4 +618,61 @@ t.test('playerDropped clears the disconnecting source\'s own cooldown -- a fresh
     t.isTrue(notifiedExactly(f, 10, locale('recall.recall_issued'), 'success'))
 end)
 
+-- ========================================================================
+-- PER-PERSON FEATURE CONTROL -- DELIBERATELY ABSENT, PINNED (this pass).
+--
+-- Every OTHER feature this pass touched gates its own OPENING action on
+-- IsXPermittedForCitizenId (config.lua's Config.FeatureControl 4-step
+-- resolution). Recall is the one deliberate exception, documented in full
+-- in server/recall.lua's own header ("PER-PERSON FEATURE CONTROL... IS
+-- DELIBERATELY NOT IMPLEMENTED HERE"): it is this resource's PRIMARY escape
+-- hatch, and a block must never be able to strand a handler whose K9
+-- partner is mid-bite. A source-level check (not just a behavioral one) is
+-- used here on purpose -- mirrors tests/training_spec.lua's own "SOURCE-
+-- LEVEL GUARANTEE" convention for the identical reason: this proves the
+-- file contains no call to HasPermission at all, not merely that today's
+-- tests happen not to trigger one.
+-- ========================================================================
+
+t.test('SOURCE-LEVEL: server/recall.lua never references HasPermission, block., or feature. anywhere in its own code', function()
+    local handle = assert(io.open('../server/recall.lua', 'r'))
+    local text = handle:read('a')
+    handle:close()
+
+    -- Strip the block header comment and every line comment, same
+    -- two-pass approach tests/training_spec.lua's own stripLuaComments
+    -- uses -- this file's header prose discusses "PER-PERSON FEATURE
+    -- CONTROL"/HasPermission BY NAME at length to explain why it is never
+    -- called, which would otherwise false-positive a naive raw-text search.
+    local stripped = text:gsub('%-%-%[%[.-%]%]', '')
+    local codeOnly = {}
+    for line in (stripped .. '\n'):gmatch('(.-)\n') do
+        codeOnly[#codeOnly + 1] = line:match('^(.-)%-%-') or line
+    end
+    local code = table.concat(codeOnly, '\n')
+
+    t.notContains(code, 'HasPermission', 'server/recall.lua must never call HasPermission -- this is the primary escape hatch and must never be blockable')
+    t.notContains(code, 'block.', 'server/recall.lua must never read a block.<Name> permission key')
+    t.notContains(code, 'feature.', 'server/recall.lua must never read a feature.<Name> permission key')
+end)
+
+t.test('BEHAVIORAL: a block.Recall grant existing in the permission system (a real high-command tablet action) has NO effect on requestRecall -- HasPermission entirely absent from the sandbox never errors', function()
+    local f = newFixture({
+        getActivePartnerFn = function(citizenid)
+            if citizenid == 'HANDLER' then return 'K9', false end
+        end,
+        endActiveEffectFn = function() return true end,
+    })
+    f.registerPlayer(1, 'HANDLER')
+    f.registerPlayer(2, 'K9')
+    -- No HasPermission stub is injected into this sandbox at all (the
+    -- production file never references the global -- see the SOURCE-LEVEL
+    -- test above) -- if a future edit ever added a HasPermission call here,
+    -- this would surface as an "attempt to call a nil value" error instead
+    -- of a clean recall.
+    local ok = pcall(f.dispatch, 1)
+    t.isTrue(ok, 'requestRecall must never error even though this sandbox defines no HasPermission at all')
+    t.isTrue(notifiedExactly(f, 1, locale('recall.recall_issued'), 'success'), 'the recall must succeed unconditionally, exactly as if block.Recall did not exist')
+end)
+
 os.exit(t.summary())

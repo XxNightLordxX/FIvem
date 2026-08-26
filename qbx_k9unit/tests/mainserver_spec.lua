@@ -200,11 +200,33 @@ local function newMainFixture(opts)
     local jobBySource = {} -- source -> job name, or nil = unresolved/no Player record at all
     local citizenidBySource = {} -- source -> citizenid string, or nil = no Player record at all (Section 12's backfill loop)
     local metaDataCalls = {} -- source -> { {key=, value=}, ... }, most recent last (Section 12: Player.Functions.SetMetaData)
+    local pedBySource = {} -- source -> ped handle (unset/0 == "offline") -- declared here (moved above exportsStub) so GetPlayer below can see it as an upvalue
+
+    -- PER-PERSON FEATURE CONTROL (this pass): CheckLeashEligibility and
+    -- relayBark both now resolve a citizenid via exports.qbx_core:GetPlayer
+    -- before running IsLeashMechanicsPermittedForCitizenId/
+    -- IsBasicBarkSoundsPermittedForCitizenId. Every test in this file
+    -- registers a source as "a real connected player" via setPed (leash/bark
+    -- tests, which never cared about job/citizenid before this pass) or
+    -- setJob/setOnlinePlayer (department/backfill tests) -- rather than
+    -- rewrite every one of those call sites to also thread a citizenid
+    -- through, GetPlayer synthesizes a stable, deterministic citizenid
+    -- ('CIT-<src>') for any source this fixture already knows is connected
+    -- (has a registered ped OR an explicitly set job/citizenid), matching
+    -- real qbx_core's own invariant that a resolvable Player always carries
+    -- BOTH a job (if any) and a citizenid together -- "job present, citizenid
+    -- absent" is a gap this STUB introduced, not a real-world state. Explicit
+    -- citizenidBySource[src] (Section 12's setOnlinePlayer) always wins over
+    -- the synthesized fallback.
+    local function citizenidFor(src)
+        return citizenidBySource[src] or (pedBySource[src] and ('CIT-' .. tostring(src)) or nil)
+    end
+
     local exportsStub = {
         qbx_core = {
             GetPlayer = function(_self, src)
                 local job = jobBySource[src]
-                local citizenid = citizenidBySource[src]
+                local citizenid = citizenidFor(src)
                 -- No record at all (never connected/registered by this fixture)
                 -- vs. a record with no job assigned yet -- Section 12 needs to
                 -- exercise BOTH "GetPlayer returns nil" and "Player exists but
@@ -225,8 +247,6 @@ local function newMainFixture(opts)
             end,
         },
     }
-
-    local pedBySource = {} -- source -> ped handle (unset/0 == "offline")
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
     local coordsByHandle = {} -- handle (ped OR door entity) -> vec3
@@ -267,6 +287,17 @@ local function newMainFixture(opts)
 
     local threadRunner = Sandbox.newThreadRunner() -- DoorScratchByDoorCooldown.StartSweep() runs at main.lua's OWN file-load time, unconditionally (not gated on Config.Features.DoorInteraction) -- CreateThread/Wait must exist regardless of which feature this fixture is testing
 
+    -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+    -- tests/pursuitsprint_spec.lua's own `permissionGrants`/`defaultHasPermission`/
+    -- `grantPermission` fixture shape exactly, for
+    -- IsLeashMechanicsPermittedForCitizenId/IsBasicBarkSoundsPermittedForCitizenId.
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local permissionCalls = {}
+    local function defaultHasPermission(citizenid, key)
+        permissionCalls[#permissionCalls + 1] = { citizenid = citizenid, key = key }
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local config = {
         Features = {
             LeashMechanics = true,
@@ -280,6 +311,7 @@ local function newMainFixture(opts)
             scratchCooldownMs = 3000, -- real shipped default
             nudgeRequiresUnlocked = true,
         },
+        FeatureControl = { RequireGrant = {} },
     }
     if opts.features then
         for k, v in pairs(opts.features) do config.Features[k] = v end
@@ -296,6 +328,7 @@ local function newMainFixture(opts)
         IsConfiguredK9Model = IsConfiguredK9Model,
         HasK9Role = HasK9Role,
         exports = exportsStub,
+        HasPermission = defaultHasPermission,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
         GetEntityModel = GetEntityModel,
@@ -377,6 +410,20 @@ local function newMainFixture(opts)
         end,
         ForceDetachLeashForSource = env.ForceDetachLeashForSource,
         ForceDetachOfficerLeashForSource = env.ForceDetachOfficerLeashForSource,
+        -- PER-PERSON FEATURE CONTROL (this pass) -- see the fixture's own
+        -- header comment above for why this mirrors
+        -- tests/pursuitsprint_spec.lua's `grantPermission`/`citizenidFor`.
+        -- (`config` is already returned once above -- LINT FIX, this pass:
+        -- a duplicate `config = config` key here was overwriting the same
+        -- value with itself, a harmless no-op at runtime but a real
+        -- luacheck warning; dropped rather than reverting any of this
+        -- section's actual additions.)
+        citizenidFor = citizenidFor,
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
+        permissionCalls = permissionCalls,
     }
 end
 
@@ -572,6 +619,57 @@ t.test('relayBark: the per-source cooldown does not block a DIFFERENT source in 
     f.dispatchNetEvent('qbx_k9unit:server:relayBark', 1, 'bark')
     f.dispatchNetEvent('qbx_k9unit:server:relayBark', 2, 'bark')
     t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 2)
+end)
+
+-- ------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsBasicBarkSoundsPermittedForCitizenId. Mirrors
+-- tests/pursuitsprint_spec.lua's own section of the same name.
+-- ------------------------------------------------------------------
+
+t.test('relayBark BLOCK: an explicit block.BasicBarkSounds grant is a silent no-op even though HasK9Access is true, and burns NO cooldown', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.grantPermission(f.citizenidFor(1), 'block.BasicBarkSounds', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 1, 'bark')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 0)
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed BarkCooldown, this would now be silently rate-limited
+    -- instead of succeeding.
+    f.grantPermission(f.citizenidFor(1), 'block.BasicBarkSounds', false)
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 1, 'bark')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 1, 'a block must never burn the cooldown a legitimate follow-up bark still needs')
+end)
+
+t.test('relayBark not blocked: an ordinary K9 with no grant/block row at all still barks (default allow, step 4)', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 1, 'bark')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 1)
+end)
+
+t.test('relayBark RequireGrant listed + no grant held -- denied even though HasK9Access is true', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.BasicBarkSounds = true
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 1, 'bark')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 0)
+end)
+
+t.test('relayBark RequireGrant listed + an active feature.BasicBarkSounds grant -- allowed', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.BasicBarkSounds = true
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.grantPermission(f.citizenidFor(1), 'feature.BasicBarkSounds', true)
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 1, 'bark')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 1)
 end)
 
 -- ========================================================================
@@ -829,6 +927,87 @@ t.test('K9 ROLE/MODEL DECOUPLING: HasK9Role not being loaded at all (soft depend
     t.isNotNil(netEvents['qbx_k9unit:server:requestLeashAttach'], 'file must still load and register its handlers with HasK9Role entirely absent')
 end)
 
+-- ========================================================================
+-- BOTH-ARE-K9 REJECTION (owner-reported gap, this pass): CheckLeashEligibility
+-- previously only ever rejected "NEITHER party is a K9" -- when BOTH
+-- genuinely hold the K9 role, the EDGE CASE tie-break used to silently
+-- cast one of them as the officer/handler role instead of refusing
+-- outright, since a K9 role-holder is typically ALSO a department member
+-- and so trivially clears officer_not_in_department too. See
+-- server/main.lua's own "BOTH-ARE-K9 CASE" comment and IsGenuinelyK9Party's
+-- doc comment for the full "role, not model, not HasK9Access" reasoning
+-- this section pins -- identical shape to server/partnership.lua's own
+-- CheckPartnershipEligibility fix and tests/partnership_spec.lua's mirror
+-- of these same four cases.
+-- ========================================================================
+
+t.test('requestLeashAttach: both parties genuinely holding the K9 role (HasK9Role) is rejected as both_k9, not silently assigning one of them the officer/handler role', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN, OFFICER_MODEL_HASH) -- neither is even on a K9 MODEL -- role alone must be enough to catch this
+    f.setJob(1, 'police')
+    f.setK9Role(1, true)
+    f.setAccess(1, true)
+    f.setPed(2, 20, ORIGIN, OFFICER_MODEL_HASH)
+    f.setJob(2, 'police')
+    f.setK9Role(2, true)
+    f.setAccess(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    -- No dedicated locale key ships yet for this reason (see
+    -- LEASH_REJECT_MESSAGES's own comment on 'both_k9') -- falls through
+    -- to the generic leash fallback message, but this MUST NOT be
+    -- reported as no_k9_party (the wrong diagnosis) and MUST NOT silently
+    -- succeed (the bug itself).
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.reject_fallback'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttachRequest'), 0, 'no consent prompt may ever be sent when both parties are genuinely K9s')
+end)
+
+t.test('requestLeashAttach: both on a CONFIGURED K9 MODEL but only ONE genuinely holds the K9 role still succeeds -- ped model alone must never trigger both_k9 (preserves "a handler can visually be on a dog model")', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN, K9_MODEL_HASH) -- on the configured K9 model, but...
+    f.setJob(1, 'police')
+    -- ...holds no K9 role/access at all -- an ordinary department officer
+    -- who merely happens to be modeled as the configured K9 species.
+    f.setPed(2, 20, ORIGIN, K9_MODEL_HASH)
+    f.setJob(2, 'police')
+    f.setAccess(2, true) -- only the actual K9 (2) is certified
+    f.setK9Role(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'), 'a department officer merely modeled as a K9, holding no real K9 role, must still be able to anchor a real K9')
+end)
+
+t.test('requestLeashAttach: a HasK9Access bypass (e.g. High Command/autoAccessGrade) with no actual K9 role must not be misread as "genuinely a K9" for the both_k9 check', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN, OFFICER_MODEL_HASH)
+    f.setJob(1, 'police')
+    f.setAccess(1, true) -- HasK9Access true (bypass) but no HasK9Role -- see IsGenuinelyK9Party's own doc comment for why HasK9Access alone is deliberately too WIDE a signal for this check
+    f.setPed(2, 20, ORIGIN, OFFICER_MODEL_HASH)
+    f.setJob(2, 'police')
+    f.setAccess(2, true)
+    f.setK9Role(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'), 'HasK9Access alone must not count as "genuinely a K9" here, or a bypass-holding officer could never anchor a real K9 at all')
+end)
+
+-- ========================================================================
+-- SAME-IDENTITY GUARD, BY CITIZENID (owner-directed, this pass): a server
+-- id is a per-connection number, not a stable identity -- the citizenid is.
+-- ========================================================================
+
+t.test('requestLeashAttach: two different server ids that resolve to the SAME citizenid are rejected as invalid_target, not treated as two distinct parties', function()
+    local f = newMainFixture()
+    -- Simulates a stale pending request (or any other path) resolving
+    -- against a NEW session for the same citizenid: two live server ids,
+    -- one underlying person.
+    f.setOnlinePlayer(1, 'SAME-CID', 'police')
+    f.setOnlinePlayer(2, 'SAME-CID', 'police')
+    f.setPed(1, 10, ORIGIN, OFFICER_MODEL_HASH)
+    f.setPed(2, 20, ORIGIN, K9_MODEL_HASH)
+    f.setAccess(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.invalid_target'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttachRequest'), 0)
+end)
+
 t.test('leash reject reason: not_certified (K9-modeled party lacks HasK9Access)', function()
     local f = newMainFixture()
     setupEligiblePair(f, 1, 2)
@@ -860,6 +1039,89 @@ t.test('a genuinely eligible request notifies the initiator with leash.request_s
     setupEligiblePair(f, 1, 2)
     f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
     t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'))
+end)
+
+-- ------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsLeashMechanicsPermittedForCitizenId, checked for BOTH
+-- parties. Mirrors tests/pursuitsprint_spec.lua's own section of the same
+-- name.
+-- ------------------------------------------------------------------
+
+t.test('leash BLOCK on the K9-role party denies the request, and burns NO rate limit', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    f.grantPermission(f.citizenidFor(1), 'block.LeashMechanics', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.reject_fallback'))
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:leashAttachRequest'), 'a blocked request must never even prompt the target')
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed LeashRequestCooldown, this would now be silently
+    -- rate-limited instead of succeeding.
+    f.grantPermission(f.citizenidFor(1), 'block.LeashMechanics', false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'), 'a block must never burn the cooldown a legitimate follow-up request still needs')
+end)
+
+t.test('leash BLOCK on the OFFICER/handler-role party ALSO denies the request -- a block on either party refuses forming the pair', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    f.grantPermission(f.citizenidFor(2), 'block.LeashMechanics', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.reject_fallback'))
+end)
+
+t.test('leash not blocked: an ordinary pair with no grant/block row at all still forms (default allow, step 4)', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'))
+end)
+
+t.test('leash RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.LeashMechanics = true
+    setupEligiblePair(f, 1, 2)
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.reject_fallback'))
+end)
+
+t.test('leash RequireGrant listed + BOTH parties hold an active feature.LeashMechanics grant -- allowed', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.LeashMechanics = true
+    setupEligiblePair(f, 1, 2)
+    f.grantPermission(f.citizenidFor(1), 'feature.LeashMechanics', true)
+    f.grantPermission(f.citizenidFor(2), 'feature.LeashMechanics', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'))
+end)
+
+t.test('leash RequireGrant listed + only ONE of the two parties holds a grant -- still denied (both parties must independently pass)', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.LeashMechanics = true
+    setupEligiblePair(f, 1, 2)
+    f.grantPermission(f.citizenidFor(1), 'feature.LeashMechanics', true)
+    -- citizenid 2 (the officer) deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.reject_fallback'))
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: detachLeash still works instantly for a K9-role party who is now block.LeashMechanics-blocked -- "detach a leash" must never be gated', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1, true) -- keepCaptures = true, just to sanity-check the pair formed below
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:leashAttached'), 'sanity: the pair really formed')
+
+    -- Block AFTER the pair is already formed -- mirrors a real "high command
+    -- blocks this handler mid-session" sequence.
+    f.grantPermission(f.citizenidFor(1), 'block.LeashMechanics', true)
+    f.clearCaptures()
+    f.dispatchNetEvent('qbx_k9unit:server:detachLeash', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2, 'a blocked K9 must still be able to detach unilaterally, and both parties are still notified')
+    t.isFalse(f.ForceDetachLeashForSource(1), 'no longer leashed -- the detach genuinely went through')
 end)
 
 -- ========================================================================
@@ -1495,10 +1757,16 @@ t.test('onResourceStart config-safety assert: ignores a DIFFERENT resource start
 end)
 
 print('')
-print('mainserver_spec.lua coverage summary (81 cases -- run this file, do not')
+print('mainserver_spec.lua coverage summary (92 cases -- run this file, do not')
 print('grep it, per DEVELOPER_REFERENCE.md §20\'s own "count you must run" note): relayBark')
-print('(8), relayDoorScratch (11), CheckLeashEligibility\'s 8 reject reasons + happy')
-print('path + 3 K9 role/model decoupling widening cases (15), symmetric role')
+print('(8) + its own PER-PERSON FEATURE CONTROL section (4: block/no-cooldown-burn,')
+print('default-allow, RequireGrant-denied, RequireGrant-granted), relayDoorScratch (11),')
+print('CheckLeashEligibility\'s 8 reject reasons + happy')
+print('path + 3 K9 role/model decoupling widening cases (15), its own PER-PERSON')
+print('FEATURE CONTROL section (7: block on either party + no-cooldown-burn,')
+print('default-allow, RequireGrant-denied, RequireGrant-granted requiring BOTH')
+print('parties, RequireGrant with only one party granted, and detachLeash staying')
+print('unconditional for an already-blocked K9), symmetric role')
 print('assignment incl. the both-K9 tie-break (3),')
 print('request-time pending/rate-limit ordering (4), respondLeashAttach incl.')
 print('double-accept/double-decline fail-closed AND the mismatched-fromServerId')

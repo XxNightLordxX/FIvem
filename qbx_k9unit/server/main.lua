@@ -389,6 +389,43 @@ BarkCooldown.RegisterPlayerDropped()
 -- room to smuggle a large payload through this event.
 local BARK_TYPE_MAX_LENGTH = 16
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.BasicBarkSounds
+--- flag) is already checked by relayBark below, before this function is
+--- ever reached.
+---   2. an explicit block.BasicBarkSounds grant -> DENY
+---   3. BasicBarkSounds listed in RequireGrant -> ALLOW only with an active
+---      feature.BasicBarkSounds grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsBasicBarkSoundsPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.BasicBarkSounds') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.BasicBarkSounds == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.BasicBarkSounds') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Relays a bark to every client so anyone near the K9 entity hears it.
 --- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
 --- both re-checked HERE, server-side, regardless of whether the client UI
@@ -407,6 +444,18 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     -- rate-limited.
     if #barkType > BARK_TYPE_MAX_LENGTH then return end -- silent no-op: oversized payload, never trust client payload shape
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+
+    -- PER-PERSON FEATURE CONTROL -- see IsBasicBarkSoundsPermittedForCitizenId
+    -- above. Checked BEFORE BarkCooldown.Consume below, matching
+    -- server/pursuitsprint.lua's own "cheapest/no-side-effect checks first"
+    -- discipline, so a blocked K9 never burns their own bark cooldown for a
+    -- request that was always going to be refused. Silent no-op on denial,
+    -- matching every other rejection branch in this handler.
+    do
+        local player = exports.qbx_core:GetPlayer(src)
+        local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+        if not citizenid or not IsBasicBarkSoundsPermittedForCitizenId(citizenid) then return end
+    end
 
     if not BarkCooldown.Consume(src) then
         return -- silent no-op: rate-limited, not an error worth notifying about
@@ -633,6 +682,51 @@ local function IsAlreadyLeashed(source)
     return LeashPairs[source] ~= nil
 end
 
+--- Deliberately NARROWER than the model-OR-role widened check
+--- (initiatorIsK9/targetIsK9) CheckLeashEligibility computes below -- used
+--- ONLY to decide the "both parties are a K9" rejection, never the
+--- "neither party is a K9" one. See that function's own "BOTH-ARE-K9 CASE"
+--- comment for the exact gap this closes (owner-directed, this pass: two
+--- K9s could leash each other, with one silently cast as the officer/
+--- handler, since the widened check only ever rejects "neither").
+--- Duplicated from server/partnership.lua's identical helper of the same
+--- name rather than shared -- same tiny, self-contained, no-shared-state
+--- reasoning as this file's/that file's other small duplicated helpers
+--- (e.g. IsDuplicateKeyError); see that copy's own doc comment for the
+--- full "why role, not model, not HasK9Access" reasoning, which applies
+--- verbatim here:
+---   - Ped MODEL is NOT evidence of "genuinely a K9" -- a
+---     Config.Peds-listed species can be worn by an ordinary department
+---     officer for reasons unrelated to K9 access (this resource's own
+---     K9 role/model decoupling promise -- "everything works on any ped"
+---     -- runs both directions: a K9 can look human, AND a handler can
+---     look like the configured K9 species). Folding model in here would
+---     misclassify that officer as a second K9 and wrongly refuse an
+---     otherwise-legitimate pairing.
+---   - HasK9Access is NOT evidence either, in the opposite direction: it
+---     is deliberately WIDER than "is the K9" (High Command /
+---     autoAccessGrade bypasses -- see server/appearance.lua's own header
+---     -- can make it true for a citizenid who has never held the K9 role
+---     at all).
+--- HasK9Role is server/appearance.lua's own documented answer to "does
+--- this citizenid actually hold the K9 identity," independent of current
+--- appearance and independent of any blanket access bypass -- exactly the
+--- primitive this question needs. FALLS BACK to IsConfiguredK9Model if
+--- HasK9Role doesn't exist (mirrors initiatorIsK9/targetIsK9's own
+--- `type(...) == 'function'` guard below) -- the pre-decoupling world's
+--- only signal for "is this citizenid a K9" -- rather than unconditionally
+--- returning `false`, which would silently disable this whole rejection
+--- instead of degrading the same way every other check here already does.
+--- @param src number
+--- @param ped number
+--- @return boolean
+local function IsGenuinelyK9Party(src, ped)
+    if type(HasK9Role) == 'function' then
+        return HasK9Role(src)
+    end
+    return IsConfiguredK9Model(GetEntityModel(ped))
+end
+
 --- Human-readable rejection messages for CheckLeashEligibility's `reason`
 --- return value.
 local LEASH_REJECT_MESSAGES = {
@@ -644,12 +738,83 @@ local LEASH_REJECT_MESSAGES = {
     no_k9_party               = locale('common.no_k9_party'),
     not_certified             = locale('common.k9_not_certified'),
     officer_not_in_department = locale('common.handler_not_in_department'),
+    -- PER-PERSON FEATURE CONTROL denial (config.lua's Config.FeatureControl
+    -- -- an explicit 'block.<Name>' row OR 'RequireGrant' listed without an
+    -- active 'feature.<Name>' grant; see CheckLeashEligibility's own
+    -- IsLeashMechanicsPermittedForCitizenId call below). Reuses the EXISTING
+    -- leash.reject_fallback locale key rather than adding a new one --
+    -- matches server/combat.lua's own COMBAT_REJECT_MESSAGES.permission_denied
+    -- entry: "an explicit mapping is kept here... so a reader of this table
+    -- sees the reason was deliberately handled, not merely unmapped."
+    permission_denied         = locale('leash.reject_fallback'),
+    -- 'both_k9' (see CheckLeashEligibility's own "BOTH-ARE-K9 CASE" comment,
+    -- and IsGenuinelyK9Party's doc comment, above) is NOT given its own
+    -- entry here, for now, purely because locales/en.json is off-limits to
+    -- this file and no shipped key for it exists yet -- same situation,
+    -- same reasoning, as server/partnership.lua's identical PARTNERSHIP_REJECT_
+    -- MESSAGES omission for the exact same reason string. Deliberately NOT
+    -- reusing 'no_k9_party's message for it: "neither of you is a K9" and
+    -- "you are both K9s" are different problems with different remedies. A
+    -- new locale key has been requested from this file's owner
+    -- (common.both_k9, proposed English text: "Both of you are playing K9s
+    -- -- one of you needs to be the handler instead.") -- the SAME key
+    -- server/partnership.lua requested, so leash and partnership share one
+    -- message for this reason exactly like they already share
+    -- common.no_k9_party/common.k9_not_certified/common.handler_not_in_department
+    -- above. Until that key ships, this reason falls through to
+    -- LeashRejectReasonMessage's `or locale('leash.reject_fallback')`
+    -- fallback ("Unable to attach leash.") rather than being silently
+    -- misreported as 'no_k9_party'. Add `both_k9 = locale('common.both_k9')`
+    -- to this table once the key exists.
 }
 
 --- @param reason string?
 --- @return string
 local function LeashRejectReasonMessage(reason)
     return LEASH_REJECT_MESSAGES[reason] or locale('leash.reject_fallback')
+end
+
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.LeashMechanics
+--- flag) is already checked at the top of CheckLeashEligibility below,
+--- before this function is ever reached. Consulted for BOTH parties of a
+--- prospective leash pair (the K9-role party AND the officer/handler-role
+--- party) inside CheckLeashEligibility -- never inside doDetachLeash/
+--- detachLeash/ForceDetachLeashForSource/ForceDetachOfficerLeashForSource,
+--- this feature's own "no unbounded trap" exit paths ("detach a leash" is
+--- one of the specific termination actions this pass is required to leave
+--- unconditional).
+---   2. an explicit block.LeashMechanics grant -> DENY
+---   3. LeashMechanics listed in RequireGrant -> ALLOW only with an active
+---      feature.LeashMechanics grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsLeashMechanicsPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.LeashMechanics') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.LeashMechanics == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.LeashMechanics') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
 --- Shared eligibility/proximity checks for forming a leash pair, run at
@@ -678,6 +843,39 @@ local function CheckLeashEligibility(initiatorSrc, targetSrc)
     local targetPed = GetPlayerPed(targetSrc)
     if initiatorPed == 0 or targetPed == 0 then
         return false, nil, nil, 'offline'
+    end
+
+    -- SAME-IDENTITY GUARD, BY CITIZENID (owner-directed, this pass; mirrors
+    -- server/partnership.lua's identical CheckPartnershipEligibility guard
+    -- -- see that copy's own doc comment for the full writeup): the
+    -- `initiatorSrc == targetSrc` check above only rejects self-targeting
+    -- by SERVER ID -- but a server id is a per-connection number FiveM
+    -- recycles, not a stable identity (see e.g. this file's own
+    -- playerDropped handler scanning PendingLeashRequests specifically
+    -- because a freed id can be reassigned to an unrelated citizenid
+    -- before a pending request's own TTL expires). The citizenid is this
+    -- resource's actual identity boundary, so this is the check that
+    -- actually matters if a reconnect, or a stale pending request
+    -- resolving against a NEW session for the citizenid it used to name,
+    -- ever produces two distinct server ids that both resolve to the same
+    -- citizenid at once. LeashPairs itself stays source-keyed (this
+    -- subsystem's own ephemeral, session-scoped design, per this file's
+    -- header) -- this guard only prevents FORMING a pair with oneself
+    -- under two different ids, it does not change how an already-formed
+    -- pair is stored or torn down.
+    do
+        local initiatorPlayerForIdentity = exports.qbx_core:GetPlayer(initiatorSrc)
+        local targetPlayerForIdentity = exports.qbx_core:GetPlayer(targetSrc)
+        local initiatorCitizenidForIdentity = initiatorPlayerForIdentity and initiatorPlayerForIdentity.PlayerData
+            and initiatorPlayerForIdentity.PlayerData.citizenid
+        local targetCitizenidForIdentity = targetPlayerForIdentity and targetPlayerForIdentity.PlayerData
+            and targetPlayerForIdentity.PlayerData.citizenid
+        if not initiatorCitizenidForIdentity or not targetCitizenidForIdentity then
+            return false, nil, nil, 'offline'
+        end
+        if initiatorCitizenidForIdentity == targetCitizenidForIdentity then
+            return false, nil, nil, 'invalid_target'
+        end
     end
 
     -- Proximity: see this file's header (and config.lua's comment on
@@ -713,6 +911,32 @@ local function CheckLeashEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'no_k9_party'
     end
 
+    -- BOTH-ARE-K9 CASE (owner-reported gap, this pass): the check above
+    -- only ever rejects "NEITHER party is a K9" -- when initiatorIsK9 AND
+    -- targetIsK9 are both true, the EDGE CASE tie-break just below
+    -- silently assigns one of two genuine K9s the OFFICER/handler role
+    -- instead of rejecting outright, and forming that pair then actually
+    -- SUCCEEDS, since a K9 role-holder is typically ALSO a department
+    -- member and so trivially clears officer_not_in_department too --
+    -- there is nothing downstream that would otherwise catch this.
+    -- "Neither of you is a K9" and "you are both K9s" are different
+    -- problems with different remedies, so this gets its own reason
+    -- rather than being folded into either 'no_k9_party' or the ordinary
+    -- success path.
+    --
+    -- Deliberately does NOT reuse initiatorIsK9/targetIsK9 (the widened
+    -- model-OR-role check immediately above) for THIS decision -- see
+    -- IsGenuinelyK9Party's own doc comment for exactly why model must not
+    -- be read as proof the OTHER party can't legitimately be the officer/
+    -- handler (a real handler's ped can coincidentally be a
+    -- Config.Peds-listed species for reasons that have nothing to do with
+    -- them holding K9 access) and why HasK9Access alone is too WIDE for
+    -- this question in the opposite direction (High Command /
+    -- autoAccessGrade bypasses).
+    if IsGenuinelyK9Party(initiatorSrc, initiatorPed) and IsGenuinelyK9Party(targetSrc, targetPed) then
+        return false, nil, nil, 'both_k9'
+    end
+
     -- EDGE CASE (flagged in this file's header, judgment call confirmed
     -- here): if BOTH are K9-modeled, default the REQUEST TARGET to the
     -- constrained role — whoever gets asked ends up "on the leash." Not a
@@ -737,6 +961,25 @@ local function CheckLeashEligibility(initiatorSrc, targetSrc)
     local officerJob = officerPlayer and officerPlayer.PlayerData and officerPlayer.PlayerData.job
     if not officerJob or not Config.Departments[officerJob.name] then
         return false, nil, nil, 'officer_not_in_department'
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsLeashMechanicsPermittedForCitizenId
+    -- above. Checked LAST, after every cheaper/no-side-effect check above
+    -- has already passed (this function performs no mutation of its own
+    -- either way, so there is no cooldown/mutex here to protect from being
+    -- burned by a block -- the caller-side cooldown, LeashRequestCooldown,
+    -- is consumed by requestLeashAttach only AFTER this whole function
+    -- already returned ok == true). Checked for BOTH parties: a block
+    -- placed on either the K9-role party OR the officer/handler-role party
+    -- must refuse forming the pair.
+    local k9Player = exports.qbx_core:GetPlayer(k9Src)
+    local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
+    local officerCitizenid = officerPlayer.PlayerData.citizenid
+    if not k9Citizenid or not IsLeashMechanicsPermittedForCitizenId(k9Citizenid) then
+        return false, nil, nil, 'permission_denied'
+    end
+    if not officerCitizenid or not IsLeashMechanicsPermittedForCitizenId(officerCitizenid) then
+        return false, nil, nil, 'permission_denied'
     end
 
     return true, k9Src, officerSrc

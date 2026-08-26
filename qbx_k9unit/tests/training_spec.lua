@@ -163,6 +163,19 @@ local function EndActiveEffectForHolder(holderSrc)
     return endActiveEffectReturn
 end
 
+-- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+-- tests/pursuitsprint_spec.lua's own `permissionGrants`/
+-- `defaultHasPermission`/`grantPermission` fixture shape, for
+-- IsTrainingModePermittedForCitizenId.
+local permissionGrants = {} -- [citizenid][key] = true/false
+local function defaultHasPermission(citizenid, key)
+    return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+end
+local function grantPermission(citizenid, key, value)
+    permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+    permissionGrants[citizenid][key] = value
+end
+
 local Config = {
     Features = { TrainingMode = true },
     TrainingZones = {
@@ -173,6 +186,7 @@ local Config = {
         ActionCooldownMs = 2000,
         ContrabandFoundChance = 0.5,
     },
+    FeatureControl = { RequireGrant = {} },
 }
 
 local randomValue = 0.0 -- see setRandom() below
@@ -189,6 +203,7 @@ local env = Sandbox.newEnv({
     NotifyPlayer = NotifyPlayer,
     exports = exportsStub,
     HasK9Access = HasK9Access,
+    HasPermission = defaultHasPermission,
     GetPlayerPed = GetPlayerPed,
     GetEntityCoords = GetEntityCoords,
     AwardXP = AwardXP,
@@ -316,6 +331,62 @@ t.test('toggle ON is rate-limited per source (ToggleCooldownMs)', function()
 end)
 
 -- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsTrainingModePermittedForCitizenId, checked ONLY on the
+-- ON transition -- never OFF (see the TOGGLE OFF section below: OFF is
+-- this file's own documented unconditional "no unbounded trap" exit path,
+-- "end training" is one of the specific terminations this pass is
+-- required to leave untouched). Mirrors tests/pursuitsprint_spec.lua's own
+-- section of the same name.
+-- ----------------------------------------------------------------------
+
+t.test('toggle ON BLOCK: an explicit block.TrainingMode grant denies even though HasK9Access is true, and burns NO toggle cooldown', function()
+    local src, citizenid = freshEligibleSource()
+    grantPermission(citizenid, 'block.TrainingMode', true)
+
+    clientEvents = {}
+    setTrainingMode(src, true)
+    t.isNil(lastClientEventFor(src), 'a blocked ON request must never push a state change to the client')
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed ToggleCooldown, this would now be silently dropped
+    -- instead of succeeding.
+    grantPermission(citizenid, 'block.TrainingMode', false)
+    setTrainingMode(src, true)
+    local evt = lastClientEventFor(src)
+    t.isNotNil(evt, 'a block must never burn the cooldown a legitimate follow-up toggle-on still needs')
+    t.isTrue(evt.args[1])
+end)
+
+t.test('toggle ON not blocked: an ordinary K9 with no grant/block row at all still turns training on (default allow, step 4)', function()
+    local src = freshEligibleSource()
+    setTrainingMode(src, true)
+    local evt = lastClientEventFor(src)
+    t.isNotNil(evt)
+    t.isTrue(evt.args[1])
+end)
+
+t.test('toggle ON RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    Config.FeatureControl.RequireGrant.TrainingMode = true
+    local src = freshEligibleSource()
+    -- deliberately NOT granted
+    setTrainingMode(src, true)
+    t.isNil(lastClientEventFor(src))
+    Config.FeatureControl.RequireGrant.TrainingMode = nil -- restore for every test below
+end)
+
+t.test('toggle ON RequireGrant listed + an active feature.TrainingMode grant -- allowed', function()
+    Config.FeatureControl.RequireGrant.TrainingMode = true
+    local src, citizenid = freshEligibleSource()
+    grantPermission(citizenid, 'feature.TrainingMode', true)
+    setTrainingMode(src, true)
+    local evt = lastClientEventFor(src)
+    t.isNotNil(evt)
+    t.isTrue(evt.args[1])
+    Config.FeatureControl.RequireGrant.TrainingMode = nil -- restore for every test below
+end)
+
+-- ----------------------------------------------------------------------
 -- TOGGLE OFF -- "no unbounded trap"
 -- ----------------------------------------------------------------------
 
@@ -330,6 +401,19 @@ t.test('toggle OFF succeeds UNCONDITIONALLY -- no access, no zone, and it still 
 
     local evt = lastClientEventFor(src)
     t.isNotNil(evt, 'OFF must always push a state change, regardless of current access/zone standing')
+    t.isFalse(evt.args[1])
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: toggle OFF still works instantly for a K9 who is now block.TrainingMode-blocked -- "end training" must never be gated', function()
+    local src, citizenid = freshEligibleSource()
+    setTrainingMode(src, true)
+
+    grantPermission(citizenid, 'block.TrainingMode', true)
+    clientEvents = {}
+    setTrainingMode(src, false)
+
+    local evt = lastClientEventFor(src)
+    t.isNotNil(evt, 'a blocked K9 must still be able to end their own training session')
     t.isFalse(evt.args[1])
 end)
 
