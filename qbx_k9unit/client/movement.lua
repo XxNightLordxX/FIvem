@@ -1403,18 +1403,19 @@ end)
 -- own inline comment ("native jump/crouch only, no fence-vault logic
 -- yet") — so both controls are gated together here, not just jump.
 --
--- When the flag is true (the Phase 1 default), native jump/crouch just
--- works via the ped model's own locomotion — no code needed, so no thread
--- is started at all in that case (avoiding an unnecessary always-on loop
--- for the common/default case).
+-- When the flag is true (the Phase 1 default) AND nobody is per-person
+-- blocked from it (see PER-PERSON BLOCK below), native jump/crouch just
+-- works via the ped model's own locomotion — no thread is ever CREATED for
+-- that case (avoiding an unnecessary always-on loop for the common/default
+-- population), only for the two cases that actually need suppression.
 --
--- When the flag is false, jump/crouch must be actively suppressed for a
--- K9-modeled player, otherwise the flag is a no-op (the gap
--- correctness-overseer flagged: setting this to false previously changed
--- nothing, since jump/crouch are inherent to any ped's native locomotion
--- and nothing gated them). DisableControlAction(0, <control>, true) every
--- frame is the standard FiveM pattern for suppressing a specific native
--- control action.
+-- When suppression IS needed (the flag is false, or a live per-person
+-- block applies), jump/crouch must be actively suppressed for a K9-modeled
+-- player, otherwise it's a no-op (the gap correctness-overseer originally
+-- flagged for the flag alone: jump/crouch are inherent to any ped's native
+-- locomotion and nothing gates them by default). DisableControlAction(0,
+-- <control>, true) every frame is the standard FiveM pattern for
+-- suppressing a specific native control action.
 --
 -- Control indices (HIGH confidence, standard/well-established GTA V
 -- control mapping used throughout the FiveM ecosystem):
@@ -1435,12 +1436,134 @@ end)
 -- crouch suppression applies ONLY to an actual K9-modeled ped, never a
 -- human-modeled role-holder) is exactly a ONE-LINE change: replace
 -- `IsOwnModelK9()` on the very next line with `IsEntityModelK9(PlayerPedId())`.
-if not Config.Features.AgilityBasicJump then
-    local INPUT_JUMP = 22
-    local INPUT_DUCK = 36
+--
+-- ======================================================================
+-- PER-PERSON BLOCK (client/featureblocks.lua hand-off item 2 -- see that
+-- file's own header for the full contract) -- THE ONE HAND-OFF ITEM THAT
+-- NEEDED A REAL JUDGMENT CALL, not a mechanical copy of the ten call sites
+-- that file's own pass added directly. Every one of THOSE ten gates an
+-- ALREADY-LIVE per-tick/per-frame thread (that file's header, "WHERE THE
+-- CHECK GOES, PER CALLER"). This one is not already live in the common
+-- case: the block immediately below only ever created a thread when
+-- Config.Features.AgilityBasicJump was false. At the shipped default
+-- (true), NO thread of any kind existed here before this pass -- so there
+-- was no per-tick condition to fold a block check into, and a per-person
+-- block on this specific feature (while the GLOBAL flag stayed enabled)
+-- had no code path capable of ever seeing it.
+--
+-- THE QUESTION: does an already-cheap `IsK9FeatureBlocked` read justify an
+-- always-on thread for every K9-modeled ped, when the overwhelming common
+-- case (no block on this feature for this person, true for every server
+-- until a high-command tablet action ever changes it) needs to do nothing
+-- at all? The hand-off note proposed a 1Hz poll. REJECTED, for a reason
+-- stronger than "it has a small ongoing cost": 1Hz means up to a full
+-- second between a block arriving and this thread ever noticing it, and
+-- with a native as immediate as jump, that gap is not a rounding error --
+-- "a jump suppression that reacts a second late is a jump that happened."
+-- A slower decision interval cannot be traded for a lower steady-state
+-- cost here the way it legitimately can be for, e.g., the MOVE-RATE
+-- WATCHDOG above (that thread is a slow-converging BACKSTOP for a case
+-- every other caller already handles immediately on its own -- this one
+-- would be the ONLY thing that ever reacts to a fresh block at all).
+--
+-- THE FIX TAKEN: no polling of any kind is needed to detect a freshly
+-- applied or cleared block. `IsK9FeatureBlocked`'s own backing state
+-- (client/featureblocks.lua's ClientFeatureBlocks) changes from exactly
+-- ONE place -- that file's 'qbx_k9unit:client:featureBlocksSync' handler
+-- -- which already fires a LOCAL, synchronous, same-tick
+-- 'qbx_k9unit:client:featureBlocksApplied' re-broadcast every single time
+-- it runs (that file's own header: "Fired unconditionally on every
+-- sync"). client/radial.lua already reacts to this exact event for the
+-- identical reason (see that file's own "SECOND call site" comment) --
+-- this is that same, already-established mechanism, not a new one
+-- invented for this file. Listening for it here means: (1) the
+-- suppression thread below is only ever CREATED at the moment it is first
+-- genuinely needed -- global flag off at load, or a block newly arriving
+-- -- so the idle steady-state cost for the population this widening is
+-- for (blocked == false, which is everyone today) is EXACTLY ZERO threads,
+-- not a cheap poll, not even a Wait(15000) -- genuinely nothing; and (2) a
+-- freshly-applied block takes effect the SAME GAME TICK the sync arrives,
+-- not up to one polling interval later -- strictly faster than the
+-- proposal this replaces, at a strictly lower idle cost, not a tradeoff
+-- between the two.
+--
+-- WHAT STILL NEEDS A POLL, AND WHY THAT ONE IS FINE: once suppression is
+-- genuinely active (this player is either globally suppressed or live-
+-- blocked right now), DisableControlAction's own contract still requires
+-- re-asserting it EVERY FRAME (Wait(0)) for as long as that's true -- no
+-- event exists for "a native control input was just pressed" that this
+-- resource could subscribe to instead, and this is exactly the same
+-- unavoidable per-frame cost the pre-existing global-off case already
+-- paid, not a new one. Within that same active loop, detecting the ped's
+-- MODEL changing back and forth (a K9 body swapping to/from human) also
+-- has no event to hook in this codebase, so it stays a Wait(1000) poll --
+-- identical to, and no more expensive than, this thread's own pre-existing
+-- global-off idle behavior, now also covering the "blocked but temporarily
+-- not K9-modeled" case the exact same way.
+--
+-- RELEASE, NEVER GATED ON THE BLOCK CHECK ITSELF (this task's own hard
+-- rule): the while-loop's own condition below is what ends the loop, and
+-- it is re-read fresh on every single iteration -- at most one frame away
+-- while actively suppressing, at most 1000ms away while temporarily
+-- off-model -- covering the block clearing, the K9 model being lost, and
+-- (since Config.Features.AgilityBasicJump does not change at runtime) the
+-- feature-flag case is moot once loaded. Death needs no separate release
+-- path either: a dead ped's model doesn't change, so the SAME
+-- IsEntityModelK9(PlayerPedId()) branch below already governs it exactly
+-- as it does any other moment, and GTA's own death/ragdoll state already
+-- restricts input on its own regardless of this thread. DisableControlAction
+-- itself needs no explicit "undo" the way SetPedMoveRateOverride/
+-- SetFollowPedCamViewMode elsewhere in this file do (see this file's own
+-- onResourceStop handlers for those) -- it only ever affects the ONE frame
+-- it's called on, so the instant this loop stops calling it, for ANY
+-- reason including this resource being stopped (FiveM guarantees a
+-- stopped resource's own threads stop running), native jump/crouch is
+-- available again on the very next frame with zero extra code. This is
+-- also why this feature gets no dedicated onResourceStop handler of its
+-- own, unlike the camera/leash/move-rate state above: there is no sticky
+-- native state here left to reverse.
+-- ======================================================================
+local INPUT_JUMP = 22
+local INPUT_DUCK = 36
 
+-- True once client/featureblocks.lua has told this client this feature is
+-- blocked for it right now -- mirrored into this plain local so the
+-- suppression loop below never has to call IsK9FeatureBlocked() itself
+-- just to decide whether to KEEP running (only the featureBlocksApplied
+-- handler further below ever calls it, to decide whether to START).
+-- `type(IsK9FeatureBlocked) == 'function'` guarded at that one call site,
+-- per this resource's soft-dependency convention (client/featureblocks.lua's
+-- own header) -- if that file is never loaded, this simply never becomes
+-- true, the correct fail-open direction (unblockable, exactly as this
+-- feature already behaved before this pass).
+local agilityJumpBlocked = false
+
+--- Either independent reason -- the static config flag, or the live
+--- per-person block -- currently requires jump/crouch to be suppressed.
+--- Re-read fresh every time (never cached beyond `agilityJumpBlocked`
+--- itself, which the event handler below keeps current), including as the
+--- suppression loop's own while-condition, so it is also this thread's own
+--- release check.
+local function ShouldSuppressAgilityJump()
+    return (not Config.Features.AgilityBasicJump) or agilityJumpBlocked
+end
+
+-- Guards against ever starting a second copy of the loop below (e.g. two
+-- featureBlocksApplied syncs arriving close together while the first
+-- thread hasn't looped around yet).
+local agilityJumpSuppressionThreadRunning = false
+
+--- Starts the suppression loop if (and only if) it isn't already running
+--- AND it's actually needed right now. Safe to call unconditionally from
+--- both the file-load-time check below and the featureBlocksApplied
+--- handler -- a no-op in every case that doesn't need it.
+local function EnsureAgilityJumpSuppressionThread()
+    if agilityJumpSuppressionThreadRunning then return end
+    if not ShouldSuppressAgilityJump() then return end
+
+    agilityJumpSuppressionThreadRunning = true
     CreateThread(function()
-        while true do
+        while ShouldSuppressAgilityJump() do
             -- OWNER'S DECISION, 2026-08-25: MODEL, not role. A player holding
             -- the K9 role on a HUMAN body keeps jump and crouch.
             -- This suppression exists because a quadruped has no jump or
@@ -1449,7 +1572,9 @@ if not Config.Features.AgilityBasicJump then
             -- copied past its own reason, taking away movement they never had
             -- cause to lose. So this stays IsEntityModelK9(PlayerPedId())
             -- deliberately, and must NOT be "corrected" to IsOwnModelK9()
-            -- (which now answers role-OR-model) by a future any-ped sweep.
+            -- (which now answers role-OR-model) by a future any-ped sweep --
+            -- true regardless of WHICH of the two reasons above is why this
+            -- loop is running right now.
             if IsEntityModelK9(PlayerPedId()) then
                 DisableControlAction(0, INPUT_JUMP, true)
                 DisableControlAction(0, INPUT_DUCK, true)
@@ -1458,8 +1583,40 @@ if not Config.Features.AgilityBasicJump then
                 Wait(1000) -- cheap idle poll while not currently a K9-modeled ped
             end
         end
+        -- Loop condition went false (block cleared, or -- moot at runtime,
+        -- since this Config value doesn't change post-load -- the global
+        -- flag). Nothing left to release (see this block's own header
+        -- comment on why DisableControlAction needs no explicit undo); just
+        -- let a future EnsureAgilityJumpSuppressionThread() call start a
+        -- fresh thread if this feature is ever blocked again.
+        agilityJumpSuppressionThreadRunning = false
     end)
 end
+
+-- Mirrors the ORIGINAL, pre-this-pass behavior exactly for the
+-- global-flag-off case: start suppressing immediately at load, unconditionally.
+EnsureAgilityJumpSuppressionThread()
+
+-- Wakes the suppression thread the INSTANT a fresh per-person block
+-- arrives -- see this section's own header comment for why this, not a
+-- poll, is what keeps this feature correct without an unconditional
+-- always-on thread. Local-only (same client, same resource -- never a
+-- network event of its own), so no source-origin guard is needed here:
+-- client/featureblocks.lua's own RegisterNetEvent handler for the REAL
+-- network event ('qbx_k9unit:client:featureBlocksSync') already owns that
+-- check before ever re-triggering this one. Mirrors client/radial.lua's
+-- own identical "SECOND call site" listener.
+AddEventHandler('qbx_k9unit:client:featureBlocksApplied', function()
+    agilityJumpBlocked = type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('AgilityBasicJump') == true
+    if agilityJumpBlocked then
+        EnsureAgilityJumpSuppressionThread()
+    end
+    -- No corresponding "stop" call needed on the false branch: if the loop
+    -- is currently running, its own while-condition (ShouldSuppressAgilityJump())
+    -- already re-reads `agilityJumpBlocked` fresh on its very next
+    -- iteration and exits on its own; if it isn't running, there's nothing
+    -- to stop.
+end)
 
 -- ======================================================================
 -- DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN

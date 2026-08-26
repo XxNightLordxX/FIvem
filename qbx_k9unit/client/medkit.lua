@@ -287,6 +287,44 @@ function RequestTreatNearestK9()
     RequestTreatK9(targetServerId)
 end
 
+-- ======================================================================
+-- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) -- mirrors
+-- client/kennel.lua's own identically-shaped "REGISTRATION-TIME FEATURE
+-- GATE" block (read that file's header before changing this one -- this
+-- follows it, not a second independent design), applied here to exactly
+-- ONE RegisterNetEvent call rather than this whole file: the ox_target
+-- option/RequestTreatNearestK9()/FindNearestTreatableK9() above all stay
+-- OUTSIDE this gate on purpose, unchanged -- RequestTreatNearestK9() must
+-- stay reachable-but-inert for client/radial.lua's and client/tablet.lua's
+-- own `type(RequestTreatNearestK9) == 'function'` call sites, exactly like
+-- client/kennel.lua's RequestDeployKennel.
+--
+-- FINDING, THIS PASS: the "FEATURE GATE" comment immediately below used to
+-- claim this handler matched "client/hud.lua / client/vision.lua /
+-- client/combat.lua's 'gate at registration' precedent" -- it did not. The
+-- code it sat above only checked Config.Features.K9Medkit as the FIRST
+-- statement INSIDE the handler body; RegisterNetEvent itself ran
+-- unconditionally at file load, so this event was always registered and
+-- always reachable, feature flag or not. That is a real, different (and
+-- weaker) pattern than the one the comment named: with the true
+-- "gate at registration" shape those sibling files use, a client whose
+-- server never enables K9Medkit never has ANY function listening on this
+-- event name at all -- structurally unreachable, not merely
+-- checked-and-declined every time something reaches it. Closed here by
+-- wrapping the RegisterNetEvent call itself, matching the DEVELOPER_REFERENCE.md
+-- "Flag-off-safety defect class" audit item that named this exact handler
+-- (alongside client/kennel.lua's deployKennelAt/removeKennel and
+-- client/progression.lua's xpTierChanged) as needing its own flag gate --
+-- those other two already got the STRONGER registration-time form; this
+-- one only got the weaker in-handler form, an inconsistency now fixed to
+-- match. The inner check three lines below is KEPT regardless, as
+-- deliberate defense-in-depth -- same "layered checks" posture as the
+-- SOURCE-ORIGIN GUARD remaining even though this outer gate also exists,
+-- and the thing that keeps this handler correct if a future edit ever
+-- flattens the outer `if` back out without noticing what it was for.
+-- ======================================================================
+if Config.Features.K9Medkit then
+
 --- Server-pushed heal application — see server/medkit.lua's header for why
 --- this is client-self-applied rather than a direct server-side
 --- SetEntityHealth call (DEVELOPER_REFERENCE.md §13.4.4 open question 1).
@@ -300,20 +338,22 @@ RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:applyMedkitHeal', <anything>)`
     -- would reach the exact same SetEntityHealth call a genuine server
-    -- push does, with zero server contact. Confidence: MEDIUM-HIGH, the
-    -- official documented pattern for distinguishing a genuine
-    -- server-sent event from a local self-trigger, not independently
-    -- verified in-engine this pass.
+    -- push does, with zero server contact. Confirmed against FiveM's own
+    -- documented event model this pass (docs-backend.fivem.net,
+    -- "Listening for events" / TriggerClientEvent references): 65535 is
+    -- the documented sentinel identifying a genuine server-to-client
+    -- dispatch; a same-resource `TriggerEvent(...)` never produces it.
     if source ~= 65535 then return end
 
-    -- FEATURE GATE -- this handler was previously registered
-    -- unconditionally regardless of Config.Features.K9Medkit (the only
-    -- prior reference to that flag in this file was inside the ox_target
-    -- `canInteract` predicate above, which only hides the REQUEST side --
-    -- it never reached this receiver). Without this, a forged event
-    -- reached a live, uncapped, cooldown-free SetEntityHealth self-heal
-    -- even with K9Medkit = false. Matches client/hud.lua / client/vision.lua
-    -- / client/combat.lua's "gate at registration" precedent.
+    -- FEATURE GATE, KEPT AS DEFENSE-IN-DEPTH -- the REAL gate is now the
+    -- registration-time `if Config.Features.K9Medkit then` this handler is
+    -- wrapped in above (see this block's own opening comment for the
+    -- finding that fixed this). This inner check is deliberately left in
+    -- place rather than deleted as "now redundant": it is what keeps this
+    -- handler correct on its own, with no reliance on the outer wrapper,
+    -- exactly the same "never remove a working guard, only add to it"
+    -- discipline this file already applies to the dead-K9 guard and the
+    -- monotonic-heal floor below.
     if not Config.Features.K9Medkit then return end
 
     if type(newHealth) ~= 'number' then return end
@@ -381,3 +421,5 @@ RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
 
     SetEntityHealth(ped, newHealth)
 end)
+
+end -- if Config.Features.K9Medkit -- REGISTRATION-TIME FEATURE GATE, see this block's own opening comment

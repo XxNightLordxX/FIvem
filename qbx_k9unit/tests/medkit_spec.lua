@@ -66,10 +66,11 @@
        .healthRestore`) and never exceeds live max health (including when
        the naive sum would overshoot it). This is deliberately scoped to
        the SERVER's own clamp only -- client/medkit.lua's own, separate
-       monotonic-floor fix (flooring at the ped's live health rather than a
-       flat 0) is CLIENT-side logic, out of this suite's scope entirely per
-       DEVELOPER_REFERENCE.md's blanket "client/*.lua is untested here" exclusion
-       (no server-side natives to sandbox a client file against). See the
+       monotonic-floor/range-clamp guards on `applyMedkitHeal` are CLIENT-
+       side logic and out of THIS file's scope (this file loads
+       server/medkit.lua only, per its own title above), but are NOT an
+       untested gap: tests/clientmedkit_spec.lua covers them directly
+       against the real, unmodified client/medkit.lua. See the
        "MUST-MATTER #2" section below.
 
     3. THE MUTEX AND ITS RELEASE ON THE ERROR PATH. Two angles: (a) a
@@ -105,13 +106,23 @@
     ======================================================================
 
     WHAT THIS FILE DOES NOT COVER, AND WHY:
-      - client/medkit.lua is entirely untested here -- client-only natives
-        (SetEntityHealth, IsEntityDead client-side, PlayerPedId), same
-        blanket exclusion DEVELOPER_REFERENCE.md already states for every
-        client/*.lua file. This includes client/medkit.lua's OWN
-        monotonic-heal floor and its own SOURCE-ORIGIN GUARD / dead-K9
-        guard / range-clamp on `applyMedkitHeal` -- real, important
-        defenses, but not reachable from a server-only sandbox.
+      - client/medkit.lua's own logic is NOT covered HERE -- client-only
+        natives (SetEntityHealth, IsEntityDead client-side, PlayerPedId)
+        have no place in a server-file sandbox. STALE NOTE, CORRECTED THIS
+        PASS: this used to cite a "blanket exclusion DEVELOPER_REFERENCE.md
+        already states for every client/*.lua file" as the reason -- that
+        citation is stale. DEVELOPER_REFERENCE.md's own Part B, Item 3
+        records that blanket exclusion as SUPERSEDED once
+        tests/main_spec.lua proved the same sandbox pattern generalizes to
+        client/*.lua files; 30+ client*_spec.lua files exist in this suite
+        today. client/medkit.lua's own SOURCE-ORIGIN GUARD / feature gate /
+        dead-K9 guard / monotonic-heal floor / range-clamp on
+        `applyMedkitHeal` are now covered directly, by
+        tests/clientmedkit_spec.lua (loads the real, unmodified
+        client/medkit.lua the same way this file loads the real
+        server/medkit.lua) -- not a permanent gap, and not this file's job
+        either way (this file's own scope is server/medkit.lua only, per
+        its own title above).
       - The MedkitCooldown sweep thread's own eviction predicate
         (`(now - loggedAt) > Config.K9Medkit.cooldownMs * 2`) is exercised
         only as a load-time sanity check (one CreateThread call) -- its

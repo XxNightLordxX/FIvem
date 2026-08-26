@@ -86,6 +86,12 @@ local function newFixture()
         CreateThread = CreateThread, Wait = Wait,
         RegisterCommand = RegisterCommand, RegisterNUICallback = RegisterNUICallback,
         AddEventHandler = AddEventHandler, GetCurrentResourceName = GetCurrentResourceName,
+        -- client/tablet.lua now RegisterNetEvent's the live theme push
+        -- (previously AddEventHandler-only, which never receives a
+        -- server-originated TriggerClientEvent -- that was the bug). This
+        -- spec only cares about the string payload, so a plain capture is
+        -- enough; tests/clienttablet_spec.lua owns the theme behaviour.
+        RegisterNetEvent = function(_eventName, _handler) end,
         GetResourceState = GetResourceState, K9Compat = fakeK9Compat,
         DisableControlAction = DisableControlAction,
         IsDisabledControlJustPressed = IsDisabledControlJustPressed,

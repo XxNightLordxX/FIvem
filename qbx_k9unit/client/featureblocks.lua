@@ -334,3 +334,41 @@ RegisterNetEvent('qbx_k9unit:client:featureBlocksSync', function(blockedKeys)
     -- costs nothing worth guarding against.
     TriggerEvent('qbx_k9unit:client:featureBlocksApplied')
 end)
+
+-- ======================================================================
+-- STARTUP PULL
+--
+-- The server pushes a fresh block set when a player loads and when high
+-- command grants or revokes a block. Neither covers this file's OTHER
+-- start case: the client scripts restarting while the server resource
+-- keeps running. The server's PlayerLoaded hook does not re-fire for a
+-- player who never disconnected, so without this a script restart would
+-- leave this client with an empty set -- every feature unblocked -- until
+-- their next reconnect or the next time high command happened to change
+-- something for them.
+--
+-- Asking rather than waiting also removes an ordering assumption: a push
+-- that races this file's own load can no longer be the only copy of the
+-- state, because we ask for it again once we are definitely ready.
+--
+-- The request is read-only, resolves the citizenid from `source`
+-- server-side (it carries no arguments at all, so there is nothing to
+-- forge), and is idempotent -- the handler above full-replaces the set
+-- rather than merging, so a duplicate answer changes nothing.
+--
+-- Asked from onClientResourceStart rather than at file scope, on purpose.
+-- That event fires for this resource on a fresh join AND on a bare client
+-- script restart, so it covers both cases a single top-level call would,
+-- while guaranteeing the network layer is actually up when the request
+-- goes out -- a file-scope TriggerServerEvent runs while the resource is
+-- still loading.
+--
+-- FAIL DIRECTION: if this never reaches the server, or the answer never
+-- comes back, ClientFeatureBlocks stays empty and every feature works.
+-- That is deliberate. A networking hiccup silently stripping someone's
+-- abilities would be far worse than a block landing late.
+-- ======================================================================
+AddEventHandler('onClientResourceStart', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    TriggerServerEvent('qbx_k9unit:server:requestFeatureBlocksSync')
+end)

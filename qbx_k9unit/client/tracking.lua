@@ -556,7 +556,26 @@ CreateThread(function()
                     -- treated as final, not silently asserted as the only
                     -- right answer.
                     local waterCrossingDist = nil
-                    if Config.Features.WaterTrackingDecay then
+                    -- PER-PERSON BLOCK (client/featureblocks.lua hand-off
+                    -- item 1 -- see that file's own header for the full
+                    -- contract this follows). This is the EASY hand-off
+                    -- case that file's own header describes: this whole
+                    -- branch already runs once per tick, unconditionally,
+                    -- inside the compute thread above (TRACK_TICK_MS while
+                    -- IsTracking() and not brokenByWater), so folding the
+                    -- block check into this SAME existing condition is
+                    -- enough, by itself, to make a block applied mid-trail
+                    -- stop breaking trails at water within one tick, and a
+                    -- block cleared mid-trail resume doing so within one
+                    -- tick -- no new thread, no new poll, no new cost of any
+                    -- kind. `type(...) == 'function'` guarded per this
+                    -- resource's soft-dependency convention (see
+                    -- client/featureblocks.lua's own header) -- if that file
+                    -- is not loaded, this reads exactly as it did before
+                    -- this pass (fails OPEN: water crossings still decay the
+                    -- trail normally, never silently "always blocked").
+                    if Config.Features.WaterTrackingDecay
+                        and not (type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('WaterTrackingDecay')) then
                         waterCrossingDist = FindWaterCrossingDistance(myCoords, sourceCoords)
 
                         if waterCrossingDist and trackingState.breaksAtWater then

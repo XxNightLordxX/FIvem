@@ -29,6 +29,21 @@
          the watchdog converges such a player back to neutral on its own,
          AND that it costs nothing (no HasK9Access() network round trip) for
          the overwhelming common case of a player with nothing to watch.
+      6. The AgilityBasicJump PER-PERSON BLOCK (client/featureblocks.lua
+         hand-off item 2, added THIS pass) -- proves the suppression thread
+         is genuinely CREATED (not merely a no-op check inside an
+         always-running thread) the instant a block first arrives via the
+         'qbx_k9unit:client:featureBlocksApplied' local event, even with
+         Config.Features.AgilityBasicJump = true (the shipped default,
+         where NO thread existed at all before this addition); that it
+         self-releases within one more pass once the block clears; that the
+         SAME owner-pinned human-body exemption from priority #4 above holds
+         regardless of WHICH of the two reasons (global flag vs. per-person
+         block) is driving suppression; and, the interval decision's own
+         central claim, that the STEADY STATE (blocked == false, the
+         overwhelming common case) creates NO thread at all -- not a cheap
+         poll, genuinely zero -- unlike the hand-off note's originally
+         proposed 1Hz poll.
 
     Everything else in this 1900+ line file is covered LIGHTLY or not at
     all -- see "WHAT THIS FILE DOES NOT COVER" at the bottom for the full,
@@ -112,7 +127,7 @@ local RESOURCE_NAME = 'qbx_k9unit'
 --- loaded against a LOCAL fixture Config (see this file's header) plus a
 --- controllable/capturing stand-in for every native or cross-file global
 --- this spec's exercised call paths touch.
---- @param opts { agilityBasicJump: boolean?, stepThreads: boolean? }? --
+--- @param opts { agilityBasicJump: boolean?, stepThreads: boolean?, featureBlocksAvailable: boolean?, blockedFeatures: table? }? --
 ---   agilityBasicJump defaults to `true` (this file's long-standing default,
 ---   preserved for every pre-existing call site below that passes no opts
 ---   at all -- see this file's header on why AgilityBasicJump=true is the
@@ -121,7 +136,13 @@ local RESOURCE_NAME = 'qbx_k9unit'
 ---   (CreateThread only counted, never invoked, as before) -- set `true` to
 ---   back CreateThread/Wait with Sandbox.newThreadRunner() so a registered
 ---   thread's body can actually be stepped, needed only by PRIORITY #4's
----   suppression-thread tests below.
+---   suppression-thread tests below. featureBlocksAvailable (default true,
+---   same "soft dependency" convention clientagility_spec.lua/
+---   clientradial_spec.lua already use) controls whether IsK9FeatureBlocked
+---   is injected into the sandbox at all -- set `false` to prove the
+---   fail-open path (PRIORITY #6 below) genuinely never calls a nil global.
+---   blockedFeatures (default {}) seeds the initial block state read by
+---   that same stand-in.
 --- @return table fixture
 local function newMovementFixture(opts)
     opts = opts or {}
@@ -195,6 +216,17 @@ local function newMovementFixture(opts)
         disableControlActionCalls[#disableControlActionCalls + 1] = { inputGroup = inputGroup, control = control, disable = disable }
     end
 
+    -- PRIORITY #6 (AgilityBasicJump PER-PERSON BLOCK, added this pass) --
+    -- same "controllable stand-in, soft dependency" convention
+    -- clientagility_spec.lua/clientradial_spec.lua already use for the
+    -- identical global. `featureBlocksAvailable` defaults to true (this
+    -- global is injected); set opts.featureBlocksAvailable = false to prove
+    -- the fail-open path never calls a nil function.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+
     local setMoveRateCalls = {}
     local function SetPedMoveRateOverride(ped, rate)
         setMoveRateCalls[#setMoveRateCalls + 1] = { ped = ped, rate = rate }
@@ -253,7 +285,7 @@ local function newMovementFixture(opts)
     -- doc comment above), overridable per-test via opts.agilityBasicJump.
     local Config = { Features = { AgilityBasicJump = opts.agilityBasicJump ~= false } }
 
-    local env = Sandbox.newEnv({
+    local overrides = {
         GetHashKey = GetHashKey,
         Config = Config,
         RegisterCommand = RegisterCommand,
@@ -278,7 +310,17 @@ local function newMovementFixture(opts)
         GetCurrentResourceName = GetCurrentResourceName,
         GetPlayerFromServerId = GetPlayerFromServerId,
         GetPlayerName = GetPlayerName,
-    })
+    }
+    -- PRIORITY #6 -- soft dependency, omitted entirely (not merely stubbed
+    -- false) when opts.featureBlocksAvailable == false, so the fail-open
+    -- test below exercises the REAL `type(IsK9FeatureBlocked) == 'function'`
+    -- guard against a genuinely absent global, not a stand-in that happens
+    -- to answer false.
+    if featureBlocksAvailable then
+        overrides.IsK9FeatureBlocked = IsK9FeatureBlocked
+    end
+
+    local env = Sandbox.newEnv(overrides)
 
     Sandbox.loadInto('../client/movement.lua', env)
 
@@ -305,6 +347,16 @@ local function newMovementFixture(opts)
         setModel = function(entity, hash) entityModels[entity] = hash end,
         setEntityModelK9 = function(entity, v) entityModelK9[entity] = v end,
         disableControlActionCalls = disableControlActionCalls,
+        -- PRIORITY #6 -- same shape as clientradial_spec.lua's own
+        -- setBlocked/fireFeatureBlocksApplied/featureBlocksAppliedHandlerCount
+        -- trio for the identical mechanism.
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
+        fireFeatureBlocksApplied = function()
+            for _, handler in ipairs(eventHandlers['qbx_k9unit:client:featureBlocksApplied'] or {}) do
+                handler()
+            end
+        end,
+        featureBlocksAppliedHandlerCount = function() return #(eventHandlers['qbx_k9unit:client:featureBlocksApplied'] or {}) end,
         --- Resumes EVERY captured thread once (Sandbox.newThreadRunner()'s
         --- own step() semantics). Only meaningful when this fixture was
         --- built with opts.stepThreads = true -- see newMovementFixture()'s
@@ -946,6 +998,110 @@ t.test('AgilityBasicJump=true (this fixture\'s existing default): the suppressio
 end)
 
 -- ========================================================================
+-- PRIORITY #6 -- the AgilityBasicJump PER-PERSON BLOCK
+-- (client/featureblocks.lua hand-off item 2), added THIS pass. See this
+-- file's own header item 6 for the full list of what these tests prove.
+-- The onResourceStop side of "guaranteed release" is deliberately NOT a
+-- new test here -- it is the EXISTING "registers exactly 3 onResourceStop
+-- handlers" sanity test near the top of this file, unchanged and still
+-- passing: this feature adds no 4th handler at all, because
+-- DisableControlAction needs no explicit reset (see client/movement.lua's
+-- own comment on this, immediately above EnsureAgilityJumpSuppressionThread).
+-- ========================================================================
+
+t.test('the qbx_k9unit:client:featureBlocksApplied listener is registered exactly once', function()
+    local f = newMovementFixture()
+    t.equals(f.featureBlocksAppliedHandlerCount(), 1)
+end)
+
+t.test('STEADY STATE (the interval decision\'s own central claim): AgilityBasicJump=true, never blocked -- creates NO suppression thread at all, not even an idle poll -- threadCount stays at 2 across multiple ticks/events with nothing to react to', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setEntityModelK9(1, true)
+    f.step()
+    f.step()
+    f.fireFeatureBlocksApplied() -- a real sync arrived, but changed nothing (blockedFeatures stays empty)
+    f.step()
+
+    t.equals(f.threadCount(), 2, 'leash pull-back + move-rate watchdog only -- zero cost paid for a feature nobody has ever blocked, not even a cheap poll')
+    t.equals(#f.disableControlActionCalls, 0)
+end)
+
+t.test('A BLOCK ARRIVING MID-SESSION TAKES EFFECT: AgilityBasicJump=true (no thread exists yet) -- firing featureBlocksApplied with AgilityBasicJump blocked CREATES the suppression thread on the spot, and it suppresses on the very next step, same tick the sync would have arrived on', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setEntityModelK9(1, true)
+    t.equals(f.threadCount(), 2, 'sanity: no suppression thread yet')
+
+    f.setBlocked('AgilityBasicJump', true)
+    f.fireFeatureBlocksApplied()
+
+    t.equals(f.threadCount(), 3, 'the block event itself must be what creates the thread -- not a poll that happens to notice it later')
+
+    f.step()
+    t.equals(#f.disableControlActionCalls, 2, 'INPUT_JUMP + INPUT_DUCK, exactly like the global-off case')
+end)
+
+t.test('A BLOCK CLEARING MID-SESSION RELEASES: once cleared, the suppression thread stops calling DisableControlAction on its very next pass -- no separate teardown path needed, mirroring the model-loss test above', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setEntityModelK9(1, true)
+    f.setBlocked('AgilityBasicJump', true)
+    f.fireFeatureBlocksApplied()
+    f.step()
+    t.equals(#f.disableControlActionCalls, 2, 'suppressed while blocked')
+
+    f.setBlocked('AgilityBasicJump', false)
+    f.fireFeatureBlocksApplied()
+    f.step()
+    t.equals(#f.disableControlActionCalls, 2, 'no NEW DisableControlAction calls once unblocked -- the loop\'s own while-condition re-reads the (now false) block on this very next pass and exits')
+
+    -- The now-dead thread must not have left the feature permanently
+    -- suppressed OR permanently un-suppressible -- a FRESH block later must
+    -- still work (proves EnsureAgilityJumpSuppressionThread() can start a
+    -- brand new thread once the old one has genuinely ended, not just once
+    -- ever).
+    f.setBlocked('AgilityBasicJump', true)
+    f.fireFeatureBlocksApplied()
+    t.equals(f.threadCount(), 4, 'a fresh thread, since the previous one already exited its while loop and cleared agilityJumpSuppressionThreadRunning')
+    f.step()
+    t.equals(#f.disableControlActionCalls, 4)
+end)
+
+t.test('OWNER\'S DECISION STILL HOLDS VIA THE BLOCK PATH: a role-holder on a HUMAN body (IsOwnModelK9 true via role, IsEntityModelK9(PlayerPedId()) false) is NEVER suppressed even while AgilityBasicJump is blocked for them -- same exemption as PRIORITY #4, proven again for the NEW trigger mechanism', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setIsOwnModelK9(true) -- role-widened answer; deliberately NOT what this thread's own gate reads
+    -- entityModelK9(1) left unset -- real body stays human
+    f.setBlocked('AgilityBasicJump', true)
+    f.fireFeatureBlocksApplied()
+
+    t.equals(f.threadCount(), 3, 'the thread still gets created -- the exemption is inside the loop body (per-frame), not a reason to skip creating the loop at all')
+
+    f.step()
+    f.step()
+    t.equals(#f.disableControlActionCalls, 0, 'a role-holder on a human body must keep jump and crouch regardless of which of the two reasons is driving suppression')
+end)
+
+t.test('DUPLICATE-THREAD GUARD: AgilityBasicJump=false (a thread already exists from load) -- a block ALSO arriving for the same feature must not start a second copy', function()
+    local f = newMovementFixture({ agilityBasicJump = false, stepThreads = true })
+    t.equals(f.threadCount(), 3, 'sanity: the global-off suppression thread already exists (leash + watchdog + suppression)')
+
+    f.setBlocked('AgilityBasicJump', true)
+    f.fireFeatureBlocksApplied()
+
+    t.equals(f.threadCount(), 3, 'EnsureAgilityJumpSuppressionThread() must be a no-op while agilityJumpSuppressionThreadRunning is already true')
+end)
+
+t.test('FAILS OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- firing featureBlocksApplied is a harmless no-op, never an error, and never starts suppression', function()
+    local f = newMovementFixture({ featureBlocksAvailable = false, stepThreads = true })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.setEntityModelK9(1, true)
+
+    f.fireFeatureBlocksApplied() -- must not error despite IsK9FeatureBlocked being absent
+
+    t.equals(f.threadCount(), 2, 'no suppression thread -- fails OPEN (unblockable), exactly as this feature behaved before this pass')
+    f.step()
+    t.equals(#f.disableControlActionCalls, 0)
+end)
+
+-- ========================================================================
 -- PRIORITY #5 -- the always-on move-rate watchdog, ADDED THIS PASS to close
 -- a real, verified "unbounded trap": the ANY-PED FIX above (PRIORITY #3)
 -- lets an OFF-MODEL role-holder carry a genuine non-1.0 move-rate override
@@ -1081,6 +1237,18 @@ end)
 --     entirely (Sandbox.newThreadRunner()'s own contract), so the exact
 --     1000 vs. 0 distinction between the two branches is not independently
 --     verified here, only each branch's DisableControlAction behavior is.
+--   - The same thread's PER-PERSON BLOCK (client/featureblocks.lua hand-off
+--     item 2) -- NOW COVERED, see PRIORITY #6 above (added this pass):
+--     proves the thread is genuinely absent (zero cost, not a cheap poll)
+--     until a block first arrives via the local featureBlocksApplied
+--     event, created and suppressing within that same tick when it does,
+--     self-releasing once cleared, immune to a duplicate second thread if
+--     the global-off case and a live block co-occur, upholding the SAME
+--     human-body exemption as the global-off case, and failing open when
+--     client/featureblocks.lua is not loaded at all. Same disclosed gap as
+--     immediately above applies here too (the exact Wait(1000) vs Wait(0)
+--     ms argument is not independently asserted, only each branch's
+--     DisableControlAction behavior is).
 --   - The SOURCE-ORIGIN GUARD's open engine-level question (can `source`
 --     ever fail open to something other than 65535 on a genuine dispatch)
 --     is NOT settled by the light source-guard tests in this file, exactly

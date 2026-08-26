@@ -46,6 +46,16 @@
        exercises it end to end) rather than fabricating a guard test
        against code that does not exist. Reported as a finding, not
        silently skipped.
+    5. WaterTrackingDecay's PER-PERSON BLOCK (client/featureblocks.lua
+       hand-off item 1, added a LATER pass) -- section D2. The check was
+       folded directly into the compute thread's own ALREADY-existing
+       per-tick condition, so these tests prove the fold's correctness
+       (blocked suppresses even a hard, water-everywhere break; unblocked
+       doesn't; a block arriving/clearing mid-session takes effect within
+       one tick either way; fails open when client/featureblocks.lua isn't
+       loaded) rather than any new thread/event machinery -- there isn't
+       any. See section D2's own header for what does NOT apply here
+       (no body/model exemption, no new onResourceStop surface).
 
     STUBBING EFFORT, reported honestly per this task's own instruction:
     proportionate. Every native this file touches is a small, cheap
@@ -148,7 +158,7 @@ end
 -- Sandbox setup
 -- ----------------------------------------------------------------------
 
---- @param opts { hasK9Access: boolean?, canShowK9UI: boolean?, omitLegacyUIGlobals: boolean?, waterTrackingDecay: boolean?, xpProgression: boolean?, gunpowderSniffing: boolean?, bloodTracking: boolean? }?
+--- @param opts { hasK9Access: boolean?, canShowK9UI: boolean?, omitLegacyUIGlobals: boolean?, waterTrackingDecay: boolean?, xpProgression: boolean?, gunpowderSniffing: boolean?, bloodTracking: boolean?, featureBlocksAvailable: boolean?, blockedFeatures: table? }?
 local function newTrackingFixture(opts)
     opts = opts or {}
     local runner, threads, waitLog = newTrackedRunner()
@@ -233,6 +243,18 @@ local function newTrackingFixture(opts)
     local isPedShooting = false
     local function IsPedShooting(entity) return isPedShooting end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua hand-off item 1,
+    -- WaterTrackingDecay, added this pass) -- same "controllable stand-in,
+    -- soft dependency" convention clientagility_spec.lua/
+    -- clientradial_spec.lua/clientmovement_spec.lua already use for the
+    -- identical global. `featureBlocksAvailable` defaults to true (this
+    -- global is injected); set opts.featureBlocksAvailable = false to prove
+    -- the fail-open path never calls a nil function.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+
     local overrides = {
         HasK9Access = HasK9Access,
         DenyK9UIAccess = DenyK9UIAccess,
@@ -248,6 +270,9 @@ local function newTrackingFixture(opts)
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
     }
+    if featureBlocksAvailable then
+        overrides.IsK9FeatureBlocked = IsK9FeatureBlocked
+    end
 
     -- `omitLegacyUIGlobals` (default false): when true, CanShowK9UI is
     -- deliberately left OUT of the sandbox entirely (env.CanShowK9UI stays
@@ -296,6 +321,7 @@ local function newTrackingFixture(opts)
         setPedDead = function(v) pedDead = v end,
         setWaterHeightFn = function(fn) waterHeightFn = fn end,
         setPedShooting = function(v) isPedShooting = v end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
 
         triggerGameEvent = function(eventName, data)
             assert(gameEventHandler, 'client/tracking.lua did not register a gameEventTriggered handler')
@@ -623,6 +649,122 @@ t.test('a SOFT water break (breaksTrail == false) still renders the partial line
     -- constants, which this spec has no access to and must not guess at).
     local firstAlpha, lastAlpha = f.drawMarkerCalls[1][17], f.drawMarkerCalls[#f.drawMarkerCalls][17]
     t.isTrue(lastAlpha < firstAlpha, 'a marker past the water crossing must render at a visibly lower alpha than one before it')
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION D2 -- PER-PERSON BLOCK (client/featureblocks.lua hand-off item
+-- 1, WaterTrackingDecay), added THIS pass. This is the trivial hand-off
+-- item: the check was folded directly into the compute thread's ALREADY
+-- existing per-tick condition (see client/tracking.lua's own comment right
+-- above the edited `if`), so every test below simply proves that fold
+-- behaves correctly -- no new thread, no new event, nothing else to wire.
+--
+-- NOT APPLICABLE HERE, stated plainly rather than silently omitted:
+--   - "the human-body exemption still holds" -- there is no body/model
+--     concept anywhere in the water-crossing check at all (it's pure
+--     coordinate/water-height geometry along the resolved trail, unrelated
+--     to which ped model is doing the tracking) -- nothing to test.
+--   - "onResourceStop releases" -- this fold adds no new thread, no new
+--     persistent native state, and no new cleanup surface of any kind; the
+--     existing compute thread's own lifecycle (and this file's own
+--     "SECTION F" note on why no source-origin guard applies here either)
+--     is entirely unchanged by this edit.
+-- ----------------------------------------------------------------------
+
+t.test('BLOCKED FROM THE START: WaterTrackingDecay blocked for this person -- a hard water-break condition (water covers the ENTIRE remaining path) never fires at all; the full trail renders exactly as if the global flag were disabled', function()
+    local f = newTrackingFixture({
+        waterTrackingDecay = true,
+        waterHeightFn = function() return true end, -- water everywhere, including traveled == 0
+        blockedFeatures = { WaterTrackingDecay = true },
+    })
+    f.env.Config.WaterTrackingDecay.breaksTrail = true
+    f.setPedCoords(vec3(0, 0, 0))
+    f.queueCallbackResponse({ found = true, coords = vec3(10, 0, 0) })
+    f.env.StartScentTrack()
+
+    f.stepOne(1)
+    t.equals(#f.notifyCalls, 0, 'blocked: no trail_lost_water notify even though water genuinely covers the whole path')
+    t.isTrue(f.env.IsTracking(), 'blocked: the session stays genuinely live, never marked broken')
+
+    f.stepOne(2)
+    local markerSpacing = f.env.Config.Tracking.Scent.markerSpacing
+    local expectedMarkerCount = math.floor(10 / markerSpacing) + 1
+    t.equals(#f.drawMarkerCalls, expectedMarkerCount, 'the FULL trail renders -- water is fully invisible to this trail while blocked')
+end)
+
+t.test('UNBLOCKED BASELINE (direct comparison with the blocked test above): the SAME hard water-break condition, with no block at all, breaks the trail exactly as section D already proves', function()
+    local f = newTrackingFixture({
+        waterTrackingDecay = true,
+        waterHeightFn = function() return true end,
+    })
+    f.env.Config.WaterTrackingDecay.breaksTrail = true
+    f.setPedCoords(vec3(0, 0, 0))
+    f.queueCallbackResponse({ found = true, coords = vec3(10, 0, 0) })
+    f.env.StartScentTrack()
+
+    f.stepOne(1)
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('tracking.trail_lost_water'))
+end)
+
+t.test('A BLOCK ARRIVING MID-SESSION TAKES EFFECT: an already-live SOFT water break (fading alpha past the crossing) reverts to full, uniform alpha on the VERY NEXT compute tick once WaterTrackingDecay is blocked for this person', function()
+    local f = newTrackingFixture({
+        waterTrackingDecay = true,
+        waterHeightFn = function(x, y, z) return x >= 6.0 end, -- water starts at x == 6
+    })
+    f.env.Config.WaterTrackingDecay.breaksTrail = false
+    f.setPedCoords(vec3(0, 0, 0))
+    f.queueCallbackResponse({ found = true, coords = vec3(9, 0, 0) })
+    f.env.StartScentTrack()
+
+    f.stepOne(1) -- unblocked compute tick: crossing detected at x=6
+    f.stepOne(2) -- render pass over the faded trail
+    local beforeFirstAlpha, beforeLastAlpha = f.drawMarkerCalls[1][17], f.drawMarkerCalls[#f.drawMarkerCalls][17]
+    t.isTrue(beforeLastAlpha < beforeFirstAlpha, 'sanity: the fade is genuinely present before the block, matching the plain SOFT-break test above')
+
+    f.setBlocked('WaterTrackingDecay', true)
+    f.stepOne(1) -- the SAME tick a real featureBlocksSync would have arrived on -- water is now fully invisible to this trail
+    local countBeforeSecondRender = #f.drawMarkerCalls
+    f.stepOne(2)
+    local newFirstAlpha, newLastAlpha = f.drawMarkerCalls[countBeforeSecondRender + 1][17], f.drawMarkerCalls[#f.drawMarkerCalls][17]
+    t.equals(newFirstAlpha, newLastAlpha, 'once blocked, the whole line renders at the SAME alpha -- no fade at all, exactly as if WaterTrackingDecay were globally disabled')
+end)
+
+t.test('A BLOCK CLEARING MID-SESSION RELEASES: a per-person block suppresses a hard water break for as long as it is live, and the break fires on the VERY NEXT tick once the block clears', function()
+    local f = newTrackingFixture({
+        waterTrackingDecay = true,
+        waterHeightFn = function() return true end, -- water everywhere, including traveled == 0
+        blockedFeatures = { WaterTrackingDecay = true },
+    })
+    f.env.Config.WaterTrackingDecay.breaksTrail = true
+    f.setPedCoords(vec3(0, 0, 0))
+    f.queueCallbackResponse({ found = true, coords = vec3(10, 0, 0) })
+    f.env.StartScentTrack()
+
+    f.stepOne(1) -- blocked: the hard-break condition is real (water everywhere) but must never fire
+    t.equals(#f.notifyCalls, 0)
+    t.isTrue(f.env.IsTracking())
+
+    f.setBlocked('WaterTrackingDecay', false)
+    f.stepOne(1) -- unblocked now -- the SAME real water condition must break the trail on this very next tick
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('tracking.trail_lost_water'))
+end)
+
+t.test('FAILS OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- the hard water break still fires normally, never silently suppressed', function()
+    local f = newTrackingFixture({
+        waterTrackingDecay = true,
+        waterHeightFn = function() return true end,
+        featureBlocksAvailable = false,
+    })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.env.Config.WaterTrackingDecay.breaksTrail = true
+    f.setPedCoords(vec3(0, 0, 0))
+    f.queueCallbackResponse({ found = true, coords = vec3(10, 0, 0) })
+    f.env.StartScentTrack()
+
+    f.stepOne(1)
+    t.equals(#f.notifyCalls, 1, 'must behave exactly as before this pass -- unblockable, never an error')
 end)
 
 -- ----------------------------------------------------------------------
