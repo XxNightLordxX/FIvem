@@ -258,6 +258,37 @@ local function newCombatFixture(opts)
     local function isHesitatingFn(cid) return hesitatingByCid[cid] == true end
     local function isDistractedFn(cid) return distractedByCid[cid] == true end
 
+    -- COMPAT-LAYER (this pass): server/combat.lua's IsTargetDowned now
+    -- calls `K9Compat.Get('ambulance').IsDowned(targetSrc)` -- a minimal,
+    -- hand-rolled stand-in `K9Compat` is supplied directly (same
+    -- established convention as tests/clienttablet_spec.lua's/
+    -- tests/clientequipmentshop_spec.lua's own `fakeK9Compat`), never the
+    -- real shared/compat/core.lua -- loading that file into this same env
+    -- would ALSO register its own onResourceStart handlers (detection
+    -- scheduling + the /k9compat command), silently breaking this file's
+    -- own "registers exactly 1 onResourceStart handler" assertion below.
+    -- Defaults to always returning nil (adapter UNKNOWN/not detected) for
+    -- every test that never sets opts.ambulanceIsDowned -- i.e. every
+    -- PropDragging test in this file written BEFORE this pass keeps
+    -- exercising IsTargetDowned's pre-existing metadata/health fallback
+    -- completely unchanged, with zero opt-in required.
+    local ambulanceIsDownedCalls = {}
+    local function ambulanceIsDownedFn(src)
+        ambulanceIsDownedCalls[#ambulanceIsDownedCalls + 1] = src
+        if type(opts.ambulanceIsDowned) == 'function' then
+            return opts.ambulanceIsDowned(src)
+        end
+        return nil
+    end
+    local fakeK9Compat = {
+        Get = function(system)
+            if system == 'ambulance' then
+                return { IsDowned = ambulanceIsDownedFn }
+            end
+            return {}
+        end,
+    }
+
     local config = {
         Features = {
             BiteAndHold = opts.biteAndHold ~= false,
@@ -313,6 +344,7 @@ local function newCombatFixture(opts)
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         IsPedRagdoll = IsPedRagdoll,
+        K9Compat = fakeK9Compat,
         GetPlayers = GetPlayers,
         Config = config,
     }
@@ -375,6 +407,7 @@ local function newCombatFixture(opts)
         notifyCalls = notifyCalls,
         printedLines = printedLines,
         awardCalls = awardCalls,
+        ambulanceIsDownedCalls = ambulanceIsDownedCalls,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setNow = function(ms) fakeNow = ms end,
@@ -1612,6 +1645,53 @@ t.test('DragExceedsMaxDistance safety valve: the maintenance thread force-ends a
     f.setCoords(k9Ped, 0, 0, 0)
     f.runOneTick()
     t.equals(countClientEvents(f, 'qbx_k9unit:client:dragEnded'), 1)
+end)
+
+-- ========================================================================
+-- COMPAT-LAYER (this pass): IsTargetDowned's K9Compat ambulance-adapter
+-- precedence -- override (if configured) wins unconditionally over the
+-- adapter; the adapter's true/false are trusted directly over the fallback
+-- when no override is configured; the adapter's nil (UNKNOWN) falls
+-- through to the pre-existing metadata guess, unchanged. See
+-- server/combat.lua's IsTargetDowned doc comment for the full contract.
+-- ========================================================================
+
+t.test('IsTargetDowned precedence: an override wins UNCONDITIONALLY over the ambulance adapter -- the adapter is never even consulted', function()
+    local f = newCombatFixture({ propDragging = true, downedOverride = function(_src) return false end, ambulanceIsDowned = function(_src) return true end })
+    wireK9(f, K9_SRC)
+    -- metadata also says downed -- proves the override's `false` wins over
+    -- BOTH the adapter's `true` AND metadata, exactly as before this pass.
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 0, 'override=false must win over adapter=true and metadata.isdead=true alike')
+    t.equals(#f.ambulanceIsDownedCalls, 0, 'the adapter must never be called at all once an override is configured')
+end)
+
+t.test('IsTargetDowned precedence: no override, adapter confirms TRUE -- accepted even though metadata says NOT downed', function()
+    local f = newCombatFixture({ propDragging = true, ambulanceIsDowned = function(_src) return true end })
+    wireK9(f, K9_SRC)
+    -- isdead/inlaststand both omitted -> setPlayer's own metadata shape
+    -- coerces both to false -- metadata alone would reject this target.
+    wirePlayerTarget(f, 501, TARGET_SRC, { wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'a confirmed adapter true must be trusted directly, overriding a stale/absent metadata guess')
+end)
+
+t.test('IsTargetDowned precedence: no override, adapter confirms FALSE -- rejected even though metadata says downed', function()
+    local f = newCombatFixture({ propDragging = true, ambulanceIsDowned = function(_src) return false end })
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 0, 'a confirmed adapter false must be trusted directly -- IsTargetDowned has no independent second signal to fall back on the way IsHandlerDown does')
+end)
+
+t.test('IsTargetDowned precedence: no override, adapter returns nil (UNKNOWN) -- falls through to the pre-existing metadata guess, unchanged', function()
+    local f = newCombatFixture({ propDragging = true, ambulanceIsDowned = function(_src) return nil end })
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'nil must never be coerced to a boolean at the call site -- it must fall through to metadata, which says downed here')
+    t.isTrue(#f.ambulanceIsDownedCalls >= 1, 'the adapter must actually have been consulted for this case')
 end)
 
 -- ========================================================================

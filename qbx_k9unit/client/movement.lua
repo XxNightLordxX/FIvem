@@ -1025,22 +1025,72 @@ end
 --- contributing system whose owning Config.Features flag is disabled
 --- simply never touches its key and never affects the product.
 ---
---- SCOPE, CONFIRMED (re-checked this pass, still true): RecomputeK9MoveRate()
---- below is HARD-GATED on IsOwnModelK9() -- it resets to neutral and returns
---- early for any ped that is not currently a recognized K9 model (see that
---- function's own `if not IsOwnModelK9() then ... return end` branch). This
---- is BY DESIGN, not a bug to fix here, for two reasons taken together: (1)
---- RecomputeK9MoveRate() takes no ped argument at all -- it only ever reads
---- PlayerPedId(), the CALLING CLIENT's own currently-controlled ped, never
---- an arbitrary target entity; (2) every modifier key in this table is
---- itself only ever written by a caller when THAT SAME client is playing a
---- K9 character (client/wellbeing.lua and client/progression.lua both scope
---- their writes to a K9 model first; `breed`, added this pass, is written by
---- THIS FILE itself, from INSIDE RecomputeK9MoveRate() after its own
---- `IsOwnModelK9()` check above has already passed -- see "BREED MOVE-RATE
---- WEIGHT" near K9MoveRateModifiers' own declaration) -- there is no
---- modifier here that would ever mean anything on a human ped in the first
---- place. A caller
+--- SCOPE, CORRECTED (this pass -- two independent agents separately found
+--- the same real bug, confirmed here and fixed below): RecomputeK9MoveRate()
+--- used to be HARD-GATED on IsOwnModelK9() ALONE -- it reset to neutral and
+--- returned early for any ped IsOwnModelK9() did not recognize. That gate's
+--- own justification used to claim "there is no modifier here that would
+--- ever mean anything on a human ped in the first place" -- TRUE when this
+--- composer was wellbeing/XP-only, but FALSIFIED the moment
+--- client/pursuitsprint.lua landed: that file's own header states, at
+--- length, "ANY PED, GATED ON ROLE/CERTIFICATION, NEVER ON PED MODEL" and
+--- deliberately writes K9MoveRateModifiers.pursuitSprint for a role-holder
+--- regardless of model. With the old gate, that promise was false in
+--- practice: a role-holder on a non-K9 body got the server's grant, the
+--- "activated" toast, and a silent no-op speed-wise, in two real,
+--- non-hypothetical configurations --
+---   (a) Config.K9Appearance.requireK9ModelForRole = true (a real, named,
+---       supported mode -- client/pursuitsprint.lua's own header names this
+---       EXACT mode as the one it is trying not to depend on, yet ended up
+---       depending on transitively through this function); and
+---   (b) even at the false DEFAULT, for a K9-access holder whose access
+---       comes from server/certifications.lua's HasK9Access() High Command
+---       or autoAccessGrade bypass rather than an actual certification --
+---       server/appearance.lua's own header states HasK9Role()/IsK9Role()
+---       "Deliberately EXCLUDES the autoAccessGrade/high-command BYPASSES
+---       inside HasK9Access()", so IsOwnModelK9()'s own IsK9Role() widening
+---       (see client/main.lua) never covers this case, even though
+---       server/pursuitsprint.lua's grant is bare HasK9Access(src) with no
+---       IsK9Role/model check of its own at all.
+---
+--- THE FIX: the early-return condition below is now
+--- `not (IsOwnModelK9() or HasK9Access())`, not `not IsOwnModelK9()` alone.
+--- HasK9Access() -- NOT IsK9Role()/CanShowK9UI() -- is the deliberate choice
+--- for the second half of that OR, for two reasons: (1) it is the EXACT
+--- same server-side check server/pursuitsprint.lua's grant already uses
+--- (HasK9Access(src), a pure role/certification check, per
+--- server/certifications.lua's own "ROLE/MODEL DECOUPLING" header), so this
+--- client-side mirror cannot under- or over-cover what the server actually
+--- grants; IsK9Role() would silently exclude the autoAccessGrade/High
+--- Command case by the same documented design decision that creates gap
+--- (b) above, and CanShowK9UI() is narrower still (it ANDs a role check
+--- in), which would regress today's working "uncertified player wearing a
+--- K9 skin still gets breed weight" case this composer's model half
+--- already covers on its own. (2) this resource already has an established
+--- precedent for exactly this shape: client/fetch.lua's
+--- RequestThrowFetchBall() and client/radial.lua's "Throw" item are both
+--- documented, deliberately gated on "HasK9Access() alone, NOT
+--- CanShowK9UI()/IsOwnModelK9()" for the identical reason (a human-handler
+--- action must not depend on being modeled as a K9) -- this fix reuses that
+--- same idiom rather than inventing a new one. Performance: `or`
+--- short-circuits, so HasK9Access()'s own (already 1000ms-TTL-cached)
+--- network round trip is only ever consulted when IsOwnModelK9() is
+--- false -- the common, already-K9-modeled case pays nothing extra.
+---
+--- STILL TRUE, UNCHANGED BY THIS FIX: (1) RecomputeK9MoveRate() takes no ped
+--- argument at all -- it only ever reads PlayerPedId(), the CALLING
+--- CLIENT's own currently-controlled ped, never an arbitrary target entity;
+--- (2) every modifier key in this table is only ever written by a caller
+--- for THAT SAME client (client/wellbeing.lua and client/progression.lua
+--- both scope their writes to their own eligibility gate first; `breed`,
+--- is written by THIS FILE itself, from INSIDE RecomputeK9MoveRate(),
+--- after the OR-gate above has already passed -- see "BREED MOVE-RATE
+--- WEIGHT" near K9MoveRateModifiers' own declaration; note `breed` itself
+--- still naturally resolves to the neutral 1.0 default for a non-K9 model
+--- either way, since K9BreedSpeedMultiplierByModelHash is keyed purely by
+--- Config.Peds models -- widening this gate restores fatigue/mood/injury/
+--- xpTier/pursuitSprint for a role-holder off-model, not a breed value that
+--- was never meaningful off-model to begin with). A caller
 --- that genuinely needs to set a DIFFERENT (non-K9, or not-necessarily-K9)
 --- ped's move rate cannot route through this composer at all -- it must
 --- call SetPedMoveRateOverride directly on that ped instead. This already
@@ -1051,11 +1101,28 @@ end
 --- suspect, not another K9 -- see that file's own "MOVE-RATE COMPOSER
 --- SCOPE" header comment for the full resolution it shipped (route through
 --- this composer only when IsOwnModelK9() is true for the applying client,
---- call SetPedMoveRateOverride directly otherwise). Restated here, at the
---- source, so a FUTURE caller doesn't have to independently re-derive that
---- from combat.lua's comment the way this one did: don't widen this gate to
---- accept an arbitrary ped, and don't remove it -- it exists because every
---- modifier this table can ever hold is meaningless off a K9 model.
+--- call SetPedMoveRateOverride directly otherwise). That resolution predates
+--- this fix and is NOT touched by it (client/combat.lua is a different
+--- file's ownership) -- but the exact same "ANY PED" reasoning that
+--- motivated widening the gate here may be worth re-checking there too, for
+--- a K9-role handler who is dragging a prop while on a non-K9 body; flagged
+--- as a related, out-of-scope observation, not fixed in this pass.
+---
+--- NOT THE SAME DECISION AS AgilityBasicJump/wellbeing's injured-sprint
+--- block, AND MUST NOT BE UNIFIED WITH THEM: this gate answers "does the
+--- calling client currently have a legitimate ROLE-based reason for a move-
+--- rate EFFECT to apply", which is exactly why it now includes HasK9Access().
+--- AgilityBasicJump's jump/crouch suppression below and
+--- client/wellbeing.lua's own injured-sprint block instead answer "can this
+--- ped's own SKELETON/RIG physically jump or sprint the way a human's can",
+--- which is a body/animation-rig question with no role component at all --
+--- a four-legged model has no jump animation regardless of who is playing
+--- it, and a human-shaped role-holder never lost anything a jump animation
+--- would have given them. That is the owner's own recorded decision (see
+--- AgilityBasicJump's own comment below, "OWNER'S DECISION, 2026-08-25:
+--- MODEL, not role") and is deliberately left exactly as-is by this pass --
+--- do not "fix" it to match this OR-gate, and do not narrow this OR-gate to
+--- match it. Two different questions, two different answers, both correct.
 --- @type table<string, number>
 K9MoveRateModifiers = {
     fatigue = 1.0,  -- client/wellbeing.lua, Config.Features.FatigueSystem
@@ -1177,15 +1244,19 @@ function RecomputeK9MoveRate()
         return -- no valid ped to apply anything to yet (e.g. between spawns) -- nothing to do, not an error
     end
 
-    if not IsOwnModelK9() then
-        -- Not currently playing a K9 character -- none of the wellbeing/XP/
-        -- dragging modifiers above are meaningful for a human character's
-        -- move speed. Reset to neutral rather than silently no-op-ing:
-        -- FiveM's SetPlayerModel keeps the SAME ped index across a model
-        -- swap, so a stale non-1.0 override applied while this ped was
-        -- last a K9 could otherwise persist onto the human character after
-        -- a K9-to-human model change, permanently speeding up or slowing
-        -- down a player who is no longer even playing K9 content.
+    if not (IsOwnModelK9() or HasK9Access()) then
+        -- Neither on a recognized K9 model NOR currently holding real K9
+        -- access (server-authoritative HasK9Access(), the same check
+        -- server/pursuitsprint.lua's own grant uses) -- see this table's own
+        -- "SCOPE, CORRECTED" header comment above for the real bug this OR
+        -- replaces (a bare IsOwnModelK9() check) and why. Reset to neutral
+        -- rather than silently no-op-ing: FiveM's SetPlayerModel keeps the
+        -- SAME ped index across a model swap, so a stale non-1.0 override
+        -- applied while this ped last qualified (by EITHER model or access)
+        -- could otherwise persist onto a player who currently qualifies by
+        -- neither -- e.g. a K9-to-human model change for someone who also
+        -- holds no K9 access, or a certification/access revocation for
+        -- someone who was never K9-modeled to begin with.
         if lastAppliedMoveRate ~= 1.0 then
             SetPedMoveRateOverride(ped, 1.0)
             lastAppliedMoveRate = 1.0
@@ -1240,6 +1311,16 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 end)
 
+-- NOT THE SAME QUESTION AS THE MOVE-RATE COMPOSER ABOVE, DELIBERATELY: that
+-- section's gate now includes HasK9Access() (a role check) alongside
+-- IsOwnModelK9(), because a move-rate EFFECT is something a ROLE grants.
+-- The suppression thread immediately below stays MODEL-only (IsOwnModelK9(),
+-- unchanged by that fix) because it answers a different question entirely --
+-- whether this ped's own SKELETON has a jump/crouch animation to suppress in
+-- the first place, which no role grants or removes. See that section's own
+-- "SCOPE, CORRECTED" comment for the full writeup of this distinction; do
+-- not unify the two.
+--
 -- AgilityBasicJump (Config.Features.AgilityBasicJump): DEVELOPER_REFERENCE.md §6.1 bullet
 -- 3 bundles jump AND crouch together ("The K9 player can run, jump, and
 -- crouch using the native quadruped locomotion..."), matching this flag's

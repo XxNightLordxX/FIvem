@@ -1174,11 +1174,12 @@ end)
 -- ======================================================================
 -- FIX (this pass, consistency finding): RevokeCertificationOffline already
 -- closes the TOCTOU window where the target reconnects between the
--- online-check guard and the UPDATE landing for leash (ForceDetachLeashIfOnline)
--- and partnership (ForceBreakPartnershipForCitizenId) -- EndActiveEffectForHolder
--- was the one call in that same "must not outlive certification" family
--- missing from this call site. See this function's own new doc comment
--- (server/certifications.lua) for the full writeup.
+-- online-check guard and the UPDATE landing for leash and partnership
+-- (ForceBreakPartnershipForCitizenId) -- EndActiveEffectForHolder was the
+-- one call in that same "must not outlive certification" family missing
+-- from this call site. All three now go through this file's own shared
+-- EndK9AccessForCitizenId helper (server/certifications.lua) -- see that
+-- function's own doc comment for the full writeup.
 -- ======================================================================
 
 t.test('RevokeCertificationOffline: FIX -- ends any active bite-hold/takedown/drag if the target reconnects in the narrow window between the online-check guard and the UPDATE landing (consistency with leash/partnership at this same call site)', function()
@@ -1186,7 +1187,7 @@ t.test('RevokeCertificationOffline: FIX -- ends any active bite-hold/takedown/dr
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
     -- REVOKEE starts genuinely offline (passes the online-check guard),
     -- then "reconnects" as a side effect of the UPDATE landing -- modeling
-    -- the exact TOCTOU window ForceDetachLeashIfOnline's own doc comment
+    -- the exact TOCTOU window EndK9AccessForCitizenId's own doc comment
     -- already describes closing for leash/partnership at this call site.
     f.mysql.update.await = function(_sql, _params)
         f.registerPlayer(99, 'REVOKEE', { name = 'police', grade = { level = 1 } })
@@ -1416,6 +1417,52 @@ t.test('OnJobUpdate: ForceBreakPartnershipForCitizenId is called for a real depa
         if call[1] == 'CIT70' and call[2] == 'department_changed' then found = true end
     end
     t.isTrue(found)
+end)
+
+-- ======================================================================
+-- FIFTH GAP FIX (this pass, cross-team "four doors, one bug" finding,
+-- closing the fifth and last known instance): a K9-role party whose ONLY
+-- access route is autoAccessGrade (or, equally, a server/permissions.lua
+-- 'k9.access' grant) -- no certification row at all -- used to keep an
+-- active leash, an in-progress bite-hold/takedown/drag, and any
+-- partnership on leaving the department entirely. The department-loss
+-- branch above only ever called ForceDetachOfficerLeashForSource (the
+-- OFFICER-role leash), never ForceDetachLeashForSource/
+-- EndActiveEffectForHolder for the K9-role party, and the
+-- cert-revoke-due-to-job-change branch further below can never observe
+-- this citizenid at all (it is gated on `cached.active`, and this
+-- citizenid never had a certification row to cache in the first place).
+-- See EndK9AccessForCitizenId's own doc comment and the department-loss
+-- branch's own comment (both server/certifications.lua) for the full
+-- writeup of why this is now closed via that shared helper.
+-- ======================================================================
+
+t.test('OnJobUpdate: FIFTH-GAP FIX -- a K9-role party with autoAccessGrade-only access (no certification row) force-detaches their OWN leash, ends any held effect, and breaks any partnership on losing department membership entirely', function()
+    local f = newFixture({
+        departments = {
+            police = { label = 'Police Department', certifierGrade = 4, autoAccessGrade = 5 },
+        },
+    })
+    f.registerPlayer(95, 'CIT95', { name = 'police', grade = { level = 5 } })
+    -- Sanity: really has K9 access via autoAccessGrade alone, with no
+    -- certification ever cached (RefreshCertificationCache deliberately
+    -- never called) for this citizenid -- this is the exact "no
+    -- certification row" shape the fifth gap needed.
+    t.isTrue(f.env.HasK9Access(95), 'sanity: autoAccessGrade alone must already grant K9 access with zero certification cache entry')
+
+    fireJobUpdate(f, 95, { name = 'taxi', grade = { level = 5 } })
+
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 95, 'the K9-role leash for this exact source must be force-detached, not just the officer-role one')
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][2], 'department_changed')
+    t.equals(f.effectEndCalls[#f.effectEndCalls], 95, 'an in-progress bite-hold/takedown/drag must not outlive this access loss either')
+    t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][1], 'CIT95')
+    t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][2], 'department_changed')
+
+    -- The pre-existing officer-role detach must still fire too -- this fix
+    -- is additive, alongside the existing department-loss behavior, never
+    -- a replacement of it.
+    t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][1], 95)
+    t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][2], 'department_changed')
 end)
 
 t.test('OnJobUpdate: the runtime existence guard genuinely tolerates ForceBreakPartnershipForCitizenId being entirely absent (server/partnership.lua not loaded / feature off)', function()

@@ -104,6 +104,25 @@ local function newMovementFixture()
     local denyCallCount = 0
     local function DenyK9UIAccess() denyCallCount = denyCallCount + 1 end
 
+    -- ANY-PED MOVE-RATE FIX (this pass): RecomputeK9MoveRate()'s own gate is
+    -- now `IsOwnModelK9() or HasK9Access()`, not IsOwnModelK9() alone -- see
+    -- that function's own "SCOPE, CORRECTED" header comment in the real
+    -- production file for the full writeup (two independent agents found the
+    -- same real bug: a role-holder on a non-K9 body got a server grant and a
+    -- success toast but zero actual speed change). HasK9Access() is a REAL
+    -- cross-file global from client/main.lua -- called there UNGUARDED,
+    -- exactly like IsOwnModelK9()/CanShowK9UI() above from that same
+    -- always-loaded foundational file (Phase 1 scaffold, never a soft/
+    -- optional dependency the way client/appearance.lua's IsK9Role is) -- so
+    -- this fixture needs its own controllable stand-in for it, same as it
+    -- already has for those two. Defaults to false so every PRE-EXISTING
+    -- "not IsOwnModelK9" test below keeps meaning exactly what it always
+    -- meant (neither model nor access -- a full reset), and the widening
+    -- itself gets its own dedicated tests further down.
+    local hasK9Access = false
+    local hasK9AccessCallCount = 0
+    local function HasK9Access() hasK9AccessCallCount = hasK9AccessCallCount + 1; return hasK9Access end
+
     local serverEvents = {}
     local function TriggerServerEvent(eventName, ...)
         serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
@@ -177,6 +196,7 @@ local function newMovementFixture()
         IsOwnModelK9 = IsOwnModelK9,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        HasK9Access = HasK9Access,
         TriggerServerEvent = TriggerServerEvent,
         lib = lib,
         PlayerPedId = PlayerPedId,
@@ -197,6 +217,8 @@ local function newMovementFixture()
         setCanShowK9UI = function(v) canShowK9UI = v end,
         canShowK9UICallCount = function() return canShowK9UICallCount end,
         denyCallCount = function() return denyCallCount end,
+        setHasK9Access = function(v) hasK9Access = v end,
+        hasK9AccessCallCount = function() return hasK9AccessCallCount end,
         serverEvents = serverEvents,
         lastServerEvent = function() return serverEvents[#serverEvents] end,
         notifyCalls = notifyCalls,
@@ -675,6 +697,76 @@ t.test('RecomputeK9MoveRate: applies to the CURRENT PlayerPedId(), not a hardcod
     f.setPed(777, true)
     f.env.RecomputeK9MoveRate()
     t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].ped, 777)
+end)
+
+-- ========================================================================
+-- ANY-PED MOVE-RATE FIX (this pass) -- RecomputeK9MoveRate()'s gate is now
+-- `IsOwnModelK9() or HasK9Access()`, not IsOwnModelK9() alone. Two
+-- independent agents separately found the same real bug: a role-holder
+-- (certified handler, or a HasK9Access() High-Command/autoAccessGrade
+-- bypass) on a non-K9 body got a genuine server grant -- client/pursuitsprint.lua's
+-- "activated" toast, a real K9MoveRateModifiers write -- and ZERO actual
+-- speed change, because the bare IsOwnModelK9() gate reset the composer back
+-- to neutral before it ever composed anything. See the real production
+-- file's own "SCOPE, CORRECTED" header comment on K9MoveRateModifiers for
+-- the full writeup (the two concrete configurations this reproduces in:
+-- Config.K9Appearance.requireK9ModelForRole = true, and the default-config
+-- HasK9Access() autoAccessGrade/High-Command-bypass case) -- not re-derived
+-- here, only proven behaviorally against the real function.
+-- ========================================================================
+
+t.test('ANY-PED FIX: NOT IsOwnModelK9, but HasK9Access() true -- the composer now applies for real, proving a role-holder on a non-K9 body genuinely receives the speed change', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.env.K9MoveRateModifiers.fatigue = 0.85
+    f.env.RecomputeK9MoveRate()
+    t.equals(#f.setMoveRateCalls, 1, 'THE BUG: this used to be 0 -- IsOwnModelK9() alone reset to neutral and returned before composing anything')
+    t.equals(f.setMoveRateCalls[1].rate, 0.85, 'the real fatigue modifier must reach SetPedMoveRateOverride on a human/custom body exactly as it would on a K9 model')
+end)
+
+t.test('ANY-PED FIX: neither IsOwnModelK9 NOR HasK9Access -- still a full reset, exactly like before this fix (a player with no model AND no access has no legitimate reason for any modifier to apply)', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.env.K9MoveRateModifiers.injury = 0.6
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 0.6)
+
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(false)
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 1.0, 'neither half of the OR is true -- must still reset to neutral, not stay stuck at 0.6')
+end)
+
+t.test('ANY-PED FIX: HasK9Access() is NEVER consulted when IsOwnModelK9() is already true -- `or` short-circuits, so the already-K9-modeled common case pays no extra network round trip', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.hasK9AccessCallCount(), 0, 'Lua\'s `or` short-circuits: IsOwnModelK9() being true means HasK9Access() must never even run')
+    t.equals(#f.setMoveRateCalls, 1, 'the K9-modeled case must still apply normally')
+end)
+
+t.test('ANY-PED FIX: HasK9Access() true alone (never a K9 model at all, e.g. an unlisted human ped) applies breed at its neutral 1.0 default -- breed itself was never meaningful off-model, only the OTHER modifiers (fatigue/injury/mood/xpTier/pursuitSprint) are what this fix actually restores', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.setModel(1, 12345) -- pedHandle 1 (this fixture's default) -- some hash never present in any breed table
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.env.K9MoveRateModifiers.breed, 1.0, 'breed must stay neutral for a model with no configured breed multiplier, exactly as it already did before this fix')
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 1.0, 'with every modifier at its neutral default, the composed rate is exactly 1.0 -- still a REAL native call, not a skipped one, unlike the old bare-IsOwnModelK9() gate which would have skipped this entirely')
+end)
+
+t.test('ANY-PED FIX: switching FROM a legitimate access-only (non-K9-model) state back to neither resets to neutral, same stale-override protection the original K9-to-human comment already documented', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.env.K9MoveRateModifiers.mood = 0.9
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 0.9)
+
+    f.setHasK9Access(false) -- access revoked mid-session, still not K9-modeled
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 1.0, 'losing the ONLY qualifying condition (access, since model was already false) must still reset to neutral')
 end)
 
 -- ========================================================================

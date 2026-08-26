@@ -808,8 +808,12 @@ end
 --- laststand state, with concrete false-positive/false-negative modes) —
 --- override function first, FAILS CLOSED on error (same discipline as
 --- IsPlayerWantedEligible above — a broken override must never silently
---- widen who can be dragged), else the default best-effort
---- metadata.isdead/.inlaststand guess.
+--- widen who can be dragged); else, if no override is configured, the
+--- detected K9Compat ambulance adapter's `true`/`false` answer (COMPAT-
+--- LAYER, this pass — see shared/compat/ambulance.lua's header for the
+--- three-valued contract this step honours); else (adapter `nil`/
+--- UNKNOWN, or nothing detected) the default best-effort
+--- metadata.isdead/.inlaststand guess, exactly as before this pass.
 --- @param targetPed number
 --- @param isPlayerTarget boolean
 --- @param targetSrc number?
@@ -843,6 +847,34 @@ local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
         end
         return result == true
     end
+
+    -- COMPAT-LAYER (this pass): only reached when no override is
+    -- configured -- consult the detected ambulance adapter (shared/compat/
+    -- ambulance.lua) as a FALLBACK, never a replacement, for the
+    -- best-effort metadata guess below, exactly the resolution order that
+    -- file's own header PRECEDENCE section requires: override (already
+    -- handled above) wins unconditionally; only if absent, the adapter's
+    -- `true`/`false` are trusted directly (a real, positive signal from
+    -- whichever ambulance resource this server actually runs); its `nil`
+    -- (UNKNOWN -- nothing detected, the resource isn't started, or it
+    -- genuinely has no answer yet for this src) falls through to the SAME
+    -- metadata guess this file already used before this pass, unchanged.
+    -- `K9Compat.Get` is NEVER nil and its methods never throw (shared/
+    -- compat/core.lua's own BuildSafeAdapter/BuildNoOpStub contract) -- no
+    -- extra pcall/type guard needed here, matching every other
+    -- K9Compat.Get call site in this resource (server/search.lua,
+    -- server/medkit.lua, server/inventory.lua, etc. all call it bare; a
+    -- couple of call sites add a defensive `type(K9Compat) == 'table'`
+    -- belt-and-suspenders check on top for other reasons -- see server/
+    -- integrations.lua's/server/scentlineup.lua's own comments on THAT --
+    -- but none of them add a pcall around the call itself, because none
+    -- need one). This function's own boolean contract (no third "unknown"
+    -- state) is exactly why `true`/`false` short-circuit here but `nil`
+    -- does not -- see shared/compat/ambulance.lua's header for why
+    -- flattening `nil` into either boolean at a call site would be wrong.
+    local ambulanceDowned = K9Compat.Get('ambulance').IsDowned(targetSrc)
+    if ambulanceDowned == true then return true end
+    if ambulanceDowned == false then return false end
 
     -- Default best-effort check -- see config.lua's own comment on this
     -- field for the confidence note (HIGHER confidence than

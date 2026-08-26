@@ -832,6 +832,74 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     return true, 'ok'
 end
 
+--- CONSOLIDATION (this pass, cross-team "four doors, one bug" finding):
+--- this is THIS FILE's own private copy of the exact three-call teardown
+--- sequence (ForceDetachLeashForSource + EndActiveEffectForHolder +
+--- ForceBreakPartnershipForCitizenId) that server/certifications.lua's OWN
+--- identically-shaped local helper of the same name wraps for ALL FIVE of
+--- ITS call sites (RevokeCertification, RevokeCertificationOffline, and
+--- the three OnJobUpdate branches). Deliberately NOT a single shared
+--- resource-global reused by both files -- doing that would need a new
+--- entry in BOTH fxmanifest.lua's server_scripts list AND
+--- /home/user/FIvem/.luacheckrc's `globals` table (a bare `function Foo()`
+--- with no matching read_globals/globals entry is flagged
+--- "setting/accessing a non-standard global variable", verified against
+--- this exact repo's luacheck config before deciding this), and this task
+--- has neither file assignable to it. Separately, and independently of
+--- that: this resource's own spec files are written to load only the
+--- minimal file set the file under test needs -- tests/certifications_spec.lua
+--- never loads server/permissions.lua and tests/permissions_spec.lua never
+--- loads server/certifications.lua for these tests -- so even a
+--- same-name-different-file helper could not be shared without either spec
+--- absorbing a file (and that file's own file-load-time Config assertions)
+--- it otherwise has no reason to load. Given both constraints, this is one
+--- real duplicate between two files -- down from six independent inline
+--- copies before this pass -- and is reported as a deliberate, bounded
+--- tradeoff rather than a missed consolidation: if a THIRD call site
+--- outside these two files ever needs this exact sequence, that is the
+--- point to revisit a genuinely shared file with whoever owns
+--- fxmanifest.lua and .luacheckrc, not before.
+---
+--- Same contract as certifications.lua's copy: resolves a live server id
+--- for `citizenid` (or reuses `knownSrc` if the caller already has one --
+--- RevokePermission below always does, since its own call site is scoped
+--- to `onlineTargetSrc` being truthy), force-detaches only a K9-role leash
+--- (never the officer/handler role -- that is a different invariant no
+--- caller of this copy needs), ends any in-progress bite-hold/takedown/
+--- drag, and unconditionally breaks any DB-backed partnership row. Runs NO
+--- confirmation/reconciliation check of its own -- RevokePermission's own
+--- `stillHasAccess == nil` gate above is what confirms the loss; this is
+--- the unconditional, "no unbounded trap" teardown for that ALREADY-
+--- CONFIRMED outcome, never a second gate that could itself block it.
+--- All three calls stay behind their own `type(...) == 'function'` runtime
+--- existence guard -- genuinely required here, not just defensive style:
+--- server/main.lua, server/combat.lua and server/partnership.lua all load
+--- AFTER this file in fxmanifest.lua's server_scripts list.
+--- @param citizenid string
+--- @param reason string
+--- @param knownSrc number? -- pass an already-resolved live server id when the caller has one (skips a redundant GetPlayerByCitizenId lookup); omit to have this resolve it itself.
+local function EndK9AccessForCitizenId(citizenid, reason, knownSrc)
+    local src = knownSrc
+    if type(src) ~= 'number' then
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        src = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+    end
+
+    if type(src) == 'number' then
+        if type(ForceDetachLeashForSource) == 'function' then
+            ForceDetachLeashForSource(src, reason)
+        end
+
+        if type(EndActiveEffectForHolder) == 'function' then
+            pcall(EndActiveEffectForHolder, src)
+        end
+    end
+
+    if type(ForceBreakPartnershipForCitizenId) == 'function' then
+        ForceBreakPartnershipForCitizenId(citizenid, reason)
+    end
+end
+
 --- Revokes `permissionKey` from `targetCitizenid`. Only callable by high
 --- command. See this file's header "THE REVOKED BUT STILL HAS IT BY RANK
 --- CASE" for the full `stillHasAccess` contract -- this is the return value
@@ -976,16 +1044,15 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     --
     -- Called UNCONDITIONALLY of any of those routes' own state -- the "no
     -- unbounded trap" rule: this is a fresh, already-confirmed loss, not a
-    -- re-check to gate the teardown behind. Every one of the three calls
-    -- below is guarded by a `type(...) == 'function'` runtime existence
-    -- check -- this resource's established soft-dependency convention,
-    -- and a genuine necessity here specifically: server/main.lua
-    -- (ForceDetachLeashForSource), server/combat.lua
-    -- (EndActiveEffectForHolder), and server/partnership.lua
-    -- (ForceBreakPartnershipForCitizenId) ALL load AFTER this file in
-    -- fxmanifest.lua's server_scripts list, so none of the three can be
-    -- assumed present by load order the way certifications.lua (loaded
-    -- even later) can assume main.lua's ForceDetachLeashForSource.
+    -- re-check to gate the teardown behind. CONSOLIDATION (this pass): the
+    -- actual three-call sequence (and its own `type(...) == 'function'`
+    -- guards, still genuinely required -- server/main.lua, server/combat.lua
+    -- and server/partnership.lua all load AFTER this file) now lives in
+    -- this file's own EndK9AccessForCitizenId helper above, immediately
+    -- before this function -- see that helper's own doc comment for why it
+    -- is a private, file-local copy rather than a resource-global shared
+    -- with server/certifications.lua's identically-named, identically-
+    -- shaped helper.
     --
     -- Deliberately does NOT run for `stillHasAccess == 'unknown_target_offline'`
     -- -- this file's own established posture (header "THE REVOKED BUT
@@ -996,19 +1063,14 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- citizenid, so skipping those two costs nothing for an offline
     -- target; a DB-backed partnership is deliberately left standing
     -- rather than broken on a guess that may resolve the other way the
-    -- moment they reconnect and are found to still qualify by rank.
+    -- moment they reconnect and are found to still qualify by rank. This
+    -- is why the call below is INSIDE this `stillHasAccess == nil` gate,
+    -- not unconditional -- `onlineTargetSrc` is guaranteed truthy on this
+    -- branch (see the if/else above that sets `stillHasAccess`), so
+    -- EndK9AccessForCitizenId always has a known, live `src` here and never
+    -- needs to fall back to its own internal GetPlayerByCitizenId lookup.
     if permissionKey == 'k9.access' and stillHasAccess == nil then
-        if type(ForceDetachLeashForSource) == 'function' then
-            ForceDetachLeashForSource(onlineTargetSrc, 'k9_access_revoked')
-        end
-
-        if type(EndActiveEffectForHolder) == 'function' then
-            pcall(EndActiveEffectForHolder, onlineTargetSrc)
-        end
-
-        if type(ForceBreakPartnershipForCitizenId) == 'function' then
-            ForceBreakPartnershipForCitizenId(targetCitizenid, 'k9_access_revoked')
-        end
+        EndK9AccessForCitizenId(targetCitizenid, 'k9_access_revoked', onlineTargetSrc)
     end
 
     return true, 'ok', stillHasAccess

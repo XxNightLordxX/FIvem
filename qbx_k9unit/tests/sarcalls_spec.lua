@@ -18,31 +18,37 @@
         server/integrations.lua's structurally identical PollK9Health loop).
       SECTION 2 (client/sarcalls.lua) -- a real, unmodified file loaded into
         a sandbox via Sandbox.loadInto, driven only through captured
-        RegisterCommand/RegisterNetEvent handlers and lib.callback.await
-        (a plain synchronous stub, per tests/scenttrail_spec.lua's own
-        client-section precedent -- no coroutine yield is needed to drive
-        RequestStartSarCall's single await), with a second, independent
-        thread runner for ShowReveal's own on-demand auto-clear timer.
+        RegisterCommand/RegisterNetEvent handlers and lib.callback.await.
+        Synchronous (resolve-from-a-queue) by default, per
+        tests/scenttrail_spec.lua's own client-section precedent -- but see
+        "STALE-SESSION RACE" below: the fixture's callbackAwait stub can
+        also be flipped, per test, into a genuinely coroutine-yielding one
+        via setYieldingAwait, specifically so the interleaving that bug
+        needed can be reproduced rather than merely asserted about in
+        isolation. A second, independent thread runner drives ShowReveal's
+        own on-demand auto-clear timer.
 
     Both sections stub math.random via a wrapper table (FakeMath), never by
     mutating the real global math table -- identical technique and
     identical reasoning to tests/scenttrail_spec.lua's own FakeMath.
 
-    KNOWN, DISCLOSED COVERAGE GAP (per tests/fixtures/sandbox.lua's own
-    house convention: say so rather than silently skip): the generation-
-    token race RequestStartSarCall/RequestAbandonSarCall/the sarCallEnded
-    handler all guard against (an abandon or a server-pushed end arriving
-    while a start's own lib.callback.await is still pending) is not
-    exercised end-to-end here, because this fixture's callbackAwait stub
-    (mirroring tests/scenttrail_spec.lua's own) returns synchronously with
-    no actual yield point for an "in the meantime" event to land inside --
-    reproducing that interleaving would need a coroutine-based await stub
-    this task's effort budget did not extend to building. The token-bump
-    code itself is exercised directly (RequestAbandonSarCall visibly
-    invalidates an ALREADY-RESOLVED prior start's staleness by being
-    callable and clearing state at all -- see its own test below) -- what
-    is NOT proven here is the specific interleaving where the bump happens
-    strictly between an await's send and its return.
+    STALE-SESSION RACE (2026-08-26): this section used to carry a KNOWN,
+    DISCLOSED COVERAGE GAP here admitting that the generation-token race
+    RequestStartSarCall/RequestAbandonSarCall/the sarCallEnded handler guard
+    against (an abandon or a server-pushed end arriving while a start's own
+    lib.callback.await is still pending) was not exercised end-to-end,
+    because the callbackAwait stub returned synchronously with no yield
+    point for an "in the meantime" event to land inside. That gap is what
+    let the actual bug through: the sarCallEnded handler bumped
+    requestGeneration UNCONDITIONALLY on every push, with no way to tell a
+    late echo of an already-abandoned call from a newer start already in
+    flight -- exactly the interleaving a synchronous stub can never trigger.
+    Closed by giving callbackAwait a genuine yielding mode (see its own
+    declaration comment in SECTION 2's fixture, and the "STALE-SESSION RACE"
+    tests near the end of this file, which drive it via a real
+    coroutine.resume/coroutine.yield pair) plus the server-issued callId
+    fix itself (client/sarcalls.lua's own header, same name) -- the race is
+    now reproduced and pinned directly, not merely reasoned about.
 ]]
 
 local t = dofile('testkit.lua')
@@ -288,16 +294,37 @@ t.test('requestSarCall: success rolls a target from the CALLER\'S OWN live serve
     t.isTrue(result.started)
     t.isNil(result.reason)
     -- The target is never returned to the caller at all -- structurally,
-    -- `result` carries only `started`/`reason`.
+    -- `result` carries only `started`/`reason`/`callId`.
     t.isNil(result.targetX)
     t.isNil(result.distance)
+    t.isNotNil(result.callId, 'a successful start must always return a callId -- see this file\'s header "STALE-SESSION RACE"')
 
     -- Immediate push: distance is exactly 10.0 (warmDistance=25 in this
-    -- fixture's defaults) -> 'warm'.
+    -- fixture's defaults) -> 'warm'. Also carries this call's own callId.
     local push = triggerClientEventCalls[before + 1]
     t.equals(push.event, 'qbx_k9unit:client:sarHintTierChanged')
     t.equals(push.target, 2)
     t.equals(push.args[1], 'warm')
+    t.equals(push.args[2], result.callId, 'the pushed id must be the SAME id this call was granted at start')
+end)
+
+t.test('requestSarCall: each successful start mints a strictly increasing, never-reused callId', function()
+    playersBySource[60] = { citizenid = 'CIT_CALLID_A', job = 'police' }
+    pedCoordsBySource[60] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local first = requestSarCall(60)
+
+    fireAbandonSarCall(60)
+    playersBySource[61] = { citizenid = 'CIT_CALLID_B', job = 'police' }
+    pedCoordsBySource[61] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local second = requestSarCall(61)
+
+    t.isNotNil(first.callId)
+    t.isNotNil(second.callId)
+    t.isTrue(second.callId > first.callId, 'callId must strictly increase across calls, never repeat')
 end)
 
 t.test('requestSarCall: a second call for the SAME source while unfinished is rejected as already_active, with no new roll and no new push', function()
@@ -343,7 +370,7 @@ t.test('tick loop: pushes sarHintTierChanged on EVERY tier crossing as the offic
     pedCoordsBySource[20] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000 -- clear any residual cooldown from earlier tests sharing this citizenid space
     queueRandom(0.0, 0.0) -- target lands at (10.0, 0.0) -- exactly minRadius, and 'warm' per this fixture's thresholds (5/15/25)
-    requestSarCall(20)
+    local started = requestSarCall(20)
 
     local pushesSoFar = #triggerClientEventCalls
 
@@ -357,6 +384,7 @@ t.test('tick loop: pushes sarHintTierChanged on EVERY tier crossing as the offic
     local hotPush = lastEventFor(20)
     t.equals(hotPush.event, 'qbx_k9unit:client:sarHintTierChanged')
     t.equals(hotPush.args[1], 'hot')
+    t.equals(hotPush.args[2], started.callId, 'every hint push across the SAME call must carry that call\'s own, unchanging callId')
 
     -- Close further to 4.0 -> 'burning' (<=5).
     pedCoordsBySource[20] = { x = 6.0, y = 0.0, z = 0.0 } -- distance to (10,0) = 4.0
@@ -376,7 +404,7 @@ t.test('tick loop: found -- awards XP exactly once, fires the sarCallCompleted o
     pedCoordsBySource[21] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
     queueRandom(0.0, 0.0) -- target (10.0, 0.0)
-    requestSarCall(21)
+    local started = requestSarCall(21)
 
     -- Walk to within arrivalRadius (3.0).
     pedCoordsBySource[21] = { x = 9.0, y = 0.0, z = 0.0 } -- 1m from target
@@ -403,6 +431,7 @@ t.test('tick loop: found -- awards XP exactly once, fires the sarCallCompleted o
     t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
     t.equals(endPush.args[1], 'found')
     t.equals(endPush.args[2], completedOutbound.args[4], 'callType pushed to the client must match the callType in the outbound event')
+    t.equals(endPush.args[3], started.callId, 'the found push must carry THIS call\'s own callId, in its fixed 3rd position -- see this file\'s header "STALE-SESSION RACE"')
 
     -- Confirmed actually cleared, not lingering: a fresh request from the
     -- SAME citizenid, after the cooldown, must succeed (no stale already_active).
@@ -417,7 +446,7 @@ t.test('tick loop: an unfinished call older than maxCallDurationMs auto-expires 
     pedCoordsBySource[22] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
     queueRandom(0.0, 0.0)
-    requestSarCall(22)
+    local started = requestSarCall(22)
 
     local awardCountBefore = #awardCalls
     fakeNow = fakeNow + (ServerConfig.SARCalls.maxCallDurationMs + 1)
@@ -434,6 +463,8 @@ t.test('tick loop: an unfinished call older than maxCallDurationMs auto-expires 
     local endPush = lastEventFor(22)
     t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
     t.equals(endPush.args[1], 'timeout')
+    t.isNil(endPush.args[2], 'callType is unused for a timeout -- must be an explicit nil, not silently absent, so callId still lands in its own fixed 3rd position')
+    t.equals(endPush.args[3], started.callId, 'a timeout push must still carry THIS call\'s own callId')
 
     -- Confirmed actually cleared: a fresh request succeeds once the
     -- cooldown clears too.
@@ -447,7 +478,7 @@ t.test('abandonSarCall: UNCONDITIONAL -- clears an active call with Config off a
     pedCoordsBySource[23] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
     queueRandom(0.0, 0.0)
-    requestSarCall(23)
+    local started = requestSarCall(23)
 
     ServerConfig.Features.SARCalls = false -- feature disabled...
     hasAccess = false -- ...and access revoked...
@@ -460,6 +491,7 @@ t.test('abandonSarCall: UNCONDITIONAL -- clears an active call with Config off a
     local endPush = triggerClientEventCalls[#triggerClientEventCalls]
     t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
     t.equals(endPush.args[1], 'abandoned')
+    t.equals(endPush.args[3], started.callId, 'an abandoned push must still carry THIS call\'s own callId')
 
     -- No-op on a source with nothing active: must not error.
     fireAbandonSarCall(999)
@@ -1079,8 +1111,21 @@ local function newClientFixture(opts)
 
     local callbackResponses = {}
     local callbackCallLog = {}
+    -- STALE-SESSION RACE fixtures (see below) need this await to genuinely
+    -- SUSPEND mid-round-trip so a test can inject other events while it is
+    -- pending, exactly the interleaving a plain synchronous stub can never
+    -- exercise -- see this file's own header KNOWN, DISCLOSED COVERAGE GAP
+    -- for why that gap existed, and the race tests below for how this
+    -- closes it. Off by default (every pre-existing test above keeps its
+    -- own synchronous, single-call round trip unchanged); a test that needs
+    -- the real interleaving flips it on via setYieldingAwait and drives the
+    -- resulting coroutine itself.
+    local awaitShouldYield = false
     local function callbackAwait(eventName, _timeout, ...)
         callbackCallLog[#callbackCallLog + 1] = { event = eventName, args = { ... } }
+        if awaitShouldYield then
+            return coroutine.yield(eventName)
+        end
         return table.remove(callbackResponses, 1)
     end
 
@@ -1234,6 +1279,12 @@ local function newClientFixture(opts)
         callbackCallCount = function() return #callbackCallLog end,
         lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
         startCommand = function(args) commandHandlers['k9sarcall'](1, args or {}) end,
+        --- See callbackAwait's own declaration comment above -- flips this
+        --- fixture's lib.callback.await stub from "resolve synchronously
+        --- from the queue" to "suspend the calling coroutine until resumed
+        --- with the response", for STALE-SESSION RACE tests that need to
+        --- inject other events while a start is genuinely still pending.
+        setYieldingAwait = function(v) awaitShouldYield = v end,
         --- Fires every captured onResourceStop handler as if THIS resource
         --- were genuinely stopping (resourceName == 'qbx_k9unit', matching
         --- the fixture's own GetCurrentResourceName() stub).
@@ -1241,15 +1292,23 @@ local function newClientFixture(opts)
             for _, handler in ipairs(resourceStopHandlers) do handler('qbx_k9unit') end
         end,
         --- Fires a pushed hint-tier event as if it genuinely came from the
-        --- server (source == 65535) unless `forged` is true.
-        fireHintTier = function(tier, forged)
+        --- server (source == 65535) unless `forged` is true. `callId`
+        --- (added for STALE-SESSION RACE) defaults to nil (no id) when
+        --- omitted, matching every pre-existing call site above this
+        --- comment -- see this file's own IsForCurrentSarCall for why a
+        --- missing id is always accepted regardless.
+        fireHintTier = function(tier, forged, callId)
             env.source = forged and 999 or 65535
-            netEventHandlers['qbx_k9unit:client:sarHintTierChanged'](tier)
+            netEventHandlers['qbx_k9unit:client:sarHintTierChanged'](tier, callId)
         end,
         --- Fires a pushed call-ended event, same forgery-modeling shape.
-        fireCallEnded = function(reason, callType, forged)
+        --- `callId` (added for STALE-SESSION RACE) is the LAST parameter,
+        --- deliberately, so every pre-existing 2- and 3-argument call site
+        --- above this comment (`forged` as the 3rd positional argument)
+        --- keeps meaning exactly what it always meant.
+        fireCallEnded = function(reason, callType, forged, callId)
             env.source = forged and 999 or 65535
-            netEventHandlers['qbx_k9unit:client:sarCallEnded'](reason, callType)
+            netEventHandlers['qbx_k9unit:client:sarCallEnded'](reason, callType, callId)
         end,
     }
 end
@@ -1492,6 +1551,116 @@ t.test('k9sarcall: no args starts a call; "stop" abandons one, unconditionally',
     f.startCommand({ 'stop' })
     t.equals(#f.triggerServerEventCalls, 1)
     t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:abandonSarCall')
+end)
+
+-- ------------------------------------------------------------------------
+-- STALE-SESSION RACE (client/sarcalls.lua's own header section by this
+-- exact name) -- pins the actual interleaving, not just the id-matching
+-- logic in isolation: this section's own callbackAwait stub (see
+-- newClientFixture's own declaration comment on `awaitShouldYield`)
+-- genuinely SUSPENDS the calling coroutine mid-round-trip so a stale push
+-- can be injected while a start is still pending, the exact ordering the
+-- real bug required and this file's own header KNOWN, DISCLOSED COVERAGE
+-- GAP used to admit this suite could not exercise.
+-- ------------------------------------------------------------------------
+
+t.test('STALE-SESSION RACE: an old call\'s late "abandoned" echo arriving WHILE a new start is still pending must not swallow that new start\'s own grant -- the new call must still receive hint tiers', function()
+    local f = newClientFixture()
+
+    -- Call A: started and genuinely active, with its own real callId.
+    f.queueCallbackResponse({ started = true, callId = 5 })
+    f.env.RequestStartSarCall()
+    t.equals(f.callbackCallCount(), 1)
+
+    -- Abandon call A, then IMMEDIATELY start call B -- the exact sequence
+    -- the bug report describes. RequestAbandonSarCall() never awaits
+    -- anything itself, so no coroutine is needed for this step.
+    f.env.RequestAbandonSarCall()
+
+    -- Call B's own start now genuinely suspends mid-round-trip.
+    f.setYieldingAwait(true)
+    local co = coroutine.create(function() f.env.RequestStartSarCall() end)
+    local ok, awaitedEvent = coroutine.resume(co)
+    t.isTrue(ok, 'the coroutine must not error merely by reaching the await')
+    t.equals(awaitedEvent, 'qbx_k9unit:server:requestSarCall')
+    t.equals(coroutine.status(co), 'suspended', 'call B\'s own start must genuinely still be pending at this point -- otherwise this test proves nothing')
+    t.equals(f.callbackCallCount(), 2, 'call B must have already sent its own requestSarCall round trip')
+
+    -- NOW, while call B's own grant is still in flight, call A's late
+    -- server-side echo of the abandon finally lands -- carrying call A's
+    -- OWN id (5), which this client already forgot the instant it called
+    -- RequestAbandonSarCall() above (see currentSarCallId's own declaration
+    -- comment in client/sarcalls.lua).
+    f.fireCallEnded('abandoned', nil, false, 5)
+
+    -- Call B's grant finally arrives, with call B's own, genuinely
+    -- different, id (6).
+    coroutine.resume(co, { started = true, callId = 6 })
+    t.equals(coroutine.status(co), 'dead', 'call B\'s own RequestStartSarCall() must have run to completion')
+
+    -- THE REGRESSION ASSERTION: call B must be genuinely active and must
+    -- still receive its own hint-tier pushes -- pre-fix, call A's stale
+    -- echo would have bumped requestGeneration while call B's await was
+    -- pending, so call B's own successful grant would have been discarded
+    -- as stale and sarCallActive would have stuck false, silently dropping
+    -- every hint notification below.
+    f.fireHintTier('warm', false, 6)
+    t.equals(#f.notifyCalls, 1, 'call B must still receive its own hint-tier notifications -- this is exactly what the bug silently dropped')
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.hint_warm'))
+
+    -- A second start attempt must be rejected as already_active (no new
+    -- round trip) -- proving sarCallActive is genuinely true for call B,
+    -- not merely that one notify slipped through by coincidence.
+    local callbackCountBefore = f.callbackCallCount()
+    f.env.RequestStartSarCall()
+    t.equals(f.callbackCallCount(), callbackCountBefore, 'call B must read as active locally -- no new server round trip')
+end)
+
+t.test('STALE-SESSION RACE: a stale hint-tier push for an OLD call (wrong callId) must never be applied to a DIFFERENT, currently-active call', function()
+    local f = newClientFixture()
+    f.queueCallbackResponse({ started = true, callId = 100 })
+    f.env.RequestStartSarCall()
+
+    -- A push carrying a DIFFERENT, non-matching id must be ignored entirely.
+    f.fireHintTier('burning', false, 999)
+    t.equals(#f.notifyCalls, 0, 'a mismatched callId must be dropped, even while a call is genuinely active')
+    t.equals(#f.playK9SoundCalls, 0)
+
+    -- The genuinely-current call's own id must still work normally.
+    f.fireHintTier('burning', false, 100)
+    t.equals(#f.notifyCalls, 1)
+end)
+
+t.test('STALE-SESSION RACE: a push with NO callId at all is always accepted, never silently dropped, even while a differently-numbered call is active', function()
+    local f = newClientFixture()
+    f.queueCallbackResponse({ started = true, callId = 42 })
+    f.env.RequestStartSarCall()
+
+    -- No callId argument at all (nil) -- must still be treated as genuine,
+    -- per this file's own deliberate "never silently drop an unlabeled
+    -- push" decision (see IsForCurrentSarCall's own declaration comment).
+    f.fireHintTier('hot')
+    t.equals(#f.notifyCalls, 1, 'a push with no id must never be silently dropped')
+end)
+
+t.test('STALE-SESSION RACE: RequestAbandonSarCall remains UNCONDITIONAL even with a stale/mismatched currentSarCallId in play -- no unbounded trap', function()
+    local f = newClientFixture()
+    f.queueCallbackResponse({ started = true, callId = 7 })
+    f.env.RequestStartSarCall()
+
+    -- Abandon never reads, sends, or needs any callId at all -- it must
+    -- succeed exactly the same regardless of whatever this client's own
+    -- currentSarCallId currently holds.
+    f.env.RequestAbandonSarCall()
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:abandonSarCall')
+
+    -- Local state must genuinely be clear: a fresh start must reach the
+    -- server again rather than being rejected as already_active.
+    f.queueCallbackResponse({ started = true, callId = 8 })
+    local before = f.callbackCallCount()
+    f.env.RequestStartSarCall()
+    t.equals(f.callbackCallCount(), before + 1)
 end)
 
 print('')

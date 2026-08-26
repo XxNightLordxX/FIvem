@@ -63,6 +63,22 @@ local function newFixture(pedsConfig)
     local function CanShowK9UI() return true end
     local function DenyK9UIAccess() end
 
+    -- ANY-PED MOVE-RATE FIX (coder-frontend, this pass): RecomputeK9MoveRate()'s
+    -- own gate is now `IsOwnModelK9() or HasK9Access()`, not IsOwnModelK9()
+    -- alone -- see client/movement.lua's own "SCOPE, CORRECTED" header
+    -- comment on K9MoveRateModifiers for the full writeup. HasK9Access() is a
+    -- REAL cross-file global from client/main.lua (called unconditionally,
+    -- no soft-dependency guard, exactly like IsOwnModelK9()/CanShowK9UI()
+    -- above from that same always-loaded foundational file) -- this sandbox
+    -- never loads client/main.lua for real, so it needs its own controllable
+    -- stand-in exactly like those two already have. Defaults to false, which
+    -- reproduces this file's pre-existing behavior exactly (every test here
+    -- that flips IsOwnModelK9() to false still expects a full reset -- this
+    -- file's own scope is the BREED slot, not this gate's widening, so no
+    -- test below exercises HasK9Access() = true).
+    local hasK9Access = false
+    local function HasK9Access() return hasK9Access end
+
     local function TriggerServerEvent() end
     local lib = { notify = function() end, alertDialog = function() return 'confirm' end }
 
@@ -102,6 +118,7 @@ local function newFixture(pedsConfig)
         IsOwnModelK9 = IsOwnModelK9,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        HasK9Access = HasK9Access,
         TriggerServerEvent = TriggerServerEvent,
         lib = lib,
         PlayerPedId = PlayerPedId,
@@ -119,6 +136,7 @@ local function newFixture(pedsConfig)
     return {
         env = env,
         setIsOwnModelK9 = function(v) isOwnModelK9 = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         setModel = function(hash) entityModels[pedHandle] = hash end,
         lastMoveRate = function() return setMoveRateCalls[#setMoveRateCalls] end,
         moveRateCallCount = function() return #setMoveRateCalls end,

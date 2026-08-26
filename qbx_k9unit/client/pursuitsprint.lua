@@ -50,6 +50,23 @@
     client/movement.lua's own "Attach Leash"/"Certify Handler" ox_target
     options already document and accept.
 
+    REAL BUG FOUND AND FIXED (client/movement.lua, this pass, two
+    independent agents): the "ANY PED... NEVER ON PED MODEL" promise above
+    was FALSE in practice until now. This file itself never checked the
+    model -- but the ONE place it hands off to, RecomputeK9MoveRate()
+    (client/movement.lua), used to hard-gate on IsOwnModelK9() alone before
+    composing anything, silently discarding K9MoveRateModifiers.pursuitSprint
+    (and every other modifier) for a role-holder on a non-K9 body. A granted
+    request still showed the "activated" toast (this file's own doing) with
+    zero actual speed change (that gate's doing) -- exactly the two real
+    configurations named in client/movement.lua's own "SCOPE, CORRECTED"
+    header comment (requireK9ModelForRole = true, and the default-config
+    HasK9Access() autoAccessGrade/High-Command-bypass case). Fixed there,
+    not here: RecomputeK9MoveRate()'s gate is now
+    `IsOwnModelK9() or HasK9Access()`, so this file needed no code change of
+    its own -- it was always calling the right function with the right
+    value, the composer just wasn't listening.
+
     ======================================================================
     THE BALANCE PROBLEM -- see server/pursuitsprint.lua's own header for
     the full numbers/worst-case writeup. The one fact that matters for THIS

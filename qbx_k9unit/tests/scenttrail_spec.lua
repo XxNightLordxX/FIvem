@@ -26,6 +26,17 @@
     header for why that never leaks into another spec file's separate
     process) so RollHuntTarget's/IntervalForDistance's otherwise-random
     inputs become deterministic and assertable.
+
+    STALE-SESSION RACE (2026-08-26): SECTION 2's own callbackAwait stub can
+    also be flipped, per test, into a genuinely coroutine-yielding one via
+    setYieldingAwait (off by default -- every pre-existing test above that
+    section keeps its own synchronous, single-call round trip unchanged),
+    specifically so the "abandon then immediately restart" interleaving
+    server/scenttrail.lua's/client/scenttrail.lua's own "STALE-SESSION RACE"
+    header sections describe can be reproduced directly rather than merely
+    reasoned about -- see the dedicated section by that same name near the
+    end of SECTION 2 below, and tests/sarcalls_spec.lua's own identically-
+    shaped addition for the sibling bug this mirrors.
 ]]
 
 local t = dofile('testkit.lua')
@@ -556,8 +567,21 @@ local function newClientFixture(opts)
 
     local callbackResponses = {}
     local callbackCallLog = {}
+    -- STALE-SESSION RACE fixtures (see below) need this await to genuinely
+    -- SUSPEND mid-round-trip so a test can inject another event while it is
+    -- pending -- the exact interleaving a plain synchronous stub can never
+    -- exercise. Off by default (every pre-existing test above this comment
+    -- keeps its own synchronous, single-call round trip unchanged); a test
+    -- that needs the real interleaving flips it on via setYieldingAwait and
+    -- drives the resulting coroutine itself (mirrors
+    -- tests/sarcalls_spec.lua's own identically-shaped fixture addition for
+    -- the sibling bug).
+    local awaitShouldYield = false
     local function callbackAwait(eventName, _timeout, ...)
         callbackCallLog[#callbackCallLog + 1] = { event = eventName, args = { ... } }
+        if awaitShouldYield then
+            return coroutine.yield(eventName)
+        end
         return table.remove(callbackResponses, 1)
     end
 
@@ -637,12 +661,22 @@ local function newClientFixture(opts)
         callbackCallCount = function() return #callbackCallLog end,
         lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
         startCommand = function(args) commandHandlers['k9nosehunt'](1, args or {}) end,
+        --- See callbackAwait's own declaration comment above -- flips this
+        --- fixture's lib.callback.await stub from "resolve synchronously
+        --- from the queue" to "suspend the calling coroutine until resumed
+        --- with the response", for STALE-SESSION RACE tests that need to
+        --- inject other events while a start is genuinely still pending.
+        setYieldingAwait = function(v) awaitShouldYield = v end,
         --- Fires the pushed found event as if it genuinely came from the
         --- server (source == 65535) unless `forged` is true, in which case
         --- it models a local self-TriggerEvent (any other source value).
-        fireFoundEvent = function(forged)
+        --- `huntId` (added for STALE-SESSION RACE) defaults to nil (no id)
+        --- when omitted, matching every pre-existing call site above this
+        --- comment -- see this file's own IsForCurrentHunt for why a
+        --- missing id is always accepted regardless.
+        fireFoundEvent = function(forged, huntId)
             env.source = forged and 999 or 65535
-            netEventHandlers['qbx_k9unit:client:scentHuntFound']()
+            netEventHandlers['qbx_k9unit:client:scentHuntFound'](huntId)
         end,
     }
 end
@@ -824,6 +858,115 @@ t.test('expired: an inactive-with-expired poll result notifies scenttrail.expire
     f.queueCallbackResponse({ started = true })
     f.startCommand({})
     t.equals(f.callbackCallCount(), 3) -- start, poll, start again
+end)
+
+-- ------------------------------------------------------------------------
+-- STALE-SESSION RACE (client/scenttrail.lua's own header section by this
+-- exact name) -- pins the actual interleaving, not just the id-matching
+-- logic in isolation, mirroring tests/sarcalls_spec.lua's own identically-
+-- shaped section for the sibling bug. This section's own callbackAwait
+-- stub (see newClientFixture's own declaration comment on
+-- `awaitShouldYield`) genuinely SUSPENDS the calling coroutine
+-- mid-round-trip so a stale push can be injected at an exact, controlled
+-- point relative to a still-pending (or freshly-resolved) start.
+-- ------------------------------------------------------------------------
+
+t.test('STALE-SESSION RACE: a late "found" push for an OLD, already-abandoned hunt, arriving AFTER a brand-new hunt has already started, must not complete that new, still-unsolved hunt early', function()
+    local f = newClientFixture()
+
+    -- Hunt A: started and genuinely active, with its own real huntId.
+    f.queueCallbackResponse({ started = true, huntId = 5 })
+    f.startCommand({})
+
+    -- Abandon hunt A, then IMMEDIATELY start hunt B -- the exact sequence
+    -- the bug report describes. StopScentHunt() never awaits anything
+    -- itself, so no coroutine is needed for this step.
+    f.startCommand({ 'stop' })
+
+    -- Hunt B's own start now genuinely suspends mid-round-trip, so the
+    -- exact moment its grant lands (and hunt A's own stale push relative
+    -- to it) can be controlled precisely.
+    f.setYieldingAwait(true)
+    local co = coroutine.create(function() f.startCommand({}) end)
+    local ok, awaitedEvent = coroutine.resume(co)
+    t.isTrue(ok, 'the coroutine must not error merely by reaching the await')
+    t.equals(awaitedEvent, 'qbx_k9unit:server:startScentHunt')
+    t.equals(coroutine.status(co), 'suspended', 'hunt B\'s own start must genuinely still be pending at this point -- otherwise this test proves nothing')
+
+    -- Hunt B's grant arrives, with hunt B's own, genuinely different, id (6).
+    coroutine.resume(co, { started = true, huntId = 6 })
+    t.equals(coroutine.status(co), 'dead', 'hunt B\'s own StartScentHunt() must have run to completion')
+    f.setYieldingAwait(false)
+
+    -- NOW, only AFTER hunt B is genuinely active, hunt A's own late,
+    -- server-side 'found' push finally lands -- carrying hunt A's OWN id
+    -- (5), which this client already forgot the instant StopScentHunt() ran
+    -- (see currentHuntId's own declaration comment in client/scenttrail.lua).
+    f.fireFoundEvent(false, 5)
+
+    -- THE REGRESSION ASSERTION: hunt B must still be running, untouched --
+    -- pre-fix, the old `if not huntActive then return end` guard alone was
+    -- no longer enough once a NEW hunt made huntActive true again; this
+    -- stale push would have completed hunt B early, sitting/barking on a
+    -- hunt it never actually solved.
+    t.equals(f.k9SitCallCount(), 0, 'hunt B must not be marked found by a push that belongs to a different, already-abandoned hunt')
+
+    local stopScentHuntCount = 0
+    for _, call in ipairs(f.triggerServerEventCalls) do
+        if call.event == 'qbx_k9unit:server:stopScentHunt' then stopScentHuntCount = stopScentHuntCount + 1 end
+    end
+    t.equals(stopScentHuntCount, 1, 'only hunt A\'s own manual abandon should have sent stopScentHunt -- CompleteHunt() must not have run for hunt B (it would send its own extra one)')
+
+    -- Hunt B's own genuine id must still work normally.
+    f.fireFoundEvent(false, 6)
+    t.equals(f.k9SitCallCount(), 1, 'hunt B\'s own genuine found push must still complete it normally')
+end)
+
+t.test('STALE-SESSION RACE: a stale found push for an OLD hunt (wrong huntId) must never be applied to a DIFFERENT, currently-active hunt', function()
+    local f = newClientFixture()
+    f.queueCallbackResponse({ started = true, huntId = 100 })
+    f.startCommand({})
+
+    f.fireFoundEvent(false, 999)
+    t.equals(f.k9SitCallCount(), 0, 'a mismatched huntId must be dropped, even while a hunt is genuinely active')
+
+    f.fireFoundEvent(false, 100)
+    t.equals(f.k9SitCallCount(), 1)
+end)
+
+t.test('STALE-SESSION RACE: a found push with NO huntId at all is always accepted, never silently dropped, even while a differently-numbered hunt is active', function()
+    local f = newClientFixture()
+    f.queueCallbackResponse({ started = true, huntId = 42 })
+    f.startCommand({})
+
+    -- No huntId argument at all (nil) -- must still be treated as genuine,
+    -- per this file's own deliberate "never silently drop an unlabeled
+    -- push" decision (see IsForCurrentHunt's own declaration comment).
+    f.fireFoundEvent(false)
+    t.equals(f.k9SitCallCount(), 1, 'a push with no id must never be silently dropped')
+end)
+
+t.test('STALE-SESSION RACE: k9nosehunt stop remains UNCONDITIONAL even with a stale/mismatched currentHuntId in play -- no unbounded trap', function()
+    local f = newClientFixture()
+    f.queueCallbackResponse({ started = true, huntId = 7 })
+    f.startCommand({})
+
+    -- Abandon never reads, sends, or needs any huntId at all -- it must
+    -- succeed exactly the same regardless of whatever this client's own
+    -- currentHuntId currently holds.
+    f.startCommand({ 'stop' })
+    local stopCall
+    for _, call in ipairs(f.triggerServerEventCalls) do
+        if call.event == 'qbx_k9unit:server:stopScentHunt' then stopCall = call end
+    end
+    t.isNotNil(stopCall)
+
+    -- Local state must genuinely be clear: a fresh start must reach the
+    -- server again rather than being rejected as already_active.
+    f.queueCallbackResponse({ started = true, huntId = 8 })
+    local before = f.callbackCallCount()
+    f.startCommand({})
+    t.equals(f.callbackCallCount(), before + 1)
 end)
 
 os.exit(t.summary())

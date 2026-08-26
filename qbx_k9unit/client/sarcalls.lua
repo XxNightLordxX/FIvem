@@ -133,14 +133,18 @@
     EVENT/CALLBACK CONTRACT (server side: server/sarcalls.lua, restated
     here from this file's point of view):
     1. 'qbx_k9unit:server:requestSarCall' () -> { started: boolean, reason:
-       ('already_active'|'cooldown'|'denied')? } [lib.callback]
+       ('already_active'|'cooldown'|'denied')?, callId: number? [present
+       iff started == true -- see "STALE-SESSION RACE" below] } [lib.callback]
     2. 'qbx_k9unit:server:abandonSarCall' () [RegisterNetEvent, this file
        only ever SENDS this] -- UNCONDITIONAL, see RequestAbandonSarCall
-       below: never gated on CanShowK9UI()/access of any kind.
-    3. 'qbx_k9unit:client:sarHintTierChanged' (tier: string) [RegisterNetEvent,
-       server -> this caller's client only, never broadcast]
-    4. 'qbx_k9unit:client:sarCallEnded' (reason: string, callType: string?)
-       [RegisterNetEvent, server -> this caller's client only]
+       below: never gated on CanShowK9UI()/access of any kind, and NEVER
+       takes or needs a callId -- see "STALE-SESSION RACE" below for why.
+    3. 'qbx_k9unit:client:sarHintTierChanged' (tier: string, callId: number)
+       [RegisterNetEvent, server -> this caller's client only, never
+       broadcast]
+    4. 'qbx_k9unit:client:sarCallEnded' (reason: string, callType: string?,
+       callId: number) [RegisterNetEvent, server -> this caller's client
+       only]
     Both server->client pushes carry the standard TRUST-BOUNDARY ORIGIN
     GUARD (`source ~= 65535` -- FiveM's documented sentinel for "this event
     genuinely came from the server," DEVELOPER_REFERENCE.md#trust-boundary,
@@ -150,6 +154,69 @@
     sound, or an early cosmetic reveal spawned at your own feet) -- kept
     anyway for consistency with this resource's standing convention on
     every server->client push.
+
+    ======================================================================
+    STALE-SESSION RACE -- ADDED A LATER PASS (found by a client-side sweep;
+    not present when this file was first written):
+
+    THE BUG: RequestAbandonSarCall() below clears the local `sarCallActive`
+    flag and fires abandonSarCall, but a player who immediately starts a NEW
+    call via RequestStartSarCall() begins a fresh lib.callback.await while
+    the OLD call's own server-side echo (sarCallEnded, reason 'abandoned')
+    may still be in flight back to this same client. That echo's handler
+    used to bump `requestGeneration` UNCONDITIONALLY -- it had no way to
+    tell "a late echo of the call I already left" from "a newer start
+    already in flight" -- so if it landed while the new start's own await
+    was still pending, the new call's own successful grant would be
+    discarded as stale (myGeneration ~= requestGeneration by the time it
+    returned), leaving `sarCallActive` stuck false for a call the server was
+    running fully live. Every sarHintTierChanged push for that live call was
+    then silently dropped (that handler gates on sarCallActive) for the rest
+    of the call, with no error, no notify, nothing -- only the eventual
+    found/timeout push (which carries no such gate) would ever land, making
+    the call LOOK like it simply had no hints, not that it silently broke.
+
+    THE FIX: server/sarcalls.lua now mints a small, server-issued,
+    monotonically increasing session id once per call (never
+    client-generated -- a client-generated id could be spoofed or
+    duplicated) and includes it on every push belonging to that call: the
+    requestSarCall grant's own `callId` field, every sarHintTierChanged
+    push, and every sarCallEnded push (found/timeout/abandoned alike).
+    `currentSarCallId` below tracks the id THIS client currently believes is
+    its own live call. IsForCurrentSarCall(pushedId) is the one place that
+    decides whether an incoming push belongs to that session:
+      - a push carrying NO id at all (pushedId == nil) is ALWAYS ACCEPTED,
+        deliberately, never silently dropped -- a stricter default here
+        would mean a single future TriggerClientEvent call site that
+        forgets to pass its callId (there are four of them in
+        server/sarcalls.lua) silently reintroduces THIS EXACT bug in a
+        different shape: a whole class of pushes going dark with no error
+        anywhere. Accepting an unlabeled push degrades this mechanism back
+        to its own pre-fix behavior for that one push only, never to a
+        stuck-forever session.
+      - a push carrying a REAL id is accepted only if it matches
+        `currentSarCallId` exactly. RequestAbandonSarCall() below sets
+        `currentSarCallId = nil` the moment it runs (mirroring its own
+        already-immediate `sarCallActive = false`) -- this is what makes the
+        fix actually close the race: from that instant on, the OLD call's id
+        can never again equal whatever this client currently believes is
+        current (nil until a new call's own grant arrives, then that new
+        call's own, different, id), so a late echo for the old call is
+        rejected outright rather than resurrecting the "unconditionally
+        bump the generation counter" bug above. This is symmetric with
+        client/scenttrail.lua's own currentHuntId/IsForCurrentHunt fix for
+        the analogous bug in that file -- same shape, same reasoning, one
+        pattern for a reader who has already read either file once.
+
+    NOT A TERMINATION-PATH CHANGE: RequestAbandonSarCall() below remains
+    exactly as unconditional as it already was -- it never reads, checks, or
+    sends any callId at all, and this fix adds nothing it needs to. A client
+    holding a stale, wrong, or nil `currentSarCallId`, for any reason, can
+    always still call RequestAbandonSarCall() and have the server clean its
+    own side up -- the id mechanism only ever decides whether THIS CLIENT
+    acts on an incoming push, never whether the server accepts a
+    termination request. See this resource's standing "no unbounded trap"
+    rule, which this fix does not touch.
 
     ======================================================================
     FILE-TO-FILE CONTRACT: this file exposes exactly two resource-global
@@ -267,6 +334,25 @@ local requestGeneration = 0
 --- callback, same shape/reasoning as client/tracking.lua's startInFlight
 --- and client/scenttrail.lua's startInFlight.
 local startInFlight = false
+
+--- @type number? -- the SERVER-ISSUED id of the call this client currently
+--- believes is its own live one, or nil when none is tracked -- see this
+--- file's header "STALE-SESSION RACE" section. Set from the grant response
+--- the moment RequestStartSarCall() succeeds; cleared back to nil the
+--- instant RequestAbandonSarCall() runs (before the server has even
+--- acknowledged it) and again once a genuine sarCallEnded push for the
+--- CURRENT session is processed.
+local currentSarCallId = nil
+
+--- True if a push carrying `pushedId` belongs to the session this client
+--- currently tracks -- see this file's header "STALE-SESSION RACE" for the
+--- full reasoning behind both branches below.
+--- @param pushedId number?
+--- @return boolean
+local function IsForCurrentSarCall(pushedId)
+    if pushedId == nil then return true end -- never silently drop an unlabeled push -- see header
+    return pushedId == currentSarCallId
+end
 
 -- ======================================================================
 -- THE COSMETIC REVEAL -- see this file's header "WHY THE REVEAL IS NEVER
@@ -397,18 +483,26 @@ end
 --- always be able to abandon a call. Bumps requestGeneration so any
 --- in-flight RequestStartSarCall() await that resolves after this runs
 --- discards its result as stale rather than resurrecting the call just
---- abandoned. Safe to call when nothing is active -- server/sarcalls.lua's
---- abandonSarCall handler is unconditional too, a harmless no-op if there
---- was nothing to clear.
+--- abandoned. Also immediately forgets `currentSarCallId` -- see this
+--- file's header "STALE-SESSION RACE": this is the step that guarantees a
+--- late echo of the call just abandoned can never again match whatever
+--- this client considers "current" from this point on, closing the race a
+--- generation-counter bump alone could not. Safe to call when nothing is
+--- active -- server/sarcalls.lua's abandonSarCall handler is unconditional
+--- too, a harmless no-op if there was nothing to clear, and this function
+--- never sends or needs currentSarCallId's value -- see the header's own
+--- "NOT A TERMINATION-PATH CHANGE" note.
 function RequestAbandonSarCall()
     requestGeneration = requestGeneration + 1
     sarCallActive = false
+    currentSarCallId = nil
     TriggerServerEvent('qbx_k9unit:server:abandonSarCall')
 end
 
-RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier)
+RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier, callId)
     if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
     if not sarCallActive then return end -- a stale push after an already-ended call on this client
+    if not IsForCurrentSarCall(callId) then return end -- stale push from a session this client has already moved past -- see header "STALE-SESSION RACE"
 
     if tier == 'burning' then
         lib.notify({ title = locale('common.notify_title'), description = locale('sar.hint_burning'), type = 'inform' })
@@ -424,11 +518,13 @@ RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier)
     end
 end)
 
-RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType)
+RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, callId)
     if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
+    if not IsForCurrentSarCall(callId) then return end -- a late echo of a call this client already left behind (see header "STALE-SESSION RACE") -- must NOT clobber a newer session's own state
 
     requestGeneration = requestGeneration + 1 -- invalidate any in-flight RequestStartSarCall() await that might resolve after this
     sarCallActive = false
+    currentSarCallId = nil
 
     if reason == 'found' then
         -- The "trained final response" -- K9_IDEAS.md §1's exact framing,
@@ -499,6 +595,7 @@ function RequestStartSarCall()
     end
 
     sarCallActive = true
+    currentSarCallId = result.callId -- see this file's header "STALE-SESSION RACE"
 end
 
 -- '/k9sarcall' starts a call; '/k9sarcall stop' abandons one -- same

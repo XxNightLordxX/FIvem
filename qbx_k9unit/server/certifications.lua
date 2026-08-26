@@ -121,40 +121,51 @@
             leash roles are assigned by which party is actually K9-modeled,
             server-verified, never client-claimed) — one shared model
             check instead of two independent copies of Config.Peds logic.
-    - THIS FILE calls `ForceDetachLeashForSource(src, reason)`, exposed by
-      server/main.lua, from every path that flips an active cert to
-      revoked for a K9-role party (RevokeCertification's online branch,
-      RevokeCertificationOffline via the ForceDetachLeashIfOnline wrapper
-      below, and the QBCore:Server:OnJobUpdate auto-revoke handler) — see
-      ForceDetachLeashIfOnline's own doc comment and server/main.lua's
-      header for the full rationale (DEVELOPER_REFERENCE.md §1/§4.4 "immediately").
-    - THIS FILE also calls `ForceBreakPartnershipForCitizenId(citizenid,
-      reason)`, exposed by server/partnership.lua (Phase 3, DEVELOPER_REFERENCE.md
-      §12.0 item 7), alongside all FIVE existing leash-teardown call sites
-      in this file: RevokeCertification's online branch
-      (ForceDetachLeashForSource), RevokeCertificationOffline
-      (ForceDetachLeashIfOnline), and the QBCore:Server:OnJobUpdate
-      handler's THREE branches — department-loss
-      (ForceDetachOfficerLeashForSource), the same-department
-      autoAccessGrade-loss branch added this pass (ForceDetachLeashForSource,
-      reason 'k9_access_lost' — see that branch's own doc comment), and
-      cert-revoke-due-to-job-change (ForceDetachLeashForSource) — a K9
-      partnership must not outlive either party's cert revocation,
-      department loss, or non-cert K9-access loss any more than a leash
-      pairing may. Guarded at each call site by a
-      `type(...) == 'function'` runtime existence check (this resource's
+    - THIS FILE calls `ForceDetachLeashForSource(src, reason)` (server/main.lua),
+      `EndActiveEffectForHolder(src)` (server/combat.lua, guarded), and
+      `ForceBreakPartnershipForCitizenId(citizenid, reason)`
+      (server/partnership.lua, Phase 3, DEVELOPER_REFERENCE.md §12.0 item
+      7, guarded) — ALL THREE, ALWAYS TOGETHER — through this file's own
+      LOCAL helper `EndK9AccessForCitizenId(citizenid, reason, knownSrc)`,
+      defined once (above HasK9Access's own eligibility helpers) and
+      called from every path that flips a citizenid's K9-role access to
+      lost: RevokeCertification's online branch, RevokeCertificationOffline,
+      and all THREE of the QBCore:Server:OnJobUpdate handler's branches —
+      department-loss, the same-department autoAccessGrade-loss branch, and
+      cert-revoke-due-to-job-change. CONSOLIDATION (this pass, cross-team
+      "four doors, one bug" finding): this exact three-call sequence used
+      to be reimplemented independently at each of those five call sites,
+      which is why the "handler loses K9 access mid-incident and their dog
+      keeps holding a suspect" bug kept being found and fixed one call site
+      at a time — most recently the department-loss branch, which used to
+      call ONLY ForceDetachOfficerLeashForSource (the officer/handler-role
+      leash, a DIFFERENT invariant kept as its own direct call, never
+      folded into this helper) and never this sequence at all, leaving a
+      K9-role party whose only access route was autoAccessGrade or a
+      server/permissions.lua 'k9.access' grant (no certification row) able
+      to keep their leash/hold/partnership on leaving the department
+      entirely — see that branch's own comment, and
+      EndK9AccessForCitizenId's own doc comment, for the full writeup and
+      why this is now the ONE place in this file meaning "citizenid has
+      just, provably, lost K9-role access." server/permissions.lua's
+      RevokePermission needs the identical sequence for its own
+      'k9.access' de-assign path and keeps its OWN private, identically-
+      shaped copy rather than sharing this one as a resource-global — see
+      that file's own copy for why (in short: doing otherwise would need a
+      new fxmanifest.lua server_scripts entry AND a new
+      /home/user/FIvem/.luacheckrc globals entry, and this resource's own
+      spec files load only the minimal file set each one's file-under-test
+      needs). All three underlying calls stay guarded at
+      `type(...) == 'function'` runtime existence checks (this resource's
       established "runtime existence guard, not a load-order assumption"
       convention — see fxmanifest.lua's own comment on server/medkit.lua's
-      RestoreInjury reuse for the precedent), since server/partnership.lua
-      is loaded AFTER this file in fxmanifest.lua's server_scripts and its
-      Config.Features.HandlerPartnership feature flag may be off entirely
-      on a given server. Called UNCONDITIONALLY of that flag's current
-      value at each site (not gated on `Config.Features.HandlerPartnership`
-      here) — a partnership row established while the feature was on must
-      still be torn down by a cert revoke/department change even if the
-      flag was later flipped off, since ForceBreakPartnershipForCitizenId
-      is itself already a cheap, safe no-op when `citizenid` has no active
-      partnership row to tear down.
+      RestoreInjury reuse for the precedent), and are called UNCONDITIONALLY
+      of Config.Features.HandlerPartnership's current value — a partnership
+      row established while the feature was on must still be torn down by
+      a cert revoke/department change even if the flag was later flipped
+      off, since ForceBreakPartnershipForCitizenId is itself already a
+      cheap, safe no-op when `citizenid` has no active partnership row to
+      tear down.
     - THIS FILE owns `Certifications` (citizenid -> { active: boolean,
       job: string }) as a local table. STRUCTURAL NOTE: DEVELOPER_REFERENCE.md §4.3's
       prose describes this cache as a bare `Certifications[citizenid] =
@@ -999,32 +1010,99 @@ local function IsEligibleCertifier(source)
     return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.certifierGrade
 end
 
---- QA/coder-security finding (leash subsystem gap): losing K9 certification
---- must end an already-formed leash pairing "immediately" per DEVELOPER_REFERENCE.md
---- §1/§4.4, not just block future attach attempts — CheckLeashEligibility
---- in server/main.lua is only consulted at attach time, so a K9-role party
---- who gets decertified mid-session while actively leashed would otherwise
---- stay paired until someone manually detaches or the distance
---- safety-valve trips. Called from every path that actually flips an
---- active cert to revoked for a K9-role party: RevokeCertification (online),
---- RevokeCertificationOffline, and the QBCore:Server:OnJobUpdate
---- auto-revoke handler.
+--- CONSOLIDATION (this pass, cross-team "four doors, one bug" finding):
+--- losing K9 access must end an already-formed leash pairing, an
+--- in-progress bite-hold/takedown/drag, and any active partnership
+--- "immediately" per DEVELOPER_REFERENCE.md §1/§4.4, not just block future
+--- attach/certify attempts — CheckLeashEligibility in server/main.lua is
+--- only consulted at attach time, so a K9-role party who loses access
+--- mid-session while actively leashed/holding/partnered would otherwise
+--- stay that way until someone manually intervenes or a safety-valve
+--- trips. This exact three-call sequence (ForceDetachLeashForSource +
+--- EndActiveEffectForHolder + ForceBreakPartnershipForCitizenId) used to
+--- be reimplemented independently at every one of THIS FILE's own call
+--- sites that flips a citizenid's K9 access to lost — which is exactly why
+--- the bug kept being found and fixed one call site at a time instead of
+--- once (most recently: the department-loss branch of the
+--- QBCore:Server:OnJobUpdate handler below only called
+--- ForceDetachOfficerLeashForSource, never this function, so a
+--- non-certified K9-role party — access via autoAccessGrade or a
+--- server/permissions.lua 'k9.access' grant only — kept their leash on
+--- leaving the department entirely; see that branch's own comment for the
+--- fix). This is now the ONE place in this file that means "citizenid has
+--- just, provably, lost K9-role access — tear down every ephemeral/
+--- session consequence of that."
 ---
---- Resolves citizenid -> current server id via
---- exports.qbx_core:GetPlayerByCitizenId and calls
---- server/main.lua's exposed ForceDetachLeashForSource. Naturally a no-op
---- for a genuinely offline target: LeashPairs is in-memory/ephemeral only
---- (never persisted, per server/main.lua's header), so an offline citizenid
---- cannot have an active pairing to tear down in the first place — this
---- function only does anything when the citizenid resolves to a currently
---- connected server id.
+--- Callable from a site with a live, already-resolved `source` for
+--- `citizenid` (pass it as `knownSrc` — RevokeCertification's online
+--- branch and all three OnJobUpdate branches always have one) or from a
+--- site with only a `citizenid` (RevokeCertificationOffline — omit
+--- `knownSrc` and this resolves it itself via
+--- exports.qbx_core:GetPlayerByCitizenId, exactly like the
+--- ForceDetachLeashIfOnline wrapper this function replaces already did).
+--- Naturally a no-op for the leash/hold half on a genuinely offline
+--- target: LeashPairs and any bite-hold/takedown/drag are in-memory/
+--- ephemeral only (never persisted, per server/main.lua's and
+--- server/combat.lua's own headers), so an offline citizenid cannot have
+--- either to tear down in the first place. ForceBreakPartnershipForCitizenId
+--- runs UNCONDITIONALLY of whether a live `src` was found at all — a
+--- partnership row is DB-backed and works identically online or offline
+--- (see that function's own "OFFLINE-CAPABLE BY DESIGN" doc comment).
+---
+--- Runs NO confirmation/reconciliation check of its own, and must never be
+--- changed to add one: every call site below already runs its OWN "is
+--- this loss actually confirmed" gate (a DB-write reconcile dance for the
+--- certification-revoke paths, a plain boolean expression for the
+--- autoAccessGrade-loss branch, an unconditional department-loss check)
+--- BEFORE ever reaching this function — this is the unconditional, "no
+--- unbounded trap" teardown for an ALREADY-CONFIRMED loss, not a second
+--- gate that could itself block it. Two of this file's own regression
+--- tests (tests/certifications_spec.lua, "a throwing UPDATE that genuinely
+--- never committed") assert ZERO side effects — including zero calls into
+--- this function — when that confirmation fails; that guarantee lives
+--- entirely in each CALLER's own gating and must stay that way.
+---
+--- Deliberately does NOT call ForceDetachOfficerLeashForSource — that is a
+--- DIFFERENT invariant (officer/handler-role department eligibility, not
+--- K9-role access) that only the department-loss branch below needs, and
+--- it keeps its own direct call for that reason.
+---
+--- NOT a resource-global, despite server/permissions.lua's own
+--- RevokePermission needing this identical sequence for its 'k9.access'
+--- de-assign path: doing that would need a new entry in BOTH
+--- fxmanifest.lua's server_scripts list AND
+--- /home/user/FIvem/.luacheckrc's `globals` table (verified: an
+--- unregistered bare `function Foo()` is flagged by this repo's real
+--- luacheck config as "setting a non-standard global variable"), and this
+--- task has neither file assignable to it. tests/certifications_spec.lua
+--- and tests/permissions_spec.lua also each load only the minimal file set
+--- their own file under test needs, so a shared implementation would force
+--- one spec to load a file it otherwise has no reason to (and inherit that
+--- file's own file-load-time Config assertions as an unwanted side
+--- effect). server/permissions.lua therefore keeps its OWN small, private,
+--- identically-shaped copy of this function (see that file's own doc
+--- comment on its copy for the full writeup) — one real duplicate between
+--- two files, down from six independent inline copies before this pass.
 --- @param citizenid string
 --- @param reason string
-local function ForceDetachLeashIfOnline(citizenid, reason)
-    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
-    local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
-    if onlineSrc then
-        ForceDetachLeashForSource(onlineSrc, reason)
+--- @param knownSrc number? -- pass this file's own already-resolved live server id when known; omit for a citizenid-only caller to have this resolve it.
+local function EndK9AccessForCitizenId(citizenid, reason, knownSrc)
+    local src = knownSrc
+    if type(src) ~= 'number' then
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        src = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+    end
+
+    if type(src) == 'number' then
+        ForceDetachLeashForSource(src, reason)
+
+        if type(EndActiveEffectForHolder) == 'function' then
+            pcall(EndActiveEffectForHolder, src)
+        end
+    end
+
+    if type(ForceBreakPartnershipForCitizenId) == 'function' then
+        ForceBreakPartnershipForCitizenId(citizenid, reason)
     end
 end
 
@@ -1637,56 +1715,16 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         targetPlayer.Functions.SetMetaData('k9certified', false)
         NotifyPlayer(targetServerId, locale('certifications.revoked_notice_online'), 'error')
 
-        -- QA finding fix: an active leash pairing must not outlive the
-        -- K9-role party's certification (DEVELOPER_REFERENCE.md §1/§4.4 "immediately") —
-        -- see ForceDetachLeashIfOnline's doc comment above. `targetServerId`
-        -- is already a live, currently-connected server id here (we're
-        -- inside the `targetIsOnline` branch), so force-detach directly
-        -- rather than re-resolving by citizenid.
-        ForceDetachLeashForSource(targetServerId, 'certification_revoked')
-
-        -- An in-progress bite-hold, takedown or drag must not outlive the
-        -- certification that authorised it either. This is the THIRD member
-        -- of the "must not outlive certification" family, and it was the one
-        -- missing: leash and partnership were both torn down here with
-        -- comments citing DEVELOPER_REFERENCE.md's "immediately", and the hold was not.
-        -- Without this, an officer decertified mid-incident kept physically
-        -- holding or dragging their target for the rest of that mechanic's
-        -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
-        -- zero K9 access the entire time. The combat maintenance tick
-        -- re-checks expiry, holder death and target resolvability every
-        -- 500ms but never re-checks access, so nothing else would have
-        -- caught it.
-        -- SOURCE-keyed, like the leash call and unlike the partnership one:
-        -- a hold only exists for a connected holder, so there is nothing to
-        -- end on an offline path. Same runtime existence guard as its
-        -- siblings -- server/combat.lua loads after this file, so this is a
-        -- deliberate guard rather than a load-order assumption, and a
-        -- missing function is a silent skip because there is then no hold
-        -- system to have a hold in.
-        if type(EndActiveEffectForHolder) == 'function' then
-            pcall(EndActiveEffectForHolder, targetServerId)
-        end
-
-        -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): a K9 partnership must not
-        -- outlive its K9-role party's certification either — same
-        -- "immediately" requirement as leash directly above, now extended
-        -- to the persistent partnership registry (server/partnership.lua).
-        -- CITIZENID-keyed (not source-keyed), unlike the leash call above,
-        -- because ForceBreakPartnershipForCitizenId operates on the DB row
-        -- directly and works identically online or offline — see that
-        -- function's own "OFFLINE-CAPABLE BY DESIGN" doc comment; using
-        -- `targetCitizenid` here rather than `targetServerId` is not an
-        -- inconsistency with the leash call above, it's this callee's own
-        -- documented, intentional shape. Guarded by a `type(...) ==
-        -- 'function'` runtime existence check, not a load-order assumption,
-        -- since server/partnership.lua loads AFTER this file (see this
-        -- file's own header and fxmanifest.lua's matching comment) — called
-        -- unconditionally of Config.Features.HandlerPartnership's current
-        -- value, see this file's header for why.
-        if type(ForceBreakPartnershipForCitizenId) == 'function' then
-            ForceBreakPartnershipForCitizenId(targetCitizenid, 'certification_revoked')
-        end
+        -- QA finding fix, CONSOLIDATED (this pass) onto EndK9AccessForCitizenId
+        -- above: an active leash pairing, an in-progress bite-hold/
+        -- takedown/drag, and any partnership must not outlive the K9-role
+        -- party's certification (DEVELOPER_REFERENCE.md §1/§4.4
+        -- "immediately") — see that function's own doc comment for the
+        -- full three-call writeup. `targetServerId` is already a live,
+        -- currently-connected server id here (we're inside the
+        -- `targetIsOnline` branch), so pass it as `knownSrc` rather than
+        -- having the helper re-resolve it by citizenid.
+        EndK9AccessForCitizenId(targetCitizenid, 'certification_revoked', targetServerId)
     end
 
     -- CERTIFICATION DEPTH (this pass, Part B §11): a specialization cannot
@@ -1841,64 +1879,39 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     -- connected player at the time it was checked, so this is normally a
     -- no-op; it only matters for the narrow TOCTOU window where the target
     -- reconnects between that guard and this UPDATE completing — same
-    -- window ForceDetachLeashIfOnline below is already written to cover.
+    -- window EndK9AccessForCitizenId below is already written to cover.
     local nowOnlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
     if nowOnlinePlayer and nowOnlinePlayer.PlayerData and nowOnlinePlayer.PlayerData.source then
         nowOnlinePlayer.Functions.SetMetaData('k9certified', false)
     end
 
-    -- QA finding fix (DEVELOPER_REFERENCE.md §1/§4.4): tear down an active leash pairing
-    -- for this citizenid if one exists. In the overwhelmingly common case
-    -- this is a genuine no-op — the online guard above already refused
-    -- this path if the citizenid resolved to a connected player at that
-    -- point, and LeashPairs is in-memory-only so a genuinely offline
-    -- target cannot have an active pairing to begin with. It's still
-    -- called here (rather than assumed unreachable) to close the narrow
-    -- TOCTOU window where the target reconnects between the online guard
-    -- above and this UPDATE completing — see ForceDetachLeashIfOnline's
-    -- doc comment.
-    ForceDetachLeashIfOnline(citizenid, 'certification_revoked')
-
-    -- CONSISTENCY FIX (this pass): same TOCTOU-window reasoning as
-    -- ForceDetachLeashIfOnline immediately above (and the `k9certified`
-    -- mirror write above that) -- if the target reconnects between the
-    -- online-check guard earlier in this function and this UPDATE
-    -- actually landing, an in-progress bite-hold/takedown/drag they hold
-    -- as the K9-role party must not outlive this revoke either. This is
-    -- the THIRD member of the "must not outlive certification" family --
-    -- leash and partnership are both already covered at every revoke call
-    -- site in this file; this was the one path still missing
-    -- EndActiveEffectForHolder, leaving this file inconsistent with its
-    -- own invariant. Genuinely narrow in practice: server/combat.lua's own
-    -- playerDropped handler already ends any hold the instant this
-    -- citizenid actually disconnected, so a hold formed BEFORE that
-    -- disconnect cannot still exist by the time a reconnect happens here
-    -- -- this only matters for a brand-new hold somehow initiated inside
-    -- the reconnect-to-UPDATE-landing window itself. SOURCE-keyed, reusing
-    -- `nowOnlinePlayer` resolved immediately above rather than a second
-    -- GetPlayerByCitizenId lookup. Same runtime existence guard as every
-    -- other EndActiveEffectForHolder call site in this file.
-    if nowOnlinePlayer and nowOnlinePlayer.PlayerData and nowOnlinePlayer.PlayerData.source and type(EndActiveEffectForHolder) == 'function' then
-        pcall(EndActiveEffectForHolder, nowOnlinePlayer.PlayerData.source)
-    end
-
-    -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): unlike leash immediately
-    -- above (a genuine, in-memory-only no-op for a truly offline citizenid
-    -- — see ForceDetachLeashIfOnline's own doc comment), a K9 partnership
-    -- is DB-backed and DOES persist across a disconnect
+    -- QA finding fix, CONSOLIDATED (this pass) onto EndK9AccessForCitizenId
+    -- above: tear down an active leash pairing, an in-progress bite-hold/
+    -- takedown/drag, and any partnership for this citizenid, per
+    -- DEVELOPER_REFERENCE.md §1/§4.4. In the overwhelmingly common case the
+    -- leash/hold half is a genuine no-op — the online guard earlier in this
+    -- function already refused this whole path if the citizenid resolved
+    -- to a connected player at that point, and both are in-memory-only, so
+    -- a genuinely offline target cannot have either to begin with. Still
+    -- called unconditionally (rather than assumed unreachable) to close
+    -- the narrow TOCTOU window where the target reconnects between that
+    -- guard and this UPDATE completing — see EndK9AccessForCitizenId's own
+    -- doc comment for the full writeup. Passes `nowOnlinePlayer`'s
+    -- already-resolved source (reused from the `k9certified` mirror write
+    -- immediately above, no synchronous state change possible in between)
+    -- as `knownSrc`, exactly like this function's own prior separate
+    -- lookups for leash-detach and hold-end used to do independently — a
+    -- behavior-preserving simplification to one lookup, not a change in
+    -- what gets resolved. ForceBreakPartnershipForCitizenId, unlike the
+    -- leash/hold half, runs even when `knownSrc` resolves to nothing: a K9
+    -- partnership is DB-backed and DOES persist across a disconnect
     -- (server/partnership.lua's own "OFFLINE-CAPABLE BY DESIGN" header
-    -- section). This is in fact THE call site that design decision exists
-    -- for: a genuinely offline K9-role citizenid revoked while off-shift
-    -- must still have any real, active partnership row torn down, or it
-    -- would otherwise stand indefinitely — exactly the gap the partnership
-    -- registry was built to not have. ForceBreakPartnershipForCitizenId is
-    -- citizenid-keyed for exactly this reason and works identically online
-    -- or offline. Same runtime existence guard / unconditional-of-
-    -- feature-flag reasoning as RevokeCertification's online branch's
-    -- identical call above in this file.
-    if type(ForceBreakPartnershipForCitizenId) == 'function' then
-        ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
-    end
+    -- section) — this is in fact THE call site that design decision exists
+    -- for, since a genuinely offline K9-role citizenid revoked while
+    -- off-shift must still have any real, active partnership row torn
+    -- down, or it would otherwise stand indefinitely.
+    EndK9AccessForCitizenId(citizenid, 'certification_revoked',
+        nowOnlinePlayer and nowOnlinePlayer.PlayerData and nowOnlinePlayer.PlayerData.source)
 
     -- CERTIFICATION DEPTH (this pass, Part B §11): same cascade as
     -- RevokeCertification's online branch — DB-authoritative, so this
@@ -2532,45 +2545,52 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     if not job or not Config.Departments[job.name] then
         ForceDetachOfficerLeashForSource(source, 'department_changed')
 
-        -- An in-progress bite-hold, takedown or drag must not outlive the
-        -- certification that authorised it (department change) either. This is the THIRD member
-        -- of the "must not outlive certification" family, and it was the one
-        -- missing: leash and partnership were both torn down here with
-        -- comments citing DEVELOPER_REFERENCE.md's "immediately", and the hold was not.
-        -- Without this, an officer decertified mid-incident kept physically
-        -- holding or dragging their target for the rest of that mechanic's
-        -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
-        -- zero K9 access the entire time. The combat maintenance tick
-        -- re-checks expiry, holder death and target resolvability every
-        -- 500ms but never re-checks access, so nothing else would have
-        -- caught it.
-        -- SOURCE-keyed, like the leash call and unlike the partnership one:
-        -- a hold only exists for a connected holder, so there is nothing to
-        -- end on an offline path. Same runtime existence guard as its
-        -- siblings -- server/combat.lua loads after this file, so this is a
-        -- deliberate guard rather than a load-order assumption, and a
-        -- missing function is a silent skip because there is then no hold
-        -- system to have a hold in.
-        if type(EndActiveEffectForHolder) == 'function' then
-            pcall(EndActiveEffectForHolder, source)
-        end
-
-        -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): department loss ends an
-        -- active partnership the same way it ends an active leash pairing
-        -- directly above — a partnership's handler-role party who no
-        -- longer passes department membership is exactly as invalid a
-        -- handler-role party as one who no longer has a leash-eligible
-        -- department. ForceBreakPartnershipForCitizenId covers `citizenid`
-        -- regardless of which role (K9 or handler) they currently hold in
-        -- their active row (see that function's own doc comment), so
-        -- unlike ForceDetachOfficerLeashForSource above, no separate
-        -- role-specific counterpart is needed here. Same runtime existence
-        -- guard / unconditional-of-feature-flag reasoning as
-        -- RevokeCertification's online branch's identical call, above in
-        -- this file.
-        if type(ForceBreakPartnershipForCitizenId) == 'function' then
-            ForceBreakPartnershipForCitizenId(citizenid, 'department_changed')
-        end
+        -- FIFTH-GAP FIX (this pass -- "four doors, one bug", closing the
+        -- fifth): this branch used to stop at the ForceDetachOfficerLeashForSource
+        -- call above, which only ever detaches `source` when they are
+        -- currently the OFFICER/handler-role party of a pairing. It never
+        -- checked the OTHER role: `source` currently being the K9-ROLE
+        -- party. HasK9Access(source) (this file, above) hard-gates on
+        -- `Config.Departments[job.name]` as its VERY FIRST check, before
+        -- the permission-grant bypass, the high-command bypass, the
+        -- cert-cache read, or the autoAccessGrade bypass are ever
+        -- consulted -- so losing department membership entirely means
+        -- HasK9Access is now unconditionally false for `source`, REGARDLESS
+        -- of which route (an active certification, a server/permissions.lua
+        -- 'k9.access' grant, or an autoAccessGrade rank) used to grant it.
+        -- A K9-role party whose ONLY route was a certification is already
+        -- covered further below (the cert-revoke-due-to-job-change branch,
+        -- gated on `cached.active`) -- but a K9-role party with NO
+        -- certification row at all (autoAccessGrade- or permission-grant-
+        -- only access) has no active row in `Certifications` for that
+        -- branch to ever observe, so it never fires for them, and until
+        -- this fix nothing else in this handler did either: they kept
+        -- their leash, an in-progress bite-hold/takedown/drag, and any
+        -- partnership indefinitely on leaving the department entirely --
+        -- the exact "handler loses K9 access mid-incident and their dog
+        -- keeps holding a suspect" shape this file already closes for a
+        -- certification loss, reached through the one door that was still
+        -- open. EndK9AccessForCitizenId (this file, above) is UNCONDITIONAL
+        -- here, never re-gated on "does source currently hold K9-role
+        -- access via some other route" -- there is no other route left to
+        -- check: department membership loss alone already makes
+        -- HasK9Access false for every route at once (see the hard gate
+        -- described above), so this cannot collide with the SEPARATE
+        -- same-department autoAccessGrade-demotion branch below (which
+        -- DOES need its own "does the new job still grant non-cert access"
+        -- computation, because THAT branch's job still passes
+        -- Config.Departments membership) or with the job-name-change
+        -- cert-revoke branch's own DB-write reconciliation dance (this
+        -- branch performs no DB write of its own at all -- it is pure,
+        -- unconditional teardown of ephemeral/session state, same as the
+        -- officer-role call directly above it always has been). `source`
+        -- is already live here (OnJobUpdate fired for it), so passed
+        -- directly as `knownSrc`. See EndK9AccessForCitizenId's own doc
+        -- comment for the full three-call (leash/hold/partnership)
+        -- writeup, and this file's header FILE-TO-FILE CONTRACT section
+        -- for this branch's place in the "five known call sites, one
+        -- fixed this pass" history.
+        EndK9AccessForCitizenId(citizenid, 'department_changed', source)
     end
 
     local cached = Certifications[citizenid]
@@ -2623,24 +2643,18 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
             or (type(dept.autoAccessGrade) == 'number' and job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.autoAccessGrade)
 
         if not stillHasNonCertAccess then
-            -- Mirrors RevokeCertification's online branch exactly --
-            -- called UNCONDITIONALLY once this specific access route is
+            -- Mirrors RevokeCertification's online branch exactly, via the
+            -- same EndK9AccessForCitizenId helper (CONSOLIDATED this pass)
+            -- -- called UNCONDITIONALLY once this specific access route is
             -- confirmed lost, never re-gated on whether some OTHER route
             -- might independently justify keeping the pairing: the
             -- leash/partnership/hold that exist right now were formed
             -- under eligibility that no longer holds, and a fresh
             -- HasK9Access re-check on the next real access attempt is
             -- what re-establishes anything, not a stale pairing carried
-            -- over from before this demotion.
-            ForceDetachLeashForSource(source, 'k9_access_lost')
-
-            if type(EndActiveEffectForHolder) == 'function' then
-                pcall(EndActiveEffectForHolder, source)
-            end
-
-            if type(ForceBreakPartnershipForCitizenId) == 'function' then
-                ForceBreakPartnershipForCitizenId(citizenid, 'k9_access_lost')
-            end
+            -- over from before this demotion. `source` is already live
+            -- here, passed as `knownSrc`.
+            EndK9AccessForCitizenId(citizenid, 'k9_access_lost', source)
         end
     end
 
@@ -2728,47 +2742,19 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     local deptLabel = (Config.Departments[oldJob] and Config.Departments[oldJob].label) or oldJob
     NotifyPlayer(source, locale('certifications.revoked_notice_job_change', deptLabel), 'error')
 
-    -- QA finding fix (DEVELOPER_REFERENCE.md §1/§4.4 "immediately"): this player is
-    -- online by definition (OnJobUpdate fired for their live `source`), so
-    -- force-detach directly rather than re-resolving by citizenid — same
-    -- reasoning as the online branch of RevokeCertification above.
-    ForceDetachLeashForSource(source, 'certification_revoked')
-
-    -- An in-progress bite-hold, takedown or drag must not outlive the
-    -- certification that authorised it either. This is the THIRD member
-    -- of the "must not outlive certification" family, and it was the one
-    -- missing: leash and partnership were both torn down here with
-    -- comments citing DEVELOPER_REFERENCE.md's "immediately", and the hold was not.
-    -- Without this, an officer decertified mid-incident kept physically
-    -- holding or dragging their target for the rest of that mechanic's
-    -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
-    -- zero K9 access the entire time. The combat maintenance tick
-    -- re-checks expiry, holder death and target resolvability every
-    -- 500ms but never re-checks access, so nothing else would have
-    -- caught it.
-    -- SOURCE-keyed, like the leash call and unlike the partnership one:
-    -- a hold only exists for a connected holder, so there is nothing to
-    -- end on an offline path. Same runtime existence guard as its
-    -- siblings -- server/combat.lua loads after this file, so this is a
-    -- deliberate guard rather than a load-order assumption, and a
-    -- missing function is a silent skip because there is then no hold
-    -- system to have a hold in.
-    if type(EndActiveEffectForHolder) == 'function' then
-        pcall(EndActiveEffectForHolder, source)
-    end
-
-    -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): same "must not outlive
-    -- certification loss" requirement as leash immediately above, applied
-    -- to the partnership registry. This branch is only reached for a
+    -- QA finding fix (DEVELOPER_REFERENCE.md §1/§4.4 "immediately"),
+    -- CONSOLIDATED (this pass) onto EndK9AccessForCitizenId above: this
+    -- player is online by definition (OnJobUpdate fired for their live
+    -- `source`), so pass it as `knownSrc` rather than having the helper
+    -- re-resolve it by citizenid — same reasoning as the online branch of
+    -- RevokeCertification above. This branch is only reached for a
     -- K9-role citizenid — the department-membership-only handler/officer
     -- role never holds a certification of its own (see this handler's own
     -- comment near its top on that exact asymmetry) — so `citizenid` here
-    -- is always the K9-role party of any active partnership it might hold.
-    -- Same runtime existence guard / unconditional-of-feature-flag
-    -- reasoning as RevokeCertification's online branch's identical call.
-    if type(ForceBreakPartnershipForCitizenId) == 'function' then
-        ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
-    end
+    -- is always the K9-role party of any active leash/hold/partnership it
+    -- might hold. See EndK9AccessForCitizenId's own doc comment for the
+    -- full three-call (leash/hold/partnership) writeup.
+    EndK9AccessForCitizenId(citizenid, 'certification_revoked', source)
 
     -- CERTIFICATION DEPTH (this pass, Part B §11): same cascade as both
     -- manual revoke paths above.

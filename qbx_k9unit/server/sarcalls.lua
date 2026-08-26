@@ -169,7 +169,9 @@
     ======================================================================
     EVENT/CALLBACK CONTRACT:
     1. 'qbx_k9unit:server:requestSarCall' (source) -> { started: boolean,
-       reason: ('already_active'|'cooldown'|'denied')? } [lib.callback]
+       reason: ('already_active'|'cooldown'|'denied')?, callId: number?
+       [present iff started == true -- see "STALE-SESSION RACE" below] }
+       [lib.callback]
        Re-validates Config.Features.SARCalls and HasK9Access(source)
        server-side regardless of client UI state, mirrors server/
        scenttrail.lua's startScentHunt exactly, including the "denied"
@@ -188,20 +190,21 @@
        of call.
     2. 'qbx_k9unit:server:abandonSarCall' (source) [RegisterNetEvent] --
        UNCONDITIONAL. See "NO UNBOUNDED TRAP" above.
-    3. 'qbx_k9unit:client:sarHintTierChanged' (tier: string) [TriggerClientEvent,
-       THIS FILE only ever SENDS this, to the caller's own client only,
-       never broadcast] -- fired once immediately on a successful
-       requestSarCall (the starting tier, whatever it genuinely is) and
-       again every time the tick loop below observes a DIFFERENT tier than
-       last observed for that call. Never fired twice in a row with the
-       same tier -- see TierForDistance/the tick loop's own edge-trigger
-       comment.
+    3. 'qbx_k9unit:client:sarHintTierChanged' (tier: string, callId: number)
+       [TriggerClientEvent, THIS FILE only ever SENDS this, to the caller's
+       own client only, never broadcast] -- fired once immediately on a
+       successful requestSarCall (the starting tier, whatever it genuinely
+       is) and again every time the tick loop below observes a DIFFERENT
+       tier than last observed for that call. Never fired twice in a row
+       with the same tier -- see TierForDistance/the tick loop's own
+       edge-trigger comment. callId added -- see "STALE-SESSION RACE" below.
     4. 'qbx_k9unit:client:sarCallEnded' (reason: ('found'|'timeout'|
        'abandoned'), callType: ('person'|'property')? [only meaningful when
-       reason == 'found']) [TriggerClientEvent, THIS FILE only ever SENDS
-       this, to the caller's own client only] -- the one and only signal
-       telling client/sarcalls.lua to run its own local cosmetic reveal
-       (reason == 'found' only).
+       reason == 'found'], callId: number) [TriggerClientEvent, THIS FILE
+       only ever SENDS this, to the caller's own client only] -- the one and
+       only signal telling client/sarcalls.lua to run its own local cosmetic
+       reveal (reason == 'found' only). callId added -- see "STALE-SESSION
+       RACE" below.
 
     Outbound integration events (server/exports.lua's `qbx_k9unit:events:*`
     namespace, server/integrations.lua's OUTBOUND-only convention -- this
@@ -247,6 +250,56 @@
     access/certification/permission is not negotiable, and gating abandon
     here would violate it for no benefit (the call is already running; all
     a block should do is stop a NEW one from starting).
+    ======================================================================
+
+    STALE-SESSION RACE -- ADDED A LATER PASS (found by a client-side sweep;
+    not present when this file was first written): client/sarcalls.lua's own
+    header documents the client-side half of this fix in full -- restated
+    here from this file's point of view because minting the id is this
+    file's own job.
+
+    THE BUG: neither requestSarCall's response nor any of the three pushes
+    (sarHintTierChanged, sarCallEnded) ever carried anything identifying
+    WHICH call they belonged to. A client that abandons call A and
+    immediately starts call B could have call A's own late-arriving
+    'abandoned' echo land while call B's own requestSarCall await was still
+    pending; that echo's handler had no way to tell "a late echo of the call
+    I already left" from "a newer start already in flight" and bumped the
+    client's own staleness counter regardless -- discarding call B's own,
+    entirely legitimate, successful grant as if it were stale. The result:
+    the server ran call B fully live (tick loop, hint pushes, eventual
+    found/timeout) while the client's own `sarCallActive` flag stuck false,
+    silently dropping every hint notification for the rest of it. The
+    ANALOGOUS bug in server/scenttrail.lua's own sibling feature is spelled
+    out in client/scenttrail.lua's header.
+
+    THE FIX: this file now mints a small, monotonically increasing,
+    SERVER-ISSUED session id (NewSarCallId below) once per call, the moment
+    ActiveSarCalls[source] is created -- never client-generated (a
+    client-generated id could be spoofed or duplicated, defeating the whole
+    point). It rides along on every push belonging that call: the
+    return value's own `callId` field, both sarHintTierChanged pushes (the
+    immediate one below and the tick loop's own), and all three
+    sarCallEnded branches inside EndSarCall (found/timeout/abandoned).
+    client/sarcalls.lua stores the id from its own successful grant and
+    drops any push whose id does not match its own currently tracked one --
+    see that file's own IsForCurrentSarCall for the exact matching rule,
+    including the deliberate "a push with no id at all is always accepted,
+    never silently dropped" decision (a defensive floor against a future
+    call site here forgetting to pass one -- see that same doc comment for
+    why the opposite default would be far worse).
+
+    NOT A TERMINATION-PATH CHANGE: this fix touches only how the CLIENT
+    interprets an incoming push. It adds nothing this file's own
+    RegisterNetEvent('qbx_k9unit:server:abandonSarCall', ...) below reads,
+    checks, or requires -- that handler remains exactly as unconditional as
+    it already was (see "NO UNBOUNDED TRAP" above), taking no id, keyed
+    purely on the ambient `source`. A client holding a stale/wrong/nil
+    session id, for any reason, can still always abandon and be cleaned up
+    -- the id mechanism exists purely to let the client tell two of ITS OWN
+    past/current sessions apart when deciding whether to act on a push, not
+    to gate anything server-side.
+
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
@@ -462,9 +515,23 @@ local StartSarCallCooldown = NewCooldown(ResolveConfiguredThresholdMs(
 -- anti-farm floor simply by relogging, defeating the entire reason this
 -- cooldown is keyed by citizenid instead of by source in the first place.
 
+-- SERVER-ISSUED, monotonically increasing session id -- see this file's
+-- header "STALE-SESSION RACE" section for the full writeup. Minted once per
+-- call, at the moment ActiveSarCalls[source] is created below, and never
+-- reused -- a plain incrementing counter is sufficient (no need for
+-- per-source scoping) since every push this file sends already targets a
+-- single `src`, so this id only ever has to disambiguate THAT source's own
+-- calls from each other over time, never one source's id from another's.
+local NextSarCallId = 0
+local function NewSarCallId()
+    NextSarCallId = NextSarCallId + 1
+    return NextSarCallId
+end
+
 -- ActiveSarCalls[source] = { citizenid: string, jobName: string?,
 --   callType: ('person'|'property'), targetX: number, targetY: number,
---   startedAt: number (GetGameTimer() ms), currentTier: string }. Ephemeral,
+--   startedAt: number (GetGameTimer() ms), currentTier: string,
+--   callId: number }. Ephemeral,
 -- in-memory only, single-slot per source -- mirrors server/scenttrail.lua's
 -- ActiveHunts shape exactly (a short-lived session record, not a rate
 -- limiter, so a plain table + manual playerDropped cleanup, not a
@@ -547,16 +614,18 @@ local function EndSarCall(src, reason)
         end
         FireOutboundEvent('qbx_k9unit:events:sarCallCompleted', src, call.citizenid, call.jobName, call.callType, GetGameTimer() - call.startedAt)
         NotifyPlayer(src, call.callType == 'person' and locale('sar.found_person') or locale('sar.found_property'), 'success')
-        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'found', call.callType)
+        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'found', call.callType, call.callId)
     elseif reason == 'timeout' then
         -- No outbound event here on purpose -- see this file's header
         -- EVENT/CALLBACK CONTRACT note on why 'timeout'/'abandoned' never
-        -- fire one.
+        -- fire one. `nil` passed explicitly for callType (unused for this
+        -- reason) so callId still lands in its own fixed 3rd position --
+        -- see this file's header "STALE-SESSION RACE".
         NotifyPlayer(src, locale('sar.call_timeout'), 'inform')
-        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'timeout')
+        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'timeout', nil, call.callId)
     elseif reason == 'abandoned' then
         NotifyPlayer(src, locale('sar.call_abandoned'), 'inform')
-        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'abandoned')
+        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'abandoned', nil, call.callId)
     end
 end
 
@@ -594,7 +663,7 @@ CreateThread(function()
                         local tier = TierForDistance(distance)
                         if tier ~= call.currentTier then
                             call.currentTier = tier
-                            TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', src, tier)
+                            TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', src, tier, call.callId)
                         end
                     end
                 end
@@ -700,6 +769,10 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
         targetY = targetY,
         startedAt = GetGameTimer(),
         currentTier = TierForDistance(initialDistance),
+        -- SERVER-ISSUED session id -- see this file's header "STALE-SESSION
+        -- RACE" and NewSarCallId's own declaration comment above. Minted
+        -- once, here, and never reassigned for the lifetime of this call.
+        callId = NewSarCallId(),
     }
 
     FireOutboundEvent('qbx_k9unit:events:sarCallStarted', source, citizenid, jobName, callType)
@@ -708,9 +781,9 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
     -- from the previously observed tier, so without this the caller would
     -- otherwise hear/see nothing until the first tick that happens to cross
     -- a tier boundary, even if the roll already landed inside one.
-    TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', source, ActiveSarCalls[source].currentTier)
+    TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', source, ActiveSarCalls[source].currentTier, ActiveSarCalls[source].callId)
 
-    return { started = true }
+    return { started = true, callId = ActiveSarCalls[source].callId }
 end)
 
 --- UNCONDITIONAL -- see this file's header "NO UNBOUNDED TRAP". Never

@@ -833,19 +833,82 @@ t.test('server/permissions.lua entirely absent + feature NOT listed in RequireGr
 end)
 
 -- ========================================================================
--- CLIENT FIXTURE -- client/pursuitsprint.lua
+-- CLIENT FIXTURE -- client/pursuitsprint.lua, loaded TOGETHER WITH THE REAL
+-- client/movement.lua.
+--
+-- REPLACES A BLIND SPOT (this pass): this fixture used to stub
+-- RecomputeK9MoveRate() as a bare counter (`recomputeCalls = recomputeCalls
+-- + 1`, nothing else) instead of loading the real composer it is meant to
+-- drive. That stub could never have caught client/movement.lua's own real
+-- bug this pass found and fixed -- RecomputeK9MoveRate() hard-gating on
+-- IsOwnModelK9() ALONE, silently discarding K9MoveRateModifiers.pursuitSprint
+-- for a role-holder on a non-K9 body even though this file's own header
+-- promises "ANY PED... NEVER ON PED MODEL" -- because the stub never
+-- composed or applied anything in the first place; a test built on it could
+-- only ever prove "this file wrote a number into a table," never "that
+-- number actually changed the ped's speed." Now loads the REAL
+-- client/movement.lua into the SAME sandbox env first, so
+-- K9MoveRateModifiers/RecomputeK9MoveRate are the genuine production
+-- symbols, and every grant-handling test below asserts against the REAL
+-- SetPedMoveRateOverride call client/movement.lua's RecomputeK9MoveRate()
+-- makes -- see the dedicated "ANY PED, GENUINELY" section further down for
+-- the test that proves the fix itself (a role-holder on a non-K9 body
+-- reaching the real native call).
+--
+-- SHARED STATE, ON PURPOSE: PlayerPedId/DoesEntityExist/RegisterCommand/
+-- RegisterKeyMapping/RegisterNetEvent/AddEventHandler/CreateThread/
+-- TriggerServerEvent/lib.notify/GetCurrentResourceName are single stubs
+-- shared by BOTH files' load, mirroring how one real client resource has
+-- exactly one FiveM event/command/thread registry, not one per file.
+-- client/movement.lua unconditionally starts its own elastic leash
+-- pull-back thread at file-load time -- harmless here (leashState, a private
+-- local to that file, is never set anywhere in this spec, so that thread's
+-- body always takes its cheap idle branch) -- and registers its own
+-- 'qbx_k9unit:toggleCamera' command/keybind and THREE of its OWN
+-- onResourceStop handlers alongside this file's one. Every assertion below
+-- that cares about "how many NEW threads/commands did PURSUIT SPRINT
+-- itself add" filters by name or takes a post-movement-load baseline
+-- delta, rather than asserting a raw total that would otherwise silently
+-- couple this file's tests to client/movement.lua's own, unrelated
+-- registration count.
+--
+-- WHY HasK9Access() NEEDS ITS OWN CONTROLLABLE STAND-IN HERE: client/movement.lua's
+-- real RecomputeK9MoveRate() now reads `IsOwnModelK9() or HasK9Access()`
+-- (see that function's own "SCOPE, CORRECTED" header comment) -- both from
+-- client/main.lua, a file this sandbox does not load for real (same
+-- established reason clientmovement_spec.lua/clientbreed_spec.lua stub
+-- IsOwnModelK9()/CanShowK9UI() individually rather than loading that whole
+-- file). Defaults to the common case (isOwnModelK9 = true, hasK9Access =
+-- false) so every PRE-EXISTING assertion below keeps meaning exactly what
+-- it always meant (a certified K9, on a K9 model); the ANY-PED section
+-- further down is what actually exercises HasK9Access() = true.
 -- ========================================================================
 
 --- @param opts table? {
 ---   featureEnabled: boolean (default true)
 ---   pursuitSprintCfg: table|false
 ---   expectLoadError: boolean
+---   withMoveRateComposer: boolean (default true) -- false simulates
+---     client/movement.lua NOT defining K9MoveRateModifiers/RecomputeK9MoveRate
+---     at all (this file's own fail-closed soft-dependency guard) by
+---     deleting both from the sandbox AFTER the real movement.lua has
+---     already defined them for real
+---   isInK9VehicleDefined: boolean (default true)
 --- }
 local function newClientFixture(opts)
     opts = opts or {}
 
     local Config = {
-        Features = { PursuitSprint = opts.featureEnabled ~= false },
+        Features = {
+            PursuitSprint = opts.featureEnabled ~= false,
+            -- client/movement.lua's OWN load-time flag -- forced true so its
+            -- AgilityBasicJump jump/crouch-suppression CreateThread branch
+            -- never registers, exactly matching tests/clientmovement_spec.lua's
+            -- own fixture convention (that thread is unrelated to pursuit
+            -- sprint and would otherwise need its own DisableControlAction/
+            -- IsEntityModelK9 stubs for nothing).
+            AgilityBasicJump = true,
+        },
     }
     if opts.pursuitSprintCfg == false then
         Config.PursuitSprint = nil
@@ -860,6 +923,10 @@ local function newClientFixture(opts)
         }
     end
 
+    -- Shared ped state -- BOTH client/movement.lua's RecomputeK9MoveRate()
+    -- and this file's own candidate search/end-timer read PlayerPedId()/
+    -- DoesEntityExist() against the SAME handle, exactly as they do in the
+    -- real resource (one client, one ped).
     local pedHandle = 1
     local function PlayerPedId() return pedHandle end
 
@@ -903,6 +970,7 @@ local function newClientFixture(opts)
         registerKeyMappingCalls[#registerKeyMappingCalls + 1] = { commandName = commandName, description = description, ioType = ioType, defaultKey = defaultKey }
     end
 
+    -- SHARED across both files -- see this section's own header block.
     local capturedEvents = {}
     local function RegisterNetEvent(name, fn) capturedEvents[name] = fn end
 
@@ -915,20 +983,52 @@ local function newClientFixture(opts)
     local RESOURCE_NAME = 'qbx_k9unit'
     local function GetCurrentResourceName() return RESOURCE_NAME end
 
+    -- SHARED thread runner -- see this section's own header block on why
+    -- client/movement.lua's own always-on leash thread being captured here
+    -- too is harmless. newThreadsSinceLoad() below (a delta against the
+    -- post-movement.lua-load baseline) is what every "did THIS grant create
+    -- a new thread" assertion uses, never a raw total.
     local runner = Sandbox.newThreadRunner()
     local threadCreateCount = 0
     local function CreateThread(fn) threadCreateCount = threadCreateCount + 1; runner.CreateThread(fn) end
     local function Wait(ms) runner.Wait(ms) end
 
-    -- Move-rate composer stand-in -- the REAL client/movement.lua globals
-    -- this file depends on (soft dependency). Present by default (matches
-    -- the shipped resource); a dedicated test below removes both to prove
-    -- the fail-closed behavior when they are absent.
-    local K9MoveRateModifiers, recomputeCalls
-    local function RecomputeK9MoveRate() recomputeCalls = recomputeCalls + 1 end
-    if opts.withMoveRateComposer ~= false then
-        K9MoveRateModifiers = { pursuitSprint = 1.0 }
-        recomputeCalls = 0
+    -- client/movement.lua's OWN load-time dependencies, not otherwise
+    -- needed by this file. GetHashKey backs its scenario-name lookup
+    -- tables; GetEntityModel backs RecomputeK9MoveRate()'s breed lookup
+    -- (always nil here, since no Config.Peds is supplied -- breed always
+    -- resolves to its neutral 1.0 default, exactly like
+    -- tests/clientmovement_spec.lua's own fixture for every test that
+    -- doesn't specifically exercise breed).
+    local function GetHashKey(name)
+        local hash = 0
+        for i = 1, #name do hash = (hash * 31 + name:byte(i)) % 2147483647 end
+        return hash
+    end
+    local function GetEntityModel(_entity) return nil end
+    local function SetFollowPedCamViewMode(_mode) end
+
+    -- THE TWO GLOBALS THIS FIXTURE NO LONGER STUBS AWAY -- see this
+    -- section's own header block. Controllable so a test can prove BOTH the
+    -- already-K9-modeled case (the pre-existing, always-worked case) AND the
+    -- role-holder-on-a-non-K9-body case (the real bug, now fixed) each
+    -- genuinely reach the real SetPedMoveRateOverride. Defaults to the
+    -- common case so every pre-existing test below keeps exercising the
+    -- exact scenario it always meant to.
+    local isOwnModelK9 = true
+    local function IsOwnModelK9() return isOwnModelK9 end
+    local hasK9Access = false
+    local hasK9AccessCallCount = 0
+    local function HasK9Access() hasK9AccessCallCount = hasK9AccessCallCount + 1; return hasK9Access end
+
+    -- REAL SetPedMoveRateOverride capture -- client/movement.lua's own
+    -- RecomputeK9MoveRate() is the ONLY caller anywhere in this resource;
+    -- this is the actual, meaningful assertion surface for "did the burst
+    -- really change anything," replacing the old recomputeCalls() stub
+    -- counter this suite used to rely on instead.
+    local setMoveRateCalls = {}
+    local function SetPedMoveRateOverride(ped, rate)
+        setMoveRateCalls[#setMoveRateCalls + 1] = { ped = ped, rate = rate }
     end
 
     local overrides = {
@@ -950,16 +1050,43 @@ local function newClientFixture(opts)
         GetCurrentResourceName = GetCurrentResourceName,
         CreateThread = CreateThread,
         Wait = Wait,
+        GetHashKey = GetHashKey,
+        GetEntityModel = GetEntityModel,
+        SetFollowPedCamViewMode = SetFollowPedCamViewMode,
+        IsOwnModelK9 = IsOwnModelK9,
+        HasK9Access = HasK9Access,
+        SetPedMoveRateOverride = SetPedMoveRateOverride,
     }
     if opts.isInK9VehicleDefined ~= false then
         overrides.IsInK9Vehicle = IsInK9Vehicle
     end
-    if opts.withMoveRateComposer ~= false then
-        overrides.K9MoveRateModifiers = K9MoveRateModifiers
-        overrides.RecomputeK9MoveRate = RecomputeK9MoveRate
-    end
 
     local env = Sandbox.newEnv(overrides)
+
+    -- REAL client/movement.lua, loaded FIRST -- see this section's own
+    -- header block for why. K9MoveRateModifiers/RecomputeK9MoveRate below
+    -- are now the genuine production symbols, not a stand-in.
+    Sandbox.loadInto('../client/movement.lua', env)
+
+    -- Baseline AFTER client/movement.lua's own load-time CreateThread call
+    -- (its always-on leash pull-back thread) but BEFORE client/pursuitsprint.lua
+    -- ever loads -- every "how many NEW threads did this grant create"
+    -- assertion below subtracts this baseline via newThreadsSinceLoad()
+    -- rather than asserting a raw total.
+    local threadCountBaseline = threadCreateCount
+
+    -- FAIL-CLOSED COVERAGE (unchanged intent, new mechanism): simulates
+    -- client/movement.lua NOT defining these two symbols at all -- the exact
+    -- historical shape of the real bug this suite's own header cites
+    -- (DEVELOPER_REFERENCE.md §13.0 Decision 2) -- by deleting them from the
+    -- sandbox AFTER the real file has already defined them for real, rather
+    -- than never loading client/movement.lua at all (which would also have
+    -- removed IsOwnModelK9()/HasK9Access()'s own real interplay with the
+    -- composer from every OTHER test in this file).
+    if opts.withMoveRateComposer == false then
+        env.K9MoveRateModifiers = nil
+        env.RecomputeK9MoveRate = nil
+    end
 
     local ok, err = pcall(Sandbox.loadInto, '../client/pursuitsprint.lua', env)
     if opts.expectLoadError then
@@ -975,13 +1102,16 @@ local function newClientFixture(opts)
         triggerServerEventCalls = triggerServerEventCalls,
         notifyCalls = notifyCalls,
         isPedInAnyVehicleCalls = isPedInAnyVehicleCalls,
-        threadCreateCount = function() return threadCreateCount end,
-        recomputeCalls = function() return recomputeCalls end,
-        K9MoveRateModifiers = K9MoveRateModifiers,
+        setMoveRateCalls = setMoveRateCalls,
+        newThreadsSinceLoad = function() return threadCreateCount - threadCountBaseline end,
+        K9MoveRateModifiers = env.K9MoveRateModifiers,
         runner = runner,
         setIsPedInAnyVehicle = function(v) isPedInAnyVehicle = v end,
         setIsInK9Vehicle = function(v) isInK9Vehicle = v end,
         setIsDead = function(entity, v) isDead[entity] = v end,
+        setIsOwnModelK9 = function(v) isOwnModelK9 = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
+        hasK9AccessCallCount = function() return hasK9AccessCallCount end,
         addCandidate = function(ped, x, y, z, isPlayer, netId)
             cpedPool[#cpedPool + 1] = ped
             pedCoords[ped] = vec3(x, y, z)
@@ -992,9 +1122,15 @@ local function newClientFixture(opts)
         --- Runs the captured 'qbx_k9unit:pursuitsprint' command handler
         --- (RequestPursuitSprint) directly -- it never yields, so no
         --- coroutine wrapping is needed here (unlike client/agility.lua's
-        --- TryVault).
+        --- TryVault). Looked up BY NAME, not index 0 -- client/movement.lua
+        --- also registers its own 'qbx_k9unit:toggleCamera' command into
+        --- this same shared list.
         runRequest = function()
-            local handler = assert(registerCommandCalls[1], 'client/pursuitsprint.lua did not register the qbx_k9unit:pursuitsprint command').handler
+            local handler
+            for _, c in ipairs(registerCommandCalls) do
+                if c.name == 'qbx_k9unit:pursuitsprint' then handler = c.handler end
+            end
+            assert(handler, 'client/pursuitsprint.lua did not register the qbx_k9unit:pursuitsprint command')
             handler()
         end,
         --- Dispatches the real captured 'qbx_k9unit:client:pursuitSprintGranted'
@@ -1006,6 +1142,13 @@ local function newClientFixture(opts)
                 'client/pursuitsprint.lua did not register qbx_k9unit:client:pursuitSprintGranted')
             handler()
         end,
+        --- Fires EVERY captured onResourceStop handler, matching what a real
+        --- resource stop actually does -- client/movement.lua's own THREE
+        --- (camera view mode, leash auto-detach, move-rate reset) plus this
+        --- file's own pursuitSprint modifier reset. The first two of
+        --- movement.lua's are harmless no-ops throughout this whole suite
+        --- (isFirstPersonK9View/leashState, both private locals to that
+        --- file, are never touched by anything this spec does).
         fireResourceStop = function(resourceName)
             for _, h in ipairs(eventHandlers['onResourceStop'] or {}) do h(resourceName or RESOURCE_NAME) end
         end,
@@ -1016,10 +1159,21 @@ end
 -- Feature gate / config asserts
 -- ------------------------------------------------------------------
 
-t.test('CLIENT: Config.Features.PursuitSprint = false -- registers zero commands/keybinds/events', function()
+--- @param list table -- registerCommandCalls or registerKeyMappingCalls
+--- @param field string -- 'name' for a command, 'commandName' for a keybind
+--- @param value string
+--- @return table? -- the matching entry, or nil
+local function findByField(list, field, value)
+    for _, entry in ipairs(list) do
+        if entry[field] == value then return entry end
+    end
+    return nil
+end
+
+t.test('CLIENT: Config.Features.PursuitSprint = false -- registers no pursuit-sprint command/keybind/event of its own (client/movement.lua\'s own unrelated command/keybind/thread still register regardless -- this file\'s flag has no bearing on that file)', function()
     local f = newClientFixture({ featureEnabled = false, pursuitSprintCfg = false })
-    t.equals(#f.registerCommandCalls, 0)
-    t.equals(#f.registerKeyMappingCalls, 0)
+    t.isNil(findByField(f.registerCommandCalls, 'name', 'qbx_k9unit:pursuitsprint'))
+    t.isNil(findByField(f.registerKeyMappingCalls, 'commandName', 'qbx_k9unit:pursuitsprint'))
 end)
 
 t.test('CLIENT: Config.PursuitSprint missing while the flag is true fails loudly at load', function()
@@ -1028,14 +1182,15 @@ t.test('CLIENT: Config.PursuitSprint missing while the flag is true fails loudly
     t.contains(f.loadError, 'Config.PursuitSprint is missing')
 end)
 
-t.test('CLIENT: registers exactly one command and one keybind, using the real locale key and default key "N"', function()
+t.test('CLIENT: registers exactly one pursuit-sprint command and one keybind, using the real locale key and default key "N" -- looked up BY NAME since client/movement.lua shares this same command/keybind registry', function()
     local f = newClientFixture()
-    t.equals(#f.registerCommandCalls, 1)
-    t.equals(f.registerCommandCalls[1].name, 'qbx_k9unit:pursuitsprint')
-    t.equals(#f.registerKeyMappingCalls, 1)
-    t.equals(f.registerKeyMappingCalls[1].commandName, 'qbx_k9unit:pursuitsprint')
-    t.equals(f.registerKeyMappingCalls[1].description, locale('pursuitsprint.keybind_label'))
-    t.equals(f.registerKeyMappingCalls[1].defaultKey, 'N')
+    local cmd = findByField(f.registerCommandCalls, 'name', 'qbx_k9unit:pursuitsprint')
+    t.isNotNil(cmd, 'qbx_k9unit:pursuitsprint must be registered')
+
+    local keymap = findByField(f.registerKeyMappingCalls, 'commandName', 'qbx_k9unit:pursuitsprint')
+    t.isNotNil(keymap)
+    t.equals(keymap.description, locale('pursuitsprint.keybind_label'))
+    t.equals(keymap.defaultKey, 'N')
 end)
 
 -- ------------------------------------------------------------------
@@ -1096,42 +1251,84 @@ end)
 -- death-reset, generation guard, onResourceStop
 -- ------------------------------------------------------------------
 
-t.test('SOURCE-ORIGIN GUARD: a forged grant (source ~= 65535) is ignored entirely -- no modifier change, no notify, no thread started', function()
+t.test('SOURCE-ORIGIN GUARD: a forged grant (source ~= 65535) is ignored entirely -- no modifier change, no notify, no thread started, and the REAL SetPedMoveRateOverride is never reached', function()
     local f = newClientFixture()
     f.dispatchGrant(1) -- NOT 65535
-    t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.0)
+    t.isNil(f.K9MoveRateModifiers.pursuitSprint, 'never written at all -- not even reset to neutral, since no grant ever ran (the real K9MoveRateModifiers table has no pursuitSprint key until the first genuine grant)')
     t.equals(#f.notifyCalls, 0)
-    t.equals(f.threadCreateCount(), 0)
+    t.equals(f.newThreadsSinceLoad(), 0)
+    t.equals(#f.setMoveRateCalls, 0)
 end)
 
-t.test('genuine grant (source == 65535) applies the multiplier, recomputes, and notifies success', function()
+t.test('genuine grant (source == 65535), already on a K9 model: applies the multiplier for REAL through the actual client/movement.lua composer -- not a stub -- and notifies success', function()
     local f = newClientFixture()
     f.dispatchGrant(65535)
     t.equals(f.K9MoveRateModifiers.pursuitSprint, REAL_SPEED_MULTIPLIER)
-    t.equals(f.recomputeCalls(), 1)
+    t.equals(#f.setMoveRateCalls, 1, 'the REAL RecomputeK9MoveRate() must have called the REAL SetPedMoveRateOverride exactly once')
+    t.equals(f.setMoveRateCalls[1].ped, 1)
+    t.equals(f.setMoveRateCalls[1].rate, REAL_SPEED_MULTIPLIER, 'no other modifier is active, so the composed rate is the raw speedMultiplier')
     t.equals(#f.notifyCalls, 1)
     t.equals(f.notifyCalls[1].description, locale('pursuitsprint.activated'))
     t.equals(f.notifyCalls[1].type, 'success')
 end)
 
-t.test('soft dependency: K9MoveRateModifiers/RecomputeK9MoveRate entirely absent -- grant handler fails CLOSED (no error, no notify, no thread)', function()
+-- ------------------------------------------------------------------
+-- ANY PED, GENUINELY -- THE FIX ITSELF. This file's own header states, at
+-- length, "ANY PED, GATED ON ROLE/CERTIFICATION, NEVER ON PED MODEL" -- the
+-- two tests below are what actually PROVES that now, against the REAL
+-- client/movement.lua composer, not just this file's own local checks
+-- (which never touched the model at all, and so could never have caught
+-- this). See client/movement.lua's own "SCOPE, CORRECTED" header comment on
+-- K9MoveRateModifiers for the full bug writeup this locks in the fix for.
+-- ------------------------------------------------------------------
+
+t.test('ANY PED, GENUINELY: NOT on a K9 model, but HasK9Access() true (a certified handler on a human/custom body, or a High-Command/autoAccessGrade access holder) -- the grant STILL reaches the real native call, proving the fix', function()
+    local f = newClientFixture()
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.dispatchGrant(65535)
+    t.equals(f.K9MoveRateModifiers.pursuitSprint, REAL_SPEED_MULTIPLIER, 'this file itself always wrote the modifier correctly -- the bug was never here')
+    t.equals(#f.setMoveRateCalls, 1,
+        'THE BUG, NOW FIXED: this used to be 0 -- client/movement.lua\'s RecomputeK9MoveRate() used to hard-gate on ' ..
+        'IsOwnModelK9() ALONE and silently reset to neutral before composing anything, so a role-holder on a non-K9 ' ..
+        'body got this file\'s own "activated" toast with zero actual speed change')
+    t.equals(f.setMoveRateCalls[1].rate, REAL_SPEED_MULTIPLIER, 'the exact same numbers apply on a non-K9 body as on a K9 one -- a multiplicative override is body-agnostic by construction')
+end)
+
+t.test('ANY PED, GENUINELY: NOT on a K9 model AND no real K9 access either -- correctly still a no-op (a player with neither has no legitimate reason for this burst to apply, and the server would never have granted it anyway)', function()
+    local f = newClientFixture()
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(false)
+    f.dispatchGrant(65535)
+    t.equals(f.K9MoveRateModifiers.pursuitSprint, REAL_SPEED_MULTIPLIER, 'this file still writes its own modifier regardless -- composing/applying it is the composer\'s job, not this file\'s')
+    t.equals(#f.setMoveRateCalls, 0, 'neither half of RecomputeK9MoveRate()\'s OR-gate is true, so the real native call correctly never fires')
+end)
+
+t.test('soft dependency: K9MoveRateModifiers/RecomputeK9MoveRate entirely absent (simulating a client/movement.lua that never defines them) -- grant handler fails CLOSED (no error, no notify, no thread, no native call)', function()
     local f = newClientFixture({ withMoveRateComposer = false })
     local ok = pcall(f.dispatchGrant, 65535)
     t.isTrue(ok, 'a missing move-rate composer must never error the grant handler')
     t.equals(#f.notifyCalls, 0)
-    t.equals(f.threadCreateCount(), 0)
+    t.equals(f.newThreadsSinceLoad(), 0)
+    t.equals(#f.setMoveRateCalls, 0)
 end)
 
-t.test('END-TIMER: the modifier resets to neutral and RecomputeK9MoveRate is called again once durationMs elapses (never gated on any access/cert check -- this handler calls no such check at all)', function()
+t.test('END-TIMER: the modifier resets to neutral and the REAL SetPedMoveRateOverride is called again once durationMs elapses (never gated on any access/cert check -- this handler calls no such check at all)', function()
     local f = newClientFixture() -- durationMs = 300, 3 ticks of 100ms
     f.dispatchGrant(65535)
     t.equals(f.K9MoveRateModifiers.pursuitSprint, REAL_SPEED_MULTIPLIER)
+    t.equals(#f.setMoveRateCalls, 1)
 
     -- 1 priming step + 3 real 100ms ticks = 4 total, per
     -- fixtures/sandbox.lua's own documented newThreadRunner() stepping
     -- convention (the first step() only reaches the loop's own first
     -- Wait(), the same shape tests/clientagility_spec.lua's TryVault tests
-    -- rely on).
+    -- rely on). client/movement.lua's own always-on leash pull-back thread
+    -- is ALSO stepped by every runner.step() call here (it is registered in
+    -- the very same shared thread runner) -- harmless, since leashState
+    -- stays nil throughout this whole file, so that thread's body always
+    -- takes its cheap idle branch and never touches this test's own
+    -- assertions.
     f.runner.step()
     f.runner.step()
     f.runner.step()
@@ -1139,7 +1336,8 @@ t.test('END-TIMER: the modifier resets to neutral and RecomputeK9MoveRate is cal
     f.runner.step()
 
     t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.0)
-    t.equals(f.recomputeCalls(), 2, 'once for the grant, once for the end-timer reset')
+    t.equals(#f.setMoveRateCalls, 2, 'once for the grant (1.4x), once for the end-timer reset (1.0x)')
+    t.equals(f.setMoveRateCalls[2].rate, 1.0)
 end)
 
 t.test('END-ON-DEATH: IsEntityDead(PlayerPedId()) true mid-burst ends the burst EARLY, well before durationMs elapses', function()
@@ -1151,6 +1349,7 @@ t.test('END-ON-DEATH: IsEntityDead(PlayerPedId()) true mid-burst ends the burst 
     f.runner.step() -- first real tick (elapsed = 100) -- death is now observed and breaks the loop immediately
 
     t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.0, 'must already be reset after only 1 real tick, not the full 3')
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 1.0, 'the real native call must reflect the early reset too')
 end)
 
 t.test('GENERATION GUARD: a stale end-timer from an EARLIER grant must never clobber a NEWER, still-active burst\'s modifier', function()

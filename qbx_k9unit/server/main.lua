@@ -511,6 +511,38 @@ local DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS = 30000
 -- Drops any DoorScratchByDoorCooldown entry whose cooldown has already
 -- expired — once (now - loggedAt) >= scratchCooldownMs, the entry can no
 -- longer affect the cooldown check below, so it's safe to evict.
+--
+-- PERFORMANCE AUDIT NOTE (this pass, considered and DELIBERATELY left
+-- ungated): a performance pass flagged this thread starting unconditionally
+-- at file load, rather than behind Config.Features.DoorInteraction, as a
+-- convention inconsistency against relayBark's/relayDoorScratch's own
+-- per-call `if not Config.Features.X then return end` gating below. Gating
+-- the *start* of this thread on that flag was considered and rejected:
+-- server/runtimecontrol.lua's own FEATURE_TIERS registers
+-- `DoorInteraction = { tier = 'live' }` specifically BECAUSE this feature's
+-- registrations (this RegisterNetEvent below, this thread) are never
+-- gated at load time and its handler re-checks the flag on every
+-- invocation instead — that tier is runtimecontrol.lua's own PROMISE to an
+-- operator that flipping this flag ON via `/qbx_k9unit:server:
+-- runtimeSetFeature` (Config.Features.RuntimeFeatureControl) takes effect
+-- immediately, with `restartRequired = false`, never "only after this
+-- resource restarts." A `if Config.Features.DoorInteraction then
+-- DoorScratchByDoorCooldown.StartSweep(...) end` guard here would be
+-- evaluated exactly once, at this file's own load time -- an operator who
+-- starts with the feature off, then flips it on live later in the same
+-- session, would get a fully working relayDoorScratch (that handler's own
+-- gate is genuinely live) but a sweep thread that NEVER starts for the
+-- rest of that server's uptime, silently reopening the exact unbounded
+-- per-doorNetId growth this table's own SECURITY/ABUSE FIX comment above
+-- exists to bound -- a strictly worse outcome than the flagged
+-- inconsistency itself. Left ungated instead: genuinely free when the
+-- feature is off (DoorScratchByDoorCooldown's store is only ever written
+-- to from inside relayDoorScratch below, which already no-ops before ever
+-- calling .Touch(...) when the feature is off, so this sweep walks a
+-- permanently empty table every 30s until/unless the feature is on) --
+-- the "no unbounded trap" rule this resource applies to every cleanup path
+-- cuts the other way here: this IS the cleanup path, and it must not be
+-- the thing gated on a feature flag that can flip live.
 DoorScratchByDoorCooldown.StartSweep(DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
     return (now - loggedAt) >= Config.DoorInteraction.scratchCooldownMs
 end)

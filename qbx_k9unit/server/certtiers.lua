@@ -65,6 +65,16 @@
     hardcoded table, behind a soft-dependency existence guard exactly
     like every other cross-file dependency in this resource.
 
+    A LATER, OWNER-DIRECTED FOLLOW-UP PASS adds exactly one more accessor
+    to this same seam: TierCapabilityPermits(citizenid, jobName,
+    capabilityKey) -- see header "CAPABILITY COMPOSITION" further down for
+    the full design. Unlike the accessors above (which answer questions
+    ABOUT the catalog), this one answers the actual authorization question
+    a real gate needs ("is citizenid, right now, permitted to do the thing
+    capabilityKey names"), composed correctly with this resource's other
+    three access layers and with the owner's own default-permissive
+    constraint -- see that section before wiring anything to it.
+
     ======================================================================
     HAZARD 1 — EXISTING ROWS (compatibility with every already-deployed
     database)
@@ -232,30 +242,65 @@
     (server/permissions.lua's own Config.Permissions catalog +
     HasPermission/GrantPermission, and server/highcommand.lua's own
     grade-based IsHighCommand) which this file does not touch, does not
-    read, and does not make tier-editable in any way. Concretely, as of
-    this pass, EVERY capability in the catalog is INERT — no gate
-    anywhere in this codebase currently calls TierHasCapability at all
-    (mirrors server/certifications.lua's own pre-existing "tier is an
-    ordinal a future file may opt into" posture for MeetsTierRequirement)
-    — so today, granting or revoking any of them changes precisely
-    nothing observable. This is deliberate, not a placeholder to be
-    embarrassed about: it means the WORST CASE of every single edit this
-    surface currently allows is "the tablet displays a different set of
-    checkboxes for a tier" — there is no path, today, from this file's
-    own code to a real capability change of any kind, let alone an
-    escalating one.
+    read, and does not make tier-editable in any way.
+
+    UPDATED THIS PASS (owner-directed follow-up: "wire the capabilities to
+    something real, or say plainly why not") — read together with the new
+    section "CAPABILITY COMPOSITION — TierCapabilityPermits" below, which
+    is the full design writeup. Short version: a real resolution
+    primitive, TierCapabilityPermits(citizenid, jobName, capabilityKey),
+    now exists in this file and is fully unit-tested. It is NOT, as of
+    this pass, called from anywhere outside this file and its own tests —
+    confirmed by grep, the same way the previous paragraph's claim was
+    confirmed before this pass. That means every capability remains
+    exactly as behaviorally INERT in a running server today as it was
+    before this pass: granting or revoking one still changes nothing a
+    player can observe, because zero consumer call sites exist yet. What
+    changed is that a consumer CAN now exist with one added line, in
+    exactly the shape every other cross-file gate in this codebase already
+    uses (a `type(TierCapabilityPermits) == 'function'` soft-dependency
+    guard, then a single AND-condition) — the missing piece was never "how
+    would a gate check this", it was "there was no gate to check it FROM",
+    since the three real candidate call sites this pass identified
+    (server/certifications.lua's GrantSpecialization,
+    server/combat.lua's ValidateCombatRequest, and
+    server/equipmentshop.lua's shop registration) are not files this pass
+    owns or may edit. The exact, reviewed diff for the first two has been
+    handed to main/coder-backend rather than applied here or left as a
+    vague TODO; the third turned out to need more than a diff (see that
+    section). This is deliberate, not a placeholder to be embarrassed
+    about: it means the WORST CASE of every single edit this surface
+    allows, TODAY, in a running server, is still "the tablet displays a
+    different set of checkboxes for a tier" — there is no path, today,
+    from this file's own code to a real capability change of any kind,
+    let alone an escalating one — while the NEXT pass that lands one of
+    the two proposed one-line diffs needs no further design work here.
 
     THE HONEST BOUNDARY OF WHAT THIS PASS CAN GUARANTEE, STATED
     EXPLICITLY: this file cannot retroactively guarantee the safety of a
     FUTURE consumer that chooses to wire a real gate to
-    TierHasCapability(key, 'some_future_capability') — that responsibility
-    belongs to whoever adds that consumer, and to CAPABILITY_CATALOG's own
-    reviewers at the point a new entry is proposed for it (a genuine code
-    change, reviewed like any other, never an in-game action). What this
-    file DOES guarantee, permanently, by construction: the SET of
-    capability strings that can ever be associated with a tier is closed
-    and code-owned, never open-ended/free-text, so no future consumer can
-    ever be surprised by an capability key nobody wrote code to define.
+    TierCapabilityPermits(citizenid, jobName, 'some_future_capability') —
+    that responsibility belongs to whoever adds that consumer, and to
+    CAPABILITY_CATALOG's own reviewers at the point a new entry is
+    proposed for it (a genuine code change, reviewed like any other, never
+    an in-game action). A future consumer wiring a REAL gate should call
+    TierCapabilityPermits, not raw TierHasCapability directly — the latter
+    has no notion of "dormant until first grant" and would, if called
+    directly against citizenid's raw resolved tier, immediately deny every
+    capability to every tier on the very first server boot after this
+    pass (every shipped tier's capability set is empty — HAZARD 1), which
+    is exactly the "quietly strips abilities from everyone" outcome the
+    owner's own brief explicitly forbids. TierHasCapability itself is
+    unchanged and remains correct for what it has always answered ("does
+    THIS tier, right now, carry THIS capability" — the tablet's own
+    display question); TierCapabilityPermits is the newer, composed
+    question ("should THIS citizenid's action be allowed, given
+    everything this file and the owner's own constraints require") a real
+    gate actually needs. What this file DOES guarantee, permanently, by
+    construction: the SET of capability strings that can ever be
+    associated with a tier is closed and code-owned, never open-ended/
+    free-text, so no future consumer can ever be surprised by an
+    capability key nobody wrote code to define.
 
     THE DELETE-VS-ASSIGN RACE (found and closed this pass, not merely
     disclosed): a naive "check reference count, then tombstone" DeleteTier
@@ -293,6 +338,118 @@
     touches any player's job/grade/permission-grant row.
 
     ======================================================================
+    CAPABILITY COMPOSITION — TierCapabilityPermits (this pass, owner-
+    directed follow-up: "wire the capabilities to something real")
+    ======================================================================
+
+    THE QUESTION THIS SECTION ANSWERS, STATED ONCE, FOR EVERY PRESENT AND
+    FUTURE CAPABILITY: where does a tier capability sit relative to the
+    THREE gates this codebase already has — Config.Features.<Name> (the
+    global switch), Config.FeatureControl (per-person block/grant, the
+    4-step resolution server/pursuitsprint.lua's own header documents
+    canonically), and HasK9Access (certified, OR a granted 'k9.access'
+    permission, OR a qualifying job grade)? ONE rule, stated here once,
+    not a per-capability judgment call:
+
+      A tier capability is a FLOOR laid UNDERNEATH all three of those —
+      never a substitute for any of them, and never able to WIDEN what
+      they already decide. A real consumer evaluates the existing three
+      exactly as it does today, in their existing order; only once all
+      three have already said "allowed" does TierCapabilityPermits get
+      consulted, as one FINAL, ADDITIONAL AND-condition. It can only
+      NARROW an already-permitted population (e.g. "certified handlers
+      may BiteAndHold, but not the trainee-tier ones") — it can never
+      grant to someone those three would otherwise refuse.
+
+    DEFAULT-PERMISSIVE ON ABSENCE, PRECISELY (the owner's own explicit
+    constraint: "An unconfigured or unrecognised capability must not
+    silently deny"). Enforcement for a given capabilityKey is DORMANT —
+    TierCapabilityPermits always returns true, for every tier, including
+    one with an empty capability set — until the FIRST time ANY tier in
+    the LIVE catalog is explicitly granted that exact key
+    (the internal IsCapabilityActiveInternal check inside TierCapabilityPermits below). This is what makes landing this pass's
+    code a zero-behavior-change event for every existing install: this
+    file's own three default tiers ship with EMPTY capability sets
+    (HAZARD 1) and nobody has ever ticked a capability checkbox before
+    this pass exists, so nothing is ACTIVE anywhere until an operator
+    deliberately uses the tablet — the exact same "byte-for-byte
+    unaffected until touched" guarantee HAZARD 1 already gives the tier
+    catalog itself, extended here to capabilities. The moment an operator
+    grants capabilityKey to at least one tier, that key goes ACTIVE
+    resource-wide: from then on, a citizenid whose OWN resolved tier does
+    not carry it is denied wherever a real consumer checks it. A
+    citizenid whose tier CANNOT be resolved at all — no active matching
+    certification record (GetCertificationTier returns nil), or K9 access
+    reached through the 'k9.access' permission grant / high-command
+    bypass / autoAccessGrade job-grade path, all of which HasK9Access
+    itself already treats as independent of tier — is ALSO allowed, never
+    denied: an inability to classify someone is treated exactly like the
+    dormant case, never as a reason to restrict them. An unrecognized
+    capabilityKey (a typo, or a key later removed from CAPABILITY_CATALOG)
+    can never be "active" in the first place — that internal check itself
+    returns false for anything outside the closed catalog — so it always
+    resolves to allow, structurally, not by convention.
+
+    NO UNBOUNDED TRAP, RESTATED AS A RULE FOR FUTURE CONSUMERS, NOT MERELY
+    AN OBSERVATION ABOUT TODAY'S CODE (see HAZARD 5 immediately below,
+    updated this pass): TierCapabilityPermits must NEVER be called from a
+    termination/cleanup path — EndActiveEffectForHolder, EndHold, a leash
+    detach, Recall, a partnership break, or any other "undo what an
+    active effect is doing" code, in this file or any future consumer.
+    Gate the REQUEST that OPENS an effect only; a capability revoked
+    mid-action must never strand a suspect, a leash, or a hold. This
+    mirrors config.lua's own Config.FeatureControl convention exactly —
+    server/combat.lua's ValidateCombatRequest doc comment already states
+    "NEVER called for a termination/cleanup path" for the identical
+    reason — so a future consumer following that same existing discipline
+    gets this one for free by construction, not by remembering to.
+
+    THE TWO REAL CANDIDATE CONSUMERS IDENTIFIED, NOT YET WIRED (both files
+    are off-limits to this pass — see this pass's own report to main for
+    the exact proposed diff text, ready to apply as-is):
+      - server/certifications.lua's GrantSpecialization — currently checks
+        only IsEligibleCertifier(granter) and the TARGET's active base
+        certification; it never asks whether the target's OWN tier is
+        even eligible to hold a specialization at all. Proposed: one
+        added check, right after the existing "specialization_requires_
+        active_cert" check, calling
+        TierCapabilityPermits(targetCitizenid, jobName,
+        'specializations_eligible').
+      - server/combat.lua's ValidateCombatRequest — currently checks
+        HasK9Access and the existing per-person Config.FeatureControl
+        resolution (IsCombatFeaturePermittedForCitizenId), but never the
+        acting K9 HANDLER's own tier, for BiteAndHold/NonLethalTakedown
+        specifically (NOT PropDragging, which shares this same validator
+        for an unrelated mechanic the capability catalog does not name).
+        Proposed: one added check, immediately after the existing
+        IsCombatFeaturePermittedForCitizenId block, calling
+        TierCapabilityPermits(k9Citizenid, k9JobName,
+        'bite_hold_and_takedown') — at REQUEST time only, never touching
+        EndHold/the maintenance-thread expiry sweep, per "NO UNBOUNDED
+        TRAP" above.
+    A third candidate, server/equipmentshop.lua's shop registration
+    (specialized_equipment_access), was investigated and found to need
+    MORE than a diff: this resource routes the entire K9 supply shop
+    through one whole-shop K9Compat/ox_inventory RegisterShop call with a
+    single shared `groups` restriction and no per-item, per-player,
+    per-purchase hook at all — the same class of "ox_inventory has no
+    real per-owner ACL primitive to hook" finding this file's own sibling,
+    server/inventory.lua's header, already documents for stashes. Gating
+    one specific item by tier capability would need new purchase-gating
+    machinery (e.g. this resource's own buy-item callback in front of
+    ox_inventory, or a live-refreshed second shop registration keyed off
+    capability state) that does not exist today — flagged as a real,
+    disclosed architectural gap for a future pass, not solved here as a
+    false one-liner.
+
+    advanced_tracking and mentor_trainees have NO real mechanic anywhere
+    in this codebase, editable or not, that could plausibly be gated —
+    confirmed by reading every server file this pass's own agent may and
+    may not edit. Neither has a home to wire into yet; both stay reserved
+    for that reason alone, independent of the file-ownership boundaries
+    that stopped the two candidates above.
+
+    ======================================================================
     HAZARD 5 — NO UNBOUNDED TRAP
     ======================================================================
 
@@ -300,10 +457,17 @@
     server/certifications.lua's SetCertificationTier gates, any
     termination/cleanup path (EndActiveEffectForHolder, leash detach,
     Recall, partnership break, etc.) — this file introduces no new gate
-    on any of those at all. This is not merely a "we were careful" claim:
-    it follows structurally from the fact that tier itself STILL gates
-    NOTHING in this codebase's own action paths (see "DEFENSE AGAINST THE
-    FIRST ADVERSARY" above — every capability is inert), and
+    on any of those at all. As of THIS pass this is no longer solely an
+    accident of nothing consuming TierHasCapability/TierCapabilityPermits
+    yet (a real resolution primitive now exists — see "CAPABILITY
+    COMPOSITION" above) — it is additionally now an EXPLICIT rule stated
+    in that section, binding on this file and on every future consumer:
+    gate the request that opens an effect, never the release that closes
+    one. Today, in this shipped pass, the older, simpler justification
+    still independently holds too: tier capability enforcement remains
+    globally DORMANT (no tier anywhere has ever had a capability granted
+    outside a test), and zero consumer call sites exist outside this
+    file's own tests, so there is doubly no trap to build here yet.
     SetCertificationTier's pre-existing behavior (confirmed unchanged by
     this pass, re-read before writing this file) never force-detaches
     anything even on an ordinary tier CHANGE, let alone a tier DELETION —
@@ -311,10 +475,10 @@
     the precedent this follows: "an already-formed leash/partnership/
     in-progress action is untouched" by a passive/administrative tier
     change. Deleting or downgrading the tier out from under someone
-    mid-action therefore cannot interrupt that action, because nothing in
-    this resource ever wired tier into an action's continuation check in
-    the first place — there is no trap to build here, and this pass does
-    not add one.
+    mid-action therefore cannot interrupt that action today, and must not
+    be allowed to once a real consumer lands either — the rule in
+    "CAPABILITY COMPOSITION" above is what keeps that true going forward,
+    not merely the current absence of any consumer.
 
     ======================================================================
     CONCURRENT-ADD ORDINAL TIE (disclosed, non-security-relevant, minor
@@ -361,21 +525,30 @@ local LEGACY_TIER_DEFAULTS = {
 -- in this codebase reads TierHasCapability yet) — see header for why
 -- that is deliberate, not an oversight.
 -- ======================================================================
+-- LABELS, UPDATED THIS PASS to stay honest about the exact current state
+-- (see header "CAPABILITY COMPOSITION" for the full writeup) -- every one
+-- of the five still changes NOTHING observable in a running server today
+-- (zero consumer call sites exist outside this file and its own tests),
+-- so none of these claim otherwise. What changed from the previous
+-- wording is precision about WHY each one is still inert: two have a
+-- real, reviewed, ready-to-apply diff waiting on a file this pass may not
+-- edit; one needs a real design this pass did not attempt; two have no
+-- mechanic anywhere in this codebase to gate at all yet.
 local CAPABILITY_CATALOG = {
     specializations_eligible = {
-        label = 'Eligible to hold K9 specializations (narcotics/explosives/patrol)',
+        label = 'Eligible to hold K9 specializations (narcotics/explosives/patrol) -- NOT YET ENFORCED: a one-line consumer change for server/certifications.lua\'s GrantSpecialization has been proposed to main, not applied',
     },
     advanced_tracking = {
-        label = 'Advanced tracking (reserved -- no gate in this resource currently checks this)',
+        label = 'Advanced tracking (reserved -- no such mechanic exists anywhere in this codebase yet to gate)',
     },
     bite_hold_and_takedown = {
-        label = 'Bite & Hold / Non-Lethal Takedown (reserved -- no gate in this resource currently checks this)',
+        label = 'Bite & Hold / Non-Lethal Takedown -- NOT YET ENFORCED: a one-line consumer change for server/combat.lua\'s ValidateCombatRequest has been proposed to main, not applied',
     },
     mentor_trainees = {
-        label = 'May mentor/supervise trainee-tier handlers (reserved -- no gate in this resource currently checks this)',
+        label = 'May mentor/supervise trainee-tier handlers (reserved -- no such mechanic exists anywhere in this codebase yet to gate)',
     },
     specialized_equipment_access = {
-        label = 'Access to specialized K9 equipment shop items (reserved -- no gate in this resource currently checks this)',
+        label = 'Access to specialized K9 equipment shop items (reserved -- this resource\'s shop is one whole-shop registration with no per-item purchase check to gate; needs a new design, not a small change)',
     },
 }
 
@@ -595,6 +768,84 @@ function TierHasCapability(key, capabilityKey)
     if type(capabilityKey) ~= 'string' then return false end
     local entry = type(key) == 'string' and TierByKey[key]
     return entry ~= nil and entry.capabilities[capabilityKey] == true
+end
+
+-- ======================================================================
+-- CAPABILITY COMPOSITION -- see header "CAPABILITY COMPOSITION" for the
+-- full design writeup TierCapabilityPermits below implements.
+-- IsCapabilityActiveInternal is a `local` helper, DELIBERATELY not
+-- exposed as a resource-global (unlike every accessor above) -- it has no
+-- real consumer of its own outside TierCapabilityPermits, and this
+-- resource's own .luacheckrc `globals` allowlist is off-limits to this
+-- pass (see this pass's own report to main), so the new public surface
+-- this file adds is kept to the ONE function a real consumer actually
+-- needs to call, not two. Both are hot-path-safe (O(number of live
+-- tiers), no query) exactly like every other accessor in this section.
+-- ======================================================================
+
+--- Is `capabilityKey` currently ACTIVE anywhere in the LIVE catalog --
+--- i.e. does at least one non-tombstoned tier currently carry it? An
+--- unrecognized key can never be active: CAPABILITY_CATALOG is closed
+--- (HAZARD 4), so a typo'd or future-removed key simply cannot match any
+--- tier's own (equally catalog-filtered, see NormalizeCapabilitiesInput)
+--- capability set -- this is what makes TierCapabilityPermits below fail
+--- OPEN on an unrecognized key structurally, not merely by coincidence.
+--- @param capabilityKey any
+--- @return boolean
+local function IsCapabilityActiveInternal(capabilityKey)
+    if type(capabilityKey) ~= 'string' or not CAPABILITY_CATALOG[capabilityKey] then
+        return false
+    end
+    for _, entry in pairs(TierByKey) do
+        if entry.capabilities[capabilityKey] then return true end
+    end
+    return false
+end
+
+--- THE single resolution point a real consumer wiring a tier capability
+--- to an actual gate must call -- see header "CAPABILITY COMPOSITION" for
+--- the full contract this implements (the one rule, stated once: a floor
+--- UNDERNEATH Config.Features / Config.FeatureControl / HasK9Access,
+--- never a substitute for any of them, checked only AFTER a caller has
+--- already evaluated all three). NEVER call this from a termination/
+--- cleanup path -- see header "CAPABILITY COMPOSITION" 's own "NO
+--- UNBOUNDED TRAP" paragraph and HAZARD 5 below.
+---
+--- Returns true (ALLOW) in every case this file cannot AFFIRMATIVELY
+--- prove should be denied:
+---   - `capabilityKey` is not a recognized catalog key (dormant for a
+---     reason other than "no tier grants it yet").
+---   - `capabilityKey` is DORMANT -- no tier in the live catalog grants it
+---     yet. Covers every install that predates this pass, byte for byte
+---     (HAZARD 1's empty default capability sets), and every capability
+---     no operator has ever touched from the tablet.
+---   - GetCertificationTier is unavailable (soft dependency,
+---     server/certifications.lua absent) or citizenid/jobName are not
+---     both strings.
+---   - GetCertificationTier(citizenid, jobName) returns nil -- no active,
+---     job-matching certification record for this citizenid. This is NOT
+---     assumed to mean "no K9 access" -- HasK9Access can independently be
+---     true via a 'k9.access' permission grant, a high-command bypass, or
+---     an autoAccessGrade job grade, none of which this file can express
+---     as a tier at all. An unresolvable tier is treated exactly like the
+---     dormant case: this function only ever narrows access for a
+---     citizenid it can affirmatively PLACE outside an ACTIVE capability,
+---     never for one it cannot classify.
+--- Returns false ONLY when `capabilityKey` is ACTIVE (>=1 tier grants it)
+--- AND citizenid's own resolved tier is not among the tiers granting it.
+--- @param citizenid any
+--- @param jobName any
+--- @param capabilityKey any
+--- @return boolean allowed
+function TierCapabilityPermits(citizenid, jobName, capabilityKey)
+    if not IsCapabilityActiveInternal(capabilityKey) then return true end
+    if type(GetCertificationTier) ~= 'function' then return true end
+    if type(citizenid) ~= 'string' or type(jobName) ~= 'string' then return true end
+
+    local tierKey = GetCertificationTier(citizenid, jobName)
+    if not tierKey then return true end
+
+    return TierHasCapability(tierKey, capabilityKey)
 end
 
 -- ======================================================================

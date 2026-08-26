@@ -435,6 +435,16 @@ globals = {
     -- was consulting the other four and not this one, so a forced revert
     -- could fire on a player still wearing an attached prop.
     "IsPropAttachmentEngaged",
+    -- TierCapabilityPermits: server/certtiers.lua's capability gate, called
+    -- by feature files to ask "does this person's certification tier allow
+    -- this action". Deliberately fail-PERMISSIVE: it returns true unless the
+    -- capability is actively granted by at least one tier AND this person's
+    -- resolved tier is not among them. Every unresolvable case -- no tier,
+    -- no lookup function, bad arguments, a capability no tier grants -- is
+    -- an allow. That direction is load-bearing: every tier in every existing
+    -- install predates capabilities, so failing closed would silently strip
+    -- abilities from everyone on upgrade.
+    "TierCapabilityPermits",
     "IsFetchCarryEngaged", "ReleaseFetchBall", "RequestRecallFetchBall", "RequestThrowFetchBall",
     -- server/cooldowns.lua constructors
     "NewCooldown", "NewNestedCooldown", "NewMutex",

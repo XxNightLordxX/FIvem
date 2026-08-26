@@ -137,7 +137,7 @@ local function boot(opts)
     local config = opts.config or defaultConfig
 
     local fakeNow = { value = 0 }
-    local env = Sandbox.newEnv({
+    local envOverrides = {
         GetGameTimer           = function() return fakeNow.value end,
         AddEventHandler        = AddEventHandlerStub,
         GetCurrentResourceName = function() return 'qbx_k9unit' end,
@@ -147,7 +147,18 @@ local function boot(opts)
         MySQL                  = { query = { await = makeQueryAwait(world) }, scalar = { await = makeScalarAwait(world) } },
         IsHighCommand          = isHighCommand,
         Config                 = config,
-    })
+    }
+    -- TierCapabilityPermits' own soft dependency on
+    -- server/certifications.lua's GetCertificationTier -- OMITTED from
+    -- envOverrides entirely (not merely nil) unless a test explicitly
+    -- supplies one via opts.getCertificationTier, so
+    -- `type(GetCertificationTier) == 'function'` inside the production
+    -- file genuinely sees it as absent, exactly like a real server
+    -- running this file without server/certifications.lua loaded.
+    if opts.getCertificationTier then
+        envOverrides.GetCertificationTier = opts.getCertificationTier
+    end
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
 
@@ -510,6 +521,127 @@ t.test('HAZARD 4: TierEditMutex is a real mutex object exposed as a bare global'
     t.isFalse(f.env.TierEditMutex.TryAcquire('trainee'), 'a second acquire of the same key while held must fail')
     f.env.TierEditMutex.Release('trainee')
     t.isTrue(f.env.TierEditMutex.TryAcquire('trainee'), 'released, then re-acquirable')
+end)
+
+-- ============================================================================
+-- SECTION 9 -- CAPABILITY COMPOSITION: TierCapabilityPermits (this pass's
+-- owner-directed follow-up: "wire the capabilities to something real").
+-- See server/certtiers.lua's own header "CAPABILITY COMPOSITION" for the
+-- full rule this section proves. Every case is driven through
+-- TierCapabilityPermits itself -- its own internal "is this capability
+-- active anywhere" check is a `local` helper with no life of its own
+-- outside that function (deliberately not a second new resource-global --
+-- see that function's own doc comment), so this spec verifies it only
+-- through the one real public contract a consumer would actually call,
+-- never by reaching around it. `opts.getCertificationTier` (this file's
+-- own extension to boot(), above) stands in for server/certifications.lua's
+-- real GetCertificationTier -- production code never runs with that file
+-- absent in a shipped install, but this spec exercises this file's OWN
+-- soft-dependency fallback deliberately, the same discipline
+-- tests/certifications_spec.lua already applies to TierEditMutex's
+-- absence in the other direction.
+-- ============================================================================
+
+t.test('COMPOSITION: DORMANT by default -- zero-behavior-change on every pre-this-pass install, for every tier including trainee', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return 'trainee' end,
+    })
+    -- None of the three default tiers ship with any capability granted
+    -- (HAZARD 1) -- 'trainee' (the lowest tier, the exact one the owner's
+    -- own example names -- "a trainee tier to not allow bite-and-hold")
+    -- must still be ALLOWED, because nobody has ever used the tablet to
+    -- grant or deny this capability to anyone.
+    t.isTrue(f.env.TierCapabilityPermits('CIT1', 'police', 'bite_hold_and_takedown'))
+end)
+
+t.test('COMPOSITION: an unrecognized capability key is allowed unconditionally, regardless of tier', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function() return 'trainee' end,
+    })
+    t.isTrue(f.env.TierCapabilityPermits('CIT1', 'police', 'not_a_real_capability'))
+end)
+
+t.test('COMPOSITION: once a tier is granted a capability, it goes ACTIVE resource-wide -- a tier that lacks it is now genuinely denied -- the owner\'s own worked example', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    -- High command grants bite_hold_and_takedown to 'certified' and
+    -- 'senior' only -- 'trainee' is deliberately left without it, exactly
+    -- the scenario named in this pass's own task ("set a trainee tier to
+    -- not allow bite-and-hold").
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'certified', label = 'Certified', capabilities = { 'bite_hold_and_takedown' } })
+    f.fakeNow.value = f.fakeNow.value + 2000
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    f.env.GetCertificationTier = function(_citizenid, _jobName) return 'trainee' end
+    t.isFalse(f.env.TierCapabilityPermits('TRAINEE_CIT', 'police', 'bite_hold_and_takedown'),
+        'a trainee-tier handler must be genuinely denied once the capability is active and trainee does not hold it')
+end)
+
+t.test('COMPOSITION: once ACTIVE, a tier that HOLDS the capability is genuinely allowed', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    f.env.GetCertificationTier = function(_citizenid, _jobName) return 'senior' end
+    t.isTrue(f.env.TierCapabilityPermits('SENIOR_CIT', 'police', 'bite_hold_and_takedown'),
+        'a senior-tier handler holding the now-active capability must be allowed')
+end)
+
+t.test('COMPOSITION: revoking the capability from every tier that held it returns to DORMANT -- allowed again for everyone', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+    f.env.GetCertificationTier = function(_citizenid, _jobName) return 'trainee' end
+    t.isFalse(f.env.TierCapabilityPermits('TRAINEE_CIT', 'police', 'bite_hold_and_takedown'), 'active, and trainee does not hold it')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = {} })
+    t.isTrue(f.env.TierCapabilityPermits('TRAINEE_CIT', 'police', 'bite_hold_and_takedown'),
+        'dormant again once the only tier holding it has it revoked -- trainee is allowed again, same as before anyone ever touched the tablet')
+end)
+
+t.test('COMPOSITION: allows when the acting citizenid\'s tier cannot be resolved at all (nil), even while the capability is active', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return nil end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    -- e.g. K9 access reached via a 'k9.access' permission grant or a
+    -- high-command bypass, with no matching certification record at all --
+    -- HasK9Access can independently be true here; this file cannot express
+    -- that citizenid as any tier, so it must never be the reason they are
+    -- denied.
+    t.isTrue(f.env.TierCapabilityPermits('NO_CERT_CIT', 'police', 'bite_hold_and_takedown'))
+end)
+
+t.test('COMPOSITION: allows when GetCertificationTier is entirely absent (soft dependency, server/certifications.lua not loaded)', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end }) -- no getCertificationTier supplied
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+    t.isNil(f.env.GetCertificationTier, 'this test\'s own sandbox genuinely has no GetCertificationTier defined')
+
+    t.isTrue(f.env.TierCapabilityPermits('ANY_CIT', 'police', 'bite_hold_and_takedown'))
+end)
+
+t.test('COMPOSITION: allows on a malformed citizenid/jobName rather than erroring or denying', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function() error('must never be reached for a bad-shaped input') end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isTrue(f.env.TierCapabilityPermits(nil, 'police', 'bite_hold_and_takedown'))
+    t.isTrue(f.env.TierCapabilityPermits('CIT1', nil, 'bite_hold_and_takedown'))
+    t.isTrue(f.env.TierCapabilityPermits(42, 'police', 'bite_hold_and_takedown'))
+end)
+
+t.test('COMPOSITION: activating one capability never affects a DIFFERENT, still-dormant capability', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function() return 'trainee' end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+    t.isTrue(f.env.TierCapabilityPermits('CIT1', 'police', 'specializations_eligible'),
+        'a sibling capability nobody has touched stays dormant independently, so it still permits unconditionally')
 end)
 
 os.exit(t.summary())
