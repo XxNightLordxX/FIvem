@@ -179,10 +179,20 @@ resource, not flipping a switch.
    safe to run again later on a server you already installed this on.
    Add `--dry-run` to see the plan without changing anything.
 
-   Prefer not to use the script? Run `sql/install.sql` once (every
-   `CREATE TABLE` is safe to re-run), then every file in
-   `sql/migrations/` in filename order (also safe to re-run). Check
-   `sql/migration_status.sql` any time to see what's actually applied.
+   Prefer not to use the script, or have no shell access? Run
+   `sql/install.sql` once (every `CREATE TABLE` is safe to re-run), then
+   every file in `sql/migrations/` in filename order (also safe to
+   re-run). Check `sql/migration_status.sql` any time to see what's
+   actually applied.
+
+   **If you are pasting into phpMyAdmin, Adminer or HeidiSQL**, use the
+   tool's *Import a file* feature rather than its query box for the
+   files in `sql/migrations/`. Five of them use a `DELIMITER` statement,
+   which is a command those query boxes do not understand — you would
+   get an unexplained syntax error partway through. `install.sql` itself
+   pastes fine either way. **`sql/DATABASE_GUIDE.md` walks through all of
+   this in plain English**, including turning the database off, taking it
+   back out, and upgrading later; read it if any of the above is unclear.
 
    **Don't want a database at all?** Set `Config.Database.enabled = false`
    in `config.lua` instead of importing anything. Every feature still
@@ -196,9 +206,10 @@ resource, not flipping a switch.
 
 `config.lua` is long but ships its own plain-English index at the top
 ("WHAT IS IN THIS FILE") — search it for the setting you want rather
-than reading start to finish. Nearly every one of its 56
-`Config.Features` switches ships **on** by default; the exceptions and
-what they mean are covered below.
+than reading start to finish. Nearly every one of its `Config.Features`
+switches ships **on** by default; the exceptions and what they mean are
+covered below. (No count is given here on purpose — a hand-typed number
+in a document goes stale the first time someone adds a feature.)
 
 ---
 
@@ -314,17 +325,31 @@ This is different from deliberately setting `Config.Database.enabled =
 false` above — this is what happens if you skip, or only partly finish,
 step 2 of "Installing" by accident.
 
-The resource checks its own tables against the database on startup. If
-**every** expected table is missing (the SQL was never imported at all),
-or if **some but not all** of them exist (`sql/install.sql` ran but a
-later file in `sql/migrations/` didn't, or a table was dropped since),
-it does **not** error, crash, or half-work — it refuses to use the
-database for that entire session and runs in the same memory-only mode
-described above instead, and says so plainly in the server console,
-including which tables it's missing. A part-installed database is
-treated the same as no database at all on purpose: saving some data and
-silently losing the rest would be worse than everyone knowing nothing is
-being saved this session.
+The resource checks its own tables against the database on startup. It
+never errors, crashes or half-works, and it always tells you plainly in
+the server console what it found. What it does next depends on what is
+missing:
+
+- **Every table missing** — the SQL was never imported. Nothing is saved
+  this session; the resource runs entirely from memory, exactly as if you
+  had set `Config.Database.enabled = false`. Everything still works for
+  everyone playing; it just forgets when the server restarts.
+- **Some tables missing** — usually `sql/install.sql` ran but a later
+  file in `sql/migrations/` didn't, or a table was dropped since. Only
+  the missing tables fall back to memory. Everything else keeps saving
+  normally. The console names the missing tables and what each one is
+  for, so you can see exactly what is not being kept.
+- **A table exists but isn't ours** — something else in your database
+  already owns a table with one of our names. This one stops the resource
+  using the database at all, on purpose, because writing into a table
+  belonging to another resource is a different and much worse problem
+  than forgetting something.
+
+One deliberate exception to the middle case: if the certifications table
+is missing, specializations fall back with it even if that table is fine.
+They are only meaningful together — keeping specializations while
+forgetting the certification behind them could hand someone back a
+specialization nobody granted.
 
 The fix is the same either way: run through step 2 of "Installing" above
 (`k9_setup.sh`, or `sql/install.sql` plus everything in
@@ -524,9 +549,15 @@ building the integration should look next, not here.
 ## Other documentation
 
 This file is the one to read for installing, configuring, and
-operating this resource. Three other files exist for a different
-reader, and none of them are needed to get this resource running:
+operating this resource. One other file is written for you as the
+server owner; the rest are for a different reader and none of them are
+needed to get this resource running:
 
+- **`sql/DATABASE_GUIDE.md`** — written for you, in plain English, if
+  anything about the database step is unclear. Covers installing without
+  shell access, turning the database off, taking it back out of your
+  database later, and upgrading. Read it if step 2 above gave you any
+  trouble.
 - **`DEVELOPER_REFERENCE.md`** — for anyone modifying this resource's
   code: full exports/events contracts, internal design, and file-by-
   file behavior.

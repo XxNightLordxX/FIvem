@@ -227,7 +227,7 @@ it.
   name conflict exists.
 - `sql/rollback/backup_k9_tables.sh` / `sql/rollback/backup_full_database.sh`
   — take a backup by hand, any time, for any reason.
-- `sql/rollback/0001_down.sql` through `0017_down.sql` — undo one
+- `sql/rollback/0001_down.sql` through the highest-numbered `*_down.sql` present — undo one
   specific past database change without deleting anything (for advanced/
   troubleshooting use; most owners never need these — see Level 2 above
   for the everyday "turn a feature off" case).
