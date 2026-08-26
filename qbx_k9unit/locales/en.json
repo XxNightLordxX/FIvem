@@ -489,7 +489,9 @@
         "specializations_heading": "Specializations",
         "no_specializations": "No specializations held.",
         "expires_label": "Expires",
-        "expired_badge": "Expired"
+        "expired_badge": "Expired",
+        "block_client_enforced_badge": "Enforced (client-side)",
+        "block_client_enforced_hint": "Blocking this stops the ability on the player's own game client. Unlike a server-enforced block, a modified or cheating client can bypass it -- treat this as best-effort, not a guarantee."
     },
     "inventory": {
         "open_gear_target_label": "Open K9 Gear",
