@@ -622,6 +622,81 @@ end
 -- ResolveConfiguredPositiveNumber's own doc comment above.
 Config.CertifyProximityMeters = ResolveConfiguredPositiveNumber(Config.CertifyProximityMeters, 5.0, 'Config.CertifyProximityMeters')
 
+-- CLAMP-AND-WARN (this pass, found while tracing the CertificationExpiry
+-- chain end-to-end) -- Config.CertificationExpiryCheckIntervalMs already
+-- got this treatment (see the CreateThread loop far below); Config.
+-- CertificationExpiryDays and Config.CertificationExpiryWarningDays did
+-- not, despite being exactly the class of "silently degrades to a
+-- DIFFERENT, unannounced behavior" footgun this file's own CONFIG-SAFETY
+-- GUARD section above exists to close: an operator who sets
+-- Config.Features.CertificationExpiry = true but leaves
+-- Config.CertificationExpiryDays misconfigured (a typo'd string, 0, a
+-- negative number) gets EVERY certification granted or renewed from that
+-- point on with NO expiry at all -- identical, byte-for-byte, to the
+-- feature being off -- with nothing printed anywhere to say why. That is
+-- the worst possible outcome for a feature an operator just deliberately
+-- opted into: it looks enabled and does nothing. One-shot printed
+-- warnings (WarnedBadExpiryDays/WarnedBadExpiryWarningDays below), not a
+-- per-call print, since both are read from hot, per-action call sites
+-- (every grant/renew, every sweep tick) rather than once at file load
+-- like Config.CertifyProximityMeters above -- mirrors
+-- WarnedBadExpiryCheckIntervalMs's own established one-shot-flag idiom
+-- later in this file.
+local WarnedBadExpiryDays = false
+local WarnedBadExpiryWarningDays = false
+
+--- Resolves Config.CertificationExpiryDays into the expiry window (in
+--- days) a fresh grant/renewal should use, or nil if either expiry is
+--- genuinely off (Config.Features.CertificationExpiry ~= true -- silent,
+--- not a misconfiguration) or misconfigured while expiry IS on (warned
+--- once, then silent for the rest of this session -- see CLAMP-AND-WARN
+--- above). Shared by GrantCertification and RenewCertification so the one
+--- validation/warning lives in one place instead of two independent
+--- copies of the same boolean expression free to drift apart.
+--- @return number?
+local function ResolveConfiguredExpiryDays()
+    if not (Config.Features and Config.Features.CertificationExpiry == true) then return nil end
+    local raw = Config.CertificationExpiryDays
+    if type(raw) == 'number' and raw == raw and raw > 0 then return raw end
+    if not WarnedBadExpiryDays then
+        WarnedBadExpiryDays = true
+        print(
+            ('[qbx_k9unit] certifications.lua: Config.CertificationExpiryDays must be a positive number now that ' ..
+             'Config.Features.CertificationExpiry is true (found: %s). Every certification granted or renewed ' ..
+             'while this stays misconfigured gets NO expiry at all -- identical to the feature being off -- not ' ..
+             'the expiry window you just enabled. Find Config.CertificationExpiryDays in config.lua and fix it.'
+            ):format(tostring(raw))
+        )
+    end
+    return nil
+end
+
+--- Resolves Config.CertificationExpiryWarningDays into the warn-ahead
+--- window (in days) CheckAndNotifyExpiry should use, falling back to the
+--- shipped default of 7 on any invalid value -- see CLAMP-AND-WARN above.
+--- Unlike ResolveConfiguredExpiryDays, this is NOT itself gated on
+--- Config.Features.CertificationExpiry: CheckAndNotifyExpiry's only
+--- callers already never reach this line unless `cached.expiresAtUnix` is
+--- non-nil, which cannot happen unless a grant/renewal already ran with
+--- expiry on -- by that point a warn-ahead window is always relevant
+--- regardless of the flag's CURRENT value (e.g. an operator who disabled
+--- the feature again after some certifications already picked up a real
+--- expiry date).
+--- @return number
+local function ResolveConfiguredExpiryWarningDays()
+    local raw = Config.CertificationExpiryWarningDays
+    if type(raw) == 'number' and raw == raw and raw > 0 then return raw end
+    if not WarnedBadExpiryWarningDays then
+        WarnedBadExpiryWarningDays = true
+        print(
+            ('[qbx_k9unit] certifications.lua: Config.CertificationExpiryWarningDays must be a positive number ' ..
+             '(found: %s). Using the built-in fallback of 7 instead -- find Config.CertificationExpiryWarningDays ' ..
+             'in config.lua and fix it.'):format(tostring(raw))
+        )
+    end
+    return 7
+end
+
 --- Precomputed set of Config.Peds model hashes, built once at file load.
 --- Used ONLY by the grant-time model check (§4.2 condition 5) — per
 --- §4.1/§4.5, ordinary access checks (HasK9Access) never consult this.
@@ -1430,10 +1505,10 @@ local function GrantCertification(granterSrc, targetServerId)
         -- below (which is exactly what every existing test already
         -- exercises). Date arithmetic happens in SQL
         -- (`DATE_ADD(NOW(), INTERVAL ? DAY)`), never in Lua — see header
-        -- "EXPIRY" item 3.
-        local expiryDays = Config.Features and Config.Features.CertificationExpiry == true
-            and type(Config.CertificationExpiryDays) == 'number' and Config.CertificationExpiryDays > 0
-            and Config.CertificationExpiryDays or nil
+        -- "EXPIRY" item 3. CLAMP-AND-WARN on a misconfigured
+        -- CertificationExpiryDays lives in ResolveConfiguredExpiryDays
+        -- (shared with RenewCertification below) — see its own doc comment.
+        local expiryDays = ResolveConfiguredExpiryDays()
 
         -- K9Store.Cert_Insert owns the with-expiry/without-expiry SQL
         -- branch internally now (byte-identical to the two insertSql
@@ -2111,9 +2186,14 @@ local function RenewCertification(granterSrc, targetServerId)
         return
     end
 
-    local expiryDays = Config.Features and Config.Features.CertificationExpiry == true
-        and type(Config.CertificationExpiryDays) == 'number' and Config.CertificationExpiryDays > 0
-        and Config.CertificationExpiryDays or nil
+    -- CLAMP-AND-WARN on a misconfigured CertificationExpiryDays lives in
+    -- ResolveConfiguredExpiryDays (shared with GrantCertification above) —
+    -- see its own doc comment. Returns nil identically whether the feature
+    -- is genuinely off or misconfigured while on; either way there is
+    -- nothing to renew, so this notice stays accurate for both cases (a
+    -- misconfiguration ALSO prints its own, separate, operator-facing
+    -- console warning naming the exact bad value).
+    local expiryDays = ResolveConfiguredExpiryDays()
     if not expiryDays then
         NotifyPlayer(granterSrc, locale('certifications.renew_feature_disabled'), 'error')
         return
@@ -3016,8 +3096,9 @@ local function CheckAndNotifyExpiry(onlineSrc, citizenid, cached)
     local now = NowUnix()
     if now == nil then return end -- see NowUnix's own doc comment -- fail toward silence, not toward a wrong day-count
 
-    local warningDays = type(Config.CertificationExpiryWarningDays) == 'number' and Config.CertificationExpiryWarningDays > 0
-        and Config.CertificationExpiryWarningDays or 7
+    -- CLAMP-AND-WARN on a misconfigured CertificationExpiryWarningDays —
+    -- see ResolveConfiguredExpiryWarningDays' own doc comment.
+    local warningDays = ResolveConfiguredExpiryWarningDays()
     local secondsRemaining = cached.expiresAtUnix - now
     if secondsRemaining <= (warningDays * 86400) and not ExpiryWarned[citizenid] then
         ExpiryWarned[citizenid] = true

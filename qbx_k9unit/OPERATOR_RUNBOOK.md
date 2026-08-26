@@ -9,9 +9,11 @@ rationale and internals see `DEVELOPER_REFERENCE.md`.
 `config.lua`'s ~50 `Config.Features` flags ships `true`. The two
 exceptions are `CameraFeedPiP` (no implementing code exists at all — the
 engine has no native for a second camera feed, so there's nothing to
-enable) and `CertificationExpiry` (off on purpose — turning it on starts
-an expiry clock retroactively on every certification that already
-exists). Read `config.lua`'s own comments before flipping anything;
+enable) and `CertificationExpiry` (off on purpose — but it is safe to turn
+on: every certification that already exists keeps no expiry date unless
+someone explicitly renews it, and only new grants get one. It is off
+because starting a recertification cycle is a decision to make on purpose,
+not because switching it on would strip anybody). Read `config.lua`'s own comments before flipping anything;
 they're written for this, not just for developers.
 
 ---

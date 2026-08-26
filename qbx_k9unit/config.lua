@@ -412,10 +412,18 @@ Config.Features = {
 
     -- server/certifications.lua. Opt-in periodic recertification: new
     -- grants get an expiry date and lapse unless renewed. OFF by default,
-    -- and deliberately so -- switching it on retroactively starts a clock
-    -- on every existing certification, which is a real policy decision
-    -- rather than a convenience. Handlers get warned ahead of expiry;
-    -- nobody should find out by an ability silently refusing to work.
+    -- and deliberately so -- but NOT because turning it on is destructive.
+    -- It is not: every certification that already exists keeps no expiry
+    -- date at all, forever, unless a certifier explicitly renews it. This
+    -- comment used to say the opposite -- that switching it on started a
+    -- clock retroactively on everyone -- and that was simply wrong, which
+    -- would have scared an operator off a safe change. Only NEW grants and
+    -- explicit renewals ever get an expiry.
+    --
+    -- It is off by default because starting a recertification cadence at
+    -- all is a policy decision you should make on purpose, not inherit.
+    -- Handlers get warned ahead of expiry; nobody should find out by an
+    -- ability silently refusing to work.
     CertificationExpiry  = false,
 
     -- server/runtimecontrol.lua. Lets high command switch features on and

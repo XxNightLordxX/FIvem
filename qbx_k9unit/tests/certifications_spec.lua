@@ -472,6 +472,85 @@ t.test('CONFIG-SAFETY: a VALID, non-default Config.CertifyProximityMeters passes
     end
 end)
 
+-- ----------------------------------------------------------------------
+-- CONFIG-SAFETY -- Config.CertificationExpiryDays / Config.
+-- CertificationExpiryWarningDays. Found while tracing the EXPIRY chain
+-- end-to-end: Config.CertificationExpiryCheckIntervalMs already had a
+-- clamp-and-warn (see the CreateThread loop's own regression tests
+-- further below), but these two silently degraded with no print at all --
+-- an operator who enables Config.Features.CertificationExpiry and typos
+-- Config.CertificationExpiryDays would see the feature "on" and get NO
+-- expiry set on any new/renewed certification, forever, with nothing
+-- printed anywhere to explain why.
+-- ----------------------------------------------------------------------
+
+t.test('CONFIG-SAFETY: Config.CertificationExpiryDays = 0 while the feature is ON does not silently succeed with an expiry anyway -- warns loudly and the grant gets NO expiry at all', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 0 })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 55 end
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end
+        return 55
+    end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.equals(#insertParams, 3, 'a misconfigured expiry window must degrade to the pre-expiry 3-argument INSERT, never a 4th argument built from a bad number')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.CertificationExpiryDays', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a clamp-and-warn substitution must be loud, never silent -- an operator who deliberately enabled the feature deserves to know it is not doing anything')
+end)
+
+t.test("CONFIG-SAFETY: Config.CertificationExpiryDays misconfigured while the feature is OFF never warns -- an unused garbage value on a server that never opted in is not this file's business", function()
+    local f = newFixture({ expiryDays = 0 }) -- Config.Features absent -- expiry off
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+    f.mysql.insert.await = function() return 56 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    for _, line in ipairs(f.printLog) do
+        t.isFalse(line:find('CertificationExpiryDays', 1, true) ~= nil, 'the feature being off must never itself trigger this warning')
+    end
+end)
+
+t.test('CONFIG-SAFETY: Config.CertificationExpiryWarningDays = -1 does not abort -- falls back to 7 and warns loudly', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90, expiryWarningDays = -1 })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    -- 3 days remaining -- would fall inside any sane warning window, so
+    -- this also proves the fallback actually applied is 7 (wide enough to
+    -- catch it), not 0 or "never warn".
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 + 259200 } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.threadRunner.step()
+    f.threadRunner.step()
+
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_warning', '3'), 'inform'), 'the fallback of 7 days must still be wide enough to catch 3 days remaining')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.CertificationExpiryWarningDays', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a clamp-and-warn substitution must be loud, never silent')
+end)
+
 t.test('CONFIG-SAFETY: an EMPTY Config.Peds does not abort the file -- HasK9Access keeps working normally, IsConfiguredK9Model rejects every model, and a warning is printed', function()
     local f = newFixture({ peds = {} })
     local warned = false
