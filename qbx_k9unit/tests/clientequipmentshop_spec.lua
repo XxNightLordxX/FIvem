@@ -310,6 +310,7 @@ t.test('happy path: a player standing at the shop location gets a real ped spawn
 
     t.isNotNil(f.targetedEntities[ped.handle], 'the real ped handle must be targeted via ox_target:addLocalEntity')
     t.equals(f.targetedEntities[ped.handle][1].label, 'K9 Supply')
+    t.equals(f.targetedEntities[ped.handle][1].icon, 'fas fa-user-tie', 'ROLE ICON: a handler-bucket action (no CanShowK9UI() gate) must use the settled handler icon, not the old shopping-basket or a K9-role icon')
 
     t.equals(#f.scenarioCalls, 1)
     t.equals(f.scenarioCalls[1][2], 'WORLD_DOG_SITTING_SHEPHERD')

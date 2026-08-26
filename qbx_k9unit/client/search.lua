@@ -40,10 +40,33 @@
        phase2_notes/DEVELOPER_REFERENCE.md#contraband-search §3 and confirmed against
        server/search.lua's own header as of this pass: 'invalid_target',
        'feature_disabled', 'no_access', 'search_in_progress', 'on_cooldown',
-       'too_far', 'search_failed'. `search_failed` is shown to the player as
-       distinct from a clean result ("couldn't complete the search, try
-       again" — NEVER "nothing found") — collapsing the two is the exact
-       correctness bug that note's §3 step 10 and §6 flag explicitly.
+       'too_far', 'search_failed' (plus 'access_revoked' — see the DISCLOSED
+       FINDING note in tests/clientsearch_spec.lua for why that one is
+       genuinely reachable despite not appearing in this file's own
+       original scaffold-era header text). `search_failed` is shown to the
+       player as distinct from a clean result ("couldn't complete the
+       search, try again" — NEVER "nothing found") — collapsing the two is
+       the exact correctness bug that note's §3 step 10 and §6 flag
+       explicitly.
+
+       UX PASS (owner request: "make the 3rd eye easier to understand...
+       never show an option that will just refuse... name the real
+       reason, never a bare 'not permitted'"): every one of
+       'too_far'/'feature_disabled'/'invalid_target'/'no_access'/
+       'access_revoked' now gets its OWN plain-English notify naming that
+       specific reason, instead of collapsing all five into one generic
+       "Unable to search right now" message — see PerformSearch's
+       rejection branch below. A genuinely unrecognized/missing reason
+       still falls through to `search.generic_denied`; the catch-all is
+       preserved, only the actually-documented reasons were pulled out of
+       it. Separately, the "Search Vehicle" option's own canInteract now
+       ALSO hides the option while `searchInProgress` is true (previously
+       only onSelect checked it) — selecting it mid-search was already a
+       guaranteed silent no-op, so a visible-but-inert option was exactly
+       the "shows an option that will just refuse" complaint; this is a
+       pure display change, not a new security boundary (PerformSearch's
+       own defensive re-check and server/search.lua's real mutex are what
+       actually enforce this, unchanged).
 
     RESOLVED — bystander-alert broadcast event (was an OPEN GAP in this
     file's earlier scaffold pass; DEVELOPER_REFERENCE.md §11.4 item 2 does not name it,
@@ -204,11 +227,23 @@ local function PerformSearch(targetType, targetEntity)
             elseif reason == 'on_cooldown' or reason == 'search_in_progress' then -- luacheck: ignore 542
                 -- Low-key / no notification, per the contract note's Rejection UX note.
                 -- Deliberately empty branch (silent no-op UX), not a missed implementation.
+            elseif reason == 'too_far' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.too_far_denied'), type = 'error' })
+            elseif reason == 'feature_disabled' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.feature_disabled_denied'), type = 'error' })
+            elseif reason == 'invalid_target' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.invalid_target_denied'), type = 'error' })
+            elseif reason == 'no_access' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.no_access_denied'), type = 'error' })
+            elseif reason == 'access_revoked' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.access_revoked_denied'), type = 'error' })
             else
-                -- 'no_access', 'feature_disabled', 'too_far', 'invalid_target',
-                -- or an unrecognized/missing reason: a plain error notify is
-                -- fine, these are not expected to be routine traffic the way
-                -- cooldown is.
+                -- A genuinely unrecognized/missing reason (or a future server
+                -- value this file hasn't been taught yet): the one remaining
+                -- generic catch-all. Every REAL, currently-documented reason
+                -- above now names itself in plain English instead of
+                -- collapsing into this bucket — see this file's header
+                -- "UX PASS" note.
                 lib.notify({ title = locale('common.notify_title'), description = locale('search.generic_denied'), type = 'error' })
             end
 
@@ -293,11 +328,30 @@ local function RegisterSearchOxTargetOptions()
     K9Compat.Get('target').AddGlobalVehicle({
         {
             name = 'qbx_k9unit:searchVehicle',
-            icon = 'fas fa-magnifying-glass',
+            -- ROLE ICON, this pass: 'fas fa-dog' for every ox_target option
+            -- only ever shown while the local player's own ped IS the K9
+            -- (CanShowK9UI() below) — the same icon client/vehicle.lua's
+            -- enter/exit-vehicle options and client/kennel.lua's
+            -- pickup-kennel option already use, standardized on here rather
+            -- than the unrelated magnifying-glass this option used before,
+            -- so every K9-role option reads as one consistent visual family
+            -- regardless of which specific action it performs (coordinated
+            -- with the PLAYERS/PEDS-scope sibling pass, and with
+            -- client/vehicle.lua's/client/kennel.lua's own owning agents).
+            icon = 'fas fa-dog',
             label = locale('search.vehicle_target_label'),
             distance = Config.SearchZones.vehicleSearchDistance,
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.SearchZones then return false end
+                -- NEVER SHOW AN OPTION THAT WILL JUST REFUSE: while a search
+                -- (this one or the other option) is already awaiting the
+                -- server, selecting this again is a guaranteed silent no-op
+                -- (searchInProgress guard inside PerformSearch above) — hide
+                -- it for that window instead of leaving it visible but inert.
+                -- Display-only, same as every other check in this predicate:
+                -- PerformSearch's own defensive re-check and the server's
+                -- independent mutex are what actually enforce this.
+                if searchInProgress then return false end
                 return CanShowK9UI()
             end,
             onSelect = function(data)
@@ -322,12 +376,27 @@ local function RegisterSearchOxTargetOptions()
     K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:searchPerson',
-            icon = 'fas fa-magnifying-glass',
+            -- ROLE ICON, this pass: same 'fas fa-dog' as "Search Vehicle"
+            -- above and every other CanShowK9UI()-gated ox_target option
+            -- across this resource (settled resource-wide scheme: fa-dog =
+            -- K9-role, fa-user-tie = a separate human acting on/for a K9,
+            -- fa-handshake = partnership, fa-id-badge = high
+            -- command/credentialing) — this option is a PLAYER target, but
+            -- ownership of this whole file, including this option, is
+            -- explicitly settled as this file's own owner's, per the same
+            -- coordination pass that fixed the icon scheme.
+            icon = 'fas fa-dog',
             label = locale('search.person_target_label'),
             distance = Config.SearchZones.personSearchDistance,
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.SearchZones then return false end
                 if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't search self
+                -- Same "never show an option that will just refuse" fix as
+                -- "Search Vehicle" above: selecting this while ANY search
+                -- (either option) is already in flight is a guaranteed
+                -- silent no-op (searchInProgress inside PerformSearch), so
+                -- hide it for that window instead of leaving it clickable.
+                if searchInProgress then return false end
                 return CanShowK9UI()
             end,
             onSelect = function(data)

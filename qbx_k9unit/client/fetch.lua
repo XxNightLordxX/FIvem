@@ -542,10 +542,31 @@ local function RegisterFetchOxTargetOptions()
     }, {
         {
             name = 'qbx_k9unit:pickupFetchBall',
-            icon = 'fas fa-baseball',
+            -- ROLE ICON (this pass, "3rd eye" UX coordination -- resource-
+            -- wide settled scheme: fa-dog = K9-role/CanShowK9UI()-gated,
+            -- fa-user-tie = a separate human acting on/for a K9, fa-handshake
+            -- = partnership, fa-id-badge = high command/credentialing).
+            -- This option is OBJECT-scope (AddModel on the ball prop) and
+            -- only ever shown while the local player's own ped IS the K9
+            -- (CanShowK9UI() below), so it gets the same fa-dog every other
+            -- K9-role ox_target option in this resource now uses -- not the
+            -- old fa-baseball, which named the OBJECT rather than the ACTOR
+            -- and was the only ox_target icon in this resource keyed off the
+            -- target's model instead of who can act on it. "Deliver to
+            -- Handler" immediately below is a PLAYERS-scope option owned by
+            -- a different agent's pass -- left untouched here.
+            icon = 'fas fa-dog',
             label = locale('fetch.pickup_target_label'),
             distance = Config.FetchMechanic.pickupInteractDistanceMeters,
             canInteract = function(entity, distance, coords, name)
+                -- NEVER SHOW AN OPTION THAT WILL JUST REFUSE: server/fetch.lua's
+                -- requestPickupFetchBall rejects outright if the requester
+                -- is already carrying (or about to carry) a fetch item
+                -- (fetch.already_carrying) -- ActiveFetchCarry mirrors that
+                -- exact condition client-side, so hide the option instead of
+                -- letting the player fire a guaranteed-rejected request.
+                -- Display-only, same as everywhere else in this resource:
+                -- the server independently re-verifies this regardless.
                 if ActiveFetchCarry then return false end
                 return CanShowK9UI()
             end,
@@ -567,10 +588,22 @@ local function RegisterFetchOxTargetOptions()
     -- canInteract predicate already documents in full). Routed through
     -- K9Compat.Get('target') (shared/compat/target.lua), never a direct
     -- `exports.ox_target` call.
+    -- THIRD-EYE CLARITY PASS (this pass, owner-directed, ped-side option
+    -- only -- "Pick Up Ball" above is object/model-based and stays with
+    -- the sibling agent covering that half of this same pass): icon
+    -- changed from fas fa-hand-holding to fas fa-dog, this resource's own
+    -- K9-role icon, since the ACTOR here is always the K9 carrying the
+    -- ball (ActiveFetchCarry can only be set after this same client's own
+    -- "Pick Up Ball" selection, itself gated on CanShowK9UI() above) —
+    -- never the human on the receiving end. Label reworded to plain
+    -- English. canInteract/onSelect are UNCHANGED (a real test in
+    -- tests/clientfetch_spec.lua pins this predicate's exact "no further
+    -- gate beyond ActiveFetchCarry + not-self" shape, and that is out of
+    -- this pass's file ownership to revisit anyway).
     K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:deliverFetchBall',
-            icon = 'fas fa-hand-holding',
+            icon = 'fas fa-dog',
             label = locale('fetch.deliver_target_label'),
             distance = DELIVER_TARGET_DISTANCE_FACTOR * Config.FetchMechanic.deliverProximityMeters,
             canInteract = function(entity, distance, coords, name)

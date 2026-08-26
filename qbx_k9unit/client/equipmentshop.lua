@@ -438,11 +438,33 @@ local function SpawnShopPed(key, loc)
     -- A `nil` handle (no usable target adapter detected) is recorded as-is;
     -- DespawnShopPed's own `if handle then` guard already treats that as
     -- "nothing to remove", so no ped is targetable but nothing errors.
+    -- ROLE ICON (this pass, "3rd eye" UX coordination -- resource-wide
+    -- settled scheme: fa-dog = K9-role/CanShowK9UI()-gated, fa-user-tie = a
+    -- separate human acting on/for a K9, fa-handshake = partnership,
+    -- fa-id-badge = high command/credentialing). This option carries NO
+    -- CanShowK9UI() gate at all -- any eligible department member can walk
+    -- up and buy gear, K9 or not -- so it is a HANDLER-bucket action
+    -- (fa-user-tie), not a K9-role one, even though it previously used a
+    -- shopping-basket icon that named the ACTION rather than who performs
+    -- it. `groups` below (ox_target's own department/grade filter) already
+    -- keeps this option from ever appearing to someone outside the
+    -- configured department at all -- see this file's header on why that
+    -- is a real, engine-level filter, not merely a canInteract convenience.
+    -- KNOWN, DISCLOSED GAP left for this pass: a per-citizenid
+    -- `block.K9EquipmentShop` grant (server/equipmentshop.lua's
+    -- IsEquipmentShopPermittedForCitizenId, surfaced to the player only via
+    -- equipmentshop.blocked_from_shop AFTER they already select this
+    -- option and the shop UI refuses to open) is invisible to this file --
+    -- there is no existing round trip this client can cheaply read to hide
+    -- the option in advance for a specifically-blocked player, and adding
+    -- one is a server-side surface change outside this file's ownership.
+    -- Flagged to main/coder-backend rather than silently left; every OTHER
+    -- refusal this pass could reach client-side is fixed.
     local handle = K9Compat.Get('target').AddLocalEntity(ped, {
         {
             name = 'qbx_k9unit:equipmentShop:' .. key,
             label = label,
-            icon = 'fas fa-shopping-basket',
+            icon = 'fas fa-user-tie',
             groups = ShopGroups,
             onSelect = function()
                 K9Compat.Get('inventory').OpenShop(ShopType)

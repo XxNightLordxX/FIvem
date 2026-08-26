@@ -43,7 +43,15 @@ local function ExtractDefaultStringsKeys()
 
     local keys = {}
     for line in body:gmatch('[^\n]+') do
-        local key = line:match("^%s+([%a_][%w_]*):%s*'")
+        -- Accept BOTH quote styles. This pattern was single-quote-only
+        -- until 2026-08-26, and two real strings (home_no_certification_title,
+        -- shop_item_label_placeholder) had been written with double quotes
+        -- and were therefore invisible to every assertion in this file --
+        -- both were genuinely missing from locales/en.json the whole time
+        -- and this spec, whose entire job is to catch exactly that, could
+        -- not see them. An extractor that silently skips valid input is
+        -- worse than no extractor, because it reports green.
+        local key = line:match("^%s+([%a_][%w_]*):%s*['\"]")
         if key then keys[#keys + 1] = key end
     end
     return keys, #keys

@@ -31,11 +31,15 @@
        label, and none of them silently show nothing -- section C
        enumerates the FULL real reason set found by reading
        server/search.lua directly (not just this file's own header
-       comment, which is stale by one value -- see that section's own
-       DISCLOSED FINDING sub-test), including the two "no reason at all"
-       degenerate cases (a nil round-trip result, and a lib.callback.await
-       that throws outright, modeling ox_lib's real timeout/rejection
-       behavior).
+       comment, which used to be stale by one value, 'access_revoked' --
+       since fixed, this file's header now documents it too), including
+       the two "no reason at all" degenerate cases (a nil round-trip
+       result, and a lib.callback.await that throws outright, modeling
+       ox_lib's real timeout/rejection behavior). UX PASS (this spec
+       revision): five of those reasons now each get their OWN,
+       distinct locale key (NAMED_DENIED_REASONS below) instead of
+       collapsing into one generic message -- only a truly unrecognized
+       reason still falls through to the generic catch-all.
     3. netId capture BEFORE the sniff animation, so a target whose entity
        handle gets reassigned mid-animation cannot be misattributed --
        section D, proven by mutating the entity->netId mapping FROM INSIDE
@@ -354,6 +358,34 @@ t.test('canInteract: both options respect Config.Features.SearchZones, and Searc
     t.isTrue(fOn.personOption().canInteract(501, 1.0, {}, 'x'))
 end)
 
+t.test('ROLE ICON: both options use the settled K9-role icon (fa-dog), never the old bare magnifying-glass', function()
+    local f = newSearchFixture()
+    t.equals(f.vehicleOption().icon, 'fas fa-dog')
+    t.equals(f.personOption().icon, 'fas fa-dog')
+end)
+
+t.test('canInteract: NEVER SHOW AN OPTION THAT WILL JUST REFUSE -- both options hide themselves while a search is already in flight, and un-hide the moment it completes', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    local sawVehicleDuringFlight, sawPersonDuringFlight
+    f.setProgressBarReentrant(function()
+        sawVehicleDuringFlight = f.vehicleOption().canInteract(500, 1.0, {}, 'x')
+        sawPersonDuringFlight = f.personOption().canInteract(500, 1.0, {}, 'x')
+    end)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.isFalse(sawVehicleDuringFlight, 'Search Vehicle must be hidden while a search is in flight, not merely inert once selected')
+    t.isFalse(sawPersonDuringFlight, 'the OTHER option (Search Person) must also be hidden while Search Vehicle is in flight')
+
+    -- Once the in-flight search has completed, both options must be
+    -- interactable again -- this is a display gate only, never a stuck flag.
+    t.isTrue(f.vehicleOption().canInteract(500, 1.0, {}, 'x'))
+    t.isTrue(f.personOption().canInteract(500, 1.0, {}, 'x'))
+end)
+
 -- ----------------------------------------------------------------------
 -- SECTION A -- the defensive re-check + "nothing to search" guard, before
 -- the in-flight/netId-capture sections that build on top of a successful
@@ -458,17 +490,31 @@ end)
 -- OF THEM SILENTLY SHOW NOTHING. Full reason set below was found by
 -- reading server/search.lua's searchTarget callback directly (grep
 -- `reason = ` across that file), not copied from client/search.lua's own
--- header comment -- see the DISCLOSED FINDING sub-test at the end of this
--- section for the one place those two lists actually disagree.
+-- header comment. UX PASS: five of these reasons ('invalid_target',
+-- 'feature_disabled', 'no_access', 'too_far', 'access_revoked') each get
+-- their own distinct locale key now (NAMED_DENIED_REASONS below), never
+-- collapsed into one generic message -- see the dedicated catch-all test
+-- further down for the one case that still legitimately falls through to
+-- search.generic_denied (a truly unrecognized/future reason).
 -- ----------------------------------------------------------------------
 
 --- Every reason string server/search.lua's searchTarget callback can
 --- return, confirmed by reading that file directly this pass.
 local SILENT_REASONS = { 'on_cooldown', 'search_in_progress' }
-local GENERIC_DENIED_REASONS = {
-    'invalid_target', 'feature_disabled', 'no_access', 'too_far',
-    'access_revoked', -- see the DISCLOSED FINDING sub-test below
-    'a_totally_unrecognized_future_reason', -- proves the catch-all, not a real server value
+
+--- UX PASS (this pass): every one of these now gets its OWN, distinct
+--- plain-English locale key naming that specific reason -- collapsing all
+--- five into one generic "Unable to search right now" message (the
+--- previous behavior) is exactly the "never a bare 'not permitted'"
+--- complaint this pass fixes. Only a genuinely unrecognized/missing reason
+--- (see the dedicated catch-all test below) still falls through to
+--- search.generic_denied.
+local NAMED_DENIED_REASONS = {
+    invalid_target = 'search.invalid_target_denied',
+    feature_disabled = 'search.feature_disabled_denied',
+    no_access = 'search.no_access_denied',
+    too_far = 'search.too_far_denied',
+    access_revoked = 'search.access_revoked_denied', -- see the DISCLOSED FINDING sub-test below
 }
 
 for _, reason in ipairs(SILENT_REASONS) do
@@ -488,18 +534,30 @@ for _, reason in ipairs(SILENT_REASONS) do
     end)
 end
 
-for _, reason in ipairs(GENERIC_DENIED_REASONS) do
-    t.test(('reason %q: falls through to the generic error notify (search.generic_denied) -- never silent, never confused with a clean result'):format(reason), function()
+for reason, localeKey in pairs(NAMED_DENIED_REASONS) do
+    t.test(('reason %q: names the real reason (%s) -- never silent, never the generic catch-all, never confused with a clean result'):format(reason, localeKey), function()
         local f = newSearchFixture()
         f.setEntityExists(500, true)
         f.setNetIdForEntity(500, 111)
         f.queueCallbackResponse({ ok = false, reason = reason })
         f.vehicleOption().onSelect({ entity = 500 })
         t.equals(#f.notifyCalls, 1, ('reason %q must produce exactly one notification, never silence'):format(reason))
-        t.equals(f.notifyCalls[1].description, locale('search.generic_denied'))
+        t.equals(f.notifyCalls[1].description, locale(localeKey))
+        t.isFalse(f.notifyCalls[1].description == locale('search.generic_denied'), ('reason %q must NOT collapse into the generic catch-all'):format(reason))
         t.equals(f.notifyCalls[1].type, 'error')
     end)
 end
+
+t.test('a genuinely unrecognized/future reason string still falls through to the generic catch-all (search.generic_denied) -- proves the catch-all still works, not just the five named reasons above', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.queueCallbackResponse({ ok = false, reason = 'a_totally_unrecognized_future_reason' })
+    f.vehicleOption().onSelect({ entity = 500 })
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('search.generic_denied'))
+    t.equals(f.notifyCalls[1].type, 'error')
+end)
 
 t.test('reason "search_failed": a DISTINCT message from generic_denied AND from a clean "nothing found" result -- never collapsed into either', function()
     local f = newSearchFixture()
@@ -548,21 +606,12 @@ t.test('lib.callback.await THROWING outright (ox_lib\'s real timeout/rejection b
     t.equals(f.notifyCalls[1].description, locale('search.failed'))
 end)
 
-t.test('DISCLOSED FINDING: server/search.lua can also return reason == "access_revoked" (a decertified-mid-search re-check), which is NOT in this file\'s own header comment\'s documented reason list -- but the client\'s catch-all already handles it correctly regardless, so this is a documentation drift, not a functional bug', function()
-    -- server/search.lua's own header comment for this exact value states
-    -- plainly: "client/search.lua's reason-handling `else` branch already
-    -- treats any unrecognized reason as a plain error notify, so no
-    -- client-side change is required for this new value." This test
-    -- confirms that claim holds against the REAL client file, not just
-    -- server/search.lua's own comment about it.
-    local f = newSearchFixture()
-    f.setEntityExists(500, true)
-    f.setNetIdForEntity(500, 111)
-    f.queueCallbackResponse({ ok = false, reason = 'access_revoked' })
-    f.vehicleOption().onSelect({ entity = 500 })
-    t.equals(#f.notifyCalls, 1, 'must not be silent')
-    t.equals(f.notifyCalls[1].description, locale('search.generic_denied'))
-end)
+-- 'access_revoked' (a decertified-mid-search re-check) is now covered by
+-- the NAMED_DENIED_REASONS loop test above, which asserts it gets its own
+-- search.access_revoked_denied message -- SUPERSEDES an earlier "DISCLOSED
+-- FINDING" test here that accepted the old collapsed-into-generic_denied
+-- behavior as merely a documentation drift rather than fixing it. Removed
+-- rather than left alongside a contradictory assertion.
 
 -- ----------------------------------------------------------------------
 -- SECTION D -- netId CAPTURE BEFORE THE SNIFF ANIMATION. Proven by
