@@ -166,6 +166,35 @@
       off, since ForceBreakPartnershipForCitizenId is itself already a
       cheap, safe no-op when `citizenid` has no active partnership row to
       tear down.
+    - THIS FILE calls `ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid, modelName?)`
+      and `MaybeRevertK9Appearance(citizenid)` (both server/appearance.lua,
+      coder-architect's K9 role/model decoupling pass), both guarded by the
+      same `type(...) == 'function'` runtime existence check as every other
+      cross-file call in this section. SECURITY FIX, this pass (coder-security
+      "prove role and model are genuinely separate, everywhere" audit):
+      server/appearance.lua's own header already documented these as being
+      called from THIS file — ApplyK9AppearanceOnGrant from
+      GrantCertification/GrantCertificationOffline's success paths, and
+      MaybeRevertK9Appearance from all FIVE of EndK9AccessForCitizenId's own
+      call sites above — but neither call actually existed anywhere in this
+      file until now. server/permissions.lua's GrantPermission/RevokePermission
+      already had the identical pair wired correctly for the 'k9.access'
+      grant path, so the documented "certifying someone (or granting
+      k9.access) actually turns their character into the ped" promise
+      (Config.K9Appearance.applyPedModelOnCertify, README.md "How a K9 gets
+      made") only ever worked through ONE of the resource's two documented
+      "how a K9 gets made" doors — a plain `/k9certify` grant (or the
+      "Certify K9 Handler" ox_target option) never applied the model at all,
+      and revoking a certification that was a citizenid's ONLY route to the
+      role never reverted it either, permanently stranding the K9 ped model
+      on that citizenid with no other code path left to ever clear it. Fixed
+      by adding the call at each of the two grant success paths and each of
+      the five EndK9AccessForCitizenId call sites — see each call site's own
+      doc comment for why it is safe (MaybeRevertK9Appearance's own
+      IsCertifiedK9ForAnyJob/HasPermission reconciliation already no-ops
+      correctly whenever a separate credential still justifies keeping the
+      appearance, so calling it from every loss site, even ones that don't
+      end up reverting anything, is inert rather than double-reverting).
     - THIS FILE owns `Certifications` (citizenid -> { active: boolean,
       job: string }) as a local table. STRUCTURAL NOTE: DEVELOPER_REFERENCE.md §4.3's
       prose describes this cache as a bare `Certifications[citizenid] =
@@ -1695,6 +1724,33 @@ local function GrantCertification(granterSrc, targetServerId)
         -- this field to HasK9Access or any other gate.
         targetPlayer.Functions.SetMetaData('k9certified', true)
 
+        -- SECURITY/CONSISTENCY FIX (coder-security, this pass -- "prove
+        -- role and model are genuinely separate, everywhere" audit):
+        -- server/appearance.lua's own header documents ApplyK9AppearanceOnGrant
+        -- as being called from BOTH server/permissions.lua's GrantPermission
+        -- (for a 'k9.access' grant) AND this function -- README.md's own
+        -- "How a K9 gets made" section promises the SAME automatic model
+        -- swap for either path, on the shipped default
+        -- (Config.K9Appearance.applyPedModelOnCertify = true). This call
+        -- was entirely MISSING from this file: a plain /k9certify grant (or
+        -- the "Certify K9 Handler" ox_target option) never turned the
+        -- target into the configured ped, silently breaking that documented
+        -- promise for what is very likely the MORE commonly used of the two
+        -- "how a K9 gets made" paths -- the permission-grant path
+        -- (server/permissions.lua) already had this wired correctly, so the
+        -- role/model coupling only ever worked for ONE of the two doors.
+        -- Mirrors server/permissions.lua's own identical guard/call shape
+        -- exactly -- see that file's own GrantPermission for the precedent.
+        -- `modelName` is omitted (nil): neither this function nor
+        -- server/permissions.lua's GrantPermission carries an explicit
+        -- model choice of its own, so ApplyK9AppearanceOnGrant's own
+        -- documented default (Config.Peds[1].model) applies, exactly as it
+        -- already does for a plain 'k9.access' grant.
+        if Config.K9Appearance and Config.K9Appearance.applyPedModelOnCertify
+            and type(ApplyK9AppearanceOnGrant) == 'function' then
+            ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid)
+        end
+
         NotifyPlayer(granterSrc, locale('certifications.grant_success_granter'), 'success')
         NotifyPlayer(targetServerId, locale('certifications.grant_success_target'), 'success')
         outcome = 'ok'
@@ -1826,6 +1882,20 @@ local function GrantCertificationOffline(granterSrc, citizenid, jobName)
         if nowOnlinePlayer and nowOnlinePlayer.PlayerData and nowOnlinePlayer.PlayerData.source then
             nowOnlinePlayer.Functions.SetMetaData('k9certified', true)
             NotifyPlayer(nowOnlinePlayer.PlayerData.source, locale('certifications.grant_success_target'), 'success')
+        end
+
+        -- SECURITY/CONSISTENCY FIX (coder-security, this pass) -- same gap,
+        -- same fix, as GrantCertification's own identical call above (see
+        -- that call site's own doc comment for the full writeup): an
+        -- offline /k9certifyoffline grant must apply the automatic model
+        -- swap exactly like the online path does, including for a target
+        -- who is still offline right now (ApplyK9AppearanceOnGrant/
+        -- SendSwapRequest already handle that case -- persisting the
+        -- assignment and applying it for real the first time PlayerLoaded
+        -- fires for them, per server/appearance.lua's own header).
+        if Config.K9Appearance and Config.K9Appearance.applyPedModelOnCertify
+            and type(ApplyK9AppearanceOnGrant) == 'function' then
+            ApplyK9AppearanceOnGrant(citizenid, granterCitizenid)
         end
 
         NotifyPlayer(granterSrc, locale('certifications.grant_success_granter'), 'success')
@@ -2112,6 +2182,36 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
     -- revoke back into a reported failure.
     RevokeAllSpecializationsForCitizenJob(targetCitizenid, targetJobName, granterCitizenid, 'certification_revoked')
 
+    -- SECURITY/CONSISTENCY FIX (coder-security, this pass -- "prove role
+    -- and model are genuinely separate, everywhere" audit): this file's
+    -- own K9 credential (a certification) is one of TWO routes
+    -- server/appearance.lua's MaybeRevertK9Appearance reconciles against
+    -- before reverting an applied K9 ped (the other being a
+    -- server/permissions.lua 'k9.access' grant) -- but until this pass
+    -- NOTHING in this file ever called it, on ANY of its five
+    -- "K9-role access just, provably, ended" sites (see
+    -- EndK9AccessForCitizenId's own doc comment for the enumerated five).
+    -- A citizenid certified through the applyPedModelOnCertify default (see
+    -- this file's own newly-added ApplyK9AppearanceOnGrant call in
+    -- GrantCertification above) who then had ONLY that certification --
+    -- never a separate 'k9.access' grant -- revoked would keep the K9 ped
+    -- model forever, stranded exactly the way this pass's brief warns
+    -- against, with no code path left to ever revert it. Called
+    -- UNCONDITIONALLY of targetIsOnline (mirrors
+    -- RevokeAllSpecializationsForCitizenJob immediately above) --
+    -- MaybeRevertK9Appearance is itself offline-capable (it either sends a
+    -- live swap request or persists the reverted row for the target's next
+    -- PlayerLoaded, per server/appearance.lua's own header) and already
+    -- fails safe (no-op) when the citizenid still independently qualifies
+    -- via a separate active cert/permission or holds no appearance
+    -- assignment at all. Guarded by `type(...) == 'function'` -- genuine
+    -- soft dependency, not a load-order assumption (server/appearance.lua
+    -- loads before this file per its own header, but this file must not
+    -- hard-require it to exist).
+    if type(MaybeRevertK9Appearance) == 'function' then
+        MaybeRevertK9Appearance(targetCitizenid)
+    end
+
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
 
@@ -2295,6 +2395,17 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     -- RevokeAllSpecializationsForCitizenJob's own doc comment for why it
     -- deliberately does not rely on the in-memory cache here).
     RevokeAllSpecializationsForCitizenJob(citizenid, job, granterCitizenid, 'certification_revoked')
+
+    -- SECURITY/CONSISTENCY FIX (coder-security, this pass) -- same gap,
+    -- same fix, as RevokeCertification's own identical call above (see
+    -- that call site's own doc comment for the full writeup): an offline
+    -- /k9decertifyoffline revoke must also reconcile/revert an applied K9
+    -- appearance, or a citizenid decertified entirely while offline (their
+    -- only route to the role) keeps the K9 ped model forever with no other
+    -- path left to ever clear it.
+    if type(MaybeRevertK9Appearance) == 'function' then
+        MaybeRevertK9Appearance(citizenid)
+    end
 
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
@@ -3543,6 +3654,26 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
         -- for this branch's place in the "five known call sites, one
         -- fixed this pass" history.
         EndK9AccessForCitizenId(citizenid, 'department_changed', source)
+
+        -- SECURITY/CONSISTENCY FIX (coder-security, this pass -- see this
+        -- file's own newly-added MaybeRevertK9Appearance call in
+        -- RevokeCertification above for the full "why this file never
+        -- called it at all" writeup). Same reasoning as the comment
+        -- immediately above this call applies here too: a K9-role party
+        -- whose ONLY route was autoAccessGrade or a 'k9.access' permission
+        -- grant (no certification row at all) has their K9 ped model
+        -- stranded forever on leaving the department, with no OTHER branch
+        -- in this handler ever reaching them, unless this call is here.
+        -- Safe to call even when this citizenid DOES still hold an active
+        -- certification row for their old job (the common case the
+        -- job-name-change branch further below will separately revoke and
+        -- revert) -- MaybeRevertK9Appearance's own IsCertifiedK9ForAnyJob
+        -- reconciliation sees that still-active row and correctly no-ops
+        -- here, deferring the actual revert to that later branch's own call
+        -- once the row is genuinely revoked.
+        if type(MaybeRevertK9Appearance) == 'function' then
+            MaybeRevertK9Appearance(citizenid)
+        end
     end
 
     local cached = Certifications[citizenid]
@@ -3607,6 +3738,22 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
             -- over from before this demotion. `source` is already live
             -- here, passed as `knownSrc`.
             EndK9AccessForCitizenId(citizenid, 'k9_access_lost', source)
+
+            -- SECURITY/CONSISTENCY FIX (coder-security, this pass -- see
+            -- RevokeCertification's own newly-added call for the full
+            -- writeup). This branch is scoped to `not cached.active` (no
+            -- active cert for THIS job), so a citizenid reaching here whose
+            -- K9 ped model was ever applied got it ONLY through
+            -- autoAccessGrade or a 'k9.access' grant -- exactly the
+            -- credential that was just confirmed lost above
+            -- (stillHasNonCertAccess == false). MaybeRevertK9Appearance's
+            -- own IsCertifiedK9ForAnyJob reconciliation still correctly
+            -- no-ops if a SEPARATE active certification for a different
+            -- department independently justifies keeping the appearance
+            -- (cross-department certs are allowed -- DEVELOPER_REFERENCE.md §4.2.3).
+            if type(MaybeRevertK9Appearance) == 'function' then
+                MaybeRevertK9Appearance(citizenid)
+            end
         end
     end
 
@@ -3711,6 +3858,18 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- CERTIFICATION DEPTH (this pass, Part B §11): same cascade as both
     -- manual revoke paths above.
     RevokeAllSpecializationsForCitizenJob(citizenid, oldJob, 'system:job_change', 'certification_revoked')
+
+    -- SECURITY/CONSISTENCY FIX (coder-security, this pass -- see
+    -- RevokeCertification's own newly-added call above for the full
+    -- writeup): a promotion/department-change that auto-revokes the OLD
+    -- job's certification must also reconcile/revert an applied K9
+    -- appearance -- otherwise a citizenid whose only route to the role was
+    -- this now-revoked certification keeps the K9 ped model forever, with
+    -- no other branch in this handler ever reaching them again for this
+    -- specific loss.
+    if type(MaybeRevertK9Appearance) == 'function' then
+        MaybeRevertK9Appearance(citizenid)
+    end
 end)
 
 lib.callback.register('qbx_k9unit:server:hasK9Access', function(source)

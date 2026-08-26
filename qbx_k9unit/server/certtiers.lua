@@ -1459,8 +1459,48 @@ end)
 -- load-time), mirroring server/runtimecontrol.lua's own identical
 -- "config-only defaults at file-load, DB layered on top at
 -- onResourceStart" pattern exactly.
+--
+-- SECURITY FIX (coder-security, authority-layer sweep, this pass) --
+-- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST, the identical
+-- boot-order fix server/permissionkeycatalog.lua and server/xptiers.lua
+-- already carry for their own sibling catalogs (see either file's own
+-- header "WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST" /
+-- "boot-order fix" section for the full writeup -- not repeated here).
+-- This file's own two tables, k9_certification_tiers and
+-- k9_certification_tier_capabilities, are BOTH listed in
+-- server/datastore.lua's own EXPECTED_TABLE_COLUMNS (the schema-collision
+-- probe's checked set) -- this file was simply missed when that fix
+-- landed for its two siblings. server/datastore.lua loads before this
+-- file and registers its own onResourceStart handler first, but that
+-- handler's own MySQL.query.await yields, and FXServer's event dispatch
+-- does not wait for a yielding handler before moving on to THIS one while
+-- the probe is still in flight. Without this wait, K9Store.Tier_GetAllRows()
+-- below would run its own narrower SELECT (`tier_key, label, ordinal,
+-- deleted` -- 4 of the 7 columns the probe checks, omitting created_at/
+-- updated_by/updated_at) against whatever `k9_certification_tiers`
+-- currently is, before the probe has had a chance to say whether that
+-- table is even really ours -- a foreign table the full probe would
+-- correctly reject could still satisfy this narrower one during that
+-- window, merging a stranger's rows straight into the LIVE tier catalog,
+-- including its `capabilities` set (this pass's own TierCapabilityPermits
+-- gates real mechanics -- specializations_eligible/bite_hold_and_takedown
+-- -- so a collision here is not merely a display glitch). On a `false`
+-- return (the probe genuinely had not settled within the wait budget --
+-- database unreachable/slow, or off by config, which settles instantly
+-- instead of waiting at all), this file boots to config-only defaults for
+-- this session, exactly like `Config.Database.enabled == false` --
+-- TierByKey/TierOrder already hold those defaults from this file's own
+-- synchronous file-load-time population above, so simply skipping the
+-- refresh here is sufficient, not a separate fallback path to maintain.
+-- The next successful certTiersUpsert/Reorder/Delete call (or a resource
+-- restart, by which point the probe will certainly have settled) re-reads
+-- the real state as normal.
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] certtiers: the schema-collision check had not finished within its wait budget -- booting this session\'s certification-tier catalog with config.lua defaults ONLY (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next successful tier edit (or a restart once the check has had time to finish) will pick up any real persisted state.')
+        return
+    end
     RefreshCertificationTierCatalog()
 end)
