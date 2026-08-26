@@ -201,6 +201,39 @@
     rule, which this fix does not touch.
     ======================================================================
 
+    RESOURCE-STOP HYGIENE -- FIXED THIS PASS (found by a client-side sweep;
+    not present when this file was first written). client/pursuitsprint.lua
+    already resets its own state on `onResourceStop`; this file used to have
+    NO `onResourceStop` handler at all, so a client-side stop (this
+    resource's own copy being independently restarted, or the FXServer
+    client runtime unilaterally stopping just THIS client's copy after
+    repeated script errors -- a real, server-independent event) never told
+    server/scenttrail.lua to release ActiveHunts[source].
+
+    WORSE THAN A BOUNDED "SELF-HEALS IN MINUTES" GAP: server/scenttrail.lua's
+    own header states its expiry check is LAZY, run only "inside
+    pollScentHunt" -- there is no separate, always-running sweep thread
+    server-side (contrast server/sarcalls.lua's own unconditional periodic
+    tick loop, which keeps re-checking every active call on its own
+    schedule regardless of the client). A source that starts a hunt and
+    then never polls again -- exactly what a dead/restarted client script
+    produces, since its own poll thread dies with the rest of this
+    resource's Lua state and sends nothing further -- leaves
+    ActiveHunts[source] with NOTHING left to trigger its own lazy expiry
+    check. That record then blocks a fresh '/k9nosehunt' with
+    reason = 'already_active' until the ONLY other thing that clears it:
+    this player's next genuine disconnect (playerDropped), not
+    Config.ScentTrailHunt.maxHuntDurationMs's own timer, which never gets a
+    chance to run for a source nobody polls for anymore.
+
+    THE FIX: an unconditional `onResourceStop` handler below calls
+    StopScentHunt() itself -- the exact same unconditional abandon path
+    '/k9nosehunt stop' already uses, so this is not a new code path, just a
+    new caller of an existing, already-safe-to-call-anytime one. NEVER
+    gated on CanShowK9UI()/access of any kind, per this file's own standing
+    "no unbounded trap" rule (see StopScentHunt()'s own doc comment).
+    ======================================================================
+
     FILE-TO-FILE CONTRACT: this file exposes NO resource-global functions
     at all (a deliberate choice -- see the .luacheckrc note above). Its only
     external surface is the '/k9nosehunt' [stop] chat command. It calls
@@ -490,3 +523,14 @@ RegisterCommand('k9nosehunt', function(_, args)
 
     StartScentHunt()
 end, false)
+
+-- Resource-stop hygiene -- see this file's header "RESOURCE-STOP HYGIENE"
+-- for the full writeup. Mirrors client/pursuitsprint.lua's own
+-- onResourceStop handler in shape. NEVER gated on CanShowK9UI()/access of
+-- any kind -- StopScentHunt() itself is the same unconditional abandon
+-- path '/k9nosehunt stop' already uses, and is always safe to call
+-- (including when nothing is active).
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    StopScentHunt()
+end)

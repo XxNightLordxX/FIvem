@@ -616,6 +616,24 @@ local function newClientFixture(opts)
         commandHandlers[name] = handler
     end
 
+    -- Resource-stop capture. client/scenttrail.lua registers an
+    -- onResourceStop handler (added when this pass closed the "a hunt
+    -- session survives a resource stop" gap); this SECTION 2 fixture
+    -- predates that and stubbed no AddEventHandler, so loading the real
+    -- file errored on a nil global. Same shape as
+    -- tests/clientscenttrail_spec.lua's own AddEventHandler pair -- kept
+    -- deliberately identical so the two fixtures for the same production
+    -- file cannot drift apart again.
+    -- Named distinctly from SECTION 1's own `eventHandlers`/`AddEventHandler`
+    -- pair (line ~90, server/scenttrail.lua's fixture) purely to avoid
+    -- shadowing it -- exactly the same reason, and the same convention, as
+    -- `registerClientNetEvent` above. The two captures are unrelated.
+    local clientEventHandlers = {}
+    local function registerClientEventHandler(eventName, handler)
+        clientEventHandlers[eventName] = clientEventHandlers[eventName] or {}
+        clientEventHandlers[eventName][#clientEventHandlers[eventName] + 1] = handler
+    end
+
     local overrides = {
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
@@ -627,6 +645,8 @@ local function newClientFixture(opts)
         TriggerServerEvent = TriggerServerEvent,
         RegisterNetEvent = registerClientNetEvent,
         RegisterCommand = RegisterCommand,
+        AddEventHandler = registerClientEventHandler,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
         source = 65535, -- ambient `source` seen by a REAL server->client push in production; this fixture's own emitSource override below can shadow it per-call to model a forged self-trigger

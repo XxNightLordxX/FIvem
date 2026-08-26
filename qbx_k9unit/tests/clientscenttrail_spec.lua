@@ -36,6 +36,15 @@
       4. FAIL-CLOSED lib.callback.await handling -- both awaited calls in
          this file are pcall-wrapped (a throwing await must degrade to "no
          usable result", never crash the caller) -- section D.
+      5. RESOURCE-STOP HYGIENE, FIXED THIS PASS (this file's own header
+         section of the same name) -- section H below pins the fix: an
+         onResourceStop handler now reaches the server with
+         'qbx_k9unit:server:stopScentHunt' via StopScentHunt() itself,
+         closing the gap this spec used to document (in its own "WHAT THIS
+         FILE DOES NOT COVER" note) as merely low-severity/self-healing --
+         see that section's own corrected text below for why it was worse
+         than first described for THIS file specifically (no periodic
+         server-side sweep, unlike server/sarcalls.lua's own).
 
     STUBBING EFFORT: proportionate. Every native/cross-file global this
     file's exercised paths touch is a small, cheap recording/controllable
@@ -168,6 +177,16 @@ local function newScentTrailFixture(opts)
     local commandHandlers = {}
     local function RegisterCommand(name, handler, _restricted) commandHandlers[name] = handler end
 
+    -- Resource-stop capture -- see this file's header "RESOURCE-STOP
+    -- HYGIENE, FIXED THIS PASS" and section H below. Same shape as
+    -- tests/clientsarcalls_spec.lua's own AddEventHandler/fireResourceStop
+    -- pair.
+    local eventHandlers = {}
+    local function AddEventHandler(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
     local overrides = {
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
@@ -179,6 +198,8 @@ local function newScentTrailFixture(opts)
         TriggerServerEvent = TriggerServerEvent,
         RegisterNetEvent = RegisterNetEvent,
         RegisterCommand = RegisterCommand,
+        AddEventHandler = AddEventHandler,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
         source = 65535,
@@ -235,6 +256,10 @@ local function newScentTrailFixture(opts)
             env.source = forged and 999 or 65535
             netEventHandlers['qbx_k9unit:client:scentHuntFound'](huntId)
         end,
+        onResourceStopHandlerCount = function() return #(eventHandlers['onResourceStop'] or {}) end,
+        fireResourceStop = function(resourceName)
+            for _, h in ipairs(eventHandlers['onResourceStop'] or {}) do h(resourceName or 'qbx_k9unit') end
+        end,
     }
 end
 
@@ -242,10 +267,11 @@ end
 -- SECTION A -- feature flag off: GENUINELY inert, not merely early-return.
 -- ----------------------------------------------------------------------
 
-t.test('Config.Features.ScentTrailHunt = false: registers NO command, NO net event, and creates NO thread', function()
+t.test('Config.Features.ScentTrailHunt = false: registers NO command, NO net event, NO onResourceStop handler, and creates NO thread', function()
     local f = newScentTrailFixture({ scentTrailHunt = false })
     t.equals(f.commandCount(), 0, 'no RegisterCommand call at all when the feature is off')
     t.equals(f.netEventCount(), 0, 'no RegisterNetEvent call at all when the feature is off')
+    t.equals(f.onResourceStopHandlerCount(), 0, 'no AddEventHandler(onResourceStop, ...) call at all when the feature is off')
     t.equals(f.threadCount(), 0, 'no CreateThread call at all when the feature is off')
 end)
 
@@ -537,6 +563,59 @@ t.test('scentHuntFound: a forged (non-65535 source) push is rejected outright, e
 end)
 
 -- ----------------------------------------------------------------------
+-- SECTION H -- RESOURCE-STOP HYGIENE, FIXED THIS PASS. See this file's own
+-- header section of the same name for the full write-up this section pins.
+-- ----------------------------------------------------------------------
+
+t.test('FIXED: Config.Features.ScentTrailHunt = true registers exactly one onResourceStop handler', function()
+    local f = newScentTrailFixture()
+    t.equals(f.onResourceStopHandlerCount(), 1)
+end)
+
+t.test('FIXED: an onResourceStop for a DIFFERENT resource is ignored -- no stopScentHunt call', function()
+    local f = newScentTrailFixture()
+    f.queueCallbackResponse({ started = true, huntId = 1 })
+    f.startCommand({})
+    f.fireResourceStop('some_other_resource')
+    t.equals(#f.triggerServerEventCalls, 0, 'only THIS resource stopping should trigger the abandon')
+end)
+
+t.test('FIXED: onResourceStop for THIS resource, mid-hunt, sends stopScentHunt -- closing the "orphaned ActiveHunts[source] until disconnect" gap this spec used to pin as a bug', function()
+    local f = newScentTrailFixture()
+    f.queueCallbackResponse({ started = true, huntId = 1 })
+    f.startCommand({})
+    t.equals(#f.triggerServerEventCalls, 0, 'sanity: nothing sent yet, only a start')
+
+    f.fireResourceStop('qbx_k9unit')
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:stopScentHunt')
+end)
+
+t.test('FIXED: onResourceStop reaches the server EVEN WITH CanShowK9UI entirely undefined -- the cleanup path is never gated on access, same as k9nosehunt stop', function()
+    local f = newScentTrailFixture()
+    f.queueCallbackResponse({ started = true, huntId = 1 })
+    f.startCommand({}) -- start while CanShowK9UI is still available; access is only checked on the START path
+
+    -- Certification/access revoked (or the whole global removed) AFTER the
+    -- hunt is already live -- StartScentHunt() is not re-entered by
+    -- onResourceStop, so this must not matter to the cleanup path at all.
+    f.env.CanShowK9UI = nil
+    f.env.DenyK9UIAccess = nil
+    t.isNil(f.env.CanShowK9UI, 'sanity: CanShowK9UI must be genuinely absent, not merely false')
+
+    f.fireResourceStop('qbx_k9unit') -- must not error
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:stopScentHunt')
+end)
+
+t.test('FIXED: onResourceStop with nothing active is a safe no-op that still forwards the unconditional stop event, same as k9nosehunt stop', function()
+    local f = newScentTrailFixture()
+    f.fireResourceStop('qbx_k9unit')
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:stopScentHunt')
+end)
+
+-- ----------------------------------------------------------------------
 -- WHAT THIS FILE DOES NOT COVER, AND WHY:
 --
 -- 1. "ANY PED" model-gating: unlike client/pursuitsprint.lua (whose own
@@ -554,17 +633,26 @@ end)
 --    consults a ped model directly itself. Whether CanShowK9UI() itself
 --    narrows on model in a given server config is client/main.lua's own
 --    concern, out of scope for this file's spec.
--- 2. onResourceStop: client/scenttrail.lua registers NO onResourceStop
---    handler at all (confirmed by reading the whole file -- grep-provable).
---    Reported as a finding to main, not silently assumed away: a resource
---    restart mid-hunt leaves server/scenttrail.lua's own ActiveHunts
---    record for that player lingering until that file's own
---    maxHuntDurationMs lazy-expiry sweep, rather than being eagerly
---    cleaned up the way the found/stop paths already do (compare
---    CompleteHunt()'s own comment on preferring eager cleanup over that
---    same lazy sweep). Low severity (self-heals, not exploitable) but a
---    real, disclosed gap -- server/sarcalls.lua's client half has the
---    identical gap, see tests/clientsarcalls_spec.lua's own note.
+-- 2. onResourceStop: FIXED THIS PASS, see section H above. This spec used
+--    to note here that client/scenttrail.lua registered no onResourceStop
+--    handler at all, calling the gap "low severity (self-heals, not
+--    exploitable)". That framing was WRONG for this file specifically, and
+--    is corrected here rather than silently deleted, so nobody re-derives
+--    the same mistaken assumption from an old copy of this comment:
+--    server/scenttrail.lua's own expiry check is LAZY, run only inside
+--    pollScentHunt (see that file's own header) -- there is no separate,
+--    always-running sweep thread there, unlike server/sarcalls.lua's own
+--    unconditional periodic tick loop (see tests/clientsarcalls_spec.lua's
+--    own equivalent note for that file's genuinely lower-severity version
+--    of this same gap). A source that starts a hunt and then never polls
+--    again -- exactly what a dead/restarted client script produces, since
+--    its own poll thread dies with the rest of this resource's Lua state
+--    and sends nothing further -- left ActiveHunts[source] with NOTHING
+--    left to ever trigger that lazy expiry check, so the record did NOT
+--    reliably self-heal within maxHuntDurationMs; it could persist until
+--    this player's next genuine disconnect. Section H above pins the fix:
+--    an eager, unconditional onResourceStop -> StopScentHunt() call,
+--    closing the gap instead of merely documenting it.
 -- 3. Exact pulse-curve tuning (linear interpolation shape) beyond the two
 --    boundary values (0m / maxRadius) already pinned above -- this file's
 --    own header explicitly disclaims the curve as "a first-pass judgment

@@ -27,6 +27,18 @@
       4. FEATURE-OFF INERTNESS and the file's own three config-safety
          asserts (missingPersonPedModel/lostPropertyPropModel/
          revealDurationMs) -- section A/B.
+      5. RESOURCE-STOP HYGIENE, FIXED THIS PASS (this file's own header
+         section of the same name) -- section H below pins the fix: the
+         onResourceStop handler now also calls RequestAbandonSarCall(),
+         reaching the server with 'qbx_k9unit:server:abandonSarCall' in
+         addition to its existing ClearReveal() cosmetic cleanup. See this
+         file's own "WHAT THIS FILE DOES NOT COVER" note at the bottom for
+         why this gap was genuinely lower severity than
+         client/scenttrail.lua's identical one (server/sarcalls.lua runs an
+         unconditional periodic tick loop, so the record already self-healed
+         within Config.SARCalls.maxCallDurationMs even before this fix) --
+         still a real, disclosed, player-facing lockout window this fix
+         closes, not a purely cosmetic tidiness change.
 
     WAIT IS A PLAIN NO-OP HERE, NOT A COROUTINE YIELD -- deliberately
     DIFFERENT from clientscenttrail_spec.lua/clientpursuitsprint_spec.lua's
@@ -647,5 +659,90 @@ t.test('k9sarcall stop: safe no-op when nothing is active', function()
     f.stopCommand()
     t.equals(#f.serverEvents, 1)
 end)
+
+-- ----------------------------------------------------------------------
+-- SECTION H -- RESOURCE-STOP HYGIENE, FIXED THIS PASS. See this file's own
+-- header section of the same name for the full write-up this section pins.
+-- ----------------------------------------------------------------------
+
+t.test('FIXED: onResourceStop for a DIFFERENT resource is ignored -- no abandonSarCall call, no reveal cleared', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({})
+    f.fireResourceStop('some_other_resource')
+    t.equals(#f.serverEvents, 0, 'only THIS resource stopping should trigger the abandon')
+end)
+
+t.test('FIXED: onResourceStop for THIS resource, mid-call, sends abandonSarCall -- closing the "orphaned ActiveSarCalls[source] until the tick-loop timeout" gap this spec used to leave undocumented', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({})
+    t.equals(#f.serverEvents, 0, 'sanity: nothing sent yet, only a start')
+
+    f.fireResourceStop('qbx_k9unit')
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:abandonSarCall')
+end)
+
+t.test('FIXED: onResourceStop reaches the server EVEN WITH CanShowK9UI entirely undefined -- the cleanup path is never gated on access, same as k9sarcall stop', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({}) -- start while CanShowK9UI is still available; access is only checked on the START path
+
+    -- Certification/access revoked (or the whole global removed) AFTER the
+    -- call is already live -- RequestStartSarCall() is not re-entered by
+    -- onResourceStop, so this must not matter to the cleanup path at all.
+    f.env.CanShowK9UI = nil
+    f.env.DenyK9UIAccess = nil
+    t.isNil(f.env.CanShowK9UI, 'sanity: CanShowK9UI must be genuinely absent, not merely false')
+
+    f.fireResourceStop('qbx_k9unit') -- must not error
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:abandonSarCall')
+end)
+
+t.test('FIXED: onResourceStop with nothing active is a safe no-op that still forwards the unconditional abandon event, same as k9sarcall stop', function()
+    local f = newSarCallsFixture()
+    f.fireResourceStop('qbx_k9unit')
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:abandonSarCall')
+end)
+
+t.test('FIXED: onResourceStop still clears a live cosmetic reveal in the same pass as sending abandonSarCall -- both cleanup jobs run, neither replaces the other', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({})
+    f.fireCallEnded(false, 'found', 'person', 1) -- call already ended; reveal is live, sarCallActive is already false
+    local handle = f.createdPeds[1].handle
+    t.isTrue(f.entityExists(handle))
+
+    f.fireResourceStop('qbx_k9unit')
+    t.isFalse(f.entityExists(handle), 'ClearReveal() must still run')
+    t.equals(#f.serverEvents, 1, 'RequestAbandonSarCall() is unconditional -- it still fires even though the call had already ended, exactly like k9sarcall stop on an inactive call')
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:abandonSarCall')
+end)
+
+-- ----------------------------------------------------------------------
+-- WHAT THIS FILE DOES NOT COVER, AND WHY:
+--
+-- 1. onResourceStop: FIXED THIS PASS, see section H above. Before this
+--    fix, this file's own onResourceStop handler called ONLY ClearReveal()
+--    -- purely cosmetic cleanup -- and never told server/sarcalls.lua to
+--    release ActiveSarCalls[source]. client/scenttrail.lua's identical gap
+--    is documented (and corrected) in tests/clientscenttrail_spec.lua's own
+--    equivalent note; THIS file's version was genuinely LOWER severity,
+--    not merely differently worded: server/sarcalls.lua runs an
+--    unconditional periodic tick loop (see that file's own "ACTIVE TICK
+--    LOOP" header) that keeps re-checking every active call on its own
+--    schedule regardless of whether this client is still talking to it, so
+--    an orphaned ActiveSarCalls[source] entry already self-cleared within
+--    Config.SARCalls.maxCallDurationMs (eight minutes) even before this
+--    fix -- unlike server/scenttrail.lua's own lazy, poll-driven expiry,
+--    which could persist indefinitely once nothing ever polls again. Still
+--    a real, disclosed, player-facing lockout window (up to eight minutes
+--    unable to take a new call after a client-side stop), not merely a
+--    tidiness issue -- section H above pins the fix, which makes the
+--    cleanup immediate instead of waiting on that timer.
+-- ----------------------------------------------------------------------
 
 os.exit(t.summary())
