@@ -4,20 +4,21 @@
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
 -- This is a hard requirement, not a recommendation. Four of the
--- twenty-two (22) tables below (k9_certifications,
+-- twenty-four (24) tables below (k9_certifications,
 -- k9_certification_specializations, k9_partnerships, k9_permissions)
 -- declare an INDEXED VIRTUAL GENERATED COLUMN backing a UNIQUE KEY
 -- (`k9_certifications.active_cert_key`,
 -- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`) -- the other eighteen
+-- `k9_permissions.active_permission_key`) -- the other twenty
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
 -- k9_certification_tier_capabilities, k9_certification_tier_audit,
 -- k9_equipment_shop_locations, k9_equipment_shop_locations_audit,
 -- k9_permission_keys, k9_permission_key_audit, k9_equipment_shop_items,
--- k9_equipment_shop_item_audit, k9_xp_tiers, k9_xp_tier_audit) need
+-- k9_equipment_shop_item_audit, k9_xp_tiers, k9_xp_tier_audit,
+-- k9_individual_overrides, k9_individual_override_audit) need
 -- nothing from this floor and would run on an older server on their own,
 -- but this resource has one stated minimum for the schema as a whole, not
 -- a per-table one.
@@ -1366,4 +1367,48 @@ CREATE TABLE IF NOT EXISTS `k9_xp_tier_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_ordinal_changed_at` (`ordinal`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_individual_overrides / k9_individual_override_audit
+--
+-- Added alongside `sql/migrations/0016_create_k9_individual_overrides.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (the per-INDIVIDUAL-K9 "god mode" override layer,
+-- resolution order GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE, why
+-- every field is independently NULLABLE/optional, why this table declares
+-- a `deleted` tombstone despite having no reference-count hazard the way
+-- k9_certification_tiers does, and why neither table declares an FK) --
+-- not repeated a second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these tables, run
+-- `sql/migrations/0016_create_k9_individual_overrides.sql` instead (a
+-- guaranteed no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_individual_overrides` (
+  `citizenid`                  VARCHAR(50)  NOT NULL,
+  `speed_multiplier`           DOUBLE       DEFAULT NULL,
+  `scent_range_multiplier`     DOUBLE       DEFAULT NULL,
+  `medkit_cooldown_multiplier` DOUBLE       DEFAULT NULL,
+  `note`                       VARCHAR(120) DEFAULT NULL,
+  `deleted`                    TINYINT(1)   NOT NULL DEFAULT 0,
+  `created_at`                 DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_by`                 VARCHAR(50)  NOT NULL,
+  `updated_at`                 DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`citizenid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `k9_individual_override_audit` (
+  `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `action`       VARCHAR(20)  NOT NULL,
+  `citizenid`    VARCHAR(50)  NOT NULL,
+  `detail`       TEXT         NOT NULL,
+  `changed_by`   VARCHAR(50)  NOT NULL,
+  `changed_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_citizenid_changed_at` (`citizenid`, `changed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

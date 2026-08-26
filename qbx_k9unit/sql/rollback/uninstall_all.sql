@@ -4,8 +4,9 @@
 -- This header used to say "ALL SIX TABLES". It has said six for a long
 -- time; the real number passed six, then eleven, migration 0010 took it to
 -- fourteen, migration 0011 took it to sixteen, migration 0013 took it to
--- eighteen, migration 0014 took it to twenty, and migration 0015 took it
--- to twenty-two. A hardcoded count in a destructive script is a promise
+-- eighteen, migration 0014 took it to twenty, migration 0015 took it to
+-- twenty-two, and migration 0016 took it to twenty-four. A hardcoded count
+-- in a destructive script is a promise
 -- that silently rots every time a migration lands, so it is deliberately
 -- not restated as a number here.
 -- The DROP list below is the authority. If you add a table in a
@@ -170,6 +171,21 @@
 --                      table is not recomputable from the first, which
 --                      only ever holds current field values, never history.
 --
+--   k9_individual_overrides / k9_individual_override_audit
+--                      Every high-command-edited per-citizenid speed/scent/
+--                      medkit-cooldown override (the per-INDIVIDUAL-K9 "god
+--                      mode" layer, on top of whatever XP-tier profile a
+--                      citizenid otherwise resolves to), and the full
+--                      history of every create/edit/reset ever made.
+--                      Dropping the first silently reverts every hand-tuned
+--                      K9 back to its plain XP-tier values on the NEXT
+--                      restart (server/k9profiles.lua's own onResourceStart
+--                      handler re-reads this table and finds nothing left
+--                      to override) -- a real behavior change to a live
+--                      server, not merely an audit-trail loss. The audit
+--                      table is not recomputable from the first, which
+--                      only ever holds the current override, never history.
+--
 -- ==> THE ONLY WAY BACK IS A BACKUP YOU TOOK BEFORE RUNNING THIS.
 --     Run sql/rollback/backup_k9_tables.sh first. It takes seconds.
 --     See OPERATOR_RUNBOOK.md §7 step 1. If you have not run it, stop
@@ -269,7 +285,7 @@ BEGIN
     -- dependency report below is the backstop for the next time a migration
     -- is missed here anyway: it runs unconditionally, on every single
     -- invocation (armed or not), and names any `k9_%` table in this
-    -- database that is not one of the twenty-two named below, loudly, in the
+    -- database that is not one of the twenty-four named below, loudly, in the
     -- one report every operator already reads before doing anything else in
     -- this file.
     SELECT COUNT(*) INTO fk_blockers
@@ -283,7 +299,8 @@ BEGIN
                                     'k9_equipment_shop_locations','k9_equipment_shop_locations_audit',
                                     'k9_permission_keys','k9_permission_key_audit',
                                     'k9_equipment_shop_items','k9_equipment_shop_item_audit',
-                                    'k9_xp_tiers','k9_xp_tier_audit')
+                                    'k9_xp_tiers','k9_xp_tier_audit',
+                                    'k9_individual_overrides','k9_individual_override_audit')
       AND TABLE_NAME NOT IN ('k9_certifications','k9_search_log','k9_partnerships',
                              'k9_progression','k9_permissions','k9_certification_specializations',
                              'k9_runtime_feature_overrides','k9_runtime_override_audit',
@@ -292,7 +309,8 @@ BEGIN
                              'k9_equipment_shop_locations','k9_equipment_shop_locations_audit',
                              'k9_permission_keys','k9_permission_key_audit',
                              'k9_equipment_shop_items','k9_equipment_shop_item_audit',
-                             'k9_xp_tiers','k9_xp_tier_audit');
+                             'k9_xp_tiers','k9_xp_tier_audit',
+                             'k9_individual_overrides','k9_individual_override_audit');
 
     -- -----------------------------------------------------------------
     -- DEPENDENCY REPORT -- always printed, whether or not this file is
@@ -310,8 +328,8 @@ BEGIN
                       '` DROP FOREIGN KEY `', CONSTRAINT_NAME, '`;') AS detail
         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
         WHERE CONSTRAINT_SCHEMA = DATABASE()
-          AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit)$'
-          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit)$'
+          AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)$'
+          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)$'
         UNION ALL
         SELECT 2,
                'WILL BREAK - view reads one of our tables',
@@ -319,7 +337,7 @@ BEGIN
                'This view keeps existing after the uninstall but errors with "references invalid table(s)" whenever anything uses it. Drop or rewrite it.'
         FROM INFORMATION_SCHEMA.VIEWS
         WHERE TABLE_SCHEMA = DATABASE()
-          AND VIEW_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit)'
+          AND VIEW_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)'
         UNION ALL
         SELECT 3,
                'WILL BE DELETED - trigger lives on one of our tables',
@@ -328,7 +346,7 @@ BEGIN
                       ' and MySQL deletes it together with that table. Save its definition now if you want it back (SHOW CREATE TRIGGER `', TRIGGER_NAME, '`).')
         FROM INFORMATION_SCHEMA.TRIGGERS
         WHERE TRIGGER_SCHEMA = DATABASE()
-          AND EVENT_OBJECT_TABLE REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit)$'
+          AND EVENT_OBJECT_TABLE REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)$'
         UNION ALL
         SELECT 4,
                'WILL BREAK - stored routine reads one of our tables',
@@ -337,7 +355,7 @@ BEGIN
         FROM INFORMATION_SCHEMA.ROUTINES
         WHERE ROUTINE_SCHEMA = DATABASE()
           AND ROUTINE_NAME NOT LIKE 'qbx\_k9unit\_%'
-          AND ROUTINE_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit)'
+          AND ROUTINE_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)'
         UNION ALL
         -- DRIFT CHECK (db-schema foolproofing pass, 2026-08-25): reproduced by
         -- execution -- a real FK into `k9_certification_tiers` (a table this
@@ -375,7 +393,7 @@ BEGIN
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_NAME LIKE 'k9\_%'
-          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit)$'
+          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)$'
     ) deps
     ORDER BY ord, object_name;
 
@@ -447,6 +465,17 @@ BEGIN
         -- this list carries no ordering requirement.
         DROP TABLE IF EXISTS `k9_xp_tiers`;
         DROP TABLE IF EXISTS `k9_xp_tier_audit`;
+        -- migration 0016 (owner-directed "god over that tablet, full
+        -- customization over everything related to that K9" pass -- the
+        -- per-INDIVIDUAL-K9 override half; migration 0015's two tables
+        -- above already cover the per-RANK half): same class of gap as
+        -- migrations 0010/0011/0013/0014/0015's tables immediately above,
+        -- now fixed in the same way -- named here plus in the FK-blocker
+        -- gate and dependency report above. No FK exists between any two
+        -- of our own tables, so their position in this list carries no
+        -- ordering requirement.
+        DROP TABLE IF EXISTS `k9_individual_overrides`;
+        DROP TABLE IF EXISTS `k9_individual_override_audit`;
 
         -- RESIDUE REPORT: name any k9_* table this file did NOT drop. New
         -- migrations add tables, and if one is ever missed out of the list

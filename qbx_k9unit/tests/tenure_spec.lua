@@ -150,6 +150,18 @@ local function newTenureFixture(opts)
         notifyCalls[#notifyCalls + 1] = { target = target, description = description }
     end
 
+    -- lib.callback.register -- this file's own DEEPER PROGRESSION PASS
+    -- addition ('qbx_k9unit:server:getPartnershipTenureProgress') runs at
+    -- FILE-LOAD time (top-level code, not inside a guarded function), so
+    -- `lib` must exist in every fixture's env or Sandbox.loadInto itself
+    -- throws before a single test in this file can run -- mirrors
+    -- partnership_spec.lua's own `libStub` shape exactly (same
+    -- capture-by-name convention, so this suite could dispatch a captured
+    -- callback the identical way that suite already does, if a future test
+    -- here needs to).
+    local capturedCallbacks = {}
+    local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
+
     local printedLines = {}
     local function printStub(...)
         local parts = {}
@@ -244,6 +256,7 @@ local function newTenureFixture(opts)
             },
         },
         Config = Config,
+        lib = libStub,
     }
     if opts.withHasPermission ~= false then
         envOverrides.HasPermission = defaultHasPermission
@@ -300,6 +313,7 @@ local function newTenureFixture(opts)
         notifyCalls = notifyCalls,
         printedLines = printedLines,
         waitCalls = waitCalls,
+        callbacks = capturedCallbacks,
     }
 end
 
@@ -794,6 +808,162 @@ t.test('PER-PERSON: server/permissions.lua entirely absent + NOT listed in Requi
     fx.setNow(86400)
     runOneTick(fx)
     t.equals(#fx.awardXPCalls, 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- DEEPER PROGRESSION PASS (this pass) -- titles + notification fallback
+-- ----------------------------------------------------------------------
+
+t.test('TITLES/NOTIFICATION: reaching a milestone notifies with the exact, unchanged, already-shipped locale text -- the PROPOSED tenure.milestone_reached_named key does not exist yet, so the soft-upgrade fallback in TenureMilestoneNotificationText degrades cleanly to it', function()
+    local fx = newTenureFixture()
+    local k9Src, handlerSrc = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+
+    local expected = Sandbox.locale('tenure.milestone_reached')
+    local sawK9, sawHandler = false, false
+    for _, entry in ipairs(fx.notifyCalls) do
+        if entry.target == k9Src then t.equals(entry.description, expected); sawK9 = true end
+        if entry.target == handlerSrc then t.equals(entry.description, expected); sawHandler = true end
+    end
+    t.isTrue(sawK9 and sawHandler)
+end)
+
+-- ----------------------------------------------------------------------
+-- DEEPER PROGRESSION PASS (this pass) -- VISIBILITY:
+-- 'qbx_k9unit:server:getPartnershipTenureProgress' callback
+-- ----------------------------------------------------------------------
+
+t.test('getPartnershipTenureProgress callback: is registered at file load time, unconditionally (not gated behind the CreateThread tick-thread flag check)', function()
+    local fx = newTenureFixture({ featuresOverride = { HandlerPartnership = true, XPProgression = true, PartnershipTenureBonus = false } })
+    t.isNotNil(fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress'])
+end)
+
+t.test('getPartnershipTenureProgress callback: the K9-role caller sees their own tier, its title (fallback list, since config carries no title fields yet), and the next milestone\'s title/threshold/ETA', function()
+    local fx = newTenureFixture()
+    local k9Src = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 1, 0) -- tier 1 (1-day) already granted
+    fx.setNow(604800) -- exactly at the 7-day threshold
+
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    t.isNotNil(handler)
+    local progress = handler(k9Src)
+
+    t.isNotNil(progress)
+    t.equals(progress.partnershipId, 1)
+    t.equals(progress.tenureSeconds, 604800)
+    t.equals(progress.tier, 1)
+    t.equals(progress.tierTitle, 'Bonded Pair')
+    t.equals(progress.tierCount, 3)
+    t.isFalse(progress.fullyCollected)
+    t.equals(progress.nextTier, 2)
+    t.equals(progress.nextTierTitle, 'Seasoned Partners')
+    t.equals(progress.nextTierThresholdSeconds, 604800)
+    t.equals(progress.secondsUntilNextTier, 0)
+end)
+
+t.test('getPartnershipTenureProgress callback: a HANDLER-role caller sees their PARTNER K9\'s progress, not nothing', function()
+    local fx = newTenureFixture()
+    local _, handlerSrc = wireHappyPath(fx)
+    fx.setCitizenidForSource(handlerSrc, 'HANDLER-CID')
+    -- wireHappyPath only wires the K9-role side of this fixture's
+    -- one-directional GetActivePartnerCitizenId stub
+    -- (partnerCitizenIdByCitizenId['K9-CID'] = {...}) -- the REVERSE
+    -- direction this test actually needs (resolving the HANDLER's own
+    -- citizenid to their K9 partner) is a separate, explicit mapping in
+    -- this fixture (unlike the real server/partnership.lua cache, which is
+    -- bidirectional by construction).
+    fx.setPartner('HANDLER-CID', 'K9-CID', false)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(100)
+
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    local progress = handler(handlerSrc)
+
+    t.isNotNil(progress)
+    t.equals(progress.tier, 0)
+    t.equals(progress.tenureSeconds, 100)
+    t.isNil(progress.tierTitle, 'tier 0 (nothing granted yet) has no CURRENT title')
+    t.equals(progress.nextTierTitle, 'Bonded Pair')
+end)
+
+t.test('getPartnershipTenureProgress callback: an unresolvable caller (unknown source, no citizenid) returns nil, never errors', function()
+    local fx = newTenureFixture()
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    local ok, progress = pcall(handler, 999)
+    t.isTrue(ok)
+    t.isNil(progress)
+end)
+
+t.test('getPartnershipTenureProgress callback: an unpartnered, but otherwise real, caller returns nil', function()
+    local fx = newTenureFixture()
+    fx.setOnline({ 1 })
+    fx.setCitizenidForSource(1, 'LONE-CID')
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    t.isNil(handler(1))
+end)
+
+t.test('getPartnershipTenureProgress: returns nil when Config.Features.PartnershipTenureBonus is off, matching this file\'s own three-flag gate elsewhere', function()
+    local fx = newTenureFixture({ featuresOverride = { HandlerPartnership = true, XPProgression = true, PartnershipTenureBonus = false } })
+    local k9Src = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 1, 0)
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    t.isNil(handler(k9Src))
+end)
+
+t.test('getPartnershipTenureProgress: returns nil when Config.Partnership.TenureBonus.milestones is missing/empty -- matches CheckTenureMilestonesForK9\'s own degrade-to-no-op contract', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0 } })
+    local k9Src = wireHappyPath(fx)
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    t.isNil(handler(k9Src))
+end)
+
+t.test('getPartnershipTenureProgress: a thrown/failing Partner_GetTenureRow read degrades to nil, never errors', function()
+    local fx = newTenureFixture()
+    local k9Src = wireHappyPath(fx)
+    fx.setSingleAwaitError(true)
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    local ok, progress = pcall(handler, k9Src)
+    t.isTrue(ok)
+    t.isNil(progress)
+end)
+
+t.test('getPartnershipTenureProgress: fullyCollected is true and nextTier/nextTierTitle are nil once every milestone has been granted', function()
+    local fx = newTenureFixture()
+    local k9Src = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 3, 0)
+    fx.setNow(999999999)
+
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    local progress = handler(k9Src)
+    t.isTrue(progress.fullyCollected)
+    t.isNil(progress.nextTier)
+    t.isNil(progress.nextTierTitle)
+    t.isNil(progress.nextTierThresholdSeconds)
+    t.isNil(progress.secondsUntilNextTier)
+    t.equals(progress.tierTitle, 'Legendary Partnership')
+end)
+
+t.test('getPartnershipTenureProgress: a milestone.title field in config, once present, is preferred over this file\'s own fallback title list -- proves the "config wins, fallback only when absent" contract', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = {
+        ProximityMeters = 5.0,
+        TenureBonus = {
+            checkIntervalMs = 300000,
+            milestones = {
+                { afterSeconds = 86400,  actionKey = 'partnershipTenure1Day', title = 'Custom Title From Config' },
+                { afterSeconds = 604800, actionKey = 'partnershipTenure7Day' }, -- no title field -- must fall back by position
+            },
+        },
+    } })
+    local k9Src = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 1, 0)
+    fx.setNow(86400)
+
+    local handler = fx.callbacks['qbx_k9unit:server:getPartnershipTenureProgress']
+    local progress = handler(k9Src)
+    t.equals(progress.tierTitle, 'Custom Title From Config')
+    t.equals(progress.nextTierTitle, 'Seasoned Partners')
 end)
 
 os.exit(t.summary())

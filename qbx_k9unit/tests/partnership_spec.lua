@@ -1712,4 +1712,308 @@ t.test('QBCore:Server:PlayerLoaded: tolerates a malformed Player object without 
     t.isTrue(ok2)
 end)
 
+-- ========================================================================
+-- DEEPER PROGRESSION PASS (this pass, coder-backend) -- ANTI-FARM GUARD
+-- EXTENSION: PairTenureSeed / CaptureTenureSeedForPair / the seed-CAS in
+-- respondPartnerUp's establish critical section. See both functions' own
+-- doc comments (this file) and PairTenureSeed's own header block for the
+-- full "why" writeup.
+--
+-- MEMORY-MODE (Config.Database.enabled = false), DELIBERATELY, for the
+-- establish-break-reform round trips below: this exercises the REAL
+-- K9Store in-memory backend end to end (Partner_Insert/Partner_EndById/
+-- Partner_GetTenureRow/Partner_SetTenureTierCAS, server/datastore.lua,
+-- unmodified) rather than a hand-rolled MySQL stub having to correctly
+-- distinguish four different SQL statement shapes across a multi-step
+-- sequence -- both simpler to get right AND, per this task's own required
+-- coverage list, a genuine test of "the DB being off".
+-- ========================================================================
+
+t.test('ANTI-FARM (Config.Database.enabled = false): breaking and immediately reforming with the SAME partner seeds the brand-new row from the highest tier that exact pair already earned -- an already-earned tenure milestone is never re-grantable by farming break+reform', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false }
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+
+    wirePair(f, 10, 'OFF-ANTIFARM', 20, 'K9-ANTIFARM')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    -- Simulate server/tenure.lua's own tick having already paid out
+    -- milestone tier 1 for this partnership (bypassing that file's tick --
+    -- this suite is exercising server/partnership.lua's OWN anti-farm
+    -- mechanism, not re-testing tenure.lua's grant logic, which
+    -- tests/tenure_spec.lua already covers directly).
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-ANTIFARM')
+    t.isNotNil(firstRowId)
+    local casApplied = f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 1, 0)
+    t.equals(casApplied, 1, 'sanity: the simulated grant itself must apply')
+
+    -- Break, then IMMEDIATELY reform the exact same pair -- the farming
+    -- vector this guard exists to close.
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 20)
+    t.isNil(f.env.GetActivePartnerCitizenId('K9-ANTIFARM'), 'sanity: really broken')
+
+    -- Clear the per-INITIATOR-source request cooldown before the SECOND
+    -- requestPartnerUp below -- both rounds are sent by the SAME src (10),
+    -- and PartnerRequestCooldown (1000ms, config.lua's own shipped default)
+    -- would otherwise silently rate-limit this second request to a no-op:
+    -- PendingPartnershipRequests[20] would never be (re)populated, and the
+    -- respondPartnerUp dispatch immediately below would then self-reject as
+    -- "no longer valid" BEFORE ever reaching the establish/seed logic this
+    -- test exists to exercise -- exactly the trap that made this whole
+    -- section fail for the wrong reason before this fix (see this section's
+    -- own header comment).
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local secondRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-ANTIFARM')
+    t.isNotNil(secondRowId)
+    t.isTrue(secondRowId ~= firstRowId, 'reforming must create a genuinely NEW row, never reactivate the old one (append-mostly audit-row schema)')
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-ANTIFARM')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 1, 'the brand-new row must already be seeded to tier 1 -- this exact pair already earned it once and must not be able to earn it again')
+end)
+
+t.test('ANTI-FARM (DB off): reforming the SAME K9 with a DIFFERENT handler does NOT inherit the old pair\'s seeded tier -- only the EXACT pair is protected, preserving server/tenure.lua\'s own documented "grab a different partner" reset design', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false }
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+
+    wirePair(f, 10, 'OFF-DIFF-1', 20, 'K9-DIFF')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-DIFF')
+    f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 1, 0)
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 20)
+
+    -- A genuinely DIFFERENT officer this time, at the same coords wirePair
+    -- already placed the K9 at.
+    f.registerPlayer(30, 'OFF-DIFF-2', { name = 'police' })
+    f.setPed(30, 3000, vec3(0, 0, 0), false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 30, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 30, true)
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-DIFF')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 0, 'a genuinely different pair starts completely fresh -- the seed is keyed on the EXACT (k9, handler) pair, never carried to an unrelated new partner')
+end)
+
+t.test('ANTI-FARM (DB off): a FORCED break (ForceBreakPartnershipForCitizenId -- the same entry point server/certifications.lua calls on decertification AND job/department changes) captures the seed exactly like a self-initiated break', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false }
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+
+    wirePair(f, 10, 'OFF-FORCED', 20, 'K9-FORCED')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-FORCED')
+    t.isNotNil(firstRowId)
+    t.equals(f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 2, 0), 1, 'sanity: the simulated grant itself must apply')
+
+    local ended = f.env.ForceBreakPartnershipForCitizenId('K9-FORCED', 'department_changed')
+    t.isTrue(ended)
+    t.isNil(f.env.GetActivePartnerCitizenId('K9-FORCED'), 'sanity: really broken')
+
+    -- Same per-INITIATOR-source cooldown as the self-break test above -- see
+    -- that test's own comment for why this is required before a SECOND
+    -- requestPartnerUp from the same src (10).
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local secondRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-FORCED')
+    t.isNotNil(secondRowId)
+    t.isTrue(secondRowId ~= firstRowId, 'reforming must create a genuinely NEW row, never reactivate the old one')
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-FORCED')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 2, 'a job-change/decertification-forced break must be protected by the SAME guard as a self-initiated break -- both route through the same shared DoBreakPartnership core')
+end)
+
+t.test('ANTI-FARM (DB off): reconnecting (disconnect then reconnect) BETWEEN the break and the reform does not defeat the guard -- the seed is keyed by citizenid, never cleared on playerDropped', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false }
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+
+    wirePair(f, 10, 'OFF-RECONNECT', 20, 'K9-RECONNECT')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-RECONNECT')
+    t.isNotNil(firstRowId)
+    t.equals(f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 1, 0), 1, 'sanity: the simulated grant itself must apply')
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 20)
+    t.isNil(f.env.GetActivePartnerCitizenId('K9-RECONNECT'), 'sanity: really broken')
+
+    -- The K9-role party disconnects and reconnects (a NEW source id,
+    -- mirroring how FiveM recycles/reassigns them) before reforming --
+    -- server/partnership.lua's own header documents that ONLY the
+    -- in-memory Partnerships CACHE entry is dropped on disconnect, never
+    -- the underlying persisted state; this guard's own PairTenureSeed must
+    -- behave identically (keyed on citizenid, never touched by
+    -- playerDropped).
+    f.disconnectPlayer(20)
+    f.firePlayerDropped(20)
+    f.registerPlayer(21, 'K9-RECONNECT', nil)
+    f.setPed(21, 2100, vec3(0, 0, 0), true)
+    f.setAccess(21, true)
+
+    -- The OFFICER side (src 10) is the one re-sending requestPartnerUp here
+    -- -- same per-INITIATOR-source cooldown as the self-break test above
+    -- applies even though the K9's own source id changed.
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 21)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 21, 10, true)
+
+    local secondRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-RECONNECT')
+    t.isNotNil(secondRowId)
+    t.isTrue(secondRowId ~= firstRowId, 'reforming must create a genuinely NEW row, never reactivate the old one')
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-RECONNECT')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 1, 'a disconnect/reconnect between break and reform must not reset or bypass the anti-farm seed')
+end)
+
+t.test('ANTI-FARM: seed capture is a complete no-op (and never errors) when Config.Features.PartnershipTenureBonus is off -- the resource-wide default -- so a pair may re-earn a milestone ONCE if the feature is only turned on LATER, between the break and the reform (a disclosed, narrow, accepted gap, not a silent double-grant against a server that had the feature on throughout)', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false } -- Features.XPProgression / PartnershipTenureBonus left unset (falsy) at break time
+
+    wirePair(f, 10, 'OFF-NOOP', 20, 'K9-NOOP')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-NOOP')
+    t.isNotNil(firstRowId)
+    t.equals(f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 1, 0), 1, 'sanity: the simulated grant itself must apply')
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 20)
+    t.isTrue(ok, 'breaking must never error just because the tenure-bonus feature happens to be off')
+    t.isNil(f.env.GetActivePartnerCitizenId('K9-NOOP'), 'sanity: really broken')
+
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+    -- Same per-INITIATOR-source cooldown as the self-break test above.
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local secondRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-NOOP')
+    t.isNotNil(secondRowId, 'sanity: the reform (feature now on) must actually establish')
+    t.isTrue(secondRowId ~= firstRowId, 'reforming must create a genuinely NEW row, never reactivate the old one')
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-NOOP')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 0, 'the feature was OFF at break time, so nothing was captured to seed from -- this is the disclosed narrow gap, not the failure this guard closes')
+end)
+
+t.test('ANTI-FARM: every write is checked -- a THROWING seed-CAS during reform is logged and does NOT abort/crash establishment; the new partnership still forms, with its own default (unseeded) tier', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false }
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+
+    wirePair(f, 10, 'OFF-WFAIL', 20, 'K9-WFAIL')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-WFAIL')
+    t.isNotNil(firstRowId)
+    t.equals(f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 1, 0), 1, 'sanity: the simulated grant itself must apply')
+
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 20)
+    t.isNil(f.env.GetActivePartnerCitizenId('K9-WFAIL'), 'sanity: really broken')
+
+    -- Every K9Store.Partner_SetTenureTierCAS call the PRODUCTION code makes
+    -- from here on must throw -- simulating a DB error on exactly the write
+    -- this task's own brief requires be checked. Monkey-patching the real
+    -- in-memory K9Store function directly (rather than hand-rolling a
+    -- stateful MySQL.single.await stub that has to separately track "active
+    -- before the break, gone after it" across four different SQL statement
+    -- shapes -- the earlier version of this test used exactly that shape
+    -- and could never actually reach this seed-CAS path, because
+    -- DoBreakPartnership's own post-UPDATE RefreshPartnershipCache call
+    -- re-read through the SAME stub and saw a still-truthy row regardless of
+    -- the real WHERE clause, so the reform below was refused as
+    -- already_partnered before ever reaching establishment) is what
+    -- actually exercises this path. K9Store is a resource-global table
+    -- (server/datastore.lua: `K9Store = {}`, no `local`), so reassigning
+    -- this field is visible to server/partnership.lua's own
+    -- `K9Store.Partner_SetTenureTierCAS(...)` call inside respondPartnerUp
+    -- -- Lua re-indexes the table on every call, there is nothing cached to
+    -- go stale.
+    f.env.K9Store.Partner_SetTenureTierCAS = function()
+        error('simulated DB error on the seed CAS UPDATE')
+    end
+
+    -- Same per-INITIATOR-source (10) request cooldown as the memory-mode
+    -- ANTI-FARM tests above -- required before this SECOND requestPartnerUp
+    -- from the same src, or it silently no-ops and respondPartnerUp below
+    -- self-rejects as "no longer valid" before ever reaching the seed-CAS
+    -- logic this test exists to exercise.
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    local ok1 = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:requestPartnerUp', 10, 20)
+    t.isTrue(ok1)
+    local ok2 = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    t.isTrue(ok2, 'a thrown seed-CAS must never abort/crash the establish flow')
+
+    local secondRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-WFAIL')
+    t.isNotNil(secondRowId, 'the new partnership must still be established despite the seed-write failure')
+    t.isTrue(secondRowId ~= firstRowId, 'reforming must create a genuinely NEW row, never reactivate the old one')
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-WFAIL')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 0, 'the seed-write threw, so the new row must keep its true default -- fail SAFE, never fail open toward an extra grant')
+
+    local sawLoggedFailure = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('tenure anti-farm seed CAS threw', 1, true) then sawLoggedFailure = true end
+    end
+    t.isTrue(sawLoggedFailure, 'a thrown seed-write must be logged, never silently swallowed')
+end)
+
+t.test('ANTI-FARM: every write is checked -- a seed-CAS that reports ZERO affected rows (lost race, or a pre-migration schema missing the column) is logged and does NOT abort establishment either', function()
+    local f = newFixture()
+    f.config.Database = { enabled = false }
+    f.config.Features.XPProgression = true
+    f.config.Features.PartnershipTenureBonus = true
+
+    wirePair(f, 10, 'OFF-WFAIL2', 20, 'K9-WFAIL2')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local firstRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-WFAIL2')
+    t.isNotNil(firstRowId)
+    t.equals(f.env.K9Store.Partner_SetTenureTierCAS(firstRowId, 1, 0), 1, 'sanity: the simulated grant itself must apply')
+
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 20)
+    t.isNil(f.env.GetActivePartnerCitizenId('K9-WFAIL2'), 'sanity: really broken')
+
+    -- See the THROWING-CAS test immediately above for why this reassigns
+    -- K9Store.Partner_SetTenureTierCAS directly rather than a raw-SQL MySQL
+    -- stub -- this variant reports a clean "0 rows affected" (a lost race /
+    -- pre-migration schema) instead of throwing.
+    f.env.K9Store.Partner_SetTenureTierCAS = function() return 0 end
+
+    -- Same per-INITIATOR-source cooldown as the test immediately above.
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    t.isTrue(ok)
+
+    local secondRowId = f.env.K9Store.Partner_GetActiveIdByParty('K9-WFAIL2')
+    t.isNotNil(secondRowId, 'the new partnership must still be established despite the seed-write applying zero rows')
+    t.isTrue(secondRowId ~= firstRowId, 'reforming must create a genuinely NEW row, never reactivate the old one')
+
+    local tenureRow = f.env.K9Store.Partner_GetTenureRow('K9-WFAIL2')
+    t.equals(tenureRow.tenure_bonus_tier_granted, 0, 'the seed-write applied zero rows, so the new row must keep its true default')
+
+    local sawLoggedFailure = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('tenure anti-farm seed CAS did not apply', 1, true) then sawLoggedFailure = true end
+    end
+    t.isTrue(sawLoggedFailure, 'a seed-CAS reporting zero affected rows must be logged, never silently ignored')
+end)
+
 os.exit(t.summary())

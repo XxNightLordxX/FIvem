@@ -114,6 +114,24 @@
     The radial entry point (this pass's own report names the exact item)
     stays available in EVERY mode -- a UI affordance, not a third open
     mode, honouring the same OpenTablet() gate either way.
+
+    SECOND ENTRY POINT (this pass) -- Config.CommandTablet.highCommandCommand.
+    A separate RegisterCommand, always registered whenever
+    Config.Features.CommandTablet is on (independent of openMode above,
+    which only governs the ORIGINAL command's/item's reachability), that
+    calls the exact same OpenTablet(), just passing 'highCommand' as its
+    `requestedView` argument. It is a SHORTCUT TO A SCREEN, never a second
+    grant of access: OpenTablet() itself is unchanged (same
+    tabletOpen-already-true no-op guard, same single SetNuiFocus(true,
+    true), same SendNUIMessage), and the ONLY thing `requestedView` does is
+    ride along in the tablet:open payload as a presentation hint -- see the
+    NUI CONTRACT's own note on that field, and html/tablet.js's
+    loadMyRecord() for where it is actually consumed, strictly AFTER
+    tablet:requestMyRecord's server-verified `viewer.isHighCommand` comes
+    back for this specific caller. Missing/blank config falls back to a
+    loud console warning, same posture as the original command's own
+    missing-config warning above -- the ORIGINAL command/item stay fully
+    reachable regardless, since this is a pure addition.
     ======================================================================
 
     ======================================================================
@@ -371,6 +389,7 @@
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
           strings = BuildTabletStrings() (locales/en.json's `tablet` group -- see LOCALIZATION below),
+          requestedView = 'highCommand' | nil, -- PRESENTATION HINT ONLY, threaded straight through from the OpenTablet(requestedView) argument the caller passed (see OPENING below for the two RegisterCommand call sites -- the ORIGINAL command/item always pass nil). Decides NOTHING by itself: html/tablet.js's loadMyRecord() only switches to the console screen once tablet:requestMyRecord's own `viewer.isHighCommand` -- server-verified, IsHighCommand(source), the SAME function every other high-command gate in this resource calls, re-run fresh on every request -- comes back true for THIS caller. A non-high-command caller who opened via the new command still gets their own record back exactly as tabletRequestMyRecord already returns it for the ordinary command; html/tablet.js just shows an explicit "you don't have access" notice above it instead of silently landing on the console tab.
           blockClientEnforcedBadge = locale('tablet.block_client_enforced_badge') | nil,
           blockClientEnforcedHint = locale('tablet.block_client_enforced_hint') | nil,
               -- ^ THIS PASS -- the Block Effect column's new 'client_enforced'
@@ -535,6 +554,16 @@ end
 local TABLET_STRING_KEYS = {
     'title', 'close_label', 'tab_console', 'tab_my_record', 'loading',
     'error_generic', 'error_not_authorized', 'error_timeout', 'error_network',
+    -- K9 HIGH COMMAND TABLET COMMAND (this pass, config.lua's
+    -- Config.CommandTablet.highCommandCommand) -- the ONE new UI-chrome
+    -- string this pass adds. Shown by html/tablet.js's loadMyRecord() when
+    -- someone who is NOT high command types the new shortcut command:
+    -- server/tablet.lua's tabletRequestMyRecord still resolves and returns
+    -- their own record exactly as it does for the ordinary command (this
+    -- flag changes presentation only, never authorization -- see this
+    -- file's OPENING section), so they still see their own record beneath
+    -- this notice rather than a blank or broken screen.
+    'high_command_required_notice',
     'retry_label', 'search_placeholder', 'refresh_label', 'empty_roster',
     'column_name', 'column_citizenid', 'column_department', 'column_certified',
     'column_xp', 'column_actions', 'certified_yes', 'certified_no',
@@ -738,6 +767,89 @@ local TABLET_STRING_KEYS = {
     'shop_item_error_busy', 'shop_item_error_too_many_items', 'shop_item_error_unknown_item',
     'shop_item_error_must_include_every_item', 'shop_item_error_invalid_key_set',
     'shop_item_error_db_error',
+    -- HOME / LANDING VIEW (this pass, owner-directed "restructure the
+    -- tablet around WHO IS HOLDING IT... a first-time player who has read
+    -- nothing should open this and know what to do within seconds") --
+    -- see html/tablet.js's own buildHomeScreen() for the full writeup on
+    -- why this is now the DEFAULT screen on open, ahead of every existing
+    -- tab, none of which this pass removed or renamed. SAME disclosed-gap
+    -- posture as every other block above: these 22 keys are NOT YET
+    -- present in locales/en.json's `tablet` group as of this pass --
+    -- flagged to that file's owner (see this pass's own report for the
+    -- exact key -> English-string list). BuildTabletStrings()'s own
+    -- pcall-per-key guard means each is simply omitted from `strings`
+    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
+    -- that exact gap in the meantime.
+    'tab_home', 'home_welcome_template', 'home_role_high_command', 'home_role_k9',
+    'home_role_handler', 'home_role_uncertified', 'home_partnered_badge',
+    'home_not_partnered_badge', 'home_certified_count_template',
+    'home_quick_actions_heading', 'home_view_my_record_label', 'home_view_my_record_hint',
+    'home_open_console_label', 'home_open_console_hint', 'home_high_command_heading',
+    'home_high_command_hint', 'home_no_certification_title', 'home_no_certification_body',
+    'home_ready_abilities_heading', 'home_no_ready_abilities', 'home_view_all_abilities_label',
+    'home_blocked_count_template',
+    -- COMMAND REFERENCE (this pass -- "the resource registers 36 commands,
+    -- a player has no way to discover them in-game"). See
+    -- html/tablet.js's own COMMAND_REFERENCE/buildCommandReferenceScreen()
+    -- for the full catalog, its drift guard
+    -- (tests/commandreferenceregistry_spec.lua), and exactly what each
+    -- entry's `gate` does and does not promise. SAME disclosed-gap posture
+    -- as every other block above: these 135 keys are NOT YET present in
+    -- locales/en.json's `tablet` group as of this pass -- flagged to that
+    -- file's owner (see this pass's own report for the exact key ->
+    -- English-string list). BuildTabletStrings()'s own pcall-per-key guard
+    -- means each is simply omitted from `strings` until added there, and
+    -- html/tablet.js's own DEFAULT_STRINGS covers that exact gap in the
+    -- meantime. (k9grantpermission/k9revokepermission and their own
+    -- their own "permissions" category, at the end of this list, were added
+    -- mid-pass -- server/permissions.lua registered both concurrently
+    -- while this list was being written; tests/commandreferenceregistry_spec.lua
+    -- is what actually caught the gap.)
+    'tab_commands', 'cmdref_heading', 'cmdref_intro', 'cmdref_search_placeholder',
+    'cmdref_empty', 'cmdref_column_command', 'cmdref_column_does', 'cmdref_column_needs',
+    'cmdref_admin_badge', 'cmdref_status_insufficient_authorization',
+    'cmdref_category_field_gear', 'cmdref_category_calling_off', 'cmdref_category_scent_games',
+    'cmdref_category_search_rescue', 'cmdref_category_training', 'cmdref_category_records',
+    'cmdref_category_certification', 'cmdref_category_xp', 'cmdref_category_audit',
+    'cmdref_category_devtools', 'cmdref_category_permissions',
+    'cmdref_k9deploykennel_usage', 'cmdref_k9deploykennel_does', 'cmdref_k9deploykennel_needs',
+    'cmdref_k9propattach_usage', 'cmdref_k9propattach_does', 'cmdref_k9propattach_needs',
+    'cmdref_k9throwfetchball_usage', 'cmdref_k9throwfetchball_does', 'cmdref_k9throwfetchball_needs',
+    'cmdref_k9dropfetchball_usage', 'cmdref_k9dropfetchball_does', 'cmdref_k9dropfetchball_needs',
+    'cmdref_k9recallfetchball_usage', 'cmdref_k9recallfetchball_does', 'cmdref_k9recallfetchball_needs',
+    'cmdref_k9recall_usage', 'cmdref_k9recall_does', 'cmdref_k9recall_needs',
+    'cmdref_k9calmdown_usage', 'cmdref_k9calmdown_does', 'cmdref_k9calmdown_needs',
+    'cmdref_k9meatbait_usage', 'cmdref_k9meatbait_does', 'cmdref_k9meatbait_needs',
+    'cmdref_k9whistle_usage', 'cmdref_k9whistle_does', 'cmdref_k9whistle_needs',
+    'cmdref_k9lineup_usage', 'cmdref_k9lineup_does', 'cmdref_k9lineup_needs',
+    'cmdref_k9lineuppick_usage', 'cmdref_k9lineuppick_does', 'cmdref_k9lineuppick_needs',
+    'cmdref_k9lineupcancel_usage', 'cmdref_k9lineupcancel_does', 'cmdref_k9lineupcancel_needs',
+    'cmdref_k9nosehunt_usage', 'cmdref_k9nosehunt_does', 'cmdref_k9nosehunt_needs',
+    'cmdref_k9sarcall_usage', 'cmdref_k9sarcall_does', 'cmdref_k9sarcall_needs',
+    'cmdref_k9training_usage', 'cmdref_k9training_does', 'cmdref_k9training_needs',
+    'cmdref_k9trainsearch_usage', 'cmdref_k9trainsearch_does', 'cmdref_k9trainsearch_needs',
+    'cmdref_k9trainbite_usage', 'cmdref_k9trainbite_does', 'cmdref_k9trainbite_needs',
+    'cmdref_k9stats_usage', 'cmdref_k9stats_does', 'cmdref_k9stats_needs',
+    'cmdref_k9certify_usage', 'cmdref_k9certify_does', 'cmdref_k9certify_needs',
+    'cmdref_k9certifyoffline_usage', 'cmdref_k9certifyoffline_does', 'cmdref_k9certifyoffline_needs',
+    'cmdref_k9decertify_usage', 'cmdref_k9decertify_does', 'cmdref_k9decertify_needs',
+    'cmdref_k9decertifyoffline_usage', 'cmdref_k9decertifyoffline_does', 'cmdref_k9decertifyoffline_needs',
+    'cmdref_k9settier_usage', 'cmdref_k9settier_does', 'cmdref_k9settier_needs',
+    'cmdref_k9settieroffline_usage', 'cmdref_k9settieroffline_does', 'cmdref_k9settieroffline_needs',
+    'cmdref_k9recertify_usage', 'cmdref_k9recertify_does', 'cmdref_k9recertify_needs',
+    'cmdref_k9recertifyoffline_usage', 'cmdref_k9recertifyoffline_does', 'cmdref_k9recertifyoffline_needs',
+    'cmdref_k9specialize_usage', 'cmdref_k9specialize_does', 'cmdref_k9specialize_needs',
+    'cmdref_k9unspecialize_usage', 'cmdref_k9unspecialize_does', 'cmdref_k9unspecialize_needs',
+    'cmdref_k9unspecializeoffline_usage', 'cmdref_k9unspecializeoffline_does', 'cmdref_k9unspecializeoffline_needs',
+    'cmdref_k9givexp_usage', 'cmdref_k9givexp_does', 'cmdref_k9givexp_needs',
+    'cmdref_k9auditcert_usage', 'cmdref_k9auditcert_does', 'cmdref_k9auditcert_needs',
+    'cmdref_k9auditpartner_usage', 'cmdref_k9auditpartner_does', 'cmdref_k9auditpartner_needs',
+    'cmdref_k9auditsearch_usage', 'cmdref_k9auditsearch_does', 'cmdref_k9auditsearch_needs',
+    'cmdref_k9auditxp_usage', 'cmdref_k9auditxp_does', 'cmdref_k9auditxp_needs',
+    'cmdref_k9auditdept_usage', 'cmdref_k9auditdept_does', 'cmdref_k9auditdept_needs',
+    'cmdref_k9bonetool_usage', 'cmdref_k9bonetool_does', 'cmdref_k9bonetool_needs',
+    'cmdref_k9grantpermission_usage', 'cmdref_k9grantpermission_does', 'cmdref_k9grantpermission_needs',
+    'cmdref_k9revokepermission_usage', 'cmdref_k9revokepermission_does', 'cmdref_k9revokepermission_needs',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -844,8 +956,20 @@ end
 --- whatever they've been certified in" true for someone not yet
 --- certified: they still open it and see why, instead of never opening
 --- at all.
+---
+--- @param requestedView string? -- 'highCommand' | nil. PRESENTATION HINT
+--- ONLY, forwarded verbatim as `requestedView` in the tablet:open payload
+--- (see NUI CONTRACT above) -- it changes NOTHING about what this function
+--- does: same tabletOpen no-op guard, same single SetNuiFocus(true, true)
+--- call, same SendNUIMessage. Real authorization still happens entirely
+--- server-side, inside tablet:requestMyRecord's own IsHighCommand(source)
+--- check -- html/tablet.js decides what to SHOW from that response, never
+--- from this argument. Callers: the original tablet command/item always
+--- call OpenTablet() with no argument (nil); the new
+--- Config.CommandTablet.highCommandCommand below is the only caller that
+--- ever passes 'highCommand'.
 --- @return nil
-function OpenTablet()
+function OpenTablet(requestedView)
     if tabletOpen then return end
 
     tabletOpen = true
@@ -854,6 +978,7 @@ function OpenTablet()
         data = {
             capabilities = Config.Permissions, -- shared config, no round trip
             strings = BuildTabletStrings(), -- locales/en.json's `tablet` group, one key per html/tablet.js's own DEFAULT_STRINGS -- see this file's header LOCALIZATION note
+            requestedView = (requestedView == 'highCommand') and 'highCommand' or nil, -- see NUI CONTRACT above and this function's own @param doc -- presentation hint only
             -- CLIENT-ENFORCED block-effect badge/hint text (this pass;
             -- locales/en.json's tablet.block_client_enforced_badge/_hint,
             -- both already landed). Sent as TWO STANDALONE fields rather
@@ -929,6 +1054,28 @@ if openMode == 'command' or openMode == 'both' then
     else
         print('[qbx_k9unit] WARNING: Config.CommandTablet.command is missing or not a valid string -- the K9 Command Tablet will not be reachable by command this session.')
     end
+end
+
+-- ----------------------------------------------------------------------
+-- SECOND ENTRY POINT (this pass) -- Config.CommandTablet.highCommandCommand.
+-- See this file's header "SECOND ENTRY POINT" note above for the full
+-- writeup. Registered UNCONDITIONALLY here (not gated on `openMode`,
+-- which governs only the ORIGINAL command's/item's reachability) --
+-- this is a wholly separate, always-available shortcut whenever
+-- Config.Features.CommandTablet is on at all (the file-level early return
+-- above already covers the flag being off, exactly like the original
+-- command). Calls the SAME OpenTablet()/CloseTablet() pair, so it shares
+-- the one focus lifecycle and the one tabletOpen no-op guard -- typing
+-- this while the tablet is already open (via either command) is a safe
+-- no-op, identical to typing the original command twice.
+-- ----------------------------------------------------------------------
+local hqTabletCommand = cfgTablet.highCommandCommand
+if type(hqTabletCommand) == 'string' and hqTabletCommand ~= '' then
+    RegisterCommand(hqTabletCommand, function() OpenTablet('highCommand') end, false)
+else
+    print('[qbx_k9unit] WARNING: Config.CommandTablet.highCommandCommand is missing or not a valid string -- ' ..
+        'the K9 High Command Tablet shortcut will not be reachable by command this session (the original ' ..
+        'tablet command/item, if configured, is unaffected).')
 end
 
 if openMode == 'item' or openMode == 'both' then
@@ -1328,14 +1475,51 @@ RegisterNUICallback('tablet:close', function(_, cb)
     cb({})
 end)
 
+--- CLIENT-LOCAL "who is holding it" role signal (this pass, owner-directed
+--- "restructure the tablet around WHO IS HOLDING IT"). Computed ENTIRELY
+--- from this player's own already-existing local state -- IsOwnModelK9()
+--- (client/main.lua) and IsPartnered() (client/partnership.lua), both
+--- already-allowlisted resource-globals this file calls elsewhere (SECTION
+--- 2/3) -- NEVER a new server round trip, and NEVER authoritative for
+--- anything: html/tablet.js uses this pair PURELY to choose which framing
+--- its new Home/landing screen shows a viewer (K9 vs. handler vs.
+--- partnered) ahead of the rest of MyRecordResult's own server-authoritative
+--- fields (isHighCommand, certifications, myFeatures) painting the rest of
+--- the picture. THE SECURITY RULE is untouched by this: neither flag is
+--- ever read by, or sent back into, any mutation/trigger callback -- see
+--- every RegisterNUICallback below, none of which accepts or trusts an
+--- `isK9Model`/`isPartnered` argument from the client. Guarded with
+--- `type(fn) == 'function'`, this resource's standard soft-dependency
+--- convention -- degrades to `false` (never a crash, never a stale cached
+--- guess) if either owning file is ever unavailable.
+--- @return boolean isK9Model
+--- @return boolean isPartnered
+local function ResolveLocalRoleFlags()
+    local isK9Model = type(IsOwnModelK9) == 'function' and IsOwnModelK9() == true
+    local isPartnered = type(IsPartnered) == 'function' and IsPartnered() == true
+    return isK9Model, isPartnered
+end
+
 --- PROPOSED server callback (not yet built -- see this pass's own
 --- report). Forwarded verbatim: AwaitServerCallback's own failure shape
 --- (`{ok=false, error='timeout'}`) already matches html/tablet.js's
 --- `{ok:false, error, message?}` contract directly, and the proposed
 --- server side is asked to return the SAME JS-shaped object on success
 --- too, so this file needs zero translation logic for these.
+---
+--- ENRICHED THIS PASS with the two CLIENT-LOCAL role fields above --
+--- ResolveLocalRoleFlags()'s own doc comment has the full reasoning.
+--- Applied to the result table regardless of `ok` (a failure response
+--- gains the same two fields, harmlessly ignored by a caller that only
+--- ever reads them after `ok === true`) so this stays a single, simple
+--- mutate-then-forward, never a second branch to keep in sync with
+--- server/tablet.lua's own response shape.
 RegisterNUICallback('tablet:requestMyRecord', function(_, cb)
-    cb(AwaitServerCallback('qbx_k9unit:server:tabletRequestMyRecord'))
+    local result = AwaitServerCallback('qbx_k9unit:server:tabletRequestMyRecord')
+    if type(result) == 'table' then
+        result.isK9Model, result.isPartnered = ResolveLocalRoleFlags()
+    end
+    cb(result)
 end)
 
 RegisterNUICallback('tablet:requestRoster', function(data, cb)

@@ -967,14 +967,37 @@ t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this
     -- ceiling exists purely so a regression that makes the production wait
     -- loop genuinely infinite fails this test instead of hanging the whole
     -- suite.
+    -- FIND the catalog's own handler rather than indexing it by position.
+    -- This used to be `f.coros[3]`, on the assumption that the third
+    -- registered onResourceStart handler is this catalog's. That is not a
+    -- property this spec controls: every file loaded into the fixture
+    -- registers its own handlers, so an unrelated file adding one shifts
+    -- the index and this test silently starts driving the WRONG coroutine
+    -- -- which is exactly what happened when server/permissions.lua went
+    -- from one start handler to three for an unrelated feature. The test
+    -- then failed while the boot-order safety property it exists to
+    -- protect was completely intact.
+    --
+    -- The catalog's handler is the one still suspended after the probe is
+    -- deliberately left hung: it is the only one polling for a settle that
+    -- never comes. Identifying it by that behaviour cannot drift.
+    local catalogCo
+    for i, co in ipairs(f.coros) do
+        if i > 1 and coroutine.status(co) == 'suspended' then
+            catalogCo = co
+            break
+        end
+    end
+    t.isTrue(catalogCo ~= nil, 'the catalog must have a suspended start handler polling for the schema check to settle')
+
     local resumes = 0
-    while coroutine.status(f.coros[3]) == 'suspended' and resumes < 200 do
-        coroutine.resume(f.coros[3])
+    while coroutine.status(catalogCo) == 'suspended' and resumes < 200 do
+        coroutine.resume(catalogCo)
         resumes = resumes + 1
     end
 
     t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
-    t.isTrue(coroutine.status(f.coros[3]) == 'dead', 'the catalog\'s own onResourceStart handler must finish (give up), not remain permanently suspended')
+    t.isTrue(coroutine.status(catalogCo) == 'dead', 'the catalog\'s own onResourceStart handler must finish (give up), not remain permanently suspended')
     t.equals(f.permKeysQueryCallCount(), 0, 'must never issue its own narrower SELECT while the collision state is genuinely unknown -- fail-closed, exactly like Config.Database.enabled = false')
     t.isFalse(f.env.IsKnownPermissionCatalogKey('k9.real'), 'no DB row -- real or foreign -- reaches the catalog while unsettled')
     t.isTrue(f.env.IsKnownPermissionCatalogKey('k9.access'), 'config-shipped defaults remain in effect')

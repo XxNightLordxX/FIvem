@@ -35,7 +35,7 @@
 
 const t = require('./testkit');
 const { createHarness, jsonResponse } = require('./tablet-sandbox');
-const { findAll } = require('./tablet-dom-stub');
+const { findAll, findByText } = require('./tablet-dom-stub');
 
 function routeFetch(handlers) {
     return function (url, init) {
@@ -71,6 +71,34 @@ async function settle(times) {
 for (const malicious of MALICIOUS_STRINGS) {
     const shortLabel = JSON.stringify(malicious.slice(0, 40)) + (malicious.length > 40 ? '...' : '');
 
+    t.test(`home: welcome heading interpolating the viewer's name containing ${shortLabel} reaches the DOM verbatim via textContent, never innerHTML`, async () => {
+        const h = createHarness({
+            fetchImpl: routeFetch({
+                'tablet:requestMyRecord': () => ({
+                    ok: true,
+                    viewer: { citizenid: 'CIT1', name: malicious, isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
+                    certifications: [],
+                    xp: null,
+                    tierLabel: null,
+                    myFeatures: [],
+                }),
+            }),
+        });
+        h.postMessage('tablet:open', {});
+        await settle();
+
+        // Home is the DEFAULT screen (this pass) -- no navigation needed.
+        // The welcome heading interpolates the viewer's name into a
+        // template string (formatTemplate()), so this checks for the
+        // payload appearing verbatim WITHIN a node's own textContent
+        // (never a bare equality check, since the template also contains
+        // fixed "Welcome, "/"." text around it) via `.indexOf`, never
+        // parsed as markup.
+        const heading = findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf(malicious) !== -1);
+        t.isTrue(heading.length >= 1, "the malicious viewer name appears verbatim (via textContent) inside the Home welcome heading");
+        t.equals(everyElementInnerHTMLWriteCount(h), 0, 'innerHTML must never be written anywhere on this page for this payload');
+    });
+
     t.test(`my-record: certification department label + feature label containing ${shortLabel} reach the DOM verbatim via textContent, never innerHTML`, async () => {
         const h = createHarness({
             fetchImpl: routeFetch({
@@ -85,6 +113,15 @@ for (const malicious of MALICIOUS_STRINGS) {
             }),
         });
         h.postMessage('tablet:open', {});
+        await settle();
+
+        // The DEFAULT screen on open is now 'home' (this pass's own
+        // landing view), which shows only summary counts, never a raw
+        // department/tier/feature label -- navigate to the full My Record
+        // screen explicitly, same as every other screen-specific case in
+        // this suite (Command Console/Manage/Shop Locations/Certification
+        // Tiers below all do the equivalent click before asserting).
+        findByText(h.getRoot(), 'My Record')[0].click();
         await settle();
 
         const matches = findAll(h.getRoot(), (n) => n._textContent === malicious);
@@ -366,6 +403,28 @@ t.test('shop locations: a full battery of malicious strings across many sequenti
         await settle();
     }
     t.equals(everyElementInnerHTMLWriteCount(h), 0, 'zero innerHTML writes across the whole document after every malicious shop-location payload in this suite, across repeated tab-visit cycles');
+});
+
+t.test('home: welcome heading falls back to a malicious citizenid, verbatim via textContent, never innerHTML, when the viewer has no name at all', async () => {
+    const malicious = MALICIOUS_STRINGS[1]; // '<script>...' -- one representative payload is enough for this one fallback branch
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: malicious, name: '', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
+                certifications: [],
+                xp: null,
+                tierLabel: null,
+                myFeatures: [],
+            }),
+        }),
+    });
+    h.postMessage('tablet:open', {});
+    await settle();
+
+    const heading = findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf(malicious) !== -1);
+    t.isTrue(heading.length >= 1, 'the malicious citizenid fallback appears verbatim (via textContent) inside the Home welcome heading');
+    t.equals(everyElementInnerHTMLWriteCount(h), 0);
 });
 
 t.run();

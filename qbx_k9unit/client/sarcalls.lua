@@ -257,7 +257,7 @@
     neither is called until the event actually fires.
 
     ======================================================================
-    FILE-TO-FILE CONTRACT: this file exposes exactly two resource-global
+    FILE-TO-FILE CONTRACT: this file exposes three resource-global
     (no `local`) functions, the established "global helper, private
     per-file state" convention (client/recall.lua's RequestRecall,
     client/combat.lua's RequestBiteHold/RequestDrag are the precedent this
@@ -266,12 +266,27 @@
         RequestAbandonSarCall() -- UNCONDITIONAL, never gated -- see its
             own doc comment for why, mirroring client/recall.lua's
             RequestRecall/client/scenttrail.lua's StopScentHunt exactly.
-    Neither is wired into client/radial.lua by this pass -- that file is
-    owned by another agent this session and has no dynamic "add an item"
-    seam to hook into without editing it directly (the identical disclosed
-    gap client/scenttrail.lua's own header already reports for itself).
-    Reachable today via '/k9sarcall' (start) / '/k9sarcall stop' (abandon),
-    the same command-with-a-stop-argument shape client/scenttrail.lua's
+        IsSarCallActive() -> boolean -- RESOLVED (this pass; was
+            unexposed): a pure, no-network read of the local `sarCallActive`
+            flag, same shape/precedent as client/combat.lua's
+            IsBiteHoldEngaged()/client/movement.lua's IsLeashed(). Added
+            specifically so client/radial.lua (this session, same owner as
+            this file) can offer a single context-sensitive "Search &
+            Rescue Call" toggle item exactly the way it already does for
+            Leash/Bite & Hold/Drag/Fetch, instead of leaving this feature
+            command-only. NOT itself gated on anything -- a pure state read,
+            like every other Is*Engaged() query in this resource.
+    RESOLVED (this pass): client/radial.lua now wires a "Search & Rescue
+    Call" toggle item calling RequestStartSarCall() when IsSarCallActive()
+    is false and RequestAbandonSarCall() when it is true -- see that file's
+    own comment on the item for the full writeup. This paragraph used to
+    read "neither is wired into client/radial.lua... owned by another
+    agent" -- no longer true now that both files are owned by the same pass;
+    left here, corrected rather than deleted, so a reader mid-diff isn't
+    left holding a stale claim. Both request functions remain fully
+    reachable via '/k9sarcall' (start) / '/k9sarcall stop' (abandon) too --
+    the radial item is an ADDITIONAL entry point, not a replacement one,
+    same command-with-a-stop-argument shape client/scenttrail.lua's
     '/k9nosehunt [stop]' already established for this exact class of
     feature, rather than two separate commands (client/recall.lua's/
     client/kennel.lua's older single-purpose-command shape) -- picked here
@@ -390,6 +405,16 @@ end
 
 --- @type boolean -- true while a call THIS client started is active (not yet found/abandoned/expired)
 local sarCallActive = false
+
+--- RESOLVED (this pass): read-only query, same shape/precedent as
+--- client/combat.lua's IsBiteHoldEngaged()/client/movement.lua's
+--- IsLeashed() -- see this file's header FILE-TO-FILE CONTRACT for why this
+--- was added. A pure local-state read, no network cost, safe to call from a
+--- hot site (e.g. a radial item's onSelect) as often as needed.
+--- @return boolean
+function IsSarCallActive()
+    return sarCallActive
+end
 
 --- @type number -- staleness token. Bumped by every start attempt, abandon
 --- and sarCallEnded push, so an in-flight requestSarCall await that

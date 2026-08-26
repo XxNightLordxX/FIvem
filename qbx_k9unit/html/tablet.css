@@ -133,6 +133,16 @@ body {
     branding-name` starts hidden via an inline style when a logo IS
     present, and that file's own `error` listener is what reveals it --
     nothing here assumes a logo is always configured.
+
+    SHAPE IS UNKNOWN AND MUST STAY UNKNOWN: the operator drops in a
+    replacement file at the SAME path (config.lua's own comment) with no
+    code change on either side, so nothing below may assume a square, a
+    wide wordmark, or a tall crest -- `height` fixes the row height only,
+    `width: auto` lets the box follow the image's own ratio, `max-width`
+    is the only thing stopping an extreme wordmark from overrunning the
+    header, and `object-fit: contain` is the actual distortion guard: even
+    if max-width clips the box narrower than the ratio would want, contain
+    letterboxes the raster inside it rather than squashing it.
 */
 .k9tablet-branding {
     display: flex;
@@ -142,10 +152,21 @@ body {
 }
 
 .k9tablet-branding-logo {
+    display: block;
     height: 28px;
-    width: 28px;
+    width: auto;
+    max-width: 64px;
     object-fit: contain;
     border-radius: 4px;
+    /* A near-black, edge-to-edge logo (no transparent margin of its own)
+       would otherwise blend straight into this header's own dark
+       background and read as a floating image with no edges -- this ring
+       + faint tint is theme-neutral (no hardcoded light/dark assumption:
+       mid-grey at low opacity shows up against both a near-black and a
+       light operator-chosen backgroundColor) and gives it a boundary
+       either way. */
+    box-shadow: 0 0 0 1px rgba(127, 127, 127, 0.35);
+    background: rgba(127, 127, 127, 0.08);
 }
 
 .k9tablet-branding-name {
@@ -153,6 +174,52 @@ body {
     font-weight: 600;
     color: var(--k9tablet-accent, #f59e0b);
     white-space: nowrap;
+}
+
+/*
+    Larger one-off branding badge for the "landing"/loading screen only
+    (html/tablet.js's own buildBrandingMark(), used from buildViewerGate())
+    -- see that function's doc comment for why this is deliberately NOT
+    repeated elsewhere: the small header mark above already appears on
+    every screen already, since buildHeader() runs regardless of which
+    tab is open.
+
+    Same shape-agnostic, never-distort rules as `.k9tablet-branding-logo`
+    above (height-constrained, width auto, max-width safety cap,
+    object-fit: contain as the actual distortion guard) and the same
+    theme-neutral boundary treatment, just sized for a standalone badge
+    rather than a header row.
+*/
+.k9tablet-branding-mark {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.k9tablet-branding-mark-frame {
+    display: inline-flex;
+    padding: 8px;
+    border-radius: 14px;
+    box-shadow: 0 0 0 1px rgba(127, 127, 127, 0.35);
+    background: rgba(127, 127, 127, 0.08);
+}
+
+.k9tablet-branding-mark-logo {
+    display: block;
+    height: 96px;
+    width: auto;
+    max-width: 240px;
+    object-fit: contain;
+    border-radius: 8px;
+}
+
+.k9tablet-branding-mark-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--k9tablet-accent, #f59e0b);
+    text-align: center;
 }
 
 .k9tablet-close-btn {
@@ -828,3 +895,108 @@ body {
     shop-location, and runtime-control screens -- one visual language, not
     a fifth one.
 */
+
+/*
+    HOME / LANDING VIEW (this pass) -- html/tablet.js's own buildHomeScreen()
+    doc comment has the full information-architecture writeup. This block
+    introduces NO new colour meaning: every colour below is either one of
+    this file's own four operator-customizable custom properties
+    (--k9tablet-primary/--k9tablet-accent/--k9tablet-bg/--k9tablet-text, see
+    this file's :root block) or a literal ALREADY used elsewhere in this
+    file for the identical structural (non-semantic) purpose -- #1c1f26 row
+    background (.k9tablet-cert-row/.k9tablet-feature-row/
+    .k9tablet-capability-row above), #23262e hover/alt background
+    (.k9tablet-specialization-row above), rgba(255,255,255,0.06) hairline
+    border (.k9tablet-cert-detail above), #9aa0ab muted text
+    (.k9tablet-cert-granter/.k9tablet-feature-state above). The identity
+    card's state-at-a-glance badges (certified count / partnered /
+    blocked count) reuse the SAME .k9tablet-feature-state--available/
+    --blocked/--global_off modifiers every other screen already uses for
+    the identical good/bad/neutral meaning -- see those rules above,
+    unchanged by this block.
+*/
+
+.k9tablet-home-card {
+    background: #1c1f26;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+
+.k9tablet-home-badges {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+}
+
+.k9tablet-home-role-badge {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--k9tablet-accent, #f59e0b);
+}
+
+.k9tablet-home-notice {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.k9tablet-home-notice-title {
+    font-weight: 600;
+    margin: 0 0 4px 0;
+}
+
+.k9tablet-home-section {
+    margin-bottom: 18px;
+}
+
+.k9tablet-home-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.k9tablet-home-action-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    flex: 1 1 220px;
+    padding: 12px 14px;
+    background: #1c1f26;
+    border: none;
+    border-left: 3px solid var(--k9tablet-primary, #2563eb);
+    border-radius: 6px;
+    color: var(--k9tablet-text, #f2f2f2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.k9tablet-home-action-card:hover {
+    background: #23262e;
+}
+
+.k9tablet-home-action-label {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.k9tablet-home-action-hint {
+    font-size: 12px;
+    color: #9aa0ab;
+}
+
+.k9tablet-home-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.k9tablet-home-tool-link {
+    font-size: 12px;
+}

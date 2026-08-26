@@ -156,7 +156,7 @@ local SCHEMA_COLLISION_DETECTED = false
 -- own header). NEVER read directly by a K9Store.* accessor -- only by
 -- K9Store.WaitForSchemaCheckToSettle() below, which every OTHER file's own
 -- boot-time cache read (permissionkeycatalog.lua, xptiers.lua,
--- equipmentshop.lua) must call before trusting its own first query -- see
+-- equipmentshop.lua, k9profiles.lua) must call before trusting its own first query -- see
 -- that function's own header for the race this closes and this file's own
 -- "SCHEMA COLLISION SAFETY NET" section near the bottom for the full
 -- writeup.
@@ -181,12 +181,12 @@ K9Store.IsDatabaseEnabled = DatabaseEnabled
 -- probe below (VerifyTableShapesAgainstKnownSchema, a real, YIELDING
 -- MySQL.query.await call) and every OTHER file's own `onResourceStart`
 -- boot-time cache read (permissionkeycatalog.lua, xptiers.lua,
--- equipmentshop.lua). See this file's own "SCHEMA COLLISION SAFETY NET"
+-- equipmentshop.lua, k9profiles.lua). See this file's own "SCHEMA COLLISION SAFETY NET"
 -- section near the bottom for the full "why this exists" writeup; this is
 -- just the mechanism.
 --
 -- THE RACE, PRECISELY: fxmanifest.lua loads this file before any of those
--- three, so THIS file's own `AddEventHandler('onResourceStart', ...)` call
+-- four, so THIS file's own `AddEventHandler('onResourceStart', ...)` call
 -- (bottom of this file) registers first. But registering first only
 -- guarantees running first up to that handler's own FIRST yield --
 -- `MySQL.query.await` always yields (it awaits a real oxmysql promise), and
@@ -198,7 +198,7 @@ K9Store.IsDatabaseEnabled = DatabaseEnabled
 -- since it starts false and is set at most once), and any OTHER file's own
 -- onResourceStart handler that fires in that window sees a stale answer.
 --
--- WHY THIS MATTERS MORE THAN "STALE FOR A MOMENT": each of those three
+-- WHY THIS MATTERS MORE THAN "STALE FOR A MOMENT": each of those four
 -- catalogs' own boot-time reads is a NARROWER `SELECT` than the columns
 -- this file's own EXPECTED_TABLE_COLUMNS checks (e.g. PermKey_GetAllRows
 -- selects 4 of the 7 columns k9_permission_keys is checked against). A
@@ -208,7 +208,7 @@ K9Store.IsDatabaseEnabled = DatabaseEnabled
 -- outcome the safety net exists to prevent, just via a side door instead
 -- of the front one.
 --
--- THE FIX: every one of those three files' own onResourceStart handlers
+-- THE FIX: every one of those four files' own onResourceStart handlers
 -- must call K9Store.WaitForSchemaCheckToSettle() FIRST, before its own
 -- first K9Store.* read, and treat a `false` result (see below) the exact
 -- same way it already treats `Config.Database.enabled == false` -- boot to
@@ -247,7 +247,7 @@ end
 --- timeout elapses, whichever comes first. This is the ONE call every
 --- OTHER file's own onResourceStart handler that reads a `k9_*` table this
 --- file's EXPECTED_TABLE_COLUMNS list also checks (currently
---- permissionkeycatalog.lua, xptiers.lua, equipmentshop.lua) must make
+--- permissionkeycatalog.lua, xptiers.lua, equipmentshop.lua, k9profiles.lua) must make
 --- BEFORE its own first K9Store.* read -- see the "BOOT-ORDER SETTLEMENT"
 --- header just above for the exact race this closes.
 ---
@@ -2317,6 +2317,191 @@ function K9Store.XPTierAudit_Append(ordinal, detail, changedBy)
 end
 
 -- ======================================================================
+-- k9_individual_overrides / k9_individual_override_audit
+--
+-- Mirrored from server/k9profiles.lua (the owner-directed "god over that
+-- tablet, full customization over everything related to that K9" pass --
+-- the per-INDIVIDUAL-K9 override half; k9_xp_tiers immediately above
+-- already covers the per-RANK half). Same "SafeQuery/SafeWrite bespoke
+-- contract, never throws" discipline as every other K9Store accessor in
+-- this file, and the same current-state-table + append-only-audit-table
+-- shape as k9_certification_tiers/k9_permission_keys above -- WITH a
+-- `deleted` tombstone column (unlike k9_xp_tiers, which has none -- see
+-- that section's own header for why a rank can only ever be re-valued,
+-- never removed): an individual override is a real, operator-initiated
+-- "reset this K9 back to normal" action, distinct from "edit one field",
+-- so it needs a real tombstone the same way k9_certification_tiers/
+-- k9_permission_keys do, even though (unlike a certification tier key)
+-- nothing else in this schema references a citizenid's override row by
+-- foreign key, so there is no HAZARD-2-shaped corruption risk a tombstone
+-- is defending against here -- it exists purely for audit-trail
+-- consistency with the rest of this schema.
+--
+-- k9_individual_overrides is a current-state table (one row per citizenid
+-- that has EVER had an override written for it, a real PRIMARY KEY per
+-- migration 0016's own header, no generated-key uniqueness engine needed)
+-- -- its memory mirror is a plain keyed map, same shape as TierRows/
+-- PermKeyRows above. k9_individual_override_audit is append-only, same
+-- bounded-in-memory-mode ring-buffer treatment as every other rare/
+-- admin-gated audit table in this file -- this surface is high-command-
+-- gated, not ordinary gameplay volume, per migration 0016's own header.
+--
+-- NAMING (bug caught in QA before this ever shipped, recorded here so it is
+-- never repeated): `K9Store.Override_*` / `OverrideRows` /
+-- `OverrideAuditRows` / `OVERRIDE_AUDIT_MEMORY_CAP` ALREADY NAME the
+-- pre-existing `k9_runtime_feature_overrides` subsystem above (see
+-- `K9Store.Override_Upsert(overrideKey, kind, value, updatedBy)` a few
+-- hundred lines up, consumed by server/runtimecontrol.lua's
+-- runtimeSetFeature/runtimeSetTunable). A first draft of this section
+-- reused that exact name -- Lua silently lets a later top-level
+-- `function K9Store.Override_Upsert(...)` OVERWRITE the earlier one in the
+-- same shared table, and a later `local OverrideRows = {}` shadows (never
+-- errors on) the earlier `local` of the same name -- so every existing
+-- runtime-feature-override write would have silently landed on THIS
+-- section's own 5-argument signature instead, writing garbage into the
+-- wrong columns while still returning `true` and reporting success. Caught
+-- before merge; every symbol in THIS section is therefore prefixed
+-- `IndividualOverride*`/`INDIVIDUAL_OVERRIDE*`, never bare `Override*`,
+-- specifically so it can never collide with that earlier, unrelated
+-- subsystem again. See tests/datastore_spec.lua's own "NAME COLLISION
+-- REGRESSION" section for the automated test this incident produced.
+-- ======================================================================
+local IndividualOverrideRows = {} -- citizenid -> { speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted, updated_by, updated_at, created_at_unix }
+local INDIVIDUAL_OVERRIDE_AUDIT_MEMORY_CAP = 200
+local IndividualOverrideAuditRows = {}
+
+--- Mirrors the SafeQuery contract. Replaces server/k9profiles.lua's own
+--- boot-time cache warm `SELECT citizenid, speed_multiplier,
+--- scent_range_multiplier, medkit_cooldown_multiplier, note, deleted FROM
+--- k9_individual_overrides` -- every citizenid EVER touched by a
+--- high-command edit, including tombstoned ones (the `deleted` column is
+--- what server/k9profiles.lua's own cache-build filters on, not this
+--- accessor).
+--- @return table rows
+function K9Store.IndividualOverride_GetAllRows()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await,
+            'SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted FROM k9_individual_overrides', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: IndividualOverride_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for citizenid, row in pairs(IndividualOverrideRows) do
+        out[#out + 1] = {
+            citizenid = citizenid, speed_multiplier = row.speed_multiplier,
+            scent_range_multiplier = row.scent_range_multiplier,
+            medkit_cooldown_multiplier = row.medkit_cooldown_multiplier,
+            note = row.note, deleted = row.deleted,
+        }
+    end
+    return out
+end
+
+--- Mirrors the SafeWrite contract. Replaces k9ProfileUpsert's own
+--- `INSERT INTO k9_individual_overrides (citizenid, speed_multiplier,
+--- scent_range_multiplier, medkit_cooldown_multiplier, note, deleted,
+--- updated_by) VALUES (?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE
+--- speed_multiplier = VALUES(speed_multiplier), scent_range_multiplier =
+--- VALUES(scent_range_multiplier), medkit_cooldown_multiplier =
+--- VALUES(medkit_cooldown_multiplier), note = VALUES(note), deleted = 0,
+--- updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` --
+--- always UN-tombstones the row (`deleted = 0`) and sets every field,
+--- whether this is a brand-new citizenid, a restore, or a plain re-edit of
+--- an already-live override. Every one of `speedMultiplier`/
+--- `scentRangeMultiplier`/`medkitCooldownMultiplier`/`note` may
+--- legitimately be `nil` (an intentionally-unset, per-field-optional
+--- override -- see migration 0016's own header) -- passed straight through
+--- to oxmysql as SQL NULL, the same nullable-middle-parameter shape this
+--- file's own XPTier_Upsert/ShopLocation_Insert already rely on.
+--- @return boolean ok
+function K9Store.IndividualOverride_Upsert(citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, note, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_individual_overrides (citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted, updated_by) ' ..
+            'VALUES (?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE speed_multiplier = VALUES(speed_multiplier), ' ..
+            'scent_range_multiplier = VALUES(scent_range_multiplier), medkit_cooldown_multiplier = VALUES(medkit_cooldown_multiplier), ' ..
+            'note = VALUES(note), deleted = 0, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, note, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: IndividualOverride_Upsert write failed for %s: %s'):format(tostring(citizenid), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = IndividualOverrideRows[citizenid]
+    IndividualOverrideRows[citizenid] = {
+        speed_multiplier = speedMultiplier, scent_range_multiplier = scentRangeMultiplier,
+        medkit_cooldown_multiplier = medkitCooldownMultiplier, note = note, deleted = 0,
+        updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()),
+        created_at_unix = existing and existing.created_at_unix or NowUnix(),
+    }
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces k9ProfileReset's own
+--- `INSERT INTO k9_individual_overrides (citizenid, deleted, updated_by)
+--- VALUES (?, 1, ?) ON DUPLICATE KEY UPDATE deleted = 1, updated_by =
+--- VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` -- TOMBSTONES a row
+--- (see migration 0016's own header), leaving an ALREADY-EXISTING row's
+--- own field values untouched (matching K9Store.Tier_Tombstone's identical
+--- "the real SQL's own ON DUPLICATE KEY UPDATE clause never mentions those
+--- columns" reasoning) -- there is no reference-count hazard to check
+--- first here (nothing else in this schema points at a citizenid's
+--- override row), so unlike K9Store.Cert_CountByTier/DeleteTier's own
+--- gate, this accessor is called unconditionally once authorization and
+--- payload validation have already passed.
+--- @return boolean ok
+function K9Store.IndividualOverride_Tombstone(citizenid, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_individual_overrides (citizenid, deleted, updated_by) VALUES (?, 1, ?) ' ..
+            'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { citizenid, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: IndividualOverride_Tombstone write failed for %s: %s'):format(tostring(citizenid), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = IndividualOverrideRows[citizenid]
+    if existing then
+        existing.deleted, existing.updated_by, existing.updated_at = 1, updatedBy, FormatDateTime(NowUnix())
+    else
+        IndividualOverrideRows[citizenid] = {
+            speed_multiplier = nil, scent_range_multiplier = nil, medkit_cooldown_multiplier = nil, note = nil,
+            deleted = 1, updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()), created_at_unix = NowUnix(),
+        }
+    end
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces server/k9profiles.lua's own
+--- `INSERT INTO k9_individual_override_audit (action, citizenid, detail,
+--- changed_by) VALUES (?, ?, ?, ?)` -- append-only, bounded in memory mode
+--- like every other rare/admin-gated audit table in this file.
+--- @return boolean ok
+function K9Store.IndividualOverrideAudit_Append(action, citizenid, detail, changedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_individual_override_audit (action, citizenid, detail, changed_by) VALUES (?, ?, ?, ?)',
+            { action, citizenid, detail, changedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: IndividualOverrideAudit_Append write failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    IndividualOverrideAuditRows[#IndividualOverrideAuditRows + 1] = { action = action, citizenid = citizenid, detail = detail, changed_by = changedBy, changed_at = FormatDateTime(NowUnix()) }
+    while #IndividualOverrideAuditRows > INDIVIDUAL_OVERRIDE_AUDIT_MEMORY_CAP do
+        table.remove(IndividualOverrideAuditRows, 1)
+    end
+    return true
+end
+
+-- ======================================================================
 -- k9_equipment_shop_items / k9_equipment_shop_item_audit
 --
 -- Mirrored from server/equipmentshop.lua (owner-directed "give high
@@ -2588,14 +2773,14 @@ end
 -- review + fix, this pass): the paragraph above is true ONLY from the
 -- moment this probe's own query returns -- and that query, like every real
 -- `MySQL.*.await` call, YIELDS. `permissionkeycatalog.lua`, `xptiers.lua`,
--- and `equipmentshop.lua` each register their OWN `onResourceStart`
+-- `equipmentshop.lua`, and `k9profiles.lua` each register their OWN `onResourceStart`
 -- handler to populate their own boot-time cache from a `k9_*` table this
 -- same EXPECTED_TABLE_COLUMNS list also checks. fxmanifest.lua loads this
 -- file first, so this probe's handler registers first too -- but
 -- registering first only guarantees running first up to its own first
 -- yield; when it yields, FXServer's event dispatch moves straight on to
 -- the NEXT already-registered handler rather than waiting for this one to
--- resume. Those three files' own boot-time reads are each a NARROWER
+-- resume. Those four files' own boot-time reads are each a NARROWER
 -- `SELECT` than the column list this probe checks (e.g.
 -- `K9Store.PermKey_GetAllRows` selects 4 of the 7 columns
 -- `k9_permission_keys` is checked against below) -- so for the length of
@@ -2605,7 +2790,7 @@ end
 -- whole safety net exists to prevent, just through a side door instead of
 -- the front one. THE FIX: `K9Store.WaitForSchemaCheckToSettle()` (declared
 -- next to `SCHEMA_CHECK_SETTLED`, near the top of this file) gives every
--- one of those three files' own onResourceStart handlers a shared,
+-- one of those four files' own onResourceStart handlers a shared,
 -- resource-global "has this been decided yet" signal to wait on, with a
 -- bounded timeout (`SCHEMA_CHECK_WAIT_TIMEOUT_MS`), BEFORE their own first
 -- read -- see that function's own header for the full contract, including
@@ -2687,6 +2872,8 @@ local EXPECTED_TABLE_COLUMNS = {
     k9_equipment_shop_locations_audit  = { 'location_id', 'action', 'changed_by', 'changed_at' },
     k9_xp_tiers                        = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
     k9_xp_tier_audit                   = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
+    k9_individual_overrides            = { 'citizenid', 'speed_multiplier', 'scent_range_multiplier', 'medkit_cooldown_multiplier', 'note', 'deleted', 'updated_by' },
+    k9_individual_override_audit       = { 'id', 'action', 'citizenid', 'detail', 'changed_by', 'changed_at' },
     k9_equipment_shop_items            = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
     k9_equipment_shop_item_audit       = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
     -- quality pass, 2026-08-26: this file's own PermKey_* functions above

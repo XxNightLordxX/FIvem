@@ -39,16 +39,64 @@
     spec drives is therefore also a check that
     permissions.grant_notify_target / permissions.revoke_notify_target /
     common.unable_to_resolve_citizenid genuinely exist.
+
+    EXCEPTION, THIS PASS (CONSOLE/CHAT COMMAND GRANT PATH section below):
+    server/permissions.lua's own header for that section lists sixteen NEW
+    'permissions.command_*' locale keys this pass needs, reported (per this
+    task's own hard rule) rather than added to locales/en.json directly.
+    localeWithPendingCommandKeys below is a NARROW, DISCLOSED exception to
+    the "never stubbed" rule above, used ONLY by the command-path tests: it
+    resolves those sixteen not-yet-landed keys from a literal copy of the
+    exact text requested (kept byte-for-byte identical to server/
+    permissions.lua's own header, so a drift between the two would be
+    obvious on review) and falls through to the REAL Sandbox.locale (real
+    en.json) for every OTHER key -- so this exception still doubles as a
+    real-file check for every key that predates this pass, exactly like
+    every other test in this file.
 ]]
 
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
 
 -- ----------------------------------------------------------------------
+-- CONSOLE/CHAT COMMAND GRANT PATH (this pass) -- see this file's own
+-- header "EXCEPTION" note above.
+-- ----------------------------------------------------------------------
+local PENDING_COMMAND_LOCALE = {
+    ['permissions.command_usage_grant']        = 'Usage: /k9grantpermission [citizenid] [permissionKey]',
+    ['permissions.command_usage_revoke']       = 'Usage: /k9revokepermission [citizenid] [permissionKey]',
+    ['permissions.command_not_authorized']     = 'You are not authorized to grant or revoke K9 permissions.',
+    ['permissions.command_feature_disabled']   = 'Permission grants are currently disabled on this server.',
+    ['permissions.command_invalid_permission'] = 'That is not a valid permission key.',
+    ['permissions.command_invalid_target']     = 'That is not a valid citizen ID.',
+    ['permissions.command_self_grant_blocked'] = 'You cannot grant a permission to yourself.',
+    ['permissions.command_rate_limited']       = 'Please wait a moment before trying again.',
+    ['permissions.command_busy']               = 'That permission key is being edited elsewhere right now -- try again in a moment.',
+    ['permissions.command_already_granted']    = '%s already holds that permission.',
+    ['permissions.command_db_error']           = 'A database error occurred. Please try again.',
+    ['permissions.command_grant_ok']           = "Granted '%s' to %s.",
+    ['permissions.command_not_granted']        = '%s does not currently hold that permission.',
+    ['permissions.command_revoke_ok']          = "Revoked '%s' from %s.",
+    ['permissions.command_revoke_ok_rank']     = "Revoked '%s' from %s, but they still have it through their rank or High Command status.",
+    ['permissions.command_revoke_ok_offline']  = "Revoked '%s' from %s. They are offline, so it could not be checked whether they still qualify for it through rank.",
+}
+
+--- @param key string
+--- @return string
+local function localeWithPendingCommandKeys(key, ...)
+    local text = PENDING_COMMAND_LOCALE[key]
+    if text then
+        if select('#', ...) > 0 then return text:format(...) end
+        return text
+    end
+    return Sandbox.locale(key, ...)
+end
+
+-- ----------------------------------------------------------------------
 -- Fixture 1: UNIT level. server/cooldowns.lua + server/permissions.lua only.
 -- ----------------------------------------------------------------------
 
---- @param opts table? -- { permissions: table (default 4-key catalog), departments: table (default police w/ certifierGrade=4,auditGrade=4), isHighCommand: fun(source):boolean (default: always false), hasK9Access: fun(source):boolean (default: always false), commandTablet: boolean (default false) }
+--- @param opts table? -- { permissions: table (default 4-key catalog), departments: table (default police w/ certifierGrade=4,auditGrade=4), isHighCommand: fun(source):boolean (default: always false), hasK9Access: fun(source):boolean (default: always false), commandTablet: boolean (default false), featureControl: table? (default absent -- Config.FeatureControl.RequireGrant, for the STARTUP WARNING section), commandTabletConfig: table? (default absent -- Config.CommandTablet, for the STARTUP WARNING section's openMode check), locale: (fun(key, ...):string)? (default nil -- keeps this fixture's existing "real locale() over real en.json" behavior; only the CONSOLE/CHAT COMMAND section overrides this, to resolve this pass's own not-yet-landed 'permissions.command_*' keys -- see that section's own comment) }
 --- @return table fixture
 local function newFixture(opts)
     opts = opts or {}
@@ -182,6 +230,16 @@ local function newFixture(opts)
         eventHandlers[name][#eventHandlers[name] + 1] = fn
     end
 
+    -- CONSOLE/CHAT COMMAND GRANT PATH (this pass) -- server/permissions.lua
+    -- now RegisterCommand's 'k9grantpermission'/'k9revokepermission'
+    -- unconditionally at file-load time, so this fixture MUST provide a
+    -- stub (plain lua5.4 has no real RegisterCommand global at all) or
+    -- EVERY test in this file would fail the moment Sandbox.loadInto
+    -- executes that top-level call. Mirrors newIntegrationFixture's own
+    -- identically-shaped `capturedCommands`/`RegisterCommand` pair below.
+    local capturedCommands = {}
+    local function RegisterCommandStub(name, fn, _restricted) capturedCommands[name] = fn end
+
     local function GetCurrentResourceNameStub() return 'qbx_k9unit' end
 
     local capturedCallbacks = {}
@@ -255,6 +313,13 @@ local function newFixture(opts)
         Departments = opts.departments or {
             police = { label = 'Police', certifierGrade = 4, auditGrade = 4, highCommandGrade = 6, autoAccessGrade = nil },
         },
+        -- STARTUP WARNING section (this pass) -- absent by default, exactly
+        -- matching real production config BEFORE Config.FeatureControl
+        -- existed, and every test written before this pass that never
+        -- passes `opts.featureControl`/`opts.commandTabletConfig` continues
+        -- to load a Config with neither field, unaffected by this addition.
+        FeatureControl = opts.featureControl,
+        CommandTablet = opts.commandTabletConfig,
     }
 
     local envOverrides = {
@@ -270,11 +335,19 @@ local function newFixture(opts)
         lib = libStub,
         TriggerClientEvent = TriggerClientEventStub,
         RegisterNetEvent = RegisterNetEventStub,
+        RegisterCommand = RegisterCommandStub,
         -- Test-controlled soft dependencies -- see this file's header.
         IsHighCommand = opts.isHighCommand or function(_source) return false end,
         HasK9Access = opts.hasK9Access, -- deliberately nil by default (type() guard must tolerate absence)
     }
     for key, value in pairs(teardownOverrides) do envOverrides[key] = value end
+    -- CONSOLE/CHAT COMMAND GRANT PATH (this pass) -- see this fixture's own
+    -- `opts` doc comment above for why this is opt-in, not a default
+    -- override: every OTHER test in this file keeps proving the REAL
+    -- locale() against the REAL locales/en.json (this file's own header
+    -- "LOCALE: never stubbed"), and only tests that need this pass's own
+    -- not-yet-landed 'permissions.command_*' keys pass one in.
+    if opts.locale then envOverrides.locale = opts.locale end
 
     local env = Sandbox.newEnv(envOverrides)
 
@@ -298,6 +371,7 @@ local function newFixture(opts)
         printLog = printLog,
         eventHandlers = eventHandlers,
         callbacks = capturedCallbacks,
+        commands = capturedCommands,
         leashDetachCalls = leashDetachCalls,
         effectEndCalls = effectEndCalls,
         partnershipBreakCalls = partnershipBreakCalls,
@@ -608,6 +682,13 @@ local function tryLoadPermissionsWithConfig(permissionsConfig)
         -- env (deliberately narrower than newFixture's) needs this stub for
         -- the same reason it already needs AddEventHandler above.
         RegisterNetEvent = function(_name, _fn) end,
+        -- CONSOLE/CHAT COMMAND GRANT PATH (this pass) -- server/permissions.lua
+        -- now RegisterCommand's 'k9grantpermission'/'k9revokepermission'
+        -- unconditionally at file-load time too (see that section's own
+        -- header for why it must NOT be gated the way the tablet callbacks
+        -- are) -- same reasoning as the RegisterNetEvent stub immediately
+        -- above.
+        RegisterCommand = function(_name, _fn, _restricted) end,
         print = printStub,
     })
     local ok = pcall(function()
@@ -1535,6 +1616,202 @@ do
 end
 
 -- ============================================================================
+-- CONSOLE/CHAT COMMAND GRANT PATH (this pass) -- 'k9grantpermission'/
+-- 'k9revokepermission', REGISTERED UNCONDITIONALLY (unlike the tablet
+-- callbacks above, which require commandTablet = true). Both are thin
+-- wrappers over the SAME GrantPermission/RevokePermission every test above
+-- already exercises directly -- these tests cover the WRAPPER's own added
+-- behavior (arg validation/usage messages, outcome-to-message mapping,
+-- feedback to the invoker) rather than re-proving authorization/validation
+-- logic that already has its own exhaustive coverage above.
+-- ============================================================================
+
+t.test('CONSOLE/CHAT COMMANDS: k9grantpermission and k9revokepermission are registered regardless of Config.Features.CommandTablet (the entire point -- a second door, not gated behind the first)', function()
+    local off = newFixture({ commandTablet = false })
+    t.isNotNil(off.commands.k9grantpermission)
+    t.isNotNil(off.commands.k9revokepermission)
+
+    local on = newFixture({ commandTablet = true })
+    t.isNotNil(on.commands.k9grantpermission)
+    t.isNotNil(on.commands.k9revokepermission)
+end)
+
+do
+    local f = newFixture({
+        commandTablet = false, -- the whole point: this door works even when the tablet's own is closed
+        locale = localeWithPendingCommandKeys,
+        isHighCommand = function(source) return source == 200 end,
+    })
+    local hcSrc = f.registerPlayer(200, 'HC-CMD', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(201, 'LOWRANK-CMD', { name = 'police', grade = { level = 1 } })
+    f.registerPlayer(202, 'CMD-TARGET', { name = 'police', grade = { level = 1 } })
+
+    t.test('k9grantpermission: malformed args (missing permissionKey) refuses with the usage message, never reaches GrantPermission at all', function()
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.isNotNil(last)
+        t.equals(last.message, 'Usage: /k9grantpermission [citizenid] [permissionKey]')
+        t.equals(last.kind, 'error')
+        t.isFalse(f.env.HasPermission('CMD-TARGET', 'feature.BiteAndHold'))
+    end)
+
+    t.test('k9revokepermission: malformed args (empty citizenid) refuses with the usage message', function()
+        f.commands.k9revokepermission(hcSrc, { '', 'feature.BiteAndHold' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'Usage: /k9revokepermission [citizenid] [permissionKey]')
+        t.equals(last.kind, 'error')
+    end)
+
+    t.test('k9grantpermission: an UNAUTHORIZED (non-high-command) caller is refused -- IDENTICAL authorization to the tablet path (GrantPermission itself), no looser gate invented here', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(201, { 'CMD-TARGET', 'feature.BiteAndHold' })
+        local last = lastNotifyFor(f, 201)
+        t.equals(last.message, 'You are not authorized to grant or revoke K9 permissions.')
+        t.equals(last.kind, 'error')
+        t.isFalse(f.env.HasPermission('CMD-TARGET', 'feature.BiteAndHold'), 'the unauthorized attempt must not have granted anything')
+    end)
+
+    t.test('k9revokepermission: an UNAUTHORIZED caller is refused the same way', function()
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(201, { 'CMD-TARGET', 'feature.BiteAndHold' })
+        local last = lastNotifyFor(f, 201)
+        t.equals(last.message, 'You are not authorized to grant or revoke K9 permissions.')
+        t.equals(last.kind, 'error')
+    end)
+
+    t.test('k9grantpermission: a high-command caller grants a RequireGrant-shaped feature.<Name> permission -- HasPermission reflects it immediately, and the invoker is told exactly what happened', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET', 'feature.BiteAndHold' })
+        t.isTrue(f.env.HasPermission('CMD-TARGET', 'feature.BiteAndHold'))
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Granted 'feature.BiteAndHold' to CMD-TARGET.")
+        t.equals(last.kind, 'success')
+    end)
+
+    t.test('k9grantpermission: granting the SAME permission again reports already_granted, distinctly, without erroring', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET', 'feature.BiteAndHold' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'CMD-TARGET already holds that permission.')
+        t.equals(last.kind, 'error')
+    end)
+
+    t.test('k9grantpermission: an unrecognized permission key is refused as invalid, naming the problem plainly', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET', 'feature.NotARealFeature' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'That is not a valid permission key.')
+        t.equals(last.kind, 'error')
+    end)
+
+    t.test('k9grantpermission: self-grant is blocked exactly like the tablet path -- no exception carved out for the command', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'HC-CMD', 'feature.BiteAndHold' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'You cannot grant a permission to yourself.')
+        t.equals(last.kind, 'error')
+        t.isFalse(f.env.HasPermission('HC-CMD', 'feature.BiteAndHold'))
+    end)
+
+    t.test('k9grantpermission: a second grant from the same officer inside the cooldown window is rate_limited, reported plainly', function()
+        f.registerPlayer(203, 'CMD-TARGET-2', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET-2', 'feature.BiteAndHold' })
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET-2', 'block.BiteAndHold' }) -- immediately after, no advanceTime
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'Please wait a moment before trying again.')
+        t.equals(last.kind, 'error')
+        t.isFalse(f.env.HasPermission('CMD-TARGET-2', 'block.BiteAndHold'), 'the rate-limited attempt must not have written anything')
+    end)
+
+    t.test('WRITE-FAILURE REPORTING: k9grantpermission surfaces a thrown DB error plainly to the invoker, rather than a silent failure', function()
+        f.registerPlayer(204, 'CMD-TARGET-3', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+        f.setForceInsertError('generic')
+        f.commands.k9grantpermission(hcSrc, { 'CMD-TARGET-3', 'feature.BiteAndHold' })
+        f.setForceInsertError(nil)
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'A database error occurred. Please try again.')
+        t.equals(last.kind, 'error')
+        t.isFalse(f.env.HasPermission('CMD-TARGET-3', 'feature.BiteAndHold'), 'a reported db_error must not have actually granted anything')
+    end)
+
+    t.test('k9revokepermission: fully removes access -- ok, and the invoker is told plainly, by label and target', function()
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(hcSrc, { 'CMD-TARGET', 'feature.BiteAndHold' })
+        t.isFalse(f.env.HasPermission('CMD-TARGET', 'feature.BiteAndHold'))
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Revoked 'feature.BiteAndHold' from CMD-TARGET.")
+        t.equals(last.kind, 'success')
+    end)
+
+    t.test('RETIRED-KEY REVOKE PATH: k9revokepermission can still revoke a permission key that is no longer catalog-valid (SHAPE-only check, matching RevokePermission\'s own security fix) -- never invalid_permission for a real, held, since-retired key', function()
+        f.advanceTime(2000)
+        f.registerPlayer(205, 'CMD-RETIRED', { name = 'police', grade = { level = 1 } })
+        f.env.Config.Permissions['k9.retiredviacommand'] = { label = 'Retired Key' }
+        f.commands.k9grantpermission(hcSrc, { 'CMD-RETIRED', 'k9.retiredviacommand' })
+        t.isTrue(f.env.HasPermission('CMD-RETIRED', 'k9.retiredviacommand'))
+
+        -- Tombstone it: remove it from Config.Permissions entirely -- mirrors
+        -- this file's own pre-existing "SECURITY FIX -- a TOMBSTONED key"
+        -- test above, just driven through the command instead of
+        -- RevokePermission directly.
+        f.env.Config.Permissions['k9.retiredviacommand'] = nil
+
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(hcSrc, { 'CMD-RETIRED', 'k9.retiredviacommand' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Revoked 'k9.retiredviacommand' from CMD-RETIRED.")
+        t.equals(last.kind, 'success')
+        t.isFalse(f.env.HasPermission('CMD-RETIRED', 'k9.retiredviacommand'))
+    end)
+
+    t.test('k9revokepermission: revoking a permission nobody holds reports not_granted, naming the target', function()
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(hcSrc, { 'CMD-TARGET', 'feature.NonLethalTakedown' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'CMD-TARGET does not currently hold that permission.')
+        t.equals(last.kind, 'error')
+    end)
+
+    t.test('k9revokepermission: revoking from someone who still qualifies via rank/high-command tells the invoker so, distinctly from a full removal', function()
+        f.advanceTime(2000)
+        local rankSrc = f.registerPlayer(206, 'CMD-STILLRANK', { name = 'police', grade = { level = 4 } }) -- meets certifierGrade
+        f.env.GrantPermission(hcSrc, 'CMD-STILLRANK', 'k9.certify')
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(hcSrc, { 'CMD-STILLRANK', 'k9.certify' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Revoked 'Certify and decertify others' from CMD-STILLRANK, but they still have it through their rank or High Command status.")
+        t.equals(last.kind, 'success')
+        f.disconnectPlayer(rankSrc)
+    end)
+
+    t.test('k9revokepermission: revoking from an OFFLINE target tells the invoker that eligibility could not be checked', function()
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'CMD-OFFLINE-TARGET', 'feature.BiteAndHold')
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(hcSrc, { 'CMD-OFFLINE-TARGET', 'feature.BiteAndHold' })
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Revoked 'feature.BiteAndHold' from CMD-OFFLINE-TARGET. They are offline, so it could not be checked whether they still qualify for it through rank.")
+        t.equals(last.kind, 'success')
+    end)
+
+    t.test('k9grantpermission: an already-notified outcome (invalid_granter) is never double-notified by this command -- GrantPermission itself already sent common.unable_to_resolve_citizenid', function()
+        f.advanceTime(2000)
+        -- 300 is never registered via f.registerPlayer -- exports.qbx_core:GetPlayer(300) resolves to nil, so IsHighCommand(300) is whatever the test stub says, but GrantPermission's OWN granterCitizenid resolution fails first only when IsHighCommand passed -- use a source IsHighCommand accepts but registerPlayer never touched.
+        local before = #f.notifyLog
+        f.env.IsHighCommand = function(source) return source == 999 end
+        f.commands.k9grantpermission(999, { 'CMD-TARGET', 'feature.BiteAndHold' })
+        local entriesFor999 = 0
+        for i = before + 1, #f.notifyLog do
+            if f.notifyLog[i].source == 999 then entriesFor999 = entriesFor999 + 1 end
+        end
+        t.equals(entriesFor999, 1, 'exactly one notification (GrantPermission\'s own common.unable_to_resolve_citizenid) -- never a second one from this command wrapper')
+        f.env.IsHighCommand = function(source) return source == 200 end
+    end)
+end
+
+-- ============================================================================
 -- RESOLUTION ORDER -- end-to-end, through the REAL server/highcommand.lua,
 -- server/certifications.lua and server/admin.lua (newIntegrationFixture).
 -- ============================================================================
@@ -1790,6 +2067,110 @@ t.test('FEATURE-BLOCK PUSH FAILS OPEN: with Config.Features.PermissionGrants off
     local pushed = g.lastClientEventFor(src)
     t.isNotNil(pushed)
     t.equals(#pushed.args[1], 0)
+end)
+
+-- ============================================================================
+-- STARTUP WARNING (this pass) -- fires only when the tablet's own grant
+-- controls are unreachable (Config.Features.CommandTablet ~= true, OR
+-- CommandTablet == true but Config.CommandTablet.openMode == 'item') AND
+-- Config.FeatureControl.RequireGrant lists at least one feature. Named
+-- features are sorted, so the assertions below can match the exact
+-- printed text rather than merely "contains somewhere".
+-- ============================================================================
+
+--- @param f table
+--- @param substring string
+--- @return boolean
+local function anyPrintLineContains(f, substring)
+    for _, line in ipairs(f.printLog) do
+        if line:find(substring, 1, true) then return true end
+    end
+    return false
+end
+
+t.test('STARTUP WARNING: does NOT fire when Config.FeatureControl is absent entirely (every fixture/production config before this pass)', function()
+    local f = newFixture({ commandTablet = false })
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
+end)
+
+t.test('STARTUP WARNING: does NOT fire when Config.FeatureControl.RequireGrant is present but empty', function()
+    local f = newFixture({ commandTablet = false, featureControl = { RequireGrant = {} } })
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
+end)
+
+t.test('STARTUP WARNING: does NOT fire when every RequireGrant entry is `false` -- only entries literally `true` count toward "this needs a grant"', function()
+    local f = newFixture({ commandTablet = false, featureControl = { RequireGrant = { SomethingNotActuallyRequired = false } } })
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
+end)
+
+t.test('STARTUP WARNING: does NOT fire when CommandTablet is ON and openMode is NOT \'item\' -- the tablet is genuinely reachable, nothing to warn about', function()
+    local f = newFixture({
+        commandTablet = true,
+        commandTabletConfig = { openMode = 'both' },
+        featureControl = { RequireGrant = { BiteAndHold = true } },
+    })
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
+end)
+
+t.test('STARTUP WARNING: does NOT fire when CommandTablet is ON and Config.CommandTablet is absent (openMode cannot be \'item\' if there is no CommandTablet config at all)', function()
+    local f = newFixture({
+        commandTablet = true,
+        featureControl = { RequireGrant = { BiteAndHold = true } },
+    })
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
+end)
+
+t.test('STARTUP WARNING: FIRES when Config.Features.CommandTablet is off and RequireGrant is non-empty -- names the EXACT features, sorted, and points at the new commands', function()
+    local f = newFixture({
+        commandTablet = false,
+        featureControl = { RequireGrant = { ScentLineup = true, BiteAndHold = true, PursuitSprint = true, NotRequired = false } },
+    })
+    f.fireOnResourceStart()
+
+    local warningLine
+    for _, line in ipairs(f.printLog) do
+        if line:find('RequireGrant', 1, true) then warningLine = line end
+    end
+    t.isNotNil(warningLine, 'the warning must actually print')
+    t.isTrue(warningLine:find('WARNING', 1, true) ~= nil)
+    t.isTrue(warningLine:find('CommandTablet is off', 1, true) ~= nil, 'must name the actual reason')
+    -- Sorted alphabetically, and NEVER includes the `false` entry.
+    t.isTrue(warningLine:find('BiteAndHold, PursuitSprint, ScentLineup', 1, true) ~= nil, 'must name the exact features, sorted, with no NotRequired leaking in')
+    t.isFalse(warningLine:find('NotRequired', 1, true) ~= nil)
+    -- Never claims a dead end -- must point at the working alternative.
+    t.isTrue(warningLine:find('/k9grantpermission', 1, true) ~= nil)
+    t.isTrue(warningLine:find('/k9revokepermission', 1, true) ~= nil)
+    t.isTrue(warningLine:find('NOT ungrantable', 1, true) ~= nil, 'must explicitly reassure the operator these are NOT a dead end -- the whole point of this pass is that they are not, anymore')
+end)
+
+t.test('STARTUP WARNING: FIRES when Config.Features.CommandTablet is ON but Config.CommandTablet.openMode is \'item\' -- the tablet has no chat-command fallback in that mode', function()
+    local f = newFixture({
+        commandTablet = true,
+        commandTabletConfig = { openMode = 'item' },
+        featureControl = { RequireGrant = { SARCalls = true } },
+    })
+    f.fireOnResourceStart()
+
+    local warningLine
+    for _, line in ipairs(f.printLog) do
+        if line:find('RequireGrant', 1, true) then warningLine = line end
+    end
+    t.isNotNil(warningLine, 'the warning must actually print')
+    t.isTrue(warningLine:find("openMode is 'item'", 1, true) ~= nil, 'must name the actual reason -- distinct wording from the CommandTablet-off case')
+    t.isTrue(warningLine:find('SARCalls', 1, true) ~= nil)
+end)
+
+t.test('STARTUP WARNING: a DIFFERENT resource starting is ignored entirely -- mirrors this resource\'s own GetCurrentResourceName() guard convention', function()
+    local f = newFixture({ commandTablet = false, featureControl = { RequireGrant = { BiteAndHold = true } } })
+    for _, handler in ipairs(f.eventHandlers['onResourceStart'] or {}) do
+        handler('some_other_resource')
+    end
+    t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
 end)
 
 os.exit(t.summary())

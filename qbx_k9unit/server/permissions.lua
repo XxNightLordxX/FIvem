@@ -1541,6 +1541,296 @@ if Config.Features and Config.Features.CommandTablet == true then
 end
 
 -- ======================================================================
+-- CONSOLE/CHAT COMMAND GRANT PATH (this pass) -- closes a genuine single
+-- point of failure found by a workflow trace: until now,
+-- 'qbx_k9unit:server:tabletGrantPermission'/'...:tabletRevokePermission'
+-- (immediately above) were the ONLY code in this resource that ever wrote
+-- a 'feature.<Name>' grant, and both are registered ONLY when
+-- Config.Features.CommandTablet == true. Nine features in config.lua's
+-- own Config.FeatureControl.RequireGrant (BiteAndHold, NonLethalTakedown,
+-- PropDragging, AdminAuditCommands, FindAlerts, ScentTrailHunt,
+-- PursuitSprint, ScentLineup, SARCalls) have NO rank-based fallback in
+-- their own 4-step resolution (config.lua's own header: step 3 is "ALLOW
+-- ONLY IF THEY HOLD A GRANT", full stop) -- so an operator who turns
+-- CommandTablet off, which config.lua's own Config.CommandTablet header
+-- describes as merely "a VIEW" that "decides nothing", silently loses the
+-- ONLY way to ever grant any of those nine features to anyone, including
+-- themselves, with nothing telling them why. See this file's own STARTUP
+-- WARNING section below for the loud half of this fix; these two commands
+-- are the actual second door.
+--
+-- MIRRORS THE TABLET CALLBACKS EXACTLY, not a fresh reimplementation:
+-- both commands are thin `RegisterCommand` wrappers over the SAME
+-- GrantPermission/RevokePermission the tablet callbacks above call,
+-- passed `source` exactly as ox_lib's own callback dispatch passes it to
+-- those -- the real, server-resolved command invoker, never a
+-- client-supplied id. GrantPermission/RevokePermission ALREADY perform
+-- 100% of the real work for either caller: authorization (IsHighCommand,
+-- re-verified from the invoker's OWN live job), rate-limiting
+-- (PermissionActionCooldown, the SAME shared instance the tablet path
+-- already consumes from), key/citizenid validation, self-grant blocking,
+-- the DB write, audit logging (LogAuditInvocation), cache refresh, the
+-- feature-block push, and target notification. THIS SECTION ADDS NO
+-- SECOND, PARALLEL AUTHORIZATION CHECK OF ITS OWN -- a grant path is a
+-- privilege-escalation surface, and the only way to guarantee this new
+-- door can never be WIDER than the tablet's is to route it through the
+-- exact same gate rather than a hand-written copy of it. If GrantPermission/
+-- RevokePermission's own authorization ever changes, both doors change
+-- together, by construction.
+--
+-- REGISTERED UNCONDITIONALLY, unlike the tablet callbacks above (which
+-- are gated on Config.Features.CommandTablet at registration time) --
+-- that is the entire point: this command must survive exactly the
+-- Config.Features.CommandTablet = false case the STARTUP WARNING below
+-- exists to flag, or it would inherit the same single point of failure it
+-- is here to remove. It is independent of Config.Features.PermissionGrants
+-- too, for the identical reason the tablet callbacks already are (see
+-- their own comment above) -- GrantPermission/RevokePermission re-check
+-- that flag themselves and fail closed with 'feature_disabled'.
+--
+-- `false` as RegisterCommand's third argument (this resource's own
+-- established convention -- matches every RegisterCommand in
+-- server/certifications.lua, e.g. k9certifyoffline/k9decertifyoffline)
+-- leaves this command unrestricted at the FiveM ACE permission layer: the
+-- REAL gate is GrantPermission/RevokePermission's own IsHighCommand check,
+-- run unconditionally on every single invocation. This deliberately
+-- includes a plain server-console invocation (source == 0): IsHighCommand
+-- has no job to consult for source 0 (see server/highcommand.lua's own
+-- header) and therefore already, correctly, refuses it -- exactly the
+-- SAME refusal the tablet path gives a non-high-command in-game caller.
+-- No console carve-out is added here (unlike server/admin.lua's own
+-- opt-in TrustConsole convar for its audit commands) -- that would be
+-- WIDENING this door past the tablet's own authorization, which this pass
+-- is explicitly told never to do. In practice this means these two
+-- commands are run BY an already-online high-command officer, from their
+-- own client console or chat box, exactly like /k9certify and friends.
+--
+-- FEEDBACK TO THE INVOKER: unlike the tablet path (which returns a
+-- structured `{ ok, reason }` for client/tablet.lua's own UI to render,
+-- deliberately WITHOUT a granter-facing toast of its own -- see header
+-- "NOTIFICATIONS") a console/chat command has no UI to hand a structured
+-- result to, so THIS section (never GrantPermission/RevokePermission
+-- themselves) is responsible for telling the invoker what happened -- the
+-- exact same responsibility split server/certifications.lua's own
+-- RegisterCommand handlers already have relative to
+-- GrantCertification/RevokeCertification. The two lookup tables below
+-- cover every outcome EXCEPT 'invalid_granter' -- GrantPermission/
+-- RevokePermission already send `locale('common.unable_to_resolve_citizenid')`
+-- to the invoker for that one themselves (see either function's own
+-- body), so adding a second message here would double-notify.
+--
+-- LOCALE KEYS THIS SECTION NEEDS -- NOT yet in locales/en.json (this file
+-- is told not to edit that file -- reported, not added, matching this
+-- file's own header precedent for permissions.grant_notify_target/
+-- permissions.revoke_notify_target). Resolved LAZILY, one `locale()` call
+-- per actual outcome -- never built as one eagerly-evaluated table -- so a
+-- key that is merely UNREACHABLE in a given call never forces every OTHER
+-- key to already exist. Every value below is the exact English text
+-- requested:
+--   permissions.command_usage_grant        = "Usage: /k9grantpermission [citizenid] [permissionKey]"
+--   permissions.command_usage_revoke       = "Usage: /k9revokepermission [citizenid] [permissionKey]"
+--   permissions.command_not_authorized     = "You are not authorized to grant or revoke K9 permissions."
+--   permissions.command_feature_disabled   = "Permission grants are currently disabled on this server."
+--   permissions.command_invalid_permission = "That is not a valid permission key."
+--   permissions.command_invalid_target     = "That is not a valid citizen ID."
+--   permissions.command_self_grant_blocked = "You cannot grant a permission to yourself."
+--   permissions.command_rate_limited       = "Please wait a moment before trying again."
+--   permissions.command_busy               = "That permission key is being edited elsewhere right now -- try again in a moment."
+--   permissions.command_already_granted    = "%s already holds that permission."
+--   permissions.command_db_error           = "A database error occurred. Please try again."
+--   permissions.command_grant_ok           = "Granted '%s' to %s."
+--   permissions.command_not_granted        = "%s does not currently hold that permission."
+--   permissions.command_revoke_ok          = "Revoked '%s' from %s."
+--   permissions.command_revoke_ok_rank     = "Revoked '%s' from %s, but they still have it through their rank or High Command status."
+--   permissions.command_revoke_ok_offline  = "Revoked '%s' from %s. They are offline, so it could not be checked whether they still qualify for it through rank."
+-- ======================================================================
+
+--- Maps a GrantPermission outcome string to the locale KEY to show the
+--- invoker (never the resolved text -- see this section's own header for
+--- why this is a lazy lookup table, not an eagerly-evaluated one). No
+--- entry for 'ok' (handled separately below -- it needs the permission's
+--- own label) or 'invalid_granter' (already notified by GrantPermission
+--- itself).
+local GRANT_COMMAND_OUTCOME_KEYS = {
+    feature_disabled   = 'permissions.command_feature_disabled',
+    denied             = 'permissions.command_not_authorized',
+    invalid_permission = 'permissions.command_invalid_permission',
+    invalid_target     = 'permissions.command_invalid_target',
+    self_grant_blocked = 'permissions.command_self_grant_blocked',
+    rate_limited       = 'permissions.command_rate_limited',
+    busy               = 'permissions.command_busy',
+    already_granted    = 'permissions.command_already_granted',
+    db_error           = 'permissions.command_db_error',
+}
+
+--- Same shape as GRANT_COMMAND_OUTCOME_KEYS above, for RevokePermission's
+--- own outcome strings. No entry for 'ok' (handled separately below --
+--- three different messages depending on `stillHasAccess`) or
+--- 'invalid_granter' (already notified by RevokePermission itself). No
+--- 'busy'/'self_grant_blocked' entries either -- RevokePermission never
+--- returns either outcome (see that function's own doc comment).
+local REVOKE_COMMAND_OUTCOME_KEYS = {
+    feature_disabled   = 'permissions.command_feature_disabled',
+    denied             = 'permissions.command_not_authorized',
+    invalid_permission = 'permissions.command_invalid_permission',
+    invalid_target     = 'permissions.command_invalid_target',
+    rate_limited       = 'permissions.command_rate_limited',
+    not_granted        = 'permissions.command_not_granted',
+    db_error           = 'permissions.command_db_error',
+}
+
+-- `type(RegisterCommand) == 'function'` guard (this resource's established
+-- soft-dependency convention): RegisterCommand is a real, always-present
+-- FiveM native in production, so this is never false there -- both
+-- commands register exactly as unconditionally as described above. It
+-- exists purely so a minimal test harness/embedding that never provides
+-- one (this file is a widely-depended-upon soft dependency of several
+-- OTHER files' own test fixtures -- server/appearance.lua,
+-- server/permissionkeycatalog.lua, server/tablet.lua) degrades to "these
+-- two commands are not registered in THAT harness" rather than a hard
+-- load-time crash the moment this section was added.
+if type(RegisterCommand) == 'function' then
+    RegisterCommand('k9grantpermission', function(source, args)
+        local targetCitizenid = args[1]
+        local permissionKey = args[2]
+        if type(targetCitizenid) ~= 'string' or targetCitizenid == '' or type(permissionKey) ~= 'string' or permissionKey == '' then
+            NotifyPlayer(source, locale('permissions.command_usage_grant'), 'error')
+            return
+        end
+
+        local ok, outcome = GrantPermission(source, targetCitizenid, permissionKey)
+        if ok then
+            NotifyPlayer(source, locale('permissions.command_grant_ok', PermissionLabelFor(permissionKey), targetCitizenid), 'success')
+            return
+        end
+
+        if outcome == 'already_granted' then
+            NotifyPlayer(source, locale(GRANT_COMMAND_OUTCOME_KEYS.already_granted, targetCitizenid), 'error')
+            return
+        end
+        local key = GRANT_COMMAND_OUTCOME_KEYS[outcome]
+        if key then
+            NotifyPlayer(source, locale(key), 'error')
+        end
+        -- outcome == 'invalid_granter': already notified by GrantPermission itself.
+    end, false)
+
+    RegisterCommand('k9revokepermission', function(source, args)
+        local targetCitizenid = args[1]
+        local permissionKey = args[2]
+        if type(targetCitizenid) ~= 'string' or targetCitizenid == '' or type(permissionKey) ~= 'string' or permissionKey == '' then
+            NotifyPlayer(source, locale('permissions.command_usage_revoke'), 'error')
+            return
+        end
+
+        local ok, outcome, stillHasAccess = RevokePermission(source, targetCitizenid, permissionKey)
+        if ok then
+            local label = PermissionLabelFor(permissionKey)
+            if stillHasAccess == 'rank_or_high_command' then
+                NotifyPlayer(source, locale('permissions.command_revoke_ok_rank', label, targetCitizenid), 'success')
+            elseif stillHasAccess == 'unknown_target_offline' then
+                NotifyPlayer(source, locale('permissions.command_revoke_ok_offline', label, targetCitizenid), 'success')
+            else
+                NotifyPlayer(source, locale('permissions.command_revoke_ok', label, targetCitizenid), 'success')
+            end
+            return
+        end
+
+        if outcome == 'not_granted' then
+            NotifyPlayer(source, locale(REVOKE_COMMAND_OUTCOME_KEYS.not_granted, targetCitizenid), 'error')
+            return
+        end
+        local key = REVOKE_COMMAND_OUTCOME_KEYS[outcome]
+        if key then
+            NotifyPlayer(source, locale(key), 'error')
+        end
+        -- outcome == 'invalid_granter': already notified by RevokePermission itself.
+    end, false)
+end
+
+-- ======================================================================
+-- STARTUP WARNING -- CommandTablet-off/unreachable + a non-empty
+-- RequireGrant (this pass). Written for the operator who flips
+-- Config.Features.CommandTablet off believing it only removes a "VIEW"
+-- (config.lua's own Config.CommandTablet header: "The tablet is a VIEW.
+-- It decides nothing.") without realising it is ALSO the tablet's own
+-- grant/revoke CONTROLS -- see this file's own "CONSOLE/CHAT COMMAND
+-- GRANT PATH" section immediately above for the fix; this is the loud,
+-- printed half of it, matching this resource's established convention
+-- for an unmissable, actionable operator warning (identical shape to
+-- server/combat.lua's PropDragging override warning and
+-- server/defense.lua's HandlerDownDefense override warning -- both
+-- `AddEventHandler('onResourceStart', ...)`, both filtered to THIS
+-- resource's own restart via `GetCurrentResourceName() ~= resourceName`,
+-- both a single loud `print`, never an `assert`, because turning a
+-- feature off is a legitimate operator choice, not a misconfiguration to
+-- abort over).
+--
+-- FIRES ONLY WHEN BOTH HOLD:
+--   1. Config.FeatureControl.RequireGrant currently lists at least one
+--      feature (an empty/absent table means nothing in this resource
+--      needs a grant at all, so an unreachable tablet costs nothing).
+--   2. The tablet's own grant controls are unreachable right now, either
+--      because Config.Features.CommandTablet ~= true (the
+--      tabletGrantPermission/tabletRevokePermission callbacks above are
+--      then never even registered), OR because
+--      Config.CommandTablet.openMode == 'item' -- client/tablet.lua's own
+--      header documents that, in 'item' mode, "The command is not
+--      registered at all", so the tablet's ONLY door is an inventory item
+--      this resource cannot verify exists in your items table (config.lua's
+--      own comment on Config.CommandTablet.itemName -- a separate,
+--      already-disclosed footgun this warning does not re-diagnose, only
+--      accounts for as a second way the tablet can be unreachable).
+--
+-- NAMES THE EXACT FEATURES, sorted for a deterministic, testable message,
+-- rather than a vague "some features" -- an operator should not have to
+-- go re-read config.lua to find out what just became affected.
+-- NEVER CLAIMS THESE ARE "UNGRANTABLE" (true before this pass, false
+-- after it) -- the two commands directly above are ALWAYS registered,
+-- regardless of CommandTablet, so this warning points at them as the
+-- working alternative rather than describing a dead end.
+-- ======================================================================
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    local requireGrant = type(Config.FeatureControl) == 'table' and Config.FeatureControl.RequireGrant
+    if type(requireGrant) ~= 'table' then return end
+
+    local featureNames = {}
+    for name, isRequired in pairs(requireGrant) do
+        if isRequired == true and type(name) == 'string' then
+            featureNames[#featureNames + 1] = name
+        end
+    end
+    if #featureNames == 0 then return end
+    table.sort(featureNames)
+
+    local commandTabletOn = Config.Features and Config.Features.CommandTablet == true
+    local openModeItemOnly = commandTabletOn and type(Config.CommandTablet) == 'table' and Config.CommandTablet.openMode == 'item'
+
+    if commandTabletOn and not openModeItemOnly then return end
+
+    local reason
+    if not commandTabletOn then
+        reason = "Config.Features.CommandTablet is off, so the tablet's own grant/revoke controls are not even registered"
+    else
+        reason = "Config.CommandTablet.openMode is 'item', so the tablet has no chat-command fallback -- it is reachable only by an inventory item this resource cannot verify you have actually configured"
+    end
+
+    print(
+        ("[qbx_k9unit] WARNING: %s. Config.FeatureControl.RequireGrant currently requires an explicit per-person " ..
+         "grant before ANYONE (including you) can use: %s. These are NOT ungrantable -- use the /k9grantpermission " ..
+         "[citizenid] [permissionKey] and /k9revokepermission [citizenid] [permissionKey] chat commands instead " ..
+         "(e.g. /k9grantpermission ABC12345 feature.BiteAndHold). They require the exact same High Command rank " ..
+         "the tablet does, nothing looser or different. If you meant to use the tablet for this, turn " ..
+         "Config.Features.CommandTablet back on and, if you rely on the 'item' open mode, either add a " ..
+         "chat-command fallback by setting Config.CommandTablet.openMode to 'command' or 'both', or confirm " ..
+         "Config.CommandTablet.itemName is really registered in your ox_inventory items table."
+        ):format(reason, table.concat(featureNames, ', '))
+    )
+end)
+
+-- ======================================================================
 -- CACHE LIFECYCLE -- warm on load/reconnect, evict on disconnect. Mirrors
 -- server/certifications.lua's own PlayerLoaded/playerDropped handlers and
 -- server/main.lua's onResourceStart backfill loop exactly.

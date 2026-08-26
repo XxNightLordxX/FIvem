@@ -256,15 +256,24 @@
         OWN auto-revert-on-credential-loss call sites, wrong for a direct,
         forceful "make them human right now" tablet button). Calls a NEW
         primitive, ForceRevertK9Appearance(granterSrc, targetCitizenid),
-        requested from server/appearance.lua's own owner this pass (message
-        sent; not yet landed at the time this file was written) rather than
-        hand-rolled here -- "coordinate with it, do not build a second
-        revert path" was the owner's own explicit instruction. Guarded with
+        requested from server/appearance.lua's own owner this pass rather
+        than hand-rolled here -- "coordinate with it, do not build a second
+        revert path" was the owner's own explicit instruction. STATUS
+        UPDATE (hardening pass, confirmed by direct read of
+        server/appearance.lua): ForceRevertK9Appearance HAS NOW LANDED --
+        it re-verifies IsHighCommand(granterSrc) itself (never trusting
+        this wrapper), consumes its own AppearanceActionCooldown (shared
+        with tabletAssignK9Role/ApplyK9PedRole, keyed by granterSrc), is
+        credential-blind on the TARGET by design (the whole point of a
+        termination path -- see that function's own doc comment), and
+        checks every one of its own DB writes' return values before ever
+        reporting success. Still guarded here with
         `type(ForceRevertK9Appearance) == 'function'`, this resource's
-        standard soft-dependency convention: the callback is registered
-        (so the tablet gets a clear, honest 'not_available' rather than a
-        hung fetch) and activates automatically the moment that function
-        lands, with zero further edits to this file.
+        standard soft-dependency convention -- kept even though the
+        function is now confirmed present, exactly like every other
+        cross-file call in this file, so a future removal of
+        server/appearance.lua degrades to a clear 'not_available' rather
+        than an uncaught error.
     ======================================================================
 
     ======================================================================

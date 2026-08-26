@@ -82,6 +82,16 @@ t.test('a successful tablet:requestMyRecord renders certifications, XP/tier, and
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
+    // The DEFAULT screen on open is now 'home' (this pass's own landing
+    // view -- see html/tablet.js's buildHomeScreen() header), which shows
+    // ONLY summary counts, never a department label/XP line -- this test
+    // is specifically about the FULL My Record screen, so it navigates
+    // there explicitly, same as every screen-specific spec already does
+    // for the console/theme/cert-tier/etc. tabs.
+    findByText(h.getRoot(), 'My Record')[0].click();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
     const root = h.getRoot();
     t.isTrue(findByText(root, 'Los Santos Police Department').length >= 1, 'certification department label rendered');
     t.isTrue(findByText(root, '1250 — Trained K9').length >= 1, 'XP + tier line rendered');

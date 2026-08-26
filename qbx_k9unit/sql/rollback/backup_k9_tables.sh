@@ -41,6 +41,12 @@
 #                         (threshold/label/multipliers/badge) on top of
 #                         config.lua's own Config.XPTiers defaults, and the
 #                         full history of every rank edit made
+#     k9_individual_overrides / k9_individual_override_audit
+#                         every high-command-edited per-INDIVIDUAL-K9
+#                         speed/scent/medkit-cooldown override (the "god
+#                         mode" layer on top of whichever XP-tier profile a
+#                         citizenid otherwise resolves to), and the full
+#                         history of every override create/edit/reset made
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -162,7 +168,8 @@ ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_pe
             k9_equipment_shop_locations k9_equipment_shop_locations_audit
             k9_permission_keys k9_permission_key_audit
             k9_equipment_shop_items k9_equipment_shop_item_audit
-            k9_xp_tiers k9_xp_tier_audit)
+            k9_xp_tiers k9_xp_tier_audit
+            k9_individual_overrides k9_individual_override_audit)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do

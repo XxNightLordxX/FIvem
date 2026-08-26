@@ -234,6 +234,7 @@ local MIGRATION_FILES_THAT_CREATE_TABLES = {
     '0013_create_k9_permission_keys.sql',
     '0014_create_k9_equipment_shop_items.sql',
     '0015_create_k9_xp_tiers.sql',
+    '0016_create_k9_individual_overrides.sql',
 }
 
 local FOUNDING_TABLES_WITH_NO_DEDICATED_MIGRATION = {

@@ -109,6 +109,17 @@
                 state: 'global_off'|'blocked'|'not_certified'|'requires_grant_missing'|'available',
               },
             ],
+            // CLIENT-LOCAL role signal (this pass, owner-directed
+            // "restructure the tablet around WHO IS HOLDING IT") --
+            // ENRICHED ONTO THIS EXACT RESPONSE BY client/tablet.lua'S
+            // OWN RegisterNUICallback('tablet:requestMyRecord', ...)
+            // HANDLER, not sent by server/tablet.lua at all -- see that
+            // handler's own ResolveLocalRoleFlags() doc comment. Cosmetic
+            // framing ONLY for buildHomeScreen()'s role badge/partnered
+            // indicator -- never read by, or forwarded into, any
+            // mutation/trigger callback (see THE SECURITY RULE above).
+            isK9Model: boolean,   // IsOwnModelK9() -- is this client currently wearing a K9 model right now
+            isPartnered: boolean, // IsPartnered() -- is this client currently in an established handler/K9 partnership right now
           }
         Failure: { ok: false, error: string, message?: string }
         (error is a short machine code -- 'not_authorized'/'server_error'/
@@ -520,6 +531,7 @@
       { action: 'tablet:open', data: {
           capabilities: { 'k9.access': {label,description}, ... },  // verbatim Config.Permissions text -- see html/tablet-bridge... no, see this file's DEFAULT_CAPABILITIES for the exact fallback copy this must match
           strings: { <key>: <resolved locale string>, ... },        // see DEFAULT_STRINGS below for the full key list this page understands
+          requestedView: 'highCommand'|null,                        // client/tablet.lua's new Config.CommandTablet.highCommandCommand shortcut -- PRESENTATION HINT ONLY. loadMyRecord() consumes this (see its own comment) strictly AFTER tablet:requestMyRecord's server-verified viewer.isHighCommand for THIS caller is known: true lands on the console tab pre-loaded, anything else shows a plain "you don't have access" notice with the caller's own record underneath, exactly as the ordinary command would show them. Never used to skip, gate, or shortcut any fetch above.
           maxXpPerGrant: number|null,                               // Config.HighCommand.maxXpPerGrant, UX hint only
           shopLocationsEnabled: boolean,                            // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled: shows a disabled-server-wide note rather than hiding the screen; every equipmentShop* callback re-checks this live, server-side, regardless
           runtimeControlEnabled: boolean,                           // Config.Features.RuntimeFeatureControl -- UX hint only, SAME posture as themingEnabled/shopLocationsEnabled: shows a disabled-server-wide note rather than hiding the screen; runtimeListFeatures/ListTunables have no such gate at all (read-only values still load), only the four mutating runtimeSetFeature/runtimeSetTunable/runtimeResetFeature/runtimeResetTunable calls actually refuse ('feature_disabled') when this is off
@@ -649,6 +661,7 @@
         error_not_authorized: 'You are not authorized to view this.',
         error_timeout: 'The server did not respond in time.',
         error_network: 'Could not reach the server.',
+        high_command_required_notice: 'You don\'t have High Command access, so here is your own record instead.',
         retry_label: 'Retry',
         search_placeholder: 'Search by name, citizen ID, or department...',
         refresh_label: 'Refresh',
@@ -1094,6 +1107,193 @@
         shop_item_error_must_include_every_item: 'The new order must include every existing item, with none missing or duplicated.',
         shop_item_error_invalid_key_set: 'The new order must include every existing item, with none missing or duplicated.',
         shop_item_error_db_error: 'A database error occurred. Try again.',
+
+        // ---- HOME / LANDING VIEW (this pass, owner-directed "restructure
+        // the tablet around WHO IS HOLDING IT... a first-time player who
+        // has read nothing should open this and know what to do within
+        // seconds"). See buildHomeScreen() below for the full writeup --
+        // this is now the DEFAULT screen on open, ahead of every existing
+        // tab; nothing below removes or renames an existing screen.
+        tab_home: 'Home',
+        home_welcome_template: 'Welcome, {name}.',
+        home_role_high_command: 'High Command',
+        home_role_k9: 'K9',
+        home_role_handler: 'Certified Handler',
+        home_role_uncertified: 'New Arrival',
+        home_partnered_badge: 'Partnered',
+        home_not_partnered_badge: 'No Partner',
+        home_certified_count_template: 'Certified in {count} of {total} departments',
+        home_quick_actions_heading: 'What do you want to do?',
+        home_view_my_record_label: 'View My Record',
+        home_view_my_record_hint: 'Your certifications, XP, and the abilities you can use right now.',
+        home_open_console_label: 'Open Command Console',
+        home_open_console_hint: 'Look up and manage handlers and K9s.',
+        home_high_command_heading: 'High Command Tools',
+        home_high_command_hint: 'Server-wide settings: theming, certification tiers, permission keys, the supply shop, runtime switches, XP ranks, and the audit trail.',
+        home_no_certification_title: "You're not certified yet",
+        home_no_certification_body: 'Ask a certifier or a High Command officer to certify you in a department. Once certified, your abilities and record will appear here.',
+        home_ready_abilities_heading: 'Ready to use right now',
+        home_no_ready_abilities: 'Nothing is ready to use right now.',
+        home_view_all_abilities_label: 'View all abilities',
+        home_blocked_count_template: '{count} of your abilities are currently blocked',
+
+        // ---- COMMAND REFERENCE (this pass -- "36 commands, no way for a
+        // player to discover them in-game"). See COMMAND_REFERENCE/
+        // buildCommandReferenceScreen() below for the full design. Every
+        // one of these keys is NOT YET present in locales/en.json's
+        // `tablet` group as of this pass -- flagged to that file's owner
+        // (see this pass's own report for the exact key -> English-string
+        // list). BuildTabletStrings()'s own pcall-per-key guard means each
+        // is simply omitted from `strings` until added there, and this
+        // DEFAULT_STRINGS table covers that exact gap in the meantime,
+        // same resilience-net role it already plays for every other key.
+        tab_commands: 'Commands',
+        cmdref_heading: 'Command Reference',
+        cmdref_intro: 'Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.',
+        cmdref_search_placeholder: 'Search commands...',
+        cmdref_empty: 'No commands match your search.',
+        cmdref_column_command: 'Command',
+        cmdref_column_does: 'What It Does',
+        cmdref_column_needs: 'What It Needs',
+        cmdref_admin_badge: 'Admin',
+        cmdref_status_insufficient_authorization: 'Requires higher authorization',
+
+        cmdref_category_field_gear: 'Field Gear & Equipment',
+        cmdref_category_calling_off: 'Calling Your K9 Off',
+        cmdref_category_scent_games: 'Scent Games',
+        cmdref_category_search_rescue: 'Search & Rescue',
+        cmdref_category_training: 'Training',
+        cmdref_category_records: 'Records & Progress',
+        cmdref_category_certification: 'Certification Management',
+        cmdref_category_xp: 'XP Management',
+        cmdref_category_audit: 'Audit & Oversight',
+        cmdref_category_devtools: 'Developer Tools',
+        cmdref_category_permissions: 'Permission Management',
+
+        cmdref_k9deploykennel_usage: '/k9deploykennel',
+        cmdref_k9deploykennel_does: 'Places a portable kennel at your feet.',
+        cmdref_k9deploykennel_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
+        cmdref_k9propattach_usage: '/k9propattach',
+        cmdref_k9propattach_does: 'Attaches or removes a prop (for example a vest) on your K9.',
+        cmdref_k9propattach_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
+        cmdref_k9throwfetchball_usage: '/k9throwfetchball',
+        cmdref_k9throwfetchball_does: 'Throws a fetch ball for your K9 to chase.',
+        cmdref_k9throwfetchball_needs: 'An active K9 certification. Only one ball may be in play for you at a time. This feature must be turned on for your server.',
+        cmdref_k9dropfetchball_usage: '/k9dropfetchball',
+        cmdref_k9dropfetchball_does: 'Drops the fetch ball you are currently carrying.',
+        cmdref_k9dropfetchball_needs: 'Nothing -- always available while you are carrying a ball, so you can never get stuck holding one.',
+        cmdref_k9recallfetchball_usage: '/k9recallfetchball',
+        cmdref_k9recallfetchball_does: 'Cancels your own fetch throw in progress.',
+        cmdref_k9recallfetchball_needs: 'Nothing -- always available, so a throw can always be called off.',
+
+        cmdref_k9recall_usage: '/k9recall',
+        cmdref_k9recall_does: 'Calls your K9 partner back from whatever it is doing (a bite hold, a takedown, a drag).',
+        cmdref_k9recall_needs: 'Nothing. This is deliberately never blocked, so you can always call your own K9 off. This feature must be turned on for your server.',
+        cmdref_k9calmdown_usage: '/k9calmdown',
+        cmdref_k9calmdown_does: 'Calms your K9 down, reducing fear and stress.',
+        cmdref_k9calmdown_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
+        cmdref_k9meatbait_usage: '/k9meatbait',
+        cmdref_k9meatbait_does: 'Uses meat bait to distract any K9 nearby, yours or someone else\'s.',
+        cmdref_k9meatbait_needs: 'You must be holding the item this server has configured for meat bait. Open to any player, not just certified handlers. This feature must be turned on for your server.',
+        cmdref_k9whistle_usage: '/k9whistle',
+        cmdref_k9whistle_does: 'Uses a whistle to distract any K9 nearby.',
+        cmdref_k9whistle_needs: 'You must be holding the item this server has configured for a whistle. Open to any player, not just certified handlers. This feature must be turned on for your server.',
+
+        cmdref_k9lineup_usage: '/k9lineup <server id> <server id> ...',
+        cmdref_k9lineup_does: 'Starts a scent line-up: invites several players to stand in a row so your K9 can pick the one real match out of them.',
+        cmdref_k9lineup_needs: 'An active K9 certification, and, on some servers, a specific grant for this feature. Needs at least the server\'s configured minimum number of participants. This feature must be turned on for your server.',
+        cmdref_k9lineuppick_usage: '/k9lineuppick <position number>',
+        cmdref_k9lineuppick_does: 'Makes your K9\'s one guess, once everyone invited has accepted.',
+        cmdref_k9lineuppick_needs: 'You must already be running a locked line-up (started with /k9lineup).',
+        cmdref_k9lineupcancel_usage: '/k9lineupcancel',
+        cmdref_k9lineupcancel_does: 'Leaves or cancels your current scent line-up, whether you started it or were invited.',
+        cmdref_k9lineupcancel_needs: 'Nothing -- always available, so nobody is ever stuck in a line-up.',
+        cmdref_k9nosehunt_usage: '/k9nosehunt [stop]',
+        cmdref_k9nosehunt_does: 'Starts a scent-trail hunt for your K9 (a follow-the-growl guessing game, no marker). Add "stop" to abandon a hunt already running.',
+        cmdref_k9nosehunt_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server. ("stop" is always available.)',
+
+        cmdref_k9sarcall_usage: '/k9sarcall [stop]',
+        cmdref_k9sarcall_does: 'Starts a search-and-rescue call for your K9 to work (a missing person or lost property). Add "stop" to abandon a call already running.',
+        cmdref_k9sarcall_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server. ("stop" is always available.)',
+
+        cmdref_k9training_usage: '/k9training <on|off>',
+        cmdref_k9training_does: 'Turns Training Mode on or off, for practice drills.',
+        cmdref_k9training_needs: 'An active K9 certification, you must currently be controlling your K9, and you must be standing in one of this server\'s configured training areas.',
+        cmdref_k9trainsearch_usage: '/k9trainsearch',
+        cmdref_k9trainsearch_does: 'Runs a practice search drill (no real consequences, just reps).',
+        cmdref_k9trainsearch_needs: 'Training Mode must already be switched on for you (see /k9training).',
+        cmdref_k9trainbite_usage: '/k9trainbite',
+        cmdref_k9trainbite_does: 'Runs a practice bite-hold drill.',
+        cmdref_k9trainbite_needs: 'Training Mode must already be switched on for you (see /k9training).',
+
+        cmdref_k9stats_usage: '/k9stats [limit]',
+        cmdref_k9stats_does: 'Shows the server\'s K9 XP leaderboard.',
+        cmdref_k9stats_needs: 'An active K9 certification. This feature must be turned on for your server.',
+
+        cmdref_k9certify_usage: '/k9certify <server id>',
+        cmdref_k9certify_does: 'Certifies a currently-online player as a K9 handler for their current department.',
+        cmdref_k9certify_needs: 'High Command, the certify permission, or your department\'s certifier rank. The target must be online, in a configured department, and within certifying distance (unless you are certifying yourself and self-certification is allowed).',
+        cmdref_k9certifyoffline_usage: '/k9certifyoffline <citizenid> <job>',
+        cmdref_k9certifyoffline_does: 'Same as /k9certify, but for a player who is currently offline.',
+        cmdref_k9certifyoffline_needs: 'Same as /k9certify. Refuses if that person is actually online right now (use /k9certify instead), and refuses if your server requires an on-model check, since that can only happen while they are online.',
+        cmdref_k9decertify_usage: '/k9decertify <server id> [reason]',
+        cmdref_k9decertify_does: 'Revokes an online player\'s current department certification.',
+        cmdref_k9decertify_needs: 'Same as /k9certify. Proximity is required unless you are revoking your own.',
+        cmdref_k9decertifyoffline_usage: '/k9decertifyoffline <citizenid> <job> [reason]',
+        cmdref_k9decertifyoffline_does: 'Same as /k9decertify, but for an offline citizen.',
+        cmdref_k9decertifyoffline_needs: 'Same as /k9certify. Refuses if that person is actually online right now.',
+        cmdref_k9settier_usage: '/k9settier <server id> <tier>',
+        cmdref_k9settier_does: 'Changes an online, actively-certified handler\'s certification tier.',
+        cmdref_k9settier_needs: 'Same as /k9certify. The target must already hold an active certification.',
+        cmdref_k9settieroffline_usage: '/k9settieroffline <citizenid> <job> <tier>',
+        cmdref_k9settieroffline_does: 'Same as /k9settier, but for an offline citizen.',
+        cmdref_k9settieroffline_needs: 'Same as /k9settier. Refuses if that person is actually online right now.',
+        cmdref_k9recertify_usage: '/k9recertify <server id>',
+        cmdref_k9recertify_does: 'Renews (extends) an online handler\'s certification expiry.',
+        cmdref_k9recertify_needs: 'Same as /k9certify. Only does anything if this server has certification expiry turned on, and the target holds an active certification.',
+        cmdref_k9recertifyoffline_usage: '/k9recertifyoffline <citizenid> <job>',
+        cmdref_k9recertifyoffline_does: 'Same as /k9recertify, but for an offline citizen.',
+        cmdref_k9recertifyoffline_needs: 'Same as /k9recertify. Refuses if that person is actually online right now.',
+        cmdref_k9specialize_usage: '/k9specialize <server id> <specialization>',
+        cmdref_k9specialize_does: 'Grants an online, actively-certified handler a specialization.',
+        cmdref_k9specialize_needs: 'Same as /k9certify. The target\'s certification tier must be allowed to hold specializations. There is no offline version of this command -- granting a specialization always requires the target to be online.',
+        cmdref_k9unspecialize_usage: '/k9unspecialize <server id> <specialization>',
+        cmdref_k9unspecialize_does: 'Revokes an online handler\'s specialization.',
+        cmdref_k9unspecialize_needs: 'Same as /k9certify.',
+        cmdref_k9unspecializeoffline_usage: '/k9unspecializeoffline <citizenid> <job> <specialization>',
+        cmdref_k9unspecializeoffline_does: 'Same as /k9unspecialize, but for an offline citizen.',
+        cmdref_k9unspecializeoffline_needs: 'Same as /k9certify. Refuses if that person is actually online right now.',
+
+        cmdref_k9givexp_usage: '/k9givexp <server id> <amount>',
+        cmdref_k9givexp_does: 'Awards XP directly to an online player.',
+        cmdref_k9givexp_needs: 'High Command or the grant-XP permission. The amount is capped by this server\'s configured maximum per grant, and repeated use is rate-limited.',
+
+        cmdref_k9auditcert_usage: '/k9auditcert <citizenid> [limit]',
+        cmdref_k9auditcert_does: 'Looks up a citizen\'s certification history (grants and revokes).',
+        cmdref_k9auditcert_needs: 'High Command, the audit permission, or your department\'s audit rank. The Audit Trail feature must be turned on for your server.',
+        cmdref_k9auditpartner_usage: '/k9auditpartner <citizenid> [limit]',
+        cmdref_k9auditpartner_does: 'Looks up a citizen\'s K9 partnership history.',
+        cmdref_k9auditpartner_needs: 'Same as /k9auditcert.',
+        cmdref_k9auditsearch_usage: '/k9auditsearch <officer|plate|person|recent> [value] [limit]',
+        cmdref_k9auditsearch_does: 'Looks up search-log entries by officer, by plate, by the person searched, or the most recent overall.',
+        cmdref_k9auditsearch_needs: 'Same as /k9auditcert.',
+        cmdref_k9auditxp_usage: '/k9auditxp <citizenid>',
+        cmdref_k9auditxp_does: 'Looks up a citizen\'s XP/progression snapshot.',
+        cmdref_k9auditxp_needs: 'Same as /k9auditcert.',
+        cmdref_k9auditdept_usage: '/k9auditdept <job> [limit]',
+        cmdref_k9auditdept_does: 'Lists everyone currently certified in a department.',
+        cmdref_k9auditdept_needs: 'Same as /k9auditcert.',
+
+        cmdref_k9bonetool_usage: '/k9bonetool <goto|next|prev|test|stop|known|help> [value]',
+        cmdref_k9bonetool_does: 'Developer tool for sweeping through a test prop\'s skeleton bones, to find the right one for attaching a leash, vest, or prop.',
+        cmdref_k9bonetool_needs: 'Your department\'s boss rank or High Command, AND a server operator must have explicitly turned this dev tool on -- it is off by default, and unsafe to leave on in production.',
+
+        cmdref_k9grantpermission_usage: '/k9grantpermission <citizenid> <permissionKey>',
+        cmdref_k9grantpermission_does: 'Grants a named permission key (a capability like certifying others, or a specific feature/block override) directly to a citizen.',
+        cmdref_k9grantpermission_needs: 'High Command only. This feature must be turned on for your server. You cannot grant a permission to yourself.',
+        cmdref_k9revokepermission_usage: '/k9revokepermission <citizenid> <permissionKey>',
+        cmdref_k9revokepermission_does: 'Revokes a previously-granted permission key from a citizen.',
+        cmdref_k9revokepermission_needs: 'High Command only. This feature must be turned on for your server.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -1139,6 +1339,270 @@
     var THEME_DENSITY_OPTIONS = ['comfortable', 'compact'];
 
     // ------------------------------------------------------------------
+    // COMMAND REFERENCE (this pass) -- "the resource registers 36
+    // commands, a player has no way to discover them in-game". This is
+    // the single, HAND-MAINTAINED catalog that screen renders from --
+    // see buildCommandReferenceScreen() below for the UI itself.
+    //
+    // DRIFT GUARD, NOT A PROMISE THIS NEVER ROTS BY ITSELF: nothing on
+    // this page derives COMMAND_REFERENCE from the real RegisterCommand
+    // calls (there is no shared runtime registry the commands themselves
+    // feed -- they are plain `RegisterCommand('k9x', ...)` calls scattered
+    // across 19 server/client files with nothing to introspect from a
+    // browser sandbox). What keeps this list honest instead is
+    // tests/commandreferenceregistry_spec.lua: it greps the REAL
+    // server/*.lua + client/*.lua source for every literal
+    // `RegisterCommand('...')` name (the exact
+    // `RegisterCommand\('[a-z0-9_]+'` shape this task was scoped from) and
+    // fails LOUDLY, naming the exact command, if that set and this
+    // catalog's own `command` field set ever diverge in EITHER direction
+    // -- a command added here with no real RegisterCommand behind it, or a
+    // real command with no entry here. Add command #37 to this array in
+    // the SAME change that registers it, or that spec turns red.
+    //
+    // Each entry:
+    //   command    string   -- the exact RegisterCommand name, e.g. 'k9auditcert'
+    //   category   string   -- a COMMAND_REFERENCE_CATEGORIES key, grouping by
+    //                          WHAT THE PLAYER IS TRYING TO DO, never by which
+    //                          file registers it
+    //   adminOnly  boolean  -- true for a command whose real gate is a
+    //                          rank/permission/High-Command check rather than
+    //                          "any certified handler" -- rendered with the
+    //                          (Admin) badge for EVERY viewer, high command
+    //                          included, per this task's own "high command
+    //                          sees everything, with the admin ones marked as
+    //                          such" instruction
+    //   usageKey/doesKey/needsKey  string -- DEFAULT_STRINGS/locales keys for
+    //                          the argument shape, the one-line plain-English
+    //                          description, and the plain-English requirement
+    //                          text, respectively
+    //   gate       object   -- see commandReferenceStatus() below for exactly
+    //                          how each `kind` is resolved; NEVER an
+    //                          enforcement decision, only this screen's own
+    //                          best-effort, honest-when-uncertain PRESENTATION
+    //                          of what the server would decide -- the server
+    //                          re-checks everything independently regardless
+    //                          of what this badge says (THE SECURITY RULE).
+    // ------------------------------------------------------------------
+    var COMMAND_REFERENCE_CATEGORIES = [
+        { key: 'field_gear', labelKey: 'cmdref_category_field_gear' },
+        { key: 'calling_off', labelKey: 'cmdref_category_calling_off' },
+        { key: 'scent_games', labelKey: 'cmdref_category_scent_games' },
+        { key: 'search_rescue', labelKey: 'cmdref_category_search_rescue' },
+        { key: 'training', labelKey: 'cmdref_category_training' },
+        { key: 'records', labelKey: 'cmdref_category_records' },
+        { key: 'certification', labelKey: 'cmdref_category_certification' },
+        { key: 'xp', labelKey: 'cmdref_category_xp' },
+        { key: 'audit', labelKey: 'cmdref_category_audit' },
+        { key: 'devtools', labelKey: 'cmdref_category_devtools' },
+        { key: 'permissions', labelKey: 'cmdref_category_permissions' },
+    ];
+
+    var COMMAND_REFERENCE = [
+        // ---- Field Gear & Equipment ----
+        { command: 'k9deploykennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9deploykennel_usage', doesKey: 'cmdref_k9deploykennel_does', needsKey: 'cmdref_k9deploykennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
+        { command: 'k9propattach', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9propattach_usage', doesKey: 'cmdref_k9propattach_does', needsKey: 'cmdref_k9propattach_needs', gate: { kind: 'access', featureKey: 'PropAttachments' } },
+        { command: 'k9throwfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9throwfetchball_usage', doesKey: 'cmdref_k9throwfetchball_does', needsKey: 'cmdref_k9throwfetchball_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
+        { command: 'k9dropfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9dropfetchball_usage', doesKey: 'cmdref_k9dropfetchball_does', needsKey: 'cmdref_k9dropfetchball_needs', gate: { kind: 'open' } },
+        { command: 'k9recallfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9recallfetchball_usage', doesKey: 'cmdref_k9recallfetchball_does', needsKey: 'cmdref_k9recallfetchball_needs', gate: { kind: 'open' } },
+
+        // ---- Calling Your K9 Off ----
+        { command: 'k9recall', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9recall_usage', doesKey: 'cmdref_k9recall_does', needsKey: 'cmdref_k9recall_needs', gate: { kind: 'open', featureKey: 'Recall' } },
+        { command: 'k9calmdown', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9calmdown_usage', doesKey: 'cmdref_k9calmdown_does', needsKey: 'cmdref_k9calmdown_needs', gate: { kind: 'access', featureKey: 'FearStressSystem' } },
+        { command: 'k9meatbait', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9meatbait_usage', doesKey: 'cmdref_k9meatbait_does', needsKey: 'cmdref_k9meatbait_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
+        { command: 'k9whistle', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9whistle_usage', doesKey: 'cmdref_k9whistle_does', needsKey: 'cmdref_k9whistle_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
+
+        // ---- Scent Games ----
+        { command: 'k9lineup', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineup_usage', doesKey: 'cmdref_k9lineup_does', needsKey: 'cmdref_k9lineup_needs', gate: { kind: 'access', featureKey: 'ScentLineup' } },
+        { command: 'k9lineuppick', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineuppick_usage', doesKey: 'cmdref_k9lineuppick_does', needsKey: 'cmdref_k9lineuppick_needs', gate: { kind: 'open' } },
+        { command: 'k9lineupcancel', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineupcancel_usage', doesKey: 'cmdref_k9lineupcancel_does', needsKey: 'cmdref_k9lineupcancel_needs', gate: { kind: 'open' } },
+        { command: 'k9nosehunt', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9nosehunt_usage', doesKey: 'cmdref_k9nosehunt_does', needsKey: 'cmdref_k9nosehunt_needs', gate: { kind: 'access', featureKey: 'ScentTrailHunt' } },
+
+        // ---- Search & Rescue ----
+        { command: 'k9sarcall', category: 'search_rescue', adminOnly: false, usageKey: 'cmdref_k9sarcall_usage', doesKey: 'cmdref_k9sarcall_does', needsKey: 'cmdref_k9sarcall_needs', gate: { kind: 'access', featureKey: 'SARCalls' } },
+
+        // ---- Training ----
+        { command: 'k9training', category: 'training', adminOnly: false, usageKey: 'cmdref_k9training_usage', doesKey: 'cmdref_k9training_does', needsKey: 'cmdref_k9training_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
+        { command: 'k9trainsearch', category: 'training', adminOnly: false, usageKey: 'cmdref_k9trainsearch_usage', doesKey: 'cmdref_k9trainsearch_does', needsKey: 'cmdref_k9trainsearch_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
+        { command: 'k9trainbite', category: 'training', adminOnly: false, usageKey: 'cmdref_k9trainbite_usage', doesKey: 'cmdref_k9trainbite_does', needsKey: 'cmdref_k9trainbite_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
+
+        // ---- Records & Progress ----
+        { command: 'k9stats', category: 'records', adminOnly: false, usageKey: 'cmdref_k9stats_usage', doesKey: 'cmdref_k9stats_does', needsKey: 'cmdref_k9stats_needs', gate: { kind: 'access', featureKey: 'K9Leaderboard' } },
+
+        // ---- Certification Management (admin) ----
+        { command: 'k9certify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9certify_usage', doesKey: 'cmdref_k9certify_does', needsKey: 'cmdref_k9certify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9certifyoffline', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9certifyoffline_usage', doesKey: 'cmdref_k9certifyoffline_does', needsKey: 'cmdref_k9certifyoffline_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9decertify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9decertify_usage', doesKey: 'cmdref_k9decertify_does', needsKey: 'cmdref_k9decertify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9decertifyoffline', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9decertifyoffline_usage', doesKey: 'cmdref_k9decertifyoffline_does', needsKey: 'cmdref_k9decertifyoffline_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9settier', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9settier_usage', doesKey: 'cmdref_k9settier_does', needsKey: 'cmdref_k9settier_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9settieroffline', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9settieroffline_usage', doesKey: 'cmdref_k9settieroffline_does', needsKey: 'cmdref_k9settieroffline_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9recertify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9recertify_usage', doesKey: 'cmdref_k9recertify_does', needsKey: 'cmdref_k9recertify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9recertifyoffline', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9recertifyoffline_usage', doesKey: 'cmdref_k9recertifyoffline_does', needsKey: 'cmdref_k9recertifyoffline_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9specialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9specialize_usage', doesKey: 'cmdref_k9specialize_does', needsKey: 'cmdref_k9specialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9unspecialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9unspecialize_usage', doesKey: 'cmdref_k9unspecialize_does', needsKey: 'cmdref_k9unspecialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        { command: 'k9unspecializeoffline', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9unspecializeoffline_usage', doesKey: 'cmdref_k9unspecializeoffline_does', needsKey: 'cmdref_k9unspecializeoffline_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+
+        // ---- XP Management (admin) ----
+        { command: 'k9givexp', category: 'xp', adminOnly: true, usageKey: 'cmdref_k9givexp_usage', doesKey: 'cmdref_k9givexp_does', needsKey: 'cmdref_k9givexp_needs', gate: { kind: 'capability', capability: 'k9.givexp' } },
+
+        // ---- Audit & Oversight (admin) ----
+        { command: 'k9auditcert', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditcert_usage', doesKey: 'cmdref_k9auditcert_does', needsKey: 'cmdref_k9auditcert_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
+        { command: 'k9auditpartner', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditpartner_usage', doesKey: 'cmdref_k9auditpartner_does', needsKey: 'cmdref_k9auditpartner_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
+        { command: 'k9auditsearch', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditsearch_usage', doesKey: 'cmdref_k9auditsearch_does', needsKey: 'cmdref_k9auditsearch_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
+        { command: 'k9auditxp', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditxp_usage', doesKey: 'cmdref_k9auditxp_does', needsKey: 'cmdref_k9auditxp_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
+        { command: 'k9auditdept', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditdept_usage', doesKey: 'cmdref_k9auditdept_does', needsKey: 'cmdref_k9auditdept_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
+
+        // ---- Developer Tools (admin) ----
+        { command: 'k9bonetool', category: 'devtools', adminOnly: true, usageKey: 'cmdref_k9bonetool_usage', doesKey: 'cmdref_k9bonetool_does', needsKey: 'cmdref_k9bonetool_needs', gate: { kind: 'highCommandOnly', featureKey: 'BoneSweepDevTool' } },
+
+        // ---- Permission Management (admin) -- server/permissions.lua's
+        // console/chat "CONSOLE/CHAT COMMAND GRANT PATH" section: the same
+        // authorization tablet:grantPermission/tablet:revokePermission
+        // already require (IsHighCommand ONLY -- no rank/permission-grant
+        // bypass, unlike certification's IsEligibleCertifier), reachable
+        // without the tablet too.
+        { command: 'k9grantpermission', category: 'permissions', adminOnly: true, usageKey: 'cmdref_k9grantpermission_usage', doesKey: 'cmdref_k9grantpermission_does', needsKey: 'cmdref_k9grantpermission_needs', gate: { kind: 'highCommandOnly', featureKey: 'PermissionGrants' } },
+        { command: 'k9revokepermission', category: 'permissions', adminOnly: true, usageKey: 'cmdref_k9revokepermission_usage', doesKey: 'cmdref_k9revokepermission_does', needsKey: 'cmdref_k9revokepermission_needs', gate: { kind: 'highCommandOnly', featureKey: 'PermissionGrants' } },
+    ];
+
+    /**
+     * Best-effort, HONEST-WHEN-UNCERTAIN availability for one COMMAND_REFERENCE
+     * entry's `gate`, from data this page ALREADY has (state.viewer,
+     * state.myRecord.myFeatures) -- no new NUI callback, no new round trip.
+     * NEVER an enforcement decision (THE SECURITY RULE) -- the server
+     * independently re-checks everything this predicts, on every real
+     * command/callback, regardless of what this returns.
+     *
+     * Gate kinds, and exactly what each reuses:
+     *   'open'       -- no personal certification/permission gate at all in
+     *                   the real command (k9dropfetchball, k9lineupcancel,
+     *                   etc.) -- always 'available' UNLESS an optional
+     *                   `featureKey` names a Config.Features key that is
+     *                   globally off (state.myRecord.myFeatures[key].state
+     *                   === 'global_off'), the one signal that check is
+     *                   accurate for REGARDLESS of this viewer's own
+     *                   certification/block status (server/tablet.lua's
+     *                   ResolveFeatureState checks Config.Features[key]
+     *                   FIRST, before anything person-specific).
+     *   'access'     -- the real command requires HasK9Access() (an active
+     *                   certification) -- checked via 'k9.access' in
+     *                   viewer.effectivePermissions (server/tablet.lua's own
+     *                   ResolveEffectivePermissions resolves that key from
+     *                   the exact same HasK9Access(source) the real command
+     *                   calls). `featureKey` here is REQUIRED and its
+     *                   resolved `state` is trusted AS-IS: every command
+     *                   using this gate kind (verified by direct read of
+     *                   each one's own server handler, not assumed from its
+     *                   feature's general purpose) checks Config.Features[key]
+     *                   AND a per-person block/RequireGrant AND HasK9Access,
+     *                   in the SAME order ResolveFeatureState resolves them,
+     *                   so its `state` field is a byte-accurate proxy.
+     *   'capability' -- the real command's gate is IsEligibleCertifier-style
+     *                   (job.isboss OR a named HasPermission grant OR
+     *                   IsHighCommand OR a department rank threshold) rather
+     *                   than "any certified handler" -- checked via
+     *                   viewer.isHighCommand OR that exact capability key in
+     *                   viewer.effectivePermissions (server/tablet.lua's own
+     *                   ResolveEffectivePermissions resolves 'k9.certify'/
+     *                   'k9.audit'/'k9.givexp' through the SAME
+     *                   MeetsDepartmentRank/HasPermission/IsHighCommand calls
+     *                   each real command's own eligibility function uses --
+     *                   verified by direct read of each, not assumed). An
+     *                   optional `featureKey` is used ONLY for its
+     *                   'global_off'/'blocked' states (both resolved BEFORE
+     *                   ResolveFeatureState's own HasK9Access branch, so
+     *                   accurate regardless of whether THIS viewer happens to
+     *                   hold a K9 certification too, which the real gate for
+     *                   these commands never asks about) -- its
+     *                   'not_certified'/'requires_grant_missing'/'available'
+     *                   states are NOT trusted here for that same reason (see
+     *                   COMMAND_REFERENCE's own header). A KNOWN, DISCLOSED
+     *                   GAP: if this viewer both holds the capability AND is
+     *                   personally missing a configured feature.<Name> grant
+     *                   AND does not otherwise hold an active K9
+     *                   certification, this can under-rarely show 'available'
+     *                   for what the server would actually refuse as
+     *                   'requires_grant_missing' -- narrow, disclosed, and
+     *                   never the OTHER direction (never claims available for
+     *                   someone who lacks the capability at all).
+     *   'highCommandOnly' -- same as 'capability' but for a real gate this
+     *                   page has no direct capability-key proxy for
+     *                   (k9bonetool's job.isboss-or-IsHighCommand, with no
+     *                   matching entry in AdminCapabilityCandidateKeys) --
+     *                   deliberately checks viewer.isHighCommand ONLY, a
+     *                   CONSERVATIVE under-approximation: a department boss
+     *                   who is not ALSO high command may see this marked
+     *                   unavailable even though the real command would allow
+     *                   them. Disclosed here rather than silently guessed at,
+     *                   and safe in the direction that matters (never
+     *                   over-promises).
+     * @param {{kind:string, capability?:string, featureKey?:string}} gate
+     * @returns {string} one of 'available'|'blocked'|'global_off'|'not_certified'|'requires_grant_missing'|'insufficient_authorization'
+     */
+    function commandReferenceStatus(gate) {
+        var viewer = state.viewer || {};
+        var effectivePermissions = Array.isArray(viewer.effectivePermissions) ? viewer.effectivePermissions : [];
+        var hasAccess = effectivePermissions.indexOf('k9.access') !== -1;
+
+        function myFeatureState(key) {
+            var list = (state.myRecord && Array.isArray(state.myRecord.myFeatures)) ? state.myRecord.myFeatures : [];
+            for (var i = 0; i < list.length; i++) {
+                if (list[i] && list[i].key === key) return list[i].state;
+            }
+            return null;
+        }
+
+        if (gate.kind === 'open') {
+            if (gate.featureKey && myFeatureState(gate.featureKey) === 'global_off') return 'global_off';
+            return 'available';
+        }
+
+        if (gate.kind === 'access') {
+            if (!hasAccess) return 'not_certified';
+            var accessState = gate.featureKey ? myFeatureState(gate.featureKey) : null;
+            return accessState || 'available';
+        }
+
+        if (gate.kind === 'capability' || gate.kind === 'highCommandOnly') {
+            var hasCapability = viewer.isHighCommand === true
+                || (gate.kind === 'capability' && effectivePermissions.indexOf(gate.capability) !== -1);
+            var gatedFeatureState = gate.featureKey ? myFeatureState(gate.featureKey) : null;
+            if (gatedFeatureState === 'global_off') return 'global_off';
+            if (gatedFeatureState === 'blocked') return 'blocked';
+            if (!hasCapability) return 'insufficient_authorization';
+            if (gatedFeatureState === 'requires_grant_missing') return 'requires_grant_missing';
+            return 'available';
+        }
+
+        return 'available';
+    }
+
+    /** @param {string} status @returns {string} localized badge text -- reuses
+     * featureStateLabel()'s own four real strings for the states that are
+     * genuinely the same concept, and one new key for the one status
+     * featureStateLabel() has no honest word for ('insufficient_authorization'
+     * -- a rank/permission/High-Command gate, not a certification one; see
+     * commandReferenceStatus()'s own doc comment for why these are kept
+     * distinct rather than reusing 'state_not_certified', which would be
+     * simply WRONG for e.g. /k9auditcert). */
+    function commandReferenceStatusLabel(status) {
+        if (status === 'insufficient_authorization') return S('cmdref_status_insufficient_authorization');
+        return featureStateLabel(status);
+    }
+
+    /** @param {string} status @returns {string} CSS class SUFFIX -- reuses the
+     * existing `.k9tablet-feature-state--*` palette (available=green,
+     * blocked=red, global_off/not_certified/requires_grant_missing=amber)
+     * with ZERO new CSS: 'insufficient_authorization' maps onto the SAME
+     * amber "you don't currently hold what this needs" bucket as
+     * 'requires_grant_missing' -- visually identical concern, distinguished
+     * only by its own, more precise label text above. */
+    function commandReferenceStatusClass(status) {
+        if (status === 'insufficient_authorization') return 'requires_grant_missing';
+        return status;
+    }
+
+    // ------------------------------------------------------------------
     // STATE -- single source of truth. Every mutation calls render(),
     // which clears and rebuilds the ENTIRE visible screen from this object.
     // No incremental DOM patching anywhere in this file: given this page's
@@ -1149,7 +1613,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers'
+        screen: 'home', // 'home' | 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         // Standalone block-enforcement badge/hint text -- see
         // clientEnforcedBadgeText()/clientEnforcedHintText()'s own doc
@@ -1163,11 +1627,39 @@
         themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
         shopLocationsEnabled: false, // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled
         branding: {}, // { serverName, logo, theme:{4 colors} } -- Config.CommandTablet.branding, verbatim; see buildBrandingElement()/applyBrandingSeedTheme()
+        // 'highCommand' | null -- set from tablet:open's own `requestedView`
+        // (client/tablet.lua's new Config.CommandTablet.highCommandCommand
+        // shortcut), CONSUMED (reset to null) the first time loadMyRecord()
+        // resolves after an open -- see that function's own comment. A
+        // PRESENTATION HINT ONLY: it never gates a fetch by itself, it only
+        // decides which screen loadMyRecord() lands on once the server's
+        // own `viewer.isHighCommand` for THIS caller is known.
+        requestedView: null,
 
         viewer: null, // set once tablet:requestMyRecord resolves successfully
         myRecordLoading: false,
         myRecordError: null, // { error, message }
         myRecord: null, // { certifications, xp, tierLabel, myFeatures }
+        // CLIENT-LOCAL "who is holding it" role signal (this pass) --
+        // client/tablet.lua's own ResolveLocalRoleFlags() doc comment has
+        // the full reasoning. Cosmetic/framing ONLY (buildHomeScreen()'s
+        // own role badge), never sent back to any mutation/trigger
+        // callback -- see THE SECURITY RULE at the top of this file.
+        // Populated from tablet:requestMyRecord's response alongside
+        // `viewer` above (same loadMyRecord() call, same lifecycle), and
+        // reset to false on every open, same as viewer/myRecord above.
+        isK9Model: false,
+        isPartnered: false,
+
+        // Command Reference screen's own search box -- see
+        // buildCommandReferenceScreen() below. A plain client-side filter
+        // over the static COMMAND_REFERENCE catalog, never a server round
+        // trip (there is nothing server-side to ask -- this whole screen is
+        // presentation over data this page already has, see
+        // commandReferenceStatus()'s own doc comment), so this needs no
+        // loading/error pair the way rosterQuery's server-backed search
+        // does just below.
+        commandReferenceQuery: '',
 
         rosterLoading: false,
         rosterError: null,
@@ -1758,11 +2250,25 @@
         }
 
         var canManageRoster = state.viewer.isHighCommand || (state.viewer.effectivePermissions && state.viewer.effectivePermissions.length > 0);
-        if (canManageRoster) {
-            panel.appendChild(buildTabs());
-        }
+        // ALWAYS rendered now (this pass) -- previously gated on
+        // canManageRoster, which meant a viewer with zero effective
+        // permissions (in practice: someone certified nowhere at all, not
+        // even the base 'k9.access' HasK9Access() resolves for almost
+        // every certified handler/K9 -- see server/tablet.lua's
+        // ResolveEffectivePermissions) saw NO navigation at all, not even
+        // a way back to 'my_record'. buildTabs() itself now gates its own
+        // Command Console entry on this SAME canManageRoster expression
+        // (see that function) so this widening never exposes a tab that
+        // would silently dead-end into the wrong screen -- the Home tab
+        // (and, for a resolved viewer, My Record) are the only two every
+        // viewer is guaranteed to see.
+        panel.appendChild(buildTabs());
 
-        if (state.screen === 'console' && canManageRoster) {
+        if (state.screen === 'home') {
+            panel.appendChild(buildHomeScreen());
+        } else if (state.screen === 'commands') {
+            panel.appendChild(buildCommandReferenceScreen());
+        } else if (state.screen === 'console' && canManageRoster) {
             panel.appendChild(buildConsoleScreen());
         } else if (state.screen === 'person' && canManageRoster) {
             panel.appendChild(buildPersonScreen());
@@ -1852,6 +2358,54 @@
         return wrap;
     }
 
+    /**
+     * Larger, one-off branding badge for the screen a player sees before
+     * anything else -- buildViewerGate() below, which covers BOTH the
+     * initial loading state (requestMyRecord in flight) and the error/
+     * retry state, i.e. the tablet's actual "landing" moment. Deliberately
+     * the ONLY other place a logo appears besides the small header mark
+     * (buildBrandingElement(), shown in buildHeader() on every single
+     * screen already, which is why this is not ALSO repeated on e.g. the
+     * My Record tab or as a per-screen title decoration -- a busy, high-
+     * contrast crest shown six times on one panel reads worse than once,
+     * placed well).
+     *
+     * Same missing/broken-logo-degrades-to-text discipline as
+     * buildBrandingElement() immediately above -- see that function's own
+     * doc comment for why the `error` listener is the one place this file
+     * mutates an already-built element's style directly instead of going
+     * through state+render(). `serverName`/`logo` are OPERATOR-SUPPLIED,
+     * DOM-bound strings here too -- textContent / an `attrs.src`+`attrs.alt`
+     * pair only, never innerHTML, same as the header mark.
+     */
+    function buildBrandingMark() {
+        var branding = state.branding || {};
+        var serverName = (typeof branding.serverName === 'string' && branding.serverName.length > 0) ? branding.serverName : '';
+        var logoPath = (typeof branding.logo === 'string' && branding.logo.length > 0) ? branding.logo : '';
+
+        var wrap = mk('div', { class: 'k9tablet-branding-mark' });
+        if (serverName.length === 0 && logoPath.length === 0) return wrap;
+
+        var fallbackText = mk('span', { class: 'k9tablet-branding-mark-name', text: serverName });
+
+        if (logoPath.length > 0) {
+            var frame = mk('div', { class: 'k9tablet-branding-mark-frame' });
+            var img = mk('img', { class: 'k9tablet-branding-mark-logo', attrs: { src: logoPath, alt: serverName } });
+            // Same hidden-until-error handshake as buildBrandingElement():
+            // the frame (border/background box) hides along with the image
+            // it exists to frame, never left behind as an empty outline.
+            fallbackText.style.display = 'none';
+            img.addEventListener('error', function () {
+                frame.style.display = 'none';
+                fallbackText.style.display = '';
+            });
+            frame.appendChild(img);
+            wrap.appendChild(frame);
+        }
+        wrap.appendChild(fallbackText);
+        return wrap;
+    }
+
     function buildActionNotice() {
         var notice = mk('div', { class: 'k9tablet-notice k9tablet-notice--' + (state.actionNotice.kind === 'error' ? 'error' : 'ok'), text: state.actionNotice.text });
         return notice;
@@ -1859,6 +2413,7 @@
 
     function buildViewerGate() {
         var wrap = mk('div', { class: 'k9tablet-status-block' });
+        wrap.appendChild(buildBrandingMark());
         if (state.myRecordLoading) {
             wrap.appendChild(mk('p', { text: S('loading') }));
         } else if (state.myRecordError) {
@@ -1883,18 +2438,65 @@
 
     function buildTabs() {
         var tabs = mk('div', { class: 'k9tablet-tabs' });
+
+        // HOME -- the new landing view (owner-directed "restructure the
+        // tablet around WHO IS HOLDING IT... a first-time player who has
+        // read nothing should open this and know what to do within
+        // seconds", see buildHomeScreen()). Always first, and, unlike
+        // every tab below, ALWAYS shown regardless of canManageRoster --
+        // buildBackdrop() now renders this whole tab bar unconditionally
+        // for every resolved viewer, and Home is the one screen every
+        // single one of them, including a brand-new uncertified arrival,
+        // can always usefully land on.
+        var homeTab = mkButton(S('tab_home'), 'k9tablet-tab' + (state.screen === 'home' ? ' k9tablet-tab--active' : ''), function () {
+            state.screen = 'home';
+            render();
+        });
+        tabs.appendChild(homeTab);
+
         var myTab = mkButton(S('tab_my_record'), 'k9tablet-tab' + (state.screen === 'my_record' ? ' k9tablet-tab--active' : ''), function () {
             state.screen = 'my_record';
             render();
             loadMyRecord();
         });
-        var consoleTab = mkButton(S('tab_console'), 'k9tablet-tab' + (state.screen === 'console' || state.screen === 'person' ? ' k9tablet-tab--active' : ''), function () {
-            state.screen = 'console';
-            render();
-            loadRoster(state.rosterQuery);
-        });
         tabs.appendChild(myTab);
-        tabs.appendChild(consoleTab);
+
+        // COMMANDS -- the command reference (this pass, "36 commands, no
+        // way for a player to discover them in-game"). ALWAYS shown, same
+        // as Home/My Record immediately above and for the identical
+        // reason: it is presentation over data every resolved viewer
+        // already has (state.viewer/state.myRecord.myFeatures -- see
+        // commandReferenceStatus()'s own doc comment), never a
+        // console-only capability, so a brand-new uncertified arrival can
+        // browse it to see what there is to earn just as usefully as a
+        // high-command officer can browse it to see the full admin set
+        // (marked as such -- see COMMAND_REFERENCE's own header).
+        var commandsTab = mkButton(S('tab_commands'), 'k9tablet-tab' + (state.screen === 'commands' ? ' k9tablet-tab--active' : ''), function () {
+            state.screen = 'commands';
+            render();
+        });
+        tabs.appendChild(commandsTab);
+
+        // Command Console -- ONLY meaningful for a viewer who actually has
+        // console access. Previously appended unconditionally (safe only
+        // because buildBackdrop() used to skip calling buildTabs() at all
+        // for a canManageRoster === false viewer) -- now guarded HERE
+        // explicitly, since this pass widens buildBackdrop() to always
+        // render this tab bar (so the new Home tab above is reachable by
+        // everyone); without this guard a viewer with no console access
+        // would see a Console tab that silently dead-ends into My Record
+        // instead (buildBackdrop()'s own 'console' branch already requires
+        // canManageRoster) -- exactly the "button exists, does something
+        // else" trap this codebase's own consistency rules forbid.
+        var canManageRoster = state.viewer.isHighCommand || (state.viewer.effectivePermissions && state.viewer.effectivePermissions.length > 0);
+        if (canManageRoster) {
+            var consoleTab = mkButton(S('tab_console'), 'k9tablet-tab' + (state.screen === 'console' || state.screen === 'person' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'console';
+                render();
+                loadRoster(state.rosterQuery);
+            });
+            tabs.appendChild(consoleTab);
+        }
 
         // High command only, matching the SAME gate the theme editor
         // controls themselves use -- see buildThemeScreen(). GetTheme
@@ -2044,6 +2646,490 @@
             tabs.appendChild(auditTab);
         }
         return tabs;
+    }
+
+    // ------------------------------------------------------------------
+    // HOME / LANDING VIEW (this pass -- owner's own words, verbatim:
+    // "make the tablet UI for all k9 dogs, k9 handlers, k9 partners and k9
+    // high command more fluid, easier to understand, more personal...
+    // everything in the tablet more structured... easier to understand
+    // where if someone is an idiot they can figure it out very quickly").
+    //
+    // THE PROBLEM THIS SCREEN SOLVES: every OTHER screen in this file is
+    // organised around a SUBSYSTEM (certifications, permissions, the shop,
+    // runtime switches, the audit trail) -- correct for someone who already
+    // knows what they are looking for, useless as a FIRST thing to see.
+    // This screen is organised around the VIEWER instead: it answers "what
+    // am I, and what can I do?" in one glance, before asking them to decode
+    // a tab bar at all. It is now the DEFAULT screen on every open (see
+    // handleOpen()) and the first tab in buildTabs() -- every existing
+    // screen/tab is UNCHANGED and still one click away, nothing here
+    // deletes or renames anything.
+    //
+    // FOUR VIEWERS, ONE SCREEN, DIFFERENT CONTENT (never a different
+    // screen -- one consistent layout, one consistent set of patterns,
+    // per this pass's own "Consistency" requirement):
+    //   THE K9 (state.isK9Model true) -- role badge reads 'K9'.
+    //   THE HANDLER (certified, not currently wearing a K9 model) -- role
+    //     badge reads 'Certified Handler'.
+    //   THE PARTNER -- EITHER of the above, PLUS the partnered/no-partner
+    //     badge (state.isPartnered, a client-local signal -- see
+    //     client/tablet.lua's ResolveLocalRoleFlags() for why this can
+    //     never be a THE SECURITY RULE concern: it is read-only framing,
+    //     never sent back into any mutation/trigger callback).
+    //   HIGH COMMAND (viewer.isHighCommand) -- role badge reads 'High
+    //     Command'; ALSO gets the dedicated High Command Tools section
+    //     below, which a Handler/K9/Partner viewer never sees at all --
+    //     THE PROGRESSIVE-DISCLOSURE REQUIREMENT: high command's own
+    //     twelve-ish admin screens are grouped under ONE heading, below
+    //     the fold, rather than crowding the two or three actions an
+    //     ordinary handler actually wants.
+    //
+    // STATE AT A GLANCE (this pass's own explicit ask -- "a player should
+    // never have to infer"): the identity card's badge row shows certified
+    // count, partnered/not, and a blocked-ability count WITHOUT the viewer
+    // opening a single other screen, reusing the SAME semantic colour
+    // classes (.k9tablet-feature-state--available/--blocked/--global_off)
+    // every other screen already uses for the identical good/bad/neutral
+    // meaning -- never a new, one-off colour.
+    //
+    // NO CERTIFICATION IS NOT AN EMPTY SHELL: a viewer with zero active
+    // certifications still gets a real, useful screen -- an explicit
+    // "you're not certified yet, here is what to do" notice (see
+    // buildHomeIdentityCard() below) INSTEAD OF a blank card, and still
+    // gets the "View My Record" quick action (which itself already
+    // renders 'no_certifications'/'no_abilities' honestly, never a
+    // broken screen -- see buildMyRecordScreen() immediately below this
+    // block).
+    //
+    // NAVIGATION HELPERS immediately below are COPIED VERBATIM from
+    // buildTabs()'s own matching tab onClick bodies (same screen, same
+    // fresh-entry draft/error/warning reset, same reload calls) --
+    // deliberately NOT a refactor of buildTabs() itself to share these
+    // (this file is being edited by several other agents concurrently
+    // this same pass; touching every existing tab's own closure body
+    // to share code carries far more conflict risk than one small,
+    // clearly-labelled, easy-to-audit duplication here). If buildTabs()
+    // ever changes one of these bodies, keep this block in sync.
+    // ------------------------------------------------------------------
+
+    function goToMyRecordScreen() {
+        state.screen = 'my_record';
+        render();
+        loadMyRecord();
+    }
+
+    function goToConsoleScreen() {
+        state.screen = 'console';
+        render();
+        loadRoster(state.rosterQuery);
+    }
+
+    function goToThemeScreen() {
+        state.screen = 'theme';
+        render();
+        loadTheme();
+    }
+
+    function goToCertTiersScreen() {
+        state.screen = 'cert_tiers';
+        state.certTierDraft = null;
+        state.certTierFieldError = null;
+        state.certTierActionError = null;
+        state.certTierWarning = null;
+        render();
+        loadCertTiers();
+    }
+
+    function goToPermissionKeysScreen() {
+        state.screen = 'permission_keys';
+        state.permissionKeyDraft = null;
+        state.permissionKeyFieldError = null;
+        state.permissionKeyActionError = null;
+        render();
+        loadPermissionKeys();
+    }
+
+    function goToShopLocationsScreen() {
+        state.screen = 'shop_locations';
+        state.shopLocationDraft = null;
+        state.shopLocationActionError = null;
+        render();
+        loadShopLocations();
+    }
+
+    function goToShopItemsScreen() {
+        state.screen = 'shop_items';
+        state.shopItemDraft = null;
+        state.shopItemFieldError = null;
+        state.shopItemActionError = null;
+        render();
+        loadEquipmentShopItems();
+        loadCertTiers();
+    }
+
+    function goToRuntimeControlScreen() {
+        state.screen = 'runtime_control';
+        state.runtimeFeatureActionError = null;
+        state.runtimeTunableDraft = null;
+        state.runtimeTunableFieldError = null;
+        render();
+        loadRuntimeFeatures();
+        loadRuntimeTunables();
+    }
+
+    function goToXpTiersScreen() {
+        state.screen = 'xp_tiers';
+        state.xpTierDraft = null;
+        state.xpTierFieldError = null;
+        state.xpTierActionError = null;
+        state.xpTierWarning = null;
+        render();
+        loadXpTiers();
+    }
+
+    function goToAuditScreen() {
+        state.screen = 'audit';
+        render();
+    }
+
+    /** @returns {boolean} -- SAME expression as buildBackdrop()/buildTabs() own local canManageRoster; a small, deliberate, per-function duplicate of a two-line boolean, matching this resource's own established convention for this exact situation (see e.g. server/tablet.lua's MeetsDepartmentRank doc comment) rather than a shared helper that would require touching either of those two functions' own call sites. */
+    function homeCanManageRoster() {
+        return !!(state.viewer && (state.viewer.isHighCommand || (state.viewer.effectivePermissions && state.viewer.effectivePermissions.length > 0)));
+    }
+
+    /** @returns {{active:number, total:number}} */
+    function homeCertificationCounts() {
+        var certs = (state.myRecord && state.myRecord.certifications) || [];
+        var active = 0;
+        for (var i = 0; i < certs.length; i++) {
+            if (certs[i] && certs[i].active) active++;
+        }
+        return { active: active, total: certs.length };
+    }
+
+    /** @returns {number} */
+    function homeBlockedFeatureCount() {
+        var features = (state.myRecord && state.myRecord.myFeatures) || [];
+        var count = 0;
+        for (var i = 0; i < features.length; i++) {
+            if (features[i] && features[i].state === 'blocked') count++;
+        }
+        return count;
+    }
+
+    /** Actionable AND currently available features only -- the "ready to
+     * use right now" subset shown on Home; the FULL list (every state,
+     * actionable or not) stays on My Record -- see buildMyFeaturesList().
+     * @returns {Array} */
+    function homeReadyFeatures() {
+        var features = (state.myRecord && state.myRecord.myFeatures) || [];
+        var out = [];
+        for (var i = 0; i < features.length; i++) {
+            var f = features[i];
+            if (f && f.actionable === true && f.state === 'available') out.push(f);
+        }
+        return out;
+    }
+
+    /** @returns {string} */
+    function homeRoleLabel() {
+        if (state.viewer.isHighCommand) return S('home_role_high_command');
+        if (state.isK9Model) return S('home_role_k9');
+        if (homeCertificationCounts().active > 0) return S('home_role_handler');
+        return S('home_role_uncertified');
+    }
+
+    function buildHomeActionCard(label, hint, onClick) {
+        var card = mk('button', { class: 'k9tablet-home-action-card' });
+        card.setAttribute('type', 'button');
+        card.appendChild(mk('span', { class: 'k9tablet-home-action-label', text: label }));
+        if (typeof hint === 'string' && hint.length > 0) {
+            card.appendChild(mk('span', { class: 'k9tablet-home-action-hint', text: hint }));
+        }
+        card.addEventListener('click', function (e) {
+            if (e && typeof e.preventDefault === 'function') e.preventDefault();
+            onClick();
+        });
+        return card;
+    }
+
+    function buildHomeIdentityCard() {
+        var card = mk('div', { class: 'k9tablet-home-card k9tablet-home-identity' });
+
+        var name = (typeof state.viewer.name === 'string' && state.viewer.name.length > 0) ? state.viewer.name : state.viewer.citizenid;
+        card.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: formatTemplate(S('home_welcome_template'), { name: String(name) }) }));
+
+        var badges = mk('div', { class: 'k9tablet-home-badges' });
+        badges.appendChild(mk('span', { class: 'k9tablet-home-role-badge', text: homeRoleLabel() }));
+
+        if (state.isPartnered) {
+            badges.appendChild(mk('span', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: S('home_partnered_badge') }));
+        } else {
+            badges.appendChild(mk('span', { class: 'k9tablet-muted', text: S('home_not_partnered_badge') }));
+        }
+
+        var counts = homeCertificationCounts();
+        if (counts.total > 0) {
+            var certClass = counts.active > 0 ? 'k9tablet-feature-state--available' : 'k9tablet-feature-state--global_off';
+            badges.appendChild(mk('span', {
+                class: 'k9tablet-feature-state ' + certClass,
+                text: formatTemplate(S('home_certified_count_template'), { count: counts.active, total: counts.total }),
+            }));
+        }
+
+        var blockedCount = homeBlockedFeatureCount();
+        if (blockedCount > 0) {
+            badges.appendChild(mk('span', {
+                class: 'k9tablet-feature-state k9tablet-feature-state--blocked',
+                text: formatTemplate(S('home_blocked_count_template'), { count: blockedCount }),
+            }));
+        }
+
+        card.appendChild(badges);
+
+        // NO CERTIFICATION IS NOT AN EMPTY SHELL -- see this block's own
+        // header comment. Shown whenever this viewer holds zero ACTIVE
+        // certifications but at least one department exists to be
+        // certified in at all (a misconfigured zero-department server has
+        // nothing useful to say here either way).
+        if (counts.active === 0 && counts.total > 0) {
+            var notice = mk('div', { class: 'k9tablet-home-notice' });
+            notice.appendChild(mk('p', { class: 'k9tablet-home-notice-title', text: S('home_no_certification_title') }));
+            notice.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_no_certification_body') }));
+            card.appendChild(notice);
+        }
+
+        return card;
+    }
+
+    function buildHomeQuickActions() {
+        var section = mk('div', { class: 'k9tablet-home-section' });
+        section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_quick_actions_heading') }));
+
+        var grid = mk('div', { class: 'k9tablet-home-actions' });
+        grid.appendChild(buildHomeActionCard(S('home_view_my_record_label'), S('home_view_my_record_hint'), goToMyRecordScreen));
+
+        if (homeCanManageRoster()) {
+            grid.appendChild(buildHomeActionCard(S('home_open_console_label'), S('home_open_console_hint'), goToConsoleScreen));
+        }
+
+        section.appendChild(grid);
+        return section;
+    }
+
+    function buildHomeReadyAbilities() {
+        var section = mk('div', { class: 'k9tablet-home-section' });
+        section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_ready_abilities_heading') }));
+
+        var ready = homeReadyFeatures();
+        if (ready.length === 0) {
+            section.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_no_ready_abilities') }));
+        } else {
+            var list = mk('div', { class: 'k9tablet-feature-list' });
+            for (var i = 0; i < ready.length; i++) {
+                list.appendChild(buildMyFeatureRow(ready[i]));
+            }
+            section.appendChild(list);
+        }
+
+        section.appendChild(mkButton(S('home_view_all_abilities_label'), 'k9tablet-link-btn', goToMyRecordScreen));
+        return section;
+    }
+
+    /**
+     * A Home-screen shortcut to an existing high-command tab. DELIBERATELY
+     * NOT rendered with the tab's own exact label string -- an arrow
+     * suffix keeps the SAME recognizable name (never a second, different
+     * name for the same screen -- see this block's own "Name things in
+     * the player's language... consistency" header note) while keeping
+     * this shortcut's own DOM node textually distinct from the real tab
+     * button that ALSO sits in the document at the same time (buildTabs()
+     * is always rendered alongside every screen, including Home) --
+     * several existing specs assert a tab exists via an EXACT, single
+     * textContent match (e.g. tablet_xp_tiers_spec.js / tablet_audit_spec.js),
+     * an assumption this screen must not break just by adding a second,
+     * synonymous way to reach the same place.
+     * @param {string} label @param {() => void} onClick */
+    function buildHomeToolLink(label, onClick) {
+        return mkButton(label + ' →', 'k9tablet-btn k9tablet-home-tool-link', onClick);
+    }
+
+    /** HIGH COMMAND ONLY (see buildHomeScreen()'s own call site) -- the
+     * PROGRESSIVE-DISCLOSURE section: every admin screen this page has,
+     * grouped under one heading, below the two or three actions an
+     * ordinary viewer wants. Reuses the EXISTING tab_* labels
+     * (tab_theme/tab_cert_tiers/...) rather than inventing a second name
+     * for each screen -- one name per screen, everywhere it appears, per
+     * this pass's own "Name things in the player's language... consistency"
+     * requirement. Each link is a plain S('tab_x')-labelled button, not a
+     * hinted card like buildHomeActionCard() above -- deliberately
+     * LOWER-EMPHASIS than the two common actions, never competing with
+     * them for attention. */
+    function buildHomeHighCommandTools() {
+        var section = mk('div', { class: 'k9tablet-home-section k9tablet-home-highcommand' });
+        section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_high_command_heading') }));
+        section.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_high_command_hint') }));
+
+        var grid = mk('div', { class: 'k9tablet-home-tools' });
+        grid.appendChild(buildHomeToolLink(S('tab_theme'), goToThemeScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_cert_tiers'), goToCertTiersScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_permission_keys'), goToPermissionKeysScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_shop_locations'), goToShopLocationsScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_shop_items'), goToShopItemsScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_runtime_control'), goToRuntimeControlScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_xp_tiers'), goToXpTiersScreen));
+        if (canViewAudit()) {
+            grid.appendChild(buildHomeToolLink(S('tab_audit'), goToAuditScreen));
+        }
+        section.appendChild(grid);
+        return section;
+    }
+
+    /** THE LANDING VIEW -- see this block's own header comment for the
+     * full information-architecture writeup. Same loading/error/empty
+     * posture as buildMyRecordScreen() immediately below (this file's one
+     * consistent loading/error pattern, reused here rather than a second
+     * one invented for this screen). */
+    function buildHomeScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen k9tablet-home' });
+
+        if (state.myRecordLoading && !state.myRecord) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.myRecordError && !state.myRecord) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.myRecordError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadMyRecord));
+            return wrap;
+        }
+        if (!state.myRecord || !state.viewer) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildHomeIdentityCard());
+        wrap.appendChild(buildHomeQuickActions());
+        wrap.appendChild(buildHomeReadyAbilities());
+
+        if (state.viewer.isHighCommand) {
+            wrap.appendChild(buildHomeHighCommandTools());
+        }
+
+        return wrap;
+    }
+
+    // ------------------------------------------------------------------
+    // COMMAND REFERENCE screen (this pass) -- see COMMAND_REFERENCE's own
+    // header above for the catalog, its drift guard, and exactly what
+    // commandReferenceStatus() does and does not promise. Grouped by
+    // COMMAND_REFERENCE_CATEGORIES (what the player is trying to do, never
+    // by which server/client file registers the command), filterable by a
+    // single client-side search box (36 entries is too many to scan, and
+    // there is nothing server-side to ask -- see state.commandReferenceQuery's
+    // own doc comment), and every row shows the SAME four things for every
+    // viewer: the command with its argument shape, one plain-English line
+    // on what it does, one on what it needs, and a live status badge --
+    // never hidden for a viewer who cannot use it, per this task's own
+    // "that is more useful than hiding it, because it tells them what to
+    // go earn" instruction.
+    // ------------------------------------------------------------------
+
+    function buildCommandReferenceScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('cmdref_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_intro') }));
+
+        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('cmdref_search_placeholder') } });
+        search.value = state.commandReferenceQuery;
+        search.addEventListener('input', function (e) {
+            state.commandReferenceQuery = e.target.value;
+            render();
+        });
+        wrap.appendChild(search);
+
+        var query = (state.commandReferenceQuery || '').toLowerCase();
+        var anyRendered = false;
+
+        for (var c = 0; c < COMMAND_REFERENCE_CATEGORIES.length; c++) {
+            var category = COMMAND_REFERENCE_CATEGORIES[c];
+            var categoryLabel = S(category.labelKey);
+
+            var rows = [];
+            for (var i = 0; i < COMMAND_REFERENCE.length; i++) {
+                var entry = COMMAND_REFERENCE[i];
+                if (entry.category !== category.key) continue;
+                if (query.length > 0) {
+                    var haystack = (
+                        entry.command + ' ' + S(entry.usageKey) + ' ' + S(entry.doesKey) + ' ' +
+                        S(entry.needsKey) + ' ' + categoryLabel
+                    ).toLowerCase();
+                    if (haystack.indexOf(query) === -1) continue;
+                }
+                rows.push(entry);
+            }
+            if (rows.length === 0) continue;
+
+            anyRendered = true;
+            wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: categoryLabel }));
+
+            var table = mk('table', { class: 'k9tablet-table' });
+            var thead = mk('thead');
+            var headRow = mk('tr');
+            [S('cmdref_column_command'), S('cmdref_column_does'), S('cmdref_column_needs'), S('status_column')].forEach(function (h) {
+                headRow.appendChild(mk('th', { text: h }));
+            });
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+
+            var tbody = mk('tbody');
+            for (var r = 0; r < rows.length; r++) {
+                tbody.appendChild(buildCommandReferenceRow(rows[r]));
+            }
+            table.appendChild(tbody);
+            wrap.appendChild(table);
+        }
+
+        if (!anyRendered) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('cmdref_empty') }));
+        }
+
+        return wrap;
+    }
+
+    /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object}} entry */
+    function buildCommandReferenceRow(entry) {
+        var tr = mk('tr');
+
+        var commandTd = mk('td');
+        commandTd.appendChild(mk('span', { text: S(entry.usageKey) }));
+        if (entry.adminOnly) {
+            // Same "(Default)"/"(Retired)" inline-parenthetical convention
+            // buildPersonFeaturesSection()/buildPermissionKeysScreen() already
+            // use elsewhere on this page (plain text, k9tablet-muted, never a
+            // new badge class) -- shown to EVERY viewer, not only high
+            // command, per this task's own "high command sees everything,
+            // with the admin ones marked as such" instruction: a handler
+            // browsing this list should see which commands are the ones to
+            // go earn authorization for, not just that they personally
+            // can't run them today.
+            commandTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('cmdref_admin_badge') + ')' }));
+        }
+        tr.appendChild(commandTd);
+
+        tr.appendChild(mk('td', { text: S(entry.doesKey) }));
+        tr.appendChild(mk('td', { text: S(entry.needsKey) }));
+
+        var status = commandReferenceStatus(entry.gate);
+        var statusTd = mk('td');
+        statusTd.appendChild(mk('span', {
+            class: 'k9tablet-feature-state k9tablet-feature-state--' + commandReferenceStatusClass(status),
+            text: commandReferenceStatusLabel(status),
+        }));
+        tr.appendChild(statusTd);
+
+        return tr;
     }
 
     // ---- My Record screen ----
@@ -5040,6 +6126,39 @@
                 tierLabel: typeof result.tierLabel === 'string' ? result.tierLabel : null,
                 myFeatures: result.myFeatures || [],
             };
+            // CLIENT-LOCAL role signal -- client/tablet.lua's own
+            // ResolveLocalRoleFlags() enriches this exact response with
+            // these two fields; see state.isK9Model's own doc comment
+            // above for why this is cosmetic/framing only.
+            state.isK9Model = result.isK9Model === true;
+            state.isPartnered = result.isPartnered === true;
+
+            // Config.CommandTablet.highCommandCommand shortcut (this pass)
+            // -- CONSUMED here, exactly once per open, strictly AFTER the
+            // server's own viewer.isHighCommand for THIS caller is known.
+            // This is presentation only: it decides which screen to land
+            // on, never whether the request above succeeded or what data
+            // it returned -- see THE SECURITY RULE at the top of this file
+            // and client/tablet.lua's own NUI CONTRACT note on
+            // `requestedView`. A caller who is genuinely high command
+            // lands on the console tab, pre-loaded; anyone else typed the
+            // High Command shortcut without holding the access it opens to
+            // -- refused with a plain, visible notice, never a blank or
+            // broken screen, and left on the exact same screen the
+            // ordinary command already lands everyone on by default (see
+            // handleOpen()'s own `state.screen` reset) -- never a second,
+            // different "consolation" view invented just for this path.
+            if (state.requestedView === 'highCommand') {
+                state.requestedView = null;
+                if (state.viewer && state.viewer.isHighCommand === true) {
+                    state.screen = 'console';
+                    render();
+                    loadRoster(state.rosterQuery);
+                    return;
+                }
+                state.actionNotice = { kind: 'error', text: S('high_command_required_notice') };
+            }
+
             render();
         });
     }
@@ -6516,6 +7635,11 @@
         state.blockClientEnforcedBadge = typeof data.blockClientEnforcedBadge === 'string' ? data.blockClientEnforcedBadge : null;
         state.blockClientEnforcedHint = typeof data.blockClientEnforcedHint === 'string' ? data.blockClientEnforcedHint : null;
         state.capabilities = (data.capabilities && typeof data.capabilities === 'object') ? data.capabilities : {};
+        // See this file's header NUI CONTRACT note on `requestedView` --
+        // presentation hint only, consumed once by loadMyRecord() below
+        // (called a few lines down this same function) once the server's
+        // own viewer.isHighCommand for this caller is known.
+        state.requestedView = data.requestedView === 'highCommand' ? 'highCommand' : null;
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
         state.peds = Array.isArray(data.peds) ? data.peds : [];
         state.specializations = (data.specializations && typeof data.specializations === 'object') ? data.specializations : {};
@@ -6537,10 +7661,19 @@
         // tablet:close resetting state; opening does the same reset, since
         // either one could be the first message this page ever sees after
         // a long idle period with a job/grant change in between).
-        state.screen = 'my_record';
+        // DEFAULT SCREEN IS 'home' (this pass) -- see buildHomeScreen()'s
+        // own header for why the landing view now comes before every
+        // existing tab, including 'my_record'. requestedView === 'highCommand'
+        // (handled a few lines below by loadMyRecord()) still overrides this
+        // to 'console' for a genuine high-command caller, exactly as it
+        // already overrode the previous 'my_record' default.
+        state.screen = 'home';
         state.viewer = null;
         state.myRecord = null;
         state.myRecordError = null;
+        state.isK9Model = false;
+        state.isPartnered = false;
+        state.commandReferenceQuery = '';
         state.roster = null;
         state.rosterError = null;
         state.rosterQuery = '';

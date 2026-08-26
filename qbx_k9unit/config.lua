@@ -765,6 +765,18 @@ Config.FeatureControl = {
     -- everyone, which is the behaviour before this feature existed --
     -- so an empty table changes nothing.
     --
+    -- HOW TO ACTUALLY GRANT ONE OF THESE: normally the K9 tablet (below).
+    -- If Config.Features.CommandTablet is off, or Config.CommandTablet.openMode
+    -- is 'item' with no chat-command fallback, the tablet cannot do this --
+    -- but everything listed here can STILL be granted/revoked with the
+    -- '/k9grantpermission [citizenid] [permissionKey]' and
+    -- '/k9revokepermission [citizenid] [permissionKey]' chat commands
+    -- (server/permissions.lua), which require the exact same High Command
+    -- authorization the tablet does and work regardless of the tablet's
+    -- own on/off state. A startup warning (also server/permissions.lua)
+    -- names the affected features and points at these commands whenever
+    -- both conditions above are true at once.
+    --
     -- These four default to grant-required because they are the ones that
     -- act ON another player rather than on the K9 itself, so "who is
     -- allowed to do this" is a decision a server will actually want to
@@ -823,6 +835,13 @@ Config.FeatureControl = {
 -- callback it likes, so the tablet showing a button must never be what
 -- makes the action allowed. It only hides what you cannot do, as a
 -- convenience.
+--
+-- BUT: turning Config.Features.CommandTablet off below does not just
+-- remove that "VIEW" -- it also removes the ONLY way this tablet offers to
+-- grant/revoke a Config.FeatureControl.RequireGrant feature (above) or any
+-- Config.Permissions capability. See Config.FeatureControl's own header
+-- above for the chat-command fallback ('/k9grantpermission'/
+-- '/k9revokepermission') that keeps working regardless of this flag.
 -- ======================================================================
 Config.CommandTablet = {
     -- HOW PLAYERS OPEN THE TABLET. Pick one:

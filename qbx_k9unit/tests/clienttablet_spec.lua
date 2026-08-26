@@ -303,6 +303,7 @@ local function newTabletFixture(opts)
     env.Config.CommandTablet = env.Config.CommandTablet or {}
     env.Config.CommandTablet.openMode = 'both'
     env.Config.CommandTablet.command = 'k9tablet'
+    env.Config.CommandTablet.highCommandCommand = 'k9hqtablet'
     env.Config.CommandTablet.itemName = 'k9_tablet'
     for key, value in pairs(opts.commandTablet or {}) do
         env.Config.CommandTablet[key] = value
@@ -428,10 +429,19 @@ end)
 
 -- ----------------------------------------------------------------------
 -- openMode resolution -- registration-time, not behavior-time.
+--
+-- Every test in this block passes `highCommandCommand = ''` to disable
+-- the SECOND entry point (see its own dedicated section further below) --
+-- these tests are specifically about the ORIGINAL command's/item's own
+-- openMode-driven registration, and the second command registers
+-- UNCONDITIONALLY regardless of openMode (by design -- see config.lua's
+-- own comment on that field), so leaving it at its pinned baseline value
+-- here would silently change every one of these counts by one and hide
+-- what each assertion is actually about.
 -- ----------------------------------------------------------------------
 
 t.test('openMode = "command": the command is registered, no item-use event handler exists', function()
-    local f = newTabletFixture({ commandTablet = { openMode = 'command' } })
+    local f = newTabletFixture({ commandTablet = { openMode = 'command', highCommandCommand = '' } })
     t.equals(#f.registerCommandCalls, 1)
     t.equals(f.registerCommandCalls[1].name, 'k9tablet')
     f.fireItemUse({}, 1)
@@ -439,21 +449,21 @@ t.test('openMode = "command": the command is registered, no item-use event handl
 end)
 
 t.test('openMode = "item": the command is NOT registered at all, the item-use handler is', function()
-    local f = newTabletFixture({ commandTablet = { openMode = 'item' } })
+    local f = newTabletFixture({ commandTablet = { openMode = 'item', highCommandCommand = '' } })
     t.equals(#f.registerCommandCalls, 0)
     f.fireItemUse({}, 1)
     t.equals(#f.useItemCalls, 1)
 end)
 
 t.test('openMode = "both": both the command and the item-use handler exist', function()
-    local f = newTabletFixture({ commandTablet = { openMode = 'both' } })
+    local f = newTabletFixture({ commandTablet = { openMode = 'both', highCommandCommand = '' } })
     t.equals(#f.registerCommandCalls, 1)
     f.fireItemUse({}, 1)
     t.equals(#f.useItemCalls, 1)
 end)
 
 t.test('openMode = an unrecognised value: falls back to "command" (registered) and warns loudly, never leaving zero ways in', function()
-    local f = newTabletFixture({ commandTablet = { openMode = 'sometypo' } })
+    local f = newTabletFixture({ commandTablet = { openMode = 'sometypo', highCommandCommand = '' } })
     t.equals(#f.registerCommandCalls, 1)
     local warned = false
     for _, line in ipairs(f.printLines) do
@@ -463,12 +473,12 @@ t.test('openMode = an unrecognised value: falls back to "command" (registered) a
 end)
 
 t.test('openMode = nil (missing entirely): also falls back to "command"', function()
-    local f = newTabletFixture({ commandTablet = { openMode = nil } })
+    local f = newTabletFixture({ commandTablet = { openMode = nil, highCommandCommand = '' } })
     t.equals(#f.registerCommandCalls, 1)
 end)
 
 t.test('Config.CommandTablet.command missing/invalid in "command" mode: warns, registers nothing, still no crash', function()
-    local f = newTabletFixture({ commandTablet = { openMode = 'command', command = '' } })
+    local f = newTabletFixture({ commandTablet = { openMode = 'command', command = '', highCommandCommand = '' } })
     t.equals(#f.registerCommandCalls, 0)
     local warned = false
     for _, line in ipairs(f.printLines) do
@@ -482,6 +492,116 @@ t.test('the registered command handler really calls the production OpenTablet(),
     f.registerCommandCalls[1].handler()
     t.equals(#f.sendNuiMessageCalls, 1)
     t.equals(f.sendNuiMessageCalls[1].action, 'tablet:open')
+end)
+
+-- ----------------------------------------------------------------------
+-- SECOND ENTRY POINT -- Config.CommandTablet.highCommandCommand. A
+-- shortcut to the SAME OpenTablet(), just requesting the console screen.
+-- Registered UNCONDITIONALLY (independent of openMode -- that field only
+-- governs the ORIGINAL command's/item's own reachability, see this
+-- file's header "SECOND ENTRY POINT" note), and routes through the exact
+-- same tabletOpen guard / SetNuiFocus / CloseTablet as everything else --
+-- it is never a second focus-taking or focus-release path.
+-- ----------------------------------------------------------------------
+
+--- @param f table fixture
+--- @param name string
+--- @return table? call {name, handler, restricted}
+local function findRegisteredCommand(f, name)
+    for _, call in ipairs(f.registerCommandCalls) do
+        if call.name == name then return call end
+    end
+    return nil
+end
+
+t.test('highCommandCommand registers a SECOND, separate command alongside the original -- both reachable', function()
+    local f = newTabletFixture() -- baseline: openMode='both', command='k9tablet', highCommandCommand='k9hqtablet'
+    t.equals(#f.registerCommandCalls, 2)
+    t.isNotNil(findRegisteredCommand(f, 'k9tablet'))
+    t.isNotNil(findRegisteredCommand(f, 'k9hqtablet'))
+end)
+
+t.test('highCommandCommand still registers when openMode = "item" -- a wholly separate reachability decision from the original command/item', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'item' } })
+    t.isNil(findRegisteredCommand(f, 'k9tablet'), 'the ORIGINAL command must stay unreachable in item mode')
+    t.isNotNil(findRegisteredCommand(f, 'k9hqtablet'), 'the NEW shortcut command is independent of openMode')
+end)
+
+t.test('highCommandCommand missing/invalid: warns loudly, but the ORIGINAL command/item are completely unaffected', function()
+    local f = newTabletFixture({ commandTablet = { highCommandCommand = '' } })
+    t.isNotNil(findRegisteredCommand(f, 'k9tablet'), 'this is a pure addition -- losing the new field must never take the old command with it')
+    t.isNil(findRegisteredCommand(f, 'k9hqtablet'))
+    local warned = false
+    for _, line in ipairs(f.printLines) do
+        if line:find('Config.CommandTablet.highCommandCommand') then warned = true end
+    end
+    t.isTrue(warned)
+end)
+
+t.test('Config.Features.CommandTablet = false: the high command shortcut is exactly as inert as the original command', function()
+    local f = newTabletFixture({ features = { CommandTablet = false } })
+    t.equals(#f.registerCommandCalls, 0)
+    t.isNil(findRegisteredCommand(f, 'k9hqtablet'))
+end)
+
+t.test('the hq command handler calls the SAME production OpenTablet(), requesting the console view -- not a parallel open path', function()
+    local f = newTabletFixture()
+    local hq = findRegisteredCommand(f, 'k9hqtablet')
+    hq.handler()
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:open')
+    t.equals(f.sendNuiMessageCalls[1].data.requestedView, 'highCommand')
+    t.equals(#f.setNuiFocusCalls, 1, 'the ONE OpenTablet() focus grab, not a second one')
+    t.isTrue(f.setNuiFocusCalls[1][1])
+end)
+
+t.test('the ORIGINAL command still sends requestedView = nil, unaffected by the new field existing at all', function()
+    local f = newTabletFixture()
+    local original = findRegisteredCommand(f, 'k9tablet')
+    original.handler()
+    t.isNil(f.sendNuiMessageCalls[1].data.requestedView)
+end)
+
+t.test('OpenTablet() called directly with no argument still sends requestedView = nil (every existing caller is unaffected)', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    t.isNil(f.sendNuiMessageCalls[1].data.requestedView)
+end)
+
+t.test('typing the hq command while already open via the ORIGINAL command is a safe no-op -- no second focus grab, no second push, same one watch thread', function()
+    local f = newTabletFixture()
+    findRegisteredCommand(f, 'k9tablet').handler()
+    findRegisteredCommand(f, 'k9hqtablet').handler()
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(#f.setNuiFocusCalls, 1)
+    t.equals(f.threadCreateCount(), 1)
+end)
+
+t.test('typing the ORIGINAL command while already open via the hq command is a safe no-op -- same one focus lifecycle either direction', function()
+    local f = newTabletFixture()
+    findRegisteredCommand(f, 'k9hqtablet').handler()
+    findRegisteredCommand(f, 'k9tablet').handler()
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(#f.setNuiFocusCalls, 1)
+    t.equals(f.threadCreateCount(), 1)
+end)
+
+t.test('typing the hq command twice in a row is a safe no-op, same as the original command', function()
+    local f = newTabletFixture()
+    local hq = findRegisteredCommand(f, 'k9hqtablet')
+    hq.handler()
+    hq.handler()
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(#f.setNuiFocusCalls, 1)
+end)
+
+t.test('closing via CloseTablet() after opening through the hq command releases focus through the SAME single close path', function()
+    local f = newTabletFixture()
+    findRegisteredCommand(f, 'k9hqtablet').handler()
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isFalse(f.setNuiFocusCalls[2][1])
+    t.equals(f.sendNuiMessageCalls[2].action, 'tablet:close')
 end)
 
 -- ----------------------------------------------------------------------

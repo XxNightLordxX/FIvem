@@ -589,6 +589,12 @@ globals = {
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua
     "IsOwnModelK9", "CanShowK9UI", "DenyK9UIAccess", "PlaySoundOnNetworkEntity",
+    -- Read-only "is this session active" accessors, same shape and purpose
+    -- as IsPartnered/GetPartnerServerId below: each is set by its own
+    -- client file and read by the tablet's command-reference screen to show
+    -- whether a command is usable right now. Presentation only -- the
+    -- server still decides what actually works, so neither is ever a gate.
+    "IsSarCallActive", "IsTrainingModeActive",
     -- server/entities.lua (REFACTOR_ROADMAP.md near-term item 2) AND,
     -- separately, client/main.lua's OWN client-side function of the same
     -- name -- two distinct Lua VMs (server vs. client), same name by

@@ -143,6 +143,61 @@ t.test('MySQL branch: Override_Upsert/Delete/OverrideAudit_Append never throw to
     t.isFalse(MysqlStore.Override_Delete('feature:Recall'), 'a thrown DB error must degrade to false, never propagate raw, matching every SafeWrite call site this replaces')
 end)
 
+t.test('MySQL branch: NAME COLLISION REGRESSION -- Override_Upsert (k9_runtime_feature_overrides) and IndividualOverride_Upsert (k9_individual_overrides) are two DISTINCT functions, each hitting only its own table', function()
+    -- Records an incident, not a hypothetical: an early draft of the
+    -- per-individual-K9 override accessors (added the same pass as
+    -- k9_individual_overrides/k9_individual_override_audit) reused the bare
+    -- names `Override_Upsert`/`OverrideRows`/`OverrideAuditRows`/
+    -- `OVERRIDE_AUDIT_MEMORY_CAP` already claimed by the PRE-EXISTING
+    -- k9_runtime_feature_overrides subsystem immediately above (consumed by
+    -- server/runtimecontrol.lua's runtimeSetFeature/runtimeSetTunable). Lua
+    -- silently let the later top-level `function K9Store.Override_Upsert`
+    -- overwrite the earlier one in the shared K9Store table, and the later
+    -- `local OverrideRows = {}` shadow the earlier `local` of the same name
+    -- -- every existing runtime-feature-override write would have silently
+    -- landed on the wrong 5-argument signature (citizenid where a feature
+    -- key was expected, a string dropped into a DOUBLE column) while still
+    -- returning `true`, so the operator would have seen "saved" for a write
+    -- that changed nothing real. Caught by QA before merge; this test is
+    -- the automated backstop so it can never happen again silently -- see
+    -- server/datastore.lua's own "NAMING" comment on the
+    -- k9_individual_overrides section for the fix (every symbol there is
+    -- now prefixed `IndividualOverride*`, never bare `Override*`).
+    t.isTrue(MysqlStore.Override_Upsert ~= MysqlStore.IndividualOverride_Upsert,
+        'K9Store.Override_Upsert and K9Store.IndividualOverride_Upsert must be two SEPARATE functions -- if this ever fails, one has silently overwritten the other again')
+    t.isTrue(MysqlStore.Override_GetAll ~= MysqlStore.IndividualOverride_GetAllRows,
+        'K9Store.Override_GetAll and K9Store.IndividualOverride_GetAllRows must be two SEPARATE functions')
+
+    resetCapture()
+    canned = {}
+    MysqlStore.Override_Upsert('feature:Recall', 'feature', 'false', 'HC1')
+    t.equals(#captured, 1)
+    t.contains(captured[1].sql, 'k9_runtime_feature_overrides', 'the ORIGINAL runtime-feature-override writer must still target its own table')
+    t.notContains(captured[1].sql, 'k9_individual_overrides')
+
+    resetCapture()
+    canned = {}
+    MysqlStore.IndividualOverride_Upsert('CIT1', 1.1, 1.2, nil, 'note', 'HC1')
+    t.equals(#captured, 1)
+    t.contains(captured[1].sql, 'k9_individual_overrides', 'the per-individual-K9 override writer must target ITS OWN table')
+    t.notContains(captured[1].sql, 'k9_runtime_feature_overrides')
+end)
+
+t.test('MySQL branch: IndividualOverride_Tombstone/IndividualOverrideAudit_Append never throw to the caller -- mirrors SafeWrite\'s own boolean contract', function()
+    resetCapture()
+    canned = {}
+    t.isTrue(MysqlStore.IndividualOverride_Tombstone('CIT1', 'HC1'))
+    t.contains(captured[1].sql, 'k9_individual_overrides')
+
+    resetCapture()
+    canned = {}
+    t.isTrue(MysqlStore.IndividualOverrideAudit_Append('override_reset', 'CIT1', 'reset', 'HC1'))
+    t.contains(captured[1].sql, 'k9_individual_override_audit')
+
+    canned = { throw = 'simulated write failure' }
+    t.isFalse(MysqlStore.IndividualOverride_Upsert('CIT1', 1.1, nil, nil, nil, 'HC1'), 'a thrown DB error must degrade to false, never propagate raw')
+end)
+
 t.test('MySQL branch: Appearance_GetRow mirrors GetAppearanceRow\'s own single-row-or-nil contract over a query.await array', function()
     resetCapture()
     canned = { { model = 'a_c_shepherd', original_model_hash = 123, active = 1 } }
@@ -460,6 +515,57 @@ t.test('Memory: runtime overrides are a plain upsert-in-place key/value store, n
     t.isTrue(MemStore.OverrideAudit_Append('feature:Recall', 'feature', 'false', 'true', 'HC2'))
     t.isTrue(MemStore.Override_Delete('feature:Recall'))
     t.equals(#MemStore.Override_GetAll(), 0)
+end)
+
+t.test('Memory: NAME COLLISION REGRESSION -- runtime-feature-override rows and individual-K9-override rows live in two INDEPENDENT in-memory tables, never a shared one', function()
+    t.isTrue(MemStore.Override_Upsert('feature:Recall', 'feature', 'false', 'HC1'))
+    t.isTrue(MemStore.IndividualOverride_Upsert('CIT1', 1.1, 1.2, nil, 'note', 'HC1'))
+    t.equals(#MemStore.Override_GetAll(), 1, 'the runtime-feature-override table must be unaffected by an individual-K9-override write')
+    t.equals(#MemStore.IndividualOverride_GetAllRows(), 1, 'the individual-K9-override table must be unaffected by a runtime-feature-override write')
+    t.isTrue(MemStore.Override_Delete('feature:Recall'))
+    t.equals(#MemStore.IndividualOverride_GetAllRows(), 1, 'deleting a runtime feature override must not touch the individual-K9-override table')
+end)
+
+--- @param citizenid string
+--- @return table? row
+local function findIndividualOverrideRow(citizenid)
+    for _, row in ipairs(MemStore.IndividualOverride_GetAllRows()) do
+        if row.citizenid == citizenid then return row end
+    end
+    return nil
+end
+
+t.test('Memory: k9_individual_overrides upsert-in-place, per-field NULL preserved, tombstone excludes from GetAllRows filtering (deleted flag surfaced raw)', function()
+    -- NOTE: this fixture's own K9Store is shared, module-level state across
+    -- every test in this file (same convention every other Memory test
+    -- above already relies on -- see e.g. SearchLog's own accumulating rows)
+    -- -- an EARLIER test in this same file already wrote a 'CIT1' row, so
+    -- this test scopes every assertion to its OWN citizenid ('CITY') rather
+    -- than asserting a total row count, which would be order-dependent.
+    t.isNil(findIndividualOverrideRow('CITY'), 'a citizenid with no prior write must have no row at all')
+
+    t.isTrue(MemStore.IndividualOverride_Upsert('CITY', 1.25, nil, 0.8, 'fast dog', 'HC1'))
+    local row = findIndividualOverrideRow('CITY')
+    t.isNotNil(row)
+    t.equals(row.speed_multiplier, 1.25)
+    t.isNil(row.scent_range_multiplier, 'an omitted field must persist as NULL, not 0 or false')
+    t.equals(row.medkit_cooldown_multiplier, 0.8)
+    t.equals(row.deleted, 0)
+
+    t.isTrue(MemStore.IndividualOverride_Upsert('CITY', 1.25, 1.30, 0.8, 'fast dog', 'HC2'), 'upserting the SAME citizenid must update in place, not add a second row')
+    local rowsForCity = 0
+    for _, r in ipairs(MemStore.IndividualOverride_GetAllRows()) do
+        if r.citizenid == 'CITY' then rowsForCity = rowsForCity + 1 end
+    end
+    t.equals(rowsForCity, 1, 'upserting the same citizenid twice must never produce a second row for it')
+
+    t.isTrue(MemStore.IndividualOverride_Tombstone('CITY', 'HC1'))
+    row = findIndividualOverrideRow('CITY')
+    t.isNotNil(row, 'GetAllRows returns tombstoned rows too -- filtering deleted=1 out of the LIVE catalog is server/k9profiles.lua\'s own job, mirroring K9Store.Tier_GetAllRows exactly')
+    t.equals(row.deleted, 1)
+
+    t.isTrue(MemStore.IndividualOverride_Tombstone('NEVER_EXISTED', 'HC1'), 'tombstoning a citizenid with no prior row must still succeed (creates a deleted-only row), matching Tier_Tombstone\'s identical shape')
+    t.isTrue(MemStore.IndividualOverrideAudit_Append('override_reset', 'CITX', 'reset', 'HC1'))
 end)
 
 t.test('Memory: tablet theme is a SINGLETON -- upserting twice never produces two rows', function()

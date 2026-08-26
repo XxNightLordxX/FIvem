@@ -1365,7 +1365,23 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         if row.kind == 'feature' then
             local name = row.override_key:match('^feature:(.+)$')
-            if name and Config.Features and Config.Features[name] ~= nil and GetFeatureTier(name) ~= 'protected' then
+            -- FAIL-CLOSED FIX (this pass): this condition used to exclude
+            -- ONLY 'protected' -- but runtimeSetFeature refuses to CREATE an
+            -- override for an 'unaudited' feature just as hard as it
+            -- refuses one for 'protected' (both share the exact same
+            -- "refused, never written" code path above). A row for a
+            -- feature that is unaudited TODAY can still exist here if it
+            -- was persisted before this file's own FEATURE_TIERS table
+            -- classified it (this file's own header already documents that
+            -- exact history happening for real, for eleven features, in a
+            -- single prior pass) -- silently re-applying such a row at boot
+            -- would let a feature this file admits it "does not know what
+            -- toggling would actually do" be toggled anyway, the precise
+            -- silent gap this file's own "FAILS CLOSED, FOR REAL" header
+            -- claims is closed everywhere. Now excluded here too, matching
+            -- runtimeSetFeature's own refusal exactly.
+            local tier = GetFeatureTier(name)
+            if name and Config.Features and Config.Features[name] ~= nil and tier ~= 'protected' and tier ~= 'unaudited' then
                 ApplyFeatureOverride(name, row.value == 'true')
                 applied = true
             end
@@ -1504,7 +1520,14 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
         return { ok = false, reason = 'db_error' }
     end
 
-    K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), valueStr, citizenid or 'unknown')
+    -- AUDIT-SWALLOW FIX (this pass): see runtimeResetFeature's identical
+    -- comment further below for the full reasoning -- the primary write
+    -- already succeeded, so `ok = true` remains correct, but a failed
+    -- audit-trail insert must not vanish without a trace tying it to this
+    -- specific name/value.
+    if not K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), valueStr, citizenid or 'unknown') then
+        print(('[qbx_k9unit] runtimecontrol.lua: runtimeSetFeature audit-trail write failed for name=%s value=%s (the change itself still succeeded and was persisted).'):format(name, valueStr))
+    end
 
     ApplyFeatureOverride(name, newValue)
     ActiveOverrides[overrideKey] = { kind = 'feature', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
@@ -1545,8 +1568,41 @@ lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, 
     local oldValue = Config.Features[name]
     local defaultValue = CONFIG_LUA_DEFAULT_FEATURES[name]
 
-    K9Store.Override_Delete(overrideKey)
-    K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), nil, citizenid or 'unknown')
+    -- CLAIMS-MORE-THAN-HAPPENED FIX (this pass): Override_Delete's own
+    -- boolean return used to be discarded outright here, so a DB failure
+    -- was reported to the caller as an unqualified `ok = true` even though
+    -- the persisted override row was NEVER actually removed -- the exact
+    -- failure class server/appearance.lua's own "DISCARDED-WRITE FIX"
+    -- comments already document and fix for its own writes. The
+    -- consequence here is not merely cosmetic: onResourceStart's own
+    -- override-reapply loop (above) re-reads k9_runtime_feature_overrides
+    -- from the DB on every restart and RE-APPLIES any row still there --
+    -- so a "reset" that silently failed to delete its own row would
+    -- silently UNDO ITSELF on the very next restart, having told the
+    -- operator "done" in the meantime. Checked and refused the same way
+    -- runtimeSetFeature's own Override_Upsert failure is refused above:
+    -- before ANY in-memory Config mutation, so a failed persist can never
+    -- leave this session's live value out of sync with what will survive
+    -- a restart.
+    local deleted = K9Store.Override_Delete(overrideKey)
+    if not deleted then
+        LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s'):format(name), 'db_error')
+        return { ok = false, reason = 'db_error' }
+    end
+
+    -- AUDIT-SWALLOW FIX (this pass): OverrideAudit_Append's own boolean
+    -- return used to be discarded here too -- K9Store's own internal
+    -- SafeWrite failure print carries no override_key/action context at
+    -- all (see server/datastore.lua's OverrideAudit_Append), so a failed
+    -- audit-trail insert was previously unlinked, in the logs, from which
+    -- privileged action actually caused it. The PRIMARY write already
+    -- succeeded above (Override_Delete returned true), so this action
+    -- genuinely happened and `ok = true` below remains correct -- but a
+    -- failed audit row must not vanish without a trace tying it to this
+    -- specific reset.
+    if not K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), nil, citizenid or 'unknown') then
+        print(('[qbx_k9unit] runtimecontrol.lua: runtimeResetFeature audit-trail write failed for name=%s (the reset itself still succeeded and was persisted).'):format(name))
+    end
 
     ApplyFeatureOverride(name, defaultValue)
     ActiveOverrides[overrideKey] = nil
@@ -1663,7 +1719,11 @@ lib.callback.register('qbx_k9unit:server:runtimeSetTunable', function(source, ke
         return { ok = false, reason = 'db_error' }
     end
 
-    K9Store.OverrideAudit_Append(overrideKey, 'tuning', tostring(oldValue), valueStr, citizenid or 'unknown')
+    -- AUDIT-SWALLOW FIX (this pass): see runtimeSetFeature's identical
+    -- comment above for the full reasoning.
+    if not K9Store.OverrideAudit_Append(overrideKey, 'tuning', tostring(oldValue), valueStr, citizenid or 'unknown') then
+        print(('[qbx_k9unit] runtimecontrol.lua: runtimeSetTunable audit-trail write failed for key=%s value=%s (the change itself still succeeded and was persisted).'):format(key, valueStr))
+    end
 
     ApplyTunableOverride(key, newValue)
     ActiveOverrides[overrideKey] = { kind = 'tuning', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
@@ -1696,14 +1756,42 @@ lib.callback.register('qbx_k9unit:server:runtimeResetTunable', function(source, 
     local oldValue = GetConfigByPath(entry.path)
     local defaultValue = CONFIG_LUA_DEFAULT_TUNABLES[key]
 
-    K9Store.Override_Delete(overrideKey)
-    K9Store.OverrideAudit_Append(overrideKey, 'tuning', tostring(oldValue), nil, citizenid or 'unknown')
+    -- CLAIMS-MORE-THAN-HAPPENED FIX (this pass): identical bug, identical
+    -- fix, as runtimeResetFeature's own Override_Delete check immediately
+    -- above -- see that callback's own comment for the full "silently
+    -- undoes itself on the next restart" consequence this closes. Every
+    -- TUNABLE_REGISTRY entry is confirmed read fresh at its point of use
+    -- (this file's own "PART 1B" header, exclusion rule 3), so a
+    -- successfully persisted reset is always genuinely live -- refusing
+    -- BEFORE any in-memory Config mutation on a failed delete keeps that
+    -- guarantee honest.
+    local deleted = K9Store.Override_Delete(overrideKey)
+    if not deleted then
+        LogAuditInvocation(source, 'runtimeResetTunable', ('key=%s'):format(key), 'db_error')
+        return { ok = false, reason = 'db_error' }
+    end
+
+    -- AUDIT-SWALLOW FIX (this pass): same reasoning as runtimeResetFeature
+    -- above -- the primary write already succeeded, so `ok = true` below is
+    -- correct, but a failed audit-trail insert must still leave a trace
+    -- tied to this specific key.
+    if not K9Store.OverrideAudit_Append(overrideKey, 'tuning', tostring(oldValue), nil, citizenid or 'unknown') then
+        print(('[qbx_k9unit] runtimecontrol.lua: runtimeResetTunable audit-trail write failed for key=%s (the reset itself still succeeded and was persisted).'):format(key))
+    end
 
     ApplyTunableOverride(key, defaultValue)
     ActiveOverrides[overrideKey] = nil
 
     LogAuditInvocation(source, 'runtimeResetTunable', ('key=%s restored=%s'):format(key, tostring(defaultValue)), 'ok')
-    return { ok = true, value = defaultValue, restartRequired = false }
+    -- SHAPE-CONSISTENCY FIX (this pass): `appliedLive` was previously absent
+    -- from this response even though runtimeSetTunable's own success shape
+    -- always includes it (and every tunable is, by this registry's own
+    -- construction, confirmed genuinely live either way) -- a consumer
+    -- checking `result.appliedLive` after a Reset the same way it does
+    -- after a Set would have read `nil`/falsy for an operation that is in
+    -- fact exactly as live as a Set. Added for parity, never previously
+    -- promised false.
+    return { ok = true, value = defaultValue, appliedLive = true, restartRequired = false }
 end)
 
 -- ======================================================================
@@ -1769,7 +1857,12 @@ lib.callback.register('qbx_k9unit:server:tabletSetTheme', function(source, parti
         return { ok = false, reason = 'db_error' }
     end
 
-    K9Store.ThemeAudit_Append(merged.primaryColor, merged.accentColor, merged.backgroundColor, merged.textColor, merged.density, merged.headerTitle, citizenid or 'unknown')
+    -- AUDIT-SWALLOW FIX (this pass): see runtimeSetFeature's identical
+    -- comment above for the full reasoning -- the theme write already
+    -- succeeded, so `ok = true` below remains correct.
+    if not K9Store.ThemeAudit_Append(merged.primaryColor, merged.accentColor, merged.backgroundColor, merged.textColor, merged.density, merged.headerTitle, citizenid or 'unknown') then
+        print('[qbx_k9unit] runtimecontrol.lua: tabletSetTheme audit-trail write failed (the theme change itself still succeeded and was persisted).')
+    end
 
     CurrentTheme = merged
     LogAuditInvocation(source, 'tabletSetTheme', ('primary=%s accent=%s background=%s text=%s density=%s header=%q'):format(
@@ -1807,7 +1900,11 @@ lib.callback.register('qbx_k9unit:server:tabletResetTheme', function(source)
         return { ok = false, reason = 'db_error' }
     end
 
-    K9Store.ThemeAudit_Append(reset.primaryColor, reset.accentColor, reset.backgroundColor, reset.textColor, reset.density, reset.headerTitle, citizenid or 'unknown')
+    -- AUDIT-SWALLOW FIX (this pass): see tabletSetTheme's identical comment
+    -- above for the full reasoning.
+    if not K9Store.ThemeAudit_Append(reset.primaryColor, reset.accentColor, reset.backgroundColor, reset.textColor, reset.density, reset.headerTitle, citizenid or 'unknown') then
+        print('[qbx_k9unit] runtimecontrol.lua: tabletResetTheme audit-trail write failed (the theme reset itself still succeeded and was persisted).')
+    end
 
     CurrentTheme = reset
     LogAuditInvocation(source, 'tabletResetTheme', 'n/a', 'ok')
