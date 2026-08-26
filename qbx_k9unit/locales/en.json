@@ -598,7 +598,8 @@
         "shop_item_error_must_include_every_item": "The new order must include every existing item, with none missing or duplicated.",
         "shop_item_error_invalid_key_set": "The new order must include every existing item, with none missing or duplicated.",
         "shop_item_error_db_error": "A database error occurred. Try again.",
-        "shop_item_retired_reference_badge": "(retired)"
+        "shop_item_retired_reference_badge": "(retired)",
+        "high_command_required_notice": "You don't have High Command access, so here is your own record instead."
     },
     "inventory": {
         "open_gear_target_label": "Open K9 Gear",

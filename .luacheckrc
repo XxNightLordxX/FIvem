@@ -201,6 +201,12 @@ read_globals = {
     -- Entity / world
     "DoesEntityExist", "IsEntityDead", "GetEntityCoords", "SetEntityCoords",
     "GetEntityHeading", "SetEntityHeading", "GetEntityModel",
+    -- GET_ENTITY_SPEED -- VERIFIED 2026-08-26 against
+    -- raw.githubusercontent.com/citizenfx/fivem/master/ext/native-decls/GetEntitySpeed.md
+    -- (ns CFX, apiset: server, returns a float in metres per second). It is
+    -- also a long-standing base-game CLIENT native, which is the side
+    -- client/agility.lua calls it from.
+    "GetEntitySpeed",
     "GetEntityType", "GetEntityArchetypeName", "GetOffsetFromEntityInWorldCoords",
     "SetEntityCollision", "SetEntityVisible", "FreezeEntityPosition",
     "AttachEntityToEntity", "DetachEntity", "GetGamePool",
