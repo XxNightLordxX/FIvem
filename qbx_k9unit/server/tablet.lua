@@ -176,15 +176,15 @@
     the one and only offline accessor, already keyed by citizenid (no
     separate ByCitizenId variant needed).
 
-    NOT YET WIRED INTO ResolveDisplayName BELOW -- that is a genuine
-    behavior change (a new resource-global call, a new nil/malformed-
-    PlayerData guard, a real player-visible improvement to every offline
-    roster/summary row) that belongs to whoever next owns this file's
-    runtime logic, not to the structural pass that closed this question.
-    ResolveDisplayName still falls back to the citizenid ITSELF for an
-    offline target in the meantime -- always present, never wrong, just
-    less friendly than a real name; that fallback remains correct and safe
-    to keep exactly as-is until the wiring lands.
+    WIRED (2026-08-26, issue-closer sweep): ResolveDisplayName below now
+    calls `exports.qbx_core:GetOfflinePlayer(citizenid)` for an offline
+    target, behind a `pcall` (the export call itself, not just its result)
+    so a qbx_core build without it -- or a citizenid it does not
+    recognize -- degrades exactly as before: straight to the citizenid
+    fallback, never an error. Only `PlayerData.charinfo` is consulted for
+    the offline path (there is no offline `source`/native-name to fall
+    back to, unlike the online branch above it), so the offline result is
+    either a real name or the citizenid -- never a half-resolved guess.
     ======================================================================
 
     ======================================================================
@@ -575,18 +575,31 @@ local function BuildCertificationsArray(citizenid)
     return out
 end
 
+--- @param charinfo any
+--- @return string?
+local function FullNameFromCharinfo(charinfo)
+    if type(charinfo) == 'table' and type(charinfo.firstname) == 'string' and type(charinfo.lastname) == 'string' then
+        local full = (charinfo.firstname .. ' ' .. charinfo.lastname):match('^%s*(.-)%s*$')
+        if type(full) == 'string' and full ~= '' then return full end
+    end
+    return nil
+end
+
 --- Best-effort display name -- see this file's header "NAME RESOLUTION"
 --- for the full, disclosed gap this documents rather than guesses around.
+--- As of this pass, the OFFLINE branch below now consults qbx_core's own
+--- `GetOfflinePlayer` export per that header's "NOT YET WIRED" note --
+--- soft-guarded with `pcall`, exactly like every other cross-resource call
+--- in this file, so a qbx_core version without that export (or a citizenid
+--- it does not recognize) still falls through to the same
+--- always-safe citizenid fallback this function has always had.
 --- @param citizenid string
 --- @return string
 local function ResolveDisplayName(citizenid)
     local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
     if onlinePlayer and onlinePlayer.PlayerData then
-        local charinfo = onlinePlayer.PlayerData.charinfo
-        if type(charinfo) == 'table' and type(charinfo.firstname) == 'string' and type(charinfo.lastname) == 'string' then
-            local full = (charinfo.firstname .. ' ' .. charinfo.lastname):match('^%s*(.-)%s*$')
-            if type(full) == 'string' and full ~= '' then return full end
-        end
+        local full = FullNameFromCharinfo(onlinePlayer.PlayerData.charinfo)
+        if full then return full end
 
         local onlineSrc = onlinePlayer.PlayerData.source
         if type(onlineSrc) == 'number' then
@@ -595,9 +608,15 @@ local function ResolveDisplayName(citizenid)
         end
     end
 
-    -- OFFLINE (or online with neither a usable charinfo nor a resolvable
-    -- native name) -- fall back to the citizenid itself. Never blank,
-    -- never a guess at an unverified schema.
+    -- OFFLINE -- ask qbx_core's own offline accessor before giving up.
+    local ok, offlinePlayer = pcall(function() return exports.qbx_core:GetOfflinePlayer(citizenid) end)
+    if ok and type(offlinePlayer) == 'table' and offlinePlayer.PlayerData then
+        local full = FullNameFromCharinfo(offlinePlayer.PlayerData.charinfo)
+        if full then return full end
+    end
+
+    -- Still nothing usable -- fall back to the citizenid itself. Never
+    -- blank, never a guess at an unverified schema.
     return citizenid
 end
 

@@ -1016,10 +1016,15 @@
         "progress_person_label": "Searching person...",
         "failed": "The search could not be completed — try again.",
         "generic_denied": "Unable to search right now.",
+        "too_far_denied": "You're too far away to search that.",
+        "feature_disabled_denied": "Searching is turned off right now.",
+        "invalid_target_denied": "That isn't something your K9 can search.",
+        "no_access_denied": "You don't have K9 search access right now.",
+        "access_revoked_denied": "Your K9 access was revoked during the search.",
         "contraband_found": "Contraband detected!",
         "nothing_found": "Nothing found.",
-        "vehicle_target_label": "Search Vehicle",
-        "person_target_label": "Search Person"
+        "vehicle_target_label": "Search Vehicle for Contraband",
+        "person_target_label": "Search Person for Contraband"
     },
     "tenure": {
         "milestone_reached": "Your partnership has reached a new tenure milestone."

@@ -125,6 +125,12 @@ local function newFixture(opts)
     -- ---- players ----
     local playersBySource = {}
     local playersByCitizenId = {}
+    -- OFFLINE roster -- deliberately separate from playersByCitizenId
+    -- (an online player must never be looked up through this table; the
+    -- two are mutually exclusive in production, matching qbx_core's own
+    -- GetPlayerByCitizenId/GetOfflinePlayer split). See
+    -- registerOfflinePlayer below.
+    local offlinePlayersByCitizenId = {}
 
     --- @param source number
     --- @param citizenid string
@@ -137,10 +143,21 @@ local function newFixture(opts)
         return source
     end
 
+    --- Registers a citizenid that is NEVER online for this fixture --
+    --- exercised only through exports.qbx_core:GetOfflinePlayer, never
+    --- GetPlayerByCitizenId/GetPlayer (see server/tablet.lua's
+    --- ResolveDisplayName OFFLINE branch).
+    --- @param citizenid string
+    --- @param charinfo table?
+    local function registerOfflinePlayer(citizenid, charinfo)
+        offlinePlayersByCitizenId[citizenid] = { PlayerData = { citizenid = citizenid, charinfo = charinfo }, Offline = true }
+    end
+
     local exportsStub = {
         qbx_core = {
             GetPlayer = function(_self, source) return playersBySource[source] end,
             GetPlayerByCitizenId = function(_self, citizenid) return playersByCitizenId[citizenid] end,
+            GetOfflinePlayer = function(_self, citizenid) return offlinePlayersByCitizenId[citizenid] end,
         },
     }
 
@@ -254,6 +271,7 @@ local function newFixture(opts)
         env = env,
         callbacks = capturedCallbacks,
         registerPlayer = registerPlayer,
+        registerOfflinePlayer = registerOfflinePlayer,
         addPermRow = addPermRow,
         addCertRow = addCertRow,
         permRows = permRows,
@@ -980,6 +998,28 @@ t.test('tabletRequestPersonSummary: works for a genuinely OFFLINE target citizen
     local found = false
     for _, key in ipairs(result.permissions) do if key == 'k9.access' then found = true end end
     t.isTrue(found)
+end)
+
+t.test('tabletRequestPersonSummary: an OFFLINE target resolves a real name via qbx_core:GetOfflinePlayer, not the citizenid fallback', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addCertRow('OFFLINE-K9-2', 'police', 'HC1', true)
+    f.registerOfflinePlayer('OFFLINE-K9-2', { firstname = 'Rex', lastname = 'Handler' })
+
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'OFFLINE-K9-2')
+    t.isTrue(result.ok)
+    t.equals(result.target.name, 'Rex Handler', 'GetOfflinePlayer charinfo must resolve a real name for an offline target')
+end)
+
+t.test('tabletRequestPersonSummary: qbx_core WITHOUT a GetOfflinePlayer export still falls back to the citizenid safely (soft-guarded)', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addCertRow('OFFLINE-K9-3', 'police', 'HC1', true)
+    f.env.exports.qbx_core.GetOfflinePlayer = nil -- simulate an older qbx_core without this export
+
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'OFFLINE-K9-3')
+    t.isTrue(result.ok)
+    t.equals(result.target.name, 'OFFLINE-K9-3', 'a missing GetOfflinePlayer export must not error -- must degrade to the citizenid fallback')
 end)
 
 t.test('tabletRequestPersonSummary: certifications array carries tier/expiry/specializations for a genuinely OFFLINE target', function()

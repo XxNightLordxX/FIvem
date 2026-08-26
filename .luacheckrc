@@ -572,6 +572,16 @@ globals = {
     "ListCertificationTiers", "IsKnownCertificationTierKey",
     "GetCertificationTierOrdinal", "GetCertificationTierCapabilities",
     "TierHasCapability", "TierEditMutex",
+    -- server/k9profiles.lua -- the per-INDIVIDUAL-K9 override layer (GAP 1
+    -- closure: promoted from `local` to a resource-global in the SAME pass
+    -- that gives it its first real cross-file consumer,
+    -- server/progression.lua's GetXPTierMedkitCooldownMs and its client
+    -- tier-snapshot composer -- exactly this resource's own established
+    -- "add the allowlist entry in the same pass that creates the cross-file
+    -- need" convention). Composes GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL
+    -- OVERRIDE into one effective speed/scent/medkit-cooldown answer; never
+    -- a boolean, never an authorization decision.
+    "GetK9EffectiveMultipliers",
     -- shared/compat/core.lua -- the resource auto-detection registry.
     -- Assigned in core.lua, read by the five sibling adapter files and by
     -- any future consumer. Same "global helper, per-file private state"

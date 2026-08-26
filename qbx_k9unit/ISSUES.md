@@ -231,17 +231,55 @@ our tables — not that you can remove oxmysql.*
 
 **In flight right now — full command from the tablet.** You asked for the
 tablet and config to be fully customisable, and for high command to have
-full command over everything. These are the pieces still being built:
+full command over everything. Four of the seven pieces this section used to
+list here are now **DONE, verified 2026-08-26 by an issue-closer sweep**
+against the actual code rather than trusting this file's own "last updated"
+stamp — this section itself had drifted stale, which is exactly the kind of
+gap this sweep exists to catch:
+
+- **Assign a tier / grant a specialisation from the tablet** — `tablet:setCertificationTier`
+  (client/tablet.lua, server/certifications.lua's `SetCertificationTierForTablet`)
+  now assigns a tier **online or offline**. `tablet:grantSpecialization`/
+  `tablet:revokeSpecialization` are also tablet-native now; granting one
+  deliberately stays **online-only** (`GrantSpecializationForTablet`'s own
+  header: its precondition checks read from an online-only cache, and
+  weakening that to fabricate an offline answer would make the
+  `TierCapabilityPermits` gate fail open — a considered decision, not a gap).
+- **The audit screen** — html/tablet.js has a full Audit Trail tab
+  (`buildAuditDeptFields`/the `auditMode` state machine) calling all five
+  `tabletAudit*` bridges via client/tablet.lua's `tablet:audit*` NUI
+  callbacks. client/tablet.lua §"SECTION 3" even documents its own
+  correction of this exact claim.
+- **Add and remove permissions themselves** — html/tablet.js's Permission
+  Keys screen (`buildPermissionKeysScreen`, tab `tab_permission_keys`) calls
+  `tablet:permKeysList`/`Upsert`/`Delete`, wired straight through to
+  server/permissionkeycatalog.lua. A key can be invented or retired from the
+  tablet with no file edit or restart.
+- **Set the experience needed for each rank** — html/tablet.js's XP Ranks
+  screen (`buildXpTiersScreen`, tab `tab_xp_tiers`) calls
+  `tablet:xpTiersList`/`xpTiersUpsert`, wired through to server/xptiers.lua.
+- **SQL that is safe on your live database** — every `CREATE TABLE` in
+  `sql/install.sql` is `IF NOT EXISTS`; every `ALTER TABLE` migration uses
+  the `INFORMATION_SCHEMA.COLUMNS`-guarded stored-procedure pattern (see
+  e.g. `sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql`'s
+  own header, execution-verified against real MySQL 5.7/8.0 and MariaDB
+  10.11 servers, not just inspected); and server/datastore.lua's boot-time
+  schema-collision probe (`EXPECTED_TABLE_COLUMNS`) now names all 24 tables
+  this resource creates — confirmed by direct diff against `sql/install.sql`,
+  `sql/preflight_check.sql`, `sql/migration_status.sql`,
+  `sql/rollback/uninstall_all.sql` and `sql/rollback/backup_k9_tables.sh`,
+  all of which independently converge on the same 24-table list. On any
+  collision this resource refuses to write to the table it does not own and
+  falls back to memory mode for the rest of that process, loudly, once.
+
+Two pieces are genuinely still open — **not re-verified as thoroughly as
+the five above**, so treat their status as unconfirmed rather than
+disproven:
 
 | Being built | What it gives you |
 |---|---|
-| Assign a tier / grant a specialisation from the tablet | Today tiers can be created and edited in the tablet but only **assigned** by a console command on someone who is online. This makes it a tablet action that works on offline people too. |
-| The audit screen | Five audit lookups already work on the server and are already restricted to high command — nothing in the tablet calls them yet, so the trail this resource carefully writes is currently invisible to you. |
-| Add and remove permissions themselves | You can hand out the four permissions that ship. You cannot yet invent a fifth or retire one without editing a file and restarting. |
-| Set the experience needed for each rank | `Config.XPTiers` is a file you edit and restart for. Becoming a tablet control, like the tiers already are. |
-| Every sub-feature in the config | The 56 on/off switches are done. The numbers *inside* each feature — distances, timers, chances — are being swept for anything hardcoded that you'd plausibly want to tune. |
-| Per-person control on the last twelve features | Twelve features live entirely on the player's own game and cannot be blocked per person yet. |
-| SQL that is safe on your live database | Making install and every migration non-destructive, and making the resource refuse loudly rather than write into a table that has our name but isn't ours. |
+| Every sub-feature in the config | The 56 on/off switches are done. The numbers *inside* each feature — distances, timers, chances — are being swept for anything hardcoded that you'd plausibly want to tune. Still genuinely in progress — recent commits (e.g. "Make the speed boost and stamina numbers genuinely editable") are this sweep landing incrementally. |
+| Per-person control on the last twelve features | Twelve features live entirely on the player's own game and cannot be blocked per person yet. **Unverified by this sweep** — given four of this table's six siblings turned out to already be finished, whoever picks this up next should re-confirm the count and the list of twelve before assuming it is still accurate, rather than trusting this row at face value. |
 
 **Rules these are all being held to**, because each one has bitten this
 project before: a feature can be gated when it *starts* and never when it

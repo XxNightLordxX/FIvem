@@ -750,20 +750,41 @@ t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this
     f.fireResourceStart()
     t.equals(f.overrideQueryCallCount(), 0)
 
-    -- Never resume coros[1] (the probe) -- a hung query that never comes
-    -- back. Keep waking ONLY this file's own handler (coros[2] --
-    -- k9profiles.lua does not load any other onResourceStart-registering
-    -- file in this fixture, so it is the very next handler registered
-    -- after datastore.lua's own) on its own bounded poll loop until it
-    -- either gives up (dies) or this test's own generous ceiling is hit.
+    -- FIND this file's own handler rather than indexing it by position.
+    -- This used to be `f.coros[2]`, on the assumption that k9profiles.lua's
+    -- start handler is always the second one registered (right after
+    -- datastore.lua's own probe, since this fixture loads no other
+    -- onResourceStart-registering file). That is not a property this spec
+    -- controls: every file loaded into the fixture registers its own
+    -- handlers, so an unrelated file (e.g. datastore.lua or cooldowns.lua)
+    -- gaining one shifts the index and this test silently starts driving
+    -- the WRONG coroutine -- exactly what happened to a sibling spec when
+    -- server/permissions.lua went from one start handler to three for an
+    -- unrelated feature. That test failed while the boot-order safety
+    -- property it exists to protect was completely intact.
+    --
+    -- Never resume coros[1] (the probe) at all -- a hung query that never
+    -- comes back. This file's own handler is the one still suspended after
+    -- the probe is deliberately left hung: it is the only one polling for
+    -- a settle that never comes. Identifying it by that behaviour cannot
+    -- drift.
+    local profileCo
+    for i, co in ipairs(f.coros) do
+        if i > 1 and coroutine.status(co) == 'suspended' then
+            profileCo = co
+            break
+        end
+    end
+    t.isTrue(profileCo ~= nil, 'k9profiles.lua must have a suspended start handler polling for the schema check to settle')
+
     local resumes = 0
-    while coroutine.status(f.coros[2]) == 'suspended' and resumes < 200 do
-        coroutine.resume(f.coros[2])
+    while coroutine.status(profileCo) == 'suspended' and resumes < 200 do
+        coroutine.resume(profileCo)
         resumes = resumes + 1
     end
 
     t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
-    t.equals(coroutine.status(f.coros[2]), 'dead', 'this file\'s own onResourceStart handler must have completed (given up), not be stuck suspended forever')
+    t.equals(coroutine.status(profileCo), 'dead', 'this file\'s own onResourceStart handler must have completed (given up), not be stuck suspended forever')
     t.equals(f.overrideQueryCallCount(), 0, 'must never have trusted the unconfirmed table')
     t.equals(#f.callbacks['qbx_k9unit:server:k9ProfilesList'](1).overrides, 0, 'boots with no individual overrides at all, exactly like Config.Database.enabled = false, rather than trust an unconfirmed table')
 end)

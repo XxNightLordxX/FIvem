@@ -954,22 +954,44 @@ t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this
     f.fireResourceStart()
     t.equals(f.xpTierQueryCallCount(), 0)
 
+    -- FIND this file's own handler rather than indexing it by position.
+    -- This used to be `f.coros[2]`, on the assumption that xptiers.lua's
+    -- start handler is always the second one registered (right after
+    -- datastore.lua's own probe, since xptiers.lua does not load
+    -- permissions.lua or any other onResourceStart-registering file in
+    -- this fixture). That is not a property this spec controls: every
+    -- file loaded into the fixture registers its own handlers, so an
+    -- unrelated file (e.g. datastore.lua or cooldowns.lua) gaining one
+    -- shifts the index and this test silently starts driving the WRONG
+    -- coroutine -- exactly what happened to a sibling spec when
+    -- server/permissions.lua went from one start handler to three for an
+    -- unrelated feature. That test failed while the boot-order safety
+    -- property it exists to protect was completely intact.
+    --
     -- Never resume coros[1] (the probe) at all -- a hung query that never
-    -- comes back, not merely a slow one. Keep waking ONLY this file's own
-    -- handler (coros[2] -- xptiers.lua does not load permissions.lua, so it
-    -- is the very next handler registered after datastore.lua's own) on
-    -- its own bounded poll loop until it either gives up (dies) or this
-    -- test's own generous ceiling is hit -- the ceiling exists purely so a
-    -- regression that makes the production wait loop genuinely infinite
-    -- fails this test instead of hanging the whole suite.
+    -- comes back, not merely a slow one. This file's own handler is the
+    -- one still suspended after the probe is deliberately left hung: it is
+    -- the only one polling for a settle that never comes. Identifying it
+    -- by that behaviour cannot drift. The 200-poll ceiling exists purely
+    -- so a regression that makes the production wait loop genuinely
+    -- infinite fails this test instead of hanging the whole suite.
+    local xpTierCo
+    for i, co in ipairs(f.coros) do
+        if i > 1 and coroutine.status(co) == 'suspended' then
+            xpTierCo = co
+            break
+        end
+    end
+    t.isTrue(xpTierCo ~= nil, 'xptiers.lua must have a suspended start handler polling for the schema check to settle')
+
     local resumes = 0
-    while coroutine.status(f.coros[2]) == 'suspended' and resumes < 200 do
-        coroutine.resume(f.coros[2])
+    while coroutine.status(xpTierCo) == 'suspended' and resumes < 200 do
+        coroutine.resume(xpTierCo)
         resumes = resumes + 1
     end
 
     t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
-    t.isTrue(coroutine.status(f.coros[2]) == 'dead', 'this file\'s own onResourceStart handler must finish (give up), not remain permanently suspended')
+    t.isTrue(coroutine.status(xpTierCo) == 'dead', 'this file\'s own onResourceStart handler must finish (give up), not remain permanently suspended')
     t.equals(f.xpTierQueryCallCount(), 0, 'must never issue its own SELECT while the collision state is genuinely unknown -- fail-closed, exactly like Config.Database.enabled = false')
     t.equals(f.env.Config.XPTiers[1].label, 'Recruit K9', 'config-shipped defaults remain in effect -- no DB row, real or foreign, reaches this file while unsettled')
     t.contains(table.concat(f.printedLines, '\n'), 'schema-collision check had not finished', 'the fallback must be logged clearly, never silent')

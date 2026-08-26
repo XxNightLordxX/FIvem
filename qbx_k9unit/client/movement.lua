@@ -720,32 +720,82 @@ local LEASH_TARGET_DISTANCE_FACTOR = 0.5
 -- registration primitive dedups/replaces by that same name (or label, per
 -- shared/compat/target.lua's own per-adapter notes), so re-running any of
 -- these three functions never duplicates an entry.
+--
+-- THIRD-EYE CLARITY PASS (this pass, owner-directed): this used to be ONE
+-- option ('qbx_k9unit:attachLeash', a bare "Attach Leash" label) shown to
+-- EITHER side of the handshake — a K9 targeting a prospective officer, OR
+-- an officer targeting a K9 — via a single `IsOwnModelK9() or
+-- IsEntityModelK9(entity) or IsK9RoleForPlayer(...)` predicate. That is
+-- exactly the "flat, jargon-y option with no indication of who it's for"
+-- complaint: the same static label/icon can't read correctly for both
+-- actors at once (ox_target's `label`/`icon` fields are plain values, not
+-- per-viewer functions — confirmed against the real ox_target source this
+-- pass, and shared/compat/target.lua's own qb-target/sleepless_interact
+-- adapters key removal BY that label, so it must stay a stable string
+-- either way). Split into two options with mutually exclusive
+-- canInteract predicates instead — each one only ever shows to the actor
+-- it actually describes, in that actor's own plain English:
+--   - 'qbx_k9unit:attachLeashAsHandler' (icon fas fa-user-tie, the
+--     resource-wide "a separate human acts on/for a K9" icon): shown to a
+--     human targeting a K9-modeled/K9-roled ped. Never shown to a K9-bodied
+--     actor (`if IsOwnModelK9() then return false end`), so the two options
+--     never both appear on the same target for the same viewer.
+--   - 'qbx_k9unit:attachLeashAsK9' (icon fas fa-dog, the resource-wide
+--     K9-role icon): shown only while the LOCAL player's own body is the K9
+--     (IsOwnModelK9()), matching this option's own long-standing "any
+--     nearby player is a plausible prospective handler, let the server
+--     answer with a specific reason" tradeoff (unchanged from before this
+--     split — see the removed comment this replaces).
+-- Both still funnel into the exact same RequestLeashAttach(targetServerId)
+-- — this is a display/labeling split only, never a second, divergent
+-- request path, and CheckLeashEligibility (server/main.lua) remains the
+-- one real authority either way.
 local function RegisterLeashOxTargetOption()
     K9Compat.Get('target').AddGlobalPlayer({
         {
-            name = 'qbx_k9unit:attachLeash',
-            icon = 'fas fa-link',
-            label = locale('movement.attach_leash_target_label'),
+            name = 'qbx_k9unit:attachLeashAsHandler',
+            icon = 'fas fa-user-tie',
+            label = locale('movement.attach_leash_handler_target_label'),
             distance = LEASH_TARGET_DISTANCE_FACTOR * Config.LeashMaxDistance,
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.LeashMechanics then return false end
                 if IsLeashed() then return false end
                 if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
+                if IsOwnModelK9() then return false end -- HANDLER direction only -- a K9-bodied actor gets the K9-direction option below instead, never both
 
-                -- At least one side should plausibly be a K9 (either us, or
-                -- the target's live model) — cheap client-side plausibility
-                -- only, per this file's header note not to over-invest here.
                 -- WIDENED (K9 role/model decoupling): IsEntityModelK9(entity)
                 -- alone misses a target who holds the decoupled K9 ROLE on a
                 -- human/custom model -- IsK9RoleForPlayer(...) is
                 -- client/appearance.lua's own per-target-cached (1s TTL,
                 -- same shape as HasK9Access() above) server round trip for
                 -- exactly that question, so it is only ever awaited here on
-                -- a cache miss, never on every frame. Short-circuited last
-                -- (Lua `or`): a real K9 model or the local player's own K9
-                -- role already answers this for the overwhelming common
-                -- case without ever reaching the network call.
-                return IsOwnModelK9() or IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
+                -- a cache miss, never on every frame.
+                return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
+            end,
+            onSelect = function(data)
+                local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+                if not targetPlayer or targetPlayer == -1 then return end
+
+                RequestLeashAttach(GetPlayerServerId(targetPlayer))
+            end,
+        },
+        {
+            name = 'qbx_k9unit:attachLeashAsK9',
+            icon = 'fas fa-dog',
+            label = locale('movement.attach_leash_k9_target_label'),
+            distance = LEASH_TARGET_DISTANCE_FACTOR * Config.LeashMaxDistance,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.LeashMechanics then return false end
+                if IsLeashed() then return false end
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
+
+                -- K9 direction: any nearby player is a plausible prospective
+                -- handler -- no cheap client-side "is that specific player
+                -- department-eligible" check exists (same tradeoff this
+                -- file's "Certify K9 Handler" option below already
+                -- documents), so this shows broadly and CheckLeashEligibility
+                -- (server/main.lua) answers with a specific reason either way.
+                return IsOwnModelK9()
             end,
             onSelect = function(data)
                 local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
@@ -821,6 +871,16 @@ local CERTIFY_TARGET_DISTANCE_FACTOR = 0.5
 -- file's "Attach Leash" option above for the full writeup this shares
 -- (same ox_target lifecycle bug, same fix shape, same combined
 -- `AddEventHandler` near the end of this file).
+-- THIRD-EYE CLARITY PASS (this pass, owner-directed): icon fas fa-id-badge
+-- is this resource's own "High Command / credentialing" icon (the fourth
+-- role bucket alongside fas fa-dog for K9-role options and fas fa-user-tie
+-- for a separate human acting on/for a K9, both confirmed with the
+-- sibling agent covering the vehicle/object half of this same pass) --
+-- unchanged from before this pass, kept deliberately since it already read
+-- correctly and is already confirmed available. Labels below reworded to
+-- plain English (what will actually happen, from the granter's own point
+-- of view), per this pass's brief -- canInteract/onSelect are UNCHANGED,
+-- this is a text/labeling pass only.
 local function RegisterCertifyOxTargetOptions()
     K9Compat.Get('target').AddGlobalPlayer({
         {
