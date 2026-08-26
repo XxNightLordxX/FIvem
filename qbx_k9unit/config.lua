@@ -808,6 +808,48 @@ Config.FeatureControl = {
         SARCalls          = true,
     },
 
+    -- CRITICAL DAY-ONE FIX (server/permissions.lua's own "SELF-GRANT"
+    -- header section documents the full reasoning this augments -- read
+    -- that before changing this). Config.Permissions grants/RequireGrant
+    -- feature grants alike may only ever be issued by a high-command
+    -- officer (server/permissions.lua's GrantPermission re-verifies
+    -- IsHighCommand server-side), and self-grant of a NAMED CAPABILITY
+    -- (k9.access/k9.certify/k9.audit/k9.givexp) is unconditionally blocked
+    -- with no escape hatch at all -- see that file's header for why that
+    -- one is correct as-is and is NOT touched by this flag.
+    --
+    -- This flag governs a narrower, different case: a high-command officer
+    -- granting THEMSELVES a 'feature.<Name>'/RequireGrant entry from THIS
+    -- table. Left unconditionally blocked (as it originally shipped), this
+    -- produces a genuine day-one deadlock on the single most common
+    -- topology there is -- a server with exactly ONE high-command officer
+    -- (the owner, on day one, before any second officer is promoted):
+    -- nobody can ever grant that officer 'feature.AdminAuditCommands' (or
+    -- any other entry above), because only high command can grant it, and
+    -- self-grant was blocked outright. Concretely, this made the tablet's
+    -- entire Audit tab permanently unreachable for that officer, forever,
+    -- on the most common day-one server shape there is.
+    --
+    -- DEFAULT TRUE HERE, the OPPOSITE default from
+    -- Config.HighCommand.allowSelfGrant (default false, see that flag's own
+    -- comment) -- deliberately, not an oversight. That flag guards
+    -- self-granting XP: a real, numeric, minted economy value, where the
+    -- judgment call being made ("how much") is genuinely different person
+    -- to person and a missing second-person witness is a real, if small,
+    -- self-dealing-optics concern worth defaulting off. A 'feature.<Name>'
+    -- grant mints nothing and is not a judgment call at all -- it is a
+    -- binary switch that ANY high-command officer already has standing
+    -- authority to flip for ANY citizenid, including this one; a
+    -- high-command officer granting it to themselves reaches no state a
+    -- second high-command officer's rubber stamp would not have produced
+    -- identically. Set this to false only if your department specifically
+    -- wants a second high-command officer's sign-off on every officer's own
+    -- feature access, and accepts that a server with exactly one
+    -- high-command officer then has NO way to grant that officer any
+    -- RequireGrant-listed feature (Audit tab included) until a second one
+    -- is promoted.
+    allowHighCommandSelfGrant = true,
+
     -- Whether a handler/K9 may open the tablet and see what they hold.
     -- Everyone gets the read-only view of their own record by default --
     -- that is the point of it. Turning this off leaves the tablet as a
@@ -2081,12 +2123,16 @@ Config.DeployableKennel = {
     -- linger indefinitely).
     pendingPlacementTtlMs = 15000,
 
-    -- CARRY VISUAL (this pass -- "make the pickup feel real"). Purely
-    -- cosmetic bone/offset/rotation for the kennel-shaped prop
-    -- client/kennel.lua attaches to a handler's own ped while carrying a
-    -- just-picked-up kennel (client/propattachment.lua's own
-    -- AttachPropToOwnPed, reused rather than reimplemented). UNTUNED
-    -- placeholder, same disclosed-confidence status as
+    -- CARRY VISUAL (K9-can-ride-along pass -- "make the pickup feel real,"
+    -- later corrected by the owner to "the SAME kennel, occupant and all,
+    -- must move with the handler" -- see server/kennel.lua's own header
+    -- CRITICAL SAFETY section for the full redesign this forced). Purely
+    -- cosmetic bone/offset/rotation client/kennel.lua uses to
+    -- AttachEntityToEntity the EXISTING, real, already-deployed kennel
+    -- object onto a carrying handler's own ped -- NOT a freshly created
+    -- prop (client/propattachment.lua's AttachPropToOwnPed is deliberately
+    -- NOT used for this -- see client/kennel.lua's own header for why).
+    -- UNTUNED placeholder, same disclosed-confidence status as
     -- placementForwardOffsetMeters above — boneIndex 0 (the root/pelvis
     -- bone) is deliberately used instead of a hand-specific bone: it is
     -- guaranteed valid on every ped skeleton (this resource's own
@@ -2104,6 +2150,23 @@ Config.DeployableKennel = {
     carryRotX = 0.0,
     carryRotY = 0.0,
     carryRotZ = 0.0,
+
+    -- REST VISUAL (K9-can-ride-along pass). Purely cosmetic offset
+    -- client/kennel.lua uses to AttachEntityToEntity an occupant's OWN ped
+    -- (a real, currently-connected player -- see server/kennel.lua's own
+    -- header for why this is never a spawned ped) onto the kennel object
+    -- itself. Defaults to the prop's own origin (0,0,0) rather than a
+    -- guessed interior offset -- this feature's own propModel confidence
+    -- note above already discloses that `prop_dog_cage_01`'s exact
+    -- in-engine dimensions were never independently confirmed this
+    -- session, so a guessed interior offset carries the identical
+    -- unverified-asset risk the model name itself already carries; the
+    -- origin is the one point guaranteed not to place the occupant
+    -- floating outside the model's own bounds regardless of its real
+    -- size.
+    restOffsetX = 0.0,
+    restOffsetY = 0.0,
+    restOffsetZ = 0.0,
 }
 -- ONE-KENNEL-PER-HANDLER LIMIT (not a config knob — see server/kennel.lua's
 -- header for the full "your call, documented" reasoning): the server-side

@@ -2338,9 +2338,16 @@ t.test('CROSS-FEATURE, THE MORE SEVERE SHAPE (no positional check at all): confi
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.no_active_ball_to_recall'))
     t.isNil(f.deletedEntities[victimKennelHandle], 'the attacker must never be able to delete the victim\'s kennel via a bogus "recall" of their own non-existent ball')
 
-    -- The victim's kennel remains genuinely theirs.
+    -- The victim's kennel remains genuinely theirs: they can still pick it
+    -- up. This used to assert the entity was DELETED on pickup, which was
+    -- true until the kennel became something a K9 can sit inside and a
+    -- handler can carry away with the dog still in it. Deleting it now
+    -- would destroy an object with a player attached to it, so pickup
+    -- keeps the same object alive and carries it. The security property
+    -- this test exists to prove is untouched -- what changed is only what
+    -- a successful pickup does to the entity afterwards.
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimKennelNetId)
-    t.isTrue(f.deletedEntities[victimKennelHandle])
+    t.isNil(f.deletedEntities[victimKennelHandle], 'a pickup carries the kennel, it does not delete it -- an occupant could be inside')
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
 end)
 

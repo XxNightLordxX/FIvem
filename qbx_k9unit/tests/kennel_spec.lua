@@ -1,10 +1,12 @@
 --[[
     tests/kennel_spec.lua
 
-    Direct tests of server/kennel.lua's four RegisterNetEvent handlers
+    Direct tests of server/kennel.lua's seven RegisterNetEvent handlers
     (requestDeployKennel / confirmKennelPlaced / cancelKennelPlacement /
-    requestPickupKennel) plus its playerDropped/onResourceStop cleanup,
-    against the REAL, unmodified production file -- loaded alongside the
+    requestPickupKennel / requestPutDownKennel / requestEnterKennel /
+    requestExitKennel -- the last three added by the K9-can-ride-along pass)
+    plus its playerDropped/onResourceStop cleanup, against the REAL,
+    unmodified production file -- loaded alongside the
     real server/cooldowns.lua and server/entities.lua per that file's own
     FILE-TO-FILE CONTRACT (DeployCooldown is a real NewCooldown() tracker,
     every ResolveNetworkEntity call is the real resolve+existence-guard
@@ -109,8 +111,36 @@ local PROP_HASH = GetHashKey(PROP_MODEL)
 local FALLBACK_HASH = GetHashKey(FALLBACK_MODEL)
 local WRONG_HASH = GetHashKey(WRONG_MODEL)
 
+-- K9-CAN-RIDE-ALONG PASS -- a fixed, arbitrary "this ped model is a K9"
+-- stand-in hash, same convention tests/propattachment_spec.lua's own
+-- K9_PED_HASH already established for the identical need (IsConfiguredK9Model
+-- stubbed against ONE fixed hash, never the real GET_HASH_KEY algorithm --
+-- see this file's own GetHashKey stand-in comment above for why that
+-- doesn't matter here).
+local K9_PED_HASH = GetHashKey('a_c_k9_test_model')
+
 local DEPLOY_COOLDOWN_MS = 5000
 local PENDING_TTL_MS = 15000
+
+-- ----------------------------------------------------------------------
+-- Vector3-alike stub -- K9-CAN-RIDE-ALONG PASS: requestPickupKennel's own
+-- new non-owner path and requestEnterKennel both do
+-- `#(GetEntityCoords(a) - GetEntityCoords(b))`, so both the `-` and `#`
+-- metamethods must be modeled, same shape tests/partnership_spec.lua/
+-- tests/certifications_spec.lua/tests/combat_spec.lua already use for the
+-- identical native.
+-- ----------------------------------------------------------------------
+local Vec3MT = {}
+Vec3MT.__index = Vec3MT
+Vec3MT.__sub = function(a, b)
+    return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, Vec3MT)
+end
+Vec3MT.__len = function(v)
+    return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+end
+local function vec3(x, y, z)
+    return setmetatable({ x = x, y = y, z = z }, Vec3MT)
+end
 
 --- @param a number
 --- @param b number
@@ -191,7 +221,16 @@ local function newKennelFixture(opts)
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
     local coordsByHandle = {} -- handle -> {x=,y=,z=}
-    local function GetEntityCoords(handle) return coordsByHandle[handle] or { x = 0, y = 0, z = 0 } end
+    -- K9-CAN-RIDE-ALONG PASS: wrapped in vec3() (see this file's own Vec3MT
+    -- stub above) so `#(GetEntityCoords(a) - GetEntityCoords(b))` -- used
+    -- by requestPickupKennel's own new non-owner path and requestEnterKennel
+    -- -- has real `-`/`#` metamethods to call. Every EXISTING consumer of
+    -- this function only ever reads `.x`/`.y`/`.z` off the result, which a
+    -- vec3-wrapped table still provides unchanged.
+    local function GetEntityCoords(handle)
+        local c = coordsByHandle[handle] or { x = 0, y = 0, z = 0 }
+        return vec3(c.x, c.y, c.z)
+    end
 
     local headingByHandle = {}
     local function GetEntityHeading(handle) return headingByHandle[handle] or 0.0 end
@@ -205,8 +244,20 @@ local function newKennelFixture(opts)
     local entityTypes = {} -- handle -> 1|2|3 (GetEntityType's real domain; 3 = object)
     local function GetEntityType(handle) return entityTypes[handle] or 0 end
 
-    local entityModels = {} -- handle -> hash
+    local entityModels = {} -- handle -> hash (shared by OBJECT handles and PED handles alike -- a real GetEntityModel doesn't distinguish either)
     local function GetEntityModel(handle) return entityModels[handle] end
+
+    -- K9-CAN-RIDE-ALONG PASS -- IsConfiguredK9Model stubbed against the one
+    -- fixed K9_PED_HASH declared at this file's own top, mirroring
+    -- tests/propattachment_spec.lua's/tests/fetch_spec.lua's own identical
+    -- stub shape for the same real dependency (server/certifications.lua).
+    -- HasK9Role is deliberately left UNDEFINED in this fixture's env --
+    -- ResolveK9PedForKennelRest's own `type(HasK9Role) == 'function'` soft
+    -- dependency guard means every test in this file exercises the
+    -- "model-based" half of that check, never the role-based half (a
+    -- second, independent concern this fixture does not need to cover for
+    -- server/kennel.lua's own tests to be meaningful).
+    local function IsConfiguredK9Model(hash) return hash == K9_PED_HASH end
 
     -- NETWORK-OWNERSHIP GUARD mock (coder-architect, this pass -- mirrors
     -- tests/propattachment_spec.lua's own identical mock, added there
@@ -232,6 +283,9 @@ local function newKennelFixture(opts)
             placementForwardOffsetMeters = 2.0,
             deployCooldownMs = opts.deployCooldownMs or DEPLOY_COOLDOWN_MS,
             pendingPlacementTtlMs = PENDING_TTL_MS,
+            -- K9-CAN-RIDE-ALONG PASS -- requestPickupKennel's own new
+            -- non-owner path and requestEnterKennel both read this.
+            interactDistanceMeters = opts.interactDistanceMeters or 2.5,
         },
         FeatureControl = { RequireGrant = {} },
     }
@@ -254,6 +308,7 @@ local function newKennelFixture(opts)
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         GetEntityModel = GetEntityModel,
+        IsConfiguredK9Model = IsConfiguredK9Model,
         NetworkGetEntityOwner = NetworkGetEntityOwner,
         DeleteEntity = DeleteEntity,
         print = printStub,
@@ -287,6 +342,12 @@ local function newKennelFixture(opts)
             coordsByHandle[pedHandle] = coords
             headingByHandle[pedHandle] = heading or 0.0
         end,
+        -- K9-CAN-RIDE-ALONG PASS -- marks `pedHandle` as a real K9-modeled
+        -- ped for ResolveK9PedForKennelRest's own IsConfiguredK9Model check.
+        -- Reuses the SAME entityModels table registerEntity below already
+        -- writes to (a real GetEntityModel doesn't distinguish object
+        -- handles from ped handles either).
+        setPedModel = function(pedHandle, hash) entityModels[pedHandle] = hash end,
         registerEntity = function(netId, handle, entityOpts)
             entityOpts = entityOpts or {}
             networkEntities[netId] = handle
@@ -382,7 +443,7 @@ end
 -- documents, before trusting any test below that depends on it.
 -- ----------------------------------------------------------------------
 
-t.test('server/kennel.lua registers exactly its 4 documented server net events', function()
+t.test('server/kennel.lua registers exactly its 7 documented server net events', function()
     local f = newKennelFixture()
     local names = {}
     local count = 0
@@ -390,11 +451,14 @@ t.test('server/kennel.lua registers exactly its 4 documented server net events',
         names[name] = true
         count = count + 1
     end
-    t.equals(count, 4)
+    t.equals(count, 7)
     t.isTrue(names['qbx_k9unit:server:requestDeployKennel'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:confirmKennelPlaced'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:cancelKennelPlacement'] ~= nil)
     t.isTrue(names['qbx_k9unit:server:requestPickupKennel'] ~= nil)
+    t.isTrue(names['qbx_k9unit:server:requestPutDownKennel'] ~= nil)
+    t.isTrue(names['qbx_k9unit:server:requestEnterKennel'] ~= nil)
+    t.isTrue(names['qbx_k9unit:server:requestExitKennel'] ~= nil)
 end)
 
 t.test('server/kennel.lua registers a playerDropped and an onResourceStop handler', function()
@@ -425,7 +489,7 @@ t.test('REGRESSION: Config.DeployableKennel.deployCooldownMs = 0 no longer abort
 
     local names, count = {}, 0
     for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
-    t.equals(count, 4, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.equals(count, 7, 'every net event this file documents must still register, not just the ones textually above the bad value')
     t.isNotNil(names['qbx_k9unit:server:requestPickupKennel'],
         'the pickup/cleanup path an operator needs to un-stick a stray kennel must remain reachable no matter what an operator puts in the config')
     t.isTrue(f.eventHandlerCount('playerDropped') >= 1)
@@ -446,7 +510,7 @@ t.test('REGRESSION: Config.DeployableKennel.deployCooldownMs = NaN also no longe
     local f = newKennelFixture({ deployCooldownMs = 0 / 0 })
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
-    t.equals(count, 4)
+    t.equals(count, 7)
 end)
 
 t.test('REGRESSION: with a valid Config.DeployableKennel.deployCooldownMs, DeployCooldown genuinely uses the CONFIGURED value, not silently always the fallback', function()
@@ -993,10 +1057,12 @@ t.test('PRE-CONFIRMATION-WINDOW: an attacker confirming a victim\'s real, NOT-YE
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
 
     -- HARD CONSTRAINT check -- not stranded either: the victim can still
-    -- remove their own, now-properly-registered kennel through the ordinary
-    -- pickup path.
+    -- pick their own, now-properly-registered kennel back up through the
+    -- ordinary pickup path (K9-CAN-RIDE-ALONG PASS: pickup no longer
+    -- deletes the object -- see server/kennel.lua's own header CRITICAL
+    -- SAFETY section).
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimNetId)
-    t.isTrue(f.deletedEntities[victimHandle])
+    t.isNil(f.deletedEntities[victimHandle])
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
 end)
 
@@ -1226,11 +1292,29 @@ t.test('requestPickupKennel: an unresolvable citizenid is a silent no-op', funct
     t.equals(#f.notifyCalls, 0)
 end)
 
-t.test('requestPickupKennel: no active kennel at all notifies not-owner', function()
+t.test('requestPickupKennel: no active kennel at all, for a genuinely certified handler, notifies not-owner', function()
     local f = newKennelFixture()
+    -- K9-CAN-RIDE-ALONG PASS, DISCLOSED BEHAVIOR CHANGE ("the handler [not
+    -- just the deploying owner] can pick it up" -- the owner's own words):
+    -- the RECORDED OWNER's own fast path (every OTHER test in this section)
+    -- is unaffected, but a caller who is NOT the recorded owner now goes
+    -- through a NEW HasK9Access + genuine-registry-membership + proximity
+    -- gate before ever reaching this "not_owner" rejection -- so this test
+    -- now grants K9 access first, to keep exercising the "no such netId is
+    -- registered at all" branch itself rather than accidentally hitting the
+    -- NEW authorization rejection instead (see the companion test
+    -- immediately below for THAT branch).
+    f.setAccess(1, true)
     f.setPlayer(1, 'ABC123')
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, 123)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_owner'))
+end)
+
+t.test('requestPickupKennel: NEW -- an uncertified caller (no HasK9Access) naming any netId is rejected as not authorized, never reaching the not_owner/proximity checks', function()
+    local f = newKennelFixture()
+    f.setPlayer(1, 'ABC123') -- deliberately no f.setAccess(1, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, 123)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_not_authorized'))
 end)
 
 t.test('requestPickupKennel: a netId that does not match the citizenid\'s own active kennel notifies not-owner, and leaves the real kennel untouched', function()
@@ -1241,20 +1325,35 @@ t.test('requestPickupKennel: a netId that does not match the citizenid\'s own ac
     t.isNil(f.deletedEntities[handle])
 end)
 
-t.test('requestPickupKennel: the real owner succeeds, deletes the entity, broadcasts removal, and clears the registry', function()
+t.test('requestPickupKennel: the real owner succeeds, attaches (NEVER deletes) the SAME object, and the registry survives the pickup', function()
     local f = newKennelFixture()
+    -- K9-CAN-RIDE-ALONG PASS, CRITICAL REDESIGN, DISCLOSED BEHAVIOR CHANGE:
+    -- the owner's own ALL-CAPS correction ("the dog is IN the cage and the
+    -- handler picks the cage up WITH THE DOG STILL IN IT... attached prop,
+    -- occupant attached to the prop, both moving with the handler") is
+    -- structurally incompatible with the OLD "pickup deletes the object"
+    -- design this test used to pin -- deleting an object a real,
+    -- currently-connected player's own ped might be attached to is exactly
+    -- the "player permanently trapped inside a deleted prop" failure this
+    -- whole feature must never produce. See server/kennel.lua's header
+    -- CRITICAL SAFETY section for the full redesign this test now proves.
     local netId, handle = deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
     t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'success')
-    t.isTrue(f.deletedEntities[handle])
-    local broadcast = lastClientEvent(f, 'qbx_k9unit:client:removeKennel')
-    t.equals(broadcast.target, -1)
-    t.equals(broadcast.args[1], netId)
+    t.isNil(f.deletedEntities[handle], 'pickup must NEVER delete the real object -- an occupant could be attached to it')
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed')
+    t.isNotNil(instruction, 'the picker must be instructed to attach the SAME object to themselves')
+    t.equals(instruction.target, 1)
+    t.equals(instruction.args[1], netId)
+    t.isTrue(#f.clientEvents > 0 and lastClientEvent(f, 'qbx_k9unit:client:removeKennel') == nil
+        or (lastClientEvent(f, 'qbx_k9unit:client:removeKennel') ~= nil and lastClientEvent(f, 'qbx_k9unit:client:removeKennel').args[1] ~= netId),
+        'no removeKennel broadcast may ever fire for this netId as a result of an ordinary pickup')
 
-    -- Registry cleared -- a second pickup of the same netId is now "not owner".
+    -- Nobody may pick up something already being carried -- not even its
+    -- own deployer.
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_owner'))
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_already_carried'))
 end)
 
 t.test('TERMINATION PATH UNAFFECTED: requestPickupKennel still works instantly for a handler who is now block.DeployableKennel-blocked -- "exit a kennel" must never be gated', function()
@@ -1263,25 +1362,294 @@ t.test('TERMINATION PATH UNAFFECTED: requestPickupKennel still works instantly f
     f.grantPermission('ABC123', 'block.DeployableKennel', true)
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'), 'a blocked handler must still be able to pick their own kennel back up')
-    t.isTrue(f.deletedEntities[handle])
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'), 'a blocked handler must still be instructed to attach it -- never silently refused')
+    t.isNil(f.deletedEntities[handle])
 end)
 
-t.test('requestPickupKennel: a stale registry entry (entity already gone) is still cleanly cleared, without erroring', function()
+t.test('requestPickupKennel: a stale registry entry (entity already gone) is rejected, and the registry is cleared -- no unbounded trap', function()
     local f = newKennelFixture()
+    -- K9-CAN-RIDE-ALONG PASS, DISCLOSED BEHAVIOR CHANGE: the OLD version of
+    -- this test pinned a "success notify despite nothing real to reclaim"
+    -- outcome, appropriate for a design where pickup deleted (or tried to
+    -- delete) the entity. Under the new "attach, never delete" design there
+    -- is nothing left to attach, so this is now honestly a REJECTION -- but
+    -- the stale registry entry is still cleared, so the owner is not stuck
+    -- at their one-kennel limit forever with nothing real left to reclaim
+    -- (the exact "no unbounded trap" requirement this test's own old name
+    -- already invoked).
     local netId, handle = deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
     f.removeExistence(handle) -- simulate the object having despawned/streamed out before pickup
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
-    -- OBSERVED BEHAVIOR, DISCLOSED: RemoveKennelForCitizenid's own
-    -- ResolveNetworkEntity guard means DeleteEntity is never called for an
-    -- already-gone entity, but requestPickupKennel's own success notify
-    -- fires unconditionally afterward regardless -- the player is told
-    -- "Kennel picked up" even though there was nothing real left to delete.
-    -- Harmless (the registry genuinely IS cleared either way), just worth
-    -- pinning as the real current behavior.
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.invalid_kennel'))
     t.isNil(f.deletedEntities[handle])
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+
+    -- Registry genuinely cleared -- a fresh deploy now succeeds again
+    -- instead of being told "you already have one."
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 2, 'a fresh deploy must be possible again once the stale entry is cleared')
+end)
+
+-- ----------------------------------------------------------------------
+-- requestPickupKennel: NEW THIS PASS -- a DIFFERENT, certified handler
+-- picking up someone else's deployed kennel (the owner's own explicit ask:
+-- "the handler [not just the deploying owner] can pick it up").
+-- ----------------------------------------------------------------------
+
+t.test('requestPickupKennel: a DIFFERENT certified handler standing close enough to someone else\'s kennel may pick it up', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    f.setAccess(2, true)
+    f.setPlayer(2, 'HANDLER02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 }) -- well within interactDistanceMeters (2.5) + tolerance (1.0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
-    local broadcast = lastClientEvent(f, 'qbx_k9unit:client:removeKennel')
-    t.equals(broadcast.args[1], netId, 'the backstop broadcast still fires even for a stale entry')
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed')
+    t.equals(instruction.target, 2)
+    t.equals(instruction.args[1], netId)
+end)
+
+t.test('requestPickupKennel: a DIFFERENT certified handler too far from someone else\'s kennel is rejected, and nothing is touched', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    f.setAccess(2, true)
+    f.setPlayer(2, 'HANDLER02')
+    f.setPed(2, 5002, { x = 500, y = 500, z = 0 })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_too_far'))
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+    t.isNil(f.deletedEntities[handle])
+end)
+
+t.test('requestPickupKennel: nobody may pick up a kennel someone else is already carrying, not even its own deployer', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    f.setAccess(2, true)
+    f.setPlayer(2, 'HANDLER02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+
+    -- The owner, back at their own kennel's spot, tries to pick up their
+    -- own kennel while HANDLER02 is already carrying it.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_already_carried'))
+end)
+
+-- ----------------------------------------------------------------------
+-- requestPutDownKennel -- NEW THIS PASS.
+-- ----------------------------------------------------------------------
+
+t.test('requestPutDownKennel: a carrier puts the kennel back down at a freshly computed spot, and it becomes pickup-able again', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+
+    f.setPed(1, 5001, { x = 10, y = 10, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPutDownKennel', 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.put_down_success'))
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:putDownKennelAt')
+    t.equals(instruction.target, 1)
+    t.equals(instruction.args[1], netId)
+    -- Computed the same way requestDeployKennel computes a spawn point:
+    -- pedCoords + placementForwardOffsetMeters ahead on +Y at heading 0.
+    approxEquals(instruction.args[2], 10)
+    approxEquals(instruction.args[3], 12) -- 10 + placementForwardOffsetMeters(2.0)
+    approxEquals(instruction.args[4], 0)
+
+    -- No longer marked as carried -- a fresh pickup succeeds again.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+t.test('requestPutDownKennel: nothing being carried is a silent no-op', function()
+    local f = newKennelFixture()
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPutDownKennel', 1)
+    t.equals(#f.notifyCalls, 0)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: requestPutDownKennel still works for a carrier who is now block.DeployableKennel-blocked', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    f.grantPermission('OWNER01', 'block.DeployableKennel', true)
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPutDownKennel', 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.put_down_success'))
+end)
+
+-- ----------------------------------------------------------------------
+-- requestEnterKennel / requestExitKennel -- NEW THIS PASS. The occupant is
+-- ALWAYS this fixture's own `setPed`/`setPedModel` combination -- a real,
+-- server-resolved ped handle for a real connected source, never a spawned
+-- ped (this fixture's own GetPlayerPed/GetEntityModel stubs have no
+-- CreatePed-equivalent primitive at all -- there is nothing in this
+-- sandbox capable of fabricating one even by accident).
+-- ----------------------------------------------------------------------
+
+--- @param f table
+--- @param src number
+--- @param citizenid string
+--- @param pedHandle number
+--- @param coords table
+local function makeK9(f, src, citizenid, pedHandle, coords)
+    f.setAccess(src, true)
+    f.setPlayer(src, citizenid)
+    f.setPed(src, pedHandle, coords, 0.0)
+    f.setPedModel(pedHandle, K9_PED_HASH)
+end
+
+t.test('requestEnterKennel: feature flag off is a silent no-op', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 0, y = 0, z = 0 })
+    f.config.Features.DeployableKennel = false
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.equals(#f.notifyCalls, 1, 'only the earlier deploy\'s own success notify -- nothing new fired')
+end)
+
+t.test('requestEnterKennel: a ped that is not a configured K9 model (and holds no K9 role) is rejected', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'HUMAN02')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 })
+    -- Deliberately no f.setPedModel -- GetEntityModel(5002) resolves to nil, never K9_PED_HASH.
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_not_authorized'))
+end)
+
+t.test('requestEnterKennel: a K9-modeled ped with no HasK9Access is rejected', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setPlayer(2, 'DOG02')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 })
+    f.setPedModel(5002, K9_PED_HASH) -- looks like a K9 -- but no f.setAccess(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_not_authorized'), 'model alone must never be enough -- mirrors server/wellbeing.lua\'s own access-bypass fix')
+end)
+
+t.test('requestEnterKennel: a real, certified K9 close enough to a genuine kennel is granted entry', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed')
+    t.isNotNil(instruction, 'the requesting K9 must be instructed to attach itself -- never driven from any other client')
+    t.equals(instruction.target, 2)
+    t.equals(instruction.args[1], netId)
+end)
+
+t.test('requestEnterKennel: too far from the kennel is rejected', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 500, y = 500, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_too_far'))
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+end)
+
+t.test('requestEnterKennel: an unrecognized/untracked netId is rejected as an invalid kennel', function()
+    local f = newKennelFixture()
+    makeK9(f, 2, 'DOG02', 5002, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, 999999)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.invalid_kennel'))
+end)
+
+t.test('requestEnterKennel: a K9 already resting somewhere is refused a second entry', function()
+    local f = newKennelFixture()
+    local netId1 = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    local netId2 = deploySuccessfully(f, 3, 'OWNER03', 5003, { x = 100, y = 100, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId1)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+
+    f.setPed(2, 5002, { x = 101, y = 100, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId2)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_already_resting'))
+end)
+
+t.test('requestEnterKennel: a kennel already occupied by a DIFFERENT K9 refuses a second occupant', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_kennel_occupied'))
+end)
+
+t.test('requestEnterKennel: cannot climb into a kennel that is currently being carried', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+
+    makeK9(f, 2, 'DOG02', 5002, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_being_carried'))
+end)
+
+t.test('requestExitKennel: clears occupancy so a different K9 can enter afterward', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'a fresh entry must succeed once the previous occupant has exited')
+end)
+
+t.test('requestExitKennel: a no-op if nothing was ever entered -- never errors', function()
+    local f = newKennelFixture()
+    f.setPlayer(2, 'DOG02')
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: requestExitKennel works even with the feature flag off, no HasK9Access, and a permission block -- an occupant\'s own exit must never be gated', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.config.Features.DeployableKennel = false
+    f.setAccess(2, false)
+    f.grantPermission('DOG02', 'block.DeployableKennel', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+
+    -- Registry genuinely cleared regardless of all three blocks above --
+    -- proven the same way requestExitKennel proves it clears anything: a
+    -- fresh occupant can now enter (re-enable the flag to prove THIS
+    -- assertion is about occupancy, not a still-broken feature flag).
+    f.config.Features.DeployableKennel = true
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+end)
+
+t.test('requestPickupKennel: picking up an occupied kennel succeeds and reports the occupant is coming along -- never evicts, never blocks', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success_occupant_released'))
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'), 'the object is still real and still gets attached to the picker -- an occupant riding inside is never a reason to refuse or evict')
 end)
 
 -- ----------------------------------------------------------------------
@@ -1313,6 +1681,112 @@ t.test('playerDropped: removes the disconnecting handler\'s own already-confirme
     -- afterward (e.g. a stray late client message) reports not-owner.
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_owner'))
+end)
+
+-- ----------------------------------------------------------------------
+-- playerDropped: K9-CAN-RIDE-ALONG PASS -- the single most safety-critical
+-- new behavior this pass adds. See server/kennel.lua's own header
+-- CRITICAL SAFETY section and RemoveKennelForCitizenid's own structural
+-- guard.
+-- ----------------------------------------------------------------------
+
+t.test('SAFETY: playerDropped does NOT delete the owner\'s kennel while a K9 is resting inside it -- deleting it would strand a currently-connected player', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'DOG02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 })
+    f.setPedModel(5002, K9_PED_HASH)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+
+    -- The OWNER (not the occupant) disconnects.
+    f.firePlayerDropped(1)
+    t.isNil(f.deletedEntities[handle], 'the real object must survive -- the K9 resting inside it is still a connected player')
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:removeKennel'), 'no removal broadcast either -- nothing was actually removed')
+
+    -- The occupant is provably still able to exit on their own at any time,
+    -- completely unaffected by the owner having disconnected.
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'the kennel is still real and still enterable after the owner\'s disconnect')
+end)
+
+t.test('SAFETY: playerDropped does NOT delete the owner\'s kennel while a DIFFERENT handler is carrying it', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CARRIER02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, netId)
+
+    f.firePlayerDropped(1) -- the OWNER, not the carrier, disconnects
+    t.isNil(f.deletedEntities[handle], 'the real object must survive -- a different, still-connected handler is actively carrying it')
+end)
+
+t.test('playerDropped: an OCCUPANT (not the owner) disconnecting clears occupancy without touching the kennel entity', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'DOG02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 })
+    f.setPedModel(5002, K9_PED_HASH)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.firePlayerDropped(2) -- the OCCUPANT disconnects
+    t.isNil(f.deletedEntities[handle], 'the kennel object itself is untouched by an occupant\'s own disconnect')
+
+    -- Occupancy is genuinely cleared -- a different K9 can now enter.
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+end)
+
+t.test('playerDropped: a CARRIER disconnecting broadcasts kennelCarrierLost so any connected client can settle the object in place', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CARRIER02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, netId)
+
+    f.firePlayerDropped(2) -- the CARRIER disconnects mid-carry
+    local broadcast = lastClientEvent(f, 'qbx_k9unit:client:kennelCarrierLost')
+    t.isNotNil(broadcast, 'connected clients must be told to settle the object -- it is now attached to a ped handle that no longer exists')
+    t.equals(broadcast.target, -1)
+    t.equals(broadcast.args[1], netId)
+
+    -- No longer marked as carried -- a fresh pickup succeeds again.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+t.test('playerDropped: a carrier disconnecting while a K9 rides inside does NOT touch KennelOccupants -- the occupant keeps its own independent exit throughout', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CARRIER02')
+    f.setPed(2, 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, netId)
+
+    f.setAccess(3, true)
+    f.setPlayer(3, 'DOG03')
+    f.setPed(3, 5003, { x = 1.0, y = 0, z = 0 })
+    f.setPedModel(5003, K9_PED_HASH)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+
+    f.firePlayerDropped(2) -- the CARRIER disconnects, the OCCUPANT does not
+
+    -- The occupant's own exit still works exactly as always -- proven by a
+    -- fresh occupant being able to enter once it fires.
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 3)
+    f.setAccess(4, true)
+    f.setPlayer(4, 'DOG04')
+    f.setPed(4, 5004, { x = 1.0, y = 0, z = 0 })
+    f.setPedModel(5004, K9_PED_HASH)
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 4, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
 end)
 
 t.test('playerDropped: also frees the DeployCooldown slot for the disconnecting source (RegisterPlayerDropped)', function()
@@ -1689,7 +2163,9 @@ t.test('CROSS-FEATURE: a legitimate kennel confirm is entirely unaffected by an 
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
 
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
-    t.isTrue(f.deletedEntities[handle])
+    -- K9-CAN-RIDE-ALONG PASS: pickup no longer deletes the object -- see
+    -- server/kennel.lua's own header CRITICAL SAFETY section.
+    t.isNil(f.deletedEntities[handle])
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
 end)
 
