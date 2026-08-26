@@ -1234,6 +1234,7 @@ t.test('ROUND TRIP: a feature grant made through the REAL tabletGrantPermission 
     local grantResult = f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold')
     t.isTrue(grantResult.ok, 'the fixed IsValidPermissionKey must accept feature.BiteAndHold end to end')
 
+    f.advanceTime(2000) -- clear server/tablet.lua's own TabletReadCooldown (targetSrc's first tabletRequestMyRecord call above already consumed it) before this second call from the SAME source
     -- After the grant: server/tablet.lua's own QueryActivePermissionSet must
     -- see the SAME row GrantPermission just wrote.
     local after = f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'](targetSrc)

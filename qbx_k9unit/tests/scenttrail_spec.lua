@@ -621,6 +621,161 @@ t.test('SESSION HYGIENE: the background sweep thread leaves a genuinely fresh hu
     t.isTrue(poll.active, 'the sweep must never clear a hunt that has not actually expired')
 end)
 
+-- ------------------------------------------------------------------------
+-- CONFIG-SAFETY: CLAMP AND WARN (2026-08-26) -- this file's own header
+-- section by this exact name. minRadius/maxRadius/arrivalRadius/
+-- maxHuntDurationMs used to be read with a bare `X or <default>` idiom at
+-- each use site -- this resource's own documented footgun (`0 or 500`
+-- evaluates to `0` in Lua, never the fallback). Each field now gets the same
+-- clamp-and-warn treatment server/sarcalls.lua's own identically-shaped
+-- config block already established -- mirrors that file's own
+-- loadCapturingPrints helper/REGRESSION section shape.
+-- ------------------------------------------------------------------------
+
+--- Loads server/scenttrail.lua fresh into a throwaway env with `tuning` in
+--- place of Config.ScentTrailHunt, capturing every printed line -- see
+--- tests/sarcalls_spec.lua's own identically-shaped loadCapturingPrints for
+--- the precedent this mirrors.
+--- @param tuning table
+--- @return string[] printedLines, boolean loaded, table freshEnv
+local function loadScentTrailCapturingPrints(tuning)
+    local printedLines = {}
+    local freshEnv = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        CreateThread = function() end,
+        Wait = function() end,
+        AddEventHandler = function() end,
+        RegisterNetEvent = function() end,
+        math = FakeMath,
+        lib = { callback = { register = function() end } },
+        print = function(...)
+            local parts = {}
+            for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+            printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        end,
+        Config = { Features = { ScentTrailHunt = true }, ScentTrailHunt = tuning },
+    })
+    Sandbox.loadInto('../server/cooldowns.lua', freshEnv)
+    local ok = pcall(Sandbox.loadInto, '../server/scenttrail.lua', freshEnv)
+    return printedLines, ok, freshEnv
+end
+
+--- Same idea, but a fully functional independent fixture (own callbacks/ped
+--- stubs), so the RESOLVED value can be proven by actual behavior, not just
+--- by reading the printed warning.
+--- @param tuning table
+--- @return table fixture
+local function newScentTrailCapturingFixture(tuning)
+    local printedLines = {}
+    local registeredCallbacks2 = {}
+    local pedCoords = {}
+    local hasAccess2 = true
+
+    local env = Sandbox.newEnv({
+        GetGameTimer = function() return fakeNow end,
+        CreateThread = function() end,
+        Wait = function() end,
+        AddEventHandler = function() end,
+        RegisterNetEvent = function() end,
+        math = FakeMath,
+        lib = { callback = { register = function(name, fn) registeredCallbacks2[name] = fn end } },
+        HasK9Access = function() return hasAccess2 end,
+        GetPlayerPed = function(source) return source end,
+        GetEntityCoords = function(ped) return pedCoords[ped] or { x = 0, y = 0, z = 0 } end,
+        TriggerClientEvent = function() end,
+        exports = { qbx_core = { GetPlayer = function(_self, source) return { PlayerData = { citizenid = 'CID-' .. tostring(source) } } end } },
+        print = function(...)
+            local parts = {}
+            for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+            printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        end,
+        Config = { Features = { ScentTrailHunt = true }, ScentTrailHunt = tuning },
+    })
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/scenttrail.lua', env)
+
+    return {
+        printedLines = printedLines,
+        startScentHunt = registeredCallbacks2['qbx_k9unit:server:startScentHunt'],
+        pollScentHunt = registeredCallbacks2['qbx_k9unit:server:pollScentHunt'],
+        setPedCoords = function(src, x, y, z) pedCoords[src] = { x = x, y = y, z = z } end,
+    }
+end
+
+t.test('CONFIG-SAFETY: an invalid minRadius/maxRadius pair falls back to BOTH shipped defaults (10.0/30.0) together, warning names both keys/values, and the file still loads', function()
+    local lines, ok = loadScentTrailCapturingPrints({ minRadius = 0, maxRadius = 30, arrivalRadius = 3, startCooldownMs = 8000 })
+    t.isTrue(ok, 'an invalid GROUP 1 pair must never abort this file\'s load')
+    local found = false
+    for _, line in ipairs(lines) do
+        if line:find('Config.ScentTrailHunt.minRadius/maxRadius', 1, true)
+            and line:find('minRadius=0', 1, true) and line:find('maxRadius=30', 1, true) then
+            found = true
+        end
+    end
+    t.isTrue(found, 'must print exactly which two keys/values were bad')
+end)
+
+t.test('CONFIG-SAFETY: maxRadius < minRadius also falls back to the whole GROUP 1 default pair, never just clamping maxRadius up to minRadius', function()
+    local lines = loadScentTrailCapturingPrints({ minRadius = 30, maxRadius = 10, arrivalRadius = 3, startCooldownMs = 8000 })
+    local found = false
+    for _, line in ipairs(lines) do
+        if line:find('minRadius=30', 1, true) and line:find('maxRadius=10', 1, true) then found = true end
+    end
+    t.isTrue(found)
+end)
+
+t.test('CONFIG-SAFETY: a valid minRadius/maxRadius pair passes through silently -- no warning on a good value', function()
+    local lines = loadScentTrailCapturingPrints({ minRadius = 10, maxRadius = 30, arrivalRadius = 3, startCooldownMs = 8000 })
+    for _, line in ipairs(lines) do
+        t.isNil(line:find('minRadius', 1, true), 'a valid configured pair must never print a warning')
+    end
+end)
+
+t.test('CONFIG-SAFETY: an invalid arrivalRadius (0) falls back to the shipped default (3.0) and is what pollScentHunt actually enforces, not the bad configured value', function()
+    local f = newScentTrailCapturingFixture({ minRadius = 10, maxRadius = 30, arrivalRadius = 0, startCooldownMs = 8000, maxHuntDurationMs = 300000 })
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.ScentTrailHunt.arrivalRadius', 1, true) and line:find('found: 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact bad field and value')
+
+    queueRandom(0.0, 0.0) -- target lands at exactly minRadius (10.0) from origin
+    f.setPedCoords(300, 0.0, 0.0, 0.0)
+    local started = f.startScentHunt(300)
+    t.isTrue(started.started)
+
+    -- Walk to exactly 3.0m from the target -- a raw configured
+    -- arrivalRadius=0 could NEVER be satisfied by any finite distance
+    -- (permanently un-completable), so `found` reading true here proves the
+    -- shipped fallback (3.0) is what actually got applied.
+    f.setPedCoords(300, 7.0, 0.0, 0.0) -- 3.0m from the target (10.0, 0.0)
+    local poll = f.pollScentHunt(300)
+    t.isTrue(poll.found, 'must resolve using the fallback (3.0), which this distance exactly satisfies -- the raw configured 0 would make this permanently unreachable')
+end)
+
+t.test('CONFIG-SAFETY: an invalid maxHuntDurationMs (0) falls back to the shipped default (300000ms) via ResolveConfiguredThresholdMs, never leaving a hunt permanently-instant-expiring', function()
+    local f = newScentTrailCapturingFixture({ minRadius = 10, maxRadius = 30, arrivalRadius = 3, startCooldownMs = 8000, maxHuntDurationMs = 0 })
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.ScentTrailHunt.maxHuntDurationMs', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact bad field')
+
+    queueRandom(0.0, 0.0)
+    f.setPedCoords(301, 0.0, 0.0, 0.0)
+    local started = f.startScentHunt(301)
+    t.isTrue(started.started)
+
+    -- Poll again almost immediately -- with the raw configured value (0)
+    -- this would already read as expired (elapsed > 0 is true the instant
+    -- any time passes at all); with the fallback (300000ms) it must still
+    -- read as genuinely active.
+    fakeNow = fakeNow + 1
+    local poll = f.pollScentHunt(301)
+    t.isTrue(poll.active, 'a misconfigured maxHuntDurationMs=0 must not make every hunt expire on its very first poll')
+    t.isNil(poll.expired)
+end)
+
 -- ========================================================================
 -- SECTION 2 -- client/scenttrail.lua
 -- ========================================================================

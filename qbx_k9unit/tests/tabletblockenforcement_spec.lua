@@ -124,12 +124,40 @@ local function newFixture()
         IsHighCommand = function() return true end, -- this spec only needs to REACH BuildPersonFeaturesArray, not test authorization (tabletserver_spec.lua already covers that)
         HasPermission = function() return false end,
         HasK9Access = function() return false end,
+        -- server/cooldowns.lua's own NewCooldown(...).RegisterPlayerDropped()
+        -- calls AddEventHandler('playerDropped', ...) at THIS file's load
+        -- time (loaded below, ahead of server/tablet.lua, for its own
+        -- NewCooldown dependency) -- a no-op stub, mirroring
+        -- tests/tabletserver_spec.lua's own simpler (non-capturing) form,
+        -- since this spec never needs to fire a drop itself.
+        AddEventHandler = function() end,
+        -- TabletReadCooldown.Consume (server/cooldowns.lua) reads
+        -- GetGameTimer() at call time -- this spec is about blockEnforcement
+        -- classification, not cooldown behavior, so a monotonically
+        -- increasing fake clock (every read jumps 1000ms, comfortably past
+        -- TABLET_READ_COOLDOWN_MS's own 500ms floor) means back-to-back
+        -- calls in the SAME test (e.g. two different target citizenids from
+        -- the same high-command source) never spuriously rate-limit each
+        -- other.
+        GetGameTimer = (function()
+            local fakeNow = 0
+            return function()
+                fakeNow = fakeNow + 1000
+                return fakeNow
+            end
+        end)(),
     })
 
     -- REAL, unmodified config.lua -- see this file's own header for why.
     Sandbox.loadInto('../config.lua', env)
     env.Config.Features.CommandTablet = true -- already true in the shipped config; asserted explicitly so this spec never silently no-ops if that default is ever flipped
 
+    -- server/cooldowns.lua -- HARD load-order requirement, same as the real
+    -- fxmanifest.lua's own placement: server/tablet.lua now calls
+    -- NewCooldown at its own file-load time (TabletReadCooldown), so
+    -- cooldowns.lua must already be loaded into this SAME env first --
+    -- mirrors tests/tabletserver_spec.lua's own identical fix.
+    Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/tablet.lua', env)
 

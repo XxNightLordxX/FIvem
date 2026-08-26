@@ -335,6 +335,36 @@ local MAX_ROSTER_QUERY_LENGTH = 100  -- defensive bound on the free-text search 
                                       -- own IsValidCitizenId is the same idea applied to a citizenid)
 local MAX_CITIZENID_LENGTH = 50      -- VARCHAR(50), matching every citizenid column in this resource's schema
 
+-- ======================================================================
+-- RATE LIMITING -- the four read/aggregation callbacks below (tabletRequestMyRecord/
+-- Roster/PersonSummary/PersonFeatures) had NO cooldown at all, unlike every
+-- other client-triggered, DB-touching read this resource exposes
+-- (server/admin.lua's own AuditCooldown covers its five read-only audit
+-- callbacks/commands the exact same way; server/tracking.lua/server/search.lua
+-- cooldown their own query paths too). BuildCertificationsArray alone issues
+-- one extra query pair PER ACTIVELY-HELD DEPARTMENT, and tabletRequestRoster
+-- issues one query PER CONFIGURED DEPARTMENT, every single call -- a caller
+-- who can already reach one of these (any certified handler for
+-- tabletRequestMyRecord; console-access/high-command for the other three)
+-- could otherwise fire an unbounded number of these per second with nothing
+-- server-side to slow them down. ONE SHARED instance across all four,
+-- mirroring server/admin.lua's AuditCooldown / server/runtimecontrol.lua's
+-- RuntimeControlActionCooldown "one cooldown per related-action group" shape
+-- -- these four are the tablet's own related "read a record" group. This is
+-- an anti-hammering floor, not an abuse gate: every caller reaching the
+-- Consume call below already PASSED this callback's own authorization check
+-- (see each callback's own placement of this call, always AFTER
+-- authorization, never before -- a denied caller never spends this shared
+-- budget). html/tablet.js's own SEARCH_DEBOUNCE_MS already spaces
+-- keystroke-triggered roster requests out client-side well past this floor;
+-- this is the server-side backstop for a client that does not (deliberately
+-- or otherwise), matching this resource's "never trust a client-side-only
+-- limit" convention.
+-- ======================================================================
+local TABLET_READ_COOLDOWN_MS = 500
+local TabletReadCooldown = NewCooldown(TABLET_READ_COOLDOWN_MS)
+TabletReadCooldown.RegisterPlayerDropped()
+
 --- DYNAMIC feature key list -- see this file's header "myFeatures /
 --- features KEY LIST -- DYNAMIC, NOT HARDCODED" for the full reasoning.
 --- Reads `Config.Features` FRESH on every call (never cached at file-load
@@ -991,6 +1021,10 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         end
     end
 
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
+    end
+
     local activePermSet = QueryActivePermissionSet(citizenid)
     local effectivePermissions = ResolveEffectivePermissions(source, activePermSet, isHighCommandCaller)
     local xp, tierLabel = ResolveXpAndTierLabel(citizenid)
@@ -1031,6 +1065,10 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
         -- It stays optional per the JS contract: its absence would still be
         -- a clean fallback, never a broken path.
         return { ok = false, error = 'not_authorized', message = locale('tablet.console_not_authorized') }
+    end
+
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
     end
 
     if type(query) ~= 'string' then query = '' end
@@ -1142,6 +1180,10 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
         return { ok = false, error = 'not_authorized', message = locale('tablet.console_not_authorized') }
     end
 
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
+    end
+
     local activePermSet = QueryActivePermissionSet(targetCitizenId)
     local xp, tierLabel = ResolveXpAndTierLabel(targetCitizenId)
 
@@ -1181,6 +1223,10 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonFeatures', function(
 
     if not (type(IsHighCommand) == 'function' and IsHighCommand(source) == true) then
         return { ok = false, error = 'not_authorized', message = locale('highcommand.not_authorized') }
+    end
+
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
     end
 
     local activePermSet = QueryActivePermissionSet(targetCitizenId)

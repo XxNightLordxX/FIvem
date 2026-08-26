@@ -190,7 +190,36 @@ local ProximityAudioFXConfig = Config.ProximityAudioFX or {}
 -- How often the discovery/maintenance thread below re-scans this client's
 -- own streamed ped pool. See this file's header "WORST-CASE PER-TICK COST"
 -- for the full cost model this interval feeds into.
-local PROXIMITY_SCAN_INTERVAL_MS = ProximityAudioFXConfig.scanIntervalMs or 2500
+--
+-- CLAMP AND WARN (bug found + fixed this pass): this used to be a bare
+-- `ProximityAudioFXConfig.scanIntervalMs or 2500`. In Lua, `or` only falls
+-- through on `nil`/`false` -- a configured `scanIntervalMs = 0` (an operator
+-- typo, or a mistaken attempt to "disable" this by zeroing it, the exact
+-- footgun this resource's own cooldown fields are already on record for --
+-- see tests/cooldowns_spec.lua) is a genuine number and therefore truthy in
+-- Lua, so it passed straight through as 0 -- silently removing this
+-- thread's entire throttle. The discovery thread below calls this value
+-- directly as `Wait(PROXIMITY_SCAN_INTERVAL_MS)`: a 0 (or any non-positive,
+-- or NaN/non-number) value there is not "scan more often," it is a
+-- `Wait(0)` (or worse) full-per-frame GetGamePool('CPed') sweep for the
+-- life of the resource -- precisely the "no tight CreateThread/Wait(0) loop"
+-- rule this file's own header otherwise correctly documents and claims
+-- ("WORST-CASE PER-TICK COST... NOT per frame, NEVER Wait(0)") but did not
+-- actually enforce against a bad config value. Never asserted at file scope
+-- (a malformed config value must degrade, not take this whole file's
+-- registration down with it, matching client/agility.lua's own
+-- vaultCooldownMs clamp-and-warn precedent for the identical bug class) --
+-- clamped to the shipped default and warned instead.
+local PROXIMITY_SCAN_INTERVAL_MS_DEFAULT = 2500
+local PROXIMITY_SCAN_INTERVAL_MS = PROXIMITY_SCAN_INTERVAL_MS_DEFAULT
+if ProximityAudioFXConfig.scanIntervalMs ~= nil then
+    local configured = ProximityAudioFXConfig.scanIntervalMs
+    if type(configured) == 'number' and configured == configured and configured > 0 then
+        PROXIMITY_SCAN_INTERVAL_MS = configured
+    else
+        print(('[qbx_k9unit] ProximityAudioFX: Config.ProximityAudioFX.scanIntervalMs must be a positive number of milliseconds (got %s) -- falling back to the shipped default of %dms. A non-positive/invalid value here would otherwise remove this thread\'s own throttle entirely, running a full ped-pool scan every single frame instead of once per interval.'):format(tostring(configured), PROXIMITY_SCAN_INTERVAL_MS_DEFAULT))
+    end
+end
 
 -- Meters. A candidate K9 ped beyond this distance never gets a loop started
 -- at all -- this MUST stay <= client/audio.lua's own real falloff ceiling

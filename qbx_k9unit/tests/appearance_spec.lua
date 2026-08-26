@@ -374,6 +374,14 @@ local function newFixture(opts)
         fakeCerts = fakeCerts,
         fakePermissions = fakePermissions,
         fakeAssignments = fakeAssignments,
+        -- Exposed so a test can monkey-patch a specific MySQL.*.await entry
+        -- point to simulate a DB write failure (K9Store's own SafeWrite
+        -- contract pcall-wraps every call, so an errored stub here degrades
+        -- to `false`/`nil`, never an uncaught throw) -- same pattern already
+        -- established by tests/certifications_spec.lua and
+        -- tests/partnership_spec.lua's own `f.mysql.scalar.await = function()
+        -- error(...) end` overrides.
+        mysql = mysql,
         clientEvents = clientEvents,
         clearClientEvents = clearClientEvents,
         notifyLog = notifyLog,

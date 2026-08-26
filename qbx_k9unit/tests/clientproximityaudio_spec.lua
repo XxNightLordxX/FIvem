@@ -160,6 +160,20 @@ local function newProximityAudioFixture(opts)
     if opts.soundName then
         env.Config.ProximityAudioFX.soundName = opts.soundName
     end
+    if opts.scanIntervalMs ~= nil then
+        env.Config.ProximityAudioFX.scanIntervalMs = opts.scanIntervalMs
+    end
+
+    -- CLAMP-AND-WARN CAPTURE -- proves a bad scanIntervalMs actually warns
+    -- (not just "doesn't crash"), same convention as
+    -- tests/sarcalls_spec.lua's/tests/clientkennel_spec.lua's own printLog
+    -- captures for this exact class of guard.
+    local printLog = {}
+    env.print = function(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
 
     Sandbox.loadInto('../client/proximityaudio.lua', env)
 

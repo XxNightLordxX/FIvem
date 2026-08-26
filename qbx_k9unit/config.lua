@@ -127,7 +127,10 @@ Config = {}
 --   Config.Database ................. running with or without a database
 --   Config.K9DownDispatch ........... announcing a K9 going down
 --   Config.AdminAudit ............... the read-only audit commands
---   Config.BoneSweepTool ............ a developer-only tool, off by default
+--   Config.BoneSweepTool ............ a developer-only tool; the flag ships
+--                                     `true` but stays unreachable without an
+--                                     operator-set convar -- see
+--                                     Config.Features.BoneSweepDevTool
 -- ======================================================================
 
 -- ======================================================================
@@ -2016,15 +2019,18 @@ Config.K9Inventory = {
 }
 
 -- ======================================================================
--- PHASE 4 — K9 MEDKIT (Config.Features.K9Medkit, still `false` by default).
+-- PHASE 4 — K9 MEDKIT (Config.Features.K9Medkit).
 -- DEVELOPER_REFERENCE.md §13.4.4/§13.2. Item consumption + heal validation live in
 -- server/medkit.lua; see that file's header for the full security-critical
 -- writeup (mirrors server/search.lua's contraband-search trust boundary,
 -- per that document's own explicit direction to reuse it as the template).
--- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
--- config-validator/economy-balance-agent pass (DEVELOPER_REFERENCE.md §9 item 4's scope,
--- widened by DEVELOPER_REFERENCE.md §13.5) — do not flip Config.Features.K9Medkit
--- to `true` on a live server before that review happens.
+-- This shipped `false` by default when this section was written, pending
+-- its own go-live review; that review has since happened and the flag now
+-- ships `true` above. NUMERIC VALUES BELOW WERE UNREVIEWED PLACEHOLDERS at
+-- that time, pending a config-validator/economy-balance-agent pass
+-- (DEVELOPER_REFERENCE.md §9 item 4's scope, widened by DEVELOPER_REFERENCE.md §13.5) —
+-- confirm that pass has actually happened before trusting these numbers on
+-- a live server; this comment does not independently verify that it has.
 -- ======================================================================
 Config.K9Medkit = {
     itemName      = 'k9_medkit', -- PLACEHOLDER item name — must exist in the target server's ox_inventory items table; NOT registered as a hotbar-"useable" item by this resource, see server/medkit.lua's header for why
@@ -2047,17 +2053,20 @@ Config.K9Medkit = {
 
 -- ======================================================================
 -- PHASE 4 — K9 WELLBEING (Config.Features.FatigueSystem / MoodSystem /
--- FearStressSystem / DistractionSystem / InjuryLimping — ALL still `false`
--- by default). DEVELOPER_REFERENCE.md §13.0 Decision 1 / §13.2 / §13.4.3: ONE
--- shared config table, ONE shared server/wellbeing.lua + client/wellbeing.lua
--- pair, ONE shared per-citizenid stat store and tick loop backing all five
--- independently-gated stats — mirrors Config.Tracking's existing
--- Scent/Blood/Gunpowder precedent (three independently-toggleable flags,
--- one shared file pair). ALL NUMERIC VALUES BELOW ARE UNREVIEWED
--- PLACEHOLDERS pending a config-validator/economy-balance-agent pass
--- (DEVELOPER_REFERENCE.md §9 item 4's scope, widened by DEVELOPER_REFERENCE.md §13.5) — do not
--- flip any of the five owning Config.Features flags to `true` on a live
--- server before that review happens.
+-- FearStressSystem / DistractionSystem / InjuryLimping). DEVELOPER_REFERENCE.md
+-- §13.0 Decision 1 / §13.2 / §13.4.3: ONE shared config table, ONE shared
+-- server/wellbeing.lua + client/wellbeing.lua pair, ONE shared per-citizenid
+-- stat store and tick loop backing all five independently-gated stats --
+-- mirrors Config.Tracking's existing Scent/Blood/Gunpowder precedent (three
+-- independently-toggleable flags, one shared file pair). All five owning
+-- flags shipped `false` by default when this section was written, pending
+-- their own go-live/balance review; that review has since happened and all
+-- five now ship `true` above. NUMERIC VALUES BELOW WERE UNREVIEWED
+-- PLACEHOLDERS at that time, pending a config-validator/economy-balance-agent
+-- pass (DEVELOPER_REFERENCE.md §9 item 4's scope, widened by
+-- DEVELOPER_REFERENCE.md §13.5) -- individual fields below that have since
+-- been confirmed wired/tuned say so in their own comment; treat any field
+-- without such a note as still an unreviewed placeholder.
 -- ======================================================================
 Config.Wellbeing = {
     tickIntervalMs = 5000, -- ONE shared server-side decay/regen tick for all five stats -- see server/wellbeing.lua's header for why this beats five independent timers
@@ -2492,18 +2501,23 @@ Config.Compat = {
         -- qb-core and es_extended entries below are researched and correct
         -- as far as they go, but only one file in this entire resource
         -- actually routes through them. Everything else -- certifications,
-        -- permissions, the tablet, XP, combat, roughly 169 places -- calls
-        -- Qbox directly, and Qbox is also a hard requirement in
-        -- fxmanifest.lua, so FiveM will not start this resource without it.
+        -- permissions, the tablet, XP, combat -- calls Qbox directly, at an
+        -- ESTIMATED number of places that this comment does not keep
+        -- current (a single `grep -rn 'exports\.qbx_core'` already turns up
+        -- 200+ and counting as the resource grows -- do not cite a fixed
+        -- number here again; recount at the time you need it). Qbox is also
+        -- a hard requirement in fxmanifest.lua, so FiveM will not start
+        -- this resource without it.
         --
         -- What that means in practice: if you run qb-core or ESX, detection
         -- will correctly identify it, and the resource still will not work.
         -- Do not read this list as a compatibility promise.
         --
         -- This is written down rather than quietly fixed because making it
-        -- true is a large job (converting those 169 call sites), not a
-        -- small one, and it is your call whether it is worth doing. It is
-        -- recorded in ISSUES.md as a decision waiting on you.
+        -- true is a large job (converting every one of those direct-call
+        -- sites, whatever the current count is), not a small one, and it is
+        -- your call whether it is worth doing. It is recorded in ISSUES.md
+        -- as a decision waiting on you.
         -- ==============================================================
         framework = {
             override = nil,
