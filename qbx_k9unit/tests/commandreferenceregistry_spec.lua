@@ -17,7 +17,7 @@
     HOW THE REAL COMMAND NAMES ARE FOUND -- deliberately the EXACT same
     shape this task itself was scoped from:
         grep -rhoE "RegisterCommand\('[a-zA-Z0-9_:]+'" server/*.lua client/*.lua
-    reproduced here as a Lua pattern (`RegisterCommand%('([%a%d_:]+)'`)
+    reproduced here as a Lua pattern (`RegisterCommand%('([^']+)'`)
     against each real file's own raw text -- see
     tests/customizationregistry_spec.lua's header "WHY TEXT-PATTERN
     EXTRACTION" for why raw source text, not a loaded/executed file, is this
@@ -47,10 +47,20 @@
     html/tablet.js), so this spec had been reporting a clean match for years
     while blind to an entire class of real, player-usable commands with zero
     COMMAND_REFERENCE entry -- passing green while catching nothing for
-    exactly the seven that needed it. Widened to `[%a%d_:]+` (any letter,
-    upper or lower, plus digit/underscore/colon) so a future namespaced
-    `RegisterCommand`/`RegisterKeyMapping` pair is caught by this same guard
-    instead of silently repeating this gap.
+    exactly the seven that needed it.
+
+    WIDENED TWICE, AND THE SECOND TIME IS THE ONE THAT MATTERS. The first
+    fix went to `[%a%d_:]+` -- letters, digits, underscore, colon -- which
+    caught those seven namespaced keybinds. A later QA pass broke it again
+    on purpose with `RegisterCommand('k9-medcheck', ...)`: a hyphen is
+    perfectly legal to FiveM, just unused here, and it made the name
+    invisible to BOTH extractors at once. Not truncated, not flagged --
+    absent, so the comparison loop below never even looked at it. That is a
+    silent pass, the exact failure the colon fix had just closed, moved to
+    a different character.
+    The pattern is now `[^']+`: anything that is not the closing quote. It
+    cannot be blind to a character class again, because it no longer has
+    one. If a name is between the quotes, this guard sees it.
 
     HAND-MAINTAINED FILE LIST, SAME DISCLOSED TRADEOFF
     tests/customizationregistry_spec.lua's OWN SERVER_LUA_FILES already
@@ -141,7 +151,7 @@ local CLIENT_LUA_FILES = {
 --- @return table<string, boolean> set
 local function ExtractRegisterCommandNames(text)
     local set = {}
-    for name in text:gmatch("RegisterCommand%('([%a%d_:]+)'") do
+    for name in text:gmatch("RegisterCommand%('([^']+)'") do
         set[name] = true
     end
     return set
@@ -182,7 +192,7 @@ local function ExtractDocumentedCommandNames(text)
     local body = text:sub(startPos, endPos)
 
     local set = {}
-    for name in body:gmatch("command:%s*'([%a%d_:]+)'") do
+    for name in body:gmatch("command:%s*'([^']+)'") do
         set[name] = true
     end
     return set
@@ -263,6 +273,27 @@ t.test('SYNTHETIC: a namespaced, mixed-case RegisterKeyMapping-paired command (e
     t.isTrue(documentedPresent['qbx_k9unit:toggleSomething'] == true, 'a colon-namespaced, camelCase command name is found by the widened documented-side extractor too, when it IS present')
 end)
 
+-- THE SECOND BLIND SPOT, and the reason the pattern is now `[^']+` rather
+-- than a longer character class. A QA pass deliberately broke the previous
+-- `[%a%d_:]+` version with a hyphenated name -- legal to FiveM, simply
+-- unused in this resource -- and found it vanished from BOTH extractors at
+-- once, producing a silent pass rather than a loud failure. Widening the
+-- class again would only have moved the same bug to the next character
+-- nobody thought of. These cases exist so that never happens a third time.
+t.test('SYNTHETIC: command names using characters outside the old class -- a hyphen, a period -- are visible to both extractors, so the guard can never be blind to a character class again', function()
+    for _, name in ipairs({ 'k9-medcheck', 'k9.medcheck', 'qbx_k9unit:toggle-thing', 'K9MedCheck2' }) do
+        local fakeServerText = ("RegisterCommand('%s', function() end, false)"):format(name)
+        local real = ExtractRegisterCommandNames(fakeServerText)
+        t.isTrue(real[name] == true, ('the real-side extractor must see %q -- if it cannot, a command by that name would be undocumented and this guard would pass green anyway'):format(name))
+
+        local fakeDocumented = "var COMMAND_REFERENCE = [\n"
+            .. ("        { command: '%s', category: 'field_gear' },\n"):format(name)
+            .. "    ];\n"
+        local documented = ExtractDocumentedCommandNames(fakeDocumented)
+        t.isTrue(documented[name] == true, ('the documented-side extractor must see %q too -- a name visible on only one side produces a false mismatch instead of a real one'):format(name))
+    end
+end)
+
 -- ============================================================================
 -- LOAD-BEARING DRIFT GUARD -- the real files, the real screen.
 -- ============================================================================
@@ -340,7 +371,7 @@ t.test('no duplicate command names within COMMAND_REFERENCE (a copy-pasted entry
 
     local seen = {}
     local duplicates = {}
-    for name in body:gmatch("command:%s*'([%a%d_:]+)'") do
+    for name in body:gmatch("command:%s*'([^']+)'") do
         if seen[name] then
             duplicates[#duplicates + 1] = name
         end

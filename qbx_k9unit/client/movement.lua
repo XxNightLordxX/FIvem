@@ -576,9 +576,16 @@ RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
     leashState = nil
     detachRequestedForSafety = false
 
+    -- Every reason the server can send needs its own sentence here, or it
+    -- falls through to the generic "leash detached" and the player is left
+    -- guessing why. server/main.lua's own detach path sends 'partner_died'
+    -- as well as 'partner_disconnected'; only the latter had wording, which
+    -- that file honestly disclosed rather than hid.
     local description = locale('movement.leash_detached')
     if reason == 'partner_disconnected' then
         description = locale('movement.leash_detached_partner_disconnected')
+    elseif reason == 'partner_died' then
+        description = locale('movement.leash_detached_partner_died')
     end
     lib.notify({ title = locale('common.notify_title'), description = description, type = 'info' })
     -- The elastic-restriction thread below naturally stops doing anything
