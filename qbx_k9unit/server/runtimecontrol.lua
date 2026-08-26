@@ -1656,6 +1656,36 @@ local TUNABLE_REGISTRY = {
     --     mintXpForNpcCombatTargets/allowSelfGrant above). Not built this
     --     pass -- reported back to coder-frontend as a shape question for a
     --     future pass, not silently dropped.
+    --   * mode (a THREE-WAY STRING choice -- 'always'/'keybind'/'off', added
+    --     a LATER pass than the rest of this block, owner-directed: "make
+    --     the scent tracking a keybind and choose always active or
+    --     [not]"). CHECKED THIS PASS, NOT ASSUMED: this registry's shape
+    --     (TUNABLE_REGISTRY's own [min,max]/`integer` fields), the
+    --     runtimeSetTunable callback's own `type(newValue) == 'number'`
+    --     finite-number gate below, runtimeListTunables' own
+    --     min/max/integer echo, THIS FILE's own onResourceStart
+    --     tuning-override reload loop (`tonumber(row.value)`, a few screens
+    --     down), AND client/tablet.lua's own tablet:runtimeSetTunable NUI
+    --     bridge (`type(data.value) ~= 'number'`) are ALL numeric-only,
+    --     end to end -- confirmed by direct read of all four, not inferred
+    --     from one. Retrofitting a string enum through this exact path
+    --     would mean a coordinated change across three files, two of them
+    --     (client/tablet.lua, html/tablet.js's generic Tunables table
+    --     renderer) outside this file's own lens entirely -- reported here,
+    --     same as the two entries directly above, rather than half-built
+    --     into a registry shape that cannot represent it without silently
+    --     misrendering (an "undefined – undefined" min/max column, a number
+    --     input a string value could never satisfy) for this one row. The
+    --     setting itself shipped this pass regardless -- config.lua only,
+    --     restart-to-apply, exactly like the vast majority of this file's
+    --     own Config fields that were never candidates for this registry in
+    --     the first place -- see that setting's own config.lua comment for
+    --     the one exception this pass DID build: an admin turning
+    --     Config.Features.ScentVision off from the tablet (already
+    --     `tier = 'live'`, already fully supported, no change needed here)
+    --     still reaches an already-rendering player's screen immediately,
+    --     with no restart, via server/tracking.lua's own getScentVisionPoints
+    --     echo -- that liveness guarantee did not need this registry at all.
     ['Tracking.ScentVision.sampleIntervalMs']        = { path = { 'Tracking', 'ScentVision', 'sampleIntervalMs' },        min = 1000, max = 30000,  integer = true },
     ['Tracking.ScentVision.minSampleMovementMeters'] = { path = { 'Tracking', 'ScentVision', 'minSampleMovementMeters' }, min = 0.0,  max = 20.0,   integer = false },
     ['Tracking.ScentVision.maxPointsPerPerson']      = { path = { 'Tracking', 'ScentVision', 'maxPointsPerPerson' },      min = 1,    max = 50,     integer = true },

@@ -977,50 +977,22 @@ end)
 -- for the fix this proves.
 -- ============================================================================
 
-local ALL_K9_TABLE_COLUMNS_FOR_SCHEMA_PROBE = {
-    k9_certifications = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
-    k9_search_log = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
-    k9_partnerships = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
-    k9_progression = { 'citizenid', 'xp', 'created_at', 'updated_at' },
-    k9_permissions = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
-    k9_certification_specializations = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
-    k9_runtime_feature_overrides = { 'override_key', 'kind', 'value', 'updated_by', 'updated_at' },
-    k9_runtime_override_audit = { 'override_key', 'kind', 'old_value', 'new_value', 'changed_by', 'changed_at' },
-    k9_tablet_theme = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'updated_by', 'updated_at' },
-    k9_tablet_theme_audit = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'changed_by', 'changed_at' },
-    k9_ped_assignments = { 'citizenid', 'model', 'original_model_hash', 'active', 'applied_by', 'applied_at', 'revoked_at' },
-    k9_certification_tiers = { 'tier_key', 'label', 'ordinal', 'deleted', 'created_at', 'updated_by', 'updated_at' },
-    k9_certification_tier_capabilities = { 'tier_key', 'capability_key', 'granted_by', 'granted_at' },
-    k9_certification_tier_audit = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
-    k9_equipment_shop_locations = { 'x', 'y', 'z', 'created_by' },
-    k9_equipment_shop_locations_audit = { 'location_id', 'action', 'changed_by', 'changed_at' },
-    k9_xp_tiers = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
-    k9_xp_tier_audit = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
-    k9_individual_overrides = { 'citizenid', 'speed_multiplier', 'scent_range_multiplier', 'medkit_cooldown_multiplier', 'note', 'deleted', 'updated_by' },
-    k9_individual_override_audit = { 'id', 'action', 'citizenid', 'detail', 'changed_by', 'changed_at' },
-    k9_equipment_shop_items = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
-    k9_equipment_shop_item_audit = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
-    k9_permission_keys = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
-    k9_permission_key_audit = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
-}
-
---- Builds the full INFORMATION_SCHEMA.COLUMNS-shaped row set for EVERY
---- table this resource owns, all with their own full expected column set
---- -- i.e. what a real, fully and currently migrated install actually
---- returns. Added alongside server/datastore.lua's no-SQL-import fix: that
---- fix now ALSO flags "some but not all of our tables exist" as unsafe
---- (see VerifyTableShapesAgainstKnownSchema there), so a schema-probe stub
---- naming only ONE table (this file's own k9_permission_keys) would
---- otherwise look like a PARTIAL install and force memory mode, not the
---- "clean, everything present" case the control test below means to prove.
+-- DERIVED, NEVER HAND-MAINTAINED. This used to be a hand-typed copy of
+-- every table and column server/datastore.lua checks at boot -- the fifth
+-- such copy in this repo. It went stale the moment migration 0018 added a
+-- table, and this file's own control test started failing because the probe
+-- response it handed back looked like a part-installed database.
+--
+-- Sandbox.installedSchemaRows() reads the real EXPECTED_TABLE_COLUMNS out of
+-- server/datastore.lua's source instead, so adding a table or a column can
+-- never again leave this fixture quietly describing an older schema. Use it
+-- anywhere a test needs to say "a clean, fully migrated database".
+--
+-- Deliberately NOT used by the collision test above, which hands back a
+-- partial column set on purpose -- that one is testing what happens when a
+-- table's shape does NOT match, so a full, correct set would defeat it.
 local function AllK9TableColumnsForSchemaProbe()
-    local rows = {}
-    for tableName, columns in pairs(ALL_K9_TABLE_COLUMNS_FOR_SCHEMA_PROBE) do
-        for _, col in ipairs(columns) do
-            rows[#rows + 1] = { tbl = tableName, col = col }
-        end
-    end
-    return rows
+    return Sandbox.installedSchemaRows()
 end
 
 --- @param opts table? -- { foreignPermKeyRows: table? -- canned response

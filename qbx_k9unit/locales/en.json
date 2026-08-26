@@ -1441,7 +1441,10 @@
         "nothing_to_track": "Nothing to track right now.",
         "trail_lost_water": "The trail is lost at the water's edge.",
         "scent_vision_keybind_label": "K9: Toggle Scent Vision",
-        "scent_vision_lost_death": "You went down — the scent trails fade from view."
+        "scent_vision_lost_death": "You went down — the scent trails fade from view.",
+        "scent_vision_mode_off": "Scent vision is turned off on this server.",
+        "scent_vision_mode_always_notice": "Scent vision is always on for you here — there's nothing to toggle.",
+        "scent_vision_disabled_live": "Scent vision was just turned off."
     },
     "training": {
         "usage": "Usage: /k9training — stand inside a training area and run it again to toggle Training Mode.",

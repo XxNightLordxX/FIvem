@@ -312,9 +312,33 @@ local function newTrackingFixture(opts)
     env.Config.Features.GunpowderSniffing = opts.gunpowderSniffing or false
     env.Config.Features.BloodTracking = opts.bloodTracking or false
 
+    -- MODE (Config.Tracking.ScentVision.mode) -- resolved ONCE at
+    -- client/tracking.lua's own file-load time (see that file's own
+    -- comment on SCENT_VISION_MODE), so it MUST be set here, before that
+    -- load below, exactly like every Config.Features.* flag above -- an
+    -- opts.scentVisionMode of nil leaves config.lua's own real shipped
+    -- default ('keybind') in place, deliberately, so every PRE-EXISTING
+    -- test in this file (none of which pass this option) keeps exercising
+    -- the exact real-world default rather than a fixture-invented one.
+    if opts.scentVisionMode ~= nil then
+        env.Config.Tracking.ScentVision.mode = opts.scentVisionMode
+    end
+
+    -- CLAMP-AND-WARN CAPTURE -- same convention as
+    -- tests/scenttrail_spec.lua's/tests/sarcalls_spec.lua's own printLog
+    -- captures for this exact class of guard (proves a bad config value
+    -- actually warns, not just "doesn't crash").
+    local printLog = {}
+    env.print = function(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
     Sandbox.loadInto('../client/tracking.lua', env)
 
     return {
+        printLog = printLog,
         env = env,
         threads = threads,
         waitLog = waitLog,
@@ -1122,6 +1146,146 @@ t.test('ScentVision: an expired dot fades (reduced alpha) rather than staying at
     local fadingAlpha = f.drawMarkerCalls[#f.drawMarkerCalls][17]
     t.isTrue(fadingAlpha < freshAlpha, 'a dot past fadeStartFraction must be dimmer than a fresh one')
     t.isTrue(fadingAlpha >= 0, 'alpha must never go negative')
+end)
+
+-- ----------------------------------------------------------------------
+-- MODE (Config.Tracking.ScentVision.mode) -- owner-directed pass: "make the
+-- scent tracking a keybind and choose always active or [not]". Three
+-- values ('always'/'keybind'/'off'), resolved once at file load (see
+-- client/tracking.lua's own SCENT_VISION_MODE comment) with the SAME
+-- clamp-and-warn discipline as every other setting in this section.
+-- ----------------------------------------------------------------------
+
+t.test('MODE: an unrecognised Config.Tracking.ScentVision.mode falls back to "keybind" and warns once, naming the exact setting', function()
+    local f = newTrackingFixture({ scentVisionMode = 'bogus-value' })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Tracking.ScentVision.mode', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a bad mode value must print a loud warning naming this exact setting')
+
+    -- The fallback must genuinely BEHAVE like "keybind" (the safest of the
+    -- three), never silently act like "always" -- proven by the keybind
+    -- still working normally, exactly like the plain-default tests above.
+    f.env.ToggleScentVision()
+    t.isTrue(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 4)
+end)
+
+t.test('MODE: "off" makes ToggleScentVision() a genuine no-op -- no activation, no poll thread -- even though Config.Features.ScentVision is on', function()
+    local f = newTrackingFixture({ scentVisionMode = 'off' })
+
+    f.env.ToggleScentVision()
+
+    t.isFalse(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 3, '"off" must never create the poll thread')
+    t.isTrue(#f.notifyCalls > 0, 'pressing the key in "off" mode must still tell the player something, not do nothing silently')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('tracking.scent_vision_mode_off'))
+end)
+
+t.test('MODE: "off" never even reaches CanShowK9UI()/DenyK9UIAccess() -- a distinct, dedicated denial from the ordinary "no K9 access" path', function()
+    local f = newTrackingFixture({ scentVisionMode = 'off', canShowK9UI = false })
+
+    f.env.ToggleScentVision()
+
+    t.equals(f.denyCallCount(), 0, '"off" must use its own notify, never DenyK9UIAccess() -- CanShowK9UI() is irrelevant when the mode itself refuses')
+end)
+
+t.test('MODE: "always" auto-starts rendering at load, without any keybind press, for an eligible caller', function()
+    local f = newTrackingFixture({ scentVisionMode = 'always' })
+
+    t.equals(#f.threads, 4, 'the always-on watcher thread must exist for mode == "always"')
+    t.isFalse(f.env.IsScentVisionActive(), 'must not be active before the watcher has even run its first pass')
+
+    f.stepOne(4) -- the watcher's first pass
+
+    t.isTrue(f.env.IsScentVisionActive(), 'must auto-activate with nothing pressed')
+    t.equals(#f.threads, 5, 'activating must create the poll thread too')
+end)
+
+t.test('MODE: "keybind" (the default) never creates the always-on watcher thread at all -- exactly 3 threads at load, matching every pre-existing test above', function()
+    local f = newTrackingFixture({ scentVisionMode = 'keybind' })
+    t.equals(#f.threads, 3, 'a session that boots in "keybind" mode must not pay for a watcher thread it will never use')
+end)
+
+t.test('MODE: "off" never creates the always-on watcher thread either', function()
+    local f = newTrackingFixture({ scentVisionMode = 'off' })
+    t.equals(#f.threads, 3)
+end)
+
+t.test('MODE: "always" does not activate for an ineligible caller, and does not error -- it keeps checking rather than giving up', function()
+    local f = newTrackingFixture({ scentVisionMode = 'always', canShowK9UI = false })
+
+    f.stepOne(4)
+    t.isFalse(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 4, 'an ineligible caller must never get the poll thread created for them')
+
+    -- Becoming eligible mid-session (e.g. certifying, or taking control of
+    -- the K9) must be picked up on the watcher's very next pass, with
+    -- nothing pressed.
+    f.setCanShowK9UI(true)
+    f.stepOne(4)
+    t.isTrue(f.env.IsScentVisionActive())
+end)
+
+t.test('MODE: "always" -- a manual keybind press while already auto-active is a deliberate no-op (never fights the watcher into a flicker), with its own explanatory notify', function()
+    local f = newTrackingFixture({ scentVisionMode = 'always' })
+    f.stepOne(4)
+    t.isTrue(f.env.IsScentVisionActive())
+
+    f.env.ToggleScentVision()
+
+    t.isTrue(f.env.IsScentVisionActive(), 'a keybind press in "always" mode must never turn it off -- it is not player-controlled')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('tracking.scent_vision_mode_always_notice'))
+end)
+
+t.test('LIVE STOP (THE TRAP TO AVOID): "always" auto-starts, then the SERVER echoing mode == "off" on a later poll stops rendering cleanly -- the stop path is never gated behind a mode check', function()
+    local f = newTrackingFixture({ scentVisionMode = 'always' })
+    f.stepOne(4) -- watcher activates
+    t.isTrue(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 5)
+
+    f.queueCallbackResponse({ points = {}, dotLifetimeMs = 45000, mode = 'off' })
+    f.stepOne(5) -- the poll thread's first real pass, learning the server's now-live "off"
+
+    t.isFalse(f.env.IsScentVisionActive(), 'the server saying mode == "off" must stop the render immediately, live, with nothing pressed')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('tracking.scent_vision_disabled_live'))
+
+    -- The always-on watcher must not immediately fight this and re-ignite
+    -- it on its very next pass -- once the server has said stop, this
+    -- session agrees, for the rest of the session (see
+    -- EffectiveScentVisionMode()'s own comment).
+    f.stepOne(4)
+    t.isFalse(f.env.IsScentVisionActive(), 'the always-on watcher must never re-ignite a session the server just told to stop')
+end)
+
+t.test('LIVE STOP: the SAME live-off signal also stops a session that was started manually via the keybind (mode == "keybind"), not only an "always"-started one', function()
+    local f = newTrackingFixture({ scentVisionMode = 'keybind' })
+    f.env.ToggleScentVision()
+    t.isTrue(f.env.IsScentVisionActive())
+
+    f.queueCallbackResponse({ points = {}, dotLifetimeMs = 45000, mode = 'off' })
+    f.stepOne(4) -- this fixture's own poll thread index for a manually-started session (no watcher thread exists in "keybind" mode)
+
+    t.isFalse(f.env.IsScentVisionActive(), 'a live "off" signal must stop rendering regardless of how the session was started')
+end)
+
+t.test('LIVE STOP: an already-received dot is left alone to fade on its own timer, not hard-cleared, when the server signals off -- same "delay before markers go away" contract as a manual toggle-off', function()
+    local f = newTrackingFixture({ scentVisionMode = 'keybind' })
+    f.setGameTimer(0)
+    f.env.ToggleScentVision()
+    f.queueCallbackResponse({ points = { { x = 1, y = 2, z = 3, r = 10, g = 20, b = 30, ageMs = 0 } }, dotLifetimeMs = 5000 })
+    f.stepOne(4)
+
+    f.queueCallbackResponse({ points = {}, dotLifetimeMs = 5000, mode = 'off' })
+    f.stepOne(4) -- learns the live "off" and stops
+
+    t.isFalse(f.env.IsScentVisionActive())
+
+    f.advanceGameTimer(1000) -- still well under dotLifetimeMs
+    f.stepOne(2)
+    t.equals(#f.drawMarkerCalls, 1, 'the already-shown dot must still fade on its own timer, exactly like a manual toggle-off')
 end)
 
 os.exit(t.summary())

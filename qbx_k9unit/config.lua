@@ -302,14 +302,37 @@ Config.Features = {
     -- before this pass (the missing-code gap above is closed; a real
     -- anti-farm gap on two specific award keys is not). Of the six award
     -- keys in Config.HandlerXP.awards below, FOUR are wired this pass and
-    -- each already rides a real per-actor throttle of its own:
+    -- each rides a real per-actor throttle of its own:
     -- `handlerCertifyK9` (server/certifications.lua's GrantCertification
-    -- AND GrantCertificationOffline, both already gated by that file's own
-    -- per-granter IsCertifyActionOnCooldown check), and the three
+    -- AND GrantCertificationOffline) is gated by that file's own
+    -- CertifyXpMintCooldown -- a DEDICATED per-(granter, target) MINT
+    -- cooldown (24 real hours) on the AWARD itself, added by the same
+    -- economy audit (2026-08-26) that found and closed a live farm loop
+    -- here. This bullet used to claim handlerCertifyK9 was "already gated
+    -- by that file's own per-granter IsCertifyActionOnCooldown check" --
+    -- THAT WAS FALSE, by this exact section's own standard:
+    -- IsCertifyActionOnCooldown is a flat 1,500ms per-granter fat-finger
+    -- guard on the grant/revoke ACTION (same shape as handlerTreatK9's
+    -- MedkitCooldown and handlerKennelDeploy's DeployCooldown below,
+    -- neither of which this comment ever credited as a mint guard), not a
+    -- per-actor MINT cooldown -- and with Config.AllowSelfCertification
+    -- true by default, an eligible certifier could `/k9certify <self>` then
+    -- `/k9decertify <self>` on repeat, 3 seconds per cycle, 60,000 XP/hr
+    -- gross -- worse than either of the two awards this comment already
+    -- refused to wire below for exactly this class of gap. Corrected here
+    -- and at server/certifications.lua's own CertifyXpMintCooldown
+    -- declaration comment (search that file for "FALSIFIED CLAIM"), not
+    -- just patched around. handlerCertifyK9 is genuinely safe to wire NOW,
+    -- for the same reason this comment always intended: a first
+    -- certification of a genuinely new person still pays every time, and a
+    -- repeat mint against the SAME (granter, target) pair inside 24 hours
+    -- does not -- see CertifyXpMintCooldown's own declaration comment for
+    -- the full arithmetic. The three
     -- `handlerPartnershipTenure{1,7,30}Day` milestones (server/tenure.lua's
     -- CheckTenureMilestonesForK9, one-time-per-partnership-row, never
     -- repeating -- the SAME CAS guard the K9-side milestones already rely
-    -- on). The remaining TWO -- `handlerTreatK9` (server/medkit.lua) and
+    -- on) are unaffected by this correction. The remaining TWO --
+    -- `handlerTreatK9` (server/medkit.lua) and
     -- `handlerKennelDeploy` (server/kennel.lua) -- are DELIBERATELY LEFT
     -- UNWIRED this pass: AwardHandlerXP is called from NOWHERE for either
     -- of those two actionKeys. Neither file has a per-actor XP MINT
@@ -1448,22 +1471,30 @@ Config.XPTiers = {
 -- keeps two separate standings, each earned only by that role's own
 -- actions, rather than one shared number blending unrelated skill tracks.
 --
--- EVERY EFFECT FIELD BELOW IS OPTIONAL AND DEFENSIVELY BOUNDED, same
--- "consulted only after an existing gate has already allowed the action,
--- can only ever shorten a wait or lengthen a distance, never grant access"
--- posture Config.XPTiers' own medkitCooldownMultiplier already
--- established -- see each accessor's own doc comment in
--- server/progression.lua (GetHandlerXPTierMedkitCooldownMs/
--- GetHandlerXPTierKennelDeployCooldownMs/GetHandlerXPTierLeashMaxDistance)
--- for the exact bounds and the CALLER CONTRACT each names for the file
--- that still needs to wire it in (server/medkit.lua, server/kennel.lua,
--- server/main.lua respectively -- none of those three are edited by this
--- pass; see this resource's own DEVELOPER_REFERENCE.md/PROJECT_HISTORY.md
--- for the handoff). WHY THESE THREE, and what was rejected for having no
--- real consumer to hook (a higher /k9givexp ceiling; better equipment-shop
--- stock) is documented in server/progression.lua's own "HANDLER XP TIER
--- UNLOCKS" section, mirroring Config.XPTiers' own "XP TIER UNLOCKS"
--- section exactly.
+-- EVERY EFFECT FIELD BELOW IS INTENDED TO BE OPTIONAL AND DEFENSIVELY
+-- BOUNDED, same "consulted only after an existing gate has already allowed
+-- the action, can only ever shorten a wait or lengthen a distance, never
+-- grant access" posture Config.XPTiers' own medkitCooldownMultiplier
+-- already established for the K9 side (GetXPTierMedkitCooldownMs,
+-- server/progression.lua). CORRECTED (verified by grepping
+-- server/progression.lua before writing this note, not assumed): this
+-- paragraph used to describe GetHandlerXPTierMedkitCooldownMs/
+-- GetHandlerXPTierKennelDeployCooldownMs/GetHandlerXPTierLeashMaxDistance as
+-- already-existing accessors with their own doc comments, and pointed to a
+-- "HANDLER XP TIER UNLOCKS" section in server/progression.lua for why these
+-- three were chosen over a higher /k9givexp ceiling or better equipment-shop
+-- stock. None of that exists: no accessor by any of those three names is
+-- defined anywhere in this resource, server/progression.lua has no section
+-- by that name, and DEVELOPER_REFERENCE.md/PROJECT_HISTORY.md do not discuss
+-- this rejection either -- that paragraph was written before the code (and
+-- the write-up) existed and was never reconciled against what actually
+-- shipped. The true, verified status (matching server/progression.lua's own
+-- AwardHandlerXP doc comment) is: these three fields are DATA ONLY on
+-- Config.HandlerXPTiers rows below, with NO accessor function and NO
+-- consumer yet -- whoever wires the first one (server/medkit.lua,
+-- server/kennel.lua, and server/main.lua respectively, by field) needs to
+-- both WRITE the accessor (mirroring GetXPTierMedkitCooldownMs's shape) and
+-- call it, not merely call something that is already there.
 --
 -- UNREVIEWED PLACEHOLDER NUMBERS, same status Config.XPTiers/Config.XP
 -- carry -- tune freely once a real handler-XP economy pass happens.
@@ -1743,6 +1774,30 @@ Config.Tracking = {
         markerSpacing    = 3.0,   -- meters between rendered trail markers/checkpoints
         searchCooldownMs = 5000,  -- per-player cooldown on re-issuing a "search" command of this type
         relayCooldownMs  = 1000,  -- per-dropping-player cap on how often the ox_inventory 'swapItems' hook (server/tracking.lua) logs a new scent-source entry. UNLIKE Blood/Gunpowder's field of the same name, this is NOT closing an anti-forgery gap -- the hook is server-to-server, so `payload.source` cannot be spoofed to claim a drop that didn't happen. It's defense-in-depth against a rapid drop/pickup/drop loop growing the server-side scent log unbounded between prune passes. Placeholder pending tuning.
+
+        -- HARD CEILING on the total number of scent entries held in memory
+        -- AT ONCE, across every player combined -- completely independent
+        -- of maxAgeSeconds above. maxAgeSeconds only ever throws away an
+        -- entry once it gets OLD; it says nothing about how many can pile
+        -- up before then. The arithmetic, worked from this table's own
+        -- numbers: relayCooldownMs (1000ms) lets one dropping player add at
+        -- most one entry per second, and maxAgeSeconds (900s) keeps each
+        -- one around for 15 minutes -- so ONE player sustaining that rate
+        -- for the entire window logs up to 900 entries
+        -- (900,000ms / 1000ms). At 128 players doing that at once -- a
+        -- genuinely normal busy evening of full-server activity, not an
+        -- attack -- that is up to 115,200 entries in this table alone.
+        -- Once the log hits this many entries, adding a new one drops the
+        -- OLDEST entry to make room (never the newest -- a dog is most
+        -- likely to be tracking whatever was JUST logged). 6,000 is
+        -- deliberately generous: it holds roughly 6-7 players' worth of
+        -- continuous worst-case dropping for the ENTIRE 15-minute window,
+        -- all at once, which is already far beyond what real play produces
+        -- (nobody drops and picks an item back up once a second, nonstop,
+        -- for 15 minutes). Raise it if your server is bigger than 128 slots
+        -- or busier than this -- there is no reason to lower it on a normal
+        -- server.
+        maxLoggedEntries = 6000,
     },
     Blood = {
         maxRange         = 40.0,
@@ -1750,6 +1805,26 @@ Config.Tracking = {
         markerSpacing    = 3.0,
         searchCooldownMs = 5000,
         relayCooldownMs  = 500,   -- per-victim cap on how often relayDamageEvent may log a new entry — distinct from searchCooldownMs (a query-side cooldown); guards the ingest side against a flood of legitimate rapid hits (multiple pellets/DoT ticks) or a modified client bypassing the client-side debounce. Placeholder pending an economy/perf tuning pass.
+
+        -- HARD CEILING, same idea as Scent.maxLoggedEntries above -- read
+        -- that field's own comment first for the full "why this exists and
+        -- why eviction takes the oldest entry" explanation; only the
+        -- arithmetic differs here. At this table's own relayCooldownMs
+        -- (500ms) and maxAgeSeconds (300s), one continuously-bleeding
+        -- player can log up to 600 entries (300,000ms / 500ms) before their
+        -- own oldest one ages out. At 128 players doing that simultaneously
+        -- -- a genuinely normal, busy full-server firefight, not an
+        -- adversarial edge case -- that is up to 76,800 entries in this
+        -- table alone (this is the largest of the three worst cases,
+        -- because Blood has both the shortest relayCooldownMs and a longer
+        -- window than Gunpowder). 8,000 is deliberately generous: it holds
+        -- roughly 13 players' worth of continuous worst-case bleeding for
+        -- the ENTIRE 5-minute window all at once -- a genuinely enormous,
+        -- sustained multi-officer firefight -- while still cutting this
+        -- table's own worst-case memory footprint from tens of megabytes
+        -- down to roughly 1-2MB. Raise it for a bigger/busier server; there
+        -- is no reason to lower it on a normal one.
+        maxLoggedEntries = 8000,
     },
     Gunpowder = {
         maxRange         = 40.0,
@@ -1757,6 +1832,31 @@ Config.Tracking = {
         markerSpacing    = 3.0,
         searchCooldownMs = 5000,
         relayCooldownMs  = 300,   -- per-shooter cap on how often relayWeaponFire may log a new entry, same rationale as Blood.relayCooldownMs above. Placeholder pending tuning.
+
+        -- HARD CEILING, same idea as Scent.maxLoggedEntries/Blood.maxLoggedEntries
+        -- above -- read Scent's own comment first for the full "why this
+        -- exists and why eviction takes the oldest entry" explanation. At
+        -- this table's own relayCooldownMs (300ms) and maxAgeSeconds
+        -- (120s), one continuously-firing player can log up to 400 entries
+        -- (120,000ms / 300ms) before their own oldest one ages out. At 128
+        -- players doing that simultaneously -- again, a normal busy
+        -- server's full-scale shootout, not an attack -- that is up to
+        -- 51,200 entries in this table alone. 6,000 is deliberately
+        -- generous: it holds roughly 15 players' worth of continuous
+        -- worst-case firing for the ENTIRE 2-minute window all at once,
+        -- while cutting this table's own worst-case memory footprint from
+        -- several megabytes down to roughly 1MB. Raise it for a
+        -- bigger/busier server; there is no reason to lower it on a normal
+        -- one.
+        --
+        -- Combined with Scent's and Blood's own ceilings above, these three
+        -- caps bring the resource-wide worst case for ALL THREE logs
+        -- together down from roughly 243,000 entries / 35-50MB
+        -- (uncapped, at 128 players sustaining every type at once) to
+        -- 20,000 entries / roughly 3-4MB -- still by far the largest
+        -- in-memory structure this resource holds, but no longer an
+        -- unbounded one.
+        maxLoggedEntries = 6000,
     },
 
     -- ==================================================================
@@ -1789,7 +1889,19 @@ Config.Tracking = {
     -- 45000ms dot-lifetime CLIENT-SIDE FALLBACK default (used only until the
     -- first server response arrives, which always echoes back the lifetime
     -- it actually enforced) share this same "resolved once, client-only"
-    -- shape, for the identical reason.
+    -- shape, for the identical reason. `mode` (below) is the SAME shape for
+    -- STARTING/becoming eligible for 'always' -- an admin flipping
+    -- 'keybind' to 'always' on config.lua does not retroactively start
+    -- rendering for a player already connected before the next restart --
+    -- but is the ONE EXCEPTION for STOPPING: server/tracking.lua's own
+    -- getScentVisionPoints echoes the server's live-resolved `mode` (and an
+    -- outright Config.Features.ScentVision = false) on every poll response
+    -- already in flight, and client/tracking.lua treats either as an
+    -- immediate, unconditional stop -- never gated behind this file's own
+    -- client-side `mode` copy -- so a currently-rendering player's screen
+    -- always clears the moment the server says to, restart or not. See
+    -- `mode`'s own comment below for why that asymmetry (start needs a
+    -- restart, stop never does) is deliberate, not an oversight.
     -- ==================================================================
     ScentVision = {
         -- CAPTURE (server/tracking.lua's position-sampling thread):
@@ -1810,6 +1922,74 @@ Config.Tracking = {
         queryMaxPointsPerTrail   = 12,   -- per shown trail, at most this many of that person's own dots are revealed, nearest-to-the-K9-first -- a second cap on top of maxPointsPerPerson so a single trail's own on-screen density can be tuned independently of the storage-side cap.
         queryCooldownMs          = 1000, -- server-enforced FLOOR between one caller's queries, independent of the client's own poll cadence below -- defense-in-depth against a modified client polling faster than intended.
         pollIntervalMs           = 1500, -- the CLIENT's own target poll cadence while the ability is toggled on.
+
+        -- ==================================================================
+        -- MODE -- owner-directed pass: "make the scent tracking a keybind
+        -- and choose always active or [not]". READ THIS EVEN IF YOU DO NOT
+        -- CODE -- it decides whether your handlers have to press a button to
+        -- see this at all, and what that choice costs.
+        --
+        -- Three plain-English choices, typed exactly as shown (in quotes,
+        -- lowercase):
+        --
+        --   'keybind' (RECOMMENDED, and the default) -- a handler presses
+        --   the key below (Z by default, rebindable per-player in their own
+        --   FiveM Settings) to see the coloured dots, and presses it again
+        --   to stop. This is the original brief exactly as asked for, and
+        --   costs nothing extra: nobody sees anything on their screen until
+        --   they deliberately ask for it.
+        --
+        --   'always' -- every eligible handler (certified, controlling
+        --   their own K9, same access check as the keybind uses) sees the
+        --   dots on their screen all the time, automatically, from the
+        --   moment they are eligible, with nothing to press. Nobody has to
+        --   remember a key, but nobody can turn it off for themselves
+        --   either -- it is a server-wide decision, not a per-player
+        --   preference. THE COST IS PURELY VISUAL, NOT PERFORMANCE: the
+        --   server was already doing the population-wide work of recording
+        --   everyone's recent footsteps whenever this feature is on at all
+        --   (see the CAPTURE section above) -- 'always' does not make the
+        --   server do one bit more of that work than 'keybind' already
+        --   does. The only difference is who is looking at the results and
+        --   when. The real cost is screen clutter: a handler mid-firefight
+        --   or mid-conversation gets coloured dots on their screen whether
+        --   they wanted them right then or not.
+        --
+        --   'off' -- nobody sees this at all, ever, and the key does
+        --   nothing if pressed. Different from turning the whole
+        --   Config.Features.ScentVision switch off further up this file:
+        --   THAT stops the server from recording anyone's footsteps in the
+        --   first place, so turning it back on later starts from nothing
+        --   and needs a few minutes to build up trails again. `mode = 'off'`
+        --   keeps that recording running quietly in the background the
+        --   whole time -- so if you switch to 'keybind' or 'always' later,
+        --   there is already a trail waiting, with no warm-up wait.
+        --
+        -- WHAT "CHOOSE" MEANS HERE, IN PRACTICE: this is a config.lua
+        -- setting, not (yet) a high-command-tablet dial like the numeric
+        -- settings above it -- change the value, save the file, and restart
+        -- this resource (`restart qbx_k9unit`) for it to take effect, the
+        -- same as almost every other setting in this file. (The handful of
+        -- settings that skip the restart and apply the instant you save
+        -- them from the tablet are the ones server/runtimecontrol.lua's own
+        -- registry explicitly lists -- this is deliberately not one of
+        -- them THIS PASS, because that registry only understands a number
+        -- with a min and a max today, not a choice of words like this one;
+        -- see that file's own comment next to `Tracking.ScentVision.*` for
+        -- the honest "not built yet, not silently dropped" note.) One thing
+        -- that IS instant, with no restart at all: if a handler is already
+        -- looking at dots (from 'always', or from having pressed the key)
+        -- the moment Config.Features.ScentVision itself gets switched off
+        -- from the tablet, their screen clears immediately -- turning THAT
+        -- switch off always wins, live, over whatever this `mode` says.
+        --
+        -- A typo or an unrecognised word here (anything other than the
+        -- three exact strings above) is never a crash and never silently
+        -- becomes 'always' by accident -- it falls back to 'keybind' (the
+        -- safest, most conservative choice) and prints one clear warning to
+        -- the server console naming this exact setting, the same
+        -- clamp-and-warn promise every other setting in this file makes.
+        mode = 'keybind',
 
         -- KEYBIND (client/keybinds.lua). A DEFAULT only, per this
         -- resource's standing RegisterKeyMapping convention -- a player who

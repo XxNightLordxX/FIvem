@@ -615,6 +615,110 @@ local TRACK_TYPE_CONFIG = {
     gunpowder = Config.Tracking.Gunpowder,
 }
 
+-- ======================================================================
+-- ENTRY-COUNT CEILING (performance audit at 128 players, this pass --
+-- coder-backend). PruneTrackableLogs further down only ever enforced an AGE
+-- limit (Config.Tracking.<Type>.maxAgeSeconds) -- exactly the gap that
+-- function's own former doc comment flagged and invited a look at ("flag
+-- for resource-performance-profiler if real entry-count numbers under load
+-- ever suggest otherwise"). They did: worked out from this resource's OWN
+-- shipped relayCooldownMs/maxAgeSeconds pairs, ONE continuously-active
+-- player can push Blood to 600 entries (300s / 500ms), Gunpowder to 400
+-- (120s / 300ms), and Scent to 900 (900s / 1000ms) before their own oldest
+-- entry ages out. At 128 players sustaining that simultaneously -- a busy
+-- roleplay server's normal evening of full-server combat, not an
+-- adversarial edge case -- that is up to 76,800 / 51,200 / 115,200 entries
+-- (roughly 243,000 total, 35-50MB), by far the largest structure in this
+-- resource (everything else here is single-digit KB). Two consequences:
+-- PruneTrackableLogs' own full linear rebuild (every
+-- TRACKABLE_LOG_PRUNE_INTERVAL_MS, 15s) would be doing up to ~243,000 table
+-- inserts every pass, and findTrackableSource's own nearest-match scan
+-- further down would be linearly scanning a log that size on every single
+-- "Track <Type>" request.
+--
+-- FIX: each Config.Tracking.<Type> table now also carries its own
+-- `maxLoggedEntries` -- a HARD, ABSOLUTE ceiling, entirely independent of
+-- maxAgeSeconds/relayCooldownMs (see each field's own config.lua comment
+-- for the full per-type arithmetic and the specific default chosen).
+-- Resolved ONCE here, at file-load time, into TRACKABLE_LOG_MAX_ENTRIES
+-- below -- the same "hand-edit-only setting, resolved once, never re-read
+-- live" posture this resource already uses for its TICK_INTERVAL_MS-shaped
+-- fields (e.g. server/wellbeing.lua), and deliberately NOT the "re-read
+-- fresh on every call" posture this file's own ScentVision section uses
+-- further down -- there is no tablet/RuntimeFeatureControl path that can
+-- reach this field live, so resolving once here avoids re-validating (and
+-- re-warning) on every single write instead of once at startup.
+--
+-- Enforced on EVERY write via AppendTrackableLogEntry below, oldest entry
+-- evicted first -- the exact same discard-on-write shape this file's own
+-- ScentVision section's RecordScentVisionPoint already uses successfully
+-- for maxPointsPerPerson (see that function's own doc comment further
+-- down), applied here to the whole server's shared per-type log instead of
+-- one person's trail. Deliberately NEVER drops the newest entry to make
+-- room: the log is naturally in chronological-append order (every append
+-- happens at the moment the underlying event occurs, never reordered), so
+-- the OLDEST entry is always at index 1 -- and the newest entry is exactly
+-- the one a dog is most likely to be tracking, so eviction always takes
+-- from the front, never the back.
+-- ======================================================================
+
+--- CLAMP-AND-WARN for a Config.Tracking.<Type>.maxLoggedEntries value --
+--- same posture this resource applies to every operator-editable Config
+--- field: never throw, print one clear line naming the exact key and what
+--- was substituted, and keep this file loading. A count (not a millisecond
+--- threshold), so this deliberately does NOT go through
+--- server/cooldowns.lua's ResolveConfiguredThresholdMs -- mirrors
+--- ResolveScentVisionNumber further down in this same file (also a plain
+--- count/distance floor, not a threshold), reimplemented locally with
+--- wording specific to THIS field rather than reused, for the same
+--- "cooldown-specific/ScentVision-specific wording would be misleading
+--- here" reason server/certifications.lua's own
+--- ResolveConfiguredPositiveNumber doc comment already gives for not
+--- calling a differently-worded sibling function directly.
+--- @param configuredValue any
+--- @param fallback number -- a positive, hardcoded call-site literal (this file's own shipped default for the field), never itself read from Config
+--- @param configKeyName string
+--- @return number
+local function ResolveTrackableLogMaxEntries(configuredValue, fallback, configKeyName)
+    if type(configuredValue) == 'number' and configuredValue == configuredValue and configuredValue >= 1 then
+        return configuredValue
+    end
+    print(
+        ('[qbx_k9unit] tracking.lua: %s must be a number >= 1 (found: %s). This log would otherwise have no ' ..
+         'absolute ceiling at all -- Config.Tracking.<Type>.maxAgeSeconds is an AGE limit, not a COUNT limit, ' ..
+         'and cannot substitute for one. Using the built-in fallback of %s instead so this log stays bounded ' ..
+         'while the config is fixed -- find %s in config.lua and set it to a positive number.')
+            :format(configKeyName, tostring(configuredValue), tostring(fallback), configKeyName)
+    )
+    return fallback
+end
+
+-- Resolved ONCE, at file-load time -- see the ENTRY-COUNT CEILING header
+-- above for why this is not re-read live the way ScentVision's own settings
+-- are. Defaults chosen generously above real usage while still bounding the
+-- worst case -- see each field's own config.lua comment for the exact
+-- arithmetic.
+local TRACKABLE_LOG_MAX_ENTRIES = {
+    scent     = ResolveTrackableLogMaxEntries(Config.Tracking.Scent.maxLoggedEntries, 6000, 'Config.Tracking.Scent.maxLoggedEntries'),
+    blood     = ResolveTrackableLogMaxEntries(Config.Tracking.Blood.maxLoggedEntries, 8000, 'Config.Tracking.Blood.maxLoggedEntries'),
+    gunpowder = ResolveTrackableLogMaxEntries(Config.Tracking.Gunpowder.maxLoggedEntries, 6000, 'Config.Tracking.Gunpowder.maxLoggedEntries'),
+}
+
+--- Appends `entry` to `log` (one of TrackableLog.scent/blood/gunpowder),
+--- then evicts entries from the FRONT (oldest first -- see the ENTRY-COUNT
+--- CEILING header above for why the log is always chronologically ordered)
+--- until the log is back at or under `maxEntries`. Enforced on EVERY write,
+--- never accumulated and filtered only at prune time.
+--- @param log table -- TrackableLog.scent | .blood | .gunpowder
+--- @param entry table -- { coords, loggedAt, ticketIssued }
+--- @param maxEntries number
+local function AppendTrackableLogEntry(log, entry, maxEntries)
+    log[#log + 1] = entry
+    while #log > maxEntries do
+        table.remove(log, 1) -- index 1 is always the oldest entry -- never the one just appended
+    end
+end
+
 -- Prune pass interval. Deliberately well under the shortest maxAgeSeconds
 -- in play (Gunpowder's 120s, "residue is time-sensitive") so a stale entry
 -- never lingers past its window by more than this margin — an
@@ -625,10 +729,18 @@ local TRACKABLE_LOG_PRUNE_INTERVAL_MS = 15000
 --- Drops any TrackableLog.scent/blood/gunpowder entry older than that
 --- type's Config.Tracking.<Type>.maxAgeSeconds. Rebuilds each type's array
 --- via a single linear pass (not a full-table `pairs` remove-while-iterating,
---- which is unsafe on Lua arrays) — cheap relative to how infrequently this
---- runs and how small these logs are expected to stay on a normal server
---- (flag for resource-performance-profiler if real entry-count numbers
---- under load ever suggest otherwise).
+--- which is unsafe on Lua arrays). RESOLVED, this pass (performance audit at
+--- 128 players): this comment used to end with "cheap relative to how
+--- infrequently this runs and how small these logs are expected to stay on
+--- a normal server (flag for resource-performance-profiler if real
+--- entry-count numbers under load ever suggest otherwise)" -- that
+--- profiling happened, the worst case WAS real (up to ~243,000 entries
+--- across all three logs, see the ENTRY-COUNT CEILING section above), and
+--- this pass closes it: AppendTrackableLogEntry above now enforces
+--- TRACKABLE_LOG_MAX_ENTRIES on every write, so this rebuild's own worst
+--- case is now bounded by that same ceiling regardless of population or
+--- combat duration, not just by how infrequently this thread happens to
+--- run.
 local function PruneTrackableLogs()
     local now = GetGameTimer()
 
@@ -703,11 +815,11 @@ RegisterNetEvent('qbx_k9unit:server:relayDamageEvent', function()
     local ped = GetPlayerPed(src)
     if ped == 0 then return end -- defensive: no live ped to read a position from
 
-    TrackableLog.blood[#TrackableLog.blood + 1] = {
+    AppendTrackableLogEntry(TrackableLog.blood, {
         coords = GetEntityCoords(ped), -- NEVER a client-supplied coordinate
         loggedAt = now,
         ticketIssued = false, -- ANTI-FARM FIX (this pass) -- see findTrackableSource's own comment on this field for the full writeup
-    }
+    }, TRACKABLE_LOG_MAX_ENTRIES.blood) -- ENTRY-COUNT CEILING (this pass) -- see that table's own declaration comment
 end)
 
 --- DEVELOPER_REFERENCE.md §11.4 item 4. Triggered by a client on a debounced local
@@ -745,11 +857,11 @@ RegisterNetEvent('qbx_k9unit:server:relayWeaponFire', function()
     local ped = GetPlayerPed(src)
     if ped == 0 then return end -- defensive: no live ped to read a position from
 
-    TrackableLog.gunpowder[#TrackableLog.gunpowder + 1] = {
+    AppendTrackableLogEntry(TrackableLog.gunpowder, {
         coords = GetEntityCoords(ped), -- NEVER a client-supplied coordinate
         loggedAt = now,
         ticketIssued = false, -- ANTI-FARM FIX (this pass) -- see findTrackableSource's own comment on this field for the full writeup
-    }
+    }, TRACKABLE_LOG_MAX_ENTRIES.gunpowder) -- ENTRY-COUNT CEILING (this pass) -- see that table's own declaration comment
 end)
 
 --- RUNTIME CAPABILITY CHECK (coordinator decision, 2026-08-24) for the
@@ -1011,11 +1123,11 @@ local function RegisterScentInventoryHook()
         local ped = GetPlayerPed(payload.source)
         if ped == 0 then return end -- defensive: no live ped (e.g. a system/script-originated drop with no real connected player behind payload.source)
 
-        TrackableLog.scent[#TrackableLog.scent + 1] = {
+        AppendTrackableLogEntry(TrackableLog.scent, {
             coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per DEVELOPER_REFERENCE.md#scent-source-resolution §2) and NEVER anything client-supplied
             loggedAt = GetGameTimer(),
             ticketIssued = false, -- ANTI-FARM FIX (this pass) — see findTrackableSource's own comment on this field for the full writeup
-        }
+        }, TRACKABLE_LOG_MAX_ENTRIES.scent) -- ENTRY-COUNT CEILING (this pass) -- see that table's own declaration comment
     end)
 
     if not registered then
@@ -1724,6 +1836,31 @@ local function ResolveScentVisionNumber(configuredValue, fallback, minAllowed, c
     return fallback
 end
 
+--- Clamp-and-warn for Config.Tracking.ScentVision.mode -- a THREE-WAY
+--- STRING choice ('always'/'keybind'/'off'), not a number, so this is its
+--- own small resolver rather than a reuse of ResolveScentVisionNumber
+--- above. Read FRESH on every getScentVisionPoints call (never captured
+--- once), same "server-side is always the live truth" posture every other
+--- svConfig.* read in that callback already follows -- this is also
+--- EXACTLY what lets an admin's edit reach an already-connected,
+--- currently-polling client's own screen live: that client's poll loop
+--- treats this echoed value as the authoritative signal to keep rendering
+--- or stop, never its own boot-time copy of config.lua alone (see
+--- client/tracking.lua's own EnsureScentVisionPollThreadRunning comment).
+--- An unrecognised value NEVER silently becomes 'always' (the one choice
+--- that puts something on every eligible player's screen unasked) -- it
+--- falls back to 'keybind', the same safe default config.lua itself ships.
+--- @param configuredValue any
+--- @return 'always'|'keybind'|'off'
+local function ResolveScentVisionMode(configuredValue)
+    if configuredValue == 'always' or configuredValue == 'keybind' or configuredValue == 'off' then
+        return configuredValue
+    end
+    print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.mode must be one of "always", "keybind", or "off" (got %s) -- falling back to "keybind".')
+        :format(tostring(configuredValue)))
+    return 'keybind'
+end
+
 --- Drops every already-expired point from `bucket` IN PLACE, evaluated
 --- against EACH POINT'S OWN `loggedAt` timestamp compared to `now` -- never
 --- a decremented per-frame countdown (owner's own explicit requirement: a
@@ -1935,7 +2072,19 @@ end
 --- population regardless of how many people are actually connected. See
 --- this section's own header for the full per-query cost bound.
 lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
-    if not Config.Features.ScentVision then return { points = {} } end
+    -- `mode = 'off'` echoed here too, deliberately -- the master feature
+    -- being off is functionally IDENTICAL to mode == 'off' from a
+    -- currently-polling client's own point of view (nothing to show, the
+    -- keybind should do nothing), and client/tracking.lua's own live-stop
+    -- check only ever looks at THIS field, never at a second "was it the
+    -- feature or the mode" distinction -- one signal, one stop path. This
+    -- is also, TODAY, the only way an admin's LIVE tablet edit (this
+    -- feature flag already carries `tier = 'live'` in
+    -- server/runtimecontrol.lua's own FEATURE_TIERS) reaches an
+    -- already-rendering player's screen without a restart: `mode` itself
+    -- is not yet tablet-editable (see config.lua's own comment on
+    -- Config.Tracking.ScentVision.mode for why), but this flag already is.
+    if not Config.Features.ScentVision then return { points = {}, mode = 'off' } end
     if not HasK9Access(source) then return { points = {} } end
 
     -- PER-PERSON FEATURE CONTROL -- same shared 4-step resolution as
@@ -1965,6 +2114,7 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
     local lifetimeMs = ResolveConfiguredThresholdMs(svConfig.dotLifetimeMs, 45000, 'Config.Tracking.ScentVision.dotLifetimeMs')
     local maxVisible = ResolveScentVisionNumber(svConfig.maxVisibleTrails, 5, 1, 'Config.Tracking.ScentVision.maxVisibleTrails')
     local maxPerTrail = ResolveScentVisionNumber(svConfig.queryMaxPointsPerTrail, 12, 1, 'Config.Tracking.ScentVision.queryMaxPointsPerTrail')
+    local mode = ResolveScentVisionMode(svConfig.mode)
 
     -- Rank every OTHER connected player with at least one still-live point
     -- in range by THAT trail's OWN nearest point -- never the caller's own
@@ -2052,6 +2202,17 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
         -- findTrackableSource's own `breaksAtWater` field already documents
         -- for itself above.
         dotLifetimeMs = lifetimeMs,
+        -- THE SERVER'S OWN LIVE VALUE, resolved fresh above -- NEVER the
+        -- client's own boot-time copy of config.lua. client/tracking.lua's
+        -- poll loop treats `mode == 'off'` here as an unconditional,
+        -- immediate stop (see that file's own comment on this exact field)
+        -- -- this is the one channel that makes turning ScentVision off
+        -- reach an already-rendering player's screen live, on THIS pass,
+        -- without waiting for a restart. It is informational for 'always'/
+        -- 'keybind' -- the client never auto-STARTS off this field, only
+        -- ever auto-STOPS, per this codebase's own "gate the start, never
+        -- the stop" rule.
+        mode = mode,
     }
 end)
 

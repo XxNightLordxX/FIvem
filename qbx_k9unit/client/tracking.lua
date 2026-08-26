@@ -970,6 +970,24 @@ end)
     second "linger" timer to configure or maintain: each dot's own
     dotLifetimeMs already IS the delay the owner asked for, so a second
     knob would only be a second, redundant way to get the same answer wrong.
+
+    MODE (Config.Tracking.ScentVision.mode) — LATER pass, owner-directed:
+    "make the scent tracking a keybind and choose always active or [not]".
+    Three values ('always'/'keybind'/'off' — see config.lua's own comment
+    for the full plain-English writeup) resolved into SCENT_VISION_MODE
+    below. 'keybind' is everything documented above, unchanged. 'off' makes
+    ToggleScentVision() a genuine no-op (own dedicated notify, never
+    DenyK9UIAccess() — that path means something different). 'always' hands
+    START to a dedicated watcher thread further below instead of the
+    keybind, with ToggleScentVision() itself becoming a no-op too (not
+    player-controlled). ALL THREE share the exact same STOP path this
+    header already describes — getScentVisionPoints' own echoed live `mode`
+    (learned by EnsureScentVisionPollThreadRunning below, in
+    `scentVisionServerMode`) can force a stop from ANY of the three at any
+    time, unconditionally, the moment the server says 'off' — this is what
+    keeps an admin's live 'always'->'off' edit from stranding an
+    already-rendering player, per this codebase's own "gate the start,
+    never the stop" rule.
     ======================================================================
 ]]
 
@@ -1025,6 +1043,53 @@ end
 -- independently since ScentVision markers carry their own per-point colour
 -- rather than one fixed TRAIL_MARKER_COLOR.
 local SCENT_VISION_MARKER_ALPHA = 200
+
+-- MODE (Config.Tracking.ScentVision.mode) -- owner-directed pass: "make the
+-- scent tracking a keybind and choose always active or [not]". See
+-- config.lua's own comment on this exact setting for the full plain-English
+-- writeup of what each of the three choices costs -- this is just the
+-- resolution/enforcement side.
+--
+-- Resolved ONCE at file load, same "client-only, resolved once" shape as
+-- SCENT_VISION_POLL_INTERVAL_MS/SCENT_VISION_FADE_START_FRACTION above (see
+-- config.lua's own "CLIENT-SIDE EXCEPTION, DISCLOSED" comment on this whole
+-- block for why that is an honest limitation, not a bug) -- a config edit
+-- from 'keybind' to 'always' does not retroactively start rendering for a
+-- player already connected before the next restart. CLAMP AND WARN, same
+-- posture as every other setting in this section: an unrecognised value
+-- (anything other than the three exact strings config.lua documents) never
+-- silently becomes 'always' (the one choice that puts something on an
+-- eligible player's screen unasked) -- it falls back to 'keybind', the
+-- safest and most conservative of the three, with one clear console
+-- warning naming this exact setting.
+local SCENT_VISION_MODE_DEFAULT = 'keybind'
+local SCENT_VISION_MODE = SCENT_VISION_MODE_DEFAULT
+do
+    local configured = Config.Tracking.ScentVision and Config.Tracking.ScentVision.mode
+    if configured == 'always' or configured == 'keybind' or configured == 'off' then
+        SCENT_VISION_MODE = configured
+    else
+        print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.mode must be one of "always", "keybind", or "off" (got %s) -- falling back to the shipped default of "%s".'):format(tostring(configured), SCENT_VISION_MODE_DEFAULT))
+    end
+end
+
+--- The freshest `mode` the SERVER has actually told us, learned from
+--- getScentVisionPoints' own echoed field (see that callback's own comment
+--- server-side) every time a poll succeeds -- nil until the very first
+--- response ever arrives. THIS is what makes turning the ability off reach
+--- an already-polling client live (no restart) -- see
+--- EnsureScentVisionPollThreadRunning below, which is also the ONLY place
+--- this is ever written. Never used to auto-START anything (this file's own
+--- "gate the start, never the stop" rule) -- only ever consulted to decide
+--- whether an ALREADY-RUNNING poll loop or the always-on watcher below
+--- should keep going.
+--- @type 'always'|'keybind'|'off'|nil
+local scentVisionServerMode = nil
+
+--- @return 'always'|'keybind'|'off'
+local function EffectiveScentVisionMode()
+    return scentVisionServerMode or SCENT_VISION_MODE
+end
 
 --- @type boolean
 local scentVisionActive = false
@@ -1162,6 +1227,38 @@ local function EnsureScentVisionPollThreadRunning()
             -- past.
             if myGeneration ~= scentVisionGeneration then break end
 
+            -- LIVE STOP (Config.Tracking.ScentVision.mode / master feature
+            -- flag) — THE TRAP THIS EXISTS TO CLOSE: never gate the STOP
+            -- path behind a mode check, only ever the START. Learn the
+            -- server's own live-resolved mode from THIS response
+            -- (server/tracking.lua's own getScentVisionPoints echoes it
+            -- fresh on every call, whether the feature is fully off or the
+            -- caller is simply mid-query) and, the moment it says 'off',
+            -- stop UNCONDITIONALLY — regardless of whether this session
+            -- started from the keybind or from the always-on watcher below.
+            -- CHECKED BEFORE the snapshot update just below, DELIBERATELY:
+            -- the master-feature-off early return server-side always
+            -- carries an EMPTY `points` array alongside `mode = 'off'` (see
+            -- that callback's own comment), and letting THIS response
+            -- overwrite `scentVisionSnapshot` before reacting to `mode`
+            -- would wipe out whatever was already on screen a frame early,
+            -- instead of leaving it to fade on its own already-established
+            -- timer — the exact "delay before markers go away" contract
+            -- ToggleScentVision()'s own manual-off already promises. Same
+            -- shape as that manual path (bump the generation, drop
+            -- `scentVisionActive`, leave `scentVisionSnapshot` untouched) —
+            -- the ONLY difference is telling the player why, since this one
+            -- was not their own choice.
+            if result and (result.mode == 'always' or result.mode == 'keybind' or result.mode == 'off') then
+                scentVisionServerMode = result.mode
+            end
+            if result and result.mode == 'off' then
+                scentVisionGeneration = scentVisionGeneration + 1
+                scentVisionActive = false
+                lib.notify({ title = locale('common.notify_title'), description = locale('tracking.scent_vision_disabled_live'), type = 'inform' })
+                break
+            end
+
             if result and type(result.points) == 'table' then
                 scentVisionSnapshot = {
                     dotLifetimeMs = type(result.dotLifetimeMs) == 'number' and result.dotLifetimeMs or SCENT_VISION_DOT_LIFETIME_MS_DEFAULT,
@@ -1169,12 +1266,13 @@ local function EnsureScentVisionPollThreadRunning()
                     points = result.points,
                 }
             end
-            -- A failed/empty response is NOT treated as "clear the
-            -- snapshot" — the last-known trails simply keep fading on
-            -- their own already-established per-dot timers (same "a
-            -- transient hiccup should not visibly blank the screen"
-            -- posture as leaving `scentVisionSnapshot` alone on
-            -- ToggleScentVision() off, per this section's own header).
+            -- A failed/empty response (that is NOT a live 'off' signal,
+            -- handled above) is NOT treated as "clear the snapshot" — the
+            -- last-known trails simply keep fading on their own
+            -- already-established per-dot timers (same "a transient hiccup
+            -- should not visibly blank the screen" posture as leaving
+            -- `scentVisionSnapshot` alone on ToggleScentVision() off, per
+            -- this section's own header).
 
             Wait(SCENT_VISION_POLL_INTERVAL_MS)
         end
@@ -1195,9 +1293,48 @@ end
 --- clear `scentVisionSnapshot` — see this section's own header for why
 --- that omission IS the "delay before markers go away" mechanism, not a
 --- bug.
+--- MODE-AWARE, this pass — Config.Tracking.ScentVision.mode (see config.lua's
+--- own comment on that setting). Both new branches below are checked AFTER
+--- the existing Config.Features.ScentVision/scentVisionActive-already-on
+--- checks above them, and BEFORE the existing CanShowK9UI() gate — neither
+--- one touches the STOP path (`scentVisionActive` already true, above) at
+--- all, only the START path, per this file's own "never gate the stop"
+--- rule this whole section's header already documents.
+---
+--- 'off': genuinely inert — the keybind exists (client/keybinds.lua
+--- registers it whenever Config.Features.ScentVision is on, independent of
+--- this mode) but this function refuses to ever start anything for it, so
+--- pressing the key costs one lib.notify() call and nothing else: no poll
+--- thread, no network round trip, no per-frame render work.
+---
+--- 'always': not player-controlled at all — the always-on watcher thread
+--- below is what starts/keeps this running for an eligible player, with
+--- nothing to press. A keybind press in this mode is a deliberate no-op
+--- (with its own explanatory notify) rather than a toggle, so it can never
+--- fight the watcher into a flicker.
 function ToggleScentVision()
     if not Config.Features.ScentVision then
         DenyK9UIAccess()
+        return
+    end
+
+    -- CHECKED BEFORE the "already active" branch just below, DELIBERATELY:
+    -- in 'always' mode, `scentVisionActive` is already true whenever this
+    -- watcher-started session is running, and this function must NOT treat
+    -- a keybind press as the toggle-off in that case (that would be the
+    -- player fighting the always-on watcher, which would just restart it
+    -- again on its very next pass — see that thread's own comment below).
+    -- This is a UX/policy no-op, not "gating the stop": the ONE real stop
+    -- path for an admin-driven 'always'->'off' change is
+    -- EnsureScentVisionPollThreadRunning()'s own live-mode check above,
+    -- which is unconditional and never consults this function at all.
+    local mode = EffectiveScentVisionMode()
+    if mode == 'off' then
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.scent_vision_mode_off'), type = 'error' })
+        return
+    end
+    if mode == 'always' then
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.scent_vision_mode_always_notice'), type = 'inform' })
         return
     end
 
@@ -1215,4 +1352,43 @@ function ToggleScentVision()
     scentVisionGeneration = scentVisionGeneration + 1
     scentVisionActive = true
     EnsureScentVisionPollThreadRunning()
+end
+
+-- ALWAYS-ON AUTO-START WATCHER (Config.Tracking.ScentVision.mode ==
+-- 'always') — the ONLY place this file ever starts ScentVision without a
+-- keybind press. Gated on the STATIC, boot-time SCENT_VISION_MODE (not
+-- EffectiveScentVisionMode()) for whether this thread is created AT ALL —
+-- a session that boots in 'keybind' or 'off' never spins this thread up in
+-- the first place, matching this resource's own "no thread left running for
+-- a feature that is not relevant right now" performance rule, and matching
+-- config.lua's own disclosed limitation that flipping 'keybind' to 'always'
+-- live does not retroactively start rendering for an already-connected
+-- player before the next restart.
+--
+-- The thread BODY, once it exists, checks EffectiveScentVisionMode() (not
+-- the static value) on every pass — so the moment
+-- EnsureScentVisionPollThreadRunning() above learns, live, that the server
+-- now says 'off' (or the feature itself went off), this watcher stops
+-- trying to restart it too. That is what stops "always" from fighting a
+-- live "off" signal: once the server has said stop, this watcher agrees,
+-- for the rest of this session.
+--
+-- CanShowK9UI() is re-checked every pass, not just once, so a handler who
+-- is not YET eligible at resource start (no active certification loaded
+-- yet, not currently controlling their K9, etc.) starts seeing this the
+-- moment they become eligible, without needing to press anything or
+-- reconnect.
+if Config.Features.ScentVision and SCENT_VISION_MODE == 'always' then
+    local SCENT_VISION_ALWAYS_ON_WATCH_INTERVAL_MS = 3000
+
+    CreateThread(function()
+        while true do
+            if EffectiveScentVisionMode() == 'always' and not scentVisionActive and CanShowK9UI() then
+                scentVisionGeneration = scentVisionGeneration + 1
+                scentVisionActive = true
+                EnsureScentVisionPollThreadRunning()
+            end
+            Wait(SCENT_VISION_ALWAYS_ON_WATCH_INTERVAL_MS)
+        end
+    end)
 end

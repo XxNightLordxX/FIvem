@@ -838,6 +838,7 @@ local function newScentVisionFixture(opts)
                 maxVisibleTrails        = 2,  -- small, deliberately, so "handful" truncation is easy to prove
                 queryMaxPointsPerTrail  = 12,
                 queryCooldownMs         = 1000,
+                mode                    = 'keybind', -- matches config.lua's own shipped default; set via opts.trackingOverrides for the MODE section's own tests below
                 palette = {
                     { r = 230, g = 25,  b = 75  },
                     { r = 60,  g = 180, b = 75  },
@@ -1115,6 +1116,86 @@ t.test('ScentVision: the server enforces queryCooldownMs regardless of how fast 
     -- Same instant, no advance() -- a second immediate query must be refused.
     local secondResult = f.getScentVisionPoints(1)
     t.equals(#secondResult.points, 0, 'a query inside queryCooldownMs must be refused, not answered again for free')
+end)
+
+-- ========================================================================
+-- MODE (Config.Tracking.ScentVision.mode) -- owner-directed pass: "make the
+-- scent tracking a keybind and choose always active or [not]". Server-side
+-- coverage only: this file never decides whether to RENDER (that is
+-- entirely client/tracking.lua's job, covered by tests/clienttracking_spec.lua)
+-- -- it only proves (1) getScentVisionPoints echoes the server's own live-
+-- resolved mode fresh on every call, the exact channel the client relies on
+-- to stop rendering live, and (2) that value never changes what/whether the
+-- capture thread records, per this task's own explicit requirement that
+-- 'always' must cost nothing extra server-side.
+-- ========================================================================
+
+t.test('MODE: getScentVisionPoints echoes the configured mode back on a successful query', function()
+    local f = newScentVisionFixture({ trackingOverrides = { mode = 'always' } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(result.mode, 'always', 'the echoed mode must match the live server config, not a stale/default guess')
+end)
+
+t.test('MODE: an unrecognised Config.Tracking.ScentVision.mode falls back to "keybind" and warns once, naming the exact setting', function()
+    local f = newScentVisionFixture({ trackingOverrides = { mode = 'bogus-value' } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(result.mode, 'keybind', 'a bad mode value must never silently become "always" -- the safest default wins')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Tracking.ScentVision.mode', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a bad mode value must print a loud warning naming this exact setting, never fail silently')
+end)
+
+t.test('MODE: Config.Features.ScentVision = false echoes mode = "off" regardless of Config.Tracking.ScentVision.mode\'s own value', function()
+    local f = newScentVisionFixture({ trackingOverrides = { mode = 'always' } })
+    f.Config.Features.ScentVision = false
+
+    local result = f.getScentVisionPoints(1) -- no players registered at all -- must not error
+    t.equals(result.mode, 'off', 'the master feature being off must read as mode == "off" to an already-polling client, regardless of the mode field')
+    t.equals(#result.points, 0)
+end)
+
+t.test('MODE: "off" does NOT change the capture threads own cost -- population-wide sampling keeps recording exactly as it does under "keybind"/"always"', function()
+    local f = newScentVisionFixture({ trackingOverrides = { mode = 'off' } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 0, 0, 0)
+
+    f.step() -- prime
+
+    f.setPedCoords(2, 5, 0, 0)
+    f.step()
+    f.setPedCoords(2, 10, 0, 0)
+    f.step()
+
+    -- Read the reveal back with mode flipped to 'keybind' -- the QUERY side
+    -- is allowed to differ by mode in principle, but the CAPTURE that
+    -- already happened above (while mode was 'off') must have recorded
+    -- real points regardless, proving the capture thread never consulted
+    -- `mode` at all -- exactly this task's own "must NOT change the
+    -- server-side sampling cost" requirement.
+    f.Config.Tracking.ScentVision.mode = 'keybind'
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.points >= 2, ('capture must be unaffected by mode == "off" -- expected at least 2 points, got %d'):format(#result.points))
 end)
 
 os.exit(t.summary())
