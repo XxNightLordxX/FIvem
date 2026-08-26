@@ -109,6 +109,17 @@ local function newAgilityFixture(opts)
     local isInK9Vehicle = false
     local function IsInK9Vehicle() return isInK9Vehicle end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
+    -- same "controllable stand-in" convention as CanShowK9UI/DenyK9UIAccess
+    -- above. Soft dependency: only added to `env` when
+    -- `opts.featureBlocksAvailable` is not explicitly false.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+    local denyK9FeatureBlockedCallCount = 0
+    local function DenyK9FeatureBlocked() denyK9FeatureBlockedCallCount = denyK9FeatureBlockedCallCount + 1 end
+
     local pedCoords = { [1] = vec3(0, 0, 0) }
     local function GetEntityCoords(entity) return pedCoords[entity] or vec3(0, 0, 0) end
     local forwardVector = vec3(1, 0, 0)
@@ -159,7 +170,17 @@ local function newAgilityFixture(opts)
         registerKeyMappingCalls[#registerKeyMappingCalls + 1] = { commandName = commandName, description = description, ioType = ioType, defaultKey = defaultKey }
     end
 
+    -- CLAMP-AND-WARN CAPTURE -- proves the guard actually warns (not just
+    -- "doesn't crash") without spamming real stdout during the test run.
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
     local overrides = {
+        print = printStub,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
         GetGameTimer = GetGameTimer,
@@ -181,6 +202,10 @@ local function newAgilityFixture(opts)
     if opts.isInK9VehicleDefined ~= false then
         overrides.IsInK9Vehicle = IsInK9Vehicle
     end
+    if featureBlocksAvailable then
+        overrides.IsK9FeatureBlocked = IsK9FeatureBlocked
+        overrides.DenyK9FeatureBlocked = DenyK9FeatureBlocked
+    end
 
     local env = Sandbox.newEnv(overrides)
     Sandbox.loadInto('../config.lua', env)
@@ -200,13 +225,14 @@ local function newAgilityFixture(opts)
 
     local ok, err = pcall(Sandbox.loadInto, '../client/agility.lua', env)
     if opts.expectLoadError then
-        return { loadOk = ok, loadError = err }
+        return { loadOk = ok, loadError = err, printLog = printLog }
     end
     assert(ok, 'client/agility.lua failed to load: ' .. tostring(err))
 
     return {
         env = env,
         Config = env.Config,
+        printLog = printLog,
         registerCommandCalls = registerCommandCalls,
         registerKeyMappingCalls = registerKeyMappingCalls,
         setEntityVelocityCalls = setEntityVelocityCalls,
@@ -222,6 +248,8 @@ local function newAgilityFixture(opts)
         setPedCoords = function(entity, x, y, z) pedCoords[entity] = vec3(x, y, z) end,
         setForwardVector = function(x, y, z) forwardVector = vec3(x, y, z) end,
         setShapeTestResolver = function(fn) shapeTestResolver = fn end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
+        denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
         --- Runs the captured 'qbx_k9unit:vault' command handler to completion
         --- inside its own fresh coroutine, regardless of how many times (zero
         --- or more) it internally yields at Wait(0) -- see this file's header.
@@ -246,11 +274,89 @@ t.test('loads cleanly with the real, shipped config.lua (detectionMethod = "rayc
     t.equals(f.registerCommandCalls[1].name, 'qbx_k9unit:vault')
 end)
 
-t.test('startup assert: any detectionMethod other than "raycast" makes the file fail to load, loudly, not silently no-op', function()
-    local f = newAgilityFixture({ detectionMethod = 'taggedProp', expectLoadError = true })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'taggedProp')
-    t.contains(f.loadError, "only 'raycast'")
+-- REGRESSION (this pass): this test used to assert the OPPOSITE -- that any
+-- detectionMethod other than "raycast" made the WHOLE FILE fail to load via
+-- a hard `assert`, which lives directly inside a top-level `if
+-- Config.Features.AgilityAdvanced then` block with no deferring
+-- onResourceStart/RegisterNetEvent wrapper -- so a failure there would have
+-- silently un-registered 'qbx_k9unit:vault' below it too, over one operator
+-- typo in a single string field. See server/cooldowns.lua's header
+-- ADDENDUM for the general case this responds to. Now CLAMP AND WARN: the
+-- file loads, the command still registers, and the feature runs on the only
+-- implemented detection method while printing one loud, named warning.
+t.test('CLAMP AND WARN: any detectionMethod other than "raycast" no longer fails to load -- warns loudly by name, falls back to raycast, and the vault command still registers', function()
+    local f = newAgilityFixture({ detectionMethod = 'taggedProp' })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('taggedProp', 1, true) and line:find("only 'raycast'", 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact bad value and explain what is actually implemented')
+    t.equals(f.Config.Combat.AgilityAdvanced.detectionMethod, 'raycast', 'resolved back into Config so any later read in this file sees the corrected value')
+    t.equals(#f.registerCommandCalls, 1, 'qbx_k9unit:vault must still register')
+end)
+
+t.test('CLAMP AND WARN: Config.Combat.AgilityAdvanced entirely missing no longer fails to load -- warns loudly, falls back to every built-in default, and the vault command still registers', function()
+    local f = newAgilityFixture()
+    f.env.Config.Combat.AgilityAdvanced = nil
+    -- newAgilityFixture already loaded the file by this point (it mutates
+    -- AFTER load in the fixture builder), so re-drive the load directly to
+    -- exercise the "table is nil" branch specifically.
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+    f.env.print = printStub
+    local ok, err = pcall(Sandbox.loadInto, '../client/agility.lua', f.env)
+    t.isTrue(ok, 'client/agility.lua failed to reload: ' .. tostring(err))
+
+    local warned = false
+    for _, line in ipairs(printLog) do
+        if line:find('Config.Combat.AgilityAdvanced', 1, true) and line:find('missing', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must warn that the whole settings table is missing')
+    t.equals(f.env.Config.Combat.AgilityAdvanced.detectionMethod, 'raycast')
+    t.equals(f.env.Config.Combat.AgilityAdvanced.maxVaultHeight, 1.2)
+    t.equals(f.env.Config.Combat.AgilityAdvanced.vaultCooldownMs, 2000)
+end)
+
+t.test('CLAMP AND WARN: a non-positive maxVaultHeight no longer errors the first time a vault is attempted -- warns loudly at load and falls back to the shipped 1.2m default', function()
+    local f = newAgilityFixture({ maxVaultHeight = 0 })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Combat.AgilityAdvanced.maxVaultHeight', 1, true) and line:find('found: 0', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key and the value found')
+    t.equals(f.Config.Combat.AgilityAdvanced.maxVaultHeight, 1.2)
+end)
+
+t.test('CLAMP AND WARN: a non-positive vaultCooldownMs no longer silently un-throttles every vault attempt -- warns loudly at load and falls back to the shipped 2000ms default', function()
+    local f = newAgilityFixture({ vaultCooldownMs = -500 })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Combat.AgilityAdvanced.vaultCooldownMs', 1, true) and line:find('found: -500', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key and the value found')
+    t.equals(f.Config.Combat.AgilityAdvanced.vaultCooldownMs, 2000)
+end)
+
+t.test('CLAMP AND WARN: a valid, non-default Config.Combat.AgilityAdvanced passes through completely silently', function()
+    local f = newAgilityFixture({ detectionMethod = 'raycast', maxVaultHeight = 1.5, vaultCooldownMs = 3000 })
+    t.equals(#f.printLog, 0, 'a fully valid config must never print anything')
+    t.equals(f.Config.Combat.AgilityAdvanced.maxVaultHeight, 1.5)
+    t.equals(f.Config.Combat.AgilityAdvanced.vaultCooldownMs, 3000)
 end)
 
 t.test('gating: Config.Features.AgilityAdvanced = false registers zero commands and zero key mappings', function()
@@ -518,6 +624,38 @@ t.test('RE-ENTRANCY GUARD RESET: once the in-flight sweep from a FIRST call full
     f.advance(2000) -- past cooldown
     f.runVault() -- a genuinely new, later, non-overlapping call must still work
     t.equals(#f.setEntityVelocityCalls, 2, 'the re-entrancy guard must reset once a sweep completes -- it must never permanently stick at true and block every future vault attempt')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- checked right
+-- after the existing CanShowK9UI() gate. A vault is a single one-shot
+-- action with no held/persistent state, so there is no "already active"
+-- teardown case to prove here, unlike client/vision.lua's toggles.
+-- ----------------------------------------------------------------------
+
+t.test('TryVault: AgilityAdvanced blocked -- DenyK9FeatureBlocked() called, no shape test ever fired, no velocity applied', function()
+    local f = newAgilityFixture()
+    f.setBlocked('AgilityAdvanced', true)
+    f.runVault()
+    t.equals(f.denyK9FeatureBlockedCallCount(), 1)
+    t.equals(#f.shapeTestCalls, 0)
+    t.equals(#f.setEntityVelocityCalls, 0)
+end)
+
+t.test('TryVault: a block on a DIFFERENT feature name never affects AgilityAdvanced', function()
+    local f = newAgilityFixture()
+    f.setBlocked('RadialMenu', true)
+    f.setShapeTestResolver(function(_h, _p) return 2, true end)
+    f.runVault()
+    t.equals(#f.setEntityVelocityCalls, 1)
+end)
+
+t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- TryVault works exactly as before this pass', function()
+    local f = newAgilityFixture({ featureBlocksAvailable = false })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.setShapeTestResolver(function(_h, _p) return 2, true end)
+    f.runVault()
+    t.equals(#f.setEntityVelocityCalls, 1, 'an unknown block state must never freeze this ability -- it must fail OPEN')
 end)
 
 os.exit(t.summary())

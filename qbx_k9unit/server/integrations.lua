@@ -205,11 +205,35 @@ if not Config.Features.K9DownDispatch then return end
 -- config.lua is a shared_script, loaded in full before any server_scripts
 -- file (this one included) starts executing, so Config already holds its
 -- real, final values by the time this line runs -- not a load-order gamble.
+if type(Config.K9DownDispatch) ~= 'table' then
+    -- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
+    -- header ADDENDUM and this block's own comment below for the full
+    -- reasoning). USED TO be a hard `assert` here on the theory that there
+    -- was "nothing sensible to clamp/substitute for the whole table
+    -- missing" -- that theory doesn't hold up: substituting an empty table
+    -- lets every one of the per-field resolvers immediately below fall back
+    -- to its own already-established default, exactly as if an operator had
+    -- left each field individually blank, instead of aborting this file's
+    -- load (K9DownFireCooldown's construction, PollK9Health, the
+    -- maintenance thread, and this file's own playerDropped cleanup) over
+    -- a missing table.
+    --
+    -- Assigned back onto the GLOBAL Config.K9DownDispatch (not just a local
+    -- variable) so this stays a genuine TABLE REFERENCE, matching
+    -- server/runtimecontrol.lua's own documented expectation for this exact
+    -- field ("`local tuning = Config.K9DownDispatch` is a TABLE REFERENCE,
+    -- not a copy") -- a high-command operator using the tablet's live
+    -- runtime tuning for K9DownDispatch.* must still reach the same table
+    -- this file reads from, even after this substitution.
+    print(
+        '[qbx_k9unit] WARNING: Config.Features.K9DownDispatch is true but Config.K9DownDispatch is missing or ' ..
+        'not a table -- using this file\'s own built-in defaults (healthThreshold=100, minDurationMs=3000, ' ..
+        'pollIntervalMs=2000, reFireCooldownMs=30000) for every field it would have set. Add the settings ' ..
+        'table back to config.lua.'
+    )
+    Config.K9DownDispatch = {}
+end
 local tuning = Config.K9DownDispatch
-assert(type(tuning) == 'table',
-    '[qbx_k9unit] Config.K9DownDispatch must be a table when Config.Features.K9DownDispatch is true -- ' ..
-    'this file reads healthThreshold/minDurationMs/pollIntervalMs/reFireCooldownMs from it unconditionally ' ..
-    'once the feature flag is on.')
 
 -- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's header
 -- ADDENDUM: "does an operator's config.lua edit alone... reach this value?
@@ -359,6 +383,41 @@ local K9DownFireCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     tuning.reFireCooldownMs, 30000, 'Config.K9DownDispatch.reFireCooldownMs'))
 K9DownFireCooldown.RegisterPlayerDropped()
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
+-- header documents the 4-step resolution; step 1, Config.Features.K9DownDispatch,
+-- is already this file's own top-of-file gate above. Mirrors
+-- server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId shape
+-- verbatim (that file's own header says to read it before writing a
+-- variant). A block here suppresses the ANNOUNCEMENT of a specific K9's own
+-- down episode (e.g. a training/test account nobody wants paging real
+-- dispatch) -- it never affects detection/state tracking for anyone else.
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsK9DownDispatchPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.K9DownDispatch') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.K9DownDispatch == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.K9DownDispatch') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- One poll pass over every currently-connected player -- see this file's
 --- header "WHO COUNTS" / "DETECTION SHAPE" for the full design this
 --- implements.
@@ -415,51 +474,70 @@ local function PollK9Health()
                             local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
                             local jobName = Player and Player.PlayerData and Player.PlayerData.job and Player.PlayerData.job.name
                             if citizenid and jobName then
-                                local coords = GetEntityCoords(ped)
-                                FireOutboundEvent('qbx_k9unit:events:k9Down', src, citizenid, jobName, coords, health)
+                                -- PER-PERSON FEATURE CONTROL -- see
+                                -- IsK9DownDispatchPermittedForCitizenId above.
+                                -- Checked here rather than before
+                                -- K9DownFireCooldown.Consume above: this is a
+                                -- passive, server-driven detection poll, not a
+                                -- player-issued request, so there is no
+                                -- attacker who benefits from forcing a cooldown
+                                -- burn by controlling when this fires --
+                                -- re-ordering would only mean re-resolving
+                                -- Player/citizenid/jobName on every poll tick a
+                                -- blocked K9 stays down, for no behavioral
+                                -- benefit. Regardless of the outcome below,
+                                -- this K9's own episode is marked fired so a
+                                -- block suppresses the announcement without
+                                -- being retried every poll tick for the rest
+                                -- of this same down episode.
                                 state.firedThisEpisode = true
 
-                                -- CONVENIENCE LAYER, PURELY ADDITIVE -- see
-                                -- shared/compat/dispatch.lua's own header
-                                -- for the full contract; this is the exact
-                                -- copy-paste call that file's author left
-                                -- for whoever wired this in, placed
-                                -- immediately AFTER (never instead of) the
-                                -- FireOutboundEvent call above so BOTH fire
-                                -- from the SAME detection episode. This
-                                -- resource's own custom/off-the-shelf
-                                -- dispatch that listens ONLY for the plain
-                                -- 'qbx_k9unit:events:k9Down' event above
-                                -- keeps working with ZERO setup either way
-                                -- -- K9Compat.Get('dispatch').Alert(...) is
-                                -- a safe no-op (returns false, sends
-                                -- nothing) whenever no supported
-                                -- off-the-shelf dispatch is detected (see
-                                -- core.lua's BuildNoOpStub/BuildSafeAdapter
-                                -- for why this can never throw into this
-                                -- poll thread), so removing this one call
-                                -- would change nothing about the line
-                                -- above it. `title` is a plain string, not
-                                -- a locale() call, per dispatch.lua's own
-                                -- header LOCALE NOTE (this file is not the
-                                -- locale-file owner this pass). Guarded the
-                                -- same way scentlineup.lua guards its own
-                                -- K9Compat.Get('framework') call -- a
-                                -- missing K9Compat (e.g. shared/compat/
-                                -- core.lua not yet loaded/registered for any
-                                -- reason) degrades to "this convenience
-                                -- layer did nothing this poll tick," never a
-                                -- thrown error that could take down this
-                                -- poll thread's own pcall wrapper's caller.
-                                if type(K9Compat) == 'table' and type(K9Compat.Get) == 'function' then
-                                    K9Compat.Get('dispatch').Alert({
-                                        code     = 'k9_down',
-                                        title    = 'K9 Unit Down',
-                                        message  = ('A K9 unit (%s) has gone down and needs assistance.'):format(jobName),
-                                        coords   = coords,
-                                        jobs     = { jobName },
-                                        priority = 0,
-                                    })
+                                if IsK9DownDispatchPermittedForCitizenId(citizenid) then
+                                    local coords = GetEntityCoords(ped)
+                                    FireOutboundEvent('qbx_k9unit:events:k9Down', src, citizenid, jobName, coords, health)
+
+                                    -- CONVENIENCE LAYER, PURELY ADDITIVE -- see
+                                    -- shared/compat/dispatch.lua's own header
+                                    -- for the full contract; this is the exact
+                                    -- copy-paste call that file's author left
+                                    -- for whoever wired this in, placed
+                                    -- immediately AFTER (never instead of) the
+                                    -- FireOutboundEvent call above so BOTH fire
+                                    -- from the SAME detection episode. This
+                                    -- resource's own custom/off-the-shelf
+                                    -- dispatch that listens ONLY for the plain
+                                    -- 'qbx_k9unit:events:k9Down' event above
+                                    -- keeps working with ZERO setup either way
+                                    -- -- K9Compat.Get('dispatch').Alert(...) is
+                                    -- a safe no-op (returns false, sends
+                                    -- nothing) whenever no supported
+                                    -- off-the-shelf dispatch is detected (see
+                                    -- core.lua's BuildNoOpStub/BuildSafeAdapter
+                                    -- for why this can never throw into this
+                                    -- poll thread), so removing this one call
+                                    -- would change nothing about the line
+                                    -- above it. `title` is a plain string, not
+                                    -- a locale() call, per dispatch.lua's own
+                                    -- header LOCALE NOTE (this file is not the
+                                    -- locale-file owner this pass). Guarded the
+                                    -- same way scentlineup.lua guards its own
+                                    -- K9Compat.Get('framework') call -- a
+                                    -- missing K9Compat (e.g. shared/compat/
+                                    -- core.lua not yet loaded/registered for any
+                                    -- reason) degrades to "this convenience
+                                    -- layer did nothing this poll tick," never a
+                                    -- thrown error that could take down this
+                                    -- poll thread's own pcall wrapper's caller.
+                                    if type(K9Compat) == 'table' and type(K9Compat.Get) == 'function' then
+                                        K9Compat.Get('dispatch').Alert({
+                                            code     = 'k9_down',
+                                            title    = 'K9 Unit Down',
+                                            message  = ('A K9 unit (%s) has gone down and needs assistance.'):format(jobName),
+                                            coords   = coords,
+                                            jobs     = { jobName },
+                                            priority = 0,
+                                        })
+                                    end
                                 end
                             end
                             -- else: a transient exports.qbx_core:GetPlayer

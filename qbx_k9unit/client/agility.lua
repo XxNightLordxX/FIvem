@@ -94,20 +94,82 @@
 -- carve-out client/main.lua's own OPEN QUESTION note documents.
 -- ======================================================================
 if Config.Features.AgilityAdvanced then
+    -- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
+    -- header ADDENDUM: "does an operator's config.lua edit alone... reach
+    -- this value? If yes it must be clamped and warned about, never
+    -- asserted and aborted"). detectionMethod/maxVaultHeight/vaultCooldownMs
+    -- below USED TO be one hard `assert` on detectionMethod alone (mirroring
+    -- client/movement.lua's own Config.DoorInteraction.nudgeRequiresUnlocked
+    -- precedent -- correct for THAT field, since a locked-door bypass has no
+    -- safe substitute value, but wrong here) -- an uncaught error thrown from
+    -- THIS BLOCK aborts client/agility.lua's remaining top-level execution
+    -- from that line onward, since this `if` runs directly at file-load time
+    -- with no deferring onResourceStart/RegisterNetEvent wrapper around it:
+    -- the 'qbx_k9unit:vault' RegisterCommand near the bottom of this same
+    -- block would silently never register, over one operator typo in a
+    -- single string field. maxVaultHeight/vaultCooldownMs were previously
+    -- read straight off Config with NO validation at all (a bad value there
+    -- would not fail at load time -- it would throw or misbehave the first
+    -- time a player actually attempted a vault, which is a worse, harder to
+    -- diagnose failure mode than either an assert or a warning).
+    -- Resolved values are written BACK into Config.Combat.AgilityAdvanced
+    -- (not copied into a disconnected local table) so `agilityCfg` stays an
+    -- alias into the real Config path below -- preserving this file's
+    -- existing "read live via field access at TryVault()-call time, never
+    -- captured by value" property (see this file's own header and this
+    -- spec's fixture comment) for maxVaultHeight/vaultCooldownMs, exactly
+    -- as it worked before this guard existed.
+    if type(Config.Combat) ~= 'table' then
+        Config.Combat = {}
+    end
+    if type(Config.Combat.AgilityAdvanced) ~= 'table' then
+        print(
+            '[qbx_k9unit] WARNING: Config.Features.AgilityAdvanced is true but Config.Combat.AgilityAdvanced ' ..
+            'is missing or not a table -- using this file\'s own built-in defaults (detectionMethod=\'raycast\', ' ..
+            'maxVaultHeight=1.2, vaultCooldownMs=2000) so the vault command still registers. Add the ' ..
+            'Config.Combat.AgilityAdvanced settings table back to config.lua.'
+        )
+        Config.Combat.AgilityAdvanced = {}
+    end
     local agilityCfg = Config.Combat.AgilityAdvanced
 
-    -- Fail loudly, not silently, if a server sets detectionMethod to
-    -- anything other than the one Phase 3 default actually implemented
-    -- here. DEVELOPER_REFERENCE.md §12.2/§12.5.5 document 'taggedProp' as a
-    -- theoretical per-server override SHAPE, but no such detection path
-    -- is built in this codebase -- same "assert rather than silently
-    -- no-op a field that looks load-bearing" posture client/movement.lua's
-    -- own Config.DoorInteraction.nudgeRequiresUnlocked assertion uses.
-    assert(agilityCfg.detectionMethod == 'raycast',
-        ("qbx_k9unit: Config.Combat.AgilityAdvanced.detectionMethod = '%s' is not implemented -- " ..
-         "only 'raycast' (the DEVELOPER_REFERENCE.md §12.0 item 3 Phase 3 default, a multi-height capsule " ..
-         "sweep) is built in client/agility.lua. Set it back to 'raycast', or implement the " ..
-         "'taggedProp' path with a reviewed code change before shipping this value."):format(tostring(agilityCfg.detectionMethod)))
+    if agilityCfg.detectionMethod ~= 'raycast' then
+        -- DEVELOPER_REFERENCE.md §12.2/§12.5.5 document 'taggedProp' as a
+        -- theoretical per-server override SHAPE, but no such detection path
+        -- is built in this codebase.
+        print(
+            ("[qbx_k9unit] WARNING: Config.Combat.AgilityAdvanced.detectionMethod = '%s' is not implemented -- " ..
+             "only 'raycast' (the DEVELOPER_REFERENCE.md §12.0 item 3 Phase 3 default, a multi-height capsule " ..
+             "sweep) is built in client/agility.lua. Using 'raycast' for this session instead of refusing to " ..
+             "load -- set Config.Combat.AgilityAdvanced.detectionMethod back to 'raycast' in config.lua, or " ..
+             "implement the 'taggedProp' path with a reviewed code change."):format(tostring(agilityCfg.detectionMethod))
+        )
+        agilityCfg.detectionMethod = 'raycast'
+    end
+
+    if not (type(agilityCfg.maxVaultHeight) == 'number' and agilityCfg.maxVaultHeight == agilityCfg.maxVaultHeight and agilityCfg.maxVaultHeight > 0) then
+        print(
+            ('[qbx_k9unit] Config.Combat.AgilityAdvanced.maxVaultHeight must be a positive number of meters ' ..
+             '(found: %s). Using the built-in fallback of 1.2 instead so this feature keeps working while the ' ..
+             'config is fixed.'):format(tostring(agilityCfg.maxVaultHeight))
+        )
+        agilityCfg.maxVaultHeight = 1.2
+    end
+
+    -- vaultCooldownMs IS a genuine cooldown threshold (compared against
+    -- below with `< agilityCfg.vaultCooldownMs`) -- 0/negative here would
+    -- make every vault attempt read as "always past cooldown" (elapsed >= 0
+    -- is never < 0), the OPPOSITE of server/cooldowns.lua's own documented
+    -- fail-closed convention for a threshold of this shape, so it gets the
+    -- same positive-number floor as every *CooldownMs field in config.lua.
+    if not (type(agilityCfg.vaultCooldownMs) == 'number' and agilityCfg.vaultCooldownMs == agilityCfg.vaultCooldownMs and agilityCfg.vaultCooldownMs > 0) then
+        print(
+            ('[qbx_k9unit] Config.Combat.AgilityAdvanced.vaultCooldownMs must be a positive number of ' ..
+             'milliseconds (found: %s). Using the built-in fallback of 2000 instead so this feature keeps ' ..
+             'working while the config is fixed.'):format(tostring(agilityCfg.vaultCooldownMs))
+        )
+        agilityCfg.vaultCooldownMs = 2000
+    end
 
     -- Capsule-sweep TUNING CONSTANTS -- deliberately plain local constants,
     -- NOT promoted into config.lua, because DEVELOPER_REFERENCE.md §12.5.5's own
@@ -257,6 +319,18 @@ if Config.Features.AgilityAdvanced then
     local function TryVault()
         if not CanShowK9UI() then
             DenyK9UIAccess()
+            return
+        end
+
+        -- Per-person block (client/featureblocks.lua, REQUESTED -- see
+        -- that file's header for the full contract). A vault is a single
+        -- one-shot action with no held/persistent state (unlike Leash/
+        -- Bite & Hold/Drag above it in this file's sibling files) -- there
+        -- is no release/termination branch here for this check to ever
+        -- risk gating. `type(...) == 'function'` guard: fails open (never
+        -- blocked) if client/featureblocks.lua has not loaded.
+        if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('AgilityAdvanced') then
+            if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
             return
         end
 

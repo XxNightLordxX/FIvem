@@ -161,6 +161,10 @@ local function newIntegrationsFixture(opts)
     local config = {
         Features = { K9DownDispatch = opts.featureEnabled ~= false },
         K9DownDispatch = opts.tuning,
+        -- PER-PERSON FEATURE CONTROL fixture knob (this pass) -- nil unless
+        -- a test opts in, mirroring pursuitsprint_spec.lua's own
+        -- `opts.requireGrantListed` shape.
+        FeatureControl = opts.featureControl,
     }
     if config.K9DownDispatch == nil and opts.featureEnabled ~= false then
         config.K9DownDispatch = {
@@ -171,7 +175,22 @@ local function newIntegrationsFixture(opts)
         }
     end
 
-    local env = Sandbox.newEnv({
+    -- HasPermission is a GLOBAL in production (server/permissions.lua),
+    -- soft-dependency-guarded (`type(HasPermission) == 'function'`) by
+    -- server/integrations.lua's own IsK9DownDispatchPermittedForCitizenId --
+    -- nil by default here (every existing test in this file never defines
+    -- it, exactly like production without server/permissions.lua
+    -- installed), settable per test via opts.hasPermissionFn.
+    local permissionCalls = {}
+    local function defaultHasPermission(citizenid, key)
+        permissionCalls[#permissionCalls + 1] = { citizenid = citizenid, key = key }
+        if type(opts.hasPermissionFn) == 'function' then
+            return opts.hasPermissionFn(citizenid, key)
+        end
+        return false
+    end
+
+    local envOverrides = {
         GetGameTimer           = GetGameTimer,
         CreateThread           = CreateThread,
         Wait                   = threadRunner.Wait,
@@ -188,7 +207,12 @@ local function newIntegrationsFixture(opts)
         GetCurrentResourceName = function() return 'qbx_k9unit' end,
         exports                = { qbx_core = { GetPlayer = qbxGetPlayer } },
         Config                 = config,
-    })
+    }
+    if opts.withHasPermission ~= false then
+        envOverrides.HasPermission = defaultHasPermission
+    end
+
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
@@ -270,17 +294,53 @@ end)
 -- 2. CONFIG-SAFETY GUARD asserts -- one bad field at a time
 -- ----------------------------------------------------------------------
 
-t.test('Config.K9DownDispatch not a table (nil/false in production) while the flag is true fails loudly at load time', function()
+-- REGRESSION (this pass): this test used to assert the OPPOSITE -- that
+-- Config.K9DownDispatch not being a table FAILED THE ENTIRE FILE'S LOAD via
+-- a hard `assert`, the last one left in this file (every individual field
+-- below it had already been migrated to clamp-and-warn). See
+-- server/cooldowns.lua's header ADDENDUM: an uncaught error thrown from
+-- this file's own top-level chunk would abort server/integrations.lua's
+-- load from that line onward, taking K9DownFireCooldown's construction, the
+-- poll thread, and this file's own playerDropped cleanup down with it, over
+-- one operator typo. Now CLAMP AND WARN: substituting an empty table lets
+-- every per-field resolver below fall back to its own already-established
+-- default.
+t.test('Config.K9DownDispatch not a table (nil/false in production) while the flag is true no longer fails to load -- clamps every field to its shipped fallback, warns loudly, and the poll thread still runs', function()
     -- `tuning = false` here (never nil) is deliberate: this fixture helper
     -- fills in a valid default tuning table whenever `opts.tuning` is nil
     -- AND the feature is enabled, precisely so every OTHER test in this
     -- file gets a sane default without repeating it -- `false` is the way
     -- to reach this specific "the table itself is missing/wrong-typed"
     -- case instead (any non-table value, including a real nil in
-    -- production, hits the exact same `type(tuning) == 'table'` assert).
-    local ok, err = pcall(newIntegrationsFixture, { featureEnabled = true, tuning = false })
-    t.isFalse(ok)
-    t.contains(err, 'Config.K9DownDispatch must be a table')
+    -- production, hits the exact same `type(tuning) == 'table'` check).
+    local f = newIntegrationsFixture({ featureEnabled = true, tuning = false })
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.K9DownDispatch', 1, true) and line:find('missing', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must warn that the whole settings table is missing')
+    t.equals(f.env.Config.K9DownDispatch.healthThreshold, 100)
+    t.equals(f.env.Config.K9DownDispatch.minDurationMs, 3000)
+    t.equals(f.env.Config.K9DownDispatch.pollIntervalMs, 2000)
+    t.equals(f.createThreadCallCount(), 1, 'the maintenance poll thread must still start')
+
+    -- Prove it keeps working end-to-end, not just "the table now has keys":
+    -- a real K9 crossing the resolved healthThreshold, held for the
+    -- resolved minDurationMs across the resolved pollIntervalMs cadence,
+    -- still fires the outbound event. Mirrors the REGRESSION tests below's
+    -- own prime-then-poll shape exactly.
+    registerQualifyingK9(f, 1, 101)
+    f.setHealth(101, 200)
+    f.tick() -- prime
+    f.setHealth(101, 0)
+    for _ = 1, 3 do
+        f.advance(2000) -- the resolved fallback pollIntervalMs
+        f.tick()
+    end
+    t.equals(#f.outboundEvents, 1, 'the feature must still function end-to-end on the substituted fallbacks')
 end)
 
 -- ------------------------------------------------------------------
@@ -750,6 +810,126 @@ t.test('playerDropped clears an in-progress episode -- a later reconnect must st
     f.advance(3000)
     f.tick()
     t.equals(#f.outboundEvents, 1, 'a real, full-length post-reconnect episode still fires')
+end)
+
+-- ----------------------------------------------------------------------
+-- 9. PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsK9DownDispatchPermittedForCitizenId. Mirrors this
+-- suite's own established fixture/test shape (see mainserver_spec.lua's
+-- identical section for BasicBarkSounds/LeashMechanics, and
+-- pursuitsprint_spec.lua for the full 5-case template).
+--
+-- No separate "cleanup/termination path still runs" case here: this
+-- feature has no ongoing per-player state of its own to strand -- a block
+-- suppresses one specific ANNOUNCEMENT, it never touches detection/episode
+-- tracking (K9DownState) for anyone, blocked or not. That is proven
+-- directly below (block still marks the episode fired, so a real,
+-- unrelated later episode for the SAME citizenid still gets its own fresh
+-- attempt once health recovers and drops again).
+-- ----------------------------------------------------------------------
+
+--- Advances the fixture through the exact same 3-tick (2000ms each) shape
+--- the file's own "fires k9Down exactly once" test above uses, after health
+--- has already been set below the resolved threshold.
+--- @param f table
+local function advanceThroughQualifyingEpisode(f)
+    f.advance(2000) f.tick()
+    f.advance(2000) f.tick()
+    f.advance(2000) f.tick()
+end
+
+t.test('PER-PERSON: block.K9DownDispatch suppresses the announcement even though every detection condition is met', function()
+    local f = newIntegrationsFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.K9DownDispatch' and citizenid == 'CITIZEN_50' end,
+    })
+    registerQualifyingK9(f, 50, 5050)
+    f.setHealth(5050, 200)
+    f.tick() -- prime
+
+    f.setHealth(5050, 0)
+    advanceThroughQualifyingEpisode(f)
+    t.equals(#f.outboundEvents, 0, 'a blocked citizenid must never get the announcement, even while genuinely down')
+
+    -- Never retried for the REST of this same down episode either (the
+    -- episode is marked fired internally even though nothing was
+    -- announced) -- proven by ticking well past reFireCooldownMs with
+    -- health still at 0.
+    f.advance(30000)
+    f.tick()
+    t.equals(#f.outboundEvents, 0, 'a block must not turn into a retry-every-tick loop for the remainder of the same episode')
+end)
+
+t.test('PER-PERSON: not blocked and not listed in RequireGrant -- default ALLOW (step 4), matching config.lua\'s documented default', function()
+    local f = newIntegrationsFixture()
+    registerQualifyingK9(f, 51, 5151)
+    f.setHealth(5151, 200)
+    f.tick()
+    f.setHealth(5151, 0)
+    advanceThroughQualifyingEpisode(f)
+    t.equals(#f.outboundEvents, 1)
+end)
+
+t.test('PER-PERSON: RequireGrant.K9DownDispatch = true + no active feature.K9DownDispatch grant -- denied even though every detection condition is met', function()
+    local f = newIntegrationsFixture({ featureControl = { RequireGrant = { K9DownDispatch = true } } })
+    registerQualifyingK9(f, 52, 5252)
+    f.setHealth(5252, 200)
+    f.tick()
+    f.setHealth(5252, 0)
+    advanceThroughQualifyingEpisode(f)
+    t.equals(#f.outboundEvents, 0)
+end)
+
+t.test('PER-PERSON: RequireGrant.K9DownDispatch = true + an active feature.K9DownDispatch grant -- allowed', function()
+    local f = newIntegrationsFixture({
+        featureControl = { RequireGrant = { K9DownDispatch = true } },
+        hasPermissionFn = function(citizenid, key) return key == 'feature.K9DownDispatch' and citizenid == 'CITIZEN_53' end,
+    })
+    registerQualifyingK9(f, 53, 5353)
+    f.setHealth(5353, 200)
+    f.tick()
+    f.setHealth(5353, 0)
+    advanceThroughQualifyingEpisode(f)
+    t.equals(#f.outboundEvents, 1)
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local f = newIntegrationsFixture({
+        withHasPermission = false,
+        featureControl = { RequireGrant = { K9DownDispatch = true } },
+    })
+    registerQualifyingK9(f, 54, 5454)
+    f.setHealth(5454, 200)
+    f.tick()
+    f.setHealth(5454, 0)
+    local ok = pcall(advanceThroughQualifyingEpisode, f)
+    t.isTrue(ok, 'a missing HasPermission must never error the poll thread')
+    t.equals(#f.outboundEvents, 0, 'RequireGrant-listed + unresolvable grant machinery must deny, not silently allow')
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent + NOT listed in RequireGrant -- still allowed (step 2/3 both structurally unreachable, falls through to step 4)', function()
+    local f = newIntegrationsFixture({ withHasPermission = false })
+    registerQualifyingK9(f, 55, 5555)
+    f.setHealth(5555, 200)
+    f.tick()
+    f.setHealth(5555, 0)
+    advanceThroughQualifyingEpisode(f)
+    t.equals(#f.outboundEvents, 1)
+end)
+
+t.test('PER-PERSON: a block never affects a DIFFERENT, unrelated citizenid\'s own episode in the same poll pass', function()
+    local f = newIntegrationsFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.K9DownDispatch' and citizenid == 'CITIZEN_56' end,
+    })
+    registerQualifyingK9(f, 56, 5656) -- blocked
+    registerQualifyingK9(f, 57, 5757) -- not blocked
+    f.setHealth(5656, 200)
+    f.setHealth(5757, 200)
+    f.tick()
+    f.setHealth(5656, 0)
+    f.setHealth(5757, 0)
+    advanceThroughQualifyingEpisode(f)
+    t.equals(#f.outboundEvents, 1, 'exactly one announcement -- the unblocked citizenid -- even though both genuinely qualified')
+    t.equals(f.outboundEvents[1].args[1], 57)
 end)
 
 os.exit(t.summary())

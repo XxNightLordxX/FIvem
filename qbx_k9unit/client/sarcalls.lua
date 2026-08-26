@@ -308,19 +308,50 @@ local tuning = Config.SARCalls or {}
 -- CLIENT-SIDE CONFIG-SAFETY GUARD -- scoped to ONLY the three fields THIS
 -- file reads (missingPersonPedModel/lostPropertyPropModel/revealDurationMs
 -- -- server/sarcalls.lua's own guard covers every other Config.SARCalls
--- field, which THAT file reads and this one never touches). Same
--- "validate what you consume, at load time, fail loud once the operator
--- has opted in" posture as server/sarcalls.lua's own guard.
+-- field, which THAT file reads and this one never touches).
+--
+-- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
+-- header ADDENDUM: "does an operator's config.lua edit alone... reach this
+-- value? If yes it must be clamped and warned about, never asserted and
+-- aborted"). This used to be three hard `assert`s here, correctly
+-- diagnosing a real risk but with the wrong remedy: an uncaught error
+-- thrown from THIS FILE's own top-level chunk (this guard sits directly
+-- after the feature-flag early-return above, with no deferring
+-- onResourceStart/RegisterNetEvent wrapper around it) aborts
+-- client/sarcalls.lua's load from that line onward, silently un-registering
+-- every SAR-call net event/callback handler this file defines below --
+-- the entire client half of the feature, over one operator typo in a
+-- cosmetic model name or a duration. Substituting a safe built-in default
+-- and printing a loud, exact-key warning keeps this file's own registrations
+-- intact while the config gets fixed.
 -- ======================================================================
-assert(type(tuning.missingPersonPedModel) == 'string' and tuning.missingPersonPedModel ~= '',
-    '[qbx_k9unit] Config.SARCalls.missingPersonPedModel must be a non-empty string -- the ped model this file ' ..
-    'spawns (non-networked, cosmetic only) for a "person"-type call\'s reveal.')
-assert(type(tuning.lostPropertyPropModel) == 'string' and tuning.lostPropertyPropModel ~= '',
-    '[qbx_k9unit] Config.SARCalls.lostPropertyPropModel must be a non-empty string -- the prop model this file ' ..
-    'spawns (non-networked, cosmetic only) for a "property"-type call\'s reveal.')
-assert(type(tuning.revealDurationMs) == 'number' and tuning.revealDurationMs > 0,
-    '[qbx_k9unit] Config.SARCalls.revealDurationMs must be a positive number -- how long the cosmetic reveal ' ..
-    'entity is kept alive before this file deletes it itself.')
+if type(tuning.missingPersonPedModel) ~= 'string' or tuning.missingPersonPedModel == '' then
+    print(
+        ("[qbx_k9unit] Config.SARCalls.missingPersonPedModel must be a non-empty string (found: %s). Using the " ..
+         "built-in fallback of 'mp_m_freemode_01' instead so this feature keeps working while the config is " ..
+         "fixed -- find Config.SARCalls.missingPersonPedModel in config.lua and set it to a real ped model name."
+        ):format(tostring(tuning.missingPersonPedModel))
+    )
+    tuning.missingPersonPedModel = 'mp_m_freemode_01'
+end
+if type(tuning.lostPropertyPropModel) ~= 'string' or tuning.lostPropertyPropModel == '' then
+    print(
+        ("[qbx_k9unit] Config.SARCalls.lostPropertyPropModel must be a non-empty string (found: %s). Using the " ..
+         "built-in fallback of 'prop_tennis_ball' instead so this feature keeps working while the config is " ..
+         "fixed -- find Config.SARCalls.lostPropertyPropModel in config.lua and set it to a real prop model name."
+        ):format(tostring(tuning.lostPropertyPropModel))
+    )
+    tuning.lostPropertyPropModel = 'prop_tennis_ball'
+end
+if type(tuning.revealDurationMs) ~= 'number' or tuning.revealDurationMs ~= tuning.revealDurationMs or tuning.revealDurationMs <= 0 then
+    print(
+        ('[qbx_k9unit] Config.SARCalls.revealDurationMs must be a positive number (found: %s). Using the ' ..
+         'built-in fallback of 15000ms instead so this feature keeps working while the config is fixed -- find ' ..
+         'Config.SARCalls.revealDurationMs in config.lua and set it to a positive number of milliseconds.'
+        ):format(tostring(tuning.revealDurationMs))
+    )
+    tuning.revealDurationMs = 15000
+end
 
 -- Mirrors client/kennel.lua's own REQUEST_MODEL_TIMEOUT_MS value exactly
 -- (5000ms) -- not extracted into a shared global (that file's own model-load

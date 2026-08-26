@@ -120,22 +120,72 @@
 ]]
 
 -- ======================================================================
--- CONFIG-SAFETY GUARD — run unconditionally at load time, same convention
--- server/certifications.lua and server/permissions.lua already established
--- for their own authorization-adjacent configs. config.lua is a
--- shared_script, already fully loaded by the time any server_scripts file
--- (this one included) starts executing.
+-- CONFIG-SAFETY GUARD — run unconditionally at load time (NOT gated behind
+-- any Config.Features flag: applyPedModelOnCertify is its own internal
+-- on/off switch, and ApplyK9PedRole/ApplyK9AppearanceOnGrant/
+-- MaybeRevertK9Appearance are called from certification/permission grant
+-- paths that run regardless).
+--
+-- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
+-- header ADDENDUM: "does an operator's config.lua edit alone... reach this
+-- value? If yes it must be clamped and warned about, never asserted and
+-- aborted"). This used to be three hard `assert`s here -- each correctly
+-- diagnosing a real risk, but with the wrong remedy: an uncaught error
+-- thrown from THIS FILE's own top-level chunk (this guard runs
+-- unconditionally, with no deferring onResourceStart/RegisterNetEvent
+-- wrapper, and with no Config.Features gate to make it opt-in) aborts
+-- server/appearance.lua's load from that line onward -- taking every
+-- function this file defines (ApplyK9PedRole, ApplyK9AppearanceOnGrant,
+-- MaybeRevertK9Appearance, and everything else below) down with it, for the
+-- rest of that server's uptime, over one operator typo in a custom
+-- Config.Peds entry added to try a new breed. Other server_scripts files
+-- (server/certifications.lua, the tablet, permission grants) call into
+-- this file's functions unconditionally and would see them simply not
+-- exist, with nothing but one script-error line at boot to explain why.
 -- ======================================================================
-assert(type(Config.K9Appearance) == 'table',
-    '[qbx_k9unit] Config.K9Appearance must be a table -- ApplyK9PedRole/ApplyK9AppearanceOnGrant/' ..
-    'MaybeRevertK9Appearance all read its fields directly with no type guard of their own.')
-assert(type(Config.Peds) == 'table' and #Config.Peds > 0,
-    '[qbx_k9unit] Config.Peds must be a non-empty array -- ApplyK9PedRole validates every caller-supplied ' ..
-    'model name against it, and ApplyK9AppearanceOnGrant defaults to Config.Peds[1].model when no explicit ' ..
-    'model is given; an empty/malformed table means no K9 ped could ever be applied, silently.')
-for i, pedEntry in ipairs(Config.Peds) do
-    assert(type(pedEntry) == 'table' and type(pedEntry.model) == 'string' and pedEntry.model ~= '',
-        ('[qbx_k9unit] Config.Peds[%d].model must be a non-empty string.'):format(i))
+if type(Config.K9Appearance) ~= 'table' then
+    print(
+        '[qbx_k9unit] WARNING: Config.K9Appearance is missing or not a table -- using a built-in default ' ..
+        '(applyPedModelOnCertify=false, i.e. this resource will detect K9 models but never assign one, same as ' ..
+        'before this feature existed) so certification/permission grants keep working while the config is ' ..
+        'fixed. Add the Config.K9Appearance settings table back to config.lua.'
+    )
+    Config.K9Appearance = { applyPedModelOnCertify = false }
+end
+
+if type(Config.Peds) ~= 'table' or #Config.Peds == 0 then
+    print(
+        '[qbx_k9unit] WARNING: Config.Peds must be a non-empty array (found: ' .. tostring(Config.Peds) .. ') -- ' ..
+        "ApplyK9PedRole validates every caller-supplied model name against it, and ApplyK9AppearanceOnGrant " ..
+        "defaults to Config.Peds[1].model when no explicit model is given. Using a single built-in fallback " ..
+        "entry ('a_c_shepherd') instead of refusing every K9 ped assignment on this server -- add your real " ..
+        'roster back to Config.Peds in config.lua.'
+    )
+    Config.Peds = { { model = 'a_c_shepherd', speedMultiplier = 1.00 } }
+end
+
+-- Individual malformed entries are dropped (not fatal) rather than
+-- rejecting the whole roster over one bad line -- same "one bad entry
+-- should not disable every other, valid entry" reasoning as
+-- Config.K9Specializations/Config.Departments elsewhere in this resource.
+do
+    local validPeds = {}
+    for i, pedEntry in ipairs(Config.Peds) do
+        if type(pedEntry) == 'table' and type(pedEntry.model) == 'string' and pedEntry.model ~= '' then
+            validPeds[#validPeds + 1] = pedEntry
+        else
+            print(('[qbx_k9unit] WARNING: Config.Peds[%d].model must be a non-empty string -- dropping this ' ..
+                'entry and continuing with the rest of the roster.'):format(i))
+        end
+    end
+    if #validPeds == 0 then
+        print(
+            '[qbx_k9unit] WARNING: every entry in Config.Peds was malformed -- using a single built-in ' ..
+            "fallback entry ('a_c_shepherd') instead of leaving the roster empty."
+        )
+        validPeds = { { model = 'a_c_shepherd', speedMultiplier = 1.00 } }
+    end
+    Config.Peds = validPeds
 end
 
 --- @param name any

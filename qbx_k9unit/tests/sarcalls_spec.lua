@@ -1217,7 +1217,17 @@ local function newClientFixture(opts)
         end
     end
 
+    -- CLAMP-AND-WARN CAPTURE -- proves the guard actually warns (not just
+    -- "doesn't crash") without spamming real stdout during the test run.
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
     local overrides = {
+        print = printStub,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
         K9Sit = K9Sit,
@@ -1262,6 +1272,7 @@ local function newClientFixture(opts)
 
     return {
         env = env,
+        printLog = printLog,
         stepOne = runner.step,
         notifyCalls = clientNotifyCalls,
         triggerServerEventCalls = triggerServerEventCalls,
@@ -1313,18 +1324,34 @@ local function newClientFixture(opts)
     }
 end
 
-t.test('CONFIG-SAFETY GUARD (client): a missing missingPersonPedModel errors at load time, naming missingPersonPedModel', function()
-    local ok, err = pcall(newClientFixture, { badConfig = { lostPropertyPropModel = 'prop_tennis_ball', revealDurationMs = 1000 } })
-    t.isFalse(ok)
-    t.contains(tostring(err), 'missingPersonPedModel')
+-- REGRESSION (this pass): these two tests used to assert the OPPOSITE --
+-- that a missing/invalid field on the CLIENT side FAILED THE ENTIRE FILE'S
+-- LOAD via a hard `assert` sitting directly after client/sarcalls.lua's
+-- feature-flag early-return, with no deferring onResourceStart/
+-- RegisterNetEvent wrapper. See server/cooldowns.lua's header ADDENDUM:
+-- an uncaught error there would silently un-register every SAR-call net
+-- event/callback handler this file defines, over one operator typo in a
+-- cosmetic model name or a duration. Now CLAMP AND WARN.
+t.test('CLAMP AND WARN (client): a missing missingPersonPedModel no longer errors at load time -- warns loudly and falls back to the shipped default', function()
+    local f = newClientFixture({ badConfig = { lostPropertyPropModel = 'prop_tennis_ball', revealDurationMs = 1000 } })
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.SARCalls.missingPersonPedModel', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact key')
+    t.equals(f.env.Config.SARCalls.missingPersonPedModel, 'mp_m_freemode_01')
 end)
 
-t.test('CONFIG-SAFETY GUARD (client): a non-positive revealDurationMs errors at load time, naming revealDurationMs', function()
-    local ok, err = pcall(newClientFixture, { badConfig = {
+t.test('CLAMP AND WARN (client): a non-positive revealDurationMs no longer errors at load time -- warns loudly and falls back to the shipped 15000ms default', function()
+    local f = newClientFixture({ badConfig = {
         missingPersonPedModel = 'mp_m_freemode_01', lostPropertyPropModel = 'prop_tennis_ball', revealDurationMs = 0,
     } })
-    t.isFalse(ok)
-    t.contains(tostring(err), 'revealDurationMs')
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.SARCalls.revealDurationMs', 1, true) and line:find('found: 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact key and the value found')
+    t.equals(f.env.Config.SARCalls.revealDurationMs, 15000)
 end)
 
 t.test('RequestStartSarCall: CanShowK9UI() false denies access locally and never calls the server callback', function()

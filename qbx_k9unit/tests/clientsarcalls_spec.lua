@@ -200,7 +200,17 @@ local function newSarCallsFixture(opts)
     local function CreateThread(fn) revealThreads[#revealThreads + 1] = fn end
     local function Wait(_ms) end
 
+    -- CLAMP-AND-WARN CAPTURE -- proves the guard actually warns (not just
+    -- "doesn't crash") without spamming real stdout during the test run.
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
     local overrides = {
+        print = printStub,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
         K9Sit = (opts.provideK9Sit ~= false) and K9Sit or nil,
@@ -247,11 +257,12 @@ local function newSarCallsFixture(opts)
 
     local ok, err = pcall(Sandbox.loadInto, '../client/sarcalls.lua', env)
     if opts.expectLoadError then
-        return { loadOk = ok, loadError = err }
+        return { loadOk = ok, loadError = err, printLog = printLog }
     end
     assert(ok, 'client/sarcalls.lua failed to load: ' .. tostring(err))
 
     return {
+        printLog = printLog,
         env = env,
         notifyCalls = notifyCalls,
         serverEvents = serverEvents,
@@ -323,26 +334,58 @@ t.test('Config.Features.SARCalls = true: registers the k9sarcall command and bot
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION B -- config-safety asserts (the THREE fields this file itself
--- reads -- input edge cases an operator could get wrong).
+-- SECTION B -- config-safety CLAMP AND WARN (the THREE fields this file
+-- itself reads -- input edge cases an operator could get wrong).
+--
+-- REGRESSION (this pass): these three tests used to assert the OPPOSITE --
+-- that a missing/invalid field FAILED THE ENTIRE FILE'S LOAD via a hard
+-- `assert` sitting directly after the feature-flag early-return, with no
+-- deferring onResourceStart/RegisterNetEvent wrapper. See
+-- server/cooldowns.lua's header ADDENDUM for the general case this
+-- responds to: an uncaught error thrown there would silently un-register
+-- every SAR-call net event/callback handler this file defines, over one
+-- operator typo in a cosmetic model name or a duration. Now CLAMP AND WARN.
 -- ----------------------------------------------------------------------
 
-t.test('missingPersonPedModel missing/empty: load fails loudly', function()
-    local f = newSarCallsFixture({ expectLoadError = true, sarCallsConfig = { missingPersonPedModel = '', lostPropertyPropModel = 'x', revealDurationMs = 1000 } })
-    t.isFalse(f.loadOk)
-    t.contains(tostring(f.loadError), 'missingPersonPedModel')
+t.test('CLAMP AND WARN: missingPersonPedModel missing/empty no longer fails to load -- warns loudly and falls back to the shipped default', function()
+    local f = newSarCallsFixture({ sarCallsConfig = { missingPersonPedModel = '', lostPropertyPropModel = 'x', revealDurationMs = 1000 } })
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.SARCalls.missingPersonPedModel', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact key')
+    t.equals(f.env.Config.SARCalls.missingPersonPedModel, 'mp_m_freemode_01')
+    t.equals(f.commandCount(), 1, 'the k9sarcall command must still register')
 end)
 
-t.test('lostPropertyPropModel missing/empty: load fails loudly', function()
-    local f = newSarCallsFixture({ expectLoadError = true, sarCallsConfig = { missingPersonPedModel = 'x', lostPropertyPropModel = '', revealDurationMs = 1000 } })
-    t.isFalse(f.loadOk)
-    t.contains(tostring(f.loadError), 'lostPropertyPropModel')
+t.test('CLAMP AND WARN: lostPropertyPropModel missing/empty no longer fails to load -- warns loudly and falls back to the shipped default', function()
+    local f = newSarCallsFixture({ sarCallsConfig = { missingPersonPedModel = 'x', lostPropertyPropModel = '', revealDurationMs = 1000 } })
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.SARCalls.lostPropertyPropModel', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact key')
+    t.equals(f.env.Config.SARCalls.lostPropertyPropModel, 'prop_tennis_ball')
+    t.equals(f.commandCount(), 1, 'the k9sarcall command must still register')
 end)
 
-t.test('revealDurationMs non-positive: load fails loudly', function()
-    local f = newSarCallsFixture({ expectLoadError = true, sarCallsConfig = { missingPersonPedModel = 'x', lostPropertyPropModel = 'y', revealDurationMs = 0 } })
-    t.isFalse(f.loadOk)
-    t.contains(tostring(f.loadError), 'revealDurationMs')
+t.test('CLAMP AND WARN: revealDurationMs non-positive no longer fails to load -- warns loudly and falls back to the shipped 15000ms default', function()
+    local f = newSarCallsFixture({ sarCallsConfig = { missingPersonPedModel = 'x', lostPropertyPropModel = 'y', revealDurationMs = 0 } })
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.SARCalls.revealDurationMs', 1, true) and line:find('found: 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact key and the value found')
+    t.equals(f.env.Config.SARCalls.revealDurationMs, 15000)
+    t.equals(f.commandCount(), 1, 'the k9sarcall command must still register')
+end)
+
+t.test('CLAMP AND WARN: a fully valid Config.SARCalls passes through completely silently', function()
+    local f = newSarCallsFixture({
+        sarCallsConfig = { missingPersonPedModel = 'a_m_m_hobo_01', lostPropertyPropModel = 'prop_backpack_01', revealDurationMs = 20000 },
+    })
+    t.equals(#f.printLog, 0, 'a fully valid config must never print anything')
+    t.equals(f.env.Config.SARCalls.revealDurationMs, 20000)
 end)
 
 -- ----------------------------------------------------------------------
