@@ -100,6 +100,22 @@
     (read that section in full -- this fix reuses its exact reasoning and
     shape, applied to this file's one flag).
 
+    CLOSED, BOTH HALVES (coder-backend, restart/reconnect audit follow-up):
+    THIS FILE's own half was already correct and already covered by
+    tests/clientprogression_spec.lua's `.live = false` assertions (nothing
+    changed here). The SERVER half this section used to describe as
+    "documented here, not applied in this file" is now applied, exactly as
+    specified below (kept verbatim as the historical record of the fix,
+    not rewritten as an "already done" summary, since the two code blocks
+    below are byte-for-byte what actually shipped in
+    server/progression.lua's PushTierSnapshot/RefreshXPProgressionLiveStateForAllOnline
+    and server/runtimecontrol.lua's ApplyFeatureOverride -- see those two
+    files for the real, current source; re-verify against them directly
+    rather than trusting this comment if the two ever appear to disagree).
+    tests/runtimecontrol_spec.lua and tests/progression_spec.lua both cover
+    the server half end to end (an XPProgression toggle now reaches an
+    already-online K9 within the same tick, no reconnect/restart needed).
+
     THE TRAP: the top-of-file gate above reads Config.Features.XPProgression
     exactly ONCE, at THIS CLIENT's own resource start -- this client's own
     static copy of config.lua, never updated afterward. server/runtimecontrol.lua

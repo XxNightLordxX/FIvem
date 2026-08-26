@@ -1071,7 +1071,35 @@ local function newGap1Fixture()
     end
 
     local function GetCurrentResourceName3() return 'qbx_k9unit' end
-    local function GetPlayers3() return {} end
+
+    -- citizenid -> { PlayerData = { citizenid, source } } -- present only
+    -- for a citizenid this test explicitly marks online, mirroring every
+    -- other fixture in this file. Declared HERE (moved up from its
+    -- original spot further below, unchanged in shape) so GetPlayers3
+    -- immediately below can close over it -- a `local` must be declared
+    -- before a function that captures it as an upvalue, or that function
+    -- would instead silently resolve to an unrelated global of the same
+    -- name.
+    local onlineByCitizenId3 = {}
+
+    -- UNBOUNDED-TRAP FIX (restart/reconnect audit follow-up, this pass):
+    -- now reflects `onlineByCitizenId3` DYNAMICALLY (an array of STRING
+    -- source ids, matching real GetPlayers()'s own return shape and
+    -- server/progression.lua's own `tonumber(playerIdStr)` read of it) --
+    -- used to be a fixed `return {}` because nothing in this fixture ever
+    -- called GetPlayers() before RefreshXPProgressionLiveStateForAllOnline
+    -- existed. Harmless for every PRE-EXISTING test below: at boot time
+    -- (when this file's own onResourceStart backfill loop is the only
+    -- caller), `onlineByCitizenId3` is always still empty (no test calls
+    -- markOnline until AFTER newGap1Fixture() has already returned), so
+    -- this returns `{}` at that point exactly as before.
+    local function GetPlayers3()
+        local ids = {}
+        for _, p in pairs(onlineByCitizenId3) do
+            ids[#ids + 1] = tostring(p.PlayerData.source)
+        end
+        return ids
+    end
     local function TriggerEvent3(_eventName, ...) end
 
     local capturedClientEvents3 = {}
@@ -1107,10 +1135,6 @@ local function newGap1Fixture()
     local callbacks3 = {}
     local lib3 = { callback = { register = function(name, handler) callbacks3[name] = handler end } }
 
-    -- citizenid -> { PlayerData = { citizenid, source } } -- present only
-    -- for a citizenid this test explicitly marks online, mirroring every
-    -- other fixture in this file.
-    local onlineByCitizenId3 = {}
     local exportsStub3 = {
         qbx_core = {
             GetPlayerByCitizenId = function(_self, citizenid) return onlineByCitizenId3[citizenid] end,
@@ -1287,6 +1311,117 @@ t.test('GAP 1: without server/k9profiles.lua loaded at all, GetXPTierMedkitCoold
     capturedTriggerEvents = {}
     AwardXP('cid-no-k9profiles-b', 'exact100') -- crosses Recruit -> Trained
     t.equals(GetXPTier('cid-no-k9profiles-b').label, 'Trained', 'AwardXP/GetXPTier must keep working identically whether or not server/k9profiles.lua is present')
+end)
+
+-- ============================================================================
+-- UNBOUNDED-TRAP FIX (restart/reconnect audit follow-up, this pass) --
+-- client/progression.lua's own header names this bug and the exact server
+-- function needed to close it, verbatim: PushTierSnapshot must stop
+-- withholding the payload while Config.Features.XPProgression is off (it
+-- now tags every payload with `.live` instead), and a NEW resource-global,
+-- RefreshXPProgressionLiveStateForAllOnline, must push a fresh snapshot to
+-- every currently-connected citizenid the INSTANT that flag changes at
+-- runtime -- not merely on that citizenid's next tier crossing, reconnect,
+-- or a full resource restart. This section tests server/progression.lua's
+-- OWN half of that fix directly (calling env3.RefreshXPProgressionLiveStateForAllOnline()
+-- and flipping Config3.Features.XPProgression exactly the way
+-- server/runtimecontrol.lua's ApplyFeatureOverride does) -- the OTHER
+-- half, that ApplyFeatureOverride genuinely calls this function when an
+-- officer flips XPProgression via the real runtimeSetFeature/
+-- runtimeResetFeature callbacks, is proved end to end in
+-- tests/runtimecontrol_spec.lua's own "UNBOUNDED-TRAP FIX" section
+-- (loading server/runtimecontrol.lua AND server/progression.lua together)
+-- -- the two together are what make this fixture's own use of newGap1Fixture
+-- (which never loads server/runtimecontrol.lua at all) an honest, narrow
+-- unit-level check of this file's own contribution, not a claim that the
+-- wiring itself is proved here.
+-- ============================================================================
+
+t.test('UNBOUNDED-TRAP FIX: PushTierSnapshot now ALWAYS sends (never withheld while the flag is off), tagging the payload with the CURRENT Config.Features.XPProgression value rather than staying silent', function()
+    local f = newGap1Fixture()
+    f.markOnline('TRAPCIT', 6001)
+
+    -- Flag ON: k9ProfileUpsert (which internally calls PushXPTierSnapshotIfOnline
+    -- -> PushTierSnapshot) must tag the payload `.live = true`, explicitly,
+    -- not merely "absent" -- see PushTierSnapshot's own doc comment for why
+    -- this is a real boolean assignment, not a conditional field.
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](100, { citizenid = 'TRAPCIT', speedMultiplier = 2.0 })
+    t.isTrue(result.ok)
+
+    local pushedWhileOn = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 6001 then pushedWhileOn = evt end
+    end
+    t.isNotNil(pushedWhileOn, 'sanity: the pre-existing GAP-1 push must still fire while the flag is on')
+    t.equals(pushedWhileOn.payload.live, true, 'the payload must explicitly carry live=true while Config.Features.XPProgression is true')
+
+    -- Flag OFF: the SAME BuildEffectiveTierSnapshot/PushTierSnapshot chain,
+    -- triggered again via k9ProfileReset (any PushTierSnapshot call site
+    -- works identically -- this one is convenient since it needs no
+    -- cooldown dance), must NOT be withheld anymore -- this is the exact
+    -- gap client/progression.lua's own header names: PushTierSnapshot used
+    -- to `if not Config.Features.XPProgression then return end` before
+    -- ever calling TriggerClientEvent.
+    f.env.Config.Features.XPProgression = false
+    f.advance()
+    local resetResult = f.callbacks['qbx_k9unit:server:k9ProfileReset'](100, 'TRAPCIT')
+    t.isTrue(resetResult.ok, 'the override write/removal itself is NOT gated on XPProgression -- only the client push semantics are under test here')
+
+    local pushedWhileOff = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 6001 and evt.payload.live == false then pushedWhileOff = evt end
+    end
+    t.isNotNil(pushedWhileOff, 'THE FIX: a PushTierSnapshot call must still reach an online client even while the flag is off, now carrying live=false -- an unpatched PushTierSnapshot would have withheld this payload entirely')
+end)
+
+t.test('UNBOUNDED-TRAP FIX: RefreshXPProgressionLiveStateForAllOnline pushes a fresh live=false snapshot to EVERY currently-connected citizenid the instant the flag flips off -- the exact function client/progression.lua\'s own header names as the missing piece', function()
+    local f = newGap1Fixture()
+    t.equals(type(f.env.RefreshXPProgressionLiveStateForAllOnline), 'function', 'server/progression.lua must expose this as a resource-global (no `local`), per its own FILE-TO-FILE CONTRACT')
+
+    f.markOnline('TRAPCIT2A', 7001)
+    f.markOnline('TRAPCIT2B', 7002)
+    -- Deliberately never marked online -- must receive nothing, and must
+    -- not make this function throw.
+    -- (TRAPCIT2C stays offline)
+
+    f.env.Config.Features.XPProgression = false
+    f.env.RefreshXPProgressionLiveStateForAllOnline()
+
+    local seenTargets = {}
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' then
+            seenTargets[evt.target] = evt.payload
+        end
+    end
+    t.isNotNil(seenTargets[7001], 'the first already-online citizenid must receive a fresh snapshot immediately')
+    t.equals(seenTargets[7001].live, false)
+    t.isNotNil(seenTargets[7002], 'the second already-online citizenid must ALSO receive one -- every currently-connected K9, not just one')
+    t.equals(seenTargets[7002].live, false)
+end)
+
+t.test('UNBOUNDED-TRAP FIX: RefreshXPProgressionLiveStateForAllOnline also re-enables the buff live when the flag flips back ON -- symmetric, not a one-way kill switch', function()
+    local f = newGap1Fixture()
+    f.markOnline('TRAPCIT3', 8001)
+
+    f.env.Config.Features.XPProgression = false
+    f.env.RefreshXPProgressionLiveStateForAllOnline()
+    f.env.Config.Features.XPProgression = true
+    f.env.RefreshXPProgressionLiveStateForAllOnline()
+
+    local lastPush = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 8001 then lastPush = evt end
+    end
+    t.isNotNil(lastPush)
+    t.equals(lastPush.payload.live, true, 'the LAST push (after flipping back on) must carry live=true, re-arming client/progression.lua\'s own reset-guard for this citizenid')
+end)
+
+t.test('UNBOUNDED-TRAP FIX: RefreshXPProgressionLiveStateForAllOnline is a safe no-op when nobody is online -- never throws against an empty GetPlayers()', function()
+    local f = newGap1Fixture()
+    -- Deliberately no markOnline calls at all.
+    local ok, err = pcall(f.env.RefreshXPProgressionLiveStateForAllOnline)
+    t.isTrue(ok, 'must never throw: ' .. tostring(err))
+    t.equals(#f.capturedClientEvents, 0, 'nothing to push to -- no events at all')
 end)
 
 -- ============================================================================

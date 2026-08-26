@@ -908,6 +908,18 @@ globals = {
     -- in only one direction does not prevent the conflict, it just decides
     -- which mechanic has to be started second.
     "IsSearchInProgress",
+    -- server/progression.lua -- re-pushes every connected K9's XP-tier
+    -- snapshot, called by server/runtimecontrol.lua when high command
+    -- flips Config.Features.XPProgression from the tablet. That flag is
+    -- declared `tier = 'live'`, i.e. the resource promises a toggle that
+    -- needs no restart -- but the push used to hard-return while the flag
+    -- was off, so it could never send the "this is off now" payload the
+    -- client half was already written and tested to handle. An officer
+    -- switching XP progression off mid-shift left every K9 already online
+    -- holding their earned speed buff until that specific player
+    -- reconnected. Guarded at its one call site with the same
+    -- `type(fn) == 'function'` convention as every other cross-file global.
+    "RefreshXPProgressionLiveStateForAllOnline",
     -- server/combat.lua / server/kennel.lua -- READ-ONLY live headcount
     -- accessors for server/runtimecontrol.lua's own "ACTIVE-USAGE
     -- CONFIRMATION FEATURES" gate (that file's own header section): "how

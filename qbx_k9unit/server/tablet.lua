@@ -939,11 +939,21 @@ local function ResolveEffectivePermissions(source, activePermSet, isHighCommandC
     return out
 end
 
---- "Console audience" gate for tabletRequestRoster / tabletRequestPersonSummary
---- -- per html/tablet.js's own contract: "a caller with at least one of
---- effectivePermissions non-empty, or isHighCommand." Re-verified here on
---- every call, from `source`'s own live job -- never trusts a client's
---- cached copy of viewer.isHighCommand/effectivePermissions.
+--- "Console audience" gate for tabletRequestRoster specifically (the FULL
+--- browse/search-by-name/department listing) -- per html/tablet.js's own
+--- contract: "a caller with at least one of effectivePermissions non-empty,
+--- or isHighCommand." Re-verified here on every call, from `source`'s own
+--- live job -- never trusts a client's cached copy of
+--- viewer.isHighCommand/effectivePermissions.
+---
+--- As of this pass, tabletRequestPersonSummary no longer calls this
+--- function directly -- see CallerHasPersonAccess() immediately below,
+--- which wraps this one and additionally admits a caller holding
+--- 'k9.certify' or 'k9.givexp' alone. This function's own narrowed
+--- contract (high command / 'k9.audit' only) is UNCHANGED and still the
+--- only thing that gates the roster; do not widen it to "fix" a
+--- person-lookup gap -- see CallerHasPersonAccess()'s own doc comment for
+--- why a separate, narrower function was the right shape instead.
 --- @param source number
 --- @param callerCitizenid string
 --- @param isHighCommandCaller boolean
@@ -973,6 +983,47 @@ local function CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCall
     local activePermSet = QueryActivePermissionSet(callerCitizenid)
     for _, key in ipairs(ResolveEffectivePermissions(source, activePermSet, false)) do
         if key == 'k9.audit' then return true end
+    end
+    return false
+end
+
+--- "Single-person audience" gate for tabletRequestPersonSummary specifically
+--- -- NOT tabletRequestRoster, which keeps CallerHasConsoleAccess() exactly
+--- as it was (workflow audit finding #1, 2026-08-26). The whole point of
+--- delegating 'k9.certify' or 'k9.givexp' to someone who is not high
+--- command and does not hold 'k9.audit' is letting them do THAT ONE thing
+--- without handing them the audit console -- html/tablet.js's own
+--- buildPersonScreen() already gates every actual control on this screen
+--- (Certify/Decertify, Give XP, the capability/feature/role sections) on
+--- the viewer's OWN effectivePermissions/isHighCommand, independently of
+--- how the screen was reached. Before this pass, a bare 'k9.certify' or
+--- 'k9.givexp' grant qualified for NONE of those controls because the
+--- screen itself was unreachable: both real entry points (the roster's
+--- "Manage" button and the "Open by exact citizen ID" box) live inside
+--- buildConsoleScreen(), which called tabletRequestRoster or
+--- tabletRequestPersonSummary, and both were gated on
+--- CallerHasConsoleAccess() -- so a capability that was real, granted, and
+--- exercised correctly the moment someone reached it was completely inert
+--- in practice. This function is what makes it reachable: it defers to
+--- CallerHasConsoleAccess() first (so nothing already permitted stops
+--- being permitted), then separately admits 'k9.certify'/'k9.givexp'
+--- holders for THIS callback alone. The roster itself is untouched -- a
+--- 'k9.certify'/'k9.givexp'-only caller still cannot browse or search by
+--- name/department, only open a SPECIFIC citizenid they already know (see
+--- html/tablet.js's buildConsoleScreen() narrowed rendering for that
+--- viewer state, and canOpenPersonRecord() for the client-side mirror of
+--- this exact gate -- convenience only, per THE SECURITY RULE, this is the
+--- real enforcement).
+--- @param source number
+--- @param callerCitizenid string
+--- @param isHighCommandCaller boolean
+--- @return boolean
+local function CallerHasPersonAccess(source, callerCitizenid, isHighCommandCaller)
+    if CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then return true end
+
+    local activePermSet = QueryActivePermissionSet(callerCitizenid)
+    for _, key in ipairs(ResolveEffectivePermissions(source, activePermSet, isHighCommandCaller)) do
+        if key == 'k9.certify' or key == 'k9.givexp' then return true end
     end
     return false
 end
@@ -1594,8 +1645,11 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
 end)
 
 -- ======================================================================
--- CALLBACK 3 -- tabletRequestPersonSummary. Console audience only. Works
--- for ANY citizenid, online or offline (every read below is DB-authoritative,
+-- CALLBACK 3 -- tabletRequestPersonSummary. Console audience, PLUS a
+-- 'k9.certify'/'k9.givexp' holder acting on one already-known citizenid --
+-- see CallerHasPersonAccess()'s own doc comment for why this callback
+-- specifically (not tabletRequestRoster) is the one widened. Works for ANY
+-- citizenid, online or offline (every read below is DB-authoritative,
 -- never the online-only in-memory caches other files keep).
 -- ======================================================================
 lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(source, targetCitizenId)
@@ -1610,7 +1664,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
     end
 
     local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
-    if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
+    if not CallerHasPersonAccess(source, callerCitizenid, isHighCommandCaller) then
         -- 'tablet.console_not_authorized' has landed in locales/en.json, so
         -- `message` is populated as this file's header always intended.
         -- SafeLocale() rather than a bare locale() call: this field is
@@ -2030,11 +2084,13 @@ end)
 -- department-change already call for an automatic teardown; this is that
 -- SAME code path, not a second one). `reason` is a plain, non-secret
 -- string this file owns ('admin_forced_from_tablet') -- client/partnership.lua's
--- own partnershipEnded handler already renders ANY unrecognized reason
--- string via a generic locale('partnership.ended_with_reason', reason)
--- template (that file's own doc comment: "a future caller... should not
--- need to also edit this file"), so this needed no client-side change to
--- produce a readable notification for whichever party is online.
+-- own partnershipEnded handler now has a DEDICATED sentence for exactly
+-- this tag (WORKFLOW CLARITY FIX, that file's own doc comment: the old
+-- generic-%s-template fallback used to show this raw tag verbatim --
+-- "Partnership ended (admin_forced_from_tablet)." -- to whichever party
+-- was online, which is not a readable notification). Add a matching
+-- branch there (and a locales/en.json key) if this file ever mints a
+-- second reason string of its own.
 -- ======================================================================
 lib.callback.register('qbx_k9unit:server:tabletForceEndPartnership', function(source, targetCitizenId)
     if type(targetCitizenId) ~= 'string' or targetCitizenId == '' or #targetCitizenId > MAX_CITIZENID_LENGTH then

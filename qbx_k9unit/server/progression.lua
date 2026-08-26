@@ -56,16 +56,28 @@
        has one live — GAP 1 closure, this pass; see PushTierSnapshot/
        BuildEffectiveTierSnapshot below for the exact composition contract.
        A citizenid with no override sees byte-identical values to before
-       this pass.)
+       this pass. UNBOUNDED-TRAP FIX (this pass): ALSO now always carries a
+       `.live` boolean — Config.Features.XPProgression's CURRENT value at
+       the moment this snapshot was built, never withheld the way the
+       payload itself used to be entirely while the flag was off. See
+       PushTierSnapshot's own doc comment below and
+       client/progression.lua's own header for the full "AN UNBOUNDED TRAP"
+       writeup this closes.)
        [client/progression.lua] — sent to the K9's own client ONLY
        (never broadcast), on: (a) PlayerLoaded / resource-start backfill
        (an authoritative snapshot so a returning K9 doesn't need to earn
-       fresh XP this session before their tier's effects apply again), and
-       (b) any real tier crossing caused by AwardXP below. client/progression.lua
-       does not need to distinguish (a) from (b) for correctness (it always
-       applies newTier.speedMultiplier to K9MoveRateModifiers.xpTier either
-       way) — it only distinguishes them for whether to show a "you leveled
-       up" notification (never on the initial post-login snapshot).
+       fresh XP this session before their tier's effects apply again),
+       (b) any real tier crossing caused by AwardXP below, and (c) NEW,
+       this pass: RefreshXPProgressionLiveStateForAllOnline (below), called
+       by server/runtimecontrol.lua's ApplyFeatureOverride the instant an
+       operator flips Config.Features.XPProgression at runtime, for every
+       currently-connected citizenid. client/progression.lua does not need
+       to distinguish (a)/(b)/(c) for correctness (it always applies
+       newTier.speedMultiplier to K9MoveRateModifiers.xpTier, then
+       force-resets to neutral if `.live` reads false, either way) — it
+       only distinguishes (a) from a real tier-up for whether to show a
+       "you leveled up" notification (never on the initial post-login
+       snapshot).
 
     Commands: none.
 
@@ -77,8 +89,11 @@
     never re-fires for an already-connected player).
     ======================================================================
 
-    FILE-TO-FILE CONTRACT — THIS FILE exposes three resource-global (no
-    `local`) functions:
+    FILE-TO-FILE CONTRACT — THIS FILE exposes four resource-global (no
+    `local`) functions (a fourth, RefreshXPProgressionLiveStateForAllOnline,
+    added this pass — see its own declaration below for the full contract;
+    not repeated here since server/runtimecontrol.lua is its only caller
+    and that call site's own comment already carries the "why"):
         AwardXP(citizenid, actionKey)
             actionKey is a string key into Config.XP.awards (e.g.
             'searchContrabandFound', 'trackSourceResolved',
@@ -1736,12 +1751,31 @@ local function BuildEffectiveTierSnapshot(citizenid, tier)
 end
 
 --- Pushes an authoritative tier snapshot to a specific, currently-connected
---- player's client. Gated on Config.Features.XPProgression — no client-side
---- consequence should ever apply while the feature is disabled, per
---- DEVELOPER_REFERENCE.md §3's "read the flag at the point of use" rule; the K9XP cache
---- itself is still warmed/kept in sync regardless of the flag (cheap, and
---- avoids losing real accumulated progress data just because the feature
---- is temporarily toggled off).
+--- player's client. UNBOUNDED-TRAP FIX (this pass, closing the gap
+--- client/progression.lua's own header names verbatim -- "AN UNBOUNDED
+--- TRAP" -- and its "THE EXACT SERVER-SIDE CHANGE THIS DEPENDS ON" section
+--- specifies exactly this edit): this function ALWAYS sends now -- it used
+--- to `if not Config.Features.XPProgression then return end` before ever
+--- calling TriggerClientEvent, a hard no-op that withheld the payload
+--- entirely while the flag was off, which is exactly why an
+--- already-connected client that had already applied a real
+--- speedMultiplier/scentRangeMultiplier had NOTHING left to tell it the
+--- flag had gone false -- no restart, no reconnect, and the resource's own
+--- "flag off means genuinely inert" invariant silently broken for that
+--- session. Fixed the same way server/wellbeing.lua's own "LIVE FEATURE
+--- FLAG PUSH" section fixed the identical shape of bug for its own five
+--- flags: the flag's CURRENT value now rides along on the SAME payload
+--- (`snapshot.live`) rather than being enforced by withholding the
+--- payload. `BuildEffectiveTierSnapshot` already returns a fresh
+--- `CopyTier`-derived table on every call (never a live reference into
+--- Config.XPTiers[n]), so writing `.live` onto it here cannot corrupt a
+--- shared tier entry for any other citizenid. client/progression.lua's own
+--- `LiveXPProgressionEnabled`/`CachedXPTierSpeedMultiplier` reset logic is
+--- what actually turns `.live = false` into "stop applying the buff" --
+--- this function's only job is to stop withholding that field. The K9XP
+--- cache itself is still warmed/kept in sync regardless of the flag
+--- (cheap, and avoids losing real accumulated progress data just because
+--- the feature is temporarily toggled off) -- unchanged by this pass.
 ---
 --- GAP 1 CLOSURE: `citizenid` is a NEW required parameter, this pass (every
 --- call site below updated in the SAME change) — needed so this function can
@@ -1749,14 +1783,15 @@ end
 --- individual override before the snapshot goes out. See
 --- BuildEffectiveTierSnapshot's own doc comment immediately above for the
 --- full composition contract; this function's own behavior is otherwise
---- completely unchanged (same flag gate, same event name, same target-only
---- delivery — never a broadcast).
+--- completely unchanged (same event name, same target-only delivery —
+--- never a broadcast).
 --- @param targetSrc number
 --- @param citizenid string
 --- @param tier table
 local function PushTierSnapshot(targetSrc, citizenid, tier)
-    if not Config.Features.XPProgression then return end
-    TriggerClientEvent('qbx_k9unit:client:xpTierChanged', targetSrc, BuildEffectiveTierSnapshot(citizenid, tier))
+    local snapshot = BuildEffectiveTierSnapshot(citizenid, tier)
+    snapshot.live = Config.Features.XPProgression == true
+    TriggerClientEvent('qbx_k9unit:client:xpTierChanged', targetSrc, snapshot)
 end
 
 --- GAP 1 CLOSURE, THE PIECE THAT MAKES THIS ACTUALLY LIVE (not merely
@@ -1775,15 +1810,19 @@ end
 --- fire next -- exactly the "set it to 3.0 and NOTHING HAPPENS" complaint
 --- this whole pass exists to close, just deferred rather than fixed.
 ---
---- No-op (never throws, never notifies) when: the feature flag is off
---- (PushTierSnapshot's own gate), `citizenid` cannot be resolved to a
---- CURRENTLY connected player (nothing to push to -- the next real
---- PlayerLoaded/backfill snapshot will already carry the override once they
---- do connect, since BuildEffectiveTierSnapshot consults the live override
---- on every call, not a cached copy), or `citizenid` is not a non-empty
---- string. Reuses PushTierSnapshot/BuildEffectiveTierSnapshot verbatim --
---- this is a thin "resolve online source, then push" wrapper, not a second
---- implementation of the composition contract.
+--- No-op (never throws, never notifies) when: `citizenid` cannot be
+--- resolved to a CURRENTLY connected player (nothing to push to -- the
+--- next real PlayerLoaded/backfill snapshot will already carry the
+--- override once they do connect, since BuildEffectiveTierSnapshot
+--- consults the live override on every call, not a cached copy), or
+--- `citizenid` is not a non-empty string. UPDATED (unbounded-trap fix,
+--- this pass): PushTierSnapshot no longer gates on the feature flag
+--- itself -- see that function's own doc comment -- so this now always
+--- reaches an online `citizenid` with a real `.live`-tagged snapshot
+--- regardless of the flag's current value, same as every other caller of
+--- PushTierSnapshot. Reuses PushTierSnapshot/BuildEffectiveTierSnapshot
+--- verbatim -- this is a thin "resolve online source, then push" wrapper,
+--- not a second implementation of the composition contract.
 --- @param citizenid string
 function PushXPTierSnapshotIfOnline(citizenid)
     if type(citizenid) ~= 'string' or citizenid == '' then return end
@@ -1791,6 +1830,51 @@ function PushXPTierSnapshotIfOnline(citizenid)
     local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
     if type(onlineSrc) ~= 'number' then return end
     PushTierSnapshot(onlineSrc, citizenid, ResolveTier(K9XP[citizenid] or 0))
+end
+
+--- UNBOUNDED-TRAP FIX (this pass) -- resource-global, THE piece that makes
+--- a runtime XPProgression toggle genuinely live for every ALREADY-ONLINE
+--- K9, not merely for the next citizenid who happens to cross a tier,
+--- reconnect, or wait for a restart. client/progression.lua's own header
+--- names this exact function verbatim in its "THE EXACT SERVER-SIDE
+--- CHANGE THIS DEPENDS ON" section -- this is that change, applied here as
+--- specified. Called from server/runtimecontrol.lua's ApplyFeatureOverride
+--- (the SINGLE mutation point for every path that changes
+--- Config.Features.XPProgression at runtime) immediately after the flag
+--- flips, behind a soft-dependency `type(...) == 'function'` guard --
+--- see that file's own call site for why the guard, even though this
+--- function is always defined in a real boot (same convention as
+--- server/medkit.lua's `type(RestoreInjury) == 'function'`).
+---
+--- Deliberately WITHOUT PlayerLoaded's own onResourceStart backfill loop's
+--- `if not Config.Features.XPProgression then return end` early exit --
+--- unlike that loop (which exists to avoid a wasted LoadXPForCitizenid
+--- query when the feature has never been enabled), this function's entire
+--- reason to exist is to run precisely at the moment that flag may have
+--- just gone false, so an early exit here would defeat its own purpose.
+--- Same iteration shape as that backfill loop (GetPlayers() +
+--- exports.qbx_core:GetPlayer(src)) -- not PushXPTierSnapshotIfOnline's
+--- own GetPlayerByCitizenId-per-call shape, since this needs every
+--- CURRENTLY connected source once, not a single citizenid lookup.
+---
+--- Uses the already-cached K9XP[citizenid] (falling back to 0 for a
+--- citizenid never warmed this session, identical to every other read
+--- site in this file) -- never a fresh database read -- so this stays
+--- cheap even on a server with hundreds of connected officers; this is an
+--- in-memory-only refresh of who gets told what, not a re-derivation of
+--- anyone's real XP total.
+--- @return nil
+function RefreshXPProgressionLiveStateForAllOnline()
+    for _, playerIdStr in ipairs(GetPlayers()) do
+        local src = tonumber(playerIdStr)
+        if src then
+            local Player = exports.qbx_core:GetPlayer(src)
+            if Player and Player.PlayerData and Player.PlayerData.citizenid then
+                local citizenid = Player.PlayerData.citizenid
+                PushTierSnapshot(src, citizenid, ResolveTier(K9XP[citizenid] or 0))
+            end
+        end
+    end
 end
 
 --- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this

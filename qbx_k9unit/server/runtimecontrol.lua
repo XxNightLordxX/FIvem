@@ -2058,11 +2058,15 @@ local CurrentTheme = {}
 for k, v in pairs(DEFAULT_THEME) do CurrentTheme[k] = v end
 
 -- Current in-memory override state -- ActiveOverrides['feature:HighCommand']
--- = { kind = 'feature', value = 'false', updatedBy = '...', updatedAt =
--- '...' }, mirroring k9_runtime_feature_overrides. Populated at boot,
--- kept in sync by SetFeature/SetTunable/ResetFeature/ResetTunable below --
--- ListFeatures/ListTunables read this rather than re-querying the DB on
--- every tablet open.
+-- = { kind = 'feature', value = 'false', updatedBy = '...', updatedByName =
+-- '...' | nil, updatedAt = '...' }, mirroring k9_runtime_feature_overrides
+-- (which has no `updatedByName` column of its own -- see this file's own
+-- "DISPLAY NAME RESOLUTION" header, further below, for why that field is
+-- session-only, resolved at write time, and nil for a row re-applied from
+-- the database at boot). Populated at boot, kept in sync by
+-- SetFeature/SetTunable/ResetFeature/ResetTunable below -- ListFeatures/
+-- ListTunables read this rather than re-querying the DB on every tablet
+-- open.
 local ActiveOverrides = {}
 
 -- ======================================================================
@@ -2125,6 +2129,115 @@ local function CanManageTabletTheme(source)
     return false, citizenid
 end
 
+-- ======================================================================
+-- DISPLAY NAME RESOLUTION (owner's request, verbatim, server/admin.lua:920:
+-- "Ensure a name actually pops up and not the player id in the tablet
+-- etc."). Applied here to the ONE surface on this file's own Runtime
+-- Control screen that was still missing it: the `overriddenBy` field
+-- runtimeListFeatures/runtimeListTunables return, which html/tablet.js's
+-- existing `runtime_overridden_by_at` template ("Overridden by {who} at
+-- {when}") already renders verbatim -- previously the raw citizenid that
+-- made the edit, e.g. "Overridden by Z1234567 at ...", on the one screen
+-- an owner is most likely to look at right after making a change.
+--
+-- A DELIBERATE, SELF-CONTAINED LOCAL DUPLICATE of server/tablet.lua's own
+-- ResolveDisplayName / server/admin.lua's own ResolveAuditDisplayName --
+-- same resolution order (online charinfo -> GetPlayerName native ->
+-- offline GetOfflinePlayer charinfo -> citizenid fallback, never blank),
+-- NOT a cross-file call to either `local` function, for the identical two
+-- reasons server/admin.lua's own header already gives for its own
+-- duplicate: (1) exporting either as a resource-global would need a new
+-- .luacheckrc `globals` entry this file cannot add for itself, and this
+-- resource's established convention for a small, self-contained helper is
+-- a per-file duplicate; (2) server/tablet.lua returns entirely at its own
+-- top (`if not Config.Features.CommandTablet then return end`) and
+-- Config.Features.RuntimeFeatureControl/CommandTablet are independent
+-- flags -- a server could run RuntimeFeatureControl = true with
+-- CommandTablet = false, so depending on a global that file only
+-- SOMETIMES defines would make this file's own name resolution silently
+-- break whenever CommandTablet happens to be off.
+--
+-- RESOLVED AND STORED AT WRITE TIME, NEVER AT READ TIME -- the load-
+-- bearing design decision this fix turns on, not a stylistic preference:
+-- ResolveDisplayName's OFFLINE branch below calls qbx_core's
+-- `GetOfflinePlayer`, a real database read (confirmed by reading that
+-- export before deciding this, per this task's own instruction) -- cheap
+-- once, but runtimeListFeatures/runtimeListTunables are polled every time
+-- an officer opens the tablet's Settings screen, and can iterate dozens of
+-- overridden rows in one call. Resolving at READ time would mean one
+-- blocking DB round trip PER OVERRIDDEN ROW, PER tablet open, for every
+-- citizenid who has since gone offline -- an N+1 query pattern this file's
+-- own SHARED HELPERS section exists to avoid elsewhere. Resolving at WRITE
+-- time instead (runtimeSetFeature/runtimeSetTunable below) is genuinely
+-- free: `source` at that exact moment IS the officer who just made the
+-- edit, by construction ALREADY connected (they are the one making this
+-- exact callback invocation) -- ResolveDisplayName's ONLINE branch always
+-- answers there, with no database access at all, and the resolved name is
+-- cached on ActiveOverrides[overrideKey].updatedByName as a point-in-time
+-- SNAPSHOT, exactly the way a name is supposed to work here (the officer
+-- who made a change is frequently offline again by the time someone else
+-- reads the row back -- a stale-but-correct snapshot of who they were
+-- when they made the change is the right answer, not a live re-lookup
+-- that would need the DB call this avoids).
+--
+-- `updatedBy` (the raw citizenid) is NEVER replaced or removed -- it
+-- remains the durable key this file's own boot-time re-application loop
+-- and every audit trail keys off; `updatedByName` is a purely additive,
+-- resolved-once snapshot sitting alongside it. A row re-applied from
+-- `k9_runtime_feature_overrides` at boot (this file's own onResourceStart
+-- handler, above) has no name to carry -- that table has no such column,
+-- and this fix does not add one (a schema change is out of scope for this
+-- pass) -- so `updatedByName` is explicitly nil for every such row until
+-- an officer edits that same key again THIS session. The read side below
+-- (`overriddenBy = override and (override.updatedByName or
+-- override.updatedBy) or nil`) falls back to the raw citizenid in exactly
+-- that case, and for any citizenid ResolveDisplayName could not put a real
+-- name to (ResolveDisplayName's own final fallback) -- never nil, never a
+-- blank string, matching this task's "never nil/blank" requirement.
+-- ======================================================================
+
+--- @param charinfo any
+--- @return string?
+local function FullNameFromCharinfo(charinfo)
+    if type(charinfo) == 'table' and type(charinfo.firstname) == 'string' and type(charinfo.lastname) == 'string' then
+        local full = (charinfo.firstname .. ' ' .. charinfo.lastname):match('^%s*(.-)%s*$')
+        if type(full) == 'string' and full ~= '' then return full end
+    end
+    return nil
+end
+
+--- @param citizenid string
+--- @return string -- ALWAYS a non-empty string; falls back to `citizenid` itself when no name resolves, never blank
+local function ResolveDisplayName(citizenid)
+    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if onlinePlayer and onlinePlayer.PlayerData then
+        local full = FullNameFromCharinfo(onlinePlayer.PlayerData.charinfo)
+        if full then return full end
+
+        local onlineSrc = onlinePlayer.PlayerData.source
+        if type(onlineSrc) == 'number' then
+            local ok, viaNative = pcall(GetPlayerName, onlineSrc)
+            if ok and type(viaNative) == 'string' and viaNative ~= '' then return viaNative end
+        end
+    end
+
+    -- OFFLINE -- ask qbx_core's own offline accessor before giving up. NOT
+    -- expected to actually be reached from either call site below (both
+    -- resolve `source`, which is always online at that exact moment) --
+    -- kept for parity with server/tablet.lua's/server/admin.lua's own
+    -- ResolveDisplayName, and as a safety net if a future caller in this
+    -- file ever resolves an OFFLINE citizenid instead.
+    local ok, offlinePlayer = pcall(function() return exports.qbx_core:GetOfflinePlayer(citizenid) end)
+    if ok and type(offlinePlayer) == 'table' and offlinePlayer.PlayerData then
+        local full = FullNameFromCharinfo(offlinePlayer.PlayerData.charinfo)
+        if full then return full end
+    end
+
+    -- Still nothing usable -- fall back to the citizenid itself. Never
+    -- blank, never a guess at an unverified schema.
+    return citizenid
+end
+
 --- Console log line for EVERY mutating call in this file -- matches
 --- server/admin.lua's/server/permissions.lua's own "%s ran %s(%s) -> %s"
 --- audit format exactly, per this task's own "AUDITED: who changed what,
@@ -2150,11 +2263,47 @@ end
 -- APPLYING AN OVERRIDE TO THE LIVE Config TABLE
 -- ======================================================================
 
+--- UNBOUNDED-TRAP FIX (restart/reconnect audit follow-up, this pass): this
+--- is the SINGLE mutation point for every path that changes
+--- Config.Features[name] at runtime -- the boot-time re-application loop
+--- above, runtimeSetFeature, and runtimeResetFeature all funnel through
+--- it -- which makes it the ONE correct place to hook a "tell already-
+--- connected clients this specific flag just changed" side effect, rather
+--- than duplicating the hook at every call site. XPProgression specifically
+--- needs this because client/progression.lua's own static
+--- Config.Features.XPProgression copy (fixed at that CLIENT's own resource
+--- start) never updates on its own when this flag changes here -- an
+--- already-online K9 with a real speedMultiplier/scentRangeMultiplier
+--- effect applied would otherwise stay stuck at that value until reconnect
+--- or a full resource restart even after high command switches the flag
+--- off, exactly the "unbounded trap" client/progression.lua's own header
+--- (search that file for "AN UNBOUNDED TRAP") documents finding. Soft-
+--- dependency `type(...) == 'function'` guard, matching this codebase's
+--- established convention for a cross-file call that is always real in a
+--- normal boot but must never hard-crash this function if
+--- server/progression.lua were ever absent/reordered (server/medkit.lua's
+--- `type(RestoreInjury) == 'function'`, client/progression.lua's own
+--- `type(RecomputeK9MoveRate) == 'function'`).
+---
+--- HandlerXPProgression (this file's own FEATURE_TIERS entry, also
+--- `tier = 'live'`) deliberately gets NO equivalent hook here, verified
+--- before writing this comment, not assumed: grep confirms no client/*.lua
+--- file references HandlerXPProgression/HandlerXP/handlerXpTier at all --
+--- there is no client-side tier cache, move-rate modifier, or any other
+--- persistent client-visible effect for this flag to leave stranded.
+--- Every server-side reader (AwardHandlerXP, IsHandlerXPProgressionPermittedForCitizenId,
+--- server/progression.lua's own onResourceStart backfill gate) already
+--- re-checks Config.Features.HandlerXPProgression fresh at its own point of
+--- use, so this flag was already genuinely live with nothing further
+--- needed.
 --- @param name string
 --- @param value boolean
 local function ApplyFeatureOverride(name, value)
     if type(Config.Features) == 'table' and Config.Features[name] ~= nil then
         Config.Features[name] = value
+        if name == 'XPProgression' and type(RefreshXPProgressionLiveStateForAllOnline) == 'function' then
+            RefreshXPProgressionLiveStateForAllOnline()
+        end
     end
 end
 
@@ -2280,6 +2429,16 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         if applied then
             appliedCount = appliedCount + 1
+            -- DISPLAY-NAME FIX (this pass): deliberately NO `updatedByName`
+            -- here -- k9_runtime_feature_overrides has no such column, and
+            -- this row is being re-applied from exactly that table, so
+            -- there is no resolved name to carry forward. runtimeListFeatures/
+            -- runtimeListTunables' own read below falls back to this row's
+            -- `updatedBy` (the raw citizenid) whenever `updatedByName` is
+            -- nil -- see this file's own "DISPLAY NAME RESOLUTION" header
+            -- above for the full contract. The next SetFeature/SetTunable
+            -- call for this SAME key (this session) fills `updatedByName`
+            -- in, same as any other override.
             ActiveOverrides[row.override_key] = { kind = row.kind, value = row.value, updatedBy = row.updated_by, updatedAt = row.updated_at }
         -- `handledAsSessionOnly` rows were already counted and printed
         -- above, with a message specific to WHY that row is intentionally
@@ -2351,7 +2510,21 @@ lib.callback.register('qbx_k9unit:server:runtimeListFeatures', function(source)
             tier = tier,
             note = GetFeatureNote(name),
             overridden = override ~= nil,
-            overriddenBy = override and override.updatedBy or nil,
+            -- DISPLAY-NAME FIX (this pass, owner's request verbatim --
+            -- server/admin.lua:920): `overriddenBy` now carries the
+            -- write-time-resolved display name when one was cached
+            -- (`updatedByName`, set by runtimeSetFeature below), falling
+            -- back to the raw citizenid (`updatedBy`) for a row re-applied
+            -- from k9_runtime_feature_overrides at boot (no name column
+            -- there) or for a citizenid ResolveDisplayName could not
+            -- resolve -- NEVER nil while `override` itself is non-nil, and
+            -- NEVER the literal string "nil". html/tablet.js's existing
+            -- `runtime_overridden_by_at` template already renders this
+            -- field verbatim as "who" -- no client-side change needed to
+            -- pick this up. See this file's own "DISPLAY NAME RESOLUTION"
+            -- header above for the full write-time-not-read-time
+            -- reasoning.
+            overriddenBy = override and (override.updatedByName or override.updatedBy) or nil,
             overriddenAt = override and override.updatedAt or nil,
             protected = tier == 'protected',
             -- CONTRACT FOR html/tablet.js (not edited by this pass -- see
@@ -2502,7 +2675,21 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
     end
 
     ApplyFeatureOverride(name, newValue)
-    ActiveOverrides[overrideKey] = { kind = 'feature', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
+    -- DISPLAY-NAME FIX (this pass): `source` is, by construction, the
+    -- CURRENTLY connected officer making this exact call -- ResolveDisplayName's
+    -- online branch always answers here, no database read involved. See
+    -- this file's own "DISPLAY NAME RESOLUTION" header (above
+    -- CanManageRuntimeControl) for why this is resolved HERE, at write
+    -- time, rather than deferred to runtimeListFeatures' read side.
+    local updatedByName = (type(citizenid) == 'string' and citizenid ~= '') and ResolveDisplayName(citizenid) or nil
+    -- `citizenid or 'unknown'` -- matches the SAME fallback the DB writes
+    -- above already use (Override_Upsert/OverrideAudit_Append), for the
+    -- rare defensive case where CanManageRuntimeControl authorized this
+    -- call (IsHighCommand) but could not resolve a citizenid at all --
+    -- keeps `overriddenBy`'s own "never nil, never blank" guarantee true
+    -- even here, rather than silently reintroducing a nil in this one edge
+    -- case.
+    ActiveOverrides[overrideKey] = { kind = 'feature', value = valueStr, updatedBy = citizenid or 'unknown', updatedByName = updatedByName, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
 
     LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s old=%s new=%s tier=%s sessionOnly=%s'):format(name, tostring(oldValue), valueStr, tier, tostring(sessionOnly)), 'ok')
 
@@ -2661,7 +2848,10 @@ lib.callback.register('qbx_k9unit:server:runtimeListTunables', function(source)
             max = entry.max,
             integer = entry.integer,
             overridden = override ~= nil,
-            overriddenBy = override and override.updatedBy or nil,
+            -- DISPLAY-NAME FIX (this pass) -- identical fallback chain to
+            -- runtimeListFeatures' own `overriddenBy` above; see this
+            -- file's "DISPLAY NAME RESOLUTION" header for the full "why".
+            overriddenBy = override and (override.updatedByName or override.updatedBy) or nil,
             overriddenAt = override and override.updatedAt or nil,
             -- PLAIN-ENGLISH DESCRIPTION (see this file's own "TUNABLE
             -- DESCRIPTIONS" header above GetTunableDescription): nil, never
@@ -2733,7 +2923,13 @@ lib.callback.register('qbx_k9unit:server:runtimeSetTunable', function(source, ke
     end
 
     ApplyTunableOverride(key, newValue)
-    ActiveOverrides[overrideKey] = { kind = 'tuning', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
+    -- DISPLAY-NAME FIX (this pass) -- identical reasoning to runtimeSetFeature
+    -- above: `source` is the currently-connected caller, so this resolves
+    -- for free off the online branch, no database read.
+    local updatedByName = (type(citizenid) == 'string' and citizenid ~= '') and ResolveDisplayName(citizenid) or nil
+    -- `citizenid or 'unknown'` -- see runtimeSetFeature's identical comment
+    -- above for why.
+    ActiveOverrides[overrideKey] = { kind = 'tuning', value = valueStr, updatedBy = citizenid or 'unknown', updatedByName = updatedByName, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
 
     LogAuditInvocation(source, 'runtimeSetTunable', ('key=%s old=%s new=%s'):format(key, tostring(oldValue), valueStr), 'ok')
     return { ok = true, appliedLive = true, restartRequired = false, value = newValue }

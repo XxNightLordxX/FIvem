@@ -154,7 +154,26 @@ local function boot(opts)
     end
 
     local playersBySource = opts.playersBySource or {}
-    local exportsStub = { qbx_core = { GetPlayer = function(_self, src) return playersBySource[src] end } }
+    -- DISPLAY-NAME FIX (this pass) -- GetPlayerByCitizenId/GetOfflinePlayer
+    -- stubs for server/runtimecontrol.lua's own ResolveDisplayName, same
+    -- shape tests/admin_spec.lua's own fixture already established for
+    -- server/admin.lua's ResolveAuditDisplayName. Both default to an EMPTY
+    -- table so every pre-existing test in this file (registerPlayer's own
+    -- 3-arg call shape, no charinfo) keeps observing ResolveDisplayName's
+    -- own documented "nothing resolves -> fall back to the citizenid
+    -- itself" path for GetPlayerName's own default stub below to then
+    -- override with a synthetic native name, exactly mirroring how a real
+    -- server with no charinfo set still resolves via GetPlayerName.
+    local playersByCitizenId = opts.playersByCitizenId or {}
+    local offlinePlayersByCitizenId = opts.offlinePlayersByCitizenId or {}
+    local getPlayerNameStub = opts.GetPlayerName or function(src) return 'SteamName#' .. tostring(src) end
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, src) return playersBySource[src] end,
+            GetPlayerByCitizenId = function(_self, citizenid) return playersByCitizenId[citizenid] end,
+            GetOfflinePlayer = function(_self, citizenid) return offlinePlayersByCitizenId[citizenid] end,
+        },
+    }
 
     local isHighCommand = opts.isHighCommand or function() return false end
     local hasPermission = opts.hasPermission -- nil unless a test wants the permission-grant escape hatch
@@ -202,6 +221,7 @@ local function boot(opts)
         IsHighCommand          = isHighCommand,
         HasPermission          = hasPermission,
         Config                 = config,
+        GetPlayerName          = getPlayerNameStub,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -238,15 +258,40 @@ local function boot(opts)
     return {
         env = env, world = world, callbacks = callbacks, printedLines = printedLines,
         broadcasts = broadcasts, playersBySource = playersBySource, fakeNow = fakeNow,
+        playersByCitizenId = playersByCitizenId, offlinePlayersByCitizenId = offlinePlayersByCitizenId,
     }
 end
 
+--- DISPLAY-NAME FIX (this pass): now ALSO registers into
+--- fixture.playersByCitizenId, keyed by citizenid, as the SAME table
+--- object as the by-source entry (source/citizenid always refer to the
+--- one connected player) -- this is what makes server/runtimecontrol.lua's
+--- own ResolveDisplayName resolvable for every existing test in this file
+--- that already calls registerPlayer, with NO other test change required.
+--- `charinfo` is an OPTIONAL 4th param (every pre-existing call site omits
+--- it, so ResolveDisplayName's own charinfo branch stays unresolved for
+--- those and falls through to the GetPlayerName native stub, exactly
+--- mirroring a real online player who has no charinfo set) -- only tests
+--- that specifically want a resolved-by-charinfo name pass it.
 --- @param fixture table
 --- @param source number
 --- @param citizenid string
-local function registerPlayer(fixture, source, citizenid)
-    fixture.playersBySource[source] = { PlayerData = { citizenid = citizenid } }
+--- @param charinfo table? -- { firstname, lastname }
+local function registerPlayer(fixture, source, citizenid, charinfo)
+    local playerObj = { PlayerData = { citizenid = citizenid, source = source, charinfo = charinfo } }
+    fixture.playersBySource[source] = playerObj
+    fixture.playersByCitizenId[citizenid] = playerObj
 end
+
+--- DISPLAY-NAME FIX (this pass): registers a citizenid that resolves ONLY
+--- through exports.qbx_core:GetOfflinePlayer, never GetPlayerByCitizenId --
+-- NOTE, deliberately no registerOfflinePlayer helper here (unlike
+-- tests/admin_spec.lua, which needs one): this file's name resolution
+-- happens at WRITE time, and the person writing an override is by
+-- definition the connected officer who just pressed the button -- the
+-- offline branch of ResolveDisplayName is unreachable from these call
+-- sites. The case that DOES matter, a row persisted before names were
+-- stored at all, is covered by the two-boot fallback test below.
 
 local HC_SOURCE = 100
 local NON_HC_SOURCE = 200
@@ -1672,6 +1717,312 @@ t.test('NON-NEGOTIABLE, THE SINGLE MOST IMPORTANT CHECK IN THIS FILE: no TUNABLE
     local attempt = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Departments.police.highCommandGrade', 0)
     t.isFalse(attempt.ok)
     t.equals(attempt.reason, 'invalid_key')
+end)
+
+-- ============================================================================
+-- UNBOUNDED-TRAP FIX (restart/reconnect audit follow-up, this pass) --
+-- THE END-TO-END PROOF, spanning both files this pass touches. Every test
+-- above this section loads server/runtimecontrol.lua ALONE, so none of it
+-- can prove the actual wiring: does flipping Config.Features.XPProgression
+-- via the REAL runtimeSetFeature/runtimeResetFeature callbacks actually
+-- reach server/progression.lua's RefreshXPProgressionLiveStateForAllOnline
+-- and, through it, an already-connected K9's own client? This section
+-- loads server/runtimecontrol.lua AND server/progression.lua TOGETHER, in
+-- fxmanifest.lua's own real server_scripts order (datastore -> cooldowns
+-- -> runtimecontrol -> events -> progression), against the REAL config.lua
+-- (same "no curated fixture Config could catch this" discipline as
+-- bootAgainstRealConfig() above), and answers exactly that question. See
+-- tests/progression_spec.lua's own "UNBOUNDED-TRAP FIX" section for the
+-- narrower, single-file half of this same fix (PushTierSnapshot/
+-- RefreshXPProgressionLiveStateForAllOnline in isolation).
+-- ============================================================================
+
+--- @return table fixture -- { env, callbacks, fakeNow, printedLines, capturedClientEvents, markOnline, markOffline }
+local function bootWithProgressionAgainstRealConfig()
+    local callbacks = {}
+    local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local fakeNow = { value = 0 }
+
+    local capturedClientEvents = {}
+    local function TriggerClientEventStub(eventName, target, payload)
+        capturedClientEvents[#capturedClientEvents + 1] = { eventName = eventName, target = target, payload = payload }
+    end
+
+    -- citizenid -> { PlayerData = { citizenid, source } } -- mirrors
+    -- tests/progression_spec.lua's own newGap1Fixture shape exactly, so
+    -- RefreshXPProgressionLiveStateForAllOnline's GetPlayers()-driven loop
+    -- (server/progression.lua) resolves a real connected source the same
+    -- way a real qbx_core install would.
+    local onlineByCitizenId = {}
+    local function GetPlayersStub()
+        local ids = {}
+        for _, p in pairs(onlineByCitizenId) do
+            ids[#ids + 1] = tostring(p.PlayerData.source)
+        end
+        return ids
+    end
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, src)
+                for _, p in pairs(onlineByCitizenId) do
+                    if p.PlayerData.source == src then return p end
+                end
+                return nil
+            end,
+            GetPlayerByCitizenId = function(_self, citizenid) return onlineByCitizenId[citizenid] end,
+        },
+    }
+
+    -- server/progression.lua needs CreateThread/Wait (AwardXP's own
+    -- non-blocking DB-write thread, and the mint-budget sweep thread) --
+    -- unused by this section's own tests (none call AwardXP), but required
+    -- for that file to even LOAD without erroring. One-shot bodies (no
+    -- Wait()) run to completion synchronously on CreateThread's own resume;
+    -- a recurring "while true do Wait() ... end" body yields at its first
+    -- Wait() and is simply left parked forever (never stepped) -- this
+    -- section has no need to drive it, identical posture to
+    -- tests/progression_spec.lua's own newGap1Fixture for the same thread.
+    local function CreateThreadStub(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('bootWithProgressionAgainstRealConfig: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+    end
+    local function WaitStub(_ms) coroutine.yield() end
+
+    local env = Sandbox.newEnv({
+        AddEventHandler        = AddEventHandlerStub,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        GetGameTimer           = function() return fakeNow.value end,
+        GetPlayers             = GetPlayersStub,
+        print                  = printStub,
+        lib                    = lib,
+        TriggerClientEvent     = TriggerClientEventStub,
+        TriggerEvent           = function() end,
+        CreateThread           = CreateThreadStub,
+        Wait                   = WaitStub,
+        exports                = exportsStub,
+        IsHighCommand          = function() return true end,
+    })
+
+    -- REAL config.lua -- see bootAgainstRealConfig()'s own header for why a
+    -- fixture Config table cannot substitute here (a curated stand-in could
+    -- never catch a real FEATURE_TIERS/Config.Features name mismatch).
+    Sandbox.loadInto('../config.lua', env)
+    env.Config.Database = env.Config.Database or {}
+    env.Config.Database.enabled = false -- route K9Store through its in-memory backend -- NO MYSQL STUB NEEDED, same as bootAgainstRealConfig()
+
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/runtimecontrol.lua', env)
+    Sandbox.loadInto('../server/events.lua', env)
+    Sandbox.loadInto('../server/progression.lua', env)
+    for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do handler('qbx_k9unit') end
+
+    return {
+        env = env, callbacks = callbacks, printedLines = printedLines, fakeNow = fakeNow,
+        capturedClientEvents = capturedClientEvents,
+        markOnline = function(citizenid, src) onlineByCitizenId[citizenid] = { PlayerData = { citizenid = citizenid, source = src } } end,
+        markOffline = function(citizenid) onlineByCitizenId[citizenid] = nil end,
+    }
+end
+
+t.test('UNBOUNDED-TRAP FIX, END TO END, THE ACTUAL REPORTED BUG: runtimeSetFeature(XPProgression, false) immediately pushes a live=false xpTierChanged snapshot to an ALREADY-CONNECTED K9 client -- same call, no reconnect/restart needed', function()
+    local f = bootWithProgressionAgainstRealConfig()
+    t.isTrue(f.env.Config.Features.XPProgression, 'sanity: config.lua ships this on by default')
+    f.markOnline('E2ECIT', 9001)
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'XPProgression', false)
+    t.isTrue(result.ok)
+    t.isTrue(result.appliedLive, 'XPProgression is tier=live')
+
+    local pushed = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 9001 then pushed = evt end
+    end
+    t.isNotNil(pushed, 'THE BUG: an already-online K9 must be told the flag changed IMMEDIATELY -- without this, the client keeps applying its last-known speedMultiplier/scentRangeMultiplier forever (until reconnect/restart), exactly the unbounded trap client/progression.lua\'s own header documents')
+    t.equals(pushed.payload.live, false, 'the pushed snapshot must carry live=false so client/progression.lua force-resets its cached move-rate modifier to neutral')
+end)
+
+t.test('UNBOUNDED-TRAP FIX: flipping XPProgression back ON immediately pushes live=true again, same tick -- symmetric, not a one-way kill switch', function()
+    local f = bootWithProgressionAgainstRealConfig()
+    f.markOnline('E2ECIT2', 9002)
+
+    f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'XPProgression', false)
+    f.fakeNow.value = f.fakeNow.value + 2000 -- clear RuntimeControlActionCooldown's 1000ms floor
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'XPProgression', true)
+    t.isTrue(result.ok)
+
+    local lastPush = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 9002 then lastPush = evt end
+    end
+    t.isNotNil(lastPush)
+    t.equals(lastPush.payload.live, true, 'the LAST push (after re-enabling) must carry live=true')
+end)
+
+t.test('UNBOUNDED-TRAP FIX: runtimeResetFeature(XPProgression) ALSO pushes the live update to already-online K9s -- ApplyFeatureOverride is the single mutation point for both SetFeature and ResetFeature', function()
+    local f = bootWithProgressionAgainstRealConfig()
+    f.markOnline('E2ECIT3', 9003)
+    -- config.lua's own shipped default for XPProgression is true, so a
+    -- reset-to-default is a true->true no-op for the VALUE -- flip it off
+    -- via Set first so the reset below is an observable false->true
+    -- transition, exactly like an operator undoing their own earlier change.
+    f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'XPProgression', false)
+    f.fakeNow.value = f.fakeNow.value + 2000
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'XPProgression')
+    t.isTrue(result.ok)
+    t.isTrue(result.value, 'config.lua\'s own default is true')
+
+    local lastPush = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 9003 then lastPush = evt end
+    end
+    t.isNotNil(lastPush, 'runtimeResetFeature must ALSO reach ApplyFeatureOverride\'s new hook, not just runtimeSetFeature')
+    t.equals(lastPush.payload.live, true)
+end)
+
+t.test('UNBOUNDED-TRAP FIX: toggling HandlerXPProgression fires NO client push at all -- verified, not assumed: no client-side tier cache exists for it, so this flag needs no equivalent hook', function()
+    local f = bootWithProgressionAgainstRealConfig()
+    f.markOnline('E2ECIT4', 9004)
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'HandlerXPProgression', false)
+    t.isTrue(result.ok)
+    for _, evt in ipairs(f.capturedClientEvents) do
+        t.isFalse(evt.eventName == 'qbx_k9unit:client:xpTierChanged', 'HandlerXPProgression must never trigger an xpTierChanged push -- ApplyFeatureOverride\'s new hook is scoped to name == "XPProgression" only')
+    end
+end)
+
+t.test('UNBOUNDED-TRAP FIX: an OFFLINE citizenid is simply skipped when the flag flips -- no push, no error', function()
+    local f = bootWithProgressionAgainstRealConfig()
+    -- Deliberately never marked online.
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'XPProgression', false)
+    t.isTrue(result.ok)
+    t.equals(#f.capturedClientEvents, 0, 'nobody online -- nothing to push, and no crash')
+end)
+
+-- ============================================================================
+-- DISPLAY NAME RESOLUTION (owner's request, verbatim, server/admin.lua:920)
+-- -- THE SETTINGS-SCREEN FIX, end to end against the real callbacks.
+-- ============================================================================
+
+t.test('DISPLAY-NAME FIX: runtimeListFeatures reports the ACTING OFFICER\'S NAME, not their citizenid, for a feature just overridden this session', function()
+    local f = boot()
+    registerPlayer(f, HC_SOURCE, 'NAMECIT1', { firstname = 'Alex', lastname = 'Handler' })
+    f.env.IsHighCommand = function(src) return src == HC_SOURCE end
+
+    local setResult = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BasicBarkSounds', false)
+    t.isTrue(setResult.ok)
+
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    t.isTrue(listed.ok)
+    local row = nil
+    for _, r in ipairs(listed.features) do
+        if r.name == 'BasicBarkSounds' then row = r end
+    end
+    t.isNotNil(row)
+    t.isTrue(row.overridden)
+    t.equals(row.overriddenBy, 'Alex Handler', 'THE BUG: this used to be the raw citizenid ("NAMECIT1") -- the owner\'s own instruction (server/admin.lua:920) is "ensure a name actually pops up and not the player id"')
+end)
+
+t.test('DISPLAY-NAME FIX: runtimeListTunables reports the acting officer\'s name too, for a tunable just overridden this session', function()
+    local f = boot()
+    registerPlayer(f, HC_SOURCE, 'NAMECIT2', { firstname = 'Sam', lastname = 'Ops' })
+    f.env.IsHighCommand = function(src) return src == HC_SOURCE end
+
+    local setResult = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'LeashMaxDistance', 12.0)
+    t.isTrue(setResult.ok)
+
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+    local row = nil
+    for _, r in ipairs(listed.tunables) do
+        if r.key == 'LeashMaxDistance' then row = r end
+    end
+    t.isNotNil(row)
+    t.equals(row.overriddenBy, 'Sam Ops')
+end)
+
+t.test('DISPLAY-NAME FIX: no charinfo at all -- falls back to the GetPlayerName native, exactly matching server/tablet.lua\'s/server/admin.lua\'s own ResolveDisplayName resolution order', function()
+    local f = boot()
+    registerPlayer(f, HC_SOURCE, 'NAMECIT3') -- no charinfo passed
+    f.env.IsHighCommand = function(src) return src == HC_SOURCE end
+    f.env.GetPlayerName = function(src) return 'NativeName#' .. tostring(src) end
+
+    f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'DoorInteraction', false)
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    local row = nil
+    for _, r in ipairs(listed.features) do
+        if r.name == 'DoorInteraction' then row = r end
+    end
+    t.isNotNil(row)
+    t.equals(row.overriddenBy, 'NativeName#' .. tostring(HC_SOURCE))
+end)
+
+t.test('DISPLAY-NAME FIX: a citizenid ResolveDisplayName cannot resolve at all (no charinfo, no native, e.g. an already-disconnected caller) falls back to the bare citizenid -- NEVER nil, NEVER blank', function()
+    local f = boot()
+    -- Deliberately do NOT call registerPlayer -- CanManageRuntimeControl's
+    -- IsHighCommand check succeeds regardless (env.IsHighCommand below), but
+    -- ResolveCitizenId(source) itself now returns nil (no player registered
+    -- for this source at all), so this exercises the "citizenid unknown
+    -- entirely" branch, distinct from "citizenid known but unresolvable".
+    f.env.IsHighCommand = function(src) return src == HC_SOURCE end
+
+    local setResult = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BasicBarkSounds', false)
+    t.isTrue(setResult.ok)
+
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    local row = nil
+    for _, r in ipairs(listed.features) do
+        if r.name == 'BasicBarkSounds' then row = r end
+    end
+    t.isNotNil(row)
+    t.isTrue(row.overridden)
+    t.isNotNil(row.overriddenBy, 'must never be nil even when no citizenid could be resolved at all')
+    t.isTrue(row.overriddenBy ~= '', 'must never be blank')
+end)
+
+t.test('DISPLAY-NAME FIX: a row re-applied from k9_runtime_feature_overrides at boot (no name column in that table) falls back to the raw citizenid until edited again this session -- never "nil", never blank', function()
+    local world = newWorld()
+    do
+        -- First boot: make a real change, persisted to the fake DB, exactly
+        -- like PERSISTENCE section above.
+        local first = boot({ world = world })
+        registerPlayer(first, HC_SOURCE, 'BOOTCIT1', { firstname = 'First', lastname = 'Booter' })
+        first.env.IsHighCommand = function(src) return src == HC_SOURCE end
+        local r = first.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BasicBarkSounds', false)
+        t.isTrue(r.ok)
+    end
+
+    -- Second boot, SAME fake database: the row is re-applied from
+    -- k9_runtime_feature_overrides at this boot's own onResourceStart --
+    -- that table has no name column at all, so ActiveOverrides.updatedByName
+    -- must come back nil, and the read side must fall back to the raw
+    -- citizenid, NEVER the literal string "nil" and never a blank.
+    local second = boot({ world = world })
+    second.env.IsHighCommand = function() return true end
+    local listed = second.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    local row = nil
+    for _, r in ipairs(listed.features) do
+        if r.name == 'BasicBarkSounds' then row = r end
+    end
+    t.isNotNil(row)
+    t.isTrue(row.overridden, 'the override itself must have survived the restart, exactly like the pre-existing PERSISTENCE test proves')
+    t.equals(row.overriddenBy, 'BOOTCIT1', 'falls back to the raw citizenid -- the ONLY thing k9_runtime_feature_overrides actually persisted -- never nil, never blank, never the string "nil"')
 end)
 
 os.exit(t.summary())
