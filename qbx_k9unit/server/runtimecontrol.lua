@@ -1275,39 +1275,29 @@ local TUNABLE_REGISTRY = {
     -- healthRestore/injuryRestore are each read inline at their own call
     -- sites, genuinely fresh, confirmed by direct read.
     --
-    -- cooldownMs is DELIBERATELY EXCLUDED, this pass -- a PRIOR version of
-    -- this entry claimed it was live ("both the sweep's staleAfterMs
-    -- calculation AND IsOnCooldown's own call pass Config.K9Medkit.cooldownMs
-    -- as an explicit per-call argument"). That claim was only HALF true, and
-    -- the wrong half is the load-bearing one: IsOnCooldown's own per-request
-    -- gate (useK9Medkit's `effectiveCooldownMs = Config.K9Medkit.cooldownMs`
-    -- ... `MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs,
-    -- ...)`) does read Config fresh -- but `MedkitBaseCooldownMs`, the value
-    -- MedkitCooldown's own StartSweep prune callback multiplies by 2 for its
-    -- staleAfterMs eviction window, is captured ONCE at that file's own
-    -- load time (`local MedkitBaseCooldownMs = ResolveConfiguredThresholdMs(
-    -- Config.K9Medkit.cooldownMs, ...)`) and never re-read afterward. RAISING
-    -- Config.K9Medkit.cooldownMs live through this registry would not merely
-    -- fail to apply -- it would open a genuine bypass: the sweep keeps
+    -- cooldownMs is NOW INCLUDED (issue-closer sweep, 2026-08-26) -- this
+    -- entry used to exclude it, on real grounds at the time: the sweep's
+    -- own staleAfterMs was a captured-once-at-load local
+    -- (`local MedkitBaseCooldownMs = ResolveConfiguredThresholdMs(
+    -- Config.K9Medkit.cooldownMs, ...)`), so a LIVE RAISE through this
+    -- registry would have been silently undermined -- the sweep would keep
     -- pruning a target's cooldown-tracker entry using the OLD, now-too-short
-    -- staleAfterMs window, so `store[key]` goes back to nil (IsOnCooldown
-    -- reads that as "never on cooldown") well before the NEWLY-RAISED
-    -- cooldown the operator just asked for would have elapsed -- a K9 medkit
-    -- usable MORE often than an operator just configured, silently, with no
-    -- error anywhere. (Lowering it live has no such bypass -- the sweep
-    -- would simply hold a now-stale-by-its-own-old-math entry a little
-    -- longer than strictly necessary, a memory-tidiness nit, not a
-    -- correctness one -- but this registry's own rule 3 excludes a tunable
-    -- the moment ANY direction of change cannot be confirmed safe, not only
-    -- when EVERY direction is unsafe.) Reported to server/medkit.lua's own
-    -- owner as a real bug independent of this registry (the sweep should
-    -- re-read Config.K9Medkit.cooldownMs on every prune pass, exactly like
-    -- its own per-request gate already does) -- not fixed here, since this
-    -- file does not own server/medkit.lua; excluding the tunable is the
-    -- correct, safe-by-default action on THIS file's own side regardless of
-    -- when/whether that fix lands. See tests/runtimecontrol_spec.lua's own
-    -- "K9Medkit.cooldownMs must never be exposed" case for the regression
-    -- guard.
+    -- window, letting the cooldown reset early. THAT BUG IS FIXED, verified
+    -- by direct read of server/medkit.lua: `ResolveMedkitBaseCooldownMs()`
+    -- (a tiny, cheap, non-yielding function, never cached) is now called
+    -- FRESH both by the per-request gate AND, every single tick, inside the
+    -- StartSweep prune callback itself (`local staleAfterMs =
+    -- ResolveMedkitBaseCooldownMs() * 2`) -- see that file's own "ACTUAL
+    -- FIX" comment on `ResolveMedkitBaseCooldownMs` for the full writeup,
+    -- including the self-corrected first attempt (a frozen local) that
+    -- would have reopened this exact gap from the other direction. Both
+    -- read paths now agree with each other and with whatever
+    -- Config.K9Medkit.cooldownMs currently holds, satisfying rule 3 the
+    -- same way every other included tunable does. See
+    -- tests/runtimecontrol_spec.lua's own "K9Medkit.cooldownMs is now safely
+    -- exposed" case for the regression guard, inverted from this entry's
+    -- old "must never be exposed" pinning test.
+    ['K9Medkit.cooldownMs']                     = { path = { 'K9Medkit', 'cooldownMs' },                          min = 1000,  max = 300000,    integer = true },
     ['K9Medkit.range']                          = { path = { 'K9Medkit', 'range' },                              min = 0.5,   max = 10.0,      integer = false },
     ['K9Medkit.healthRestore']                  = { path = { 'K9Medkit', 'healthRestore' },                      min = 1,     max = 200,       integer = true },
     ['K9Medkit.injuryRestore']                  = { path = { 'K9Medkit', 'injuryRestore' },                      min = 0,     max = 100,       integer = true },
@@ -1551,11 +1541,17 @@ local TUNABLE_REGISTRY = {
     -- WarningDays ("anything governing who may do what"). These are
     -- POLICY exclusions being deliberately overridden by the owner's own
     -- instruction, NOT technical "cannot be read live" exclusions -- every
-    -- exclusion further above this point in this table (K9Medkit.cooldownMs,
-    -- SearchZones.alertBroadcastRadius, the FearStress forgery-adjacent
+    -- OTHER exclusion further above this point in this table
+    -- (SearchZones.alertBroadcastRadius, the FearStress forgery-adjacent
     -- values, etc.) is UNCHANGED and remains correctly excluded; opening a
     -- POLICY restriction is not licence to also open a CORRECTNESS/SECURITY
-    -- one that happens to sit near it.
+    -- one that happens to sit near it. (K9Medkit.cooldownMs used to be
+    -- named here too, as a technical exclusion -- it no longer is one,
+    -- since server/medkit.lua's own sweep now reads it fresh; see that
+    -- key's own TUNABLE_REGISTRY entry above for the full correction. Not
+    -- an example of this section's POLICY-vs-technical distinction any
+    -- more, so it is removed from this list rather than left to imply the
+    -- old exclusion still holds.)
     --
     -- WHAT IS DELIBERATELY STILL **NOT** OPENED, from this same directive,
     -- and why -- read before assuming an omission here is an oversight:

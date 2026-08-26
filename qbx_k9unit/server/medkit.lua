@@ -393,10 +393,14 @@ end
 
 -- QUALITY FIX (this pass), REVISED after a cross-file follow-up finding
 -- (server/runtimecontrol.lua's owner, reported against this file's own
--- first version of this fix — see that file's own "K9Medkit.cooldownMs is
--- DELIBERATELY EXCLUDED" comment for their independent trace of the exact
--- same regression, and tests/runtimecontrol_spec.lua's "K9Medkit.cooldownMs
--- must never be exposed" case): Config.K9Medkit.cooldownMs used to be read
+-- first version of this fix — see that file's own "K9Medkit.cooldownMs" entry
+-- (TUNABLE_REGISTRY, near "K9Medkit.range") for their independent trace of
+-- the exact same regression -- UPDATE (issue-closer sweep, 2026-08-26): that
+-- entry used to be titled "DELIBERATELY EXCLUDED" and
+-- tests/runtimecontrol_spec.lua carried a matching "must never be exposed"
+-- case; both have since been corrected/inverted to "is now safely exposed"
+-- now that the fix described below has landed and been re-verified.
+-- Config.K9Medkit.cooldownMs used to be read
 -- raw, directly, at every call site below (RunUseK9MedkitMutation's
 -- `effectiveCooldownMs`, and this sweep's own `staleAfterMs`) — the ONE
 -- cooldown-backing config value in this file with no validation at all,

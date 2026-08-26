@@ -1175,6 +1175,50 @@ local function ResolveFeatureState(key, hasK9Access, activePermSet)
     return 'available'
 end
 
+-- ======================================================================
+-- FEATURE DOMAIN TAGGING -- owner-directed ("more color based on all
+-- scent stuff vehicle related is more text based") pass. A small, explicit,
+-- hand-maintained table, deliberately mirroring NOT_ENFORCEABLE_FEATURES/
+-- CLIENT_ENFORCED_FEATURES above (same shape: a plain key->value map, read
+-- by one small resolver function, never guessed from a feature's name
+-- string at render time) -- this is that same established pattern, not a
+-- second mechanism. `myFeatures[].category`/`features[].category` (both
+-- documented in html/tablet.js's own header, both sent as a bare `nil`
+-- until this pass) are populated from this table below.
+--
+-- Only scent-family and vehicle-family features get a tag today -- every
+-- other Config.Features key resolves to `nil` here (rendered as "no
+-- domain", i.e. the ordinary generic feature-list styling, exactly as
+-- every feature already renders before this pass). This is deliberately
+-- narrow: html/tablet.js's own colour-vs-text treatment (this pass) only
+-- exists for these two domains, so tagging anything else would be a label
+-- with no reader.
+local FEATURE_DOMAINS = {
+    -- 'scent' -- Config.Tracking.ScentVision.palette (config.lua) is the
+    -- ONE person-to-colour scheme this domain's tablet content must agree
+    -- with; see html/tablet.js's own scent-section comment for why that
+    -- palette is deliberately NOT reused here for feature-row colouring
+    -- (it is reserved for representing a SPECIFIC TRACKED PERSON, which no
+    -- row in this generic feature list is).
+    ScentTracking     = 'scent',
+    ScentVision       = 'scent',
+    ScentLineup       = 'scent',
+    ScentTrailHunt    = 'scent',
+    BloodTracking     = 'scent',
+    GunpowderSniffing = 'scent',
+    -- 'vehicle' -- effectively the only vehicle-specific Config.Features
+    -- key today (vehicle *search* shares the generic SearchZones/
+    -- ContrabandAlerts mechanic with person search -- see
+    -- help_task_search_2's own copy -- so it is not tagged here).
+    VehicleEntryExit  = 'vehicle',
+}
+
+--- @param key string -- a Config.Features key
+--- @return string? -- 'scent' | 'vehicle' | nil (no domain)
+local function ResolveFeatureDomain(key)
+    return FEATURE_DOMAINS[key]
+end
+
 --- Is `key` known to have a client/tablet.lua single-button trigger?
 --- DATA-DRIVEN, not hardcoded here -- see this file's header "myFeatures /
 --- features KEY LIST -- DYNAMIC, NOT HARDCODED": reads the OPTIONAL,
@@ -1204,7 +1248,7 @@ local function BuildMyFeaturesArray(hasK9Access, activePermSet)
         out[i] = {
             key = key,
             label = nil,     -- html/tablet.js's own DEFAULT_STRINGS humanizes an absent label client-side
-            category = nil,
+            category = ResolveFeatureDomain(key),
             actionable = IsKnownActionableFeature(key),
             state = ResolveFeatureState(key, hasK9Access, activePermSet),
         }
@@ -1227,7 +1271,7 @@ local function BuildPersonFeaturesArray(hasK9Access, activePermSet)
         out[i] = {
             key = key,
             label = nil,
-            category = nil,
+            category = ResolveFeatureDomain(key),
             globallyEnabled = Config.Features and Config.Features[key] == true or false,
             requiresGrant = requireGrantTable[key] == true,
             granted = activePermSet['feature.' .. key] == true,

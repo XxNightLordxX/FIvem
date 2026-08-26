@@ -1395,20 +1395,37 @@ t.test('LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY path resolves against t
     t.isTrue(#listed.tunables >= 105, ('sanity: only saw %d tunable(s) registered -- expected at least 105 after this pass\'s owner-directed expansion (HighCommand.*/XP.*/CertificationExpiry*)'):format(#listed.tunables))
 end)
 
-t.test('K9Medkit.cooldownMs must never be exposed as a tunable -- server/medkit.lua\'s own StartSweep prune window (staleAfterMs) is a captured-once-at-load local, not a fresh Config read, so a LIVE RAISE of this value would be silently undermined by the sweep evicting the tracker entry using the OLD, now-too-short window, letting the cooldown reset early', function()
+t.test('RESOLVED: K9Medkit.cooldownMs is now safely exposed as a tunable -- server/medkit.lua\'s own StartSweep prune window (staleAfterMs) used to be a captured-once-at-load local, not a fresh Config read, so a LIVE RAISE of this value would have been silently undermined by the sweep evicting the tracker entry using the OLD, now-too-short window; that gap is closed (ResolveMedkitBaseCooldownMs is now called fresh both by the per-request gate AND every sweep tick), so the old "must never be exposed" pinning would now just be asserting a bug that no longer exists', function()
     local f = bootAgainstRealConfig()
+    f.env.IsHighCommand = function() return true end
+
     local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
     t.isTrue(listed.ok)
+    local found
     for _, row in ipairs(listed.tunables) do
-        t.isFalse(row.key == 'K9Medkit.cooldownMs', 'K9Medkit.cooldownMs must stay excluded from TUNABLE_REGISTRY -- see this file\'s own header comment on that exclusion for the full bypass this would otherwise open')
+        if row.key == 'K9Medkit.cooldownMs' then found = row end
     end
+    t.isNotNil(found, 'K9Medkit.cooldownMs must now be present in TUNABLE_REGISTRY')
+    t.equals(found.currentValue, f.env.Config.K9Medkit.cooldownMs, 'must reflect the real config.lua value, not a hardcoded stand-in')
 
-    -- SetTunable must refuse it outright too, not merely omit it from the
-    -- list -- the exclusion has to hold end to end, not just in ListTunables'
-    -- own response.
+    -- SetTunable must actually accept and apply it end to end, not merely
+    -- list it -- mirrors the "a value inside range is accepted and applied
+    -- live" shape used for every other genuinely-live tunable in this file.
     local setResult = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'K9Medkit.cooldownMs', 120000)
-    t.isFalse(setResult.ok)
-    t.equals(setResult.reason, 'invalid_key')
+    t.isTrue(setResult.ok)
+    t.isTrue(setResult.appliedLive)
+    t.equals(f.env.Config.K9Medkit.cooldownMs, 120000)
+
+    -- Out-of-range values are still rejected with the configured bounds
+    -- named back, exactly like every other tunable -- being newly-exposed
+    -- does not mean unbounded. fakeNow advanced past
+    -- RUNTIME_CONTROL_ACTION_COOLDOWN_MS first -- the same officer's own
+    -- anti-fat-finger window would otherwise reject this second call for an
+    -- unrelated reason.
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local tooLow = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'K9Medkit.cooldownMs', 1)
+    t.isFalse(tooLow.ok)
+    t.equals(tooLow.reason, 'out_of_range')
 end)
 
 t.test('every out-of-range rejection for a newly-added tunable still names the exact configured bounds back to the caller (spot-check across the expansion, not just the original 20)', function()
