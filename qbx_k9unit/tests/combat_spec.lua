@@ -1728,6 +1728,18 @@ t.test('IsTargetDowned precedence: no override, adapter returns nil (UNKNOWN) --
     t.isTrue(#f.ambulanceIsDownedCalls >= 1, 'the adapter must actually have been consulted for this case')
 end)
 
+t.test('IsTargetDowned precedence: an UNEXPECTED-SHAPE adapter answer (a truthy non-boolean, e.g. a string) is neither `true` nor `false` -- falls through to the metadata guess exactly like nil, never coerced to "downed" by a loose truthy check', function()
+    local f = newCombatFixture({ propDragging = true, ambulanceIsDowned = function(_src) return 'yes' end })
+    wireK9(f, K9_SRC)
+    -- Metadata says NOT downed. A naive `if ambulanceDowned then return true end`
+    -- would wrongly treat the string as truthy and accept the drag; the real
+    -- `== true` / `== false` comparisons must both miss it and fall through.
+    wirePlayerTarget(f, 501, TARGET_SRC, { wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 0, 'an unexpected-shape adapter answer must never be treated as a confirmed "downed" -- it must fall through to metadata, which says NOT downed here')
+    t.isTrue(#f.ambulanceIsDownedCalls >= 1, 'the adapter must actually have been consulted for this case')
+end)
+
 -- ========================================================================
 -- NON-COMPLIANCE DETECTION: notify_staff fan-out ACE->job-rank rewrite
 -- (project-owner-directed, this pass). Narrow, permission-boundary-only

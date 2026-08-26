@@ -785,6 +785,25 @@ t.test('IsHandlerDown precedence: no override, adapter returns nil (UNKNOWN) -- 
     t.isTrue(#f.ambulanceIsDownedCalls >= 1, 'the adapter must actually have been consulted for this case')
 end)
 
+t.test('IsHandlerDown precedence: an UNEXPECTED-SHAPE adapter answer (a truthy non-boolean, e.g. a string) is not coerced to "down" by a loose truthy check -- healthy handler, no metadata flags, no trigger', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return 'yes' end })
+    -- Healthy HP and no metadata flags: a naive `if ambulanceDowned then
+    -- return true end` would wrongly treat the string as truthy and
+    -- trigger; the real `== true` comparison must miss it and fall through
+    -- to the metadata/health OR below, which also has nothing to say here.
+    wireHappyPath(f, { healthy = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 0, 'an unexpected-shape adapter answer must never be treated as a confirmed "down"')
+    t.isTrue(#f.ambulanceIsDownedCalls >= 1, 'the adapter must actually have been consulted for this case')
+end)
+
+t.test('IsHandlerDown precedence: an UNEXPECTED-SHAPE adapter answer is ALSO not treated as a confirmed false -- the metadata half of the OR still fires normally, proving it falls through exactly like nil rather than picking either boolean', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return 'yes' end })
+    wireHappyPath(f, { healthy = true, isdead = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1, 'an unexpected-shape adapter answer must not suppress the metadata half either -- only a confirmed `false` earns that, per IsHandlerDown\'s own doc comment')
+end)
+
 -- ========================================================================
 -- PERFORMANCE (this pass): IsHandlerDown orders a cheap
 -- Config.Departments[job.name] membership check BEFORE the (cross-resource)

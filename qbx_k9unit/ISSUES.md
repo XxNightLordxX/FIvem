@@ -61,10 +61,21 @@ Two honest options: **say so plainly** in the docs and config — cheap, and
 what I'd suggest unless you actually need this — or **commit to converting
 those ~169 call sites**, which is a large job, not a quick fix.
 
-There is a smaller version of the same thing: the **ambulance/downed**
-detection is built and researched but nothing calls it yet, so "detect
-whether someone is down" still falls back to a guess unless you set the
-manual override. That one is a small, scoped fix and is being written now.
+There was a smaller version of the same thing: the **ambulance/downed**
+detection was built and researched but nothing called it, so "detect
+whether someone is down" fell back to a guess unless you set the manual
+override. **This one is now fixed.** The two places that need this
+answer — the drag-a-downed-player check (`server/combat.lua`) and the
+handler-down-defense poll (`server/defense.lua`) — both now consult the
+detected ambulance resource first, in this order: your manual override
+(if you set one) always wins; failing that, a confirmed answer from a
+detected `qbx_medical` or `qb-ambulancejob` install is trusted directly;
+only if neither applies does it fall back to the same guess as before.
+Only those two resources were verified against real source — a few other
+ambulance resources are registered but intentionally inert (see
+`shared/compat/ambulance.lua`'s header) because their exports could not be
+confirmed, matching this resource's own no-guessing convention for a
+third-party dependency.
 
 ### Fixed: certification tier permissions now change something
 
