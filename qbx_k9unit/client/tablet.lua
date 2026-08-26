@@ -179,6 +179,49 @@
         here is why" -- a referenced or protected tier), not failures in
         the "something went wrong" sense; `referenceCount` (delete only)
         names how many k9_certifications rows still reference the tier.
+      tablet:equipmentShopGetLocations {}                         -> cb({ok,locations?,error?})   [high command -- server/equipmentshop.lua]
+      tablet:equipmentShopAddLocation {label?,model?,scenario?}   -> cb({ok,locationKey?,locations?,error?})
+        COORDINATES ARE NEVER SENT BY html/tablet.js -- a CEF browser page
+        has no native access to GetEntityCoords at all (see this task's own
+        instruction: "Get it client-side and send it; do not expect the
+        server to know where they are"). THIS FILE captures the caller's
+        own current position/heading (GetEntityCoords/GetEntityHeading on
+        PlayerPedId()) at the moment this callback fires and adds it to the
+        `location` table sent to the server -- the ONLY point in this whole
+        round trip that has that information. `label`/`model`/`scenario`
+        are each OMITTED entirely when blank (never sent as `''`, which the
+        server's own IsSafeShortString would reject outright) -- meaning
+        "inherit the shop-wide default", exactly like a config.lua location
+        entry with that field left unset.
+      tablet:equipmentShopMoveLocation {locationKey,updates?:{label?,model?,scenario?},useCurrentPosition?} -> cb({ok,locations?,error?})
+        Serves BOTH this screen's "Edit" (metadata only: `updates.label`/
+        `.model`/`.scenario`, ALWAYS all three, each either a non-empty
+        string override or `false` to reset that field back to the
+        shop-wide default -- never omitted here, unlike Add above, since an
+        edit's draft always starts pre-filled from a real, already-resolved
+        value) and its "Move Here" (`useCurrentPosition = true`, no
+        label/model/scenario at all) -- ONE server callback, so both flow
+        through here. `useCurrentPosition` triggers the SAME THIS-FILE
+        GetEntityCoords/GetEntityHeading capture as AddLocation above,
+        merged into `updates.x/.y/.z/.heading` -- never requested of, or
+        assumed by, the server.
+      tablet:equipmentShopRemoveLocation {locationKey}             -> cb({ok,locations?,error?})
+        All four forwarded through the SAME TranslateReasonResult as the
+        theme/cert-tier callbacks above -- server/equipmentshop.lua's own
+        header states its response shape is a plain `{ ok, reason, ... }`
+        outcome table, "never player-facing prose", same convention. High
+        command only (`CanManageShopLocations` re-verified server-side on
+        every one of the three mutating calls; GetLocations itself has NO
+        such gate server-side -- open to any connected player, matching
+        that file's own header note that this only needs to be true for
+        someone who has not yet earned any special trust) -- this page
+        still only ever shows the MANAGEMENT screen to high command, a
+        convenience per THE SECURITY RULE, not the real gate. A `db:<n>`
+        location key may be moved/removed; a `cfg:<n>` one (defined in
+        config.lua) is refused outright (`invalid_key`) by the server on
+        purpose -- see that file's own SCOPE note -- and this page never
+        offers Move/Remove controls for one, only a note pointing at
+        config.lua.
 
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
@@ -186,6 +229,7 @@
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
           themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
+          shopLocationsEnabled = Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled just above -- shows a disabled-server-wide note on the Shop Locations screen rather than one that would always come back 'feature_disabled'; tablet:equipmentShopGetLocations/Add/Move/RemoveLocation all re-check this live, server-side, regardless of what this flag says
           branding = Config.CommandTablet.branding,  -- shared config, no round trip -- { serverName: string, logo: string (relative to html/), theme: {primaryColor,accentColor,backgroundColor,textColor} }. Owner-supplied server identity (name/logo) PLUS the operator's chosen starting palette for a fresh install -- COSMETIC ONLY, same as tablet:getTheme's own theme, never consulted by any authorization check. html/tablet.js renders `logo` with a `serverName`-text fallback on load failure (never a broken-image icon -- the operator hand-swaps this file and may typo it) and seeds its OWN pre-fetch initial paint from `branding.theme`'s four colours ONLY until the real, authoritative tablet:getTheme response lands (which always wins once it does, same "config is the starting point, the runtime edit wins" precedence server/runtimecontrol.lua's own DEFAULT_THEME->k9_tablet_theme-DB-override chain already establishes for that file's own default).
       } }
       { action = 'tablet:close', data = {} }
@@ -202,6 +246,17 @@
         html/tablet-bridge.js's existing `/^tablet:/` relay picks it up with
         no further change on that file's side; html/tablet.js's own header
         documents what it does with a push arriving while hidden.
+      { action = 'tablet:equipmentShopLocationsUpdated', data = table<string,ShopLocation> }
+        Lua-INITIATED, SAME shape/posture as tablet:themeUpdated immediately
+        above -- relayed verbatim from server/equipmentshop.lua's
+        qbx_k9unit:client:equipmentShopLocationsUpdated broadcast (that
+        file's own header: "an already-connected player's own shop-ped
+        thread AND any already-open tablet screen updates live"), fired for
+        EVERY connected client on every successful Add/Move/RemoveLocation.
+        client/equipmentshop.lua ALSO listens for this exact event
+        independently (to respawn/reposition shop peds) -- AddEventHandler
+        supports any number of handlers per event name, so this is a
+        second, additive listener, not a replacement for that one.
 
     LOCALIZATION: `strings` ships the FULL, real, locale()-resolved set --
     all 117 of html/tablet.js's own DEFAULT_STRINGS keys, one-for-one,
@@ -284,7 +339,7 @@ end
 --- tests/tablet_strings_spec.lua both iterate the SAME set, and so a key
 --- added to html/tablet.js without a matching addition here/in
 --- locales/en.json's `tablet` group is caught by that spec instead of
---- silently falling back to English forever. 117 keys total.
+--- silently falling back to English forever. 152 keys total.
 local TABLET_STRING_KEYS = {
     'title', 'close_label', 'tab_console', 'tab_my_record', 'loading',
     'error_generic', 'error_not_authorized', 'error_timeout', 'error_network',
@@ -325,6 +380,24 @@ local TABLET_STRING_KEYS = {
     'cert_tier_error_tier_in_use', 'cert_tier_error_must_include_every_tier',
     'cert_tier_error_invalid_key_set', 'cert_tier_error_db_error',
     'cert_tier_error_invalid_payload',
+    -- K9 Supply Shop location management (high command only) -- see this
+    -- file's own header NUI CONTRACT section on the four
+    -- tablet:equipmentShop*Location(s) callbacks.
+    'tab_shop_locations', 'shop_locations_heading', 'shop_locations_disabled_note',
+    'shop_locations_empty', 'column_coordinates', 'column_model', 'column_source',
+    'source_config', 'source_runtime', 'shop_location_add_here_label',
+    'shop_location_add_hint', 'shop_location_label_label', 'shop_location_label_placeholder',
+    'shop_location_model_label', 'shop_location_model_placeholder',
+    'shop_location_scenario_label', 'shop_location_scenario_placeholder',
+    'shop_location_save_label', 'shop_location_cancel_label', 'shop_location_edit_label',
+    'shop_location_move_here_label', 'shop_location_move_here_hint',
+    'shop_location_remove_label', 'shop_location_config_note',
+    'shop_location_error_denied', 'shop_location_error_rate_limited',
+    'shop_location_error_invalid_coords', 'shop_location_error_invalid_heading',
+    'shop_location_error_invalid_model', 'shop_location_error_invalid_scenario',
+    'shop_location_error_invalid_label', 'shop_location_error_invalid_key',
+    'shop_location_error_invalid_payload', 'shop_location_error_db_error',
+    'shop_location_error_feature_disabled',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -429,6 +502,7 @@ function OpenTablet()
                 and Config.HighCommand.maxXpPerGrant or nil,
             peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role
             themingEnabled = Config.Features and Config.Features.TabletTheming == true, -- UX hint only, see NUI CONTRACT
+            shopLocationsEnabled = Config.Features and Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled -- see NUI CONTRACT
             branding = (type(Config.CommandTablet) == 'table' and type(Config.CommandTablet.branding) == 'table')
                 and Config.CommandTablet.branding or {}, -- shared config, no round trip -- { serverName, logo, theme:{4 colors} } -- see this file's header NUI CONTRACT note
         },
@@ -1158,6 +1232,111 @@ RegisterNUICallback('tablet:certTiersDelete', function(data, cb)
     -- renders 'tier_in_use' with its own explanatory copy instead of a
     -- generic failure message -- see that function for the full list).
     cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:certTiersDelete', data.key)))
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 EQUIPMENT SHOP LOCATIONS -- server/equipmentshop.lua, high command
+-- only (CanManageShopLocations re-checked there on every mutating call;
+-- GetLocations itself has no gate server-side at all -- see this file's
+-- header NUI CONTRACT note). Owner's own words: "make the shop a dog ped
+-- and i can change the locations in the config or add more locations
+-- remove locations etc along with in the high command tablet."
+--
+-- COORDINATES: html/tablet.js (a CEF browser page) has NO native access to
+-- GetEntityCoords/GetEntityHeading -- this file is the ONLY place in the
+-- whole round trip that can capture "where is the caller standing right
+-- now," so both mutating callbacks below do it themselves, at the moment
+-- each fires, rather than trusting anything the NUI payload claims (which
+-- could not even supply it in the first place). Every response is routed
+-- through the SAME TranslateReasonResult already used for theme/cert-tier
+-- calls above -- server/equipmentshop.lua's own header states its response
+-- shape is a plain `{ ok, reason, ... }` outcome table, identical
+-- convention.
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:equipmentShopGetLocations', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopGetLocations')))
+end)
+
+--- DISCLOSED SIMPLIFICATION: a blank label/model/scenario field in the NUI
+--- payload is OMITTED here entirely (never forwarded as `''`, which the
+--- server's own IsSafeShortString would reject as invalid) -- meaning
+--- "inherit the shop-wide default," exactly like a config.lua location
+--- entry with that field left unset. This contract has no way to ADD a
+--- location with an EXPLICIT "no scenario even though the shop default has
+--- one" override in one step (unlike editing one afterward, just below,
+--- which can via `false`) -- an operator who needs that reaches for Edit
+--- immediately after adding. See html/tablet.js's own comment on its Add
+--- form for the matching client-side half of this choice.
+RegisterNUICallback('tablet:equipmentShopAddLocation', function(data, cb)
+    data = type(data) == 'table' and data or {}
+
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    local location = {
+        x = coords.x,
+        y = coords.y,
+        z = coords.z,
+        heading = GetEntityHeading(ped),
+    }
+    if type(data.label) == 'string' and data.label ~= '' then location.label = data.label end
+    if type(data.model) == 'string' and data.model ~= '' then location.model = data.model end
+    if type(data.scenario) == 'string' and data.scenario ~= '' then location.scenario = data.scenario end
+
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopAddLocation', location)))
+end)
+
+--- Serves BOTH this screen's "Edit" (metadata only) and "Move Here"
+--- (position only) actions -- ONE server callback, so both flow through
+--- here rather than each inventing its own. See this file's header NUI
+--- CONTRACT note for the full `updates`/`useCurrentPosition` shape.
+RegisterNUICallback('tablet:equipmentShopMoveLocation', function(data, cb)
+    if type(data) ~= 'table' or type(data.locationKey) ~= 'string' or data.locationKey == '' then
+        cb({ ok = false, error = 'invalid_key' })
+        return
+    end
+
+    local updates = {}
+    if type(data.updates) == 'table' then
+        -- ALWAYS forwarded when present (never omitted for being blank,
+        -- unlike Add above) -- an edit draft always starts pre-filled from
+        -- a real, already-resolved value (server/equipmentshop.lua's own
+        -- ShopLocation class: model/scenario/label are "already resolved
+        -- ... never nil/empty"), so html/tablet.js sends `false` for a
+        -- field the operator deliberately blanked out (reset to the
+        -- shop-wide default) and a non-empty string for a real override --
+        -- both are meaningful values this file must not silently drop.
+        if data.updates.label ~= nil then updates.label = data.updates.label end
+        if data.updates.model ~= nil then updates.model = data.updates.model end
+        if data.updates.scenario ~= nil then updates.scenario = data.updates.scenario end
+    end
+
+    if data.useCurrentPosition == true then
+        local ped = PlayerPedId()
+        local coords = GetEntityCoords(ped)
+        updates.x, updates.y, updates.z = coords.x, coords.y, coords.z
+        updates.heading = GetEntityHeading(ped)
+    end
+
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopMoveLocation', data.locationKey, updates)))
+end)
+
+RegisterNUICallback('tablet:equipmentShopRemoveLocation', function(data, cb)
+    if type(data) ~= 'table' or type(data.locationKey) ~= 'string' or data.locationKey == '' then
+        cb({ ok = false, error = 'invalid_key' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopRemoveLocation', data.locationKey)))
+end)
+
+-- Lua-INITIATED push, SAME shape/posture as tablet:themeUpdated just below
+-- -- see this file's header NUI CONTRACT note on
+-- tablet:equipmentShopLocationsUpdated. client/equipmentshop.lua ALSO
+-- listens for this exact event independently (to respawn/reposition shop
+-- peds) -- AddEventHandler supports any number of handlers per event name,
+-- so this is a second, additive listener, not a replacement for that one.
+AddEventHandler('qbx_k9unit:client:equipmentShopLocationsUpdated', function(locations)
+    SendNUIMessage({ action = 'tablet:equipmentShopLocationsUpdated', data = locations })
 end)
 
 -- Lua-INITIATED push, NOT tied to this player's own tablet being open --

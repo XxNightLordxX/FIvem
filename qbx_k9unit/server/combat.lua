@@ -1864,10 +1864,33 @@ end
 -- at resource start and never mutated at runtime, so gating thread
 -- creation itself (rather than looping forever just to no-op every tick)
 -- costs nothing.
+--
+-- POLL-INTERVAL VALIDATION (audit follow-up, same shape server/defense.lua's
+-- own pollIntervalMs fix just addressed there, see that file's own comment
+-- and server/cooldowns.lua's header ADDENDUM): positionSampleWindowMs feeds
+-- a bare `Wait()` directly, never NewCooldown/ResolveConfiguredThresholdMs,
+-- so it was validated by neither of this file's other backstops. A
+-- non-numeric/non-positive value here would throw inside `Wait()` on this
+-- thread's very first iteration, killing THIS thread permanently (Lua
+-- coroutines do not resume after an unhandled error) and silently
+-- disabling non-compliance sampling for the rest of the resource's
+-- uptime — quieter than the expiry-thread failure modes above only because
+-- this feature is itself "non-punitive and log-only," never because a
+-- config typo here is somehow safe. Resolved the same way, not with a hard
+-- `assert` — an `error()` thrown from this file's own top-level chunk (this
+-- `if` block runs at file-load time) would abort server/combat.lua's own
+-- load from this line onward, taking EndActiveEffectForHolder and every
+-- BiteAndHold/NonLethalTakedown/PropDragging event down with it, exactly
+-- the failure cooldowns.lua's header ADDENDUM used THIS file as its own
+-- worked example of. Same fallback (500ms) as config.lua's own shipped
+-- default for this field.
+local PositionSampleWindowMs = ResolveConfiguredThresholdMs(
+    Config.Combat.NonComplianceDetection.positionSampleWindowMs, 500, 'Config.Combat.NonComplianceDetection.positionSampleWindowMs')
+
 if Config.Combat.NonComplianceDetection.enabled then
     CreateThread(function()
         while true do
-            Wait(Config.Combat.NonComplianceDetection.positionSampleWindowMs)
+            Wait(PositionSampleWindowMs)
             local now = GetGameTimer()
 
             for targetNetId, hold in pairs(ActiveHolds) do

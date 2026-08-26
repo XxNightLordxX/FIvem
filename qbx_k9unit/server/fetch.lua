@@ -1111,7 +1111,25 @@ end)
 -- wouldn't have loaded otherwise). Interval is deliberately independent of
 -- any per-tick sampling need — this feature has none — so a coarse
 -- interval is both correct and cheap.
-local FETCH_MAINTENANCE_INTERVAL_MS = Config.FetchMechanic.maintenanceIntervalMs or 2000
+-- VALIDATED (audit follow-up — same footgun this file's own ThrowCooldown/
+-- PickupCooldown comments above already document and fix for their own
+-- fields, missed here): `Config.FetchMechanic.maintenanceIntervalMs or
+-- 2000` looks identical to the `Config.FetchMechanic.pickupCooldownMs or
+-- 500` idiom this file's own header explicitly calls out as REPLACED, NOT
+-- KEPT, for the exact reason it applies here too — `0 or 2000` evaluates to
+-- `0` in Lua (0 is truthy), so an operator setting this to 0 would not get
+-- "no throttle," they would get `Wait(0)` on the SAME thread this comment
+-- block calls the "no unbounded trap" guarantee for a ball nobody ever
+-- picks up, drops, delivers, or recalls — a tight busy-loop at best, and a
+-- thread-killing throw at worst if the value is ever a non-number instead
+-- of 0 (this `or` idiom guards against nil only, never against wrong
+-- type), which would silently and permanently disable that entire
+-- lifetime-ceiling enforcement for the rest of this resource's uptime.
+-- Resolved with ResolveConfiguredThresholdMs (CLAMP AND WARN, never abort),
+-- matching ThrowCooldown/PickupCooldown immediately above. Same fallback
+-- (2000ms) as config.lua's own shipped default for this field.
+local FETCH_MAINTENANCE_INTERVAL_MS = ResolveConfiguredThresholdMs(
+    Config.FetchMechanic.maintenanceIntervalMs, 2000, 'Config.FetchMechanic.maintenanceIntervalMs')
 
 CreateThread(function()
     while true do

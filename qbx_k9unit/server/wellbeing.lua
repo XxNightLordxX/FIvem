@@ -627,6 +627,36 @@ local RecentGunfire = {}
 --- not 0 (the reason a ped's default max health is 200, not 100).
 local PED_DEAD_HEALTH_THRESHOLD = 100
 
+--- VALIDATED TICK INTERVAL (audit follow-up — same shape server/defense.lua's
+--- pollIntervalMs fix and server/combat.lua's positionSampleWindowMs fix
+--- both address in their own files; see server/cooldowns.lua's header
+--- ADDENDUM for the general writeup). `Config.Wellbeing.tickIntervalMs` is a
+--- raw, operator-editable Config field consumed in THREE places in this
+--- file: this line's own MIN_DEATH_EPISODE_DURATION_MS arithmetic
+--- immediately below (unconditional, top-level, file-load time), the
+--- `Wait(...)` call at the top of the shared tick thread further down (a
+--- bare `Wait()` that never goes through NewCooldown), and TickWellbeing's
+--- own `dtSeconds` calculation. None of the three previously validated it.
+--- A non-numeric/non-positive value here would throw immediately at THIS
+--- line — a top-level arithmetic op reached unconditionally at file-load
+--- time, before a single Config.Features flag is even checked — aborting
+--- server/wellbeing.lua's own load from this line onward and taking
+--- RestoreInjury/IsHesitating/IsDistracted/IsFlashbangImmune (every one of
+--- this file's resource-global exports, all defined below this point) down
+--- with it, silently disabling Fatigue/Mood/FearStress/Distraction/Injury
+--- resource-wide over one operator typo. Resolved with
+--- ResolveConfiguredThresholdMs (CLAMP AND WARN, never abort) rather than a
+--- hard `assert`, for the identical reason cooldowns.lua's own header
+--- ADDENDUM gives: this value is reached unconditionally at this file's own
+--- top-level load, so an `error()` here would be the exact "single mis-set
+--- Config number reaches into an unrelated termination/cleanup path"
+--- disaster that ADDENDUM already found once in server/combat.lua. Same
+--- fallback (5000ms) as config.lua's own shipped default for this field.
+--- All three consumers below now read this SAME resolved local, so they can
+--- never disagree with each other about what interval is actually in
+--- effect.
+local TICK_INTERVAL_MS = ResolveConfiguredThresholdMs(Config.Wellbeing.tickIntervalMs, 5000, 'Config.Wellbeing.tickIntervalMs')
+
 --- MINIMUM QUALIFYING DEATH-EPISODE DURATION (red-team fix, this pass —
 --- see this file's header, STUCK-K9 SOFTLOCK FIX item 2's FOLLOW-UP FIX #2,
 --- for the full exploit this closes). `PED_DEAD_HEALTH_THRESHOLD` alone
@@ -673,7 +703,7 @@ local PED_DEAD_HEALTH_THRESHOLD = 100
 --- false negative here costs a K9 nothing it wasn't already going to
 --- recover from via ordinary passive regen; a false positive is the actual
 --- exploit this constant exists to close.
-local MIN_DEATH_EPISODE_DURATION_MS = math.max(Config.Wellbeing.tickIntervalMs * 3, 60000)
+local MIN_DEATH_EPISODE_DURATION_MS = math.max(TICK_INTERVAL_MS * 3, 60000)
 
 --- @param value number
 --- @param min number
@@ -970,7 +1000,21 @@ end)
 -- own MOOD_INTERACT_RANGE/DISTRACTION_COOLDOWN_PRUNE_INTERVAL_MS above are
 -- the established precedent for a small, disclosed, non-spec value living
 -- here rather than in config.lua.
-local HESITATION_MAX_CONTINUOUS_MS = Config.Wellbeing.FearStress.hesitationDurationMs * 8
+--
+-- VALIDATED (audit follow-up, same TICK_INTERVAL_MS shape/reasoning above):
+-- `Config.Wellbeing.FearStress.hesitationDurationMs` was previously read raw
+-- here, in a top-level, unconditional multiplication reached at this file's
+-- own load time — a non-numeric/non-positive value would have thrown
+-- immediately and aborted server/wellbeing.lua's load from this line
+-- onward, the exact same class of failure TICK_INTERVAL_MS above was just
+-- fixed for. Resolved once into HESITATION_DURATION_MS (CLAMP AND WARN,
+-- never abort) and reused below at this file's other raw read of the same
+-- field (the hesitatingUntil extension further down), so both stay
+-- consistent with each other. Same fallback (8000ms) as config.lua's own
+-- shipped default for this field.
+local HESITATION_DURATION_MS = ResolveConfiguredThresholdMs(
+    Config.Wellbeing.FearStress.hesitationDurationMs, 8000, 'Config.Wellbeing.FearStress.hesitationDurationMs')
+local HESITATION_MAX_CONTINUOUS_MS = HESITATION_DURATION_MS * 8
 
 -- ======================================================================
 -- MOOD — "Pet K9" / "Feed K9" ox_target interactions (client/wellbeing.lua).
@@ -1333,7 +1377,7 @@ end
 -- ======================================================================
 local function TickWellbeing()
     local now = GetGameTimer()
-    local dtSeconds = Config.Wellbeing.tickIntervalMs / 1000
+    local dtSeconds = TICK_INTERVAL_MS / 1000
 
     -- Prune gunfire entries FearStress could no longer care about — once
     -- per tick, before the per-player pass below reads RecentGunfire.
@@ -1539,7 +1583,7 @@ local function TickWellbeing()
                             -- accessor's own comment and this section's own
                             -- header above describe WHY it exists.
                             if (now - stats.hesitationEpisodeStartedAt) < HESITATION_MAX_CONTINUOUS_MS then
-                                stats.hesitatingUntil = math.max(stats.hesitatingUntil, now + Config.Wellbeing.FearStress.hesitationDurationMs)
+                                stats.hesitatingUntil = math.max(stats.hesitatingUntil, now + HESITATION_DURATION_MS)
                             else
                                 -- Forced recovery: fearStress must climb back
                                 -- past hesitationThreshold from zero before
@@ -1702,7 +1746,7 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
     or Config.Features.InjuryLimping then
     CreateThread(function()
         while true do
-            Wait(Config.Wellbeing.tickIntervalMs)
+            Wait(TICK_INTERVAL_MS)
             local ok, err = pcall(TickWellbeing)
             if not ok then
                 print(('[qbx_k9unit] wellbeing tick error: %s'):format(tostring(err)))

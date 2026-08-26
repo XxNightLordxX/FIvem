@@ -146,6 +146,41 @@
     disconnect).
     ======================================================================
 
+    PER-PERSON FEATURE CONTROL -- ADDED A LATER PASS (this pass found and
+    closed the gap; not present when this file was first written).
+    startScentHunt below used to check only Config.Features.ScentTrailHunt
+    and HasK9Access(source) -- config.lua's own
+    Config.FeatureControl.RequireGrant.ScentTrailHunt entry (already
+    present, with its own comment explaining it exists so high command can
+    phase the hunt in per person, e.g. reserve it for K9s who finished
+    search training) had ZERO effect: a citizenid with an active
+    block.ScentTrailHunt row could still start a hunt, and one with no
+    feature.ScentTrailHunt grant could still start one too, while
+    RequireGrant.ScentTrailHunt was true. Fixed by copying
+    server/pursuitsprint.lua's own IsPursuitSprintPermittedForCitizenId
+    shape verbatim (see IsScentTrailHuntPermittedForCitizenId below) --
+    pursuitsprint.lua's own header says to read it before writing another
+    variant, so this is a copy, not a new one.
+
+    GATED ON THE START PATH ONLY, deliberately, mirroring
+    server/scentlineup.lua's own established precedent (that file's
+    CanUseScentLineup() is likewise consulted only at its one entry point,
+    /k9lineup, never at its continuation command /k9lineuppick or its
+    unconditional /k9lineupcancel): a hunt, once legitimately started, is a
+    single already-authorized session, not a repeated re-grantable action --
+    pollScentHunt is a read-only QUERY against that already-decided session
+    (same "re-validates Config.Features.ScentTrailHunt/HasK9Access on EVERY
+    call because it is a query, not a termination" reasoning this file's
+    own EVENT/CALLBACK CONTRACT item 2 already gives ITSELF, which this
+    pass does not extend to the per-person grant/block -- a query is not
+    where "does this person's feature act" is decided, the start is), and
+    stopScentHunt MUST remain unconditional regardless (see this file's own
+    "NO UNBOUNDED TRAP" citation in EVENT/CALLBACK CONTRACT item 3 -- a
+    handler whose grant is revoked or who is freshly blocked mid-hunt must
+    still be able to stop it; gating cleanup on this check would be exactly
+    the trap that rule exists to forbid).
+    ======================================================================
+
     FILE-TO-FILE CONTRACT:
     - Calls `HasK9Access(source)` (server/certifications.lua), reused, never
       re-derived -- that file's own "single source of truth" rule.
@@ -155,6 +190,13 @@
       resource with the same requirement (see fxmanifest.lua's own comments
       on server/tracking.lua/server/search.lua/server/defense.lua for the
       identical precedent).
+    - Calls `exports.qbx_core:GetPlayer(source).PlayerData.citizenid`
+      (ADDED this pass, for the per-person feature-control check above only
+      -- see "WHY exports.qbx_core... DIRECTLY" in server/findalert.lua's
+      own header for the resource-wide convention this matches) and
+      `HasPermission(citizenid, key)` (server/permissions.lua), the latter
+      behind a `type(HasPermission) == 'function'` soft-dependency guard,
+      same as every other RequireGrant-consuming file in this resource.
     - Exposes NO resource-global functions. ActiveHunts is this file's own
       private state; nothing outside this file (including
       client/scenttrail.lua) ever reads it directly.
@@ -164,13 +206,14 @@
       shape. No shared state, no coupling either direction.
     - Does NOT call AwardXP, AwardXPDirect, or any progression.lua global --
       see this file's header "THE XP DECISION" above.
-    - No natives are used anywhere in this file beyond GetEntityCoords/
-      GetPlayerPed/GetGameTimer, all already allowlisted in the repo-root
-      .luacheckrc read_globals list from this resource's existing usage
-      elsewhere -- verification method: no new native surface was
-      introduced, so no new native-decl/hash-database lookup was required
-      for this file. math.random/math.sqrt/math.pi/math.cos/math.sin are
-      the standard Lua 5.4 math library, not FiveM natives.
+    - Natives used: GetEntityCoords/GetPlayerPed/GetGameTimer, all already
+      allowlisted in the repo-root .luacheckrc read_globals list from this
+      resource's existing usage elsewhere -- verification method: no new
+      native surface was introduced, so no new native-decl/hash-database
+      lookup was required for this file. math.random/math.sqrt/math.pi/
+      math.cos/math.sin are the standard Lua 5.4 math library, not FiveM
+      natives. `exports`/`HasPermission` above are resource
+      exports/globals, not natives, and are listed separately.
 ]]
 
 local ScentHuntConfig = Config.ScentTrailHunt or {}
@@ -239,9 +282,67 @@ local function RollHuntTarget(originX, originY)
     return originX + math.cos(angle) * radius, originY + math.sin(angle) * radius
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.
+--- ScentTrailHunt flag) is already checked by startScentHunt below, before
+--- this function is ever reached:
+---   2. an explicit block.ScentTrailHunt grant -> DENY
+---   3. ScentTrailHunt listed in RequireGrant -> ALLOW only with an active
+---      feature.ScentTrailHunt grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsScentTrailHuntPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.ScentTrailHunt') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.ScentTrailHunt == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.ScentTrailHunt') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 lib.callback.register('qbx_k9unit:server:startScentHunt', function(source)
     if not Config.Features.ScentTrailHunt then return { started = false, reason = 'denied' } end
     if not HasK9Access(source) then return { started = false, reason = 'denied' } end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsScentTrailHuntPermittedForCitizenId
+    -- above. Keyed on `source`, the ONLY person this feature ever acts for
+    -- (the K9 starting the hunt -- see this file's header "WHY THE
+    -- COORDINATE NEVER LEAVES THIS FILE": nobody else is ever told
+    -- anything about a hunt). Resolved via a DIRECT
+    -- exports.qbx_core:GetPlayer(source) call, matching
+    -- server/pursuitsprint.lua's own identical `k9Player.PlayerData.
+    -- citizenid` resolution shape. Fails CLOSED (reason = 'denied', which
+    -- the client already collapses into the same generic denial as
+    -- 'no_access' -- see this file's header EVENT/CALLBACK CONTRACT item 1)
+    -- when the citizenid cannot be resolved at all -- a per-person check
+    -- with no resolvable person to check can never be answered "allow".
+    -- Deliberately placed only on this START path, not on pollScentHunt or
+    -- stopScentHunt below -- see this file's header "PER-PERSON FEATURE
+    -- CONTROL" section for why.
+    local k9Player = exports.qbx_core:GetPlayer(source)
+    local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
+    if not k9Citizenid or not IsScentTrailHuntPermittedForCitizenId(k9Citizenid) then
+        return { started = false, reason = 'denied' }
+    end
 
     if ActiveHunts[source] then
         return { started = false, reason = 'already_active' }

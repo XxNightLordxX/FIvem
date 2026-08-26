@@ -123,6 +123,33 @@ local function TriggerClientEvent(eventName, target, ...)
     triggerClientEventCalls[#triggerClientEventCalls + 1] = { event = eventName, target = target, args = { ... } }
 end
 
+-- PER-PERSON FEATURE CONTROL fixture scaffolding -- server/scenttrail.lua's
+-- startScentHunt resolves `exports.qbx_core:GetPlayer(source).PlayerData.
+-- citizenid` (added alongside IsScentTrailHuntPermittedForCitizenId this
+-- pass) and fails CLOSED with no resolvable citizenid, mirroring
+-- server/pursuitsprint.lua's own identical behavior. citizenidBySource
+-- DEFAULTS every numeric source to a deterministic 'CID-<source>' string
+-- (see exportsStub.GetPlayer below) so every ALREADY-EXISTING test in this
+-- section -- none of which are about the per-person mechanism -- keeps a
+-- resolvable identity and keeps passing unchanged; a dedicated
+-- "PER-PERSON FEATURE CONTROL" section further down overrides specific
+-- sources via setCitizenId when it needs a stable name to grant/block
+-- against. Config.FeatureControl.RequireGrant.ScentTrailHunt defaults to
+-- FALSE (not listed) for the identical reason tests/findalert_spec.lua's
+-- own fixture gives for the same default -- see that file's header.
+local citizenidBySource = {}
+local function citizenidFor(source) return citizenidBySource[source] or ('CID-' .. tostring(source)) end
+local exportsStub = {
+    qbx_core = {
+        GetPlayer = function(_self, source) return { PlayerData = { citizenid = citizenidFor(source) } } end,
+    },
+}
+
+local permissionGrants = {} -- [citizenid][key] = true/false
+local function HasPermission(citizenid, key)
+    return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+end
+
 local ServerConfig = {
     Features = { ScentTrailHunt = true },
     ScentTrailHunt = {
@@ -131,6 +158,9 @@ local ServerConfig = {
         arrivalRadius = 3.0,
         startCooldownMs = 8000,
         maxHuntDurationMs = 300000,
+    },
+    FeatureControl = {
+        RequireGrant = { ScentTrailHunt = false },
     },
 }
 
@@ -145,6 +175,8 @@ serverEnv = Sandbox.newEnv({
     TriggerClientEvent = TriggerClientEvent,
     lib = libStub,
     Config = ServerConfig,
+    exports = exportsStub,
+    HasPermission = HasPermission,
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', serverEnv) -- hard load-order dependency, see server/scenttrail.lua's own FILE-TO-FILE CONTRACT
@@ -152,6 +184,22 @@ Sandbox.loadInto('../server/scenttrail.lua', serverEnv)
 
 local startScentHunt = registeredCallbacks['qbx_k9unit:server:startScentHunt']
 local pollScentHunt = registeredCallbacks['qbx_k9unit:server:pollScentHunt']
+
+--- Overrides the default 'CID-<source>' citizenid a given source resolves
+--- to -- see citizenidFor's own declaration comment above.
+--- @param source number
+--- @param citizenid string
+local function setCitizenId(source, citizenid)
+    citizenidBySource[source] = citizenid
+end
+
+--- @param citizenid string
+--- @param key string
+--- @param value boolean
+local function grantPermission(citizenid, key, value)
+    permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+    permissionGrants[citizenid][key] = value
+end
 
 t.test('server/scenttrail.lua registers both lib.callback handlers and the stopScentHunt net event at load time', function()
     t.isNotNil(startScentHunt)
@@ -321,6 +369,118 @@ t.test('playerDropped clears a source\'s ActiveHunts entry', function()
     fakeNow = fakeNow + 1000
     local poll = pollScentHunt(9)
     t.isFalse(poll.active)
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL -- Config.FeatureControl.RequireGrant's
+-- documented 4-step resolution (steps 2-4; step 1, Config.Features.
+-- ScentTrailHunt, is already covered above), keyed on the K9 STARTING the
+-- hunt -- mirrors tests/pursuitsprint_spec.lua's own "Per-person feature
+-- control" section. Fresh source numbers (101+) throughout, never reused
+-- by an earlier test in this file, so each test's own StartHuntCooldown
+-- state is guaranteed untouched by anything before it.
+-- ----------------------------------------------------------------------
+
+t.test('grant_required: RequireGrant.ScentTrailHunt = true + no grant held -- denied even though HasK9Access is true', function()
+    ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = true
+    setCitizenId(101, 'CID-BLOCKED-1')
+    pedCoordsBySource[101] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    -- deliberately NOT granted
+
+    local result = startScentHunt(101)
+
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+    ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = false
+end)
+
+t.test('RequireGrant.ScentTrailHunt = true + an active feature.ScentTrailHunt grant -- allowed', function()
+    ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = true
+    setCitizenId(102, 'CID-GRANTED-1')
+    grantPermission('CID-GRANTED-1', 'feature.ScentTrailHunt', true)
+    pedCoordsBySource[102] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+
+    local result = startScentHunt(102)
+
+    t.isTrue(result.started)
+    ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = false
+end)
+
+t.test('BLOCK ALWAYS WINS: an explicit block.ScentTrailHunt denies even a citizenid who ALSO holds an active feature.ScentTrailHunt grant, RequireGrant on', function()
+    ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = true
+    setCitizenId(103, 'CID-BLOCKED-2')
+    grantPermission('CID-BLOCKED-2', 'feature.ScentTrailHunt', true)
+    grantPermission('CID-BLOCKED-2', 'block.ScentTrailHunt', true)
+    pedCoordsBySource[103] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+
+    local result = startScentHunt(103)
+
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+    ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = false
+end)
+
+t.test('BLOCK STILL APPLIES even when NOT listed in RequireGrant (step 2 fires independently of step 3)', function()
+    setCitizenId(104, 'CID-BLOCKED-3')
+    grantPermission('CID-BLOCKED-3', 'block.ScentTrailHunt', true)
+    pedCoordsBySource[104] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+
+    local result = startScentHunt(104) -- ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt is false here
+
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+end)
+
+t.test('RequireGrant.ScentTrailHunt = false (not listed) -- default ALLOW, no grant needed, matching config.lua\'s own documented step 4', function()
+    setCitizenId(105, 'CID-DEFAULT-1')
+    pedCoordsBySource[105] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+
+    local result = startScentHunt(105) -- deliberately NOT granted -- must still succeed
+
+    t.isTrue(result.started)
+end)
+
+t.test('a citizenid that cannot be resolved fails CLOSED -- exports.qbx_core:GetPlayer returning no PlayerData denies even with RequireGrant off and HasK9Access true', function()
+    local realGetPlayer = exportsStub.qbx_core.GetPlayer
+    exportsStub.qbx_core.GetPlayer = function(_self, _source) return nil end
+    pedCoordsBySource[106] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+
+    local result = startScentHunt(106)
+
+    exportsStub.qbx_core.GetPlayer = realGetPlayer
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+end)
+
+t.test('cleanup still works for a blocked person: stopScentHunt remains UNCONDITIONAL even after the hunt owner is blocked mid-hunt', function()
+    setCitizenId(107, 'CID-MIDHUNT-1')
+    pedCoordsBySource[107] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local started = startScentHunt(107)
+    t.isTrue(started.started, 'must genuinely be active before the block is applied, or the cleanup-still-works claim below proves nothing')
+
+    -- Revoke mid-hunt: an explicit block lands on this same citizenid while
+    -- the hunt this file's own header calls "a single already-authorized
+    -- session" is still running.
+    grantPermission('CID-MIDHUNT-1', 'block.ScentTrailHunt', true)
+
+    -- The "no unbounded trap" rule: stopScentHunt must still work, exactly
+    -- as if nothing had changed -- it never consults HasPermission,
+    -- HasK9Access, or Config.Features.ScentTrailHunt at all.
+    fireStopScentHunt(107)
+
+    fakeNow = fakeNow + 1000
+    local poll = pollScentHunt(107)
+    t.isFalse(poll.active, 'the hunt must actually be gone -- a mid-hunt block must never strand an active hunt unstoppable')
 end)
 
 -- ========================================================================
