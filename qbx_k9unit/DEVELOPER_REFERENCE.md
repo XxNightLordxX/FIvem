@@ -2866,7 +2866,7 @@ disagree, the code wins):
 | system | realm | required methods |
 |---|---|---|
 | `inventory` | `client` | `OpenStash`, `OpenShop`, `UseItem`, `ItemExists` |
-| `inventory` | `server` | `GetInventoryItems`, `GetContainerFromSlot`, `GetItemCount`, `RemoveItem`, `RegisterStash`, `RegisterShop`, `RegisterHook` |
+| `inventory` | `server` | `GetInventoryItems`, `GetContainerFromSlot`, `GetItemCount`, `RemoveItem`, `RegisterStash`, `RegisterShop`, `RegisterHook`, `ItemExists` |
 | `target` | `client` | `AddGlobalPlayer`, `AddGlobalVehicle`, `AddGlobalObject`, `AddModel`, `AddSphereZone`, `Remove`, `AddLocalEntity`, `RemoveLocalEntity` |
 | `target` | `server` | *(none)* |
 | `framework` | `client` | `GetPlayerData` |

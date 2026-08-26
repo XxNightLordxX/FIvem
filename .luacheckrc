@@ -692,6 +692,14 @@ globals = {
     -- assumption" convention (see fxmanifest.lua's own comment on
     -- server/medkit.lua's ordering for the precedent this follows).
     "AwardXP", "GetXPTier", "GetXP",
+    -- server/progression.lua -- GAP 1 closure (per-INDIVIDUAL-K9 override,
+    -- server/k9profiles.lua). Exposed so that file's own k9ProfileUpsert/
+    -- k9ProfileReset tablet callbacks can push a fresh, override-composed
+    -- tier snapshot to an already-connected citizenid's client THE MOMENT
+    -- high command edits their override -- without this, the edit would sit
+    -- correct-but-invisible until that citizenid's next real tier crossing,
+    -- reconnect, or a resource restart.
+    "PushXPTierSnapshotIfOnline",
     -- client/movement.lua's PHASE4_SPEC.md §13.0 Decision 2 "move-rate
     -- composer" -- REAL, IMPLEMENTED (coder-frontend pass, real-bug fix):
     -- a qa-tester finding caught client/wellbeing.lua unconditionally
