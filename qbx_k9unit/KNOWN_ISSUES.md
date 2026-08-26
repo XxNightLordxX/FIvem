@@ -245,11 +245,6 @@ designed but have an edge worth knowing about before you rely on them.
   of ghost-entity bug — but worth knowing if you expect a whole team to
   see the same marker.
 
-- **Pursuit sprint's cooldown resets on disconnect/reconnect.** It's a
-  short movement burst, not an XP exploit, and reconnecting mid-chase
-  already costs the player the chase — low-impact by design, not
-  overlooked.
-
 - **The tenure check runs a small database query every five minutes for
   every fully-tenured partnership**, rather than skipping it entirely.
   This is deliberate and tested — the alternative (a cache that could go
@@ -377,3 +372,26 @@ because each one taught a rule worth not re-learning.
   callers that already tolerate a bounded, server-corrected "already
   partnered"/"not partnered" rejection either way — not a caller that
   needs a live answer, which must call the refresh function first.
+- **Pursuit sprint's cooldown used to reset on disconnect/reconnect** — and
+  an earlier pass at this entry overstated why that mattered before this
+  one narrowed it back down, so both drafts are worth being honest about.
+  The cooldown was keyed by the player's numeric server id and cleared via
+  a `playerDropped` handler; reconnecting always produced a fresh id with no
+  cooldown history. For the mechanic's own stated purpose — a burst that
+  ends a foot chase already going the K9's way — this bought almost
+  nothing: the request handler re-checks live proximity and re-resolves the
+  target on every attempt regardless of cooldown state, and a suspect who
+  is genuinely fleeing will be out of range or gone by the time anyone
+  reconnects. The real gap was narrower and different: a **stationary or
+  engaged target** — cornered, mid-shootout, downed-but-not-arrested,
+  anyone who stays in range and wanted for well over the cooldown's own
+  length. Nothing else in this mechanic limited re-bursting against that
+  same target faster than this one cooldown, unlike its closest siblings:
+  Bite & Hold/Non-Lethal Takedown each have an independent per-target
+  cooldown behind their per-K9 one, and the XP-mint cooldowns are all
+  backstopped by the shared, citizenid-keyed XP budget — both already
+  immune to a reconnect for the identical reason. Pursuit sprint had no
+  second gate, so it's now keyed by citizenid (never a server id, which
+  never survives a reconnect) and cleaned up by a periodic sweep instead of
+  the connection-drop handler — same fix shape this resource already uses
+  for every other cooldown keyed by something other than a live connection.
