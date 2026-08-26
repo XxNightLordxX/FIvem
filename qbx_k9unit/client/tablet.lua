@@ -1301,10 +1301,14 @@ RegisterNUICallback('tablet:equipmentShopMoveLocation', function(data, cb)
         -- ALWAYS forwarded when present (never omitted for being blank,
         -- unlike Add above) -- an edit draft always starts pre-filled from
         -- a real, already-resolved value (server/equipmentshop.lua's own
-        -- ShopLocation class: model/scenario/label are "already resolved
-        -- ... never nil/empty"), so html/tablet.js sends `false` for a
-        -- field the operator deliberately blanked out (reset to the
-        -- shop-wide default) and a non-empty string for a real override --
+        -- ShopLocation class: model/label are "already resolved ... never
+        -- nil/empty"; scenario's OWN doc comment there is narrower --
+        -- "'' means 'no scenario', never nil" -- so a blank scenario field
+        -- can legitimately mean "already resolved to no scenario," not
+        -- only "untouched"), so html/tablet.js sends `false` for a field
+        -- the operator deliberately blanked out (reset to the shop-wide
+        -- default -- a genuine no-op if that field already resolved to
+        -- empty/default) and a non-empty string for a real override --
         -- both are meaningful values this file must not silently drop.
         if data.updates.label ~= nil then updates.label = data.updates.label end
         if data.updates.model ~= nil then updates.model = data.updates.model end

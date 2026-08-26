@@ -2775,8 +2775,12 @@
      *     "inherit the shop-wide default".
      *   - Edit: sent as `false` -- "reset this field back to the shop-wide
      *     default", since an edit draft always starts pre-filled from a
-     *     real, already-resolved (never blank) value, so a blank field here
-     *     is always a DELIBERATE clear, not an untouched default.
+     *     real, already-resolved value (label/model are never blank; a
+     *     blank scenario CAN legitimately mean "already resolved to no
+     *     scenario" -- sending `false` for one that is already blank is a
+     *     harmless no-op either way), so a blank field here is always
+     *     either a DELIBERATE clear or a value that was already effectively
+     *     the default, never silent data loss.
      */
     function saveShopLocationDraft() {
         if (state.pendingAction || !state.shopLocationDraft) return;

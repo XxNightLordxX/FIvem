@@ -512,6 +512,41 @@ end
 -- default 5.0) and its explicit autoAccessGrade-bypass fixtures (10, an
 -- integer) — none of the spec's 47 cases construct a Config shape any of
 -- these asserts would reject.
+--
+-- CLAMP-AND-WARN, NOT ASSERT, FOR Config.Peds / Config.CertifyProximityMeters
+-- (this pass) — same incident/reasoning as server/cooldowns.lua's own
+-- header ADDENDUM: a bare top-level `assert` that throws aborts THIS
+-- ENTIRE FILE from that line onward the instant an operator's config.lua
+-- edit reaches it — every function definition (HasK9Access,
+-- RefreshCertificationCache, IsConfiguredK9Model), RegisterNetEvent/
+-- RegisterCommand, and the QBCore:Server:OnJobUpdate auto-revoke handler
+-- textually BELOW the failing line silently never exist, for the rest of
+-- the resource's uptime, with nothing but one script-error line at boot to
+-- explain why. That is already the worst failure class this resource
+-- forbids ("the unbounded trap") anywhere; it is WORSE here specifically
+-- because THIS file is the one HasK9Access/GrantCertification/
+-- RevokeCertification live in — nearly every other feature in this
+-- resource calls into one of those three, so a single config typo on
+-- EITHER of these two fields would currently take every gated K9 feature
+-- down resource-wide, not just certification. See
+-- ResolveConfiguredPositiveNumber below and the Config.Peds build loop
+-- immediately after it for the actual clamp-and-warn behavior each is
+-- replaced with.
+--
+-- Config.Departments' own asserts immediately below are DELIBERATELY LEFT
+-- AS BARE ASSERTS, not converted — narrower in scope than the two above
+-- (this task's own instruction names only Config.Peds/
+-- Config.CertifyProximityMeters) and structurally a poor fit for the same
+-- treatment regardless: unlike a single positive number with one obvious,
+-- already-shipped fallback value, there is no single sensible substitute
+-- for a malformed per-department `certifierGrade`/`autoAccessGrade` that
+-- would not itself silently misrepresent a real operator department
+-- definition (clamping an unreadable rank requirement to some guessed
+-- number is a correctness risk of its own, not obviously safer than
+-- failing loudly). Left exactly as originally written and reported here
+-- for whoever owns config.lua/DEVELOPER_REFERENCE.md's broader
+-- config-safety pass to weigh in on, rather than decided unilaterally in
+-- this one.
 -- ======================================================================
 assert(type(Config.Departments) == 'table',
     '[qbx_k9unit] Config.Departments must be a table -- HasK9Access, IsEligibleCertifier, and every ' ..
@@ -540,40 +575,84 @@ for jobName, dept in pairs(Config.Departments) do
         'to whoever configured it.'):format(jobName))
 end
 
+--- CLAMP-AND-WARN (this pass) — see the CONFIG-SAFETY GUARD block above
+--- for the full "why not a bare assert here" reasoning. Resolves a raw
+--- Config number to a safe, positive value: unchanged if already valid,
+--- otherwise a loud PRINT (never an aborting error) naming the exact key,
+--- the bad value found, and the fallback substituted, so this file keeps
+--- loading — and every OTHER K9 feature that has nothing to do with the
+--- one field that was wrong keeps working — while an operator fixes the
+--- real config.lua typo. Mirrors server/cooldowns.lua's own
+--- ResolveConfiguredThresholdMs shape exactly (see that function's doc
+--- comment for the original incident this responds to), reimplemented
+--- locally rather than called directly: that function's own printed
+--- wording is cooldown-specific ("does NOT mean 'no cooldown'... would
+--- otherwise permanently block the guarded action") and would be actively
+--- misleading for the proximity-meters value this is used for below.
+--- @param configuredValue any
+--- @param fallback number -- a positive, hardcoded call-site literal (this file's own shipped default for the field), never itself read from Config
+--- @param configKeyName string
+--- @return number
+local function ResolveConfiguredPositiveNumber(configuredValue, fallback, configKeyName)
+    if type(configuredValue) == 'number' and configuredValue == configuredValue and configuredValue > 0 then
+        return configuredValue
+    end
+    print(
+        ('[qbx_k9unit] certifications.lua: %s must be a positive number (found: %s). Using the built-in ' ..
+         'fallback of %s instead so this file keeps loading and every OTHER K9 feature keeps working -- find ' ..
+         '%s in config.lua and fix it.'):format(configKeyName, tostring(configuredValue), tostring(fallback), configKeyName)
+    )
+    return fallback
+end
+
+-- CLAMP-AND-WARN (this pass): unchanged if valid; otherwise every online
+-- grant/revoke's proximity check (§4.2.4) falls back to the shipped
+-- 5.0-meter default rather than this whole file aborting. See
+-- ResolveConfiguredPositiveNumber's own doc comment above.
+Config.CertifyProximityMeters = ResolveConfiguredPositiveNumber(Config.CertifyProximityMeters, 5.0, 'Config.CertifyProximityMeters')
+
 --- Precomputed set of Config.Peds model hashes, built once at file load.
 --- Used ONLY by the grant-time model check (§4.2 condition 5) — per
 --- §4.1/§4.5, ordinary access checks (HasK9Access) never consult this.
 --- Generic over Config.Peds — no hardcoded model name anywhere (DEVELOPER_REFERENCE.md §3
 --- acceptance bullet 3), including custom streamed entries.
---
--- CONFIG-SAFETY GUARD (coder-backend, this pass) — see the block above
--- this comment for the full "why load time, not onResourceStart"
--- reasoning; this specific assert must run BEFORE the `for` loop three
--- lines below it, since that loop is what actually calls GetHashKey on
--- every entry.
-assert(type(Config.Peds) == 'table' and #Config.Peds > 0,
-    '[qbx_k9unit] Config.Peds must be a non-empty array -- K9ModelHashes (built immediately below, at this ' ..
-    'file\'s own load time) is derived entirely from it, and IsConfiguredK9Model (the grant-time model check, ' ..
-    'DEVELOPER_REFERENCE.md §4.2.5) could never accept ANY model if this were empty or malformed -- every certification grant ' ..
-    'attempt would fail with "target not K9 model" regardless of the target\'s actual ped.')
-for i, pedEntry in ipairs(Config.Peds) do
-    assert(type(pedEntry) == 'table' and type(pedEntry.model) == 'string' and pedEntry.model ~= '',
-        ('[qbx_k9unit] Config.Peds[%d].model must be a non-empty string -- GetHashKey(pedEntry.model) is called ' ..
-        'on it at this file\'s own load time to build K9ModelHashes; a missing/empty/non-string model here means ' ..
-        'that entry can never be matched by IsConfiguredK9Model, silently and permanently, with nothing logged ' ..
-        'to explain why a real K9 model never passes the grant-time check.'):format(i))
-end
-
-assert(type(Config.CertifyProximityMeters) == 'number' and Config.CertifyProximityMeters > 0,
-    '[qbx_k9unit] Config.CertifyProximityMeters must be a positive number -- GrantCertification and ' ..
-    'RevokeCertification both compare a live, server-measured distance against it (DEVELOPER_REFERENCE.md §4.2.4) before ' ..
-    'allowing an online grant/revoke. Zero or negative would make every such attempt fail as "too far" ' ..
-    'regardless of actual proximity, and a non-number would throw at the very first certify/revoke attempt ' ..
-    'instead of failing loudly here at resource start.')
-
+---
+--- CLAMP-AND-WARN (this pass) — see the CONFIG-SAFETY GUARD block above
+--- for the full "why not a bare assert here" reasoning. A missing/empty/
+--- malformed Config.Peds (or an individual malformed entry within it)
+--- degrades to a loud PRINT plus K9ModelHashes simply having no entry for
+--- the affected model(s) — IsConfiguredK9Model then correctly rejects
+--- every ped it's asked about (every certification GRANT attempt fails
+--- with "target not K9 model", exactly as the original assert's own
+--- message already described), but HasK9Access/GrantCertification/
+--- RevokeCertification/every net event and command this file registers
+--- keep working normally — unlike an aborting assert, this is a bounded,
+--- single-feature degradation, never a resource-wide one. An individual
+--- malformed entry (e.g. Config.Peds[3] missing `.model`) is skipped on
+--- its own, by index, without discarding every OTHER valid entry in the
+--- same array.
 local K9ModelHashes = {}
-for _, pedEntry in ipairs(Config.Peds) do
-    K9ModelHashes[GetHashKey(pedEntry.model)] = true
+if type(Config.Peds) ~= 'table' or #Config.Peds == 0 then
+    print(
+        '[qbx_k9unit] certifications.lua: Config.Peds must be a non-empty array (found: ' ..
+        tostring(Config.Peds) .. '). No model will ever be recognized as a K9 model -- every certification ' ..
+        'GRANT attempt will fail with "target not K9 model" until this is fixed in config.lua -- but ' ..
+        'HasK9Access and every other K9 feature in this file are unaffected. Find Config.Peds in config.lua ' ..
+        'and fix it.'
+    )
+else
+    for i, pedEntry in ipairs(Config.Peds) do
+        if type(pedEntry) == 'table' and type(pedEntry.model) == 'string' and pedEntry.model ~= '' then
+            K9ModelHashes[GetHashKey(pedEntry.model)] = true
+        else
+            print(
+                ('[qbx_k9unit] certifications.lua: Config.Peds[%d].model must be a non-empty string (found: %s). ' ..
+                 'Skipping this ONE entry -- it can never be matched by IsConfiguredK9Model -- rather than ' ..
+                 'discarding every other valid entry or aborting this file. Find Config.Peds[%d] in config.lua ' ..
+                 'and fix it.'):format(i, tostring(pedEntry and pedEntry.model), i)
+            )
+        end
+    end
 end
 
 --- @param modelHash number
