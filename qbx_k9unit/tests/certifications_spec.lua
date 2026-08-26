@@ -36,6 +36,27 @@
     silently drift from en.json's actual wording while still asserting
     real content, not just "some string was sent".
 
+    UPDATED (workflow-clarity pass -- "make the certification lifecycle
+    smooth and self-explaining"): env.locale is now `localeWithPendingCertKeys`
+    (below), NOT bare `Sandbox.locale`, for every fixture in this file --
+    mirrors tests/permissions_spec.lua's own `localeWithPendingCommandKeys`
+    pattern exactly, generalized to the file's default rather than an
+    opt-in override, because this pass touches the large majority of this
+    file's own refusal messages. For every key ALREADY shipped in
+    locales/en.json, `localeWithPendingCertKeys` is BYTE-IDENTICAL to
+    `Sandbox.locale` (a plain pass-through) -- the "doubles as a check the
+    key really exists" guarantee above is therefore still fully intact for
+    every pre-existing key. It ONLY substitutes the small, explicitly-listed
+    set of BRAND NEW keys this pass introduces (not yet in locales/en.json
+    -- this file may not edit that file directly; see PENDING_CERT_LOCALE
+    below for the exact, proposed English text of every one, forwarded to
+    whoever owns locales/en.json) with their proposed final text, so this
+    spec can assert on the REAL new wording today rather than skipping
+    those branches the way this file's own prior "one case this spec cannot
+    pin yet" note (removed this pass, now resolved) had to for
+    `specialization_requires_tier_capability` before that key actually
+    shipped.
+
     GENUINE FINDING (not a deviation to paper over): this file was audited
     for `assert(...)` calls at file-load time (the shape server/
     propattachment.lua, server/bonetool.lua, server/progression.lua,
@@ -54,6 +75,86 @@
 
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
+
+-- ======================================================================
+-- WORKFLOW-CLARITY PASS -- brand new locale keys, proposed to and not yet
+-- added by whoever owns locales/en.json (this file may not edit that file
+-- directly). Mirrors tests/permissions_spec.lua's own
+-- PENDING_COMMAND_LOCALE/localeWithPendingCommandKeys pattern exactly.
+-- Every value below is the EXACT English text requested -- see this
+-- pass's own report for the same list handed off verbatim.
+-- ======================================================================
+local PENDING_CERT_LOCALE = {
+    ['certifications.invalid_target_id'] =
+        "Invalid target -- provide the target's numeric server id (see /players).",
+    ['certifications.not_authorized_to_certify_hint'] =
+        "You are not authorized to certify K9 handlers -- you need your department's certifying rank, the k9.certify permission, or High Command status.",
+    ['certifications.not_authorized_to_revoke_hint'] =
+        "You are not authorized to revoke K9 certifications -- you need your department's certifying rank, the k9.certify permission, or High Command status.",
+    ['certifications.self_certification_disabled_hint'] =
+        "Self-certification is disabled on this server -- ask another certifying officer to do this for you instead.",
+    ['certifications.target_must_be_online_use_offline'] =
+        "Target must be online to be certified this way. If they are offline, use /k9certifyoffline [citizenid] [job] instead.",
+    ['certifications.target_must_be_online_model_check'] =
+        "Target must be online to be certified -- this server requires verifying their current K9 model, which cannot be checked while they are offline. There is no offline path for this while that check is enabled.",
+    ['certifications.target_not_in_department_hint'] =
+        'Target is not employed by an eligible department. Configured departments: %s.',
+    ['certifications.target_too_far_to_certify_distance'] =
+        'Target is too far away to certify -- move within %sm of them and try again.',
+    ['certifications.target_too_far_to_revoke_distance'] =
+        'Target is too far away to revoke their certification -- move within %sm of them and try again.',
+    ['certifications.action_target_too_far_distance'] =
+        'Target is too far away for this action -- move within %sm of them and try again.',
+    ['certifications.target_not_k9_model_hint'] =
+        "Target is not playing a recognized K9 model. Ask them to switch to one of this server's configured K9 models before certifying, or ask an operator to turn off Config.K9Appearance.requireK9ModelForRole if that check isn't needed.",
+    ['certifications.target_already_certified_hint'] =
+        "Target already holds an active certification for this department. Use /k9settier or /k9specialize to adjust it, or /k9decertify (/k9decertifyoffline if they're offline) and re-certify to start over.",
+    ['certifications.invalid_department_hint'] =
+        "'%s' is not a configured department. Configured departments: %s.",
+    ['certifications.tier_change_target_must_be_online_hint'] =
+        "Target must be online for this action, or use /k9settieroffline [citizenid] [job] [tier] to change their tier while they're offline.",
+    ['certifications.renew_target_must_be_online_hint'] =
+        "Target must be online for this action, or use /k9recertifyoffline [citizenid] [job] to renew their certification while they're offline.",
+    ['certifications.specialization_target_must_be_online_no_offline'] =
+        "Target must be online for this action -- specializations can only be granted while the target is connected; there is no offline path for this one.",
+    ['certifications.target_not_actively_certified_needs_cert'] =
+        "Target does not hold an active certification for this department -- certify them first with /k9certify [server id] (or /k9certifyoffline [citizenid] [job] if they're offline).",
+    ['certifications.tier_change_busy'] =
+        'That tier is being edited elsewhere right now -- try again in a moment.',
+    ['certifications.invalid_specialization_hint'] =
+        'That is not a configured K9 specialization. Configured specializations: %s.',
+    ['certifications.specialization_requires_active_cert_hint'] =
+        "That person must hold an active certification for this department before a specialization can be granted -- certify them first with /k9certify (or /k9certifyoffline if they're offline).",
+    ['certifications.specialization_requires_tier_capability_hint'] =
+        "That person's certification tier does not permit specializations for this department -- change their tier with /k9settier, or ask an operator to grant this capability to their tier from the tablet.",
+    ['certifications.grant_success_next_steps'] =
+        "They start at the '%s' tier with no specializations yet. %d feature(s) on this server also require a separate grant (/k9grantpermission, or the tablet) before they will work for them.",
+    ['certifications.grant_success_next_steps_no_grants'] =
+        "They start at the '%s' tier with no specializations yet.",
+    ['certifications.revoked_notice_online_with_reason'] =
+        'Your K9 certification has been revoked (reason: %s).',
+    ['certifications.renew_success_granter_detail'] =
+        "Target's certification has been renewed -- it now expires in %s day(s).",
+    ['certifications.renew_success_target_detail'] =
+        'Your K9 certification has been renewed -- it now expires in %s day(s).',
+    ['certifications.k9_access_lost_department_change'] =
+        'You are no longer employed by an eligible K9 department, so your K9 access permission no longer applies here. Any active K9 pairing has ended.',
+    ['certifications.k9_access_lost_grade_change'] =
+        'Your K9 access has ended -- your current rank no longer qualifies you, and you hold no separate certification for this department. Any active K9 pairing has ended.',
+    ['certifications.revoked_notice_job_change_next_steps'] =
+        'If you need K9 access in your new department, ask a certifying officer there to certify you.',
+}
+
+--- @param key string
+--- @return string
+local function localeWithPendingCertKeys(key, ...)
+    local text = PENDING_CERT_LOCALE[key]
+    if text then
+        if select('#', ...) > 0 then return text:format(...) end
+        return text
+    end
+    return Sandbox.locale(key, ...)
+end
 
 -- ----------------------------------------------------------------------
 -- Vector3-alike stub -- GrantCertification/RevokeCertification's proximity
@@ -276,6 +377,12 @@ local function newFixture(opts)
             narcotics = { label = 'Narcotics detection' },
             explosives = { label = 'Explosives detection' },
         },
+        -- WORKFLOW CLARITY (this pass, item 1): absent by default (every
+        -- pre-existing test's shipped-default posture, matching Features/
+        -- expiry above) -- CountFeaturesRequiringGrant treats a missing
+        -- table as zero, exactly like the real config.lua default
+        -- ("an empty table changes nothing").
+        FeatureControl = opts.featureControl,
     }
     if Config.AllowSelfCertification == nil then Config.AllowSelfCertification = true end
 
@@ -347,6 +454,11 @@ local function newFixture(opts)
             appearanceRevertCalls[#appearanceRevertCalls + 1] = citizenid
         end
     end
+
+    -- WORKFLOW-CLARITY PASS -- see this file's own header for the full
+    -- "byte-identical to Sandbox.locale except for the explicitly pending
+    -- keys" writeup.
+    overrides.locale = localeWithPendingCertKeys
 
     local env = Sandbox.newEnv(overrides)
 
@@ -474,7 +586,7 @@ t.test('CONFIG-SAFETY: Config.CertifyProximityMeters = 0 does not abort the file
     f.setPed(1001, 5001, vec3(6, 0, 0))
     f.setSource(1000)
     f.events['qbx_k9unit:server:certifyHandler'](1001)
-    t.isTrue(notifiedExactly(f, 1000, Sandbox.locale('certifications.target_too_far_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1000, localeWithPendingCertKeys('certifications.target_too_far_to_certify_distance', tostring(5.0)), 'error'))
 end)
 
 t.test('CONFIG-SAFETY: Config.CertifyProximityMeters = -3 (negative) does not abort the file -- resolves to the 5.0 fallback and warns', function()
@@ -721,7 +833,7 @@ t.test('GrantCertification: a non-numeric targetServerId is rejected outright, b
     f.mysql.scalar.await = function() scalarCalled = true end
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler']('not-a-number')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_target'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.invalid_target_id'), 'error'))
     t.isFalse(scalarCalled)
 end)
 
@@ -731,7 +843,7 @@ t.test('GrantCertification: a granter who is not certifier-eligible is rejected'
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
 t.test('GrantCertification: the certifier action cooldown silently no-ops the second rapid call from the SAME granter (no notification at all)', function()
@@ -752,7 +864,7 @@ t.test('GrantCertification: self-certification is rejected when Config.AllowSelf
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](1)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.self_certification_disabled'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.self_certification_disabled_hint'), 'error'))
 end)
 
 t.test('GrantCertification: an offline target (not currently connected) is rejected -- grant requires an online target', function()
@@ -760,7 +872,18 @@ t.test('GrantCertification: an offline target (not currently connected) is rejec
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2) -- source 2 never registered -> offline
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_must_be_online'), 'error'))
+    -- Config.K9Appearance is absent in this fixture (requireK9ModelForRole
+    -- not true), so the "point at /k9certifyoffline" variant applies -- see
+    -- the matching model-check variant test further below.
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_must_be_online_use_offline'), 'error'))
+end)
+
+t.test('GrantCertification: an offline target is told the MODEL-CHECK variant instead when Config.K9Appearance.requireK9ModelForRole is true -- never a false promise that /k9certifyoffline would work', function()
+    local f = newFixture({ k9Appearance = { requireK9ModelForRole = true } })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](2)
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_must_be_online_model_check'), 'error'))
 end)
 
 t.test('GrantCertification: a target not employed by any configured department is rejected', function()
@@ -769,7 +892,7 @@ t.test('GrantCertification: a target not employed by any configured department i
     f.registerPlayer(2, 'T1', { name = 'taxi', grade = { level = 1 } })
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_not_in_department'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_in_department_hint', 'police, sheriff'), 'error'))
 end)
 
 t.test('GrantCertification: a target beyond Config.CertifyProximityMeters is rejected (live server-side coords, not client-claimed)', function()
@@ -780,7 +903,7 @@ t.test('GrantCertification: a target beyond Config.CertifyProximityMeters is rej
     f.setPed(2, 200, vec3(100, 0, 0), K9_HASH_SHEPHERD) -- 100m away, target IS K9-modeled
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_too_far_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_too_far_to_certify_distance', tostring(5.0)), 'error'))
 end)
 
 t.test('GrantCertification: proximity is skipped for self-certification (nothing to measure distance to)', function()
@@ -809,7 +932,7 @@ t.test('GrantCertification: a target whose LIVE ped model is not a configured K9
     f.setPed(2, 200, vec3(0, 0, 0), NON_K9_HASH)
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_not_k9_model'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_k9_model_hint'), 'error'))
 end)
 
 t.test('GrantCertification: an already-actively-certified target (existingId pre-check) is rejected as a no-op, never reaches the INSERT', function()
@@ -823,7 +946,7 @@ t.test('GrantCertification: an already-actively-certified target (existingId pre
     f.mysql.insert.await = function() insertCalled = true; return 1 end
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_already_certified'), 'inform'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_already_certified_hint'), 'inform'))
     t.isFalse(insertCalled)
 end)
 
@@ -852,7 +975,13 @@ t.test('GrantCertification: full success path -- INSERT fires once, cache reflec
     f.setSource(10)
     f.events['qbx_k9unit:server:certifyHandler'](20)
 
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'))
+    -- WORKFLOW CLARITY (this pass, item 1): GrantCertification now sends
+    -- the granter ONE additional "what's still missing" notice right after
+    -- this one -- see the dedicated test below for that message's own
+    -- content -- so the granter-facing success text is no longer
+    -- necessarily the LAST entry; anyNotify (scans every entry) still
+    -- proves it was sent, which is all this test itself is about.
+    t.isTrue(anyNotify(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'))
     t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.grant_success_target'), 'success'))
     t.equals(insertParams[1], 'TARGET')
     t.equals(insertParams[2], 'police')
@@ -868,6 +997,62 @@ t.test('GrantCertification: full success path -- INSERT fires once, cache reflec
         end
     end
     t.isTrue(firedGrant, 'the outbound integration event must fire only after the INSERT + cache refresh already committed')
+end)
+
+-- ======================================================================
+-- WORKFLOW CLARITY (this pass, item 1 -- "a certifier is never told what
+-- is still missing"). SendGrantSuccessNextSteps -- every value it reports
+-- is proven here to come from REAL STATE (the just-refreshed cache /
+-- Config.FeatureControl.RequireGrant), never a hardcoded assumption.
+-- ======================================================================
+
+t.test('GrantCertification: WORKFLOW CLARITY -- success sends the granter a follow-up naming the real tier and specialization count, with no features requiring a grant on this server (the shipped default)', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+    f.mysql.scalar.await = function() return nil end
+    f.mysql.insert.await = function() return 77 end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    -- No Config.FeatureControl at all in this fixture (opts.featureControl
+    -- absent) -- CountFeaturesRequiringGrant reads that as zero, so the
+    -- NO-GRANTS-NEEDED variant is the one that must be sent, naming the
+    -- REAL tier ('certified', the DB's own default -- read back from the
+    -- cache this same call just populated, never hardcoded here).
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.grant_success_next_steps_no_grants', 'certified'), 'inform'))
+end)
+
+t.test('GrantCertification: WORKFLOW CLARITY -- when Config.FeatureControl.RequireGrant lists features, the follow-up names the REAL, live count, not a hardcoded number', function()
+    local f = newFixture({ featureControl = { RequireGrant = { BiteAndHold = true, NonLethalTakedown = true, PropDragging = false } } })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+    f.mysql.scalar.await = function() return nil end
+    f.mysql.insert.await = function() return 77 end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    -- Exactly 2 of the 3 entries are `true` (PropDragging is `false`, and
+    -- must NOT be counted) -- proves the count is computed live from the
+    -- actual table shape, not merely "the table is non-empty".
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.grant_success_next_steps', 'certified', 2), 'inform'))
+end)
+
+t.test('GrantCertificationOffline: WORKFLOW CLARITY -- the same follow-up is sent on the offline grant path too, computed from the same just-refreshed real state', function()
+    local f = newFixture({ featureControl = { RequireGrant = { FindAlerts = true } } })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.mysql.scalar.await = function() return nil end
+    f.mysql.insert.await = function() return 5 end
+
+    f.commands['k9certifyoffline'].fn(1, { 'OFFLINE_CIT', 'police' })
+
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.grant_success_next_steps', 'certified', 1), 'inform'))
 end)
 
 -- ======================================================================
@@ -1139,7 +1324,7 @@ t.test('GrantCertification: a duplicate-key error thrown by the INSERT (DB backs
     f.mysql.insert.await = function() error({ errno = 1062, message = 'Duplicate entry' }) end
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_already_certified'), 'inform'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_already_certified_hint'), 'inform'))
 end)
 
 -- ----------------------------------------------------------------------
@@ -1211,8 +1396,8 @@ t.test('GrantCertification: LOAD-BEARING -- two overlapping grants for the SAME 
 
     t.equals(insertCount, 1, 'exactly one INSERT must occur despite the interleaved concurrent attempt')
     t.equals(scalarCallCount, 2, 'both MySQL.scalar.await calls that DID happen must both be attributable to A alone (its own pre-check + its own post-insert cache refresh) -- B made zero MySQL calls')
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'the winner (A) must see a real success')
-    t.isTrue(notifiedExactly(f, 11, Sandbox.locale('certifications.target_already_certified'), 'inform'), 'the loser (B) must see the same "already certified" no-op a real post-facto duplicate would -- not an error, not silence')
+    t.isTrue(anyNotify(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'the winner (A) must see a real success')
+    t.isTrue(notifiedExactly(f, 11, localeWithPendingCertKeys('certifications.target_already_certified_hint'), 'inform'), 'the loser (B) must see the same "already certified" no-op a real post-facto duplicate would -- not an error, not silence')
 end)
 
 t.test('GrantCertification: LOAD-BEARING -- GrantInFlight is released even when the critical section throws an unexpected error, so a thrown error can never permanently block future grants for that (citizenid, job)', function()
@@ -1249,7 +1434,7 @@ t.test('GrantCertification: LOAD-BEARING -- GrantInFlight is released even when 
     f.events['qbx_k9unit:server:certifyHandler'](20)
 
     t.equals(insertCount, 1, 'the retry must succeed -- proving GrantInFlight[lockKey] was genuinely released after the thrown error, not left held')
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'the retry must be a real success, not another "already certified"/still-locked rejection')
+    t.isTrue(anyNotify(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'the retry must be a real success, not another "already certified"/still-locked rejection')
 end)
 
 -- ======================================================================
@@ -1297,6 +1482,21 @@ t.test('RevokeCertification: full online success path -- UPDATE fires with the g
         if ev[1] == 'qbx_k9unit:events:certificationRevoked' and ev[2] == 'REVOKEE' and ev[3] == 'police' and ev[4] == 'manual' then fired = true end
     end
     t.isTrue(fired)
+end)
+
+t.test('RevokeCertification: WORKFLOW CLARITY -- when the granter supplies a reason, the revoked handler is told what it was, not just that they were revoked', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    f.commands['k9decertify'].fn(10, { '20', 'disciplinary' })
+
+    t.isTrue(notifiedExactly(f, 20, localeWithPendingCertKeys('certifications.revoked_notice_online_with_reason', 'disciplinary'), 'error'))
 end)
 
 -- ======================================================================
@@ -1383,7 +1583,7 @@ t.test('RevokeCertification: a target beyond proximity is rejected, same rule as
     f.setPed(20, 1020, vec3(50, 0, 0))
     f.setSource(10)
     f.events['qbx_k9unit:server:revokeHandler'](20)
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.target_too_far_to_revoke'), 'error'))
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.target_too_far_to_revoke_distance', tostring(5.0)), 'error'))
 end)
 
 t.test('RevokeCertification: a genuinely offline target (numeric-id path) is refused with a pointer to the offline command, never silently proceeds', function()
@@ -1404,7 +1604,7 @@ t.test('RevokeCertification: not certifier-eligible is rejected', function()
     f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
     f.setSource(10)
     f.events['qbx_k9unit:server:revokeHandler'](20)
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.not_authorized_to_revoke'), 'error'))
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.not_authorized_to_revoke_hint'), 'error'))
 end)
 
 -- ----------------------------------------------------------------------
@@ -1557,7 +1757,7 @@ t.test('RevokeCertificationOffline: a typo\'d/unconfigured department is rejecte
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
     f.commands['k9decertifyoffline'].fn(10, { 'SOMEONE', 'not-a-real-department' })
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.invalid_department', 'not-a-real-department'), 'error'))
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not-a-real-department', 'police, sheriff'), 'error'))
     t.isFalse(updateCalled)
 end)
 
@@ -1697,6 +1897,19 @@ t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade, fo
     t.equals(f.effectEndCalls[#f.effectEndCalls], 90)
     t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][1], 'CIT90')
     t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][2], 'k9_access_lost')
+
+    -- WORKFLOW CLARITY (this pass, item 4 -- "a job change is the
+    -- invisible one"): this is the EXACT case that pass closes -- a
+    -- confirmed grade-based access loss reachable with NO admin action at
+    -- all. Zero false-positive risk here BY CONSTRUCTION (reaching this
+    -- line already required `stillHasNonCertAccess == false`), so this
+    -- must always notify.
+    t.isTrue(notifiedExactly(f, 90, localeWithPendingCertKeys('certifications.k9_access_lost_grade_change'), 'error'))
+    local audited = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('AUDIT: job change ended K9 access', 1, true) and line:find('CIT90', 1, true) then audited = true end
+    end
+    t.isTrue(audited, 'the actor (unreachable directly -- OnJobUpdate carries no acting source) must be able to understand this afterward via the server console')
 end)
 
 t.test('OnJobUpdate: APPEARANCE FIX -- a same-department demotion below autoAccessGrade (no cached cert) also calls MaybeRevertK9Appearance, so an autoAccessGrade-only role-holder is never stranded on the K9 model after losing the grade', function()
@@ -1727,6 +1940,10 @@ t.test('OnJobUpdate: FIX -- a same-department demotion that STAYS at/above autoA
     t.equals(#f.leashDetachCalls, 0)
     t.equals(#f.effectEndCalls, 0)
     t.equals(#f.partnershipBreakCalls, 0)
+    -- WORKFLOW CLARITY (this pass, item 4) -- no real loss occurred, so no
+    -- "your K9 access ended" notice must be sent either; an ordinary
+    -- promotion/demotion that stays above the threshold must be silent.
+    t.equals(#f.notifyLog, 0)
 end)
 
 t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade does NOT tear anything down when the citizenid separately holds an active k9.access permission grant', function()
@@ -1795,7 +2012,12 @@ t.test('OnJobUpdate: a REAL department change revokes the old cert, re-scopes th
     t.equals(updateParams[2], 'reassigned')
     t.equals(updateParams[3], 'CIT40')
     t.equals(updateParams[4], 'police')
-    t.isTrue(notifiedExactly(f, 40, Sandbox.locale('certifications.revoked_notice_job_change', 'Police Department'), 'error'))
+    -- WORKFLOW CLARITY (this pass, item 4): a "what to do next" follow-up
+    -- is now sent right after this one -- see the dedicated test below --
+    -- so this is no longer necessarily the LAST notice; anyNotify still
+    -- proves it was sent.
+    t.isTrue(anyNotify(f, 40, Sandbox.locale('certifications.revoked_notice_job_change', 'Police Department'), 'error'))
+    t.isTrue(notifiedExactly(f, 40, localeWithPendingCertKeys('certifications.revoked_notice_job_change_next_steps'), 'inform'))
     t.equals(player._metaWrites[#player._metaWrites].value, false)
     t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 40)
     t.equals(f.leashDetachCalls[#f.leashDetachCalls][2], 'certification_revoked')
@@ -1830,6 +2052,34 @@ t.test('OnJobUpdate: losing department membership entirely (new job not in Confi
     t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][1], 50)
     t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][2], 'department_changed')
     t.equals(#f.notifyLog, 0, 'a player with no active cert of their own must get no cert-revoke notification from this path')
+end)
+
+-- ======================================================================
+-- WORKFLOW CLARITY (this pass, item 4 -- "a job change is the invisible
+-- one... whatever happens, both the person and the actor should be able
+-- to understand it afterwards"). The department-loss branch above runs
+-- for EVERY employee leaving an eligible department, so it must stay
+-- silent for the overwhelming majority (the test immediately above already
+-- pins that). It is scoped to notify ONLY the one case this file can
+-- verify after the fact without a second tracking cache: a citizenid who
+-- separately holds a 'k9.access' PERMISSION GRANT (not job-scoped, so
+-- still checkable once `job` is already the new one) -- see this file's
+-- header for the disclosed autoAccessGrade-only residual gap.
+-- ======================================================================
+
+t.test('OnJobUpdate: WORKFLOW CLARITY -- leaving the department entirely notifies a citizenid who holds a separate k9.access permission grant, since that grant silently stops working the instant department membership is lost', function()
+    local f = newFixture()
+    f.registerPlayer(52, 'CIT52', { name = 'police', grade = { level = 1 } })
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'CIT52' and key == 'k9.access' end
+
+    fireJobUpdate(f, 52, { name = 'taxi', grade = { level = 1 } })
+
+    t.isTrue(notifiedExactly(f, 52, localeWithPendingCertKeys('certifications.k9_access_lost_department_change'), 'error'))
+    local audited = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('AUDIT: job change ended K9 access', 1, true) and line:find('CIT52', 1, true) then audited = true end
+    end
+    t.isTrue(audited)
 end)
 
 t.test('OnJobUpdate: a K9-role player who ALSO loses department membership entirely triggers BOTH the officer-role leash detach AND the cert-revoke leash detach -- pinned as observed, not assumed exclusive', function()
@@ -2007,7 +2257,7 @@ t.test('OnJobUpdate: REGRESSION -- a throwing auto-revoke UPDATE that ACTUALLY c
     local ok, err = pcall(fireJobUpdate, f, 41, { name = 'sheriff', grade = { level = 1 } })
     t.isTrue(ok, 'must not propagate: ' .. tostring(err))
 
-    t.isTrue(notifiedExactly(f, 41, Sandbox.locale('certifications.revoked_notice_job_change', 'Police Department'), 'error'))
+    t.isTrue(anyNotify(f, 41, Sandbox.locale('certifications.revoked_notice_job_change', 'Police Department'), 'error'))
     t.equals(player._metaWrites[#player._metaWrites].value, false)
     t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 41)
 
@@ -2046,7 +2296,7 @@ t.test('/k9certify command: a valid numeric string arg reaches the real grant fl
     f.setPed(1, 100, vec3(0, 0, 0))
     f.setPed(2, 200, vec3(0, 0, 0), K9_HASH_SHEPHERD)
     f.commands['k9certify'].fn(1, { '2' })
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'))
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'))
 end)
 
 -- ======================================================================
@@ -2308,7 +2558,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- a granter who is not certifier-elig
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setSource(1)
     f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
 t.test('SetCertificationTier: FAIL-CLOSED -- an invalid tier name is rejected outright, before any MySQL call', function()
@@ -2330,7 +2580,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- self-action is rejected when Config
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
     f.events['qbx_k9unit:server:setCertificationTier'](1, 'senior')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.self_certification_disabled'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.self_certification_disabled_hint'), 'error'))
 end)
 
 t.test('SetCertificationTier: FAIL-CLOSED -- an offline target is rejected', function()
@@ -2338,7 +2588,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- an offline target is rejected', fun
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
     f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.action_target_must_be_online'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.tier_change_target_must_be_online_hint'), 'error'))
 end)
 
 t.test('SetCertificationTier: FAIL-CLOSED -- a target beyond Config.CertifyProximityMeters is rejected', function()
@@ -2349,7 +2599,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- a target beyond Config.CertifyProxi
     f.setPed(2, 1020, vec3(50, 0, 0))
     f.setSource(1)
     f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.action_target_too_far'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.action_target_too_far_distance', tostring(5.0)), 'error'))
 end)
 
 t.test('SetCertificationTier: FAIL-CLOSED -- a target with no active certification for their current job is rejected', function()
@@ -2360,7 +2610,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- a target with no active certificati
     f.setPed(2, 1020, vec3(0, 0, 0))
     f.setSource(1)
     f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_not_actively_certified'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'))
 end)
 
 t.test('SetCertificationTier: already holding the requested tier is a distinguishable no-op', function()
@@ -2470,7 +2720,7 @@ t.test('RenewCertification: FAIL-CLOSED -- a granter who is not certifier-eligib
     f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } })
     f.setSource(1)
     f.events['qbx_k9unit:server:renewCertification'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
 t.test('RenewCertification: FAIL-CLOSED -- a target with no active certification is rejected', function()
@@ -2481,7 +2731,7 @@ t.test('RenewCertification: FAIL-CLOSED -- a target with no active certification
     f.setPed(2, 1020, vec3(0, 0, 0))
     f.setSource(1)
     f.events['qbx_k9unit:server:renewCertification'](2)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_not_actively_certified'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'))
 end)
 
 t.test('RenewCertification: EXPIRY -- full success path extends expires_at via DATE_ADD(NOW(), INTERVAL ? DAY), refreshes the cache, clears the warned/lapsed flags, fires the outbound event', function()
@@ -2504,8 +2754,11 @@ t.test('RenewCertification: EXPIRY -- full success path extends expires_at via D
     t.equals(updateParams[1], 90)
     t.equals(updateParams[2], 'TARGET')
     t.equals(updateParams[3], 'police')
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_success_granter'), 'success'))
-    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.renew_success_target'), 'success'))
+    -- WORKFLOW CLARITY (this pass, item 5 -- "renewing says what changed"):
+    -- state.nowUnix (1700000000) to the new expiresAtUnix (1707776000) is
+    -- exactly 90 days -- both success notices now say so explicitly.
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.renew_success_granter_detail', '90'), 'success'))
+    t.isTrue(notifiedExactly(f, 20, localeWithPendingCertKeys('certifications.renew_success_target_detail', '90'), 'success'))
 
     local fired = false
     for _, ev in ipairs(f.outboundEvents) do
@@ -2550,7 +2803,7 @@ t.test('GrantSpecialization: FAIL-CLOSED -- an unconfigured specialization key i
     f.setPed(2, 200, vec3(0, 0, 0))
     f.setSource(1)
     f.events['qbx_k9unit:server:grantSpecialization'](2, 'not-a-real-specialization')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_specialization'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.invalid_specialization_hint', 'explosives, narcotics'), 'error'))
 end)
 
 t.test('GrantSpecialization: FAIL-CLOSED -- a target with no active base certification is rejected', function()
@@ -2561,7 +2814,7 @@ t.test('GrantSpecialization: FAIL-CLOSED -- a target with no active base certifi
     f.setPed(2, 200, vec3(0, 0, 0))
     f.setSource(1)
     f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_requires_active_cert'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.specialization_requires_active_cert_hint'), 'error'))
 end)
 
 t.test('GrantSpecialization: SECURITY FIX -- a target whose base certification is EXPIRED (active=true in the DB, but past expires_at) is also rejected, matching GetCertificationTier', function()
@@ -2581,7 +2834,7 @@ t.test('GrantSpecialization: SECURITY FIX -- a target whose base certification i
     f.setSource(1)
     f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_requires_active_cert'), 'error'),
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.specialization_requires_active_cert_hint'), 'error'),
         'this precondition used to omit `not cached.expired`, unlike GetCertificationTier -- an expired-but-not-revoked row must be refused here too, not treated as still-active')
     t.isFalse(insertCalled, 'must never reach the INSERT for an expired base certification')
 end)
@@ -2745,7 +2998,7 @@ t.test('RevokeSpecialization: FAIL-CLOSED -- a granter who is not certifier-elig
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setSource(1)
     f.events['qbx_k9unit:server:revokeSpecialization'](2, 'narcotics')
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_revoke'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_revoke_hint'), 'error'))
 end)
 
 t.test('RevokeSpecialization: an offline target is refused with a pointer to the offline command', function()
@@ -2834,7 +3087,7 @@ t.test('RevokeSpecializationOffline: a typo\'d/unconfigured department is reject
     local f = newFixture()
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
     f.commands['k9unspecializeoffline'].fn(10, { 'SOMEONE', 'not-a-real-department', 'narcotics' })
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.invalid_department', 'not-a-real-department'), 'error'))
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not-a-real-department', 'police, sheriff'), 'error'))
 end)
 
 t.test('/k9unspecialize command: a non-numeric args[1] is rejected with the usage message', function()
@@ -3135,7 +3388,7 @@ t.test('tabletSetCertificationTier: SECURITY -- a caller with no rank/grant/high
     t.isFalse(result.ok)
     t.equals(result.error, 'not_eligible')
     t.isFalse(updateCalled)
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
     t.isTrue(auditedWith(f, 'tabletSetCertificationTier', 'not_eligible'), 'a DENIED tablet invocation must be audited too, not only a successful one')
 end)
 
@@ -3399,7 +3652,10 @@ t.test('tabletRenewCertification: OFFLINE success extends expiry with no proximi
     t.equals(updateParams[1], 90)
     t.equals(updateParams[2], 'T1')
     t.equals(updateParams[3], 'police')
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_success_granter'), 'success'))
+    -- expires_at_unix (1700000000) equals this fixture's default nowUnix
+    -- exactly -- DaysRemainingFromUnix clamps to a minimum of 1 rather than
+    -- reporting 0 (see that function's own rounding doc comment).
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.renew_success_granter_detail', '1'), 'success'))
 end)
 
 t.test('tabletRenewCertification: ONLINE success is unaffected', function()
@@ -3581,7 +3837,7 @@ t.test('tabletCertify: OFFLINE grant now succeeds when Config.K9Appearance.requi
     t.isTrue(result.ok)
     t.equals(insertParams[1], 'T1')
     t.equals(insertParams[2], 'police')
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'))
+    t.isTrue(anyNotify(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'))
 end)
 
 t.test('tabletCertify: OFFLINE grant is REFUSED when Config.K9Appearance.requireK9ModelForRole is explicitly true -- never silently skips a check the operator turned on', function()
@@ -3656,7 +3912,7 @@ t.test('/k9certifyoffline command: an unconfigured department is rejected, never
 
     f.commands['k9certifyoffline'].fn(1, { 'T1', 'not_a_real_department' })
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_department', 'not_a_real_department'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not_a_real_department', 'police, sheriff'), 'error'))
     t.isFalse(insertCalled)
 end)
 
@@ -3666,7 +3922,7 @@ t.test('/k9settieroffline command: a non-certifier is rejected before any lookup
 
     f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
 t.test('/k9recertifyoffline command: disabled-by-default expiry feature is rejected before any citizenid/job validation', function()

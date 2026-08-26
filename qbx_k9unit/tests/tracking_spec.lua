@@ -51,6 +51,20 @@ local TRACK_TYPE_FEATURE = {
     gunpowder = 'GunpowderSniffing',
 }
 
+--- DETERMINISTIC ITERATION ORDER: plain `pairs(TRACK_TYPE_FEATURE)` would
+--- work fine for correctness (every test body below builds its own fresh
+--- fixture and asserts independently of the others), but Lua's table
+--- iteration order over string keys is not guaranteed stable across
+--- process runs (lstate.c seeds the string hash per-VM-instance) -- this
+--- file's own three-type loop below was observed emitting its
+--- 'not blocked...'/'block.X denies...'/'block.X on ONE track type...'
+--- trios in a different scent/blood/gunpowder order from one `lua5.4
+--- tracking_spec.lua` run to the next. Harmless to pass/fail, but it
+--- makes a run-to-run diff of this file's own output noisy for no
+--- reason. Iterating this fixed array instead of the map directly pins
+--- the order without changing which cases run.
+local TRACK_TYPES_ORDERED = { 'scent', 'blood', 'gunpowder' }
+
 --- @param opts table? {
 ---   requireGrantListed: table? -- e.g. { BloodTracking = true } -- Config.FeatureControl.RequireGrant
 ---   withHasPermission: boolean (default true)
@@ -221,7 +235,8 @@ end
 -- type would be triplicated, near-identical code.
 -- ========================================================================
 
-for trackType, featureName in pairs(TRACK_TYPE_FEATURE) do
+for _, trackType in ipairs(TRACK_TYPES_ORDERED) do
+    local featureName = TRACK_TYPE_FEATURE[trackType]
     t.test(('not blocked, not in RequireGrant -- %s search succeeds (default allow, step 4)'):format(trackType), function()
         local f = newTrackingFixture()
         f.registerPlayer(1, 'K9-CID', 100)
@@ -285,7 +300,8 @@ for trackType, featureName in pairs(TRACK_TYPE_FEATURE) do
         f.setPedCoords(100, 0, 0, 0)
         f.grantPermission('K9-CID', 'block.' .. featureName, true)
 
-        for otherType, otherFeature in pairs(TRACK_TYPE_FEATURE) do
+        for _, otherType in ipairs(TRACK_TYPES_ORDERED) do
+            local otherFeature = TRACK_TYPE_FEATURE[otherType]
             if otherType ~= trackType then
                 -- Only assert on the two capturable types (blood/gunpowder)
                 -- -- scent has no logged source in this fixture regardless.
