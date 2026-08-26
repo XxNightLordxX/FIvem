@@ -60,6 +60,24 @@
     wander-off/entity-lost/carry-reassertion branches. See
     server/kennel.lua's own header CRITICAL SAFETY section for the full
     architecture this pins from the client side.
+
+    TRAP-HUNT FIX (this pass, coder-frontend): a real, high-probability
+    stranding trap was found in "Rest in Kennel" -- the ONLY pre-existing
+    exit was re-selecting the same small (likely camera-occluding) kennel
+    prop through ox_target, with no radial entry, no keybind. This pass
+    adds ExitKennelRest() (a globally-exposed, gate-free wrapper over
+    ReleaseKennelRest()), a k9exitkennel keybind (client/keybinds.lua), and
+    an "Exit Kennel" radial item (client/radial.lua). It ALSO corrects a
+    real false claim this file's own former "WANDER-OFF EXIT" test
+    inherited from client/kennel.lua's own (now-fixed) comment: "simply
+    walking away is ALREADY an unconditional... way out" -- VERIFIED FALSE,
+    since AttachEntityToEntity re-clamps the occupant's position to the
+    kennel's bone every tick regardless of movement input (see
+    client/combat.lua's own PROP DRAGGING header for the same finding
+    applied to its own dragged target). See the "EXITKENNELREST" and
+    "REQUIRED (trap-hunt brief)" test sections below for the new coverage,
+    and the corrected WATCHDOG test's own new name for the corrected
+    framing.
 ]]
 
 local t = dofile('testkit.lua')
@@ -889,6 +907,110 @@ t.test('SAFETY: the "Exit Kennel" ox_target option releases unconditionally -- d
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestExitKennel')
 end)
 
+t.test('SAFETY: the "Exit Kennel" ox_target option calls the SAME ExitKennelRest() global the new k9exitkennel keybind (client/keybinds.lua) and "Exit Kennel" radial item (client/radial.lua) now also call -- never a second, forked release', function()
+    local f = newKennelFixture()
+    local netId = 951
+    f.registerForeignEntity(netId, 151, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    f.fireResourceStart(RESOURCE_NAME)
+    local exitOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:exitKennel' then exitOption = option end
+    end
+
+    local exitKennelRestCalls = 0
+    local realExitKennelRest = f.env.ExitKennelRest
+    f.env.ExitKennelRest = function(...)
+        exitKennelRestCalls = exitKennelRestCalls + 1
+        return realExitKennelRest(...)
+    end
+
+    exitOption.onSelect()
+    t.equals(exitKennelRestCalls, 1, 'onSelect must call through the shared ExitKennelRest() global, not a private copy of ReleaseKennelRest')
+    t.isFalse(f.env.IsRestingInKennel())
+end)
+
+-- ========================================================================
+-- ExitKennelRest() -- trap-hunt fix, THIS PASS. The occupant's own
+-- ALWAYS-AVAILABLE exit entry point, exposed globally so client/keybinds.lua's
+-- new k9exitkennel command/keybind and client/radial.lua's new "Exit
+-- Kennel" item can reach it directly, instead of only through ox_target on
+-- the kennel prop itself. See client/kennel.lua's own doc comment on this
+-- global, and its corrected WANDER-OFF EXIT comment above for the finding
+-- this whole addition responds to.
+-- ========================================================================
+
+t.test('ExitKennelRest(): defined with the feature ON, and releases exactly like the ox_target option -- detaches, restores collision, fires the best-effort server bookkeeping event', function()
+    local f = newKennelFixture()
+    local netId = 952
+    f.registerForeignEntity(netId, 152, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
+
+    f.env.ExitKennelRest()
+
+    t.isFalse(f.env.IsRestingInKennel())
+    t.isTrue(#f.detachCalls >= 1 and f.detachCalls[#f.detachCalls].handle == MY_PED)
+    t.isTrue(#f.collisionCalls >= 1 and f.collisionCalls[#f.collisionCalls].handle == MY_PED and f.collisionCalls[#f.collisionCalls].toggle == true)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestExitKennel')
+end)
+
+t.test('FIXED: ExitKennelRest() stays defined and reachable-but-inert with the feature OFF at file-load -- mirrors IsRestingInKennel()/IsCarryingKennel()/RequestDeployKennel() above, for client/keybinds.lua/client/radial.lua\'s own call sites', function()
+    local f = newKennelFixture({ deployableKennel = false })
+    t.isNotNil(f.env.ExitKennelRest)
+    f.env.ExitKennelRest() -- must not error even though restState can never be non-nil with the feature off from load
+    t.equals(#f.serverEvents, 0, 'a genuine no-op -- ReleaseKennelRest\'s own `if not restState then return end` guard short-circuits before ever touching the network')
+end)
+
+t.test('ExitKennelRest(): calling it while not resting is a genuine, harmless no-op -- no detach, no collision change, no server event', function()
+    local f = newKennelFixture()
+    f.env.ExitKennelRest()
+    t.equals(#f.detachCalls, 0)
+    t.equals(#f.collisionCalls, 0)
+    t.equals(#f.serverEvents, 0)
+end)
+
+t.test('REQUIRED (trap-hunt brief): ExitKennelRest() releases the occupant even when Config.Features.DeployableKennel has been toggled OFF mid-session, AFTER the occupant already entered while it was on', function()
+    local f = newKennelFixture()
+    local netId = 953
+    f.registerForeignEntity(netId, 153, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
+
+    -- Simulates a live config push flipping the flag off while this client
+    -- is already resting -- this file's own REGISTRATION-TIME FEATURE GATE
+    -- was evaluated once at load time and does not re-run, so every
+    -- net-event handler/ox_target option/watchdog thread registered while
+    -- the flag was still true stays registered regardless -- but this
+    -- proves ExitKennelRest() ITSELF never re-reads the flag on the way
+    -- out either.
+    f.env.Config.Features.DeployableKennel = false
+
+    f.env.ExitKennelRest()
+    t.isFalse(f.env.IsRestingInKennel())
+    t.isTrue(#f.detachCalls >= 1 and f.detachCalls[#f.detachCalls].handle == MY_PED)
+end)
+
+t.test('REQUIRED (trap-hunt brief): ExitKennelRest() releases the occupant even when CanShowK9UI()/HasK9Access() would now both deny access ("no longer certified") -- neither is even consulted', function()
+    local f = newKennelFixture()
+    local netId = 954
+    f.registerForeignEntity(netId, 154, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    f.setCanShowK9UI(false)
+    f.setHasK9Access(false)
+    local canShowK9UICallsBefore = f.canShowK9UICallCount()
+    local hasK9AccessCallsBefore = f.hasK9AccessCallCount()
+
+    f.env.ExitKennelRest()
+
+    t.isFalse(f.env.IsRestingInKennel(), 'an exit path must never be deniable by a certification/access check')
+    t.equals(f.canShowK9UICallCount(), canShowK9UICallsBefore, 'CanShowK9UI() must never even be consulted on the way out')
+    t.equals(f.hasK9AccessCallCount(), hasK9AccessCallsBefore, 'HasK9Access() must never even be consulted on the way out')
+    t.equals(f.denyCallCount(), 0, 'DenyK9UIAccess() must never fire for an exit path')
+end)
+
 t.test('ANY PED: the "Rest in Kennel" option\'s canInteract relies on CanShowK9UI() alone -- setting IsOwnModelK9 has NO effect either way, proving production code never consults it', function()
     local f = newKennelFixture()
     f.fireResourceStart(RESOURCE_NAME)
@@ -1089,20 +1211,20 @@ t.test('WATCHDOG: own-death while resting releases the occupant (detach + restor
     t.isTrue(#f.detachCalls >= 1 and f.detachCalls[#f.detachCalls].handle == MY_PED)
 end)
 
-t.test('WATCHDOG: wandering out of interactDistanceMeters releases the occupant even with no freeze/control-disable ever applied', function()
+t.test('WATCHDOG: distance-check backstop -- CORRECTED framing (trap-hunt finding, this pass): this does NOT prove "walking away is an escape hatch." An earlier version of this test\'s own name/assertion message claimed exactly that, and it was FALSE -- see client/kennel.lua\'s own corrected WANDER-OFF EXIT comment for the full writeup (AttachEntityToEntity re-clamps the occupant\'s position to the kennel\'s bone every tick; only DetachEntity ends that, never ordinary movement input). This test instead pins the NARROW, REAL case this branch actually catches: this fixture\'s own GetEntityCoords/SetEntityCoords stub directly overwrites coordinates (unlike a real attached ped, which the engine would keep re-clamping) -- standing in for the rare native-level desync where the attachment silently ends while restState has not been told yet. If that ever happens, the occupant really is free-standing, and this branch still correctly converts it into a clean, tracked exit rather than a stale KennelOccupants entry.', function()
     local f = newKennelFixture()
     local netId = 1101
     f.registerForeignEntity(netId, 301, GetHashKey(PRIMARY_MODEL), { x = 0, y = 0, z = 0 })
     f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
 
-    f.setCoords(MY_PED, 100.0, 100.0, 0.0) -- far beyond interactDistanceMeters (2.5)
+    f.setCoords(MY_PED, 100.0, 100.0, 0.0) -- simulates a desynced/already-detached ped, far beyond interactDistanceMeters (2.5) -- NOT a claim that ordinary movement can reach this state while genuinely attached
     f.stepWatchdogOnce()
 
-    t.isFalse(f.env.IsRestingInKennel(), 'this feature never disables movement -- simply walking away must always work as an exit')
+    t.isFalse(f.env.IsRestingInKennel(), 'a free-standing occupant (however that came about) must still be converted into a clean exit')
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestExitKennel')
 end)
 
-t.test('WATCHDOG: the kennel entity becoming unresolvable releases the occupant after the debounced miss-streak, not on the first miss', function()
+t.test('REQUIRED (trap-hunt brief): WATCHDOG -- the kennel entity becoming unresolvable releases the occupant after the debounced miss-streak, not on the first miss (this IS the genuine, always-running automatic safety valve for "the kennel prop is destroyed while occupied" -- it never depends on a thread that only starts under some condition: this thread starts whenever the feature was on at file-load, the same condition that is the only way restState could ever become non-nil in the first place)', function()
     local f = newKennelFixture()
     local netId = 1102
     f.registerForeignEntity(netId, 302, GetHashKey(PRIMARY_MODEL), { x = 0, y = 0, z = 0 })

@@ -150,6 +150,26 @@
         IsCarryingKennel() -> boolean
             Whether THIS client is currently carrying (has attached to
             its own hands) a kennel object.
+        ExitKennelRest() -- THIS PASS (trap-hunt fix: see "CORRECTED" note
+            on the shared watchdog thread's own former WANDER-OFF EXIT
+            comment, further down, for the finding this responds to). The
+            occupant's own ALWAYS-AVAILABLE exit entry point, exposed
+            globally for the identical reason client/vehicle.lua's own
+            ExitK9Vehicle() and client/movement.lua's own DetachLeash() are
+            resource-globals: client/keybinds.lua's new k9exitkennel
+            RegisterCommand/RegisterKeyMapping pair and client/radial.lua's
+            new "Exit Kennel" item both call THIS SAME function -- never a
+            second, forked copy of the release logic (this resource's own
+            "SAME FUNCTION, NEVER A FORKED ENTRY POINT" doctrine,
+            client/keybinds.lua's own header cites the historical
+            ScratchAtDoor/NudgeDoor incident this avoids). The pre-existing
+            "Exit Kennel" ox_target option below now also calls this
+            instead of ReleaseKennelRest() directly, for the same reason.
+            A thin, deliberately gate-free wrapper over ReleaseKennelRest()
+            -- see that function's own doc comment for why it is already
+            unconditional (never gated on Config.Features.DeployableKennel,
+            HasK9Access, certification, or any cooldown); this function
+            must never add a gate of its own, on purpose.
     - THIS FILE calls client/main.lua's CanShowK9UI() and DenyK9UIAccess()
       before acting, same as every other gated client action in this
       resource. ANY PED (this resource's own established convention): this
@@ -294,6 +314,17 @@ end
 --- visible, and collidable the instant this function's own native calls
 --- return, whether or not 'qbx_k9unit:server:requestExitKennel' is ever
 --- received, or has anything left to receive it at all.
+---
+--- THIS PASS (trap-hunt fix): this is now reached from FOUR places, not
+--- one -- the pre-existing "Exit Kennel" ox_target option (via
+--- ExitKennelRest()), the new k9exitkennel keybind/command
+--- (client/keybinds.lua), the new "Exit Kennel" radial item
+--- (client/radial.lua), and the shared watchdog thread's own automatic
+--- backstops below (own-death, entity-lost, the desync-only wander-off
+--- case). ox_target/keybind/radial all route through ExitKennelRest()
+--- rather than calling this local function directly, so there is exactly
+--- ONE forked-entry-point risk surface (ExitKennelRest() itself), not
+--- three independent copies of "which locale key to notify with."
 --- @param notifyLocaleKey string?
 local function ReleaseKennelRest(notifyLocaleKey)
     if not restState then return end
@@ -310,6 +341,25 @@ local function ReleaseKennelRest(notifyLocaleKey)
     end
 
     TriggerServerEvent('qbx_k9unit:server:requestExitKennel')
+end
+
+--- Occupant's own, ALWAYS-AVAILABLE exit entry point -- THIS PASS
+--- (trap-hunt fix). Exposed globally (not kept as an ox_target-local
+--- closure), mirroring client/vehicle.lua's own ExitK9Vehicle() and
+--- client/movement.lua's own DetachLeash() being resource-globals for the
+--- identical reason -- see this file's header "FILE-TO-FILE CONTRACT" for
+--- the full rationale and who calls this. Declared OUTSIDE the
+--- REGISTRATION-TIME FEATURE GATE further down, same as
+--- IsRestingInKennel()/IsCarryingKennel()/RequestDeployKennel() above:
+--- reachable-but-inert even with Config.Features.DeployableKennel false at
+--- THIS file's own load time, and -- the actually load-bearing case --
+--- never re-reads that flag (or HasK9Access, or certification, or any
+--- cooldown) on the way out even when the flag WAS true at load and got
+--- toggled off later mid-session. GATE THE START OF A THING, NEVER THE
+--- STOP: adds no condition of its own beyond whatever ReleaseKennelRest()
+--- itself already does (or rather, deliberately does not do).
+function ExitKennelRest()
+    ReleaseKennelRest('kennel.exit_success')
 end
 
 --- Runs RequestDeployKennel()'s own client-side gating and, if it passes,
@@ -729,15 +779,50 @@ CreateThread(function()
                 local kennelEntity = ResolveKennelFromRestState()
                 if kennelEntity then
                     restMissStreak = 0
-                    -- WANDER-OFF EXIT: since this feature deliberately
-                    -- never freezes or disables control on the occupant
-                    -- (see this file's header), simply walking away is
-                    -- ALREADY an unconditional, code-independent way out —
-                    -- this branch only converts "wandered away" into a
-                    -- clean, tracked exit (clears server-side occupancy)
-                    -- rather than leaving a stale KennelOccupants entry
-                    -- for a K9 who is provably no longer anywhere near the
-                    -- kennel.
+                    -- CORRECTED (this pass, trap-hunt finding) -- an
+                    -- EARLIER version of this comment claimed "since this
+                    -- feature deliberately never freezes or disables
+                    -- control on the occupant, simply walking away is
+                    -- ALREADY an unconditional, code-independent way out."
+                    -- VERIFIED FALSE by reading how AttachEntityToEntity is
+                    -- actually enforced elsewhere in THIS codebase:
+                    -- client/combat.lua's own PROP DRAGGING header
+                    -- ("HOLDER-SIDE ATTACH RE-ASSERTION") documents that the
+                    -- ONLY thing that ever ends an AttachEntityToEntity
+                    -- relationship is an explicit DetachEntity() call --
+                    -- that file re-asserts its own attach every single tick
+                    -- purely to defend against a HOSTILE TARGET calling
+                    -- DetachEntity ON ITSELF, never because the position
+                    -- relationship decays, or can be overridden by ordinary
+                    -- movement input, without one. The occupant's own ped
+                    -- IS attached here (see enterKennelConfirmed above) --
+                    -- the engine re-clamps its position to the kennel's own
+                    -- bone transform every tick regardless of WASD/task-
+                    -- locomotion input, exactly like combat.lua's own
+                    -- dragged target. Ordinary movement therefore CANNOT
+                    -- move a genuinely-still-attached occupant away from a
+                    -- still-existing kennel -- the distance check below can
+                    -- practically never fire for that reason.
+                    --
+                    -- WHAT THIS BRANCH ACTUALLY CATCHES: the rare case
+                    -- where the native-level attachment itself silently
+                    -- ends (a desync, a migration edge case) while
+                    -- restState (this file's own bookkeeping) hasn't been
+                    -- told yet -- in exactly that scenario the occupant
+                    -- really is free-standing and CAN walk away, and this
+                    -- converts that into a clean, tracked exit (clears
+                    -- server-side occupancy) instead of leaving a stale
+                    -- KennelOccupants entry. A narrow backstop, NOT this
+                    -- feature's real escape hatch.
+                    --
+                    -- THE REAL, ALWAYS-AVAILABLE ESCAPE HATCH: the "Exit
+                    -- Kennel" ox_target option below, PLUS (this pass) the
+                    -- k9exitkennel keybind (client/keybinds.lua) and the
+                    -- "Exit Kennel" radial item (client/radial.lua) -- all
+                    -- three call ExitKennelRest() (-> ReleaseKennelRest())
+                    -- directly, which never depends on the occupant's own
+                    -- ped being movable, targetable, or even visible at
+                    -- all, unlike this distance check.
                     local dist = #(GetEntityCoords(ped) - GetEntityCoords(kennelEntity))
                     if dist > Config.DeployableKennel.interactDistanceMeters then
                         ReleaseKennelRest('kennel.exit_success')
@@ -911,8 +996,13 @@ local function RegisterKennelOxTargetOption()
             canInteract = function(entity, distance, coords, name)
                 return IsRestingInKennel() and ResolveKennelFromRestState() == entity
             end,
+            -- Calls the SAME ExitKennelRest() global client/keybinds.lua's
+            -- k9exitkennel command/keybind and client/radial.lua's "Exit
+            -- Kennel" item now also call (THIS PASS) -- never a second,
+            -- independent copy of the release call. See ExitKennelRest()'s
+            -- own doc comment above.
             onSelect = function()
-                ReleaseKennelRest('kennel.exit_success')
+                ExitKennelRest()
             end,
         },
     })

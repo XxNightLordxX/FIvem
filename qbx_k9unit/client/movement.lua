@@ -645,17 +645,41 @@ CreateThread(function()
                         lib.notify({ title = locale('common.notify_title'), description = locale('movement.leash_snapped_too_far'), type = 'error' })
                         DetachLeash()
                     end
-                elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) and not (IsInK9Vehicle and IsInK9Vehicle()) then
+                elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) and not (IsInK9Vehicle and IsInK9Vehicle()) and not (IsRestingInKennel and IsRestingInKennel()) then
                     -- Proportional soft pull-back, not a hard snap at the
                     -- exact threshold: the closer to hardCap, the stronger
                     -- the correction applied this tick. Skipped while in a
-                    -- vehicle (IsPedInAnyVehicle) or "tucked" into a K9
+                    -- vehicle (IsPedInAnyVehicle), "tucked" into a K9
                     -- cruiser via client/vehicle.lua's attach-based load-in
-                    -- (IsInK9Vehicle) to avoid fighting the AttachEntityToEntity
-                    -- that's holding the ped in place — a defensive edge
-                    -- case, not spelled out in DEVELOPER_REFERENCE.md. The IsInK9Vehicle
-                    -- existence check guards load order between these two
-                    -- client scripts within the resource.
+                    -- (IsInK9Vehicle), or (THIS PASS, trap-hunt follow-up)
+                    -- resting in a kennel via client/kennel.lua's own
+                    -- attach-based "Rest in Kennel" (IsRestingInKennel) --
+                    -- all three exclusions exist to avoid fighting the
+                    -- AttachEntityToEntity that's holding the ped in place.
+                    -- A leashed K9 resting in a kennel whose partner walks
+                    -- away would otherwise get SetEntityCoords called on it
+                    -- every tick by THIS thread while the kennel attachment
+                    -- is independently repositioning it back every tick too
+                    -- -- a physics fight, not a stranding on its own (the
+                    -- hard-cap safety valve above still force-detaches the
+                    -- leash unconditionally regardless of this branch), but
+                    -- one that breaks this file's own stated rule of
+                    -- excluding every attach-based tucked state from the
+                    -- elastic pull-back. IsRestingInKennel is a REAL,
+                    -- always-defined cross-file global once client/kennel.lua
+                    -- loads (exposed outside that file's own
+                    -- REGISTRATION-TIME FEATURE GATE specifically so callers
+                    -- like this one can reach it unconditionally) — guarded
+                    -- with the SAME `X and X()` existence-check idiom this
+                    -- line already uses for IsInK9Vehicle, not the
+                    -- `type(X) == 'function'` idiom this resource's OTHER
+                    -- files use for the identical soft-dependency purpose,
+                    -- to stay consistent with this exact line rather than
+                    -- mix two different guard styles in one boolean
+                    -- expression. A defensive edge case, not spelled out in
+                    -- DEVELOPER_REFERENCE.md. The existence checks guard
+                    -- load order between these independent client scripts
+                    -- within the resource.
                     local excess = dist - pullZoneStart
                     local zoneSize = math.max(hardCap - pullZoneStart, 0.1)
                     local pullFactor = math.min(excess / zoneSize, 1.0)

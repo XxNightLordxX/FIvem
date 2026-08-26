@@ -33,7 +33,11 @@
       - client/fetch.lua's RequestThrowFetchBall(), ReleaseFetchBall(),
         RequestRecallFetchBall(), IsFetchCarryEngaged().
       - client/propattachment.lua's RequestToggleK9PropAttachment().
-      - client/kennel.lua's RequestDeployKennel().
+      - client/kennel.lua's RequestDeployKennel(), ExitKennelRest() -- the
+        latter added THIS PASS (trap-hunt fix, "Exit Kennel" item,
+        registered UNCONDITIONALLY -- see that item's own comment for why
+        it does NOT gate on IsRestingInKennel()/Config.Features.DeployableKennel
+        the way Attach/Detach Leash gates on IsLeashed()).
       - client/inventory.lua's RequestOpenOwnK9Inventory().
       - client/medkit.lua's RequestTreatNearestK9().
       - client/main.lua's HasK9Access() directly (not just via CanShowK9UI())
@@ -1408,6 +1412,75 @@ local function RegisterK9RadialMenu()
             end,
         }
     end
+
+    --- Exit Kennel -- trap-hunt fix, THIS PASS. A "Rest in Kennel" occupant
+    --- (client/kennel.lua's enterKennelConfirmed) is attached at
+    --- config.lua's Config.DeployableKennel.restOffsetX/Y/Z (0,0,0, by
+    --- design, so the ped sits inside the small cage model's own bounds) --
+    --- before this pass, the ONLY way out was re-selecting that same small,
+    --- likely camera-occluding prop through ox_target. This item, plus the
+    --- new k9exitkennel keybind (client/keybinds.lua), closes that gap --
+    --- see client/kennel.lua's ExitKennelRest() doc comment for the full
+    --- writeup, and this file's own file-load-time comment above (the
+    --- master list of every global this file calls) already covers
+    --- client/kennel.lua's other kennel entry points.
+    ---
+    --- REGISTERED UNCONDITIONALLY -- A DELIBERATE DEVIATION FROM THE
+    --- ATTACH/DETACH LEASH ITEM'S OWN "WIDENED GATE" PRECEDENT ABOVE, found
+    --- and disclosed while writing this pass's own test: that item's gate
+    --- (`Config.Features.LeashMechanics or (IsLeashed() ...)`) is only
+    --- actually "kept live, tick to tick" (that item's own comment's exact
+    --- words) if something re-runs RegisterK9RadialMenu() at the moment
+    --- IsLeashed() flips true -- its own comment CLAIMS
+    --- client/movement.lua's 'qbx_k9unit:client:leashStateChanged' local
+    --- re-broadcast is paired with "this file's own listener near the
+    --- bottom" for exactly that -- but no such AddEventHandler for that
+    --- event exists anywhere in this file (verified by reading, not
+    --- assumed): RegisterK9RadialMenu() is in fact only ever re-run by
+    --- 'onResourceStart' or 'qbx_k9unit:client:featureBlocksApplied', per
+    --- this file's own file-load-time header list. That comment is
+    --- therefore ALSO a stale/false claim, of the identical class this pass
+    --- already found and fixed in client/kennel.lua's own WANDER-OFF EXIT
+    --- comment -- flagged to the team, but fixing THAT pre-existing leash
+    --- item is outside this pass's own scope (it is not the confining
+    --- mechanic this pass was asked to fix, and it has other exits: the
+    --- leash's own automatic hard-cap safety valve, and LeashMechanics
+    --- ships `true` by default so the item is normally visible from
+    --- resource start regardless).
+    ---
+    --- For THIS item, an equivalent widened-but-not-actually-live gate
+    --- would recreate the exact same class of bug for a MUCH higher-stakes
+    --- feature (an occupant physically inside a kennel prop, not merely
+    --- leashed): if Config.Features.DeployableKennel happened to be false
+    --- the one time RegisterK9RadialMenu() last ran, this item would simply
+    --- never exist in the menu at all, REGARDLESS of IsRestingInKennel()'s
+    --- live value, for as long as the resource stays up -- exactly the
+    --- "hidden right when someone actually needs it" failure this whole
+    --- pass exists to close. UNCONDITIONAL registration (same shape as Sit
+    --- above, which also carries no Config.Features gate of its own) has no
+    --- such gap: the item is simply always in the menu, and onSelect is a
+    --- safe, harmless no-op via ExitKennelRest() -> ReleaseKennelRest()'s
+    --- own `if not restState then return end` guard for the overwhelming
+    --- common case of a player who was never resting at all.
+    ---
+    --- GATE THE START OF A THING, NEVER THE STOP: onSelect below calls
+    --- ExitKennelRest() directly, with NO CanShowK9UI()/access gate of its
+    --- own -- unlike every OTHER item in this file (including Deploy
+    --- Kennel immediately above), an exit-adjacent action is never gated on
+    --- the way out. Mirrors Detach Leash's own onSelect, which skips the
+    --- access gate entirely for the identical reason (that item's own
+    --- comment: "Detach never requires consent/access — always available
+    --- while leashed").
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_exit_kennel',
+        label = locale('radial.exit_kennel_label'),
+        icon = 'dog',
+        onSelect = function()
+            if type(ExitKennelRest) == 'function' then
+                ExitKennelRest()
+            end
+        end,
+    }
 
     --- Open My Gear -- Phase 4 (K9Inventory). Closes a real gap: client/inventory.lua
     --- exposes RequestOpenOwnK9Inventory() specifically as a "future

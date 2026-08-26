@@ -63,6 +63,24 @@
     quickly" -- a keybind list nobody can navigate is its own kind of
     unusable, so this stays a short, memorable set rather than fifty
     entries in the pause menu.
+
+    ONE DELIBERATE EXCEPTION, ADDED THIS PASS: k9exitkennel. "Kennel
+    actions" above are excluded as logistics -- but that exclusion was
+    written about DEPLOY/PICK UP/PUT DOWN/ENTER, never about EXIT, and a
+    trap-hunting pass found exactly why exit needed its own answer: "Rest
+    in Kennel" attaches the occupant's own ped inside a small cage prop
+    (config.lua's Config.DeployableKennel.restOffsetX/Y/Z = 0,0,0, on
+    purpose, so the ped sits inside the model's own bounds) -- meaning the
+    only PRE-EXISTING way out was re-selecting that same small, likely
+    camera-occluding prop through ox_target, with no radial entry, no
+    keybind, and (see client/kennel.lua's own corrected WANDER-OFF EXIT
+    comment) no working "just walk away" fallback either, since an
+    attached ped's position is engine-enforced every tick regardless of
+    movement input. This is a genuine "player stuck in a game" mechanic --
+    category "confining," not "logistics" -- and the owner's own separate
+    instruction (this pass) is that confining mechanics belong on a
+    rebindable keybind, not third-eye-only. See client/kennel.lua's own
+    ExitKennelRest() doc comment for the full trap writeup.
     ======================================================================
 
     ======================================================================
@@ -88,6 +106,11 @@
       - k9recall    -> no new function at all; this file adds ONLY the
         RegisterKeyMapping half for the command client/recall.lua ALREADY
         registers (`k9recall` -> RequestRecall()). See that section below.
+      - k9exitkennel -> ExitKennelRest() (client/kennel.lua) -- THIS PASS.
+        The SAME function the new "Exit Kennel" item in client/radial.lua
+        calls, and the SAME function the pre-existing "Exit Kennel"
+        ox_target option on the kennel prop itself now also calls (see
+        client/kennel.lua's own doc comment on that global).
     Every one of the above is called through this resource's standard
     `type(fn) == 'function'` soft-dependency guard (not a load-order
     assumption -- by the time a player can actually press one of these
@@ -326,3 +349,37 @@ if Config.Features.ScentVision then
 
     RegisterKeyMapping('k9scentvision', locale('tracking.scent_vision_keybind_label'), 'keyboard', Config.Tracking.ScentVision.keybind)
 end
+
+-- ======================================================================
+-- EXIT KENNEL -- trap-hunt fix, THIS PASS. See this file's own header
+-- "ONE DELIBERATE EXCEPTION, ADDED THIS PASS" for why this is a confining
+-- mechanic, not a logistics one, and therefore belongs here even though
+-- every other kennel action deliberately does not.
+--
+-- REGISTERED UNCONDITIONALLY -- NO Config.Features.DeployableKennel WRAPPER,
+-- unlike every other conditionally-registered entry in this file. This is
+-- deliberate, not an oversight: GATE THE START OF A THING, NEVER THE STOP
+-- (this codebase's own standing doctrine, restated by server/kennel.lua's
+-- own requestExitKennel handler and client/kennel.lua's own "Exit Kennel"
+-- ox_target canInteract). client/kennel.lua's ExitKennelRest() is itself
+-- ALREADY safe to call with the feature off, or the flag toggled off
+-- mid-session, or no kennel ever having existed at all -- it is a thin
+-- wrapper over ReleaseKennelRest(), whose own `if not restState then
+-- return end` guard makes it a genuine no-op for a player who was never
+-- resting. Gating the KEYBIND itself behind the feature flag would recreate
+-- exactly the trap this pass exists to close: an occupant who entered while
+-- the feature was on, then had it toggled off from under them (or whose
+-- own ox_target canInteract just failed to resolve for any other reason),
+-- would lose this exit path for no correctness reason at all. Mirrors
+-- k9sit above (also unconditional, for the analogous "no dedicated
+-- Config.Features flag gates this specific action" reasoning, though the
+-- underlying rationale here is stronger: exits must never be gated,
+-- period).
+-- ======================================================================
+RegisterCommand('k9exitkennel', function()
+    if type(ExitKennelRest) == 'function' then
+        ExitKennelRest()
+    end
+end, false)
+
+RegisterKeyMapping('k9exitkennel', locale('kennel.exit_keybind_label'), 'keyboard', 'O')

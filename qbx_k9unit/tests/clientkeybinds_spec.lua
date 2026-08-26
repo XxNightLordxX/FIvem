@@ -6,7 +6,14 @@
     keybinds, not third-eye" pass. This file registers five NEW
     RegisterCommand/RegisterKeyMapping pairs (k9bitehold, k9takedown,
     k9dragtoggle, k9sit, k9bark) plus ONE keybind-only addition for the
-    PRE-EXISTING `k9recall` command (client/recall.lua).
+    PRE-EXISTING `k9recall` command (client/recall.lua). A trap-hunt pass
+    later added a SEVENTH pair, k9exitkennel (client/kennel.lua's
+    ExitKennelRest()) -- registered UNCONDITIONALLY, unlike every
+    conditionally-gated command above, since it is a confining-mechanic
+    escape hatch that must never be gated (see client/keybinds.lua's own
+    header "ONE DELIBERATE EXCEPTION" section). Every commandCount()/
+    keyMappingCalls assertion below accounts for it being present
+    regardless of which Config.Features flags this fixture sets.
 
     THE THREE THINGS THIS SPEC EXISTS TO PIN:
       1. SAME FUNCTION, NEVER A FORKED ENTRY POINT -- every command calls
@@ -93,6 +100,9 @@ local function newKeybindsFixture(opts)
     local k9SitCalls = 0
     local function K9Sit() k9SitCalls = k9SitCalls + 1 end
 
+    local exitKennelRestCalls = 0
+    local function ExitKennelRest() exitKennelRestCalls = exitKennelRestCalls + 1 end
+
     local canShowK9UI = opts.canShowK9UI
     if canShowK9UI == nil then canShowK9UI = true end
     local denyCalls = 0
@@ -169,6 +179,9 @@ local function newKeybindsFixture(opts)
     if opts.provideK9Sit ~= false then
         overrides.K9Sit = K9Sit
     end
+    if opts.provideExitKennelRest ~= false then
+        overrides.ExitKennelRest = ExitKennelRest
+    end
 
     local env = Sandbox.newEnv(overrides)
     Sandbox.loadInto('../client/keybinds.lua', env)
@@ -188,6 +201,7 @@ local function newKeybindsFixture(opts)
         requestDragCallCount = function() return requestDragCalls end,
         requestTakedownCallCount = function() return requestTakedownCalls end,
         k9SitCallCount = function() return k9SitCalls end,
+        exitKennelRestCallCount = function() return exitKennelRestCalls end,
         toggleScentVisionCallCount = function() return toggleScentVisionCalls end,
         commandCount = function()
             local n = 0
@@ -211,45 +225,47 @@ end
 -- SECTION A -- per-mechanic registration gating.
 -- ----------------------------------------------------------------------
 
-t.test('all five feature flags on: registers all five commands, all five keybinds, plus the k9recall keybind (six keyMapping calls total)', function()
+t.test('all five feature flags on: registers all five commands, all five keybinds, plus the k9recall keybind and the always-on k9exitkennel pair (six commands, seven keyMapping calls total)', function()
     local f = newKeybindsFixture()
-    t.equals(f.commandCount(), 5)
+    t.equals(f.commandCount(), 6)
     t.isNotNil(f.commandHandlers['k9bitehold'])
     t.isNotNil(f.commandHandlers['k9takedown'])
     t.isNotNil(f.commandHandlers['k9dragtoggle'])
     t.isNotNil(f.commandHandlers['k9sit'])
     t.isNotNil(f.commandHandlers['k9bark'])
-    t.equals(#f.keyMappingCalls, 6)
+    t.isNotNil(f.commandHandlers['k9exitkennel'])
+    t.equals(#f.keyMappingCalls, 7)
 end)
 
-t.test('Config.Features.BiteAndHold = false: no k9bitehold command, no keybind for it -- the other four are unaffected', function()
+t.test('Config.Features.BiteAndHold = false: no k9bitehold command, no keybind for it -- the other four (plus the always-on k9exitkennel) are unaffected', function()
     local f = newKeybindsFixture({ biteAndHold = false })
     t.isNil(f.commandHandlers['k9bitehold'])
     t.isNil(f.findKeyMapping('k9bitehold'))
-    t.equals(f.commandCount(), 4)
+    t.equals(f.commandCount(), 5)
     t.isNotNil(f.commandHandlers['k9takedown'])
     t.isNotNil(f.commandHandlers['k9dragtoggle'])
+    t.isNotNil(f.commandHandlers['k9exitkennel'])
 end)
 
 t.test('Config.Features.NonLethalTakedown = false: no k9takedown command, no keybind for it', function()
     local f = newKeybindsFixture({ nonLethalTakedown = false })
     t.isNil(f.commandHandlers['k9takedown'])
     t.isNil(f.findKeyMapping('k9takedown'))
-    t.equals(f.commandCount(), 4)
+    t.equals(f.commandCount(), 5)
 end)
 
 t.test('Config.Features.PropDragging = false: no k9dragtoggle command, no keybind for it', function()
     local f = newKeybindsFixture({ propDragging = false })
     t.isNil(f.commandHandlers['k9dragtoggle'])
     t.isNil(f.findKeyMapping('k9dragtoggle'))
-    t.equals(f.commandCount(), 4)
+    t.equals(f.commandCount(), 5)
 end)
 
 t.test('Config.Features.BasicBarkSounds = false: no k9bark command, no keybind for it', function()
     local f = newKeybindsFixture({ basicBarkSounds = false })
     t.isNil(f.commandHandlers['k9bark'])
     t.isNil(f.findKeyMapping('k9bark'))
-    t.equals(f.commandCount(), 4)
+    t.equals(f.commandCount(), 5)
 end)
 
 t.test('Config.Features.Recall = false: no k9recall keyMapping entry at all (and this file never registers a k9recall COMMAND regardless)', function()
@@ -258,12 +274,14 @@ t.test('Config.Features.Recall = false: no k9recall keyMapping entry at all (and
     t.isNil(f.commandHandlers['k9recall'])
 end)
 
-t.test('all combat/bark flags off: k9sit is STILL registered -- it has no dedicated Config.Features flag of its own, same as client/movement.lua ToggleK9Camera()', function()
+t.test('all combat/bark flags off: k9sit and k9exitkennel are STILL registered -- neither has a dedicated Config.Features flag of its own (k9sit mirrors client/movement.lua ToggleK9Camera(); k9exitkennel must never be gated at all, see this file own header)', function()
     local f = newKeybindsFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false, basicBarkSounds = false, recall = false })
-    t.equals(f.commandCount(), 1)
+    t.equals(f.commandCount(), 2)
     t.isNotNil(f.commandHandlers['k9sit'])
-    t.equals(#f.keyMappingCalls, 1)
+    t.isNotNil(f.commandHandlers['k9exitkennel'])
+    t.equals(#f.keyMappingCalls, 2)
     t.equals(f.keyMappingCalls[1].commandName, 'k9sit')
+    t.equals(f.keyMappingCalls[2].commandName, 'k9exitkennel')
 end)
 
 -- ----------------------------------------------------------------------
@@ -502,6 +520,42 @@ t.test('k9scentvision does not touch any movement/task/animation native directly
     f.runCommand('k9scentvision')
     -- Reaching here at all (no "attempt to call a nil value" error, since
     -- this fixture never provides any movement/task native) is the assertion.
+end)
+
+-- ----------------------------------------------------------------------
+-- EXIT KENNEL -- trap-hunt fix. UNCONDITIONAL registration (no
+-- Config.Features.DeployableKennel wrapper, unlike every combat/bark/
+-- scent-vision command above) is the one thing this section exists to
+-- pin down, alongside the usual SAME FUNCTION / soft-dependency coverage.
+-- ----------------------------------------------------------------------
+
+t.test('k9exitkennel: registered with EVERY Config.Features flag off, including DeployableKennel not even existing on this fixture Config at all', function()
+    local f = newKeybindsFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false, basicBarkSounds = false, recall = false, scentVision = false })
+    t.isNotNil(f.commandHandlers['k9exitkennel'], 'k9exitkennel must never be gated behind any Config.Features flag -- it is a confining-mechanic escape hatch')
+    local mapping = f.findKeyMapping('k9exitkennel')
+    t.isNotNil(mapping)
+    t.equals(mapping.defaultKey, 'O')
+    t.equals(mapping.ioType, 'keyboard')
+    t.equals(mapping.description, locale('kennel.exit_keybind_label'))
+end)
+
+t.test('k9exitkennel: calls the SAME ExitKennelRest() global client/radial.lua\'s new "Exit Kennel" item and client/kennel.lua\'s own ox_target option call -- never a second, forked release', function()
+    local f = newKeybindsFixture()
+    f.runCommand('k9exitkennel')
+    t.equals(f.exitKennelRestCallCount(), 1)
+end)
+
+t.test('k9exitkennel: tolerates ExitKennelRest being entirely undefined (soft dependency, e.g. client/kennel.lua not loaded) -- must not error', function()
+    local f = newKeybindsFixture({ provideExitKennelRest = false })
+    t.isNil(f.env.ExitKennelRest, 'ExitKennelRest must be genuinely absent from this sandbox for this test to prove anything')
+    f.runCommand('k9exitkennel') -- must not throw "attempt to call a nil value"
+end)
+
+t.test('k9exitkennel: does not touch CanShowK9UI()/DenyK9UIAccess() at all -- this exit must never be gated, not even by the usual "check here too" redundant convention every other item in this file uses', function()
+    local f = newKeybindsFixture({ canShowK9UI = false })
+    f.runCommand('k9exitkennel')
+    t.equals(f.exitKennelRestCallCount(), 1, 'must still call through even with CanShowK9UI() false')
+    t.equals(f.denyCallCount(), 0, 'must never call DenyK9UIAccess() -- an exit path is never denied')
 end)
 
 os.exit(t.summary())

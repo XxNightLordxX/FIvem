@@ -1354,6 +1354,9 @@
         cmdref_k9deploykennel_usage: '/k9deploykennel',
         cmdref_k9deploykennel_does: 'Places a portable kennel at your feet.',
         cmdref_k9deploykennel_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
+        cmdref_k9exitkennel_usage: '/k9exitkennel',
+        cmdref_k9exitkennel_does: 'Gets you out of a kennel you are resting in.',
+        cmdref_k9exitkennel_needs: 'Nothing -- always available while resting in a kennel, so you can never get stuck inside one.',
         cmdref_k9propattach_usage: '/k9propattach',
         cmdref_k9propattach_does: 'Attaches or removes a prop (for example a vest) on your K9.',
         cmdref_k9propattach_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
@@ -1918,6 +1921,14 @@
 
         // ---- Field Gear & Equipment ----
         { command: 'k9deploykennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9deploykennel_usage', doesKey: 'cmdref_k9deploykennel_does', needsKey: 'cmdref_k9deploykennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
+        // k9exitkennel -- trap-hunt fix. UNCONDITIONAL (gate: 'open', no
+        // featureKey at all) on purpose, matching k9dropfetchball/
+        // k9recallfetchball above: client/keybinds.lua registers this
+        // command with NO Config.Features wrapper, and client/kennel.lua's
+        // ExitKennelRest() never gates on DeployableKennel, HasK9Access, or
+        // certification -- this is a confining-mechanic escape hatch, never
+        // gated on the way out.
+        { command: 'k9exitkennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9exitkennel_usage', doesKey: 'cmdref_k9exitkennel_does', needsKey: 'cmdref_k9exitkennel_needs', gate: { kind: 'open' }, defaultKeybind: 'O' },
         { command: 'k9propattach', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9propattach_usage', doesKey: 'cmdref_k9propattach_does', needsKey: 'cmdref_k9propattach_needs', gate: { kind: 'access', featureKey: 'PropAttachments' } },
         { command: 'k9throwfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9throwfetchball_usage', doesKey: 'cmdref_k9throwfetchball_does', needsKey: 'cmdref_k9throwfetchball_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
         { command: 'k9dropfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9dropfetchball_usage', doesKey: 'cmdref_k9dropfetchball_does', needsKey: 'cmdref_k9dropfetchball_needs', gate: { kind: 'open' } },

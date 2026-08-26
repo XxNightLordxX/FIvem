@@ -267,7 +267,7 @@ read_globals = {
     -- AgilityAdvanced capsule-sweep vault (client/agility.lua, extracted from
     -- client/movement.lua, Phase 3,
     -- PHASE3_SPEC.md §12.5.5/§12.0 item 3) -- confirmed real natives per
-    -- phase2_notes/phase3_combat_natives.md §5
+    -- qbx_k9unit/DEVELOPER_REFERENCE.md#phase-3-combat
     "StartShapeTestCapsule", "GetShapeTestResult", "SetEntityVelocity",
     -- NUI bridge (client/hud.lua)
     "SendNUIMessage", "RegisterNUICallback",
@@ -276,7 +276,7 @@ read_globals = {
     -- IsThermalVisionActive wrapper functions declared below)
     "SetNightvision", "IsNightvisionActive", "SetSeethrough", "IsSeethroughActive",
     -- DeployableKennel (client/kennel.lua, server/kennel.lua, Phase 5 R&D,
-    -- phase2_notes/phase5_features_research.md §5) -- object creation/
+    -- qbx_k9unit/DEVELOPER_REFERENCE.md#phase-5-research) -- object creation/
     -- placement/model-loading natives, none previously used anywhere else
     -- in this resource
     "CreateObject", "PlaceObjectOnGroundProperly", "DeleteEntity",
@@ -315,8 +315,8 @@ read_globals = {
     -- before every native this client applies to a ped it may not own --
     -- added after a QA pass found the pre-existing applyNpcBiteHold/
     -- applyNpcTakedown handlers omitted it, which this resource's own
-    -- phase2_notes/phase3_combat_natives.md names as required for exactly
-    -- those natives. It is best-effort: no success-check native is
+    -- qbx_k9unit/DEVELOPER_REFERENCE.md#phase-3-combat names as required for
+    -- exactly those natives. It is best-effort: no success-check native is
     -- confirmed available here, so the call improves the odds of the
     -- effect landing rather than guaranteeing it -- see client/combat.lua's
     -- own disclosure. IsPedDeadOrDying/IsPedRagdoll back the NPC branch of
@@ -683,6 +683,12 @@ globals = {
     -- IsPropAttachmentEngaged/IsInK9Vehicle above -- exposed for a future
     -- client/appearance.lua model-swap guard, not yet wired there.
     "IsRestingInKennel", "IsCarryingKennel",
+    -- ExitKennelRest: client/kennel.lua's trap-hunt fix (this pass) -- the
+    -- occupant's own always-available exit, called from
+    -- client/keybinds.lua's k9exitkennel command/keybind and
+    -- client/radial.lua's "Exit Kennel" item, mirroring
+    -- DetachLeash/ExitK9Vehicle above.
+    "ExitKennelRest",
     -- server/wellbeing.lua (Phase 4, PHASE4_SPEC.md §13.1 sub-phase 4c/4d,
     -- the unified wellbeing subsystem). RestoreInjury is read (never
     -- written) by server/medkit.lua behind a `type(RestoreInjury) ==

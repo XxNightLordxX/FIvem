@@ -377,6 +377,7 @@ local function newRadialFixture(opts)
         RequestRecallFetchBall = record('RequestRecallFetchBall'),
         RequestToggleK9PropAttachment = record('RequestToggleK9PropAttachment'),
         RequestDeployKennel = record('RequestDeployKennel'),
+        ExitKennelRest = record('ExitKennelRest'),
         RequestOpenOwnK9Inventory = record('RequestOpenOwnK9Inventory'),
         RequestTreatNearestK9 = record('RequestTreatNearestK9'),
         IsSarCallActive = queryFn('IsSarCallActive', 'isSarCallActive'),
@@ -599,6 +600,7 @@ t.test('this spec\'s baseline flags: Sit, Bark, Leash, Vehicle (Phase 1) are pre
     t.isTrue(presentIds.k9_bark)
     t.isTrue(presentIds.k9_leash)
     t.isTrue(presentIds.k9_vehicle)
+    t.isTrue(presentIds.k9_exit_kennel, 'k9_exit_kennel has no dedicated Config.Features flag of its own -- see this file own header comment on why an exit-adjacent item is registered unconditionally')
 
     local shouldBeAbsent = {
         'k9_track_scent', 'k9_track_blood', 'k9_track_gunpowder',
@@ -1311,6 +1313,68 @@ t.test('k9_leash: Attach with nobody in range notifies radial.no_leash_candidate
     t.isNil(f.calls.RequestLeashAttach)
     t.equals(#f.notifyCalls, 1)
     t.equals(f.notifyCalls[1].description, locale('radial.no_leash_candidate'))
+end)
+
+t.test('k9_exit_kennel: UNCONDITIONAL REGISTRATION (trap-hunt fix) -- present with EVERY Config.Features flag off, including DeployableKennel, unlike Deploy Kennel immediately above it. See this item\'s own source comment for why a widened-but-not-actually-live gate (the shape k9_leash uses) was deliberately rejected here', function()
+    local f = newRadialFixture({ features = {
+        DeployableKennel = false, LeashMechanics = false, VehicleEntryExit = false, BasicBarkSounds = false,
+    } })
+    t.isNotNil(f.findInMenu('k9unit', 'k9_exit_kennel'), 'must be present regardless of every feature flag -- a confining-mechanic escape hatch must never be hideable')
+end)
+
+t.test('k9_exit_kennel: onSelect fires UNGATED -- CanShowK9UI/DenyK9UIAccess are never even consulted, unlike Deploy Kennel immediately above it', function()
+    local f = newRadialFixture({ features = { DeployableKennel = false }, canShowK9UI = false })
+    f.findInMenu('k9unit', 'k9_exit_kennel').onSelect()
+    t.equals(#f.calls.ExitKennelRest, 1, 'must call ExitKennelRest() regardless of CanShowK9UI()')
+    t.equals(f.canShowK9UICallCount(), 0, 'an exit path must never even ask CanShowK9UI() -- gate the START of a thing, never the STOP')
+    t.equals(f.denyCallCount(), 0)
+end)
+
+t.test('k9_exit_kennel: onSelect tolerates ExitKennelRest being entirely absent (soft dependency) -- must not throw', function()
+    local f = newRadialFixture({ omit = { 'ExitKennelRest' } })
+    assertGuardDoesNotThrow(f.findInMenu('k9unit', 'k9_exit_kennel'))
+end)
+
+-- INVERTED, THIS PASS (coordinator review) -- an earlier version of THIS
+-- test asserted the OPPOSITE: that k9_exit_kennel is ABSENT when
+-- DeployableKennel=false and this client is not currently resting. That
+-- assertion was wrong, not the production code: a gate evaluated at
+-- RegisterK9RadialMenu() time is a one-shot, boot-time snapshot (see the
+-- item's own client/radial.lua comment) -- if DeployableKennel happened to
+-- be false the LAST time that function ran, a widened, "present only while
+-- resting" gate would leave the item permanently absent for the rest of
+-- this resource's uptime regardless of what IsRestingInKennel() answers
+-- LATER, which is the exact "hidden right when someone actually needs it"
+-- failure this whole pass exists to close -- worse here than for the leash
+-- item this pattern was copied from, since this occupant is physically
+-- attached to a prop, not merely leashed. UNCONDITIONAL registration (this
+-- test) is therefore the correct fix, matching Sit/Detach Leash's own
+-- established "an exit-adjacent action must not be gated" precedent.
+--
+-- THE REAL QUESTION THIS RAISES, ANSWERED DIRECTLY BELOW: does registering
+-- the item unconditionally grant ANY kennel capability on a server with
+-- DeployableKennel off? NO. ExitKennelRest() is a thin wrapper over
+-- ReleaseKennelRest(), which can only ever RELEASE an EXISTING restState --
+-- it never deploys, never creates a kennel object, never attaches anyone TO
+-- one, and (see server/kennel.lua's own requestExitKennel handler) the one
+-- server event it fires only ever CLEARS a KennelOccupants entry that
+-- already names this exact src, never grants one. A player on a
+-- DeployableKennel=false server who was never resting gets nothing from
+-- this item but a harmless no-op (proven below) -- there is no capability
+-- to gate here, only a release path, so "gate the START of a thing, never
+-- the STOP" applies cleanly. Before reverting this test back to asserting
+-- absence, first prove ExitKennelRest() (or something it calls) has grown
+-- a code path that creates/authorizes state rather than only clearing it --
+-- if that ever becomes true, the gate question is real again and this test
+-- (and client/radial.lua's own comment above the item) both need another
+-- look.
+t.test('k9_exit_kennel: UNCONDITIONAL REGISTRATION GRANTS NOTHING OF ITS OWN -- this ITEM adds no notify/server-event/native call beyond the single ExitKennelRest() call itself; the real "no-op while not resting" guarantee lives in, and is proven against the REAL implementation by, tests/clientkennel_spec.lua\'s own "ExitKennelRest(): calling it while not resting is a genuine, harmless no-op" test (this file stubs ExitKennelRest as a bare recorder, so it cannot re-prove that guarantee itself -- it only proves THIS file does not add a second, independent side effect on top)', function()
+    local f = newRadialFixture({ features = { DeployableKennel = false } })
+    f.findInMenu('k9unit', 'k9_exit_kennel').onSelect()
+
+    t.equals(#f.calls.ExitKennelRest, 1, 'exactly one call, straight through -- no branching/gating logic of this item\'s own')
+    t.equals(#f.notifyCalls, 0, 'this ITEM never notifies directly -- any notification is ExitKennelRest\'s own responsibility, proven elsewhere')
+    t.equals(#f.triggerServerEventCalls, 0, 'this ITEM never talks to the network directly -- any server event is ExitKennelRest\'s own responsibility, proven elsewhere')
 end)
 
 t.test('k9_vehicle: BOTH directions (enter and exit) are gated on CanShowK9UI -- unlike Leash/Bite/Drag, there is no ungated "release" branch here', function()

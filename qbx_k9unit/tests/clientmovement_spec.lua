@@ -44,6 +44,19 @@
          overwhelming common case) creates NO thread at all -- not a cheap
          poll, genuinely zero -- unlike the hand-off note's originally
          proposed 1Hz poll.
+      7. The elastic leash pull-back thread's IsRestingInKennel() exclusion
+         (leash-in-kennel fix, this pass) -- CLOSES, partially, this file's
+         own former "single largest disclosed gap" (that thread's body was
+         captured but never stepped at all). Proves the thread genuinely
+         pulls an out-of-range leashed pair back together by default, that
+         resting in a kennel now excludes that pull-back exactly like being
+         in a vehicle or tucked into a K9 cruiser already did, that the
+         exclusion is a soft dependency (client/kennel.lua absent degrades
+         safely), and that the hard-cap safety-valve auto-detach is NOT
+         excludable by any of the three exclusions -- see PRIORITY #7's own
+         section further down for the full test list and "WHAT THIS FILE
+         STILL DOES NOT COVER" for what remains genuinely untested about
+         this thread even after this addition.
 
     Everything else in this 1900+ line file is covered LIGHTLY or not at
     all -- see "WHAT THIS FILE DOES NOT COVER" at the bottom for the full,
@@ -77,12 +90,17 @@
     BODY. PRIORITY #4 below opts INTO real stepping
     (`newMovementFixture({ stepThreads = true, ... })`, backed by
     Sandbox.newThreadRunner()) specifically to exercise the jump/crouch
-    suppression thread's body; the elastic leash pull-back thread (softLimit/
-    hardCap pull-back, the auto-detach safety valve) remains a real,
-    disclosed gap below even when stepThreads is on for a DIFFERENT test --
-    fully exercising ITS math would additionally need Vec3 + GetEntityCoords/
-    SetEntityCoords machinery combat_spec.lua/clientradial_spec.lua already
-    use, which no test in this file sets up.
+    suppression thread's body. PRIORITY #7 (leash-in-kennel fix, added THIS
+    pass) does the same for the elastic leash pull-back thread (softLimit/
+    hardCap pull-back, the three exclusions, the hard-cap auto-detach safety
+    valve) -- this file's own fixture now carries a real Vec3 stub plus
+    GetEntityCoords/SetEntityCoords/IsPedInAnyVehicle/GetPlayerPed, the exact
+    machinery combat_spec.lua/clientradial_spec.lua already use for their own
+    unrelated Vec3 needs, specifically so PRIORITY #7 could stop being a
+    disclosed gap. See "WHAT THIS FILE STILL DOES NOT COVER" near the bottom
+    for what remains genuinely untested about that thread even after this
+    addition (its exact pull-strength math, the detachRequestedForSafety
+    single-fire guard).
 
     NOTIFICATION TYPE: 'info', NOT 'inform' -- ox_lib's real
     NotificationType union is 'info' | 'warning' | 'success' | 'error';
@@ -116,6 +134,38 @@ local function GetHashKey(name)
         hash = (hash * 31 + name:byte(i)) % 2147483647
     end
     return hash
+end
+
+-- ----------------------------------------------------------------------
+-- Vec3-alike stub -- THIS PASS (leash-in-kennel exclusion fix). Closes the
+-- header's own previously-disclosed "single largest gap" (the elastic
+-- leash pull-back thread's BODY was captured but never stepped) just
+-- enough to prove the new IsRestingInKennel() exclusion actually works --
+-- same shape as tests/clientkennel_spec.lua's/tests/clientcombat_spec.lua's
+-- own identical Vec3MT stubs, EXTENDED with __div/__mul/__add (this
+-- thread's own pull-back math needs `(partnerCoords - myCoords) / dist`
+-- and `myCoords + dir * pullAmount`, which neither of those two files'
+-- narrower stubs needed).
+-- ----------------------------------------------------------------------
+local Vec3MT = {}
+Vec3MT.__index = Vec3MT
+Vec3MT.__sub = function(a, b)
+    return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, Vec3MT)
+end
+Vec3MT.__add = function(a, b)
+    return setmetatable({ x = a.x + b.x, y = a.y + b.y, z = a.z + b.z }, Vec3MT)
+end
+Vec3MT.__mul = function(a, b)
+    return setmetatable({ x = a.x * b, y = a.y * b, z = a.z * b }, Vec3MT)
+end
+Vec3MT.__div = function(a, b)
+    return setmetatable({ x = a.x / b, y = a.y / b, z = a.z / b }, Vec3MT)
+end
+Vec3MT.__len = function(v)
+    return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+end
+local function vec3(x, y, z)
+    return setmetatable({ x = x, y = y, z = z }, Vec3MT)
 end
 
 local RESOURCE_NAME = 'qbx_k9unit'
@@ -213,6 +263,36 @@ local function newMovementFixture(opts)
     local function DoesEntityExist(entity) return existingEntities[entity] == true end
     local function GetEntityModel(entity) return entityModels[entity] end
 
+    -- LEASH PULL-BACK THREAD MACHINERY -- THIS PASS (leash-in-kennel
+    -- exclusion fix, PRIORITY #7 below). Coords are a shared table keyed by
+    -- ANY ped handle, same convention tests/clientkennel_spec.lua already
+    -- established for its own coordsByHandle. Defaults: myPed (handle 1)
+    -- and any as-yet-unregistered handle both read as the origin, so a
+    -- test that forgets to set a partner's coords fails loudly via `dist`
+    -- staying 0 (never pulled back) rather than erroring.
+    local coordsByHandle = { [1] = vec3(0, 0, 0) }
+    local setCoordsCalls = {}
+    local function GetEntityCoords(handle) return coordsByHandle[handle] or vec3(0, 0, 0) end
+    local function SetEntityCoords(handle, x, y, z, ...)
+        coordsByHandle[handle] = vec3(x, y, z)
+        setCoordsCalls[#setCoordsCalls + 1] = { handle = handle, x = x, y = y, z = z }
+    end
+    local pedInVehicle = false
+    local function IsPedInAnyVehicle(_ped, _lastVehicle) return pedInVehicle end
+    local playerPedByIndex = {}
+    local function GetPlayerPed(playerIndex) return playerPedByIndex[playerIndex] or 0 end
+
+    -- IsRestingInKennel -- THIS PASS. Soft dependency, same
+    -- `opts.provideXxx ~= false` convention as IsK9FeatureBlocked above:
+    -- present by default (client/kennel.lua loaded, answering `false`
+    -- unless a test says otherwise), omittable via
+    -- opts.provideIsRestingInKennel = false to prove the real
+    -- `IsRestingInKennel and IsRestingInKennel()` guard in
+    -- client/movement.lua degrades safely with client/kennel.lua entirely
+    -- absent.
+    local isRestingInKennelValue = false
+    local function IsRestingInKennel() return isRestingInKennelValue end
+
     -- PRIORITY #4 (AgilityBasicJump suppression thread) -- a SEPARATE
     -- knob from IsOwnModelK9()/entityModels above on purpose: the real
     -- production gate for this thread is `IsEntityModelK9(PlayerPedId())`,
@@ -296,7 +376,15 @@ local function newMovementFixture(opts)
     -- ONLY field client/movement.lua reads at load time. Defaults to `true`
     -- (this file's long-standing default -- see newMovementFixture()'s own
     -- doc comment above), overridable per-test via opts.agilityBasicJump.
-    local Config = { Features = { AgilityBasicJump = opts.agilityBasicJump ~= false } }
+    -- LeashMaxDistance -- THIS PASS (PRIORITY #7, leash-in-kennel exclusion
+    -- fix): the elastic pull-back thread's own softLimit/hardCap/
+    -- pullZoneStart math reads this at RUN time (every tick), not load
+    -- time, so unlike AgilityBasicJump above it needs no opts plumbing of
+    -- its own -- a single fixed fixture-owned value (10.0, an arbitrary
+    -- round number with no correctness dependency on config.lua's real
+    -- shipped value) is enough for every PRIORITY #7 test below to compute
+    -- its own pullZoneStart/hardCap distances against.
+    local Config = { Features = { AgilityBasicJump = opts.agilityBasicJump ~= false }, LeashMaxDistance = 10.0 }
 
     local overrides = {
         GetHashKey = GetHashKey,
@@ -324,7 +412,17 @@ local function newMovementFixture(opts)
         GetCurrentResourceName = GetCurrentResourceName,
         GetPlayerFromServerId = GetPlayerFromServerId,
         GetPlayerName = GetPlayerName,
+        GetEntityCoords = GetEntityCoords,
+        SetEntityCoords = SetEntityCoords,
+        IsPedInAnyVehicle = IsPedInAnyVehicle,
+        GetPlayerPed = GetPlayerPed,
     }
+    -- Soft dependency, same convention as IsK9FeatureBlocked below --
+    -- omitted entirely (not merely stubbed false) when
+    -- opts.provideIsRestingInKennel == false.
+    if opts.provideIsRestingInKennel ~= false then
+        overrides.IsRestingInKennel = IsRestingInKennel
+    end
     -- PRIORITY #6 -- soft dependency, omitted entirely (not merely stubbed
     -- false) when opts.featureBlocksAvailable == false, so the fail-open
     -- test below exercises the REAL `type(IsK9FeatureBlocked) == 'function'`
@@ -401,6 +499,22 @@ local function newMovementFixture(opts)
             threadRunner.step()
         end,
         registerPlayer = function(serverId, playerIndex) playerIndexByServerId[serverId] = playerIndex end,
+        -- LEASH PULL-BACK THREAD helpers -- THIS PASS (PRIORITY #7).
+        setPedCoords = function(handle, x, y, z) coordsByHandle[handle] = vec3(x, y, z) end,
+        setCoordsCalls = setCoordsCalls,
+        setPedInVehicle = function(v) pedInVehicle = v end,
+        --- Registers a partner ped so GetPlayerFromServerId ->
+        --- GetPlayerPed -> DoesEntityExist all resolve to a real, existing
+        --- handle -- mirrors registerPlayer() above but also marks the
+        --- resulting ped handle as existing (registerPlayer alone only
+        --- wires the serverId -> playerIndex half already used by the
+        --- leash attach/detach net-event tests).
+        registerPartnerPed = function(serverId, playerIndex, handle)
+            playerIndexByServerId[serverId] = playerIndex
+            playerPedByIndex[playerIndex] = handle
+            existingEntities[handle] = true
+        end,
+        setIsRestingInKennel = function(v) isRestingInKennelValue = v end,
         threadCount = function() return threadCount end,
         keyMappingCount = function() return keyMappingCount end,
         commandCount = function()
@@ -1209,20 +1323,89 @@ t.test('WATCHDOG SELF-QUIETS: once its own reset has run, a SECOND step makes no
 end)
 
 -- ========================================================================
--- WHAT THIS FILE DOES NOT COVER, AND WHY (per this task's own instruction
--- to disclose uncovered paths rather than silently skip them):
+-- PRIORITY #7 -- THE ELASTIC LEASH PULL-BACK THREAD's IsRestingInKennel()
+-- EXCLUSION (leash-in-kennel fix, this pass). This file's own header used
+-- to disclose the pull-back thread's BODY as "the single largest disclosed
+-- gap in this spec" (captured but never stepped) -- CLOSED, partially, this
+-- pass: real Vec3 + GetEntityCoords/SetEntityCoords/IsPedInAnyVehicle/
+-- GetPlayerPed machinery was added to this file's own fixture (see the
+-- top-of-file Vec3MT stub and newMovementFixture()'s own "LEASH PULL-BACK
+-- THREAD MACHINERY" section) specifically to prove the new
+-- IsRestingInKennel() exclusion actually works, using the SAME
+-- `stepThreads = true` + `f.step()` convention PRIORITY #4/#5 above
+-- already established (one `f.step()` call = one full loop-body pass,
+-- since -- like the suppression/watchdog threads above -- this thread's
+-- own `Wait(sleepMs)` sits at the END of its while-loop body, not the
+-- start). See "WHAT THIS FILE STILL DOES NOT COVER" below for what remains
+-- genuinely untested about this thread even after this addition.
+-- ========================================================================
+
+t.test('LEASH PULL-BACK: baseline -- out of the pull zone, not in a vehicle, not resting -- SetEntityCoords genuinely pulls this ped toward its partner (proves the thread body actually runs, not merely registers)', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.registerPartnerPed(65, 20, 2)
+    f.triggerLeashAttached(65535, 65, true)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 10, 0, 0) -- dist 10 -- between pullZoneStart (7.5) and hardCap (15) for this fixture's Config.LeashMaxDistance = 10.0
+
+    f.step()
+
+    t.equals(#f.setCoordsCalls, 1)
+    t.equals(f.setCoordsCalls[1].handle, 1, 'THIS client\'s own ped is the one pulled, never the partner\'s')
+end)
+
+t.test('LEASH PULL-BACK: IsRestingInKennel() true excludes the pull-back, exactly like IsPedInAnyVehicle/IsInK9Vehicle already did -- THE FIX', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.registerPartnerPed(65, 20, 2)
+    f.triggerLeashAttached(65535, 65, true)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 10, 0, 0)
+    f.setIsRestingInKennel(true)
+
+    f.step()
+
+    t.equals(#f.setCoordsCalls, 0, 'resting in a kennel must exclude the elastic pull-back -- otherwise a physics fight against the kennel\'s own AttachEntityToEntity every tick')
+end)
+
+t.test('LEASH PULL-BACK: IsRestingInKennel absent entirely (client/kennel.lua not loaded) is a soft dependency -- pull-back still runs exactly as before this pass, no error', function()
+    local f = newMovementFixture({ stepThreads = true, provideIsRestingInKennel = false })
+    t.isNil(f.env.IsRestingInKennel, 'IsRestingInKennel must be genuinely absent from this sandbox for this test to prove anything')
+    f.registerPartnerPed(65, 20, 2)
+    f.triggerLeashAttached(65535, 65, true)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 10, 0, 0)
+
+    f.step() -- must not throw "attempt to call a nil value"
+
+    t.equals(#f.setCoordsCalls, 1, 'with client/kennel.lua absent, the pull-back must behave exactly as it did before this pass')
+end)
+
+t.test('LEASH PULL-BACK: past the hard cap, the safety-valve auto-detach still fires regardless of IsRestingInKennel() -- the kennel exclusion only ever touches the SOFT pull-back branch, never the hard-cap fallback', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.registerPartnerPed(65, 20, 2)
+    f.triggerLeashAttached(65535, 65, true)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 20, 0, 0) -- dist 20 > hardCap (15)
+    f.setIsRestingInKennel(true)
+
+    f.step()
+
+    t.equals(#f.setCoordsCalls, 0, 'the hard-cap branch never calls SetEntityCoords -- it detaches instead')
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:detachLeash', 'DetachLeash() must still fire unconditionally even while resting in a kennel -- the hard-cap safety valve is this file\'s own last resort and must never be excludable')
+end)
+
+-- ========================================================================
+-- WHAT THIS FILE STILL DOES NOT COVER, AND WHY (per this task's own
+-- instruction to disclose uncovered paths rather than silently skip them):
 --
---   - The elastic leash pull-back thread's BODY (the CreateThread this file
---     registers) -- captured but never invoked (see "CreateThread IS
---     CAPTURED BUT NEVER INVOKED" in this file's header). Its softLimit/
---     hardCap/pullZoneStart math, the IsPedInAnyVehicle/IsInK9Vehicle
---     exclusions, and the detachRequestedForSafety single-fire guard are
---     all untested here. This is the single largest disclosed gap in this
---     spec -- it was not one of this task's three named priorities, and
---     exercising it properly needs the same coroutine-stepping + Vec3
---     machinery already used elsewhere in this suite (combat_spec.lua,
---     clientradial_spec.lua), which would have meaningfully diluted the
---     effort this pass put into the three named priorities instead.
+--   - The elastic leash pull-back thread's own detachRequestedForSafety
+--     single-fire guard, and its softLimit/pullZoneStart proportional
+--     pull-strength math (the exact pullAmount for a given distance) --
+--     PRIORITY #7 above proves the thread runs and proves its THREE
+--     exclusions (vehicle/K9-vehicle/kennel) and its hard-cap fallback all
+--     fire or don't fire correctly, but does not pin the exact magnitude
+--     of a given pull-back call or that a second hard-cap breach within
+--     the same attach does not re-notify/re-detach.
 --   - ToggleK9Camera()'s OWN gate behavior (IsOwnModelK9 false -> deny) is
 --     exercised only as a SIDE EFFECT of setting up onResourceStop tests
 --     above -- not independently tested for its own sake (e.g. the
