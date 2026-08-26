@@ -48,8 +48,15 @@
     reason for a client to ever claim this, and none is exposed.
 
     Client events (RegisterNetEvent, server->client):
-    1. 'qbx_k9unit:client:xpTierChanged' (newTier: table — a full entry
-       from Config.XPTiers: { xp, label, speedMultiplier, scentRangeMultiplier })
+    1. 'qbx_k9unit:client:xpTierChanged' (newTier: table — a copy of the
+       citizenid's resolved Config.XPTiers entry: { xp, label,
+       speedMultiplier, scentRangeMultiplier, ... }, WITH speedMultiplier/
+       scentRangeMultiplier/medkitCooldownMultiplier OVERLAID by
+       server/k9profiles.lua's per-INDIVIDUAL-K9 override, if this citizenid
+       has one live — GAP 1 closure, this pass; see PushTierSnapshot/
+       BuildEffectiveTierSnapshot below for the exact composition contract.
+       A citizenid with no override sees byte-identical values to before
+       this pass.)
        [client/progression.lua] — sent to the K9's own client ONLY
        (never broadcast), on: (a) PlayerLoaded / resource-start backfill
        (an authoritative snapshot so a returning K9 doesn't need to earn
@@ -103,6 +110,25 @@
             Config.Features.XPProgression themselves (this accessor does
             not gate internally, so it stays a plain, always-correct cache
             read regardless of caller).
+            DELIBERATELY STILL RAW, NOT OVERRIDE-AWARE (GAP 1 closure, this
+            pass — stated explicitly so this does not read as an oversight):
+            this function's own return value is UNCHANGED by this pass —
+            still the plain XP-tier lookup, never composed with
+            server/k9profiles.lua's per-INDIVIDUAL-K9 override. Widening this
+            accessor itself would silently change what every one of its
+            existing callers (server/tracking.lua, server/search.lua,
+            server/tablet.lua, server/highcommand.lua, server/exports.lua —
+            none owned by this pass) receives, for a benefit only one of them
+            (server/tracking.lua's own scent-range calculation) could
+            actually use — too wide a blast radius for this pass to take on
+            for those files' own owners. The two places an override actually
+            needs to reach a real effect (GetXPTierMedkitCooldownMs, and the
+            client-facing tier-snapshot push) call
+            GetK9EffectiveMultipliers(citizenid) directly instead — see each
+            one's own doc comment. server/tracking.lua's own scent-range
+            consumer is DISCLOSED, NOT YET WIRED — see
+            server/k9profiles.lua's own header "INTEGRATION HANDOFF" section
+            for the exact one-line patch reported to that file's owner.
         GetXP(citizenid) -> number
             Raw accumulated total (0 if uncached). Not currently consumed
             anywhere in this resource — exposed for a future HUD/display
@@ -919,6 +945,25 @@ end
 --- that file's own header documents as PERMANENTLY ON — the opposite of a
 --- Veteran-tier reward, and exactly the kind of footgun this guard exists
 --- to prevent.
+---
+--- GAP 1 CLOSURE (owner-directed "god over that tablet ... over everything
+--- related to that K9" pass, server/k9profiles.lua's own per-INDIVIDUAL-K9
+--- override layer): the multiplier consulted below is now
+--- `GetK9EffectiveMultipliers(citizenid).medkitCooldownMultiplier` — GLOBAL
+--- DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE, server/k9profiles.lua's own
+--- documented resolution order, composed for this citizenid — rather than
+--- `GetXPTier(citizenid).medkitCooldownMultiplier` raw. Soft-guarded
+--- (`type(GetK9EffectiveMultipliers) == 'function'`, pcall-wrapped): when
+--- server/k9profiles.lua is absent or throws, this falls back to the exact
+--- same raw `GetXPTier(citizenid).medkitCooldownMultiplier` read this
+--- function used before this pass — byte-for-byte unaffected for a
+--- citizenid with no individual override either way, since
+--- GetK9EffectiveMultipliers itself already returns the plain tier value
+--- when no override row sets this field. Every defensive bound below is
+--- UNCHANGED and applies identically regardless of which source the
+--- multiplier came from — an override cannot bypass this function's own
+--- <= 0 / > 1 / NaN guard any more than a tier's own config-shipped value
+--- could.
 --- @param citizenid string
 --- @param baseCooldownMs number
 --- @return number effectiveCooldownMs
@@ -927,8 +972,18 @@ function GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
         return baseCooldownMs
     end
 
-    local tier = GetXPTier(citizenid)
-    local multiplier = tier.medkitCooldownMultiplier
+    local multiplier
+    if type(GetK9EffectiveMultipliers) == 'function' then
+        local ok, effective = pcall(GetK9EffectiveMultipliers, citizenid)
+        if ok and type(effective) == 'table' then
+            multiplier = effective.medkitCooldownMultiplier
+        end
+    end
+    if multiplier == nil then
+        local tier = GetXPTier(citizenid)
+        multiplier = tier.medkitCooldownMultiplier
+    end
+
     if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
         return baseCooldownMs
     end
@@ -964,20 +1019,6 @@ local function LoadXPForCitizenid(citizenid)
     return K9XP[citizenid]
 end
 
---- Pushes an authoritative tier snapshot to a specific, currently-connected
---- player's client. Gated on Config.Features.XPProgression — no client-side
---- consequence should ever apply while the feature is disabled, per
---- DEVELOPER_REFERENCE.md §3's "read the flag at the point of use" rule; the K9XP cache
---- itself is still warmed/kept in sync regardless of the flag (cheap, and
---- avoids losing real accumulated progress data just because the feature
---- is temporarily toggled off).
---- @param targetSrc number
---- @param tier table
-local function PushTierSnapshot(targetSrc, tier)
-    if not Config.Features.XPProgression then return end
-    TriggerClientEvent('qbx_k9unit:client:xpTierChanged', targetSrc, tier)
-end
-
 --- Copies a Config.XPTiers-shaped entry (xp/label/speedMultiplier/
 --- scentRangeMultiplier) into a fresh table — identical shape/purpose to
 --- server/exports.lua's own `ShallowCopyTier`, duplicated here rather than
@@ -997,6 +1038,120 @@ local function CopyTier(tier)
         copy[key] = value
     end
     return copy
+end
+
+--- GAP 1 CLOSURE (owner-directed "god over that tablet ... over everything
+--- related to that K9" pass, server/k9profiles.lua's own per-INDIVIDUAL-K9
+--- override layer). Composes `tier`'s own speedMultiplier/scentRangeMultiplier/
+--- medkitCooldownMultiplier with `citizenid`'s LIVE individual override, if
+--- any, into a FRESH COPY -- never the shared Config.XPTiers[n] reference
+--- `tier` may hold (same defensive-copy requirement CopyTier's own doc
+--- comment above already states; this function calls CopyTier itself so
+--- every caller gets that guarantee for free).
+---
+--- RESOLUTION ORDER IS NOT RE-IMPLEMENTED HERE -- it is server/k9profiles.lua's
+--- own GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE order (that file's
+--- own header), consulted through its one resource-global seam,
+--- `GetK9EffectiveMultipliers(citizenid)`, and forwarded verbatim. This
+--- function's only job is turning that answer into a snapshot shape safe to
+--- hand to `TriggerClientEvent`.
+---
+--- SOFT-GUARDED (`type(GetK9EffectiveMultipliers) == 'function'`), same
+--- convention as every other cross-file dependency in this resource: when
+--- server/k9profiles.lua is absent, or throws (pcall-wrapped — an override
+--- lookup must never be able to crash a real tier push), this degrades to a
+--- PLAIN COPY of `tier` with no override applied — byte-for-byte this
+--- function's own pre-existing (pre-GAP-1) behavior. Even present-and-
+--- healthy, a citizenid with no live override is unaffected: GetK9EffectiveMultipliers
+--- itself already returns the plain tier-derived values for that case (its
+--- own "STEP 3" only overwrites a field when an override row actually sets
+--- it), so this is a strict, provably-safe WIDENING — never a narrowing —
+--- of what a citizenid without any override ever saw pushed before this
+--- pass.
+---
+--- LOAD ORDER: server/k9profiles.lua loads AFTER this file in
+--- fxmanifest.lua's server_scripts list (that file's own requested
+--- placement, "runtime-only soft dependency" on this file's own GetXPTier).
+--- This is safe specifically BECAUSE this function is only ever called at
+--- RUNTIME (from PushTierSnapshot below, itself only reachable from
+--- AwardXP/AwardXPDirect/PlayerLoaded/the onResourceStart backfill loop, all
+--- of which fire long after every server_scripts file has finished
+--- loading) — never at either file's own file-load time. Matches this
+--- resource's own established "runtime existence guard, not a load-order
+--- assumption" convention (see fxmanifest.lua's own comment on
+--- server/medkit.lua's ordering for the precedent).
+--- @param citizenid any
+--- @param tier table
+--- @return table snapshot
+local function BuildEffectiveTierSnapshot(citizenid, tier)
+    local snapshot = CopyTier(tier)
+    if type(citizenid) == 'string' and citizenid ~= '' and type(GetK9EffectiveMultipliers) == 'function' then
+        local ok, effective = pcall(GetK9EffectiveMultipliers, citizenid)
+        if ok and type(effective) == 'table' then
+            if type(effective.speedMultiplier) == 'number' then snapshot.speedMultiplier = effective.speedMultiplier end
+            if type(effective.scentRangeMultiplier) == 'number' then snapshot.scentRangeMultiplier = effective.scentRangeMultiplier end
+            if type(effective.medkitCooldownMultiplier) == 'number' then snapshot.medkitCooldownMultiplier = effective.medkitCooldownMultiplier end
+        end
+    end
+    return snapshot
+end
+
+--- Pushes an authoritative tier snapshot to a specific, currently-connected
+--- player's client. Gated on Config.Features.XPProgression — no client-side
+--- consequence should ever apply while the feature is disabled, per
+--- DEVELOPER_REFERENCE.md §3's "read the flag at the point of use" rule; the K9XP cache
+--- itself is still warmed/kept in sync regardless of the flag (cheap, and
+--- avoids losing real accumulated progress data just because the feature
+--- is temporarily toggled off).
+---
+--- GAP 1 CLOSURE: `citizenid` is a NEW required parameter, this pass (every
+--- call site below updated in the SAME change) — needed so this function can
+--- ask server/k9profiles.lua whether THIS specific K9 carries a live
+--- individual override before the snapshot goes out. See
+--- BuildEffectiveTierSnapshot's own doc comment immediately above for the
+--- full composition contract; this function's own behavior is otherwise
+--- completely unchanged (same flag gate, same event name, same target-only
+--- delivery — never a broadcast).
+--- @param targetSrc number
+--- @param citizenid string
+--- @param tier table
+local function PushTierSnapshot(targetSrc, citizenid, tier)
+    if not Config.Features.XPProgression then return end
+    TriggerClientEvent('qbx_k9unit:client:xpTierChanged', targetSrc, BuildEffectiveTierSnapshot(citizenid, tier))
+end
+
+--- GAP 1 CLOSURE, THE PIECE THAT MAKES THIS ACTUALLY LIVE (not merely
+--- "exposed and tested") -- resource-global, exposed specifically for
+--- server/k9profiles.lua's own k9ProfileUpsert/k9ProfileReset tablet
+--- callbacks to call immediately after a successful individual-override
+--- write, so a high-command edit reaches an ALREADY-CONNECTED citizenid's
+--- client THE MOMENT it is made, without waiting for that citizenid's next
+--- real XP-tier crossing, reconnect, or a resource restart -- the three
+--- ONLY other events that would otherwise ever cause a fresh snapshot to be
+--- sent (PlayerLoaded, the onResourceStart backfill loop, and a tier
+--- crossing inside AwardXP/AwardXPDirect). Without this function, an
+--- override write is real in the database and in GetK9EffectiveMultipliers'
+--- own answer, but an already-online citizenid's client would keep showing
+--- their OLD speed until one of those three unrelated events happened to
+--- fire next -- exactly the "set it to 3.0 and NOTHING HAPPENS" complaint
+--- this whole pass exists to close, just deferred rather than fixed.
+---
+--- No-op (never throws, never notifies) when: the feature flag is off
+--- (PushTierSnapshot's own gate), `citizenid` cannot be resolved to a
+--- CURRENTLY connected player (nothing to push to -- the next real
+--- PlayerLoaded/backfill snapshot will already carry the override once they
+--- do connect, since BuildEffectiveTierSnapshot consults the live override
+--- on every call, not a cached copy), or `citizenid` is not a non-empty
+--- string. Reuses PushTierSnapshot/BuildEffectiveTierSnapshot verbatim --
+--- this is a thin "resolve online source, then push" wrapper, not a second
+--- implementation of the composition contract.
+--- @param citizenid string
+function PushXPTierSnapshotIfOnline(citizenid)
+    if type(citizenid) ~= 'string' or citizenid == '' then return end
+    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+    if type(onlineSrc) ~= 'number' then return end
+    PushTierSnapshot(onlineSrc, citizenid, ResolveTier(K9XP[citizenid] or 0))
 end
 
 --- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
@@ -1250,7 +1405,7 @@ function AwardXP(citizenid, actionKey)
         local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
         local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
         if type(onlineSrc) == 'number' then
-            PushTierSnapshot(onlineSrc, newTier)
+            PushTierSnapshot(onlineSrc, citizenid, newTier)
         end
     end
 end
@@ -1326,7 +1481,7 @@ function AwardXPDirect(citizenid, amount, reason)
         local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
         local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
         if type(onlineSrc) == 'number' then
-            PushTierSnapshot(onlineSrc, newTier)
+            PushTierSnapshot(onlineSrc, citizenid, newTier)
         end
     end
 
@@ -1348,7 +1503,7 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     -- level-up notification.
     local targetSrc = Player.PlayerData.source
     if type(targetSrc) == 'number' then
-        PushTierSnapshot(targetSrc, ResolveTier(xp))
+        PushTierSnapshot(targetSrc, citizenid, ResolveTier(xp))
     end
 end)
 
@@ -1391,7 +1546,7 @@ AddEventHandler('onResourceStart', function(resourceName)
             if Player and Player.PlayerData and Player.PlayerData.citizenid then
                 local citizenid = Player.PlayerData.citizenid
                 local xp = LoadXPForCitizenid(citizenid)
-                PushTierSnapshot(src, ResolveTier(xp))
+                PushTierSnapshot(src, citizenid, ResolveTier(xp))
             end
         end
     end

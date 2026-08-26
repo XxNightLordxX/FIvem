@@ -1440,6 +1440,43 @@ function K9Store.OverrideAudit_Append(overrideKey, kind, oldValue, newValue, cha
     return true
 end
 
+--- GAP 2 CLOSURE (owner-directed "full control ... accountability" pass --
+--- every catalog-edit audit table was write-only until this pass; see
+--- server/admin.lua's own new `qbx_k9unit:server:tabletAuditCatalog`
+--- callback for the tablet-facing consumer this backs). Mirrors the
+--- SafeQuery contract exactly (K9Store.SearchLog_GetRecent's own shape,
+--- immediately above this section) -- most recent first, bounded by
+--- SanitizeLimit, NEVER throws, ALWAYS a table. `Config.Database.enabled =
+--- false`: returns whatever THIS session's own OverrideAudit_Append calls
+--- have accumulated in `OverrideAuditRows` so far (empty on a fresh session
+--- with no edits yet this pass, per this file's own established
+--- "everything still works, forgotten on next restart" story -- see this
+--- file's own header) -- never a hardcoded empty regardless of real
+--- in-memory state, which would silently contradict every other
+--- `K9Store.*_GetAll*`/`*_GetRecent` accessor's own documented behavior in
+--- this exact same file.
+--- @param limit any
+--- @return table rows -- { { override_key, kind, old_value, new_value, changed_by, changed_at }, ... }, most recent first
+function K9Store.OverrideAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT override_key, kind, old_value, new_value, changed_by, changed_at FROM k9_runtime_override_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: OverrideAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #OverrideAuditRows, 1, -1 do
+        local row = OverrideAuditRows[i]
+        out[#out + 1] = { override_key = row.override_key, kind = row.kind, old_value = row.old_value, new_value = row.new_value, changed_by = row.changed_by, changed_at = row.changed_at }
+        if #out >= limit then break end
+    end
+    return out
+end
+
 -- ======================================================================
 -- k9_tablet_theme / k9_tablet_theme_audit
 --
@@ -1516,6 +1553,36 @@ function K9Store.ThemeAudit_Append(primaryColor, accentColor, backgroundColor, t
         table.remove(ThemeAuditRows, 1)
     end
     return true
+end
+
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- immediately above the k9_runtime_override_audit section for the full
+--- contract this mirrors exactly (SafeQuery, most recent first, bounded,
+--- never throws, real in-memory data when Config.Database.enabled = false).
+--- @param limit any
+--- @return table rows -- { { primary_color, accent_color, background_color, text_color, density, header_title, changed_by, changed_at }, ... }, most recent first
+function K9Store.ThemeAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT primary_color, accent_color, background_color, text_color, density, header_title, changed_by, changed_at FROM k9_tablet_theme_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: ThemeAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #ThemeAuditRows, 1, -1 do
+        local row = ThemeAuditRows[i]
+        out[#out + 1] = {
+            primary_color = row.primary_color, accent_color = row.accent_color, background_color = row.background_color,
+            text_color = row.text_color, density = row.density, header_title = row.header_title,
+            changed_by = row.changed_by, changed_at = row.changed_at,
+        }
+        if #out >= limit then break end
+    end
+    return out
 end
 
 -- ======================================================================
@@ -1750,6 +1817,34 @@ function K9Store.ShopLocationAudit_Insert(locationId, action, x, y, z, heading, 
         table.remove(ShopLocationAuditRows, 1)
     end
     return true
+end
+
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- (k9_runtime_override_audit section, above) for the full contract this
+--- mirrors exactly.
+--- @param limit any
+--- @return table rows -- { { location_id, action, x, y, z, heading, model, scenario, label, changed_by, changed_at }, ... }, most recent first
+function K9Store.ShopLocationAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT location_id, action, x, y, z, heading, model, scenario, label, changed_by, changed_at FROM k9_equipment_shop_locations_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopLocationAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #ShopLocationAuditRows, 1, -1 do
+        local row = ShopLocationAuditRows[i]
+        out[#out + 1] = {
+            location_id = row.location_id, action = row.action, x = row.x, y = row.y, z = row.z, heading = row.heading,
+            model = row.model, scenario = row.scenario, label = row.label, changed_by = row.changed_by, changed_at = row.changed_at,
+        }
+        if #out >= limit then break end
+    end
+    return out
 end
 
 -- ======================================================================
@@ -2042,6 +2137,31 @@ function K9Store.TierAudit_Append(action, tierKey, detail, changedBy)
     return true
 end
 
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- (k9_runtime_override_audit section, near the top of this file) for the
+--- full contract this mirrors exactly.
+--- @param limit any
+--- @return table rows -- { { action, tier_key, detail, changed_by, changed_at }, ... }, most recent first
+function K9Store.TierAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT action, tier_key, detail, changed_by, changed_at FROM k9_certification_tier_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: TierAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #TierAuditRows, 1, -1 do
+        local row = TierAuditRows[i]
+        out[#out + 1] = { action = row.action, tier_key = row.tier_key, detail = row.detail, changed_by = row.changed_by, changed_at = row.changed_at }
+        if #out >= limit then break end
+    end
+    return out
+end
+
 -- ======================================================================
 -- k9_permission_keys / k9_permission_key_audit
 --
@@ -2196,6 +2316,31 @@ function K9Store.PermKeyAudit_Append(action, permissionKey, detail, changedBy)
     return true
 end
 
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- (k9_runtime_override_audit section, near the top of this file) for the
+--- full contract this mirrors exactly.
+--- @param limit any
+--- @return table rows -- { { action, permission_key, detail, changed_by, changed_at }, ... }, most recent first
+function K9Store.PermKeyAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT action, permission_key, detail, changed_by, changed_at FROM k9_permission_key_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: PermKeyAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #PermKeyAuditRows, 1, -1 do
+        local row = PermKeyAuditRows[i]
+        out[#out + 1] = { action = row.action, permission_key = row.permission_key, detail = row.detail, changed_by = row.changed_by, changed_at = row.changed_at }
+        if #out >= limit then break end
+    end
+    return out
+end
+
 -- ======================================================================
 -- k9_xp_tiers / k9_xp_tier_audit
 --
@@ -2314,6 +2459,31 @@ function K9Store.XPTierAudit_Append(ordinal, detail, changedBy)
         table.remove(XPTierAuditRows, 1)
     end
     return true
+end
+
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- (k9_runtime_override_audit section, near the top of this file) for the
+--- full contract this mirrors exactly.
+--- @param limit any
+--- @return table rows -- { { action, ordinal, detail, changed_by, changed_at }, ... }, most recent first
+function K9Store.XPTierAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT action, ordinal, detail, changed_by, changed_at FROM k9_xp_tier_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: XPTierAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #XPTierAuditRows, 1, -1 do
+        local row = XPTierAuditRows[i]
+        out[#out + 1] = { action = row.action, ordinal = row.ordinal, detail = row.detail, changed_by = row.changed_by, changed_at = row.changed_at }
+        if #out >= limit then break end
+    end
+    return out
 end
 
 -- ======================================================================
@@ -2499,6 +2669,31 @@ function K9Store.IndividualOverrideAudit_Append(action, citizenid, detail, chang
         table.remove(IndividualOverrideAuditRows, 1)
     end
     return true
+end
+
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- (k9_runtime_override_audit section, near the top of this file) for the
+--- full contract this mirrors exactly.
+--- @param limit any
+--- @return table rows -- { { action, citizenid, detail, changed_by, changed_at }, ... }, most recent first
+function K9Store.IndividualOverrideAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT action, citizenid, detail, changed_by, changed_at FROM k9_individual_override_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: IndividualOverrideAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #IndividualOverrideAuditRows, 1, -1 do
+        local row = IndividualOverrideAuditRows[i]
+        out[#out + 1] = { action = row.action, citizenid = row.citizenid, detail = row.detail, changed_by = row.changed_by, changed_at = row.changed_at }
+        if #out >= limit then break end
+    end
+    return out
 end
 
 -- ======================================================================
@@ -2711,6 +2906,31 @@ function K9Store.ShopItemAudit_Append(action, itemKey, detail, changedBy)
         table.remove(ShopItemAuditRows, 1)
     end
     return true
+end
+
+--- GAP 2 CLOSURE -- see K9Store.OverrideAudit_GetRecent's own doc comment
+--- (k9_runtime_override_audit section, near the top of this file) for the
+--- full contract this mirrors exactly.
+--- @param limit any
+--- @return table rows -- { { action, item_key, detail, changed_by, changed_at }, ... }, most recent first
+function K9Store.ShopItemAudit_GetRecent(limit)
+    limit = SanitizeLimit(limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT action, item_key, detail, changed_by, changed_at FROM k9_equipment_shop_item_audit ORDER BY id DESC LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItemAudit_GetRecent query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #ShopItemAuditRows, 1, -1 do
+        local row = ShopItemAuditRows[i]
+        out[#out + 1] = { action = row.action, item_key = row.item_key, detail = row.detail, changed_by = row.changed_by, changed_at = row.changed_at }
+        if #out >= limit then break end
+    end
+    return out
 end
 
 -- ======================================================================

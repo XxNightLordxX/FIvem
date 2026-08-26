@@ -366,6 +366,24 @@ t.test('Memory: a fresh process starts with EVERY table empty -- fail-closed by 
     t.equals(#MemStore.Override_GetAll(), 0)
     t.equals(#MemStore.Theme_GetRows(), 0)
     t.isNil(MemStore.Appearance_GetRow('NOBODY'))
+    -- GAP 2 CLOSURE -- every one of the eight catalog-edit audit read
+    -- accessors must ALSO start empty on a fresh process, matching this
+    -- test's own "fail-closed by construction" framing: `Config.Database.enabled
+    -- = false` with nothing yet written THIS session must read back as
+    -- nothing, never a hardcoded empty regardless of real state (see each
+    -- accessor's own doc comment in server/datastore.lua). Placed HERE
+    -- (the very first Part 2 test) deliberately -- every one of these eight
+    -- tables is still genuinely untouched by any earlier test in this file
+    -- at this exact point, so this is a real assertion about a truly fresh
+    -- process, not a coincidence of test order.
+    t.equals(#MemStore.OverrideAudit_GetRecent(50), 0)
+    t.equals(#MemStore.ThemeAudit_GetRecent(50), 0)
+    t.equals(#MemStore.ShopLocationAudit_GetRecent(50), 0)
+    t.equals(#MemStore.TierAudit_GetRecent(50), 0)
+    t.equals(#MemStore.PermKeyAudit_GetRecent(50), 0)
+    t.equals(#MemStore.XPTierAudit_GetRecent(50), 0)
+    t.equals(#MemStore.IndividualOverrideAudit_GetRecent(50), 0)
+    t.equals(#MemStore.ShopItemAudit_GetRecent(50), 0)
 end)
 
 t.test('Memory: Cert_Insert/GetActiveId/RevokeActive round-trip, fails closed again after revoke', function()
@@ -1155,6 +1173,156 @@ t.test('SETTLEMENT: a probe that never resumes (a hung query, not an error) make
     t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
     t.equals(coroutine.status(waiterCo), 'dead', 'the waiting coroutine must finish (give up), not remain permanently suspended')
     t.isFalse(settled, 'unknown must be reported honestly as unknown -- callers are responsible for treating this as "assume collision" for their own boot-time read')
+end)
+
+-- ----------------------------------------------------------------------
+-- PART 4 -- GAP 2 CLOSURE: the eight catalog-edit audit tables (cert
+-- tiers, permission keys, XP tiers, equipment shop items, equipment shop
+-- locations, per-K9 individual overrides, runtime feature/tunable
+-- overrides, tablet theme) were WRITE-ONLY until this pass -- every
+-- `*Audit_Append`/`*Audit_Insert` writer had no matching read accessor
+-- anywhere in this resource, so every catalog edit high command made was
+-- logged perfectly and invisible forever. These eight new `*_GetRecent`
+-- accessors are the read side; see server/admin.lua's own new
+-- `qbx_k9unit:server:tabletAuditCatalog` callback for the ONE generic,
+-- catalog-name-parameterized tablet consumer built on top of them (tested
+-- in tests/admin_spec.lua, not here -- this file owns server/datastore.lua
+-- alone). Same SafeQuery contract as every other accessor in this file
+-- (K9Store.SearchLog_GetRecent's own shape, PART 1/2 above): most recent
+-- first, bounded by SanitizeLimit, NEVER throws, ALWAYS a table.
+-- ----------------------------------------------------------------------
+
+t.test('MySQL branch: every new catalog-audit *_GetRecent accessor queries its OWN table, most-recent-first, with a bound LIMIT -- never another catalog\'s table', function()
+    local cases = {
+        { fn = 'OverrideAudit_GetRecent', tableName = 'k9_runtime_override_audit' },
+        { fn = 'ThemeAudit_GetRecent', tableName = 'k9_tablet_theme_audit' },
+        { fn = 'ShopLocationAudit_GetRecent', tableName = 'k9_equipment_shop_locations_audit' },
+        { fn = 'TierAudit_GetRecent', tableName = 'k9_certification_tier_audit' },
+        { fn = 'PermKeyAudit_GetRecent', tableName = 'k9_permission_key_audit' },
+        { fn = 'XPTierAudit_GetRecent', tableName = 'k9_xp_tier_audit' },
+        { fn = 'IndividualOverrideAudit_GetRecent', tableName = 'k9_individual_override_audit' },
+        { fn = 'ShopItemAudit_GetRecent', tableName = 'k9_equipment_shop_item_audit' },
+    }
+    for _, case in ipairs(cases) do
+        resetCapture()
+        canned = { { changed_by = 'CANNED-' .. case.tableName } }
+        local rows = MysqlStore[case.fn](5)
+        t.equals(#captured, 1, case.fn .. ' must issue exactly one query')
+        t.equals(captured[1].kind, 'query')
+        t.contains(captured[1].sql, 'FROM ' .. case.tableName, case.fn .. ' must read its own table')
+        t.contains(captured[1].sql, 'ORDER BY id DESC', case.fn .. ' must return most-recent-first')
+        t.contains(captured[1].sql, 'LIMIT 5', case.fn .. ' must embed the sanitized limit')
+        t.equals(#rows, 1)
+        t.equals(rows[1].changed_by, 'CANNED-' .. case.tableName, case.fn .. ' must pass the query result through unchanged')
+    end
+end)
+
+t.test('MySQL branch: every new catalog-audit *_GetRecent accessor degrades to {} (never throws) on a thrown query error', function()
+    local fns = {
+        'OverrideAudit_GetRecent', 'ThemeAudit_GetRecent', 'ShopLocationAudit_GetRecent',
+        'TierAudit_GetRecent', 'PermKeyAudit_GetRecent', 'XPTierAudit_GetRecent',
+        'IndividualOverrideAudit_GetRecent', 'ShopItemAudit_GetRecent',
+    }
+    for _, fn in ipairs(fns) do
+        resetCapture()
+        canned = { throw = 'simulated connection drop' }
+        local ok, rows = pcall(MysqlStore[fn], 10)
+        t.isTrue(ok, fn .. ' must never let a thrown query error escape to the caller')
+        t.equals(#rows, 0, fn .. ' must degrade to an empty table on a thrown error')
+    end
+end)
+
+t.test('Memory: OverrideAudit_GetRecent -- append order reversed (most recent first), limit respected', function()
+    t.isTrue(MemStore.OverrideAudit_Append('gap2.testkey', 'feature', 'old1', 'new1', 'GAP2-A'))
+    t.isTrue(MemStore.OverrideAudit_Append('gap2.testkey', 'feature', 'new1', 'new2', 'GAP2-B'))
+    t.isTrue(MemStore.OverrideAudit_Append('gap2.testkey', 'feature', 'new2', 'new3', 'GAP2-C'))
+    local top2 = MemStore.OverrideAudit_GetRecent(2)
+    t.equals(#top2, 2)
+    t.equals(top2[1].changed_by, 'GAP2-C', 'most recent append must be first')
+    t.equals(top2[1].new_value, 'new3')
+    t.equals(top2[2].changed_by, 'GAP2-B')
+end)
+
+t.test('Memory: ThemeAudit_GetRecent -- append order reversed, limit respected', function()
+    t.isTrue(MemStore.ThemeAudit_Append('#111111', '#222222', '#333333', '#444444', 'comfortable', 'Theme A', 'GAP2-A'))
+    t.isTrue(MemStore.ThemeAudit_Append('#aaaaaa', '#bbbbbb', '#cccccc', '#dddddd', 'compact', 'Theme B', 'GAP2-B'))
+    local top1 = MemStore.ThemeAudit_GetRecent(1)
+    t.equals(#top1, 1)
+    t.equals(top1[1].changed_by, 'GAP2-B')
+    t.equals(top1[1].header_title, 'Theme B')
+end)
+
+t.test('Memory: ShopLocationAudit_GetRecent -- append order reversed, limit respected', function()
+    t.isTrue(MemStore.ShopLocationAudit_Insert(1, 'add', 1.0, 2.0, 3.0, 90.0, 'a_c_husky', 'WORLD_HUMAN_STAND_IMPATIENT', 'Loc A', 'GAP2-A'))
+    t.isTrue(MemStore.ShopLocationAudit_Insert(1, 'move', 4.0, 5.0, 6.0, 180.0, 'a_c_husky', 'WORLD_HUMAN_STAND_IMPATIENT', 'Loc A', 'GAP2-B'))
+    local rows = MemStore.ShopLocationAudit_GetRecent(10)
+    t.isTrue(#rows >= 2)
+    t.equals(rows[1].changed_by, 'GAP2-B', 'most recent append must be first')
+    t.equals(rows[1].action, 'move')
+    t.equals(rows[2].changed_by, 'GAP2-A')
+end)
+
+t.test('Memory: TierAudit_GetRecent -- append order reversed, limit respected', function()
+    t.isTrue(MemStore.TierAudit_Append('tier_create', 'gap2tier', 'label=Gap2', 'GAP2-A'))
+    t.isTrue(MemStore.TierAudit_Append('tier_update', 'gap2tier', 'label=Gap2Updated', 'GAP2-B'))
+    local top1 = MemStore.TierAudit_GetRecent(1)
+    t.equals(#top1, 1)
+    t.equals(top1[1].changed_by, 'GAP2-B')
+    t.equals(top1[1].action, 'tier_update')
+end)
+
+t.test('Memory: PermKeyAudit_GetRecent -- append order reversed, limit respected, starts empty (untouched by any earlier test in this file)', function()
+    t.equals(#MemStore.PermKeyAudit_GetRecent(1000), 0, 'sanity: no other test in this file touches k9_permission_key_audit')
+    t.isTrue(MemStore.PermKeyAudit_Append('permkey_create', 'gap2.key', 'label="Gap2"', 'GAP2-A'))
+    t.isTrue(MemStore.PermKeyAudit_Append('permkey_delete', 'gap2.key', 'tombstoned', 'GAP2-B'))
+    local rows = MemStore.PermKeyAudit_GetRecent(10)
+    t.equals(#rows, 2)
+    t.equals(rows[1].action, 'permkey_delete', 'most recent append must be first')
+    t.equals(rows[2].action, 'permkey_create')
+end)
+
+t.test('Memory: XPTierAudit_GetRecent -- append order reversed, limit respected, starts empty', function()
+    t.equals(#MemStore.XPTierAudit_GetRecent(1000), 0, 'sanity: no other test in this file touches k9_xp_tier_audit')
+    t.isTrue(MemStore.XPTierAudit_Append(2, 'xpThreshold=1250 -> 1300', 'GAP2-A'))
+    t.isTrue(MemStore.XPTierAudit_Append(2, 'xpThreshold=1300 -> 1400', 'GAP2-B'))
+    local rows = MemStore.XPTierAudit_GetRecent(10)
+    t.equals(#rows, 2)
+    t.equals(rows[1].changed_by, 'GAP2-B', 'most recent append must be first')
+    t.equals(rows[1].ordinal, 2)
+end)
+
+t.test('Memory: IndividualOverrideAudit_GetRecent -- append order reversed, limit respected', function()
+    t.isTrue(MemStore.IndividualOverrideAudit_Append('override_create', 'GAP2CIT', 'speedMultiplier=3.0', 'GAP2-A'))
+    t.isTrue(MemStore.IndividualOverrideAudit_Append('override_reset', 'GAP2CIT', 'reset', 'GAP2-B'))
+    local top1 = MemStore.IndividualOverrideAudit_GetRecent(1)
+    t.equals(#top1, 1)
+    t.equals(top1[1].changed_by, 'GAP2-B')
+    t.equals(top1[1].action, 'override_reset')
+end)
+
+t.test('Memory: ShopItemAudit_GetRecent -- append order reversed, limit respected, starts empty', function()
+    t.equals(#MemStore.ShopItemAudit_GetRecent(1000), 0, 'sanity: no other test in this file touches k9_equipment_shop_item_audit')
+    t.isTrue(MemStore.ShopItemAudit_Append('item_create', 'gap2_item', 'price=100', 'GAP2-A'))
+    t.isTrue(MemStore.ShopItemAudit_Append('item_update', 'gap2_item', 'price=100 -> 150', 'GAP2-B'))
+    local rows = MemStore.ShopItemAudit_GetRecent(10)
+    t.equals(#rows, 2)
+    t.equals(rows[1].action, 'item_update', 'most recent append must be first')
+    t.equals(rows[2].action, 'item_create')
+end)
+
+t.test('Memory: every new catalog-audit *_GetRecent accessor never throws on a non-numeric/negative/NaN limit -- same SanitizeLimit backstop every other accessor in this file already relies on', function()
+    local fns = {
+        'OverrideAudit_GetRecent', 'ThemeAudit_GetRecent', 'ShopLocationAudit_GetRecent',
+        'TierAudit_GetRecent', 'PermKeyAudit_GetRecent', 'XPTierAudit_GetRecent',
+        'IndividualOverrideAudit_GetRecent', 'ShopItemAudit_GetRecent',
+    }
+    for _, fn in ipairs(fns) do
+        for _, badLimit in ipairs({ 'notanumber', {}, true, -5, 0, 0/0 }) do
+            local ok, rows = pcall(MemStore[fn], badLimit)
+            t.isTrue(ok, fn .. ' must never throw on limit=' .. tostring(badLimit))
+            t.isTrue(type(rows) == 'table', fn .. ' must always return a table')
+        end
+    end
 end)
 
 os.exit(t.summary())

@@ -231,13 +231,36 @@
         `client/movement.lua`'s `K9MoveRateModifiers.xpTier` (via
         client/progression.lua's existing, UNCHANGED handler -- neither
         client file needed editing, since both already trust whatever the
-        server sends) reflects a speed override LIVE the moment it is set,
-        for an already-connected citizenid. See server/progression.lua's own
-        header for the exact composition contract and the one remaining
-        boundary (a live edit made through server/xptiers.lua's own tier
-        EDITOR, as opposed to an XP-driven crossing or login, pushes through
-        a SEPARATE channel that does not yet compose this override -- see
-        that file's own report for the disclosed, unclosed follow-on).
+        server sends) reflects an override on the citizenid's NEXT snapshot.
+      * THE REMAINING PIECE, ALSO CLOSED THIS PASS (found and fixed only
+        after re-tracing the FULL chain end to end, not assumed complete
+        from the two bullets above alone): those two bullets alone were NOT
+        enough to make an edit LIVE for an ALREADY-CONNECTED citizenid --
+        `PushTierSnapshot` is only ever CALLED from PlayerLoaded, the
+        onResourceStart backfill loop, and a real XP-tier CROSSING inside
+        AwardXP/AwardXPDirect, none of which fire merely because THIS file's
+        own k9ProfileUpsert/k9ProfileReset just wrote a new override. Without
+        a fourth trigger, a high-command edit to an already-online citizenid
+        would sit correct-in-the-database-and-in-GetK9EffectiveMultipliers
+        but INVISIBLE on that citizenid's own screen until their next real
+        tier crossing, reconnect, or a server restart -- the exact "set it to
+        3.0 and NOTHING HAPPENS" symptom this whole pass exists to close,
+        merely deferred rather than fixed. CLOSED by a new resource-global,
+        server/progression.lua's `PushXPTierSnapshotIfOnline(citizenid)`
+        (a thin "resolve the online source, then call the same
+        PushTierSnapshot" wrapper -- no second implementation of the
+        composition contract), called from BOTH k9ProfileUpsert and
+        k9ProfileReset below, immediately after each one's own
+        RefreshOverrideCache() call, soft-guarded and pcall-wrapped. This is
+        what makes the effect genuinely LIVE, not merely "correct the next
+        time something else happens to push a snapshot."
+        REMAINING, DISCLOSED BOUNDARY: a live edit made through
+        server/xptiers.lua's own tier EDITOR (changing a whole RANK's
+        speed/scent, as opposed to one individual K9's override, or an
+        XP-driven crossing/login) pushes through a SEPARATE channel
+        (`server/xptiers.lua:806`) that does not compose this file's own
+        override at all -- reported to that file's owner, not fixed here
+        (out of this pass's own file ownership).
       * server/tracking.lua's own SERVER-SIDE scent-range consumer
         (`GetXPTier(trackerCitizenid).scentRangeMultiplier`, used for a
         real, live search-radius calculation) -- STILL NOT WIRED. That file
@@ -247,15 +270,33 @@
         tier.scentRangeMultiplier` in place of the raw tier read at that
         file's own maxRange calculation -- reported, not applied.
 
-    Net effect, stated plainly: an individual override's SPEED component now
-    has a real, visible, live effect on an already-connected citizenid (the
-    exact symptom the owner's own report named) and its MEDKIT-COOLDOWN
-    component is wired all the way to the one remaining ready-to-apply patch
-    in server/medkit.lua (unchanged from the prior pass's own disclosure).
-    Its SCENT-RANGE component is not yet visible anywhere a player could
-    observe it, because its one real consumer is server-side, in a file
-    neither this nor the prior pass may edit -- disclosed above, not silently
-    dropped.
+    Net effect, stated plainly, TRACED END TO END (not merely exposed and
+    unit-tested -- see this file's own k9profiles_spec.lua and
+    tests/progression_spec.lua's own "GAP 1 CLOSURE" section for the tests
+    that actually exercise this chain, not just each half in isolation):
+    setting an individual override's speedMultiplier from the tablet, for a
+    citizenid who is CURRENTLY CONNECTED, now reaches that exact chain in
+    one call --
+      k9ProfileUpsert (this file) writes the override, refreshes the cache,
+      -> PushXPTierSnapshotIfOnline (server/progression.lua) resolves the
+      citizenid's live server id and calls PushTierSnapshot
+      -> BuildEffectiveTierSnapshot composes GetK9EffectiveMultipliers'
+      answer onto a fresh tier copy
+      -> TriggerClientEvent('qbx_k9unit:client:xpTierChanged', ...) reaches
+      client/progression.lua's existing, UNCHANGED handler
+      -> which writes K9MoveRateModifiers.xpTier and calls
+      RecomputeK9MoveRate() (client/movement.lua, also unchanged)
+      -> which calls SetPedMoveRateOverride on that K9's own ped.
+    That last native call is the real, in-game, player-visible effect --
+    every link in this chain was read, this pass, to confirm it, not
+    assumed from an accessor existing. Its MEDKIT-COOLDOWN component is
+    wired all the way to the one remaining ready-to-apply patch in
+    server/medkit.lua (unchanged from the prior pass's own disclosure --
+    that file has a live owner and the accessor itself, not its one caller,
+    is what this pass owns). Its SCENT-RANGE component is not yet visible
+    anywhere a player could observe it, because its one real consumer
+    (server/tracking.lua) is server-side, in a file neither this nor the
+    prior pass may edit -- disclosed above, not silently dropped.
 ]]
 
 -- ======================================================================
@@ -666,6 +707,24 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     RefreshOverrideCache()
     K9ProfileEditMutex.Release(citizenid)
 
+    -- LIVE PUSH (GAP 1 closure, THE step that makes this actually live
+    -- rather than merely correct-and-invisible): if `citizenid` is
+    -- currently connected, push their freshly-composed effective tier
+    -- snapshot to their own client RIGHT NOW -- otherwise an
+    -- already-online K9 would keep showing its OLD speed until its next
+    -- real XP-tier crossing, reconnect, or a resource restart, which is
+    -- exactly the "set it to 3.0 and NOTHING HAPPENS" complaint this whole
+    -- pass exists to close. Soft-guarded (`type(...) == 'function'`,
+    -- pcall-wrapped) -- server/progression.lua loads BEFORE this file in
+    -- fxmanifest.lua's server_scripts list, so this is a genuine runtime
+    -- existence guard, not a load-order assumption; a missing/throwing
+    -- progression.lua degrades to "the write still succeeded, only the
+    -- immediate client refresh did not happen this instant" -- the DB/cache
+    -- state (and every future login) is unaffected either way.
+    if type(PushXPTierSnapshotIfOnline) == 'function' then
+        pcall(PushXPTierSnapshotIfOnline, citizenid)
+    end
+
     -- SELF-SERVICE VISIBILITY (same posture server/certtiers.lua's own
     -- "SELF-TIER CAPABILITY EDIT" / server/xptiers.lua's own
     -- "SELF-PROMOTION" sections already establish for their own surfaces):
@@ -730,6 +789,15 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
 
     RefreshOverrideCache()
     K9ProfileEditMutex.Release(citizenid)
+
+    -- LIVE PUSH -- see k9ProfileUpsert's own identical comment above for the
+    -- full "why this must happen here, not just on the next crossing/login"
+    -- writeup. A reset is just as much a live-effect change as a set: an
+    -- online K9's speed must snap back to its plain tier value immediately,
+    -- not linger at the just-removed override's value.
+    if type(PushXPTierSnapshotIfOnline) == 'function' then
+        pcall(PushXPTierSnapshotIfOnline, citizenid)
+    end
 
     WriteOverrideAudit('override_reset', citizenid, 'individual override reset -- K9 now uses its plain XP-tier values with no override', actingCitizenid or 'unknown')
 

@@ -83,10 +83,46 @@ end
 -- to resolve a citizenid for the console log line; nil is a valid/expected
 -- "unresolved source" response.
 local playersBySource = {}
+
+-- DISPLAY NAME RESOLUTION (this pass) -- GetPlayerByCitizenId/GetOfflinePlayer
+-- stubs for server/admin.lua's own ResolveAuditDisplayName, same shape
+-- tests/tabletserver_spec.lua's own newFixture() already established for
+-- server/tablet.lua's ResolveDisplayName. Both default to an EMPTY table so
+-- every pre-existing test in this file (none of which register a citizenid
+-- here) keeps observing ResolveAuditDisplayName's own documented "nothing
+-- resolves -> fall back to the citizenid itself" path, byte-for-byte
+-- unchanged from before this pass -- see e.g. the 'XP snapshot for
+-- ABCD1234' assertion further below, which stays true precisely because
+-- AuditDisplayLabel('ABCD1234') collapses back to the bare citizenid when
+-- no player is registered for it.
+local playersByCitizenId = {}
+local offlinePlayersByCitizenId = {}
+
+--- @param citizenid string
+--- @param charinfo table?
+local function registerOnlinePlayerByCitizenId(citizenid, source, charinfo)
+    playersByCitizenId[citizenid] = { PlayerData = { citizenid = citizenid, source = source, charinfo = charinfo } }
+end
+
+--- Registers a citizenid that only ever resolves through
+--- exports.qbx_core:GetOfflinePlayer, never GetPlayerByCitizenId -- mirrors
+--- tests/tabletserver_spec.lua's own registerOfflinePlayer helper.
+--- @param citizenid string
+--- @param charinfo table?
+local function registerOfflinePlayerByCitizenId(citizenid, charinfo)
+    offlinePlayersByCitizenId[citizenid] = { PlayerData = { citizenid = citizenid, charinfo = charinfo }, Offline = true }
+end
+
 local exportsStub = {
     qbx_core = {
         GetPlayer = function(_self, src)
             return playersBySource[src]
+        end,
+        GetPlayerByCitizenId = function(_self, citizenid)
+            return playersByCitizenId[citizenid]
+        end,
+        GetOfflinePlayer = function(_self, citizenid)
+            return offlinePlayersByCitizenId[citizenid]
         end,
     },
 }
@@ -153,7 +189,12 @@ local Config = {
         AcePermission = 'k9unit.admin',
         CommandCooldownMs = 300,
         TrustConsole = false,
-        MaxResults = { Certifications = 50, Partnerships = 50, SearchLog = 50 },
+        -- CatalogAudit added this pass (GAP 2 closure -- backs the new
+        -- qbx_k9unit:server:tabletAuditCatalog callback) -- server/admin.lua's
+        -- own onResourceStart now asserts this key exists exactly like the
+        -- three that were already here, so a fixture missing it would fail
+        -- EVERY test in this file at boot, not just the new ones.
+        MaxResults = { Certifications = 50, Partnerships = 50, SearchLog = 50, CatalogAudit = 50 },
     },
     -- Only what IsValidDepartment needs (`Config.Departments[job] ~= nil`) --
     -- a single real-shaped entry ('police', matching config.lua's own key
@@ -172,6 +213,16 @@ local Config = {
     FeatureControl = { RequireGrant = {} },
 }
 
+-- DISPLAY NAME RESOLUTION -- ResolveAuditDisplayName's own online branch
+-- falls back to this native when an online player has no charinfo at all
+-- (mirrors tests/tabletserver_spec.lua's own GetPlayerNameStub). Present
+-- unconditionally; harmless for every pre-existing test, none of which
+-- reach this branch (no citizenid is ever registered via
+-- registerOnlinePlayerByCitizenId in those tests).
+local function GetPlayerNameStub(source)
+    return 'SteamName#' .. tostring(source)
+end
+
 local env = Sandbox.newEnv({
     GetGameTimer = GetGameTimer,
     RegisterCommand = RegisterCommand,
@@ -185,6 +236,7 @@ local env = Sandbox.newEnv({
     print = printStub,
     Config = Config,
     lib = LibStub,
+    GetPlayerName = GetPlayerNameStub,
 })
 
 -- server/admin.lua calls NewCooldown() at file-load time (AuditCooldown) --
@@ -1123,6 +1175,150 @@ t.test('tabletAuditCert: a valid authorized call returns RAW rows (not a formatt
     t.contains(capturedPrints[#capturedPrints], 'ran tabletAuditCert(ABCD1234) -> ok')
 end)
 
+-- ============================================================================
+-- DISPLAY NAME RESOLUTION (owner's own request: "ensure a name actually
+-- pops up and not the player id... in the tablet etc"). Every raw
+-- citizenid column these five callbacks' `rows` already carried is now
+-- ADDITIVELY paired with a `<field>_name` sibling (granted_by_name,
+-- revoked_by_name, k9_citizenid_name, handler_citizenid_name,
+-- established_by_name, ended_by_name, searcher_citizenid_name,
+-- target_citizenid_name, citizenid_name) -- the raw column itself is never
+-- removed or replaced (this task's own "keep the identifier" rule), and
+-- the SAME enrichment feeds both this callback surface's JSON `rows` and
+-- the /k9audit* commands' own chat/console text (FormatCertRow etc., via
+-- PresentRows/PrintRowsToConsole) -- see server/admin.lua's own
+-- "DISPLAY NAME RESOLUTION" header section.
+-- ============================================================================
+
+t.test('tabletAuditCert: rows carry granted_by_name/revoked_by_name as ADDITIVE fields -- the raw granted_by/revoked_by columns are never replaced', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('ADMIN1', 501, { firstname = 'Alex', lastname = 'Admin' })
+    registerOfflinePlayerByCitizenId('OLDADMIN', { firstname = 'Sam', lastname = 'Retired' })
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certifications WHERE citizenid = ?', 1, true) then
+            return {
+                { job = 'police', active = 0, granted_by = 'ADMIN1', granted_at = '2024-01-01 00:00:00', revoked_by = 'OLDADMIN', revoked_at = '2024-02-01 00:00:00' },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].granted_by, 'ADMIN1', 'the raw identifier must never be replaced')
+    t.equals(result.rows[1].granted_by_name, 'Alex Admin', 'an ONLINE granter with charinfo resolves to their real name')
+    t.equals(result.rows[1].revoked_by, 'OLDADMIN')
+    t.equals(result.rows[1].revoked_by_name, 'Sam Retired', 'an OFFLINE revoker resolves via GetOfflinePlayer charinfo')
+end)
+
+t.test('tabletAuditCert: an unresolvable granted_by falls back to the bare citizenid, never blank or a fake name -- and revoked_by_name stays nil when the row was never revoked', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certifications WHERE citizenid = ?', 1, true) then
+            return {
+                { job = 'police', active = 1, granted_by = 'GHOST1', granted_at = '2024-01-01 00:00:00', revoked_by = nil, revoked_at = nil },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(result.rows[1].granted_by_name, 'GHOST1', 'unresolvable -> the citizenid itself, matching this file\'s own established fallback')
+    t.isNil(result.rows[1].revoked_by_name, 'a still-active row has no revoked_by, so no name to resolve either')
+end)
+
+t.test('/k9auditcert chat/console output resolves the SAME name the callback does -- "Name (citizenid)", not the citizenid alone', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('ADMIN1', 501, { firstname = 'Alex', lastname = 'Admin' })
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certifications WHERE citizenid = ?', 1, true) then
+            return {
+                { job = 'police', active = 1, granted_by = 'ADMIN1', granted_at = '2024-01-01 00:00:00', revoked_by = nil, revoked_at = nil },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.isNotNil(capturedNotifications[2], 'expected a formatted-rows notification chunk')
+    t.contains(capturedNotifications[2].description, 'Alex Admin (ADMIN1)', 'the chat line must show the resolved name alongside the citizenid, not the citizenid alone')
+end)
+
+t.test('/k9auditcert chat/console "Certification history for ..." header ALSO resolves the target citizenid\'s own name', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('ABCD1234', 502, { firstname = 'Terry', lastname = 'Target' })
+    local src = freshAuthorizedSource()
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.contains(capturedNotifications[1].description, 'Terry Target (ABCD1234)')
+end)
+
+t.test('tabletAuditPartner: rows carry k9_citizenid_name/handler_citizenid_name/established_by_name/ended_by_name -- a K9 is a citizenid too', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('K9-2', 601, { firstname = 'Rex', lastname = 'K9' })
+    registerOnlinePlayerByCitizenId('H', 602, { firstname = 'Han', lastname = 'Dler' })
+    fixtureResponder = function(sql)
+        if sql:find('k9_citizenid = ?', 1, true) then
+            return { { id = 2, k9_citizenid = 'K9-2', handler_citizenid = 'H', established_by = 'H', established_at = '2024-01-01', ended_by = nil, ended_at = nil, active = 1 } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditPartner'](src, 'ABCD1234', 3)
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].k9_citizenid, 'K9-2')
+    t.equals(result.rows[1].k9_citizenid_name, 'Rex K9')
+    t.equals(result.rows[1].handler_citizenid_name, 'Han Dler')
+    t.equals(result.rows[1].established_by_name, 'Han Dler')
+    t.isNil(result.rows[1].ended_by_name, 'a still-active partnership has no ended_by, so no name to resolve either')
+end)
+
+t.test('tabletAuditSearch: "person" mode rows carry searcher_citizenid_name/target_citizenid_name; a vehicle-type row never resolves a name for target_plate', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('OFFICERX', 701, { firstname = 'Off', lastname = 'Icer' })
+    fixtureResponder = function(sql)
+        if sql:find('target_citizenid = ?', 1, true) then
+            return { { searcher_citizenid = 'OFFICERX', searcher_job = 'police', target_type = 'person', target_plate = nil, target_citizenid = 'SUSPECT2', result = 'clean', total_weight = nil, alert_tier = nil, searched_at = '2024-02-02 00:00:00', id = 1 } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'person', 'SUSPECT2')
+    t.equals(result.rows[1].searcher_citizenid_name, 'Off Icer')
+    t.equals(result.rows[1].target_citizenid_name, 'SUSPECT2', 'unresolved target falls back to the bare citizenid')
+end)
+
+t.test('tabletAuditDept: rows carry citizenid_name/granted_by_name additively -- raw citizenid/granted_by unchanged', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('ABCD1111', 801, { firstname = 'Roster', lastname = 'Member' })
+    registerOnlinePlayerByCitizenId('ADMIN1', 802, { firstname = 'Alex', lastname = 'Admin' })
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certifications', 1, true) and sql:find('job = ?', 1, true) then
+            return { { citizenid = 'ABCD1111', granted_by = 'ADMIN1', granted_at = '2024-01-01 00:00:00' } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditDept'](src, 'police', 10)
+    t.equals(result.rows[1].citizenid, 'ABCD1111')
+    t.equals(result.rows[1].citizenid_name, 'Roster Member')
+    t.equals(result.rows[1].granted_by, 'ADMIN1')
+    t.equals(result.rows[1].granted_by_name, 'Alex Admin')
+end)
+
+t.test('tabletAuditXp: label resolves the target citizenid\'s own name, matching every other label builder', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('ABCD1234', 901, { firstname = 'Xavier', lastname = 'Player' })
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_progression', 1, true) then
+            return { { xp = 4200, updated_at = '2024-04-04 00:00:00' } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditXp'](src, 'ABCD1234')
+    t.contains(result.label, 'Xavier Player (ABCD1234)')
+end)
+
 t.test('tabletAuditCert: limit is clamped exactly like the command path -- an out-of-range numeric limit clamps to the hard max (100)', function()
     resetCaptures()
     local src = freshAuthorizedSource()
@@ -1361,6 +1557,61 @@ t.test('tabletAuditDept: console (source == 0) IS NOT a valid caller of a callba
     Config.AdminAudit.TrustConsole = false
 end)
 
+-- ============================================================================
+-- tabletAuditCatalog (GAP 2 closure, pre-existing this pass) -- DISPLAY NAME
+-- RESOLUTION applies here too: every one of its eight sources carries a
+-- `changed_by` citizenid, and k9Profiles ALSO carries a `citizenid` column
+-- (the K9/handler an individual override targets). See server/admin.lua's
+-- own EnrichChangedByRows.
+-- ============================================================================
+
+t.test('tabletAuditCatalog: certTiers rows carry changed_by_name additively', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('HC1', 1001, { firstname = 'High', lastname = 'Command' })
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certification_tier_audit', 1, true) then
+            return { { action = 'update', tier_key = 'senior', detail = 'raised requirement', changed_by = 'HC1', changed_at = '2024-05-01 00:00:00' } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].changed_by, 'HC1', 'the raw identifier must never be replaced')
+    t.equals(result.rows[1].changed_by_name, 'High Command')
+end)
+
+t.test('tabletAuditCatalog: k9Profiles rows carry BOTH changed_by_name and citizenid_name (the only one of the eight sources with a second citizenid column)', function()
+    resetCaptures()
+    registerOnlinePlayerByCitizenId('HC1', 1002, { firstname = 'High', lastname = 'Command' })
+    registerOnlinePlayerByCitizenId('K9-9', 1003, { firstname = 'Rex', lastname = 'Nine' })
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_individual_override_audit', 1, true) then
+            return { { action = 'set', citizenid = 'K9-9', detail = 'speedMultiplier=1.1', changed_by = 'HC1', changed_at = '2024-05-02 00:00:00' } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'k9Profiles')
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].citizenid_name, 'Rex Nine')
+    t.equals(result.rows[1].changed_by_name, 'High Command')
+end)
+
+t.test('tabletAuditCatalog: runtimeOverrides rows (a source with NO extra citizenid column) never get a citizenid_name field at all', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_runtime_override_audit', 1, true) then
+            return { { override_key = 'Config.Features.Foo', kind = 'boolean', old_value = 'false', new_value = 'true', changed_by = 'HC1', changed_at = '2024-05-03 00:00:00' } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'runtimeOverrides')
+    t.isTrue(result.ok)
+    t.isNil(result.rows[1].citizenid_name, 'runtimeOverrides rows have no citizenid column at all -- hasCitizenidColumn must stay false for every source except k9Profiles')
+end)
+
 -- ----------------------------------------------------------------------
 -- cap / limit / truncated (this pass) -- server/admin.lua's HARD_MAX_RESULTS
 -- is now echoed back on every successful tabletAudit* response instead of
@@ -1551,6 +1802,270 @@ t.test('tabletAuditDept: not_authorized carries no cap/limit/truncated', functio
     t.isNil(result.cap)
     t.isNil(result.limit)
     t.isNil(result.truncated)
+end)
+
+-- ----------------------------------------------------------------------
+-- GAP 2 CLOSURE -- 'qbx_k9unit:server:tabletAuditCatalog'. The eight
+-- catalog-edit audit tables (cert tiers, permission keys, XP tiers, shop
+-- items, shop locations, per-K9 overrides, runtime overrides, tablet
+-- themes) were write-only until this pass; this is the ONE generic,
+-- catalog-name-parameterized read callback that replaces what would
+-- otherwise be eight near-identical copies of tabletAuditCert's own shape.
+-- Reuses the EXACT SAME IsAuthorizedAdmin/AuditCooldown/ClampLimit/
+-- HARD_MAX_RESULTS/LogAuditInvocation scaffolding every callback above
+-- already does -- these cases prove that reuse, not merely that the new
+-- callback "works" in isolation.
+-- ----------------------------------------------------------------------
+
+t.test('tabletAuditCatalog: registered exactly like the other five audit callbacks', function()
+    t.isNotNil(registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'], 'onResourceStart must register tabletAuditCatalog')
+end)
+
+t.test('tabletAuditCatalog: an unauthorized caller is denied, no query runs, shape is { ok = false, error = "not_authorized", message }', function()
+    resetCaptures()
+    local src = 9401
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.contains(result.message, 'not authorized')
+    t.contains(capturedPrints[#capturedPrints], 'ran tabletAuditCatalog(n/a) -> denied')
+end)
+
+t.test('tabletAuditCatalog: an unknown catalog name is rejected as invalid_args, no query runs -- the HARDCODED allowlist, not a client-suppliable table name', function()
+    -- A FRESH source per case (never the same one twice) -- reusing one
+    -- source across several calls in the same test would trip the shared
+    -- AuditCooldown on the 2nd+ call and report rate_limited instead of the
+    -- invalid_args this test actually means to exercise.
+    local badNames = {
+        'k9_certifications', -- a REAL table name in this schema, but not a valid catalogName key -- must still be refused
+        'certTiers; DROP TABLE k9_certification_tier_audit;--',
+        '', 123, {}, true,
+    }
+    for _, badName in ipairs(badNames) do
+        resetCaptures()
+        local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](freshAuthorizedSource(), badName)
+        t.equals(#capturedQueries, 0, 'catalogName=' .. tostring(badName) .. ' must never reach a query')
+        t.isFalse(result.ok)
+        t.equals(result.error, 'invalid_args')
+    end
+    -- `nil` handled separately -- embedding a literal nil inside the array
+    -- above would make `ipairs` stop early (a nil hole ends iteration), so
+    -- every case after it would silently never run.
+    resetCaptures()
+    local nilResult = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](freshAuthorizedSource(), nil)
+    t.equals(#capturedQueries, 0, 'catalogName=nil must never reach a query')
+    t.isFalse(nilResult.ok)
+    t.equals(nilResult.error, 'invalid_args')
+end)
+
+t.test('tabletAuditCatalog: a valid catalogName returns RAW rows, plus ok/label/cap/limit/truncated -- same shape as every other tabletAudit* callback', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certification_tier_audit', 1, true) then
+            return {
+                { action = 'tier_create', tier_key = 'master', detail = 'label=Master ordinal=4', changed_by = 'HC1', changed_at = '2024-01-01 00:00:00' },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    t.equals(#capturedQueries, 1)
+    t.isTrue(result.ok)
+    t.equals(type(result.rows), 'table')
+    t.equals(#result.rows, 1)
+    t.equals(result.rows[1].tier_key, 'master', 'rows must be the RAW k9_certification_tier_audit row -- a real field, never a formatted string')
+    t.equals(result.rows[1].changed_by, 'HC1')
+    t.contains(result.label, 'audit')
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 50, 'absent limit falls back to the configured Config.AdminAudit.MaxResults.CatalogAudit default')
+    t.isFalse(result.truncated)
+    t.equals(#capturedNotifications, 0, 'a callback invocation must never also fire a chat toast')
+    t.contains(capturedPrints[#capturedPrints], 'ran tabletAuditCatalog(certTiers) -> ok')
+end)
+
+t.test('tabletAuditCatalog: every one of the eight real catalog names routes to its OWN table, never a different one', function()
+    local cases = {
+        { name = 'certTiers', tableName = 'k9_certification_tier_audit' },
+        { name = 'permissionKeys', tableName = 'k9_permission_key_audit' },
+        { name = 'xpTiers', tableName = 'k9_xp_tier_audit' },
+        { name = 'shopItems', tableName = 'k9_equipment_shop_item_audit' },
+        { name = 'shopLocations', tableName = 'k9_equipment_shop_locations_audit' },
+        { name = 'k9Profiles', tableName = 'k9_individual_override_audit' },
+        { name = 'runtimeOverrides', tableName = 'k9_runtime_override_audit' },
+        { name = 'tabletThemes', tableName = 'k9_tablet_theme_audit' },
+    }
+    for _, case in ipairs(cases) do
+        resetCaptures()
+        fixtureResponder = nil
+        local src = freshAuthorizedSource()
+        local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, case.name)
+        t.isTrue(result.ok, case.name .. ' must be a recognized catalog name')
+        t.equals(#capturedQueries, 1, case.name .. ' must issue exactly one query')
+        t.contains(capturedQueries[1].sql, 'FROM ' .. case.tableName, case.name .. ' must query its own table')
+    end
+end)
+
+t.test('tabletAuditCatalog: rate limiting is the SAME shared AuditCooldown budget every other tabletAudit* callback uses', function()
+    resetCaptures()
+    fixtureResponder = nil
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    t.isTrue(result.ok)
+    local result2 = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    t.isFalse(result2.ok)
+    t.equals(result2.error, 'rate_limited')
+end)
+
+t.test('tabletAuditCatalog: a callback call ALSO feeds the shared cooldown -- blocks a subsequent tabletAuditCert call from the same source', function()
+    resetCaptures()
+    fixtureResponder = nil
+    local src = freshAuthorizedSource()
+    registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'rate_limited')
+end)
+
+t.test('tabletAuditCatalog: limit is clamped exactly like every other tabletAudit* callback -- an out-of-range numeric limit clamps to the hard max (100)', function()
+    resetCaptures()
+    fixtureResponder = nil
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers', 999999)
+    t.isTrue(result.ok)
+    t.equals(result.limit, 100)
+    t.isTrue(result.truncated)
+end)
+
+t.test('tabletAuditCatalog: PER-PERSON FEATURE CONTROL applies identically -- an explicit block denies even job.isboss', function()
+    resetCaptures()
+    fixtureResponder = nil
+    grantPermission('CITFC-CATALOG-1', 'block.AdminAuditCommands', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-CATALOG-1',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCatalog'](src, 'certTiers')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
+-- ----------------------------------------------------------------------
+-- CONFIG-ABORT REGRESSION GUARD (this pass) -- NON-NEGOTIABLE: "NEVER use a
+-- bare top-level assert on a config value... one bad assert silently kills
+-- every registration below it for the server's entire uptime." A fresh,
+-- fully independent fixture (never the shared `env`/`Config` above, since
+-- those already carry a valid CatalogAudit key from file-load time) whose
+-- Config.AdminAudit.MaxResults is missing CatalogAudit ENTIRELY -- modelling
+-- an operator who already had Config.Features.AdminAuditCommands = true and
+-- their own MaxResults table from BEFORE this pass ever added the new key.
+-- ----------------------------------------------------------------------
+
+t.test('CONFIG-ABORT REGRESSION: a MISSING Config.AdminAudit.MaxResults.CatalogAudit must NOT abort registration of the other five commands/six callbacks -- clamp-and-warn, never assert', function()
+    local printed = {}
+    local function printStub2(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printed[#printed + 1] = table.concat(parts, '\t')
+    end
+
+    local eventHandlers2 = {}
+    local function AddEventHandler2(eventName, handler)
+        eventHandlers2[eventName] = eventHandlers2[eventName] or {}
+        eventHandlers2[eventName][#eventHandlers2[eventName] + 1] = handler
+    end
+
+    local registeredCommands2 = {}
+    local function RegisterCommand2(name, handler, _restricted)
+        registeredCommands2[name] = handler
+    end
+
+    local callbacks2 = {}
+    local lib2 = { callback = { register = function(name, handler) callbacks2[name] = handler end } }
+
+    local Config2 = {
+        Features = { AdminAuditCommands = true },
+        AdminAudit = {
+            CommandCooldownMs = 300,
+            TrustConsole = false,
+            -- CatalogAudit DELIBERATELY ABSENT -- the exact pre-this-pass
+            -- operator config shape this regression guard exists to protect.
+            MaxResults = { Certifications = 50, Partnerships = 50, SearchLog = 50 },
+        },
+        Departments = {
+            police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4 },
+        },
+        FeatureControl = { RequireGrant = {} },
+    }
+
+    local env2 = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        RegisterCommand = RegisterCommand2,
+        AddEventHandler = AddEventHandler2,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        IsPlayerAceAllowed = function() return false end,
+        HasPermission = function() return false end,
+        exports = { qbx_core = { GetPlayer = function(_self, src)
+            if src == 555 then
+                return { PlayerData = { citizenid = 'CIT555', job = { name = 'police', grade = { level = 4 } } } }
+            end
+            return nil
+        end } },
+        MySQL = { query = { await = function(_sql, _params) return {} end } },
+        NotifyPlayer = function(...) end,
+        print = printStub2,
+        Config = Config2,
+        lib = lib2,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env2)
+    Sandbox.loadInto('../server/datastore.lua', env2)
+
+    -- THE ACTUAL REGRESSION TEST: this must complete WITHOUT throwing.
+    -- Wrapped in pcall purely so a real regression (an assert firing) is
+    -- reported as a clear, named test failure below rather than a raw Lua
+    -- error aborting this whole spec file's run.
+    local loadOk, loadErr = pcall(Sandbox.loadInto, '../server/admin.lua', env2)
+    t.isTrue(loadOk, 'server/admin.lua must load without throwing: ' .. tostring(loadErr))
+
+    local fireOk, fireErr = pcall(function()
+        for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do
+            handler('qbx_k9unit')
+        end
+    end)
+    t.isTrue(fireOk, 'onResourceStart must complete without throwing on a MISSING CatalogAudit key: ' .. tostring(fireErr))
+
+    -- Every pre-existing command AND callback (including the five that have
+    -- nothing to do with CatalogAudit) must still be registered -- the whole
+    -- point of clamp-and-warn over assert is that ONE missing/malformed key
+    -- must never take the rest of this file's registration down with it.
+    t.isNotNil(registeredCommands2.k9auditcert, 'k9auditcert must still register')
+    t.isNotNil(registeredCommands2.k9auditpartner, 'k9auditpartner must still register')
+    t.isNotNil(registeredCommands2.k9auditsearch, 'k9auditsearch must still register')
+    t.isNotNil(registeredCommands2.k9auditxp, 'k9auditxp must still register')
+    t.isNotNil(registeredCommands2.k9auditdept, 'k9auditdept must still register')
+    t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditCert'], 'tabletAuditCert must still register')
+    t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditPartner'], 'tabletAuditPartner must still register')
+    t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditSearch'], 'tabletAuditSearch must still register')
+    t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditXp'], 'tabletAuditXp must still register')
+    t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditDept'], 'tabletAuditDept must still register')
+    t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditCatalog'], 'tabletAuditCatalog itself must ALSO still register')
+
+    -- A clear, named warning must have been printed -- "loud, never fatal".
+    local warned = false
+    for _, line in ipairs(printed) do
+        if line:find('CatalogAudit', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a missing CatalogAudit key must print a warning naming it, not fail silently either')
+
+    -- The new callback must actually WORK, using the built-in fallback (25)
+    -- as its default limit -- clamp-and-warn means "still functions", not
+    -- merely "does not crash at boot".
+    local result = callbacks2['qbx_k9unit:server:tabletAuditCatalog'](555, 'certTiers')
+    t.isTrue(result.ok, 'tabletAuditCatalog must actually work off the built-in fallback, not just boot without erroring')
+    t.equals(result.limit, 25, 'the built-in fallback (25) must be the effective default limit when CatalogAudit was never configured')
 end)
 
 os.exit(t.summary())

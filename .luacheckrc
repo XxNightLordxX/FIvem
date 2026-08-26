@@ -664,6 +664,11 @@ globals = {
     "ToggleNightVision",
     -- client/kennel.lua (Phase 5 R&D, DeployableKennel)
     "RequestDeployKennel",
+    -- IsRestingInKennel/IsCarryingKennel: client/kennel.lua's own K9-can-
+    -- ride-along pass, same "engagement predicate" shape as
+    -- IsPropAttachmentEngaged/IsInK9Vehicle above -- exposed for a future
+    -- client/appearance.lua model-swap guard, not yet wired there.
+    "IsRestingInKennel", "IsCarryingKennel",
     -- server/wellbeing.lua (Phase 4, PHASE4_SPEC.md §13.1 sub-phase 4c/4d,
     -- the unified wellbeing subsystem). RestoreInjury is read (never
     -- written) by server/medkit.lua behind a `type(RestoreInjury) ==

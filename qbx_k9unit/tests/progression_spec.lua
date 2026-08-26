@@ -919,4 +919,257 @@ t.test('PER-PERSON: AwardXPDirect (/k9givexp, a deliberate high-command override
     t.equals(f.GetXP('cid-xpdirect'), 50)
 end)
 
+-- ============================================================================
+-- GAP 1 CLOSURE: server/k9profiles.lua's per-INDIVIDUAL-K9 override,
+-- traced END TO END through the REAL, unmodified production
+-- server/progression.lua AND server/k9profiles.lua loaded TOGETHER in one
+-- sandbox -- this is deliberately NOT the same shared `env`/`newProgressionFixture`
+-- fixture every test above this section uses (neither loads
+-- server/k9profiles.lua at all), and deliberately NOT
+-- tests/k9profiles_spec.lua either (that file never loads the REAL
+-- server/progression.lua -- see its own header -- so it cannot exercise
+-- this cross-file chain for real). This section is the ONE place in this
+-- resource's test suite that proves the full chain the owner's own report
+-- named -- "set a K9's speed multiplier to 3.0 and NOTHING HAPPENS" -- is
+-- actually closed: k9ProfileUpsert (k9profiles.lua) -> RefreshOverrideCache
+-- -> PushXPTierSnapshotIfOnline (progression.lua) -> PushTierSnapshot ->
+-- BuildEffectiveTierSnapshot -> GetK9EffectiveMultipliers ->
+-- TriggerClientEvent('qbx_k9unit:client:xpTierChanged', ...). The one
+-- link this suite cannot exercise directly is client/progression.lua's own
+-- handler turning that event into a real SetPedMoveRateOverride call --
+-- tests/clientprogression_spec.lua already owns that half, against the
+-- REAL, unmodified client file, so the chain is fully covered end to end
+-- across the two suites together, never merely asserted from either side.
+-- ============================================================================
+
+--- @return table fixture
+local function newGap1Fixture()
+    local fakeNow3 = 0
+    local function GetGameTimer3() return fakeNow3 end
+
+    local eventHandlers3 = {}
+    local function AddEventHandler3(eventName, handler)
+        eventHandlers3[eventName] = eventHandlers3[eventName] or {}
+        eventHandlers3[eventName][#eventHandlers3[eventName] + 1] = handler
+    end
+
+    local function GetCurrentResourceName3() return 'qbx_k9unit' end
+    local function GetPlayers3() return {} end
+    local function TriggerEvent3(_eventName, ...) end
+
+    local capturedClientEvents3 = {}
+    local function TriggerClientEvent3(eventName, target, payload)
+        capturedClientEvents3[#capturedClientEvents3 + 1] = { eventName = eventName, target = target, payload = payload }
+    end
+
+    -- Coroutine capture for progression.lua's recurring mint-budget sweep
+    -- thread -- identical technique to this file's own top-of-file
+    -- CreateThread/Wait stubs (see that declaration's own comment for the
+    -- full "why" writeup); a one-shot body still runs to completion
+    -- synchronously, a recurring body is captured and never auto-stepped.
+    local capturedRecurringThreads3 = {}
+    local function CreateThread3(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('newGap1Fixture: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+        if coroutine.status(co) ~= 'dead' then
+            capturedRecurringThreads3[#capturedRecurringThreads3 + 1] = co
+        end
+    end
+    local function Wait3(_ms) coroutine.yield() end
+
+    local printedLines3 = {}
+    local function printStub3(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines3[#printedLines3 + 1] = table.concat(parts, '\t')
+    end
+
+    local callbacks3 = {}
+    local lib3 = { callback = { register = function(name, handler) callbacks3[name] = handler end } }
+
+    -- citizenid -> { PlayerData = { citizenid, source } } -- present only
+    -- for a citizenid this test explicitly marks online, mirroring every
+    -- other fixture in this file.
+    local onlineByCitizenId3 = {}
+    local exportsStub3 = {
+        qbx_core = {
+            GetPlayerByCitizenId = function(_self, citizenid) return onlineByCitizenId3[citizenid] end,
+            GetPlayer = function(_self, src)
+                for _, p in pairs(onlineByCitizenId3) do
+                    if p.PlayerData.source == src then return p end
+                end
+                return nil
+            end,
+        },
+    }
+
+    local MySQLStub3 = {
+        scalar = { await = function(_sql, _params) return nil end },
+        insert = { await = function(_sql, _params) return 1 end },
+    }
+
+    local Config3 = {
+        Features = { XPProgression = true },
+        -- Config.Database = { enabled = false } (below, on the table
+        -- itself) -- K9Store.WaitForSchemaCheckToSettle() settles
+        -- INSTANTLY in this mode (server/datastore.lua's own header), so
+        -- k9profiles.lua's own onResourceStart handler needs no coroutine
+        -- dance to finish -- it runs to completion synchronously, exactly
+        -- like every real memory-mode boot.
+        Database = { enabled = false },
+        XP = {
+            scopePerCitizenidOrJob = 'citizenid',
+            awards = { smallAward = 60, exact100 = 100 },
+        },
+        XPTiers = {
+            { xp = 0,   label = 'Recruit', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 100, label = 'Trained', speedMultiplier = 1.05, scentRangeMultiplier = 1.05, medkitCooldownMultiplier = 0.75 },
+        },
+    }
+
+    local isHighCommand3 = true
+    local function IsHighCommand3(_source) return isHighCommand3 end
+
+    local env3 = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer3,
+        AddEventHandler = AddEventHandler3,
+        GetCurrentResourceName = GetCurrentResourceName3,
+        GetPlayers = GetPlayers3,
+        TriggerEvent = TriggerEvent3,
+        TriggerClientEvent = TriggerClientEvent3,
+        CreateThread = CreateThread3,
+        Wait = Wait3,
+        exports = exportsStub3,
+        print = printStub3,
+        MySQL = MySQLStub3,
+        Config = Config3,
+        lib = lib3,
+        IsHighCommand = IsHighCommand3,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env3)
+    Sandbox.loadInto('../server/datastore.lua', env3)
+    Sandbox.loadInto('../server/events.lua', env3)
+    Sandbox.loadInto('../server/progression.lua', env3)
+    -- fxmanifest.lua's REAL server_scripts order: server/k9profiles.lua
+    -- loads AFTER server/progression.lua. Loaded in that same real order
+    -- here, deliberately -- this is exactly the load-order this pass's own
+    -- soft-dependency guards (`type(GetK9EffectiveMultipliers) ==
+    -- 'function'`, `type(PushXPTierSnapshotIfOnline) == 'function'`) are
+    -- written to survive, so testing it in the real order is the honest
+    -- version of this test, not the easy one.
+    Sandbox.loadInto('../server/k9profiles.lua', env3)
+
+    for _, handler in ipairs(eventHandlers3['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    return {
+        env = env3,
+        AwardXP = env3.AwardXP,
+        GetXPTier = env3.GetXPTier,
+        GetXPTierMedkitCooldownMs = env3.GetXPTierMedkitCooldownMs,
+        callbacks = callbacks3,
+        capturedClientEvents = capturedClientEvents3,
+        printedLines = printedLines3,
+        setHighCommand = function(v) isHighCommand3 = v end,
+        -- Advances past K9_PROFILE_ACTION_COOLDOWN_MS (1000ms, server/k9profiles.lua)
+        -- -- every test below that issues MORE THAN ONE mutating
+        -- k9Profile* call from the SAME acting source must call this
+        -- between calls, mirroring tests/k9profiles_spec.lua's own
+        -- `advance` helper exactly.
+        advance = function() fakeNow3 = fakeNow3 + 1100 end,
+        markOnline = function(citizenid, src)
+            onlineByCitizenId3[citizenid] = { PlayerData = { citizenid = citizenid, source = src } }
+        end,
+        markOffline = function(citizenid) onlineByCitizenId3[citizenid] = nil end,
+    }
+end
+
+t.test('GAP 1: k9ProfileUpsert on an ONLINE citizenid pushes a LIVE, override-composed xpTierChanged snapshot immediately -- not merely on the next tier crossing/login', function()
+    local f = newGap1Fixture()
+    f.markOnline('GAP1CIT', 4242)
+
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](100, { citizenid = 'GAP1CIT', speedMultiplier = 3.0 })
+    t.isTrue(result.ok, 'the upsert itself must succeed')
+    t.equals(result.effective.speedMultiplier, 3.0, 'the callback response must already reflect the override')
+
+    local pushed = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 4242 then pushed = evt end
+    end
+    t.isNotNil(pushed, 'setting an override for an ONLINE citizenid must push a fresh xpTierChanged snapshot to their own client, immediately, not deferred to their next real tier crossing')
+    t.equals(pushed.payload.speedMultiplier, 3.0, 'the pushed payload must carry the OVERRIDDEN value, not the plain tier default (1.00) -- this IS the "set it to 3.0 and something happens" property')
+    t.equals(pushed.payload.label, 'Recruit', 'every OTHER field on the pushed tier snapshot is untouched -- only the composed multiplier fields change')
+end)
+
+t.test('GAP 1: k9ProfileUpsert on an OFFLINE citizenid writes the override successfully but pushes NOTHING (no client to push to) -- never throws', function()
+    local f = newGap1Fixture()
+    -- deliberately never call f.markOnline for this citizenid
+
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](100, { citizenid = 'GAP1OFFLINE', speedMultiplier = 2.0 })
+    t.isTrue(result.ok)
+    t.equals(result.effective.speedMultiplier, 2.0, 'the write itself must still succeed for an offline citizenid')
+    t.equals(#f.capturedClientEvents, 0, 'nothing should be pushed to a citizenid with no live client to push to')
+end)
+
+t.test('GAP 1: k9ProfileReset on an ONLINE citizenid pushes the PLAIN tier value back immediately, snapping an already-overridden K9 back to normal live', function()
+    local f = newGap1Fixture()
+    f.markOnline('GAP1RESET', 5252)
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](100, { citizenid = 'GAP1RESET', speedMultiplier = 3.0 })
+    f.advance() -- clear K9ProfileActionCooldown's 1000ms floor before the 2nd mutating call from the same source
+
+    local resetResult = f.callbacks['qbx_k9unit:server:k9ProfileReset'](100, 'GAP1RESET')
+    t.isTrue(resetResult.ok)
+    t.equals(resetResult.effective.speedMultiplier, 1.0, 'after reset, the effective value must be the plain base tier (1.00), never the just-removed override')
+
+    local lastPush = nil
+    for _, evt in ipairs(f.capturedClientEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.target == 5252 then lastPush = evt end
+    end
+    t.isNotNil(lastPush)
+    t.equals(lastPush.payload.speedMultiplier, 1.0, 'the LAST push (the reset) must carry the plain tier value, not the 3.0 override the upsert just pushed a moment earlier')
+end)
+
+t.test('GAP 1: GetXPTierMedkitCooldownMs composes the individual override, layered on top of the XP tier -- GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE', function()
+    local f = newGap1Fixture()
+    -- 'GAP1MEDKIT' never earns XP -> resolves to the base Recruit tier,
+    -- which carries NO medkitCooldownMultiplier at all (only 'Trained'
+    -- does, in this fixture's own Config3.XPTiers) -- so, with no
+    -- individual override, this accessor must be a pure no-op.
+    t.equals(f.GetXPTierMedkitCooldownMs('GAP1MEDKIT', 10000), 10000, 'no tier multiplier and no override -- baseCooldownMs must pass through unchanged')
+
+    -- Setting an individual override on top of that SAME base tier must now
+    -- take effect -- this is the exact composition GetK9EffectiveMultipliers
+    -- exists to provide, and the exact seam GetXPTierMedkitCooldownMs was
+    -- rewired to consult this pass.
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](100, { citizenid = 'GAP1MEDKIT', medkitCooldownMultiplier = 0.5 })
+    t.isTrue(result.ok)
+    t.equals(f.GetXPTierMedkitCooldownMs('GAP1MEDKIT', 10000), 5000, 'a 0.5 individual override must halve the base cooldown, even though this citizenid\'s own XP tier (Recruit) carries no medkitCooldownMultiplier of its own')
+end)
+
+t.test('GAP 1: without server/k9profiles.lua loaded at all, GetXPTierMedkitCooldownMs and the xpTierChanged push degrade cleanly to their pre-this-pass behavior -- the soft-dependency guard genuinely degrades, not merely "does not crash"', function()
+    -- Reuses the file's OWN shared `env`/AwardXP/GetXPTier (top of this
+    -- file) -- that fixture never loads server/k9profiles.lua at all, so
+    -- GetK9EffectiveMultipliers/PushXPTierSnapshotIfOnline are genuinely
+    -- undefined here, exactly like every real install that predates this
+    -- pass's own server/k9profiles.lua ever existing.
+    t.isNil(env.GetK9EffectiveMultipliers, 'sanity check on the fixture itself: this shared env must not have loaded server/k9profiles.lua')
+
+    -- Trained's own medkitCooldownMultiplier (0.75) is exercised directly by
+    -- tests/xptierunlocks_spec.lua -- this assertion only needs to prove
+    -- k9profiles.lua's ABSENCE changes nothing, using whichever tier a
+    -- citizenid already ends up on in THIS shared fixture.
+    local baseCooldown = env.GetXPTierMedkitCooldownMs('cid-no-k9profiles-a', 8000)
+    t.equals(baseCooldown, 8000, 'the base (Recruit) tier in this shared fixture carries no medkitCooldownMultiplier at all -- this must be a pure passthrough regardless of k9profiles.lua\'s absence')
+
+    playerByCitizenId['cid-no-k9profiles-b'] = { PlayerData = { citizenid = 'cid-no-k9profiles-b', source = 9998 } }
+    capturedTriggerEvents = {}
+    AwardXP('cid-no-k9profiles-b', 'exact100') -- crosses Recruit -> Trained
+    t.equals(GetXPTier('cid-no-k9profiles-b').label, 'Trained', 'AwardXP/GetXPTier must keep working identically whether or not server/k9profiles.lua is present')
+end)
+
 os.exit(t.summary())

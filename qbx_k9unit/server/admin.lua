@@ -903,28 +903,145 @@ local function MergeSortedByIdDesc(rowsA, rowsB, limit)
     return truncated
 end
 
---- @param row table -- one k9_certifications row
+-- ======================================================================
+-- DISPLAY NAME RESOLUTION (this pass) -- owner's own request, verbatim:
+-- "Ensure a name actually pops up and not the player id in the tablet
+-- etc." Applied here to every audit surface THIS FILE owns: the five
+-- /k9audit* commands' chat/console output (FormatCertRow/FormatPartnershipRow/
+-- FormatSearchLogRow/FormatDeptCertRow below, via PresentRows/
+-- PrintRowsToConsole) and the tabletAudit* callbacks' JSON `rows`/`label`
+-- the tablet's Audit Trail tab renders (see the CALLBACK SURFACE section
+-- further below).
+--
+-- A DELIBERATE, SELF-CONTAINED LOCAL DUPLICATE of server/tablet.lua's own
+-- ResolveDisplayName -- same resolution order (online charinfo ->
+-- GetPlayerName native -> offline GetOfflinePlayer charinfo -> citizenid
+-- fallback, never blank), NOT a cross-file call to that file's `local`
+-- function. Two independent reasons, either alone sufficient:
+--   1. Exporting server/tablet.lua's ResolveDisplayName as a resource-global
+--      would need a NEW .luacheckrc `globals` entry this file cannot add
+--      for itself -- this resource's established convention for a
+--      genuinely small, self-contained helper is a per-file duplicate
+--      instead (see server/permissions.lua's own MeetsDepartmentGradeOrHighCommand/
+--      IsDuplicateKeyError doc comments for the same reasoning already
+--      applied elsewhere in this codebase).
+--   2. server/tablet.lua returns ENTIRELY at its own top (`if not
+--      Config.Features.CommandTablet then return end`) -- this file's five
+--      audit COMMANDS are a load-bearing, independent surface from the
+--      tablet (Config.Features.AdminAuditCommands is its own, separate
+--      flag; an operator can ship CommandTablet = false with
+--      AdminAuditCommands = true, a real, plausible config, not a
+--      contrived one), so depending on a global that file only SOMETIMES
+--      defines would make this file's own name resolution silently break
+--      whenever CommandTablet happens to be off. A local duplicate has no
+--      such load-order or feature-flag coupling.
+-- ======================================================================
+
+--- @param charinfo any
+--- @return string?
+local function FullNameFromCharinfo(charinfo)
+    if type(charinfo) == 'table' and type(charinfo.firstname) == 'string' and type(charinfo.lastname) == 'string' then
+        local full = (charinfo.firstname .. ' ' .. charinfo.lastname):match('^%s*(.-)%s*$')
+        if type(full) == 'string' and full ~= '' then return full end
+    end
+    return nil
+end
+
+--- @param citizenid string
+--- @return string -- ALWAYS a non-empty string; falls back to `citizenid` itself when no name resolves, never blank
+local function ResolveAuditDisplayName(citizenid)
+    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if onlinePlayer and onlinePlayer.PlayerData then
+        local full = FullNameFromCharinfo(onlinePlayer.PlayerData.charinfo)
+        if full then return full end
+
+        local onlineSrc = onlinePlayer.PlayerData.source
+        if type(onlineSrc) == 'number' then
+            local ok, viaNative = pcall(GetPlayerName, onlineSrc)
+            if ok and type(viaNative) == 'string' and viaNative ~= '' then return viaNative end
+        end
+    end
+
+    -- OFFLINE -- ask qbx_core's own offline accessor before giving up. See
+    -- server/tablet.lua's own header "NAME RESOLUTION" for how this export
+    -- was confirmed real against qbx_core's live server/player.lua.
+    local ok, offlinePlayer = pcall(function() return exports.qbx_core:GetOfflinePlayer(citizenid) end)
+    if ok and type(offlinePlayer) == 'table' and offlinePlayer.PlayerData then
+        local full = FullNameFromCharinfo(offlinePlayer.PlayerData.charinfo)
+        if full then return full end
+    end
+
+    -- Still nothing usable -- fall back to the citizenid itself. Never
+    -- blank, never a guess at an unverified schema.
+    return citizenid
+end
+
+--- Pure text-formatting helper (no I/O of its own) -- turns an
+--- already-resolved-or-nil display name and its citizenid into ONE
+--- human-readable fragment for a chat/console line, per this task's "keep
+--- the identifier, add the name; never a blank or a fake name" rule:
+---   * citizenid nil/empty -> 'N/A' (this file's own pre-existing
+---     convention for a nullable citizenid column, e.g. revoked_by/ended_by
+---     on an active/never-ended row).
+---   * name resolved to something OTHER than the citizenid itself ->
+---     "Name (citizenid)".
+---   * name nil, OR identical to the citizenid (ResolveAuditDisplayName's
+---     own documented "nothing resolved" fallback) -> the bare citizenid --
+---     never a fabricated name, and this bare citizenid IS the "clear
+---     marker" this task's own instruction asks for when a name genuinely
+---     cannot be resolved (identical, deliberately, to how
+---     server/tablet.lua's own `name` field already signals the same case:
+---     a `name` equal to its sibling `citizenid` reads as unresolved, not
+---     as a coincidentally citizenid-shaped human name).
+--- @param name string? -- ResolveAuditDisplayName's own result, or nil if never resolved (e.g. a nil/empty source column)
+--- @param citizenid string?
+--- @return string
+local function NameWithCitizenId(name, citizenid)
+    if type(citizenid) ~= 'string' or citizenid == '' then return 'N/A' end
+    if type(name) == 'string' and name ~= '' and name ~= citizenid then
+        return ('%s (%s)'):format(name, citizenid)
+    end
+    return citizenid
+end
+
+--- Convenience wrapper combining the two helpers above, for the `label`
+--- header strings below that take a single citizenid argument and have no
+--- separate `_name` sibling field to carry (contrast the ROW enrichers
+--- further below, which deliberately keep the resolved name SEPARATE from
+--- the formatted fragment so it can travel to the tablet's JSON `_name`
+--- fields unformatted).
+--- @param citizenid string? -- already validated by IsValidCitizenId at every call site
+--- @return string
+local function AuditDisplayLabel(citizenid)
+    if type(citizenid) ~= 'string' or citizenid == '' then return 'N/A' end
+    return NameWithCitizenId(ResolveAuditDisplayName(citizenid), citizenid)
+end
+
+--- @param row table -- one k9_certifications row, ALREADY passed through
+--- EnrichCertHistoryRows below (granted_by_name/revoked_by_name present)
 --- @return string
 local function FormatCertRow(row)
     return locale('admin.cert_row_format',
-        tostring(row.job), tostring(row.active == 1), tostring(row.granted_by), tostring(row.granted_at),
-        row.revoked_by and tostring(row.revoked_by) or 'N/A',
+        tostring(row.job), tostring(row.active == 1), NameWithCitizenId(row.granted_by_name, row.granted_by), tostring(row.granted_at),
+        NameWithCitizenId(row.revoked_by_name, row.revoked_by),
         row.revoked_at and tostring(row.revoked_at) or 'N/A'
     )
 end
 
---- @param row table -- one k9_partnerships row
+--- @param row table -- one k9_partnerships row, ALREADY passed through
+--- EnrichPartnershipHistoryRows below
 --- @return string
 local function FormatPartnershipRow(row)
     return locale('admin.partnership_row_format',
-        tostring(row.k9_citizenid), tostring(row.handler_citizenid), tostring(row.active == 1),
-        tostring(row.established_by), tostring(row.established_at),
-        row.ended_by and tostring(row.ended_by) or 'N/A',
+        NameWithCitizenId(row.k9_citizenid_name, row.k9_citizenid), NameWithCitizenId(row.handler_citizenid_name, row.handler_citizenid), tostring(row.active == 1),
+        NameWithCitizenId(row.established_by_name, row.established_by), tostring(row.established_at),
+        NameWithCitizenId(row.ended_by_name, row.ended_by),
         row.ended_at and tostring(row.ended_at) or 'N/A'
     )
 end
 
---- @param row table -- one k9_search_log row
+--- @param row table -- one k9_search_log row, ALREADY passed through
+--- EnrichSearchLogRows below
 --- @return string
 local function FormatSearchLogRow(row)
     -- Dynamic-value substitution via locale()'s own %s placeholder, not `..`
@@ -933,9 +1050,9 @@ local function FormatSearchLogRow(row)
     -- (movement.officer_fallback_name, bonetool.bone_index_label, etc.).
     local targetLabel = row.target_type == 'vehicle'
         and locale('admin.search_log_target_plate_label', tostring(row.target_plate))
-        or locale('admin.search_log_target_citizenid_label', tostring(row.target_citizenid))
+        or locale('admin.search_log_target_citizenid_label', NameWithCitizenId(row.target_citizenid_name, row.target_citizenid))
     return locale('admin.search_log_row_format',
-        tostring(row.searched_at), tostring(row.searcher_citizenid), tostring(row.searcher_job),
+        tostring(row.searched_at), NameWithCitizenId(row.searcher_citizenid_name, row.searcher_citizenid), tostring(row.searcher_job),
         tostring(row.target_type), targetLabel, tostring(row.result),
         row.total_weight and tostring(row.total_weight) or 'N/A',
         row.alert_tier and tostring(row.alert_tier) or 'N/A'
@@ -947,10 +1064,14 @@ end
 local function FormatProgressionRow(row)
     -- Deliberately reports the raw `xp` total only — see this file's
     -- header "COMMAND SURFACE" item 4 for why a tier is not derived here.
+    -- No citizenid column on this row at all (see QueryProgressionSnapshot's
+    -- own doc comment) -- the name resolution for THIS query lives entirely
+    -- in its own `label` (AuditDisplayLabel), not here.
     return locale('admin.progression_row_format', tostring(row.xp), tostring(row.updated_at))
 end
 
---- @param row table -- one k9_certifications row (active-only roster shape)
+--- @param row table -- one k9_certifications row (active-only roster shape),
+--- ALREADY passed through EnrichDeptRosterRows below
 --- @return string
 local function FormatDeptCertRow(row)
     -- Deliberately omits `job` (already the query's own fixed argument —
@@ -960,7 +1081,7 @@ local function FormatDeptCertRow(row)
     -- active-only roster row — see this file's header "COMMAND SURFACE"
     -- item 5 "DISPLAY BOUNDARY" reasoning for why nothing wider than
     -- idx_job_active's own documented column list is exposed here).
-    return locale('admin.dept_cert_row_format', tostring(row.citizenid), tostring(row.granted_by), tostring(row.granted_at))
+    return locale('admin.dept_cert_row_format', NameWithCitizenId(row.citizenid_name, row.citizenid), NameWithCitizenId(row.granted_by_name, row.granted_by), tostring(row.granted_at))
 end
 
 --- Presents `rows` (already fetched, already bounded) to a connected
@@ -1003,6 +1124,62 @@ local function PrintRowsToConsole(label, rows, formatRow)
     end
 end
 
+-- ======================================================================
+-- ROW ENRICHERS (this pass) -- add a `<field>_name` sibling to each RAW
+-- citizenid column these five queries already return, additive only:
+-- every existing raw column is UNCHANGED (this task's own "add a
+-- display-name field alongside the id -- do not replace the id, and do not
+-- make any code path key off a name" rule). ONE enrichment per query
+-- function below, mutating and returning the same `rows` table -- both of
+-- each query's own callers (the matching /k9audit* RegisterCommand handler
+-- via FormatCertRow/FormatPartnershipRow/FormatSearchLogRow/FormatDeptCertRow,
+-- and the matching tabletAudit* lib.callback's own JSON `rows` response)
+-- see the SAME already-enriched rows -- name resolution runs exactly ONCE
+-- per query, not once per consumer.
+-- ======================================================================
+
+--- @param rows table -- raw k9_certifications history rows (job, granted_by, granted_at, revoked_by, revoked_at, active)
+--- @return table -- the same rows, each with granted_by_name/revoked_by_name added (nil where the source column is nil)
+local function EnrichCertHistoryRows(rows)
+    for _, row in ipairs(rows) do
+        row.granted_by_name = (type(row.granted_by) == 'string' and row.granted_by ~= '') and ResolveAuditDisplayName(row.granted_by) or nil
+        row.revoked_by_name = (type(row.revoked_by) == 'string' and row.revoked_by ~= '') and ResolveAuditDisplayName(row.revoked_by) or nil
+    end
+    return rows
+end
+
+--- @param rows table -- raw k9_partnerships history rows
+--- @return table -- the same rows, each with k9_citizenid_name/handler_citizenid_name/established_by_name/ended_by_name added (a K9 is a citizenid too -- see server/permissions.lua's own "a handler OR a K9, since both are just citizenids" convention)
+local function EnrichPartnershipHistoryRows(rows)
+    for _, row in ipairs(rows) do
+        row.k9_citizenid_name = (type(row.k9_citizenid) == 'string' and row.k9_citizenid ~= '') and ResolveAuditDisplayName(row.k9_citizenid) or nil
+        row.handler_citizenid_name = (type(row.handler_citizenid) == 'string' and row.handler_citizenid ~= '') and ResolveAuditDisplayName(row.handler_citizenid) or nil
+        row.established_by_name = (type(row.established_by) == 'string' and row.established_by ~= '') and ResolveAuditDisplayName(row.established_by) or nil
+        row.ended_by_name = (type(row.ended_by) == 'string' and row.ended_by ~= '') and ResolveAuditDisplayName(row.ended_by) or nil
+    end
+    return rows
+end
+
+--- @param rows table -- raw k9_search_log rows
+--- @return table -- the same rows, each with searcher_citizenid_name/target_citizenid_name added. `target_citizenid_name` stays nil for a vehicle-type row (target_citizenid itself is nil there -- target_plate is the identifier instead, and a plate is not a citizenid, so it is never routed through ResolveAuditDisplayName)
+local function EnrichSearchLogRows(rows)
+    for _, row in ipairs(rows) do
+        row.searcher_citizenid_name = (type(row.searcher_citizenid) == 'string' and row.searcher_citizenid ~= '') and ResolveAuditDisplayName(row.searcher_citizenid) or nil
+        row.target_citizenid_name = (type(row.target_citizenid) == 'string' and row.target_citizenid ~= '') and ResolveAuditDisplayName(row.target_citizenid) or nil
+    end
+    return rows
+end
+
+--- @param rows table -- raw k9_certifications active-roster rows (citizenid, granted_by, granted_at)
+--- @return table -- the same rows, each with citizenid_name/granted_by_name added
+local function EnrichDeptRosterRows(rows)
+    for _, row in ipairs(rows) do
+        row.citizenid_name = (type(row.citizenid) == 'string' and row.citizenid ~= '') and ResolveAuditDisplayName(row.citizenid) or nil
+        row.granted_by_name = (type(row.granted_by) == 'string' and row.granted_by ~= '') and ResolveAuditDisplayName(row.granted_by) or nil
+    end
+    return rows
+end
+
 --- '/k9auditcert' query. Uses idx_citizen_job_active's leading `citizenid`
 --- column as a prefix scan (sql/install.sql's own comment on that index
 --- names this exact "full cert history for citizenid X" shape). Ordered by
@@ -1012,7 +1189,7 @@ end
 --- @param limit number -- already clamped by ClampLimit
 --- @return table rows
 local function QueryCertificationHistory(citizenid, limit)
-    return K9Store.Cert_GetHistory(citizenid, limit)
+    return EnrichCertHistoryRows(K9Store.Cert_GetHistory(citizenid, limit))
 end
 
 --- '/k9auditpartner' query. Two separate equality queries — one per unique
@@ -1029,7 +1206,10 @@ local function QueryPartnershipHistory(citizenid, limit)
     local asK9 = K9Store.Partner_GetHistoryByK9(citizenid, limit)
     local asHandler = K9Store.Partner_GetHistoryByHandler(citizenid, limit)
 
-    return MergeSortedByIdDesc(asK9, asHandler, limit)
+    -- Enriched AFTER the merge/truncate, deliberately: name resolution only
+    -- ever runs over the final, already-bounded `limit`-sized result, never
+    -- over the larger pre-merge candidate set.
+    return EnrichPartnershipHistoryRows(MergeSortedByIdDesc(asK9, asHandler, limit))
 end
 
 --- '/k9auditsearch officer' query — searches PERFORMED BY citizenid, most
@@ -1039,7 +1219,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogByOfficer(citizenid, limit)
-    return K9Store.SearchLog_GetByOfficer(citizenid, limit)
+    return EnrichSearchLogRows(K9Store.SearchLog_GetByOfficer(citizenid, limit))
 end
 
 --- '/k9auditsearch plate' query — searches OF a vehicle plate, most recent
@@ -1049,7 +1229,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogByPlate(plate, limit)
-    return K9Store.SearchLog_GetByPlate(plate, limit)
+    return EnrichSearchLogRows(K9Store.SearchLog_GetByPlate(plate, limit))
 end
 
 --- '/k9auditsearch person' query — searches OF a person citizenid, most
@@ -1059,7 +1239,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogByPerson(citizenid, limit)
-    return K9Store.SearchLog_GetByPerson(citizenid, limit)
+    return EnrichSearchLogRows(K9Store.SearchLog_GetByPerson(citizenid, limit))
 end
 
 --- '/k9auditsearch recent' query — the N most recently logged searches of
@@ -1070,7 +1250,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogRecent(limit)
-    return K9Store.SearchLog_GetRecent(limit)
+    return EnrichSearchLogRows(K9Store.SearchLog_GetRecent(limit))
 end
 
 --- '/k9auditxp' query — see this file's header "COMMAND SURFACE" item 4
@@ -1099,7 +1279,7 @@ end
 --- @param limit number -- already clamped by ClampLimit
 --- @return table rows
 local function QueryDepartmentRoster(job, limit)
-    return K9Store.Cert_GetActiveRosterByJob(job, limit)
+    return EnrichDeptRosterRows(K9Store.Cert_GetActiveRosterByJob(job, limit))
 end
 
 -- ======================================================================
@@ -1162,6 +1342,11 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     local maxResults = Config.AdminAudit.MaxResults
     assert(type(maxResults) == 'table', '[qbx_k9unit] Config.AdminAudit.MaxResults must be a table.')
+    -- PRE-EXISTING assert loop, UNCHANGED by this pass -- Certifications/
+    -- Partnerships/SearchLog have been required keys here since before this
+    -- pass touched this file, so an operator who already has
+    -- Config.Features.AdminAuditCommands = true is already required to
+    -- carry all three.
     for _, key in ipairs({ 'Certifications', 'Partnerships', 'SearchLog' }) do
         local value = maxResults[key]
         -- Integer-ness is checked here too (not just range) even though
@@ -1175,6 +1360,54 @@ AddEventHandler('onResourceStart', function(resourceName)
             type(value) == 'number' and value == math.floor(value) and value >= 1 and value <= HARD_MAX_RESULTS,
             ('[qbx_k9unit] Config.AdminAudit.MaxResults.%s must be an integer in [1, %d].'):format(key, HARD_MAX_RESULTS)
         )
+    end
+
+    -- 'CatalogAudit' (GAP 2 closure, THIS pass) is DELIBERATELY NOT added to
+    -- the assert loop above. NON-NEGOTIABLE, restated here as the reason,
+    -- not merely a style choice: an operator who already has
+    -- Config.Features.AdminAuditCommands = true and their own
+    -- Config.AdminAudit.MaxResults table from BEFORE this pass has no
+    -- reason to already carry a brand-new 'CatalogAudit' key -- a hard
+    -- assert on it would be the exact "config-abort" bug class this
+    -- resource has been bitten by before: one missing key on an unrelated
+    -- operator's config would silently kill EVERY registration in this
+    -- entire onResourceStart handler -- all five pre-existing commands AND
+    -- all six pre-existing callbacks, not merely the one new callback that
+    -- actually needs this value -- for the rest of that server's uptime,
+    -- over a config field that server's operator never asked for and may
+    -- not even know exists yet. CLAMP AND WARN instead, mirroring
+    -- server/cooldowns.lua's own ResolveConfiguredThresholdMs pattern
+    -- exactly (read, validate, print one clear warning naming the key and
+    -- the fallback used, never abort): a missing/malformed value degrades
+    -- to a safe built-in default (25, matching config.lua's own shipped
+    -- default for this same key) so `qbx_k9unit:server:tabletAuditCatalog`
+    -- still works, immediately, with no operator action required, while
+    -- every OTHER command/callback in this file is completely unaffected
+    -- either way.
+    --
+    -- `x or default` does NOT fall back when x is 0 -- checked here via an
+    -- explicit `type(...) == 'number'` + range test, never via `or`, the
+    -- exact footgun server/cooldowns.lua's own header names by name.
+    -- A non-positive value is also never read as "unlimited" -- it is
+    -- caught by the SAME `>= 1` floor as every other malformed case below,
+    -- not given special "0 means no cap" meaning.
+    do
+        local catalogAuditMaxResults = maxResults.CatalogAudit
+        local catalogAuditValid = type(catalogAuditMaxResults) == 'number'
+            and catalogAuditMaxResults == math.floor(catalogAuditMaxResults)
+            and catalogAuditMaxResults >= 1
+            and catalogAuditMaxResults <= HARD_MAX_RESULTS
+        if not catalogAuditValid then
+            print(
+                ('[qbx_k9unit] admin.lua: Config.AdminAudit.MaxResults.CatalogAudit is missing or not an integer ' ..
+                 'in [1, %d] (found: %s). Using a built-in fallback of 25 for ' ..
+                 'qbx_k9unit:server:tabletAuditCatalog\'s own default result limit instead of aborting this ' ..
+                 'file\'s entire command/callback registration over one missing field. Add ' ..
+                 'Config.AdminAudit.MaxResults.CatalogAudit = 25 (or your own preferred value, 1-%d) to ' ..
+                 'config.lua to silence this warning.'):format(HARD_MAX_RESULTS, tostring(catalogAuditMaxResults), HARD_MAX_RESULTS)
+            )
+            maxResults.CatalogAudit = 25
+        end
     end
 
     --- '/k9auditcert [citizenid] [limit]' — see this file's header
@@ -1201,7 +1434,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         local limit = ClampLimit(args[2], Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
         local rows = QueryCertificationHistory(citizenid, limit)
-        local label = locale('admin.cert_history_label', citizenid)
+        local label = locale('admin.cert_history_label', AuditDisplayLabel(citizenid))
 
         LogAuditInvocation(source, 'k9auditcert', citizenid, 'ok')
 
@@ -1236,7 +1469,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         local limit = ClampLimit(args[2], Config.AdminAudit.MaxResults.Partnerships, HARD_MAX_RESULTS)
         local rows = QueryPartnershipHistory(citizenid, limit)
-        local label = locale('admin.partnership_history_label', citizenid)
+        local label = locale('admin.partnership_history_label', AuditDisplayLabel(citizenid))
 
         LogAuditInvocation(source, 'k9auditpartner', citizenid, 'ok')
 
@@ -1292,7 +1525,7 @@ AddEventHandler('onResourceStart', function(resourceName)
             end
             local limit = ClampLimit(args[3], Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
             rows = (mode == 'officer') and QuerySearchLogByOfficer(citizenid, limit) or QuerySearchLogByPerson(citizenid, limit)
-            label = locale('admin.search_log_label_by_value', mode, citizenid)
+            label = locale('admin.search_log_label_by_value', mode, AuditDisplayLabel(citizenid))
         elseif mode == 'plate' then
             local plate = NormalizePlateArg(args[2])
             if not plate then
@@ -1344,7 +1577,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
 
         local rows = QueryProgressionSnapshot(citizenid)
-        local label = locale('admin.xp_snapshot_label', citizenid)
+        local label = locale('admin.xp_snapshot_label', AuditDisplayLabel(citizenid))
 
         LogAuditInvocation(source, 'k9auditxp', citizenid, 'ok')
 
@@ -1528,7 +1761,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         local clampedLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
         local rows = QueryCertificationHistory(citizenid, clampedLimit)
-        local label = locale('admin.cert_history_label', citizenid)
+        local label = locale('admin.cert_history_label', AuditDisplayLabel(citizenid))
 
         LogAuditInvocation(source, 'tabletAuditCert', citizenid, 'ok')
         -- cap/limit/truncated (this pass): see this file's header CALLBACK
@@ -1565,7 +1798,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         local clampedLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.Partnerships, HARD_MAX_RESULTS)
         local rows = QueryPartnershipHistory(citizenid, clampedLimit)
-        local label = locale('admin.partnership_history_label', citizenid)
+        local label = locale('admin.partnership_history_label', AuditDisplayLabel(citizenid))
 
         LogAuditInvocation(source, 'tabletAuditPartner', citizenid, 'ok')
         -- cap/limit/truncated: see tabletAuditCert above for the full contract.
@@ -1616,7 +1849,7 @@ AddEventHandler('onResourceStart', function(resourceName)
             end
             effectiveLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
             rows = (mode == 'officer') and QuerySearchLogByOfficer(value, effectiveLimit) or QuerySearchLogByPerson(value, effectiveLimit)
-            label = locale('admin.search_log_label_by_value', mode, value)
+            label = locale('admin.search_log_label_by_value', mode, AuditDisplayLabel(value))
         elseif mode == 'plate' then
             local plate = NormalizePlateArg(value)
             if not plate then
@@ -1662,7 +1895,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
 
         local rows = QueryProgressionSnapshot(citizenid)
-        local label = locale('admin.xp_snapshot_label', citizenid)
+        local label = locale('admin.xp_snapshot_label', AuditDisplayLabel(citizenid))
 
         LogAuditInvocation(source, 'tabletAuditXp', citizenid, 'ok')
         -- `cap` only, for a UNIFORM AuditResult shape across all five
@@ -1708,5 +1941,114 @@ AddEventHandler('onResourceStart', function(resourceName)
         return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
-    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept); audit callbacks registered (tabletAuditCert, tabletAuditPartner, tabletAuditSearch, tabletAuditXp, tabletAuditDept).')
+    -- ==================================================================
+    -- GAP 2 CLOSURE -- "eight audit tables are write-only" (owner-directed
+    -- "full control ... accountability" pass). server/datastore.lua has
+    -- eight `*Audit_Append`/`*Audit_Insert` writers backing every catalog
+    -- edit a high-command officer makes from the tablet (certification
+    -- tiers, permission keys, XP tiers, equipment shop items, equipment
+    -- shop locations, per-K9 individual overrides, runtime feature/tunable
+    -- overrides, tablet theme) -- and, until this pass, NOT ONE had a read
+    -- accessor anywhere in this resource. Every one of those edits was
+    -- logged perfectly and was invisible forever. This is the read side.
+    --
+    -- ONE GENERIC CALLBACK, PARAMETERIZED BY CATALOG NAME -- NOT eight
+    -- near-identical ones (this task's own explicit instruction: eight
+    -- copies is exactly the kind of drift this resource keeps finding and
+    -- fixing reactively elsewhere, e.g. server/permissions.lua's own
+    -- IsDuplicateKeyError doc comment on "each file keeps its own tiny copy"
+    -- being the RIGHT call only for a genuinely small, self-contained
+    -- check -- eight full authorization+cooldown+query+shape blocks is not
+    -- that).
+    --
+    -- CATALOG_AUDIT_SOURCES below is the ENTIRE trust boundary for this
+    -- surface, stated once: `catalogName` (a client-supplied string, over
+    -- the wire, therefore adversarial) is looked up in this HARDCODED Lua
+    -- table literal and is NEVER, itself, used to build a table name, a
+    -- column name, or any other piece of SQL text -- not concatenated, not
+    -- formatted into a query string, not passed to K9Store as a table-name
+    -- argument. Every value in this table is a closed-over Lua FUNCTION
+    -- REFERENCE this file itself names at load time (one of the eight real
+    -- K9Store.*_GetRecent accessors below, each of which has its own
+    -- hardcoded `FROM k9_whatever_audit` SQL text with zero caller-supplied
+    -- interpolation) plus a locale key for the display label -- a caller
+    -- can therefore never reach any table this map does not explicitly
+    -- name here, no matter what string they send, in any encoding, under
+    -- any validation bypass on their own client.
+    -- ==================================================================
+    -- `hasCitizenidColumn` (this pass, DISPLAY NAME RESOLUTION) -- every one
+    -- of these eight row shapes carries a `changed_by` citizenid column
+    -- (who made this catalog edit); exactly ONE, k9Profiles
+    -- (IndividualOverrideAudit_GetRecent), ALSO carries a `citizenid` column
+    -- naming the K9/handler the override targets. Flagged here rather than
+    -- hardcoded inside EnrichChangedByRows below, so that helper stays a
+    -- single generic function for all eight instead of a k9Profiles-specific
+    -- branch living inside it.
+    local CATALOG_AUDIT_SOURCES = {
+        certTiers        = { accessor = K9Store.TierAudit_GetRecent,               labelKey = 'admin.catalog_audit_label_cert_tiers' },
+        permissionKeys   = { accessor = K9Store.PermKeyAudit_GetRecent,            labelKey = 'admin.catalog_audit_label_permission_keys' },
+        xpTiers          = { accessor = K9Store.XPTierAudit_GetRecent,             labelKey = 'admin.catalog_audit_label_xp_tiers' },
+        shopItems        = { accessor = K9Store.ShopItemAudit_GetRecent,           labelKey = 'admin.catalog_audit_label_shop_items' },
+        shopLocations    = { accessor = K9Store.ShopLocationAudit_GetRecent,       labelKey = 'admin.catalog_audit_label_shop_locations' },
+        k9Profiles       = { accessor = K9Store.IndividualOverrideAudit_GetRecent, labelKey = 'admin.catalog_audit_label_k9_profiles', hasCitizenidColumn = true },
+        runtimeOverrides = { accessor = K9Store.OverrideAudit_GetRecent,           labelKey = 'admin.catalog_audit_label_runtime_overrides' },
+        tabletThemes     = { accessor = K9Store.ThemeAudit_GetRecent,              labelKey = 'admin.catalog_audit_label_tablet_themes' },
+    }
+
+    --- DISPLAY NAME RESOLUTION (this pass) -- generic enrichment for all
+    --- eight CATALOG_AUDIT_SOURCES row shapes above, ONE helper rather than
+    --- eight near-identical copies (mirrors CATALOG_AUDIT_SOURCES's own
+    --- "one generic, parameterized callback, not eight" reasoning). Additive
+    --- only: `changed_by`/`citizenid` themselves are unchanged.
+    --- @param rows table
+    --- @param alsoEnrichCitizenid boolean? -- true only for the k9Profiles source (IndividualOverrideAudit_GetRecent's own extra `citizenid` column)
+    --- @return table -- the same rows
+    local function EnrichChangedByRows(rows, alsoEnrichCitizenid)
+        for _, row in ipairs(rows) do
+            row.changed_by_name = (type(row.changed_by) == 'string' and row.changed_by ~= '') and ResolveAuditDisplayName(row.changed_by) or nil
+            if alsoEnrichCitizenid then
+                row.citizenid_name = (type(row.citizenid) == 'string' and row.citizenid ~= '') and ResolveAuditDisplayName(row.citizenid) or nil
+            end
+        end
+        return rows
+    end
+
+    --- 'qbx_k9unit:server:tabletAuditCatalog' -- the GAP 2 read side. Same
+    --- authorization, cooldown, and result-cap scaffolding as the five
+    --- callbacks above (this task's own explicit "reuse, don't invent new
+    --- gating" instruction) -- IsAuthorizedAdmin re-verified fresh on THIS
+    --- call, the SAME shared AuditCooldown budget, the SAME HARD_MAX_RESULTS
+    --- ceiling via ClampLimit. See this section's own header immediately
+    --- above for the full CATALOG_AUDIT_SOURCES trust-boundary writeup.
+    --- @param source number
+    --- @param catalogName string? -- MUST be an exact key of CATALOG_AUDIT_SOURCES above
+    --- @param limit number?
+    --- @return table { ok: boolean, rows: table?, label: string?, cap: number?, limit: number?, truncated: boolean?, error: string?, message: string? }
+    lib.callback.register('qbx_k9unit:server:tabletAuditCatalog', function(source, catalogName, limit)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'tabletAuditCatalog', 'n/a', 'denied')
+            return { ok = false, error = 'not_authorized', message = locale('admin.not_authorized') }
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'tabletAuditCatalog', 'n/a', 'rate_limited')
+            return { ok = false, error = 'rate_limited' }
+        end
+
+        local sourceDef = type(catalogName) == 'string' and CATALOG_AUDIT_SOURCES[catalogName]
+        if not sourceDef then
+            LogAuditInvocation(source, 'tabletAuditCatalog', 'n/a', 'invalid_args')
+            return { ok = false, error = 'invalid_args' }
+        end
+
+        local clampedLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.CatalogAudit, HARD_MAX_RESULTS)
+        local rows = EnrichChangedByRows(sourceDef.accessor(clampedLimit), sourceDef.hasCitizenidColumn)
+        local label = locale(sourceDef.labelKey)
+
+        LogAuditInvocation(source, 'tabletAuditCatalog', catalogName, 'ok')
+        -- cap/limit/truncated: see tabletAuditCert above for the full contract.
+        return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
+    end)
+
+    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept); audit callbacks registered (tabletAuditCert, tabletAuditPartner, tabletAuditSearch, tabletAuditXp, tabletAuditDept, tabletAuditCatalog).')
 end)

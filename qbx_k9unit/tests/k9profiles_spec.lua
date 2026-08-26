@@ -16,13 +16,19 @@
     already own that. What THIS spec covers is the NEW surface: the
     resolution seam (GetK9EffectiveMultipliers, exercised indirectly through
     k9ProfileGet/k9ProfileUpsert/k9ProfileReset's own `effective` response
-    field -- this file is deliberately kept `local`, see server/k9profiles.lua's
-    own header, so there is no direct global to call), the resolution ORDER
-    itself (global default -> XP tier -> individual override), overlay
-    precedence (a per-field partial edit never clobbers an untouched field),
-    tombstones, Config.Database = false, the schema-collision boot-order
-    race, write-failure reporting, every rejected value shape, and
-    authorization refusal.
+    field -- GAP 1 closure, a later pass: this function is NOW a
+    resource-global, promoted specifically so server/progression.lua could
+    become its first real cross-file consumer; see
+    tests/progression_spec.lua's own "GAP 1 CLOSURE" section for the
+    end-to-end (k9profiles.lua + progression.lua, loaded together)
+    composition tests that section owns -- this file's own tests below
+    still exercise it only indirectly, through this file's own callbacks,
+    which is sufficient for everything THIS file is responsible for), the
+    resolution ORDER itself (global default -> XP tier -> individual
+    override), overlay precedence (a per-field partial edit never clobbers
+    an untouched field), tombstones, Config.Database = false, the
+    schema-collision boot-order race, write-failure reporting, every
+    rejected value shape, and authorization refusal.
 
     NOT COVERED HERE (disclosed, not silently skipped), same posture
     tests/certtiers_spec.lua/tests/xptiereditor_spec.lua's own headers take

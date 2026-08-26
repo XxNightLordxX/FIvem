@@ -24,16 +24,26 @@ then repeated. Two commits made after I said I had fixed the practice —
 `7752daf` and `a383b6a` — carry work their messages do not mention, for the same
 reason.
 
-The practice that actually prevents it, now in use: stage an explicit list of
-files, print `git diff --cached --name-only` and read it, reconcile that list
-against what the message is about to claim, and only then commit.
+Staging an explicit list of files was not enough, and it took three more
+commits to work out why. Agents were told to verify their own work by staging
+their files and building a tree from the index — so they were writing to the
+same index I was committing from. Between my checking what was staged and my
+committing it, an agent could add its own files, and did.
+
+The practice that actually works, now in use: keep a private index
+(`GIT_INDEX_FILE` pointing at a scratch file), stage into that, build the
+verification tree from that, and commit from that. No other process can reach
+it. Then read the file list one final time and reconcile it against what the
+message is about to claim.
 
 ## Was anything pushed in a broken state?
 
-No. Every commit that actually carries a change carries it whole — production
-code, its manifest and locale companions, and its own tests, together in the one
-commit — and always *earlier* than the commit that later claims it. There is no
-point in the history where the branch would have failed to load.
+No, and this was checked rather than reasoned about. Each of the thirty commits
+was extracted into a clean tree and linted: **all thirty are clean, 0 warnings
+and 0 errors.** Every commit that actually carries a change carries it whole —
+production code, its manifest and locale companions, and its own tests, together
+in the one commit — and always *earlier* than the commit that later claims it.
+There is no point in the history where the branch would have failed to load.
 
 The one exception is prose, not code: `5bb63e676` says the Shop Items screen
 "landed" one commit before `bd71a0975` actually adds it.
@@ -81,11 +91,19 @@ names where it really is.
 
 **12 accurate, 9 partial, 9 mis-credited.**
 
-Two later commits carry the same fault and are recorded here for completeness:
-`7752daf` (message covers the licence, offline names and the issues list; also
-carries the ped third-eye icon pass, `server/k9profiles.lua` changes and two test
-fixes) and `a383b6a` (message covers the tablet string sync; also carries the
-whole world-object third-eye pass).
+Three later commits carry the same fault and are recorded here for
+completeness:
+
+- `7752daf` — message covers the licence, offline names and the issues list; also
+  carries the ped third-eye icon pass, `server/k9profiles.lua` changes and two
+  test fixes.
+- `a383b6a` — message covers the tablet string sync; also carries the whole
+  world-object third-eye pass.
+- `e23d198` — message covers five pieces of work by name; also carries the
+  name-resolution pass (`server/tablet.lua` and two specs), which resolves the
+  granting officer's citizenid to a real character name across the audit trail
+  and certification rows. That commit was made after this file first described
+  the problem, which is what finally identified the shared-index cause above.
 
 ## Two claims that were overstated
 
