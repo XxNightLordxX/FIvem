@@ -78,6 +78,34 @@ tagged release will draw a line under this section.
 
 ### Added
 
+- **Every command now appears in your chat autocomplete.** Before this
+  there were none at all — the tablet's Commands tab was the only place any
+  of the resource's commands were written down. Type `/` and they are
+  there.
+- **One tablet command instead of two.** `/k9tablet` now opens whichever
+  view your rank in the department actually gives you, rather than needing
+  a separate high-command command you had to know existed.
+- **High command holds everything implicitly** — every permission, every
+  feature, every upgrade — without anyone having to grant it row by row.
+  One deliberate exception: an explicit **block** on a person still beats
+  their rank. That is the only way to restrain one individual without
+  demoting them, so it was kept.
+- **A K9's player can warn their handler of danger**, and a handler can be
+  warned before an apprehension. The warning carries only a rough compass
+  direction and a distance band, both worked out on the server from real
+  positions — so it can never be repeated over and over to narrow down
+  exactly where someone is. Ships **off** until it has been reviewed.
+- **Events can be posted to a Discord channel.** Messages are batched
+  rather than sent one per event, because Discord rate-limits hard enough
+  that a busy shift would trip it within seconds. The queue has a ceiling
+  and drops rather than growing forever; the next message tells you how
+  many were lost. The busiest event by far — a completed search — ships
+  off. **A webhook URL is a password.** Anyone who has it can post to that
+  channel forever.
+- **Dogs can eat and drink from bowls.**
+- **A character can be pinned as a dog permanently**, so they load in as
+  the same dog every time, independently of any certification.
+
 - **Someone granted a single permission can now use it.** Granting only
   "may certify" left that person with no way to reach a person's record —
   the permission was real everywhere except the screen they would use it
