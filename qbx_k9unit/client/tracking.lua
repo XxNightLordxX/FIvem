@@ -110,6 +110,28 @@
     client/search.lua (different trust model, different file) or
     client/vision.lua (unrelated feature). Load order relative to those two
     doesn't matter.
+
+    ======================================================================
+    LEGIBILITY FIX (this pass, coder-frontend) — every OTHER way a trail
+    can stop already says so (water break: 'tracking.trail_lost_water';
+    manual stop: silent BY DESIGN, per StopTracking()'s own doc comment,
+    since the keypress itself is the feedback). The one remaining ending —
+    the K9's own death mid-track, which already forced a StopTracking()
+    call — said nothing at all: the markers this player was watching just
+    stopped appearing, indistinguishable from the render thread having
+    broken. Fixed at that one call site (see the OWN-DEATH EXIT PATH branch
+    below) with a new notify, not inside StopTracking() itself, so the
+    manual-stop path's own deliberate silence is untouched. New locale key,
+    see this pass's report: tracking.trail_lost_death. Every other flow in
+    this file (start refusals, the already-tracking/starting-in-progress
+    guards, the trail render itself as the visible "still live" state, and
+    arrival — which deliberately stays a client-side non-event per this
+    file's own "never hand the player the answer" design, left to
+    server/findalert.lua's existing bark-and-sit reaction on
+    'qbx_k9unit:server:reportTrackSourceArrival', Config.FindAlerts.
+    reactOnTrackArrival, default on) was reviewed and left unchanged this
+    pass.
+    ======================================================================
 ]]
 
 --- Local-only view of the CURRENT tracking session, if any. Set by a
@@ -488,7 +510,22 @@ CreateThread(function()
             -- matching this file's existing "no self-service silent resume"
             -- precedent already established for the water-break case below.
             if IsEntityDead(myPed) then
+                -- LEGIBILITY FIX (this pass) — StopTracking() itself stays
+                -- silent by design for a MANUAL stop (see its own doc
+                -- comment: "no confirmation notification needed"), but an
+                -- own-death auto-stop is a genuinely different case: the
+                -- trail markers this player was watching simply stop
+                -- appearing, on this same tick, with nothing said about why
+                -- — indistinguishable from the render thread having broken.
+                -- Notified HERE, at this specific call site, not inside
+                -- StopTracking() itself, so a manual stop (and the
+                -- water-break/generation-staleness paths, which already
+                -- have their own explicit notify or are deliberately silent
+                -- per this file's own documented reasoning) are entirely
+                -- unaffected. New locale key, see this pass's report:
+                -- tracking.trail_lost_death.
                 StopTracking()
+                lib.notify({ title = locale('common.notify_title'), description = locale('tracking.trail_lost_death'), type = 'error' })
             else
                 sleepMs = TRACK_TICK_MS
 

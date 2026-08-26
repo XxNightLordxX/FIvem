@@ -369,6 +369,79 @@
       client does not already control — see "NETWORK OWNERSHIP OF THE
       TARGET PED" above.
     ======================================================================
+
+    ======================================================================
+    LEGIBILITY PASS (this session, coder-frontend) — the mechanical trust
+    boundary/lifecycle work above was already solid; what it never did was
+    tell either PARTY what state they were actually in while it mattered.
+    Concretely, before this pass:
+      - The TARGET of bite-hold/takedown/drag received ZERO text, ever, for
+        any of the three mechanics, on either start or end (confirmed by
+        grep: server/combat.lua's own NotifyPlayer calls are 100%
+        holder-facing — no `hold.targetSrc` NotifyPlayer call exists
+        anywhere in that file). The only signal a target ever got was the
+        native effect itself (sprint/fire silently refusing to respond, a
+        sudden ragdoll, a sudden slow-down) — mid-pursuit, indistinguishable
+        from lag or a bug.
+      - The bite-hold HOLDER had no way to learn the hold's own duration at
+        all (biteHoldStarted received `expiresAt` and never even stored it).
+        dragStarted had the identical gap for PropDragging.
+      - server/combat.lua's own EndHold announces every NON-manual ending to
+        the holder for takedown ('combat.takedown_ended_early') and drag
+        ('combat.drag_ended'), but has NO equivalent call in its bite
+        branch at all — bite-hold's holder learned nothing when a hold
+        ended by timeout/target-death/disconnect, only when they released
+        it themselves. The three sibling mechanics disagreed with each
+        other for no disclosed reason.
+    FIXED, entirely client-side (server/combat.lua is coder-security-owned
+    and out of scope for this pass): every TARGET-side Category B relay
+    handler (applyBiteHold/endBiteHold, forceRagdoll/endForceRagdoll,
+    applyDragSpeedLimit/endDragSpeedLimit) now sends the target exactly one
+    notify on start and one on a genuine (non-stale) end — see each
+    handler's own inline comment for the exact reasoning and locale key.
+    Every END-side notify is gated on "was something actually active
+    before this event," never on the state-clearing assignment itself,
+    so a stale/duplicate/forged-then-genuine end sequence never produces a
+    spurious "you're free" toast, and the termination assignment (Active* =
+    nil) remains exactly as unconditional as it already was — this pass
+    adds a notification, never a new gate on any termination path.
+    biteHoldStarted/dragStarted now also notify the HOLDER with the
+    mechanic's own configured duration (both derived from the identical
+    shared config.lua constant already used to compute each effect's own
+    localDeadline — no new clock assumption, see this file's own
+    CLOCK-DOMAIN NOTE), and biteHoldEnded now mirrors dragEnded/takedown's
+    own "announce every non-manual ending" pattern, picked here as the
+    pattern that should win for exactly that reason (it was already the
+    majority, and the more complete, behavior of the three).
+    NEW LOCALE KEYS — none of these exist in locales/en.json yet (this
+    pass is expressly forbidden from editing that file — see this
+    resource's own file-ownership rules); reported to the coordinator with
+    suggested exact text, mirroring this file's own already-documented
+    precedent for 'combat.blocked_by_vehicle' (see
+    tests/clientcombat_spec.lua's header): combat.bite_hold_holder_status,
+    combat.bite_hold_ended, combat.bite_hold_target_notice,
+    combat.takedown_target_notice, combat.drag_target_notice,
+    combat.drag_holder_status, combat.target_restraint_ended. Every call
+    site referencing one of these is a genuinely NEW code path (see this
+    file's own updated spec for exactly which pre-existing tests exercise
+    these handlers and will read as failing — via the test sandbox's
+    deliberately-hard-failing locale() — until the key lands, not a logic
+    regression) — this mirrors that same precedent's own resolution
+    ("reported... key was added shortly after").
+    DEFERRED, disclosed rather than silently skipped: no per-mechanic
+    flavor text on the shared target-side ending
+    (combat.target_restraint_ended is one string reused for all three) —
+    a deliberate consistency choice (three different restrictions, one
+    simple "it's over" signal), not a missed opportunity. Also deferred:
+    a live, continuously-updating countdown for either party — the
+    one-shot notify (plus, for the two duration notices, a `duration`
+    field matching the real effect length) answers "how long until this
+    releases" without adding any new per-frame draw call, matching this
+    file's own "no per-frame cost for an indicator" constraint; a HUD-driven
+    live countdown remains a legitimate follow-up but needs coordination
+    with whichever file owns this resource's HUD surface, not something to
+    improvise here.
+    ======================================================================
 ]]
 
 -- ======================================================================
@@ -1136,6 +1209,25 @@ if Config.Features.BiteAndHold then
         if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         MyEngagedTargetNetId = targetNetId
         PlayBiteHoldStance()
+        -- LEGIBILITY FIX (this pass) — server/combat.lua's own
+        -- 'combat.bite_hold_attempted' notify (sent at request time, per
+        -- that file's own NotifyPlayer call) confirms the ATTEMPT, but never
+        -- told the holder how long the hold will run before it lets go on
+        -- its own — the exact "how long until this releases?" gap this
+        -- pass's own brief calls out by name. Both sides derive the SAME
+        -- nominal duration from the SAME shared Config.Combat.BiteAndHold.
+        -- maxDurationMs constant (see this file's own header CLOCK-DOMAIN
+        -- NOTE for why this is safe to state here rather than echo a raw
+        -- server timestamp) — this is a genuine duration, not a guess.
+        -- `duration` on the toast itself is set to match, so the toast's own
+        -- own lifetime is a second, non-verbal cue for the same answer.
+        -- New locale key, see this pass's report: combat.bite_hold_holder_status.
+        lib.notify({
+            title = locale('common.notify_title'),
+            description = locale('combat.bite_hold_holder_status', math.ceil(Config.Combat.BiteAndHold.maxDurationMs / 1000)),
+            type = 'inform',
+            duration = Config.Combat.BiteAndHold.maxDurationMs,
+        })
     end)
 
     RegisterNetEvent('qbx_k9unit:client:biteHoldEnded', function(targetNetId, reason)
@@ -1143,6 +1235,30 @@ if Config.Features.BiteAndHold then
         if MyEngagedTargetNetId ~= targetNetId then return end -- stale/foreign event, e.g. a race with a brand-new hold — never clear a DIFFERENT hold's state
         MyEngagedTargetNetId = nil
         ClearPedTasksImmediately(PlayerPedId())
+        -- CONSISTENCY FIX (this pass) — server/combat.lua's own EndHold
+        -- notifies the holder for takedown ('combat.takedown_ended_early',
+        -- reason ~= 'timeout') and drag ('combat.drag_ended', reason not a
+        -- manual release) on every NON-manual ending, but has no equivalent
+        -- call at all in its bite branch — bite-hold's holder previously
+        -- learned NOTHING when a hold it started ended for any reason other
+        -- than its own ReleaseBiteHold() press (a timeout, the target dying,
+        -- the target disconnecting, all landed in total silence). This is
+        -- the exact "if they end differently without reason, pick the
+        -- pattern that should win" case: takedown/drag's "announce every
+        -- non-manual ending" pattern is picked here, applied client-side
+        -- (server/combat.lua/EndHold is coder-security-owned and out of
+        -- scope for this pass) since this handler already fires
+        -- unconditionally for both the player-target and NPC-target
+        -- branches of a bite hold (server/combat.lua's own EndHold sends
+        -- this event outside its isPlayerTarget if/else), matching how the
+        -- sibling server-side notifies apply to both target kinds too.
+        -- 'released' (ReleaseBiteHold(), self-evident from the keypress
+        -- itself) is the only reason excluded, mirroring drag_ended's own
+        -- exclusion of its two manual-release reasons. New locale key, see
+        -- this pass's report: combat.bite_hold_ended.
+        if reason ~= 'released' then
+            lib.notify({ title = locale('common.notify_title'), description = locale('combat.bite_hold_ended'), type = 'inform' })
+        end
     end)
 
     -- TARGET-SIDE CATEGORY B RELAY HANDLER — registered for EVERY client
@@ -1177,12 +1293,41 @@ if Config.Features.BiteAndHold then
         -- parked in one) so continuous per-frame reassertion resumes within
         -- about one tick, instead of up to ~500ms later.
         WakeMaintenanceThread()
+        -- LEGIBILITY FIX (this pass) — before this, the TARGET of a bite
+        -- hold received precisely zero text of any kind, on this client or
+        -- server/combat.lua's own side (that file's NotifyPlayer calls are
+        -- 100% holder-facing — grep confirms no `hold.targetSrc` NotifyPlayer
+        -- call exists anywhere in that file, for any of the three combat
+        -- mechanics). The only signal the target ever got was the native
+        -- effect itself (sprint/fire silently refusing to respond) — which,
+        -- mid-pursuit, reads exactly like lag or a bug, not "a K9 has you."
+        -- One-shot, fired once per grant, mirroring the holder's own
+        -- one-shot "attempted" notify in shape. New locale key, see this
+        -- pass's report: combat.bite_hold_target_notice.
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.bite_hold_target_notice'), type = 'error' })
     end)
 
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:endBiteHold', function(reason)
         if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
+        -- LEGIBILITY FIX (this pass) — see applyBiteHold's own start-notice
+        -- comment above for why the target previously heard nothing at all;
+        -- the ending was equally silent (native controls simply started
+        -- responding again, with no explanation). `wasActive` gates the
+        -- notify only, never the state clear below — ActiveBiteHold = nil
+        -- runs unconditionally regardless, so a stale/duplicate endBiteHold
+        -- (nothing was active) stays a true no-op, never a spurious "you're
+        -- free" toast. Shared wording across all three mechanics' target-side
+        -- endings (see endForceRagdoll/endDragSpeedLimit below) — a
+        -- deliberate consistency choice, not a missed opportunity for
+        -- per-mechanic flavor text: three different restrictions, one simple
+        -- "it's over" signal each time. New locale key, see this pass's
+        -- report: combat.target_restraint_ended.
+        local wasActive = ActiveBiteHold ~= nil
         ActiveBiteHold = nil
+        if wasActive then
+            lib.notify({ title = locale('common.notify_title'), description = locale('combat.target_restraint_ended'), type = 'inform' })
+        end
     end)
 
     -- NPC-TARGET RELAY HANDLERS — sent ONLY to the REQUESTING K9's own
@@ -1339,6 +1484,12 @@ if Config.Features.NonLethalTakedown then
         ActiveForcedRagdoll = {
             localDeadline = GetGameTimer() + Config.Combat.NonLethalTakedown.ragdollDurationMs,
         }
+        -- LEGIBILITY FIX (this pass) — same gap, same fix shape as
+        -- applyBiteHold's own start-notice comment above: this handler
+        -- previously told the target nothing at all beyond the ragdoll
+        -- itself. New locale key, see this pass's report:
+        -- combat.takedown_target_notice.
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.takedown_target_notice'), type = 'error' })
     end)
 
     --- @param reason string
@@ -1347,6 +1498,12 @@ if Config.Features.NonLethalTakedown then
         if not ActiveForcedRagdoll then return end
         ActiveForcedRagdoll = nil
         SetEntityCanBeDamaged(PlayerPedId(), true)
+        -- LEGIBILITY FIX (this pass) — see endBiteHold's own comment above
+        -- for the full reasoning (shared wording, gated on this handler's
+        -- own pre-existing `if not ActiveForcedRagdoll then return end`
+        -- guard so a stale/duplicate end stays a true no-op). New locale
+        -- key, see this pass's report: combat.target_restraint_ended.
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.target_restraint_ended'), type = 'inform' })
     end)
 
     -- NPC-TARGET RELAY HANDLERS — see BiteAndHold's own group above for the
@@ -1478,6 +1635,19 @@ if Config.Features.PropDragging then
         AssertDragAsHolderTick(ActiveDragAsHolder)
         -- CANCELLABLE-WAIT FIX — see header "CANCELLABLE MAINTENANCE WAIT".
         WakeMaintenanceThread()
+        -- LEGIBILITY FIX (this pass) — same "how long until this releases?"
+        -- gap this pass's own brief names, same fix shape as
+        -- biteHoldStarted's own duration notice above (see that handler's
+        -- comment for the full CLOCK-DOMAIN reasoning this inherits
+        -- unchanged): the drag holder previously had NO way to learn the
+        -- drag's own duration at all, on either side of this event. New
+        -- locale key, see this pass's report: combat.drag_holder_status.
+        lib.notify({
+            title = locale('common.notify_title'),
+            description = locale('combat.drag_holder_status', math.ceil(Config.Combat.PropDragging.maxDragDurationMs / 1000)),
+            type = 'inform',
+            duration = Config.Combat.PropDragging.maxDragDurationMs,
+        })
     end)
 
     --- HOLDER-SIDE receiver — stops the re-assertion loop, calls
@@ -1523,6 +1693,10 @@ if Config.Features.PropDragging then
         AssertDragSpeedLimitOnTarget()
         -- CANCELLABLE-WAIT FIX — see header "CANCELLABLE MAINTENANCE WAIT".
         WakeMaintenanceThread()
+        -- LEGIBILITY FIX (this pass) — same gap, same fix shape as
+        -- applyBiteHold's own start-notice comment above. New locale key,
+        -- see this pass's report: combat.drag_target_notice.
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.drag_target_notice'), type = 'error' })
     end)
 
     --- @param reason string
@@ -1548,6 +1722,13 @@ if Config.Features.PropDragging then
         -- transit or never sent (e.g. the K9 disconnected before its own
         -- teardown event fired) — idempotent, harmless if already detached.
         DetachEntity(ped, true, false)
+
+        -- LEGIBILITY FIX (this pass) — see endBiteHold's own comment above
+        -- for the full reasoning (shared wording, gated on this handler's
+        -- own pre-existing `if not ActiveDragSpeedLimit then return end`
+        -- guard above so a stale/duplicate end stays a true no-op). New
+        -- locale key, see this pass's report: combat.target_restraint_ended.
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.target_restraint_ended'), type = 'inform' })
     end)
 end
 

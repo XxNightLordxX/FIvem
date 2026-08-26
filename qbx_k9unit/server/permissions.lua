@@ -249,10 +249,12 @@
         ListActivePermissionsForCitizenId(callerSrc, targetCitizenid) -> ok, rowsOrOutcome
         ListPermissionRoster(callerSrc, permissionKey) -> ok, rowsOrOutcome
       HasPermission is consulted by server/certifications.lua (HasK9Access,
-      IsEligibleCertifier) and server/admin.lua (IsAuthorizedAdmin), each
-      behind a `type(HasPermission) == 'function'` guard, and SHOULD be
-      consulted the same way by server/highcommand.lua's '/k9givexp' handler
-      (reported, not yet wired -- live-owned file). The other four are for
+      IsEligibleCertifier), server/admin.lua (IsAuthorizedAdmin), and
+      server/highcommand.lua's '/k9givexp'/tabletGiveXp handler
+      (IsAuthorizedForXpGrant, checking the 'k9.givexp' key -- WIRED as of a
+      later pass than the one that wrote "reported, not yet wired" here;
+      confirmed live by direct read of that function), each behind a
+      `type(HasPermission) == 'function'` guard. The other four are for
       the tablet's own server-side glue (coder-ui/coder-frontend) to call
       directly from THEIR OWN event/callback handler, using THAT handler's
       own real `source` -- never a client-supplied one -- for `granterSrc`/
@@ -983,6 +985,18 @@ end
 --- @return string outcome -- 'ok' | 'feature_disabled' | 'denied' | 'invalid_permission' | 'invalid_target' | 'invalid_granter' | 'self_grant_blocked' | 'rate_limited' | 'busy' | 'already_granted' | 'db_error'
 function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceModelOverride)
     if not (Config.Features and Config.Features.PermissionGrants == true) then
+        -- SECURITY FIX (coder-security, this pass -- audit-trail completeness):
+        -- every OTHER rejection below this line logs via LogAuditInvocation
+        -- before returning; this branch used to be the one silent exception --
+        -- an attempted grant while the feature is off (including one from a
+        -- genuine, currently-authorized high-command account, e.g. while
+        -- probing whether the feature is live) left NO trail at all, unlike
+        -- 'denied'/'rate_limited'/every other outcome. Logged BEFORE the
+        -- IsHighCommand check (which has not run yet here) using the same
+        -- granterSrc-derived whoLabel LogAuditInvocation always resolves --
+        -- this does not require or imply the caller is authorized, exactly
+        -- like the 'denied' log line just below does not.
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(tostring(permissionKey), tostring(targetCitizenid)), 'feature_disabled')
         return false, 'feature_disabled'
     end
 
@@ -1254,6 +1268,10 @@ end
 --- @return string? stillHasAccess -- meaningful ONLY when ok == true: nil (fully removed -- target has no other path to this capability), 'rank_or_high_command' (target is online and independently still qualifies -- revoking THIS grant did not remove their access), 'unknown_target_offline' (target is not connected -- their current rank/high-command status cannot be verified right now)
 function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     if not (Config.Features and Config.Features.PermissionGrants == true) then
+        -- SECURITY FIX (coder-security, this pass) -- see GrantPermission's
+        -- own identical comment immediately above its matching branch: audit
+        -- every rejection, not just the ones after the authorization check.
+        LogAuditInvocation(granterSrc, 'revokePermission', ('permission=%s target=%s'):format(tostring(permissionKey), tostring(targetCitizenid)), 'feature_disabled')
         return false, 'feature_disabled'
     end
 

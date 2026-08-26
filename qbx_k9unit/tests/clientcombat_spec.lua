@@ -637,6 +637,45 @@ t.test('ReleaseBiteHold: always sends, unconditionally, no CanShowK9UI gate', fu
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseBiteHold')
 end)
 
+-- TERMINATION-PATH GUARANTEE (this pass's own explicit test requirement):
+-- "verify the termination path still runs with the gating function
+-- entirely undefined, not merely false." `canShowK9UI = false` above only
+-- proves the FALSE case; a real production install could have a stripped
+-- or out-of-order client/main.lua where CanShowK9UI simply does not exist
+-- as a global at all -- a stricter, meaningfully different condition
+-- (Lua raises "attempt to call a nil value" on a bare call, not a false
+-- return) that a naive `if not CanShowK9UI() then ... end` guard would
+-- crash on, permanently bricking the release path. ReleaseBiteHold's own
+-- body never references CanShowK9UI (or any other gate) at all -- this
+-- pins that property directly rather than trusting it by inspection alone.
+t.test('ReleaseBiteHold: fires even when CanShowK9UI is entirely UNDEFINED (not merely false) -- a release path must never depend on any gating function existing at all', function()
+    local f = newCombatFixture()
+    f.env.CanShowK9UI = nil
+    local ok, err = pcall(f.env.ReleaseBiteHold)
+    t.isTrue(ok, 'ReleaseBiteHold must not error when CanShowK9UI is undefined: ' .. tostring(err))
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseBiteHold')
+end)
+
+-- ReleaseDrag() had ZERO test coverage before this pass -- the drag
+-- equivalent of the two ReleaseBiteHold guarantees above, both pinned here
+-- for the first time. A K9 holder stuck unable to drop a dragged suspect
+-- is this resource's own named worst-case outcome (client/combat.lua's
+-- own ReleaseDrag doc comment: "no consent/access gate on the way out").
+t.test('ReleaseDrag: always sends, unconditionally, no CanShowK9UI gate -- including when CanShowK9UI is entirely UNDEFINED, not merely false', function()
+    local f = newCombatFixture({ canShowK9UI = false })
+    f.env.ReleaseDrag()
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseDrag')
+
+    local f2 = newCombatFixture()
+    f2.env.CanShowK9UI = nil
+    local ok, err = pcall(f2.env.ReleaseDrag)
+    t.isTrue(ok, 'ReleaseDrag must not error when CanShowK9UI is undefined: ' .. tostring(err))
+    t.equals(#f2.serverEvents, 1)
+    t.equals(f2.lastServerEvent().event, 'qbx_k9unit:server:releaseDrag')
+end)
+
 t.test('RequestTakedown: same CanShowK9UI/no-target shape as RequestBiteHold', function()
     local f = newCombatFixture({ canShowK9UI = false })
     f.env.RequestTakedown()
@@ -657,6 +696,84 @@ t.test('IsBiteHoldEngaged / IsDragEngaged: both false before any grant', functio
     local f = newCombatFixture()
     t.isFalse(f.env.IsBiteHoldEngaged())
     t.isFalse(f.env.IsDragEngaged())
+end)
+
+-- ========================================================================
+-- LEGIBILITY PASS (this session) -- HOLDER-side duration/ending notices.
+-- See client/combat.lua's own header "LEGIBILITY PASS" for the full
+-- writeup of the gap these close: before this pass, biteHoldStarted never
+-- told the holder how long the hold would run, and biteHoldEnded never
+-- told the holder anything at all, for any reason. Neither handler had a
+-- single test in this file before this pass either -- both are entirely
+-- new coverage, not a rewrite of an existing assertion.
+-- ========================================================================
+
+t.test('biteHoldStarted: sets MyEngagedTargetNetId (IsBiteHoldEngaged) and notifies the holder with the configured duration, ceil-rounded to whole seconds', function()
+    local f = newCombatFixture({ biteAndHoldCfg = { range = 2.5, maxDurationMs = 12500 } })
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldStarted', 65535, 12345, 999)
+
+    t.isTrue(f.env.IsBiteHoldEngaged())
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('combat.bite_hold_holder_status', 13), 'ceil(12500 / 1000) == 13, never truncated to 12')
+    t.equals(f.notifyCalls[1].type, 'inform')
+    t.equals(f.notifyCalls[1].duration, 12500, 'the toast\'s own lifetime should match the real effect duration')
+end)
+
+t.test('biteHoldStarted: source guard rejects a forged local trigger -- no state change, no notify', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldStarted', 1, 12345, 999)
+    t.isFalse(f.env.IsBiteHoldEngaged())
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('biteHoldEnded: reason == "released" (the holder\'s own ReleaseBiteHold press) clears state but does NOT notify -- self-evident from the keypress itself, mirrors drag_ended/takedown_ended_early\'s own manual-release exclusion', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldStarted', 65535, 555, 999)
+    t.equals(#f.notifyCalls, 1, 'sanity: the start notice already fired')
+
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldEnded', 65535, 555, 'released')
+    t.isFalse(f.env.IsBiteHoldEngaged())
+    t.equals(#f.notifyCalls, 1, 'a manual release must not add a second notify')
+end)
+
+t.test('biteHoldEnded: a NON-manual reason (timeout/target_died/disconnect/...) DOES notify the holder -- the consistency fix, matching drag/takedown\'s own "announce every non-manual ending" pattern', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldStarted', 65535, 555, 999)
+
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldEnded', 65535, 555, 'timeout')
+    t.isFalse(f.env.IsBiteHoldEngaged())
+    t.equals(#f.notifyCalls, 2)
+    t.equals(f.notifyCalls[2].description, locale('combat.bite_hold_ended'))
+    t.equals(f.notifyCalls[2].type, 'inform')
+end)
+
+t.test('biteHoldEnded: a stale/foreign targetNetId (does not match MyEngagedTargetNetId) is ignored entirely -- never clears a DIFFERENT hold\'s state, never notifies', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldStarted', 65535, 555, 999)
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldEnded', 65535, 777, 'timeout') -- a DIFFERENT targetNetId
+    t.isTrue(f.env.IsBiteHoldEngaged(), 'must still be engaged with 555 -- the stale event named 777')
+    t.equals(#f.notifyCalls, 1, 'no end-notify for an event this handler correctly ignored')
+end)
+
+t.test('biteHoldEnded: source guard rejects a forged local trigger -- no notify', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldStarted', 65535, 555, 999)
+    f.dispatchNetEvent('qbx_k9unit:client:biteHoldEnded', 1, 555, 'timeout')
+    t.isTrue(f.env.IsBiteHoldEngaged(), 'a forged end must not have cleared the hold')
+    t.equals(#f.notifyCalls, 1, 'only the start notice, no forged end-notify')
+end)
+
+t.test('dragStarted: notifies the holder with the configured drag duration, mirroring biteHoldStarted', function()
+    local f = newCombatFixture({ propDraggingCfg = { range = 2.5, maxDragDurationMs = 8000, dragSpeedMultiplier = 0.4 } })
+    f.registerNetworkEntity(900050, 50)
+    f.setPed(1, true)
+    f.dispatchNetEvent('qbx_k9unit:client:dragStarted', 65535, 900050, false, 999)
+
+    t.isTrue(f.env.IsDragEngaged())
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('combat.drag_holder_status', 8))
+    t.equals(f.notifyCalls[1].type, 'inform')
+    t.equals(f.notifyCalls[1].duration, 8000)
 end)
 
 -- ------------------------------------------------------------------
@@ -713,12 +830,18 @@ t.test('applyBiteHold: sets ActiveBiteHold, immediately bridges DisableControlAc
     f.dispatchNetEvent('qbx_k9unit:client:applyBiteHold', 65535, 12345, 999)
     t.equals(#f.disableControlCalls, 2, 'the immediate bridge call must fire both DisableControlAction calls (sprint + attack) on grant, not wait for the next tick')
     t.equals(f.pendingTimeoutCount(), 2, 'WakeMaintenanceThread must schedule a SEPARATE, fresh SetTimeout(0, ...) alongside the still-pending original coarse wait')
+    -- LEGIBILITY FIX (this pass) -- the TARGET previously received zero
+    -- text for this; see client/combat.lua's own header "LEGIBILITY PASS".
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('combat.bite_hold_target_notice'))
+    t.equals(f.notifyCalls[1].type, 'error')
 end)
 
 t.test('applyBiteHold: source guard rejects a forged local trigger -- pins the CODE only, see this file\'s own D3 note', function()
     local f = newCombatFixture()
     f.dispatchNetEvent('qbx_k9unit:client:applyBiteHold', 1, 12345, 999)
     t.equals(#f.disableControlCalls, 0)
+    t.equals(#f.notifyCalls, 0, 'a forged applyBiteHold must not notify either')
 end)
 
 t.test('endBiteHold: source guard rejects a forged local trigger', function()
@@ -728,15 +851,25 @@ t.test('endBiteHold: source guard rejects a forged local trigger', function()
     -- Still active -- proven by the maintenance thread still reasserting on its next tick.
     f.startMaintenanceThread()
     t.isTrue(#f.disableControlCalls > 2, 'a forged endBiteHold must not have cleared ActiveBiteHold')
+    t.equals(#f.notifyCalls, 1, 'only the start notice -- a forged end must not add a second notify')
 end)
 
-t.test('endBiteHold: source == 65535 genuinely clears ActiveBiteHold -- no further reassertion on the next tick', function()
+t.test('endBiteHold: source == 65535 genuinely clears ActiveBiteHold -- no further reassertion on the next tick, and notifies the TARGET that the restraint ended', function()
     local f = newCombatFixture()
     f.dispatchNetEvent('qbx_k9unit:client:applyBiteHold', 65535, 12345, 999)
     local callsAfterGrant = #f.disableControlCalls
     f.dispatchNetEvent('qbx_k9unit:client:endBiteHold', 65535, 'timeout')
     f.startMaintenanceThread()
     t.equals(#f.disableControlCalls, callsAfterGrant, 'no new DisableControlAction calls once ActiveBiteHold is cleared')
+    t.equals(#f.notifyCalls, 2)
+    t.equals(f.notifyCalls[2].description, locale('combat.target_restraint_ended'))
+    t.equals(f.notifyCalls[2].type, 'inform')
+end)
+
+t.test('endBiteHold: a stale/duplicate end (nothing was ever active) is a true no-op -- clears an already-nil state but never notifies', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:endBiteHold', 65535, 'timeout')
+    t.equals(#f.notifyCalls, 0, 'nothing was active -- no spurious "you\'re free" toast')
 end)
 
 t.test('forceRagdoll: applies the damage bracket and ragdoll task using the TARGET\'s own forward vector, source-guarded', function()
@@ -753,17 +886,26 @@ t.test('forceRagdoll: applies the damage bracket and ragdoll task using the TARG
     t.equals(#f.ragdollCalls, 1)
     t.equals(f.ragdollCalls[1].dirX, 0.6)
     t.equals(f.ragdollCalls[1].dirY, 0.8)
+    -- LEGIBILITY FIX (this pass) -- the forged call above must not have
+    -- notified either (source guard already rejected it before this).
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('combat.takedown_target_notice'))
+    t.equals(f.notifyCalls[1].type, 'error')
 end)
 
 t.test('endForceRagdoll: restores damageability, and is a no-op when nothing is active', function()
     local f = newCombatFixture()
     f.dispatchNetEvent('qbx_k9unit:client:endForceRagdoll', 65535, 'timeout')
     t.equals(#f.canBeDamagedCalls, 0, 'no-op when ActiveForcedRagdoll was never set')
+    t.equals(#f.notifyCalls, 0, 'a true no-op must not notify either')
 
     f.dispatchNetEvent('qbx_k9unit:client:forceRagdoll', 65535, 999)
     f.dispatchNetEvent('qbx_k9unit:client:endForceRagdoll', 65535, 'timeout')
     t.equals(#f.canBeDamagedCalls, 2)
     t.equals(f.canBeDamagedCalls[2].canBeDamaged, true)
+    t.equals(#f.notifyCalls, 2, 'start notice + end notice')
+    t.equals(f.notifyCalls[2].description, locale('combat.target_restraint_ended'))
+    t.equals(f.notifyCalls[2].type, 'inform')
 end)
 
 t.test('applyDragSpeedLimit / endDragSpeedLimit: human target (no move-rate composer) calls SetPedMoveRateOverride directly', function()
@@ -772,11 +914,26 @@ t.test('applyDragSpeedLimit / endDragSpeedLimit: human target (no move-rate comp
     f.dispatchNetEvent('qbx_k9unit:client:applyDragSpeedLimit', 65535, 999)
     t.equals(#f.moveRateCalls, 1)
     t.equals(f.moveRateCalls[1].rate, f.config.Combat.PropDragging.dragSpeedMultiplier)
+    -- LEGIBILITY FIX (this pass) -- the TARGET previously received zero
+    -- text for this either, same gap/fix shape as bite-hold/takedown above.
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('combat.drag_target_notice'))
+    t.equals(f.notifyCalls[1].type, 'error')
 
     f.dispatchNetEvent('qbx_k9unit:client:endDragSpeedLimit', 65535, 'released_by_holder')
     t.equals(#f.moveRateCalls, 2)
     t.equals(f.moveRateCalls[2].rate, 1.0)
     t.equals(#f.detachCalls, 1, 'endDragSpeedLimit also defensively detaches its own ped')
+    t.equals(#f.notifyCalls, 2)
+    t.equals(f.notifyCalls[2].description, locale('combat.target_restraint_ended'))
+    t.equals(f.notifyCalls[2].type, 'inform')
+end)
+
+t.test('endDragSpeedLimit: a stale/duplicate end (nothing was ever active) is a true no-op -- never notifies', function()
+    local f = newCombatFixture({ propDragging = true })
+    f.dispatchNetEvent('qbx_k9unit:client:endDragSpeedLimit', 65535, 'released_by_holder')
+    t.equals(#f.moveRateCalls, 0)
+    t.equals(#f.notifyCalls, 0)
 end)
 
 t.test('applyDragSpeedLimit: a K9-model target (rare, per this file\'s own "MOVE-RATE COMPOSER SCOPE" note) routes through the composer instead of calling SetPedMoveRateOverride directly', function()

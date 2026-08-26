@@ -820,6 +820,27 @@ do
         t.equals(outcome, 'feature_disabled')
     end)
 
+    -- SECURITY FIX (coder-security, this pass): a rejected attempt while the
+    -- feature is off used to be the ONE outcome LogAuditInvocation never
+    -- printed anything for -- every other rejection (denied, rate_limited,
+    -- invalid_permission, ...) already left a trail. Proven here against the
+    -- REAL, unmodified GrantPermission, not a re-implementation.
+    t.test('AUDIT: GrantPermission still prints a trail (granter + target) even when the feature is disabled', function()
+        f.env.Config.Features.PermissionGrants = false
+        local before = #f.printLog
+        f.env.GrantPermission(hcSrc, 'TARGET-A', 'k9.access')
+        f.env.Config.Features.PermissionGrants = true
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('HC-GRANTER', 1, true)
+                and line:find('TARGET-A', 1, true) and line:find('feature_disabled', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a feature-disabled grant attempt must still be audited, naming both the granter and the target')
+    end)
+
     t.test('GrantPermission: a non-high-command caller is denied', function()
         local ok, outcome = f.env.GrantPermission(101, 'TARGET-A', 'k9.access')
         t.isFalse(ok)
@@ -1047,6 +1068,24 @@ do
         f.env.Config.Features.PermissionGrants = true
         t.isFalse(ok)
         t.equals(outcome, 'feature_disabled')
+    end)
+
+    -- SECURITY FIX (coder-security, this pass) -- RevokePermission's own
+    -- mirror of the identical GrantPermission audit-trail fix above.
+    t.test('AUDIT: RevokePermission still prints a trail (granter + target) even when the feature is disabled', function()
+        f.env.Config.Features.PermissionGrants = false
+        local before = #f.printLog
+        f.env.RevokePermission(hcSrc, 'X', 'k9.access')
+        f.env.Config.Features.PermissionGrants = true
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('HC-REVOKER', 1, true)
+                and line:find('X', 1, true) and line:find('feature_disabled', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a feature-disabled revoke attempt must still be audited, naming both the granter and the target')
     end)
 
     t.test('RevokePermission: a non-high-command caller is denied', function()

@@ -789,6 +789,13 @@ t.test('own-death: the compute thread stops tracking (and the render thread goes
     f.stepOne(1) -- compute thread: IsEntityDead(myPed) is now true -> StopTracking()
     t.isFalse(f.env.IsTracking())
     t.equals(f.waitLog[1], 1000, 'must fall back to the idle tick rate, not keep ticking at TRACK_TICK_MS for a dead ped')
+    -- LEGIBILITY FIX (this pass) -- unlike a manual StopTracking() (silent
+    -- by design), an own-death auto-stop must say so: the markers this
+    -- player was watching just vanished with no other explanation. See
+    -- client/tracking.lua's own header "LEGIBILITY FIX".
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('tracking.trail_lost_death'))
+    t.equals(f.notifyCalls[1].type, 'error')
 
     f.stepOne(2)
     t.equals(#f.drawMarkerCalls, 0, 'the render thread must never have drawn a "trail" computed from a dead ped\'s position')

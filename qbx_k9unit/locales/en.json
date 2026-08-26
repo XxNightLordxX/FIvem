@@ -128,6 +128,13 @@
         "renew_target_online_use_online_action": "They are online right now (server id %s). Use /k9recertify on them instead."
     },
     "combat": {
+        "bite_hold_holder_status": "Holding on — this releases automatically in %ds unless you let go sooner.",
+        "bite_hold_ended": "The bite and hold ended.",
+        "bite_hold_target_notice": "A K9 has bitten down and is holding you — you can't sprint or fire while it holds on.",
+        "takedown_target_notice": "A K9 unit has taken you down.",
+        "drag_target_notice": "A K9 is dragging you — your movement is slowed.",
+        "drag_holder_status": "Dragging — this releases automatically in %ds unless you let go sooner.",
+        "target_restraint_ended": "You're no longer restrained.",
         "already_held": "That target is already held by another K9.",
         "blocked_by_vehicle": "Not available while your K9 is loaded into a vehicle.",
         "bite_hold_feature_disabled": "Bite and hold is turned off on this server.",
@@ -1013,6 +1020,7 @@
         "milestone_reached": "Your partnership has reached a new tenure milestone."
     },
     "tracking": {
+        "trail_lost_death": "You went down — the trail is lost.",
         "already_tracking": "Already tracking something — stop first.",
         "starting_in_progress": "Already starting a track — please wait.",
         "nothing_to_track": "Nothing to track right now.",
