@@ -384,6 +384,30 @@ server_scripts {
     -- IsHighCommand/HasPermission/HasK9Access it consults (21 call sites,
     -- all at runtime, so this is convention rather than a hard requirement).
     'server/tablet.lua',
+    -- K9 COMMAND TABLET ROSTERS, server half (ROSTER_SPEC.md, Phase A --
+    -- data layer + server logic only; the UI/entry-point work is a
+    -- separate, later pass). Two roster LISTS (K9s, Handlers) plus an
+    -- explicit "Unassigned" bucket, layered over the certification data
+    -- server/tablet.lua/server/certifications.lua already own -- NOT a
+    -- second person-detail screen (ROSTER_SPEC.md §1's "extend
+    -- buildPersonScreen(), do not fork it" decision belongs to that later
+    -- UI pass; this file only supplies the data/mutations it will consume).
+    -- Owns its OWN lib.callback registrations (`qbx_k9unit:server:roster*`)
+    -- rather than adding them to server/tablet.lua, and its OWN table
+    -- (`k9_personnel`, migration 0020) behind K9Store like every other
+    -- table in this schema. Gated the same way server/tablet.lua gates
+    -- itself -- `Config.Features.CommandTablet` -- reusing that existing
+    -- master flag rather than inventing a second one for what is still,
+    -- functionally, one feature (the K9 Command Tablet). Loaded
+    -- immediately after server/tablet.lua: soft dependencies only
+    -- (IsHighCommand from server/highcommand.lua, K9Store from
+    -- server/datastore.lua, QueryCertificationRecord/GetXP/GetXPTier from
+    -- server/certifications.lua/server/progression.lua, all already loaded
+    -- earlier in this list, all reached only at call time behind this
+    -- resource's standard `type(...) == 'function'` guard) -- placed here
+    -- purely for topical grouping with the other tablet file, not a hard
+    -- ordering requirement.
+    'server/roster.lua',
     -- HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7/§12.3
     -- -- loaded after server/cooldowns.lua (NewCooldown/
     -- NewMutex at this file's own file-load time) and server/certifications.lua

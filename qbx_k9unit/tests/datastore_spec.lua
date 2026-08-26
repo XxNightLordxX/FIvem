@@ -1597,4 +1597,220 @@ t.test('Memory: every new catalog-audit *_GetRecent accessor never throws on a n
     end
 end)
 
+-- ----------------------------------------------------------------------
+-- PART 5 -- k9_personnel (migration 0020, ROSTER_SPEC.md §3/§4). The
+-- K9/Handler roster assignment + callsign table -- one active row per
+-- (citizenid, job), plus a SECOND invariant this table alone has: at most
+-- one active callsign per department, case-insensitive, shared across
+-- BOTH roles (ROSTER_SPEC.md §4's combined-namespace decision).
+-- ----------------------------------------------------------------------
+
+t.test('MySQL branch: Personnel_GetActiveRow forwards citizenid/job and passes the row through', function()
+    resetCapture()
+    canned = { role = 'k9', callsign = '12-Adam-1', granted_by = 'HC1', granted_at = '2026-01-01 00:00:00' }
+    local row = MysqlStore.Personnel_GetActiveRow('CITP1', 'police')
+    t.equals(#captured, 1)
+    t.equals(captured[1].kind, 'single')
+    t.contains(captured[1].sql, 'FROM k9_personnel')
+    t.contains(captured[1].sql, 'active = 1')
+    t.equals(captured[1].params[1], 'CITP1')
+    t.equals(captured[1].params[2], 'police')
+    t.equals(row.role, 'k9')
+    t.equals(row.callsign, '12-Adam-1')
+end)
+
+t.test('MySQL branch: Personnel_GetActiveRowsByJob queries by job only, degrades to {} on a thrown query error', function()
+    resetCapture()
+    canned = { { citizenid = 'CITP2', role = 'handler', callsign = nil } }
+    local rows = MysqlStore.Personnel_GetActiveRowsByJob('sheriff')
+    t.equals(captured[1].kind, 'query')
+    t.contains(captured[1].sql, 'FROM k9_personnel')
+    t.equals(captured[1].params[1], 'sheriff')
+    t.equals(#rows, 1)
+    t.equals(rows[1].role, 'handler')
+
+    resetCapture()
+    canned = { throw = 'simulated connection drop' }
+    local ok, rowsOnFail = pcall(MysqlStore.Personnel_GetActiveRowsByJob, 'sheriff')
+    t.isTrue(ok, 'must never let a thrown query error escape to the caller')
+    t.equals(#rowsOnFail, 0)
+end)
+
+t.test('MySQL branch: Personnel_Insert forwards citizenid/job/role/grantedBy in column order; a thrown duplicate error propagates unchanged', function()
+    resetCapture()
+    canned = 42
+    local id = MysqlStore.Personnel_Insert('CITP3', 'police', 'k9', 'HC1')
+    t.equals(id, 42)
+    t.equals(captured[1].kind, 'insert')
+    t.contains(captured[1].sql, 'INSERT INTO k9_personnel')
+    t.equals(captured[1].params[1], 'CITP3')
+    t.equals(captured[1].params[2], 'police')
+    t.equals(captured[1].params[3], 'k9')
+    t.equals(captured[1].params[4], 'HC1')
+
+    resetCapture()
+    canned = { throw = { errno = 1062, message = 'ER_DUP_ENTRY' } }
+    local ok, err = pcall(MysqlStore.Personnel_Insert, 'CITP3', 'police', 'k9', 'HC1')
+    t.isFalse(ok)
+    t.equals(err.errno, 1062, 'the real oxmysql-shaped duplicate error must reach the caller exactly as thrown')
+end)
+
+t.test('MySQL branch: Personnel_UpdateRole clears the callsign in the SAME statement (ROSTER_SPEC.md §4)', function()
+    resetCapture()
+    canned = 1
+    MysqlStore.Personnel_UpdateRole('CITP4', 'police', 'handler')
+    t.equals(captured[1].kind, 'update')
+    t.contains(captured[1].sql, 'SET role = ?, callsign = NULL')
+    t.equals(captured[1].params[1], 'handler')
+    t.equals(captured[1].params[2], 'CITP4')
+    t.equals(captured[1].params[3], 'police')
+end)
+
+t.test('MySQL branch: Personnel_SetCallsign forwards a real callsign, and forwards nil to clear it', function()
+    resetCapture()
+    canned = 1
+    MysqlStore.Personnel_SetCallsign('CITP5', 'police', '12-Adam-1')
+    t.equals(captured[1].kind, 'update')
+    t.contains(captured[1].sql, 'SET callsign = ?')
+    t.equals(captured[1].params[1], '12-Adam-1')
+
+    resetCapture()
+    canned = 1
+    MysqlStore.Personnel_SetCallsign('CITP5', 'police', nil)
+    t.isNil(captured[1].params[1], 'a nil callsign must be forwarded as-is (clears the column), never coerced to a placeholder string')
+end)
+
+t.test('MySQL branch: Personnel_ClearActive forwards clearedBy/citizenid/job in the documented order', function()
+    resetCapture()
+    canned = 1
+    MysqlStore.Personnel_ClearActive('CITP6', 'police', 'HC1')
+    t.equals(captured[1].kind, 'update')
+    t.contains(captured[1].sql, 'active = 0')
+    t.equals(captured[1].params[1], 'HC1')
+    t.equals(captured[1].params[2], 'CITP6')
+    t.equals(captured[1].params[3], 'police')
+end)
+
+t.test('Memory: a fresh process has no personnel rows at all -- fail-closed by construction', function()
+    t.isNil(MemStore.Personnel_GetActiveRow('NOBODY', 'police'))
+    t.equals(#MemStore.Personnel_GetActiveRowsByJob('police'), 0)
+end)
+
+t.test('Memory: Personnel_Insert/GetActiveRow round-trip; a fresh row always starts with a NULL callsign', function()
+    local id = MemStore.Personnel_Insert('CITQ1', 'police', 'k9', 'HC1')
+    t.isNotNil(id)
+    local row = MemStore.Personnel_GetActiveRow('CITQ1', 'police')
+    t.equals(row.id, id)
+    t.equals(row.role, 'k9')
+    t.isNil(row.callsign, 'ROSTER_SPEC.md §4: a fresh assignment never starts with a callsign')
+    t.equals(row.granted_by, 'HC1')
+end)
+
+t.test('Memory: TWO ACTIVE ROWS FOR THE SAME (citizenid, job) IS IMPOSSIBLE -- Personnel_Insert throws the real 1062-shaped error', function()
+    MemStore.Personnel_Insert('CITQ2', 'police', 'k9', 'HC1')
+    local ok, err = pcall(MemStore.Personnel_Insert, 'CITQ2', 'police', 'handler', 'HC1')
+    t.isFalse(ok, 'a second active personnel row for the same (citizenid, job) must be refused, not silently created')
+    t.equals(err.errno, 1062, 'must be the exact shape every existing IsDuplicateKeyError helper already recognizes')
+end)
+
+t.test('Memory: a citizenid may hold INDEPENDENT roster rows in two different departments at once', function()
+    MemStore.Personnel_Insert('CITQ3', 'police', 'k9', 'HC1')
+    local ok = pcall(MemStore.Personnel_Insert, 'CITQ3', 'sheriff', 'handler', 'HC1')
+    t.isTrue(ok, 'holding an active roster row in one department must never block one in a different department')
+    t.equals(MemStore.Personnel_GetActiveRow('CITQ3', 'police').role, 'k9')
+    t.equals(MemStore.Personnel_GetActiveRow('CITQ3', 'sheriff').role, 'handler')
+end)
+
+t.test('Memory: FIRE-THEN-REHIRE produces a NEW row and does NOT resurrect the old callsign', function()
+    local firstId = MemStore.Personnel_Insert('CITQ4', 'police', 'k9', 'HC1')
+    t.isTrue(MemStore.Personnel_SetCallsign('CITQ4', 'police', '9-Lincoln-3') > 0)
+    t.equals(MemStore.Personnel_GetActiveRow('CITQ4', 'police').callsign, '9-Lincoln-3')
+
+    -- Fire: clear the active row (mirrors ClearPersonnelRowForCitizenJob).
+    t.equals(MemStore.Personnel_ClearActive('CITQ4', 'police', 'HC1'), 1)
+    t.isNil(MemStore.Personnel_GetActiveRow('CITQ4', 'police'), 'a cleared row must no longer read as active')
+
+    -- Re-hire: a brand-new row, never a revived one.
+    local secondId = MemStore.Personnel_Insert('CITQ4', 'police', 'k9', 'HC1')
+    t.isTrue(secondId ~= firstId, 'a re-hire must be a NEW row, not the same history row reactivated')
+    local row = MemStore.Personnel_GetActiveRow('CITQ4', 'police')
+    t.equals(row.id, secondId)
+    t.isNil(row.callsign, 'a re-hire must never resurrect the old, now-inactive row\'s callsign')
+end)
+
+t.test('Memory: Personnel_UpdateRole clears the callsign in the same action', function()
+    MemStore.Personnel_Insert('CITQ5', 'police', 'k9', 'HC1')
+    MemStore.Personnel_SetCallsign('CITQ5', 'police', '7-David-2')
+    t.equals(MemStore.Personnel_UpdateRole('CITQ5', 'police', 'handler'), 1)
+    local row = MemStore.Personnel_GetActiveRow('CITQ5', 'police')
+    t.equals(row.role, 'handler')
+    t.isNil(row.callsign, 'a role change must clear the callsign -- a K9 callsign and a handler callsign mean different things')
+end)
+
+t.test('Memory: CALLSIGN COLLISION WITHIN A DEPARTMENT is refused, case-insensitively, and does NOT overwrite the existing holder', function()
+    MemStore.Personnel_Insert('CITQ6A', 'police', 'k9', 'HC1')
+    MemStore.Personnel_Insert('CITQ6B', 'police', 'handler', 'HC1')
+    t.isTrue(MemStore.Personnel_SetCallsign('CITQ6A', 'police', '5-Mary-9') > 0)
+
+    -- Same department, different citizenid, same callsign, different case.
+    local ok, err = pcall(MemStore.Personnel_SetCallsign, 'CITQ6B', 'police', '5-mary-9')
+    t.isFalse(ok, 'a case-insensitive collision within the same department must be refused')
+    t.equals(err.errno, 1062)
+
+    -- The ORIGINAL holder's callsign must be untouched.
+    t.equals(MemStore.Personnel_GetActiveRow('CITQ6A', 'police').callsign, '5-Mary-9', 'a rejected collision must never silently overwrite the existing holder')
+    -- The rejected caller must not have picked up the callsign either.
+    t.isNil(MemStore.Personnel_GetActiveRow('CITQ6B', 'police').callsign)
+end)
+
+t.test('Memory: a callsign collision across the TWO ROSTERS in the SAME department is also rejected (combined-namespace decision, §4)', function()
+    -- CITQ7A is a K9, CITQ7B is a HANDLER, same department -- the
+    -- combined-namespace decision means these two share one callsign
+    -- pool, not two separate ones.
+    MemStore.Personnel_Insert('CITQ7A', 'sheriff', 'k9', 'HC1')
+    MemStore.Personnel_Insert('CITQ7B', 'sheriff', 'handler', 'HC1')
+    t.isTrue(MemStore.Personnel_SetCallsign('CITQ7A', 'sheriff', 'Adam-12') > 0)
+
+    local ok = pcall(MemStore.Personnel_SetCallsign, 'CITQ7B', 'sheriff', 'ADAM-12')
+    t.isFalse(ok, 'a K9\'s callsign and a handler\'s callsign in the SAME department must share one namespace')
+end)
+
+t.test('Memory: the SAME callsign in a DIFFERENT department is not a collision -- the namespace is scoped per department', function()
+    MemStore.Personnel_Insert('CITQ8A', 'police', 'k9', 'HC1')
+    MemStore.Personnel_Insert('CITQ8B', 'sheriff', 'k9', 'HC1')
+    t.isTrue(MemStore.Personnel_SetCallsign('CITQ8A', 'police', '1-Adam-1') > 0)
+    local ok = pcall(MemStore.Personnel_SetCallsign, 'CITQ8B', 'sheriff', '1-Adam-1')
+    t.isTrue(ok, 'the same callsign text in a DIFFERENT department must never collide')
+end)
+
+t.test('Memory: re-saving a citizenid\'s own unchanged callsign is never reported as a collision against itself', function()
+    MemStore.Personnel_Insert('CITQ9', 'police', 'k9', 'HC1')
+    MemStore.Personnel_SetCallsign('CITQ9', 'police', '2-Baker-4')
+    local ok = pcall(MemStore.Personnel_SetCallsign, 'CITQ9', 'police', '2-Baker-4')
+    t.isTrue(ok, 'a citizenid re-saving its own current callsign must never be treated as a collision against itself')
+end)
+
+t.test('Memory: Personnel_SetCallsign(nil) clears an existing callsign without error', function()
+    MemStore.Personnel_Insert('CITQ10', 'police', 'k9', 'HC1')
+    MemStore.Personnel_SetCallsign('CITQ10', 'police', '3-Charlie-7')
+    t.equals(MemStore.Personnel_SetCallsign('CITQ10', 'police', nil), 1)
+    t.isNil(MemStore.Personnel_GetActiveRow('CITQ10', 'police').callsign)
+end)
+
+t.test('Memory: Personnel_ClearActive affects zero rows for a citizenid with no active row, one for a real one', function()
+    t.equals(MemStore.Personnel_ClearActive('NOBODY-PERSONNEL', 'police', 'HC1'), 0)
+    MemStore.Personnel_Insert('CITQ11', 'police', 'k9', 'HC1')
+    t.equals(MemStore.Personnel_ClearActive('CITQ11', 'police', 'HC1'), 1)
+    t.equals(MemStore.Personnel_ClearActive('CITQ11', 'police', 'HC1'), 0, 'clearing an already-inactive row affects zero rows, same as the real UPDATE')
+end)
+
+t.test('Memory: Personnel_GetActiveRowsByJob never leaks a different department\'s rows', function()
+    MemStore.Personnel_Insert('CITQ12', 'police', 'k9', 'HC1')
+    MemStore.Personnel_Insert('CITQ13', 'sheriff', 'handler', 'HC1')
+    local policeRows = MemStore.Personnel_GetActiveRowsByJob('police')
+    for _, row in ipairs(policeRows) do
+        t.isTrue(row.citizenid ~= 'CITQ13', 'a sheriff row must never appear in a police-scoped read')
+    end
+end)
+
 os.exit(t.summary())

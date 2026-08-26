@@ -1113,6 +1113,20 @@ globals = {
     -- "RADIAL/KEYBIND CONTRACT" section for the exact hookup a future
     -- change there needs.
     "RequestDangerWarn",
+    -- server/roster.lua (NEW FILE, ROSTER_SPEC.md, Phase A -- K9 Command
+    -- Tablet rosters, data layer + server logic). These are CORE LOGIC
+    -- functions exposed as globals DELIBERATELY WITHOUT their own
+    -- authorization check (see each one's own doc comment): this file's
+    -- own `lib.callback` handlers are one caller, re-verifying
+    -- IsHighCommand(source) before calling in; a later, serialized pass
+    -- integrating `GrantCertificationForTablet`/a new
+    -- `RevokeCertificationForTablet` wrapper (both server/certifications.lua,
+    -- out of scope for this pass) is expected to call
+    -- RosterAssignPersonnelRole/ClearPersonnelRowForCitizenJob directly,
+    -- from ITS OWN already-verified authority, at hire/fire time
+    -- respectively -- see server/roster.lua's own file header for the
+    -- exact integration this allowlists in advance.
+    "RosterAssignPersonnelRole", "RosterSetCallsign", "ClearPersonnelRowForCitizenJob",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the
