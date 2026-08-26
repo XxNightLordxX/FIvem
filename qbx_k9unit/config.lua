@@ -2028,12 +2028,16 @@ Config.FindAlerts = {
     -- Also react when the K9 reaches the end of a scent, blood or gunpowder
     -- trail, with the same strength as a big find.
     --
-    -- ONE HONEST LIMITATION: the event this listens for is only fired while
-    -- Config.Features.XPProgression is ALSO on, because it lives inside
-    -- that flag's own check for an unrelated reason. So with XPProgression
-    -- off, this particular bonus stays silent even with tracking and
-    -- FindAlerts both on. The contraband-search reaction above is
-    -- unaffected and works either way.
+    -- THAT LIMITATION IS GONE (this pass). This block used to warn that the
+    -- reaction stayed silent whenever Config.Features.XPProgression was
+    -- switched off, because the event behind it began life as the XP
+    -- trigger and was gated on that flag. It is not any more --
+    -- client/tracking.lua now reports arrival unconditionally, and the
+    -- server still mints no XP while the flag is off. So this works with
+    -- XP progression on or off, exactly like the search reaction above.
+    -- The warning is kept here, corrected rather than deleted, because an
+    -- owner who read the old text may have turned this off believing it
+    -- did nothing.
     reactOnTrackArrival = true,
 }
 

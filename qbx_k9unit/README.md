@@ -9,6 +9,16 @@ in-game "K9 Command Tablet" for high command to run all of it.
 Proprietary, not open source — licensed for use on the purchaser's own
 server only. See `LICENSE.md` for the full terms.
 
+**Readable, not encrypted.** Every line of this resource ships as plain
+Lua you can open, read, and debug. It is not escrow-protected. That is a
+deliberate choice, and it has a practical consequence worth knowing about
+before you buy anything in this category: when an escrow-encrypted script
+misbehaves, the error names encrypted code, and neither you nor anyone you
+hire can trace it to a line — you wait for the seller. Here, an error names
+a real file and a real line number, and if something goes wrong at 2am on a
+full server you can at least see what happened. The licence, not
+encryption, is what stops redistribution.
+
 **This is the one document for installing, configuring, and running this
 resource.** Everything about *playing* it — every command, what each one
 needs, and step-by-step walkthroughs for setting up a handler, running a
