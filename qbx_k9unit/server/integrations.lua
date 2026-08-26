@@ -200,39 +200,114 @@ if not Config.Features.K9DownDispatch then return end
 -- an onResourceStart handler (server/certifications.lua's own header gives
 -- the identical reasoning for the identical structural reason): the
 -- K9DownFireCooldown construction a few lines below this guard calls
--- NewCooldown(tuning.reFireCooldownMs) immediately, at this file's own load
--- time -- by the time any onResourceStart handler could run, that call has
--- already executed (and, unguarded, would already have crashed loudly via
--- NewCooldown's own AssertValidDefaultThreshold, just with a less specific
--- message than the asserts below give). config.lua is a shared_script,
--- loaded in full before any server_scripts file (this one included) starts
--- executing, so Config already holds its real, final values by the time
--- this line runs -- not a load-order gamble.
+-- NewCooldown(...) immediately, at this file's own load time -- by the time
+-- any onResourceStart handler could run, that call has already executed.
+-- config.lua is a shared_script, loaded in full before any server_scripts
+-- file (this one included) starts executing, so Config already holds its
+-- real, final values by the time this line runs -- not a load-order gamble.
 local tuning = Config.K9DownDispatch
 assert(type(tuning) == 'table',
     '[qbx_k9unit] Config.K9DownDispatch must be a table when Config.Features.K9DownDispatch is true -- ' ..
     'this file reads healthThreshold/minDurationMs/pollIntervalMs/reFireCooldownMs from it unconditionally ' ..
     'once the feature flag is on.')
-assert(type(tuning.healthThreshold) == 'number' and tuning.healthThreshold == tuning.healthThreshold and tuning.healthThreshold > 0,
-    '[qbx_k9unit] Config.K9DownDispatch.healthThreshold must be a positive number -- compared directly against ' ..
-    "GetEntityHealth(ped) in this file's own poll loop below; a non-positive or NaN value would make every " ..
-    'online K9 read as permanently down (or never down at all), silently.')
-assert(type(tuning.minDurationMs) == 'number' and tuning.minDurationMs == tuning.minDurationMs and tuning.minDurationMs >= 0,
-    '[qbx_k9unit] Config.K9DownDispatch.minDurationMs must be a non-negative number -- 0 is a legitimate choice ' ..
-    '("fire on the very first qualifying poll tick, no debounce"), but nil/a string/NaN/negative is a config error.')
-assert(type(tuning.pollIntervalMs) == 'number' and tuning.pollIntervalMs > 0,
-    '[qbx_k9unit] Config.K9DownDispatch.pollIntervalMs must be a positive number -- passed directly to Wait() in ' ..
-    "this file's own poll thread below; a non-positive value would poll needlessly tightly for a feature whose " ..
-    'entire purpose is periodic background monitoring, not a per-frame check.')
+
+-- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's header
+-- ADDENDUM: "does an operator's config.lua edit alone... reach this value?
+-- If yes it must be clamped and warned about, never asserted and aborted").
+-- healthThreshold/minDurationMs/pollIntervalMs below USED TO be three
+-- separate hard `assert`s here -- each one correctly diagnosing a real risk
+-- (a bad number would make every online K9 read as permanently
+-- down/never down, or poll needlessly tight/throw in Wait()) but with the
+-- wrong remedy: an uncaught error thrown from THIS FILE's own top-level
+-- chunk aborts server/integrations.lua's load from that line onward --
+-- taking K9DownFireCooldown's own construction, PollK9Health, the
+-- maintenance CreateThread, and this file's own playerDropped cleanup down
+-- with it, over one operator typo. reFireCooldownMs two lines below this
+-- comment (K9DownFireCooldown's own construction) was already migrated to
+-- ResolveConfiguredThresholdMs in an earlier pass -- these three siblings
+-- were missed only because they never reach NewCooldown at all (healthThreshold/
+-- minDurationMs are pure comparison values, pollIntervalMs feeds Wait()
+-- directly), not because the risk was any different.
+--
+-- healthThreshold and pollIntervalMs are each resolved individually --
+-- neither has a relationship to any other field in this block.
+-- pollIntervalMs is a genuine duration (feeds Wait() directly, no
+-- legitimate non-positive meaning), so it reuses
+-- ResolveConfiguredThresholdMs unchanged. healthThreshold is NOT a
+-- duration -- it is a raw GetEntityHealth(ped) comparison value -- so it
+-- gets its own bespoke clamp-and-warn below rather than borrowing
+-- ResolveConfiguredThresholdMs's cooldown-specific warning text ("does NOT
+-- mean 'no cooldown'... permanently block the guarded action"), which would
+-- mislead an operator reading a healthThreshold warning.
+--
+-- minDurationMs is deliberately NOT run through ResolveConfiguredThresholdMs
+-- either, for a different reason: IsValidThreshold (which backs
+-- ResolveConfiguredThresholdMs) rejects 0, but 0 is an explicitly
+-- LEGITIMATE value here (config.lua's own comment: "0 disables it", i.e.
+-- "fire on the very first qualifying poll tick, no debounce") -- routing it
+-- through ResolveConfiguredThresholdMs would silently replace every
+-- operator's valid `minDurationMs = 0` with the 3000ms fallback and warn
+-- about it, training operators to ignore a warning that fires on a
+-- perfectly good value. Its own bespoke resolver below accepts >= 0.
+--- @param value any
+--- @return boolean
+local function IsValidHealthThreshold(value)
+    return type(value) == 'number' and value == value and value > 0
+end
+
+--- @param value any
+--- @return boolean
+local function IsValidMinDurationMs(value)
+    return type(value) == 'number' and value == value and value >= 0
+end
+
+--- Same clamp-and-warn shape as server/cooldowns.lua's
+--- ResolveConfiguredThresholdMs, generalized here for a Config number that
+--- is not itself a cooldown/duration threshold (so IsValidThreshold's
+--- strictly-positive rule either doesn't apply to its meaning, as with
+--- healthThreshold, or doesn't apply to its VALID RANGE, as with
+--- minDurationMs's legitimate 0). Never errors; prints one warning naming
+--- the exact key, the bad value found, and the fallback substituted, then
+--- returns a value guaranteed to satisfy `isValidFn`.
+--- @param value any
+--- @param fallback number -- must itself satisfy isValidFn -- an invalid fallback is this call site's own bug, matching ResolveConfiguredThresholdMs's identical fallback-validation posture
+--- @param keyName string
+--- @param isValidFn fun(v: any): boolean
+--- @param requirementText string -- human-readable requirement, used only in the printed warning
+--- @return number
+local function ResolveConfiguredNumber(value, fallback, keyName, isValidFn, requirementText)
+    if not isValidFn(fallback) then
+        error(('[qbx_k9unit] ResolveConfiguredNumber called with an invalid fallback (%s) for %s -- the ' ..
+            'fallback is a hardcoded call-site literal, not an operator-editable value, so this is a ' ..
+            'programmer bug at the call site, not a Config problem.'):format(tostring(fallback), keyName), 2)
+    end
+    if isValidFn(value) then
+        return value
+    end
+    print(('[qbx_k9unit] %s is %s (found: %s). Using the built-in fallback of %s instead so this feature keeps ' ..
+        'working while the config is fixed -- find %s in config.lua and correct it.')
+            :format(keyName, requirementText, tostring(value), tostring(fallback), keyName))
+    return fallback
+end
+
+tuning.healthThreshold = ResolveConfiguredNumber(
+    tuning.healthThreshold, 100, 'Config.K9DownDispatch.healthThreshold', IsValidHealthThreshold,
+    'missing or not a positive number -- compared directly against GetEntityHealth(ped) in this file\'s own ' ..
+    'poll loop; a non-positive or NaN value would make every online K9 read as permanently down (or never ' ..
+    'down at all)')
+
+tuning.minDurationMs = ResolveConfiguredNumber(
+    tuning.minDurationMs, 3000, 'Config.K9DownDispatch.minDurationMs', IsValidMinDurationMs,
+    'missing or not a non-negative number -- 0 is a legitimate choice ("fire on the very first qualifying ' ..
+    'poll tick, no debounce"), but nil/a string/NaN/negative is not')
+
+tuning.pollIntervalMs = ResolveConfiguredThresholdMs(
+    tuning.pollIntervalMs, 2000, 'Config.K9DownDispatch.pollIntervalMs')
+
 -- reFireCooldownMs is intentionally NOT re-validated here beyond what
--- NewCooldown(tuning.reFireCooldownMs) below already enforces on its own --
--- see AssertValidDefaultThreshold in server/cooldowns.lua, which errors
--- loudly (naming that exact constructor call) on anything that isn't a
--- valid positive number. Duplicating that check here would only race it:
--- this file's own assert would have to run BEFORE the NewCooldown call a
--- few lines down to ever actually be the one that fires, and would gain
--- nothing over letting the already-loud, already-tested existing guard do
--- its job.
+-- ResolveConfiguredThresholdMs(tuning.reFireCooldownMs, ...) below already
+-- enforces on its own (see K9DownFireCooldown's own declaration a few lines
+-- down) -- duplicating that check here would only race it.
 
 --- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
 --- file's header's own DESIGN PRINCIPLE 2 deferred this exact

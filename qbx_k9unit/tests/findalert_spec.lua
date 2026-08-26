@@ -19,6 +19,28 @@
     reactOnTrackArrival) -- see server/findalert.lua's/client/findalert.lua's
     own header comments for the authoritative shape.
 
+    PER-PERSON FEATURE CONTROL FIXTURE CHOICE (added alongside
+    server/findalert.lua's own IsFindAlertsPermittedForCitizenId this pass):
+    the fixture's Config.FeatureControl.RequireGrant.FindAlerts defaults to
+    FALSE (not listed) UNLESS a test opts in via `requireGrantListed`. This
+    was a deliberate choice, not an oversight -- every pre-existing test in
+    this file is testing the REACTION logic (tier lookup, cooldown sharing,
+    online-resolution, HasK9Access) and has nothing to do with the
+    per-person grant/block mechanism; forcing every one of them to also
+    grant 'feature.FindAlerts' the way tests/pursuitsprint_spec.lua's own
+    fixture does (requireGrantListed defaults to true there, so EVERY
+    single dispatch call in that file grants explicitly) would bury the
+    thing each test is actually about under boilerplate unrelated to it.
+    Instead, per-person resolution gets its OWN dedicated section below
+    ("PER-PERSON FEATURE CONTROL"), mirroring pursuitsprint_spec.lua's own
+    dedicated section for the identical steps 2-4, with RequireGrant
+    explicitly turned on only there. `setPlayerOnline` still ALWAYS
+    registers a resolvable citizenid for forward (src -> citizenid) lookups
+    too (see exportsStub.GetPlayer below) -- IsFindAlertsPermittedForCitizenId
+    fails CLOSED with no citizenid at all, matching
+    server/pursuitsprint.lua's own identical fail-closed behavior, so every
+    test that expects a reaction to actually fire must resolve one.
+
     SERVER SECTION loads the REAL server/cooldowns.lua (NewCooldown is
     called at server/findalert.lua's own file-load time) plus the REAL
     server/findalert.lua. CLIENT SECTION loads only the REAL
@@ -35,7 +57,10 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 -- SERVER: server/findalert.lua
 -- ============================================================================
 
---- @param opts { findAlerts: boolean?, scentTracking: boolean?, reactOnTrackArrival: boolean? }?
+--- @param opts { findAlerts: boolean?, scentTracking: boolean?, reactOnTrackArrival: boolean?,
+---   requireGrantListed: boolean (default false) -- Config.FeatureControl.RequireGrant.FindAlerts
+---   withHasPermission: boolean (default true) -- whether HasPermission exists in the sandbox at all
+--- }?
 --- @return table fixture
 local function newServerFixture(opts)
     opts = opts or {}
@@ -54,15 +79,33 @@ local function newServerFixture(opts)
         triggeredClientEvents[#triggeredClientEvents + 1] = { eventName = eventName, targetSrc = targetSrc, args = { ... } }
     end
 
+    -- playerByCitizenId indexes by citizenid (existing, reverse-resolution
+    -- use -- ResolveOnlineSourceForCitizenid); playerBySrc indexes the SAME
+    -- objects by src (NEW, forward-resolution use --
+    -- IsFindAlertsPermittedForCitizenId's caller, `exports.qbx_core:
+    -- GetPlayer(targetSrc)`). Both are populated together by
+    -- setPlayerOnline below so every existing call site keeps working
+    -- unchanged.
     local playerByCitizenId = {}
+    local playerBySrc = {}
     local exportsStub = {
         qbx_core = {
             GetPlayerByCitizenId = function(_self, citizenid) return playerByCitizenId[citizenid] end,
+            GetPlayer = function(_self, src) return playerBySrc[src] end,
         },
     }
 
     local accessBySource = {}
     local function HasK9Access(src) return accessBySource[src] == true end
+
+    -- Per-person feature control -- mirrors tests/pursuitsprint_spec.lua's
+    -- own permissionGrants/defaultHasPermission shape exactly.
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local permissionCalls = {}
+    local function defaultHasPermission(citizenid, key)
+        permissionCalls[#permissionCalls + 1] = { citizenid = citizenid, key = key }
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
 
     local capturedPrints = {}
     local function printStub(...)
@@ -85,9 +128,12 @@ local function newServerFixture(opts)
             },
             reactOnTrackArrival = opts.reactOnTrackArrival ~= false,
         },
+        FeatureControl = {
+            RequireGrant = { FindAlerts = opts.requireGrantListed == true },
+        },
     }
 
-    local env = Sandbox.newEnv({
+    local overrides = {
         GetGameTimer = GetGameTimer,
         AddEventHandler = AddEventHandler,
         TriggerClientEvent = TriggerClientEvent,
@@ -95,7 +141,12 @@ local function newServerFixture(opts)
         HasK9Access = HasK9Access,
         Config = Config,
         print = printStub,
-    })
+    }
+    if opts.withHasPermission ~= false then
+        overrides.HasPermission = defaultHasPermission
+    end
+
+    local env = Sandbox.newEnv(overrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/findalert.lua', env)
@@ -104,13 +155,24 @@ local function newServerFixture(opts)
         Config = Config,
         triggeredClientEvents = triggeredClientEvents,
         capturedPrints = capturedPrints,
+        permissionCalls = permissionCalls,
         setNow = function(ms) fakeNow = ms end,
         now = function() return fakeNow end,
         setPlayerOnline = function(citizenid, src)
-            playerByCitizenId[citizenid] = { PlayerData = { citizenid = citizenid, source = src } }
+            local player = { PlayerData = { citizenid = citizenid, source = src } }
+            playerByCitizenId[citizenid] = player
+            playerBySrc[src] = player
         end,
-        setOffline = function(citizenid) playerByCitizenId[citizenid] = nil end,
+        setOffline = function(citizenid)
+            local player = playerByCitizenId[citizenid]
+            if player then playerBySrc[player.PlayerData.source] = nil end
+            playerByCitizenId[citizenid] = nil
+        end,
         setAccess = function(src, allowed) accessBySource[src] = allowed end,
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
 
         fireSearchCompleted = function(searcherCitizenid, searcherJob, targetType, result, totalWeightOrNil, alertTierOrNil)
             local handler = assert(
@@ -265,6 +327,7 @@ end)
 t.test('server: reportTrackSourceArrival reacts with the "aggressive_bark" tier for the real event source, when eligible', function()
     local f = newServerFixture()
     f.setAccess(701, true)
+    f.setPlayerOnline('CITIZEN-701', 701) -- resolvable citizenid required for the per-person feature-control check
 
     f.fireTrackArrival(701)
 
@@ -317,6 +380,121 @@ t.test('server: reportTrackSourceArrival never reacts without HasK9Access, no cr
 
     t.isTrue(ok)
     t.equals(#f.triggeredClientEvents, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL -- Config.FeatureControl.RequireGrant's
+-- documented 4-step resolution (steps 2-4; step 1, Config.Features.
+-- FindAlerts, is already covered above), keyed on the K9 the reaction is
+-- dispatched TO (targetSrc / the searcher's own citizenid) -- mirrors
+-- tests/pursuitsprint_spec.lua's own "Per-person feature control" section.
+-- ----------------------------------------------------------------------
+
+t.test('grant_required: RequireGrant.FindAlerts = true + no grant held -- denied even though HasK9Access is true and the tier/online checks all pass', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-BLOCKED-1', 801)
+    f.setAccess(801, true)
+    -- deliberately NOT granted
+
+    f.fireSearchCompleted('CITIZEN-BLOCKED-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 0)
+end)
+
+t.test('RequireGrant.FindAlerts = true + an active feature.FindAlerts grant -- allowed', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-GRANTED-1', 802)
+    f.setAccess(802, true)
+    f.grantPermission('CITIZEN-GRANTED-1', 'feature.FindAlerts', true)
+
+    f.fireSearchCompleted('CITIZEN-GRANTED-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 1)
+end)
+
+t.test('BLOCK ALWAYS WINS: an explicit block.FindAlerts denies even a citizenid who ALSO holds an active feature.FindAlerts grant, with the global flag still on', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-BLOCKED-2', 803)
+    f.setAccess(803, true)
+    f.grantPermission('CITIZEN-BLOCKED-2', 'feature.FindAlerts', true)
+    f.grantPermission('CITIZEN-BLOCKED-2', 'block.FindAlerts', true)
+
+    f.fireSearchCompleted('CITIZEN-BLOCKED-2', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 0)
+end)
+
+t.test('BLOCK STILL APPLIES even when NOT listed in RequireGrant (step 2 fires independently of step 3)', function()
+    local f = newServerFixture({ requireGrantListed = false })
+    f.setPlayerOnline('CITIZEN-BLOCKED-3', 804)
+    f.setAccess(804, true)
+    f.grantPermission('CITIZEN-BLOCKED-3', 'block.FindAlerts', true)
+
+    f.fireSearchCompleted('CITIZEN-BLOCKED-3', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 0)
+end)
+
+t.test('RequireGrant.FindAlerts = false (not listed) -- default ALLOW, no grant needed, matching config.lua\'s own documented step 4', function()
+    local f = newServerFixture({ requireGrantListed = false })
+    f.setPlayerOnline('CITIZEN-DEFAULT-1', 805)
+    f.setAccess(805, true)
+    -- deliberately NOT granted -- must still succeed since it is not listed
+
+    f.fireSearchCompleted('CITIZEN-DEFAULT-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 1)
+end)
+
+t.test('server/permissions.lua entirely absent (HasPermission not even defined): RequireGrant-listed feature fails CLOSED (deny), never open', function()
+    local f = newServerFixture({ requireGrantListed = true, withHasPermission = false })
+    f.setPlayerOnline('CITIZEN-NOPERM-1', 806)
+    f.setAccess(806, true)
+
+    local ok = pcall(f.fireSearchCompleted, 'CITIZEN-NOPERM-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.isTrue(ok, 'a missing HasPermission must never error the handler')
+    t.equals(#f.triggeredClientEvents, 0)
+end)
+
+t.test('server/permissions.lua entirely absent + feature NOT listed in RequireGrant -- still allowed (step 2/3 both structurally unreachable, falls through to step 4)', function()
+    local f = newServerFixture({ requireGrantListed = false, withHasPermission = false })
+    f.setPlayerOnline('CITIZEN-NOPERM-2', 807)
+    f.setAccess(807, true)
+
+    f.fireSearchCompleted('CITIZEN-NOPERM-2', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 1)
+end)
+
+t.test('a citizenid that cannot be resolved at all (targetSrc not registered with exports.qbx_core:GetPlayer) fails CLOSED, even with RequireGrant off and HasK9Access true', function()
+    local f = newServerFixture({ requireGrantListed = false })
+    f.setAccess(808, true)
+    -- deliberately no setPlayerOnline call for source 808 -- GetPlayer(808) resolves to nil
+
+    local ok = pcall(f.fireTrackArrival, 808)
+
+    t.isTrue(ok, 'an unresolvable citizenid must be a fail-closed no-op, never a crash')
+    t.equals(#f.triggeredClientEvents, 0)
+end)
+
+t.test('a BLOCKED/no-grant reaction never consumes the shared per-source cooldown -- a later legitimate reaction on the SAME source still fires (no unbounded side effect from a denied attempt)', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-COOLDOWN-1', 809)
+    f.setAccess(809, true)
+    -- deliberately NOT granted for the first attempt
+
+    f.setNow(0)
+    f.fireSearchCompleted('CITIZEN-COOLDOWN-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+    t.equals(#f.triggeredClientEvents, 0, 'denied for lack of a grant')
+
+    -- Grant it, then retry almost immediately (well within the 1500ms
+    -- reaction cooldown) -- if the earlier denial had wrongly consumed the
+    -- cooldown, this would still be throttled.
+    f.grantPermission('CITIZEN-COOLDOWN-1', 'feature.FindAlerts', true)
+    f.setNow(100)
+    f.fireSearchCompleted('CITIZEN-COOLDOWN-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+    t.equals(#f.triggeredClientEvents, 1, 'a denied attempt must never have spent the cooldown budget of the legitimate one right after it')
 end)
 
 -- ============================================================================

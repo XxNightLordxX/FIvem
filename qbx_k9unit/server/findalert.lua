@@ -78,6 +78,26 @@
        privacy -- this file does not duplicate or extend that surface).
     ======================================================================
 
+    PER-PERSON FEATURE CONTROL -- ADDED A LATER PASS (this pass found and
+    closed the gap; not present when this file was first written). Until
+    now, DispatchFindAlertReaction below checked only Config.Features.
+    FindAlerts and HasK9Access(targetSrc) -- config.lua's own
+    Config.FeatureControl.RequireGrant.FindAlerts entry (already present,
+    with its own comment explaining FindAlerts is listed there specifically
+    so high command can switch it per person even though it does not fit
+    the "acts on another player" rationale the other RequireGrant entries
+    share) had ZERO effect: a citizenid with an active block.FindAlerts row
+    still got the reaction, and one with no feature.FindAlerts grant still
+    got it too, while RequireGrant.FindAlerts was true. Fixed by copying
+    server/pursuitsprint.lua's own IsPursuitSprintPermittedForCitizenId
+    shape verbatim (see IsFindAlertsPermittedForCitizenId below) --
+    pursuitsprint.lua's own header says to read it before writing another
+    variant, so this is a copy, not a new one. The check is keyed on
+    targetSrc, the K9 whose own ped the reaction plays on -- see
+    DispatchFindAlertReaction's own doc comment for why that is the only
+    person this feature could ever be keyed on.
+    ======================================================================
+
     WHY exports.qbx_core:GetPlayerByCitizenId(...) DIRECTLY, not through
     Config.Compat: config.lua's Config.Compat.Systems.framework block lists
     'qbx_core'/'qb-core'/'es_extended' as detection CANDIDATES, but as of
@@ -150,12 +170,56 @@ local function ResolveOnlineSourceForCitizenid(citizenid)
     return src
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.FindAlerts
+--- flag) is already checked by DispatchFindAlertReaction below, before
+--- this function is ever reached:
+---   2. an explicit block.FindAlerts grant -> DENY
+---   3. FindAlerts listed in RequireGrant -> ALLOW only with an active
+---      feature.FindAlerts grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsFindAlertsPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.FindAlerts') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.FindAlerts == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.FindAlerts') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Shared implementation behind both inbound event handlers below. Never
 --- called with an untrusted/raw client-claimed alertTier -- see each
 --- caller's own comment for exactly where its alertTier argument comes
 --- from (either server/search.lua's own already-computed tier, or this
 --- file's own hardcoded 'aggressive_bark' literal for the track-arrival
 --- path).
+---
+--- `targetSrc` is BOTH the person this reaction is dispatched TO and the
+--- person the per-person feature-control check below is keyed on -- there
+--- is only one person this feature ever affects (the searching/tracking
+--- K9 whose own ped sits/barks; see this file's header item 3, "the
+--- searching/tracking K9's OWN body"), so the grant/block resolved here is
+--- always that same K9's own, never the search's target or anyone else.
 --- @param targetSrc number
 --- @param alertTier string
 local function DispatchFindAlertReaction(targetSrc, alertTier)
@@ -173,6 +237,26 @@ local function DispatchFindAlertReaction(targetSrc, alertTier)
     if not reaction then return end
 
     if not HasK9Access(targetSrc) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here -- mirrors server/main.lua's relayBark
+
+    -- PER-PERSON FEATURE CONTROL -- see IsFindAlertsPermittedForCitizenId
+    -- above. Resolved via a DIRECT exports.qbx_core:GetPlayer(targetSrc)
+    -- call, matching this file's own header "WHY exports.qbx_core...
+    -- DIRECTLY" convention (already used the other direction, by
+    -- citizenid, a few lines up in ResolveOnlineSourceForCitizenid) and
+    -- server/pursuitsprint.lua's own identical `k9Player.PlayerData.
+    -- citizenid` resolution shape. Fails CLOSED (no reaction) when the
+    -- citizenid cannot be resolved at all -- a per-person check with no
+    -- resolvable person to check can never be answered "allow", same
+    -- reasoning server/scentlineup.lua's own CanUseScentLineup gives for
+    -- itself. Silent, no NotifyPlayer call, on purpose -- this function's
+    -- every other denial above is already a silent no-op (this is a
+    -- background reaction dispatch, not a direct player-issued command
+    -- that owes its caller an explanation).
+    local k9Player = exports.qbx_core:GetPlayer(targetSrc)
+    local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
+    if not k9Citizenid or not IsFindAlertsPermittedForCitizenId(k9Citizenid) then
+        return
+    end
 
     if not FindAlertReactionCooldown.Consume(targetSrc) then
         return -- silent no-op: rate-limited, not an error worth notifying about -- matches this resource's bark/leash-request/certify-action convention

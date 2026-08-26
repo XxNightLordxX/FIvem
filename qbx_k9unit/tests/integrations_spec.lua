@@ -48,11 +48,15 @@
          garbage Config.K9DownDispatch tuning table that would otherwise
          fail every CONFIG-SAFETY GUARD assert.
 
-    Beyond those four, also covers: every CONFIG-SAFETY GUARD assert firing
-    loudly at load time for its own specific bad value (healthThreshold,
-    minDurationMs, pollIntervalMs) plus reFireCooldownMs's guard being
-    server/cooldowns.lua's OWN NewCooldown constructor guard (not
-    reimplemented here -- see this file's header for why); the
+    Beyond those four, also covers: the CONFIG-SAFETY GUARD (2026-08-26,
+    REWRITTEN this pass -- see the REGRESSION sections below) clamping and
+    warning, never asserting-and-aborting, on a bad healthThreshold/
+    minDurationMs/pollIntervalMs/reFireCooldownMs -- each proven to (a) keep
+    the file loading with its poll thread/playerDropped cleanup intact, (b)
+    print a warning naming the exact key/value found/fallback substituted,
+    (c) leave a VALID configured value untouched and silent, and, for at
+    least one field each, (d) actually enforce the resolved fallback in a
+    real running poll episode, not merely survive loading; the
     edge-triggered/debounced firing shape (never fires before
     minDurationMs elapses, fires exactly once per continuous qualifying
     episode, not once per poll tick); a health dip that recovers before
@@ -279,28 +283,129 @@ t.test('Config.K9DownDispatch not a table (nil/false in production) while the fl
     t.contains(err, 'Config.K9DownDispatch must be a table')
 end)
 
-t.test('healthThreshold <= 0 fails loudly, naming the field', function()
-    local ok, err = pcall(newIntegrationsFixture, {
+-- ------------------------------------------------------------------
+-- REGRESSION (2026-08-26): these three tests used to assert the OPPOSITE --
+-- that healthThreshold/minDurationMs/pollIntervalMs failing their bound
+-- aborts this file's load via a hard `assert`. They were pinning the bug.
+--
+-- The exact same class of mistake ResolveConfiguredThresholdMs's own
+-- reFireCooldownMs REGRESSION section above documents: an uncaught error
+-- thrown from THIS FILE's own top-level chunk aborts server/integrations.lua's
+-- load from that line onward -- taking K9DownFireCooldown's own
+-- construction, PollK9Health, the maintenance CreateThread, and this file's
+-- own playerDropped cleanup down with it, over one operator typo.
+-- reFireCooldownMs was migrated first; these three siblings sat two lines
+-- above it, unmigrated, only because none of them feed NewCooldown (they
+-- feed a raw comparison / Wait() instead) -- not because the risk differed.
+--
+-- Now clamp-and-warn (healthThreshold/minDurationMs via this file's own
+-- bespoke ResolveConfiguredNumber, pollIntervalMs via
+-- ResolveConfiguredThresholdMs): the file loads, the poll thread starts,
+-- and the feature keeps working on a safe built-in fallback while printing
+-- one unmissable warning naming the exact key, the value found, and what
+-- was substituted.
+-- ------------------------------------------------------------------
+
+t.test('REGRESSION: healthThreshold = 0 no longer aborts this file\'s load -- clamps to the shipped 100 fallback, warns loudly naming the exact key, and the poll thread still fires a real episode on the resolved value', function()
+    local ok, f = pcall(newIntegrationsFixture, {
         tuning = { healthThreshold = 0, minDurationMs = 0, pollIntervalMs = 1000, reFireCooldownMs = 1000 },
     })
-    t.isFalse(ok)
-    t.contains(err, 'healthThreshold must be a positive number')
+    t.isTrue(ok, 'the file must still load -- an abort here kills the whole K9-down dispatch feature')
+    t.equals(f.createThreadCallCount(), 1, 'the maintenance poll thread must still be created')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.K9DownDispatch.healthThreshold', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('100', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+
+    -- Prove at the level the bug lives: the fallback (100), not the invalid
+    -- configured 0, is the value the real poll loop enforces -- a K9 exactly
+    -- AT the fallback threshold must still qualify and fire.
+    registerQualifyingK9(f, 50, 5050)
+    f.setHealth(5050, 200)
+    f.tick() -- prime
+    f.setHealth(5050, 100) -- at the FALLBACK threshold, not the invalid configured one
+    for _ = 1, 3 do
+        f.advance(2000)
+        f.tick()
+    end
+    t.equals(#f.outboundEvents, 1, 'the fallback threshold (100) must be the one actually enforced by the running poll loop, not merely printed in a warning')
 end)
 
-t.test('minDurationMs < 0 fails loudly, naming the field', function()
-    local ok, err = pcall(newIntegrationsFixture, {
+t.test('REGRESSION: minDurationMs = -1 no longer aborts this file\'s load -- clamps to the shipped 3000ms fallback and warns loudly, naming the exact key/value/substitute', function()
+    local ok, f = pcall(newIntegrationsFixture, {
         tuning = { healthThreshold = 100, minDurationMs = -1, pollIntervalMs = 1000, reFireCooldownMs = 1000 },
     })
-    t.isFalse(ok)
-    t.contains(err, 'minDurationMs must be a non-negative number')
+    t.isTrue(ok, 'the file must still load -- an abort here kills the whole K9-down dispatch feature')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.K9DownDispatch.minDurationMs', 1, true)
+            and line:find('found: -1', 1, true)
+            and line:find('3000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+    t.equals(f.createThreadCallCount(), 1, 'the maintenance poll thread must still be created')
 end)
 
-t.test('pollIntervalMs <= 0 fails loudly, naming the field', function()
-    local ok, err = pcall(newIntegrationsFixture, {
+t.test('REGRESSION: minDurationMs = 0 is a VALID configured value (config.lua\'s own documented "0 disables it"/no-debounce choice), never clamped, never warned about', function()
+    local ok, f = pcall(newIntegrationsFixture, {
+        tuning = { healthThreshold = 100, minDurationMs = 0, pollIntervalMs = 1000, reFireCooldownMs = 1000 },
+    })
+    t.isTrue(ok)
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('minDurationMs', 1, true),
+            'minDurationMs = 0 is documented as "fire on the very first qualifying poll tick, no debounce" -- warning on a good value trains operators to ignore real warnings')
+    end
+end)
+
+t.test('REGRESSION: pollIntervalMs = 0 no longer aborts this file\'s load -- clamps to the shipped 2000ms fallback, warns loudly, and the poll thread still runs end-to-end', function()
+    local ok, f = pcall(newIntegrationsFixture, {
         tuning = { healthThreshold = 100, minDurationMs = 0, pollIntervalMs = 0, reFireCooldownMs = 1000 },
     })
-    t.isFalse(ok)
-    t.contains(err, 'pollIntervalMs must be a positive number')
+    t.isTrue(ok, 'the file must still load -- an abort here kills the whole K9-down dispatch feature')
+    t.equals(f.createThreadCallCount(), 1, 'the maintenance poll thread must still be created')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.K9DownDispatch.pollIntervalMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('2000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+
+    -- Prove the resolved fallback interval is what the real thread runs on,
+    -- not merely that loading survived.
+    registerQualifyingK9(f, 51, 5151)
+    f.setHealth(5151, 200)
+    f.tick() -- prime
+    f.setHealth(5151, 10)
+    for _ = 1, 3 do
+        f.advance(2000)
+        f.tick()
+    end
+    t.equals(#f.outboundEvents, 1, 'the poll thread must still detect and fire a real episode after pollIntervalMs was clamped')
+end)
+
+t.test('REGRESSION: a VALID healthThreshold/minDurationMs/pollIntervalMs are all still used, not silently replaced by their fallbacks', function()
+    local ok, f = pcall(newIntegrationsFixture, {
+        tuning = { healthThreshold = 77, minDurationMs = 500, pollIntervalMs = 1500, reFireCooldownMs = 1000 },
+    })
+    t.isTrue(ok)
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('healthThreshold', 1, true), 'a valid configured healthThreshold must pass through silently')
+        t.isNil(line:find('minDurationMs', 1, true), 'a valid configured minDurationMs must pass through silently')
+        t.isNil(line:find('pollIntervalMs', 1, true), 'a valid configured pollIntervalMs must pass through silently')
+    end
 end)
 
 -- ------------------------------------------------------------------

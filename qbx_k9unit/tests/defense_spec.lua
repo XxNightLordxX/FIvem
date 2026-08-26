@@ -394,60 +394,105 @@ t.test('Config.Features.HandlerDownDefense = false: no net event, no thread, no 
 end)
 
 -- ========================================================================
--- pollIntervalMs load-time assert -- what shape of config makes it fire.
+-- pollIntervalMs -- CLAMP AND WARN, NOT ASSERT.
+--
+-- REGRESSION (2026-08-26): this section used to assert that a bad
+-- pollIntervalMs FAILED THIS FILE'S LOAD via a hard `assert`, "blamed on"
+-- pollIntervalMs at resource-start time. That was itself the bug the rest
+-- of this suite's own retriggerCooldownMs/attackerReportCooldownMs
+-- REGRESSION section (below) already documents for this exact file: an
+-- uncaught error thrown from server/defense.lua's own top-level chunk
+-- aborts THIS FILE's execution from that line onward -- not just
+-- pollIntervalMs, but the spoofable-override onResourceStart warning,
+-- IsHandlerDown, TryNotifyPartnerK9, the maintenance CreateThread itself,
+-- the reportHandlerAttacker RegisterNetEvent, and this file's own
+-- playerDropped cleanup, all textually below it. pollIntervalMs was missed
+-- when its two sibling cooldowns (attackerReportCooldownMs/
+-- retriggerCooldownMs, just above it in server/defense.lua) were migrated,
+-- only because it feeds a bare Wait() directly rather than NewCooldown --
+-- not because the risk was any different; if anything it is WORSE, since a
+-- crash here also takes down HandlerDownDefense's own `playerDropped`
+-- cleanup, something none of the other 10 ResolveConfiguredThresholdMs call
+-- sites in this resource can say.
+--
+-- server/defense.lua now resolves this value through
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua) before ever assigning
+-- it to the local the maintenance thread's Wait() call actually uses: the
+-- file loads, every registration below it survives, and the feature keeps
+-- working on a safe built-in (1000ms, config.lua's own shipped default)
+-- fallback while printing one unmissable warning naming the exact key, the
+-- value found, and what was substituted.
 -- ========================================================================
 
-t.test('pollIntervalMs assert: a normal positive integer (the shipped default, 1000) loads fine', function()
-    local ok = pcall(newDefenseFixture)
-    t.isTrue(ok)
+t.test('pollIntervalMs: a normal positive integer (the shipped default, 1000) loads fine and is never warned about', function()
+    local f = newDefenseFixture()
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('pollIntervalMs', 1, true), 'a valid configured pollIntervalMs must pass through silently -- warning on a good value trains operators to ignore the warning')
+    end
 end)
 
-t.test('pollIntervalMs assert: 0 fails to load, naming pollIntervalMs in the error', function()
+t.test('REGRESSION: pollIntervalMs = 0 no longer aborts this file\'s load -- clamps to the shipped 1000ms fallback, warns loudly naming the exact key/value/substitute, and every registration below it survives', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.pollIntervalMs = 0
-    local ok, err = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok, 'a zero pollIntervalMs must fail resource-start loudly, not silently kill the thread on its first Wait()')
-    t.contains(tostring(err), 'pollIntervalMs')
+    local ok, f = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
+    t.isTrue(ok, 'a zero pollIntervalMs must never fail resource-start loudly anymore -- that used to take the whole file, including its own playerDropped cleanup, down with it')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.Combat.HandlerDownDefense.pollIntervalMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('1000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+
+    -- Prove it at the level the bug lives, not just "it didn't throw":
+    -- every registration textually below the old assert must still exist.
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'], 'the net event must still be registered')
+    t.isTrue(f.eventHandlerCount('onResourceStart') >= 1, 'onResourceStart must still be registered')
+    t.isTrue(f.eventHandlerCount('playerDropped') >= 1, 'this file\'s own playerDropped cleanup must still be registered')
+
+    -- And the maintenance thread must still actually RUN, on the resolved
+    -- fallback interval, not merely have been constructed.
+    wireHappyPath(f)
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1, 'the maintenance thread must still detect and notify for a real down handler after pollIntervalMs was clamped')
 end)
 
-t.test('pollIntervalMs assert: a negative value fails to load', function()
+t.test('REGRESSION: a negative pollIntervalMs is clamped the same way as zero, never treated as "poll every frame" and never aborting the load', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.pollIntervalMs = -500
-    local ok = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok)
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.Combat.HandlerDownDefense.pollIntervalMs', 1, true) and line:find('-500', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'])
 end)
 
-t.test('pollIntervalMs assert: NaN fails to load (a naive `> 0` check alone would miss this)', function()
+t.test('REGRESSION: pollIntervalMs = NaN also no longer aborts this file\'s load (a naive `> 0` check alone would miss this)', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.pollIntervalMs = 0 / 0
-    local ok = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok, 'NaN > 0 is false in Lua, but NaN == NaN is also false -- the assert must catch it via the self-equality test, not a bare > 0')
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'], 'NaN > 0 is false in Lua, but NaN == NaN is also false -- the resolver must catch it via the self-equality test, not a bare > 0, and clamp rather than abort')
 end)
 
-t.test('pollIntervalMs assert: nil (key omitted from config) fails to load', function()
+t.test('REGRESSION: pollIntervalMs omitted (nil) also no longer aborts this file\'s load', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.pollIntervalMs = nil
-    local ok, err = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok)
-    t.contains(tostring(err), 'pollIntervalMs')
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'])
 end)
 
-t.test('pollIntervalMs assert: a non-number (string) config value fails to load', function()
+t.test('REGRESSION: a non-number (string) pollIntervalMs also no longer aborts this file\'s load', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.pollIntervalMs = '1000'
-    local ok = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok, 'a stringly-typed Config value (e.g. from a copy-paste config mistake) must not slip past type(x) == "number"')
-end)
-
-t.test('pollIntervalMs assert: math.huge (positive, non-NaN) is CURRENTLY accepted -- documents the exact boundary of what this assert catches', function()
-    -- Not a recommendation to ever configure this -- pinning the real,
-    -- observed boundary: the assert only demands positive + non-NaN, not
-    -- "sane". An operator typo producing an enormous number would load
-    -- without error and simply poll extremely infrequently, not crash.
-    local cfg = baselineHandlerDownDefenseConfig()
-    cfg.pollIntervalMs = math.huge
-    local ok = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isTrue(ok, 'math.huge is a positive, non-NaN Lua number, so the current assert lets it through')
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'], 'a stringly-typed Config value (e.g. from a copy-paste config mistake) must not slip past the resolver -- clamped to the fallback, not aborted and not passed through as-is')
 end)
 
 -- ========================================================================
