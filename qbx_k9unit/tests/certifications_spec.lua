@@ -233,7 +233,7 @@ local function newFixture(opts)
     end
 
     local Config = {
-        Peds = {
+        Peds = opts.peds or {
             { model = 'a_c_shepherd' },
             { model = 'a_c_rottweiler' },
         },
@@ -417,6 +417,101 @@ end
 -- named here so every advanceTime() call below documents WHY it needs to
 -- exceed this value.
 local COOLDOWN_MS = 1500
+
+-- ======================================================================
+-- FIX (this pass): Config.Peds / Config.CertifyProximityMeters were
+-- previously bare top-level `assert`s -- a malformed value on EITHER threw
+-- at this file's own load time, aborting the ENTIRE FILE from that line
+-- onward (HasK9Access, every net event/command, the OnJobUpdate handler --
+-- all of it silently gone for the rest of the resource's uptime). Neither
+-- was covered by any test before this pass ("nothing tests them either
+-- way"). Now CLAMP AND WARN instead: this section pins that the file loads
+-- successfully, a warning is printed, and the resulting degraded state is
+-- exactly what's documented (a bad CertifyProximityMeters falls back to
+-- 5.0; a bad/malformed Config.Peds means no model is ever recognized, but
+-- HasK9Access itself is entirely unaffected).
+-- ======================================================================
+
+t.test('CONFIG-SAFETY: Config.CertifyProximityMeters = 0 does not abort the file -- resolves to the 5.0 fallback and warns', function()
+    local f = newFixture({ proximityMeters = 0 })
+    t.equals(f.env.Config.CertifyProximityMeters, 5.0)
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.CertifyProximityMeters', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a clamp-and-warn substitution must be loud, never silent')
+
+    -- Functional proof, not just the raw value: an online revoke at 6m
+    -- (beyond the OLD, invalid "0" but within the substituted 5.0... no --
+    -- beyond 5.0 too) still enforces a real, positive proximity bound
+    -- rather than the file having crashed or the check being disabled.
+    f.registerPlayer(1000, 'PROX-GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(1001, 'PROX-TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(1000, 5000, vec3(0, 0, 0))
+    f.setPed(1001, 5001, vec3(6, 0, 0))
+    f.setSource(1000)
+    f.events['qbx_k9unit:server:certifyHandler'](1001)
+    t.isTrue(notifiedExactly(f, 1000, Sandbox.locale('certifications.target_too_far_to_certify'), 'error'))
+end)
+
+t.test('CONFIG-SAFETY: Config.CertifyProximityMeters = -3 (negative) does not abort the file -- resolves to the 5.0 fallback and warns', function()
+    local f = newFixture({ proximityMeters = -3 })
+    t.equals(f.env.Config.CertifyProximityMeters, 5.0)
+end)
+
+t.test('CONFIG-SAFETY: Config.CertifyProximityMeters = "5" (a string, not a number) does not abort the file -- resolves to the 5.0 fallback and warns', function()
+    local f = newFixture({ proximityMeters = '5' })
+    t.equals(f.env.Config.CertifyProximityMeters, 5.0)
+end)
+
+t.test('CONFIG-SAFETY: a VALID, non-default Config.CertifyProximityMeters passes through unchanged, with no warning', function()
+    local f = newFixture({ proximityMeters = 12.5 })
+    t.equals(f.env.Config.CertifyProximityMeters, 12.5)
+    for _, line in ipairs(f.printLog) do
+        t.isFalse(line:find('CertifyProximityMeters', 1, true) ~= nil, 'a genuinely valid value must never warn')
+    end
+end)
+
+t.test('CONFIG-SAFETY: an EMPTY Config.Peds does not abort the file -- HasK9Access keeps working normally, IsConfiguredK9Model rejects every model, and a warning is printed', function()
+    local f = newFixture({ peds = {} })
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Peds', 1, true) then warned = true end
+    end
+    t.isTrue(warned)
+    t.isFalse(f.env.IsConfiguredK9Model(K9_HASH_SHEPHERD))
+
+    -- HasK9Access itself never consults Config.Peds at all -- unaffected.
+    f.registerPlayer(1010, 'PEDS-EMPTY-CIT', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 55 end
+    f.env.RefreshCertificationCache('PEDS-EMPTY-CIT', 'police')
+    t.isTrue(f.env.HasK9Access(1010))
+end)
+
+t.test('CONFIG-SAFETY: a non-table Config.Peds does not abort the file -- same degraded-but-bounded outcome as empty', function()
+    local f = newFixture({ peds = 'not-a-table' })
+    t.isFalse(f.env.IsConfiguredK9Model(K9_HASH_SHEPHERD))
+    f.registerPlayer(1011, 'PEDS-BADTYPE-CIT', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 56 end
+    f.env.RefreshCertificationCache('PEDS-BADTYPE-CIT', 'police')
+    t.isTrue(f.env.HasK9Access(1011))
+end)
+
+t.test('CONFIG-SAFETY: ONE malformed Config.Peds entry is skipped on its own -- every OTHER valid entry in the same array still works, and exactly one warning names that entry', function()
+    local f = newFixture({ peds = {
+        { model = 'a_c_shepherd' },
+        { model = 123 },              -- malformed: not a string
+        { model = 'a_c_rottweiler' },
+    } })
+    t.isTrue(f.env.IsConfiguredK9Model(K9_HASH_SHEPHERD), 'the valid entry BEFORE the bad one must still be recognized')
+    t.isTrue(f.env.IsConfiguredK9Model(K9_HASH_ROTTWEILER), 'the valid entry AFTER the bad one must still be recognized')
+
+    local warnCount = 0
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Peds%[2%]') then warnCount = warnCount + 1 end
+    end
+    t.equals(warnCount, 1, 'exactly one warning, naming the one bad index -- never one per valid entry')
+end)
 
 -- ======================================================================
 -- HasK9Access -- the gate everything else trusts
