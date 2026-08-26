@@ -709,6 +709,101 @@ local function TenureMilestoneNotificationText(tierTitle)
 end
 
 -- ======================================================================
+-- HONEST PER-PARTY XP WORDING (owner-directed fix, this pass: "a tenure
+-- milestone congratulates both partners when only one earned anything").
+--
+-- WHAT ACTUALLY HAPPENS, established before writing a word of this fix
+-- (read server/tenure.lua's own award loop, not assumed): every
+-- configured milestone in the SHIPPED config.lua carries a
+-- `handlerActionKey` alongside its `actionKey` -- so when
+-- Config.Features.HandlerXPProgression is ON, the handler-role party is
+-- NOT shortchanged relative to the K9 -- both are paid the IDENTICAL
+-- face-value XP (15/40/100) for the SAME milestone crossing, just into two
+-- separate ladders with two separate ceilings. The bug is not "the handler
+-- gets less" -- it is that Config.Features.HandlerXPProgression SHIPS OFF
+-- BY DEFAULT (config.lua), which makes AwardHandlerXP an unconditional
+-- no-op: with the shipped default, the handler earns EXACTLY ZERO XP from
+-- every tenure milestone, ever, while still being told "your partnership
+-- has reached a new tenure milestone" -- the same sentence the K9 gets
+-- after genuinely earning 15/40/100 XP. The same zero-XP outcome can also
+-- happen with the flag ON, if AwardHandlerXP's own per-person block, rate
+-- floor, or the shared mint budget rejects the specific call -- rare, but
+-- the same dishonesty either way. This section makes each party's own
+-- message say what THAT party actually got, derived from AwardXP/
+-- AwardHandlerXP's own real return value (server/progression.lua, this
+-- pass's own "return amount on success, nil on rejection" addition) rather
+-- than assumed from the milestone table alone -- never guessed, never
+-- optimistic.
+--
+-- DELIBERATELY NOT touching WHO gets paid or HOW MUCH -- that is a balance
+-- decision the task that produced this fix explicitly reserved for its
+-- own owner to make, not something this pass changes unilaterally. This
+-- section only makes the WORDING match reality.
+--
+-- LOCALE, soft-dependency shape identical to TenureMilestoneNotificationText
+-- immediately above -- FOUR PROPOSED, self-contained, WHOLE-SENTENCE keys,
+-- not yet in locales/en.json. DELIBERATELY NOT built by gluing a separate
+-- "you earned N XP" fragment onto TenureMilestoneNotificationText's own
+-- output with Lua string concatenation -- an earlier draft of this fix did
+-- exactly that, and it is wrong for the same reason every OTHER soft
+-- locale dependency in this file is a whole sentence, never a fragment:
+-- concatenating two independently-translated (or one translated, one
+-- inline-English-fallback) strings produces broken, half-translated text
+-- the moment this file is ever localized into anything but English. Each
+-- key below is a COMPLETE sentence, tried whole, exactly like
+-- `tenure.milestone_reached`/`tenure.milestone_reached_named` already are:
+--   `tenure.milestone_reached_named_with_xp` -- title AND xp known -- TWO
+--     args, %s (title) then %d (xp) -- proposed text: "Your partnership
+--     has reached the %s milestone! You earned %d XP from it."
+--   `tenure.milestone_reached_with_xp` -- xp known, no title -- ONE %d arg
+--     -- proposed text: "Your partnership has reached a new tenure
+--     milestone. You earned %d XP from it."
+--   `tenure.milestone_reached_named_no_xp` -- title known, no xp earned --
+--     ONE %s arg -- proposed text: "Your partnership has reached the %s
+--     milestone, but you did not earn any XP from it."
+--   `tenure.milestone_reached_no_xp` -- neither known -- no args --
+--     proposed text: "Your partnership has reached a new tenure milestone,
+--     but you did not earn any XP from it."
+-- FALLBACK, when none of the four above exist yet (true today): degrades
+-- to TenureMilestoneNotificationText(tierTitle) UNCHANGED -- the EXACT,
+-- already-shipped/tested text, for BOTH parties, regardless of what either
+-- actually earned. This makes the whole honesty fix a TOTAL NO-OP until
+-- the four keys above are landed -- deliberately, per the same "soft
+-- dependency, degrade to what already ships, upgrade automatically with no
+-- further code change" discipline this file already applies everywhere
+-- else, rather than ship a half-measure (correct information, broken
+-- localization) in the meantime.
+-- ======================================================================
+
+--- @param tierTitle string?
+--- @param xpAwarded number? -- the REAL amount AwardXP/AwardHandlerXP reported back this crossing (0 or nil both mean "genuinely nothing")
+--- @return string
+local function TenureMilestonePartyNotificationText(tierTitle, xpAwarded)
+    local earnedXp = type(xpAwarded) == 'number' and xpAwarded > 0
+    local hasTitle = type(tierTitle) == 'string' and tierTitle ~= ''
+
+    if hasTitle and earnedXp then
+        local ok, text = pcall(locale, 'tenure.milestone_reached_named_with_xp', tierTitle, xpAwarded)
+        if ok and type(text) == 'string' then return text end
+    elseif hasTitle then
+        local ok, text = pcall(locale, 'tenure.milestone_reached_named_no_xp', tierTitle)
+        if ok and type(text) == 'string' then return text end
+    elseif earnedXp then
+        local ok, text = pcall(locale, 'tenure.milestone_reached_with_xp', xpAwarded)
+        if ok and type(text) == 'string' then return text end
+    else
+        local ok, text = pcall(locale, 'tenure.milestone_reached_no_xp')
+        if ok and type(text) == 'string' then return text end
+    end
+
+    -- None of the four proposed keys exist yet -- see this section's own
+    -- header for why this is the correct fallback (never a concatenated
+    -- fragment): the exact, unchanged, already-shipped text, identical for
+    -- both parties, exactly like before this pass.
+    return TenureMilestoneNotificationText(tierTitle)
+end
+
+-- ======================================================================
 -- VISIBILITY -- see this file's own "TENURE PROGRESSION EXTENSIONS" header
 -- section above. Read-only, side-effect-free: never grants, never mutates
 -- tenure_bonus_tier_granted, never touches TenureFullyCollected. Safe to
@@ -914,10 +1009,25 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     -- long absence could cross more than one threshold in a single tick) --
     -- see this file's header design question 2 for why this is three fixed
     -- actionKey strings, never a computed amount.
+    --
+    -- HONEST-MESSAGING ADDITION (this pass): each side's REAL earned total
+    -- this crossing is now tracked from AwardXP/AwardHandlerXP's own return
+    -- value (server/progression.lua, this pass's own addition -- nil/0 on
+    -- any rejection, the real amount on success), summed across every
+    -- tier crossed in this one tick, so the notification below can say
+    -- exactly what happened rather than assuming success. A `nil` return
+    -- (feature off, malformed actionKey, per-person block, rate floor, or
+    -- the shared mint budget) contributes 0, same as an award that was
+    -- never attempted at all -- both are "this party did not get this
+    -- one," which is exactly what needs to reach that party's own message.
+    local k9XpAwardedThisPass, handlerXpAwardedThisPass = 0, 0
     for tier = alreadyGranted + 1, targetTier do
         local milestone = tenureCfg.milestones[tier]
         if type(AwardXP) == 'function' and milestone and type(milestone.actionKey) == 'string' then
-            AwardXP(k9Citizenid, milestone.actionKey)
+            local granted = AwardXP(k9Citizenid, milestone.actionKey)
+            if type(granted) == 'number' then
+                k9XpAwardedThisPass = k9XpAwardedThisPass + granted
+            end
         end
         -- HANDLER XP (Config.Features.HandlerXPProgression, server/
         -- progression.lua's AwardHandlerXP) -- paid to the HANDLER-role
@@ -934,9 +1044,17 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
         -- committed `tenure_bonus_tier_granted` before this loop ever runs)
         -- and same-pair-reform seeding for free -- no new anti-farm state
         -- needed for this half either, per config.lua's own header on this
-        -- exact field.
+        -- exact field. AwardHandlerXP itself is ALSO the whole-function
+        -- no-op when Config.Features.HandlerXPProgression is off (that
+        -- flag's own shipped default) -- this branch still runs and still
+        -- calls it every time (never special-cased on the flag here), it
+        -- simply returns nil in that case, which the honest-messaging
+        -- accounting above already treats as "earned nothing."
         if type(AwardHandlerXP) == 'function' and milestone and type(milestone.handlerActionKey) == 'string' then
-            AwardHandlerXP(row.handler_citizenid, milestone.handlerActionKey)
+            local grantedHandler = AwardHandlerXP(row.handler_citizenid, milestone.handlerActionKey)
+            if type(grantedHandler) == 'number' then
+                handlerXpAwardedThisPass = handlerXpAwardedThisPass + grantedHandler
+            end
         end
     end
 
@@ -952,13 +1070,16 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     -- either party offline). Named after the HIGHEST tier just crossed
     -- (targetTier -- plural crossings in one tick still get one message
     -- naming the furthest milestone reached, not one per tier) -- see
-    -- TenureMilestoneNotificationText's own doc comment for why this
-    -- degrades to the exact, unchanged, already-shipped generic text
-    -- today.
+    -- TenureMilestoneNotificationText's own doc comment for why the BASE
+    -- sentence degrades to the exact, unchanged, already-shipped generic
+    -- text today. TWO DIFFERENT messages now, one per party, each with its
+    -- own honest XP suffix (TenureMilestonePartyNotificationText above) --
+    -- this is the fix for "a tenure milestone congratulates both partners
+    -- when only one earned anything": the K9 and handler no longer
+    -- necessarily see byte-identical text.
     local reachedTitle = ResolveMilestoneTitle(tenureCfg.milestones[targetTier], targetTier)
-    local milestoneMessage = TenureMilestoneNotificationText(reachedTitle)
-    NotifyPlayer(k9Src, milestoneMessage)
-    NotifyPlayer(handlerSrc, milestoneMessage)
+    NotifyPlayer(k9Src, TenureMilestonePartyNotificationText(reachedTitle, k9XpAwardedThisPass))
+    NotifyPlayer(handlerSrc, TenureMilestonePartyNotificationText(reachedTitle, handlerXpAwardedThisPass))
 end
 
 --- One pass over currently-connected players per tick, mirroring
@@ -1324,15 +1445,36 @@ end
 
            "tenure": {
                "milestone_reached": "Your partnership has reached a new tenure milestone.",
-               "milestone_reached_named": "Your partnership has reached the %s milestone!"
+               "milestone_reached_named": "Your partnership has reached the %s milestone!",
+               "milestone_reached_named_with_xp": "Your partnership has reached the %s milestone! You earned %d XP from it.",
+               "milestone_reached_with_xp": "Your partnership has reached a new tenure milestone. You earned %d XP from it.",
+               "milestone_reached_named_no_xp": "Your partnership has reached the %s milestone, but you did not earn any XP from it.",
+               "milestone_reached_no_xp": "Your partnership has reached a new tenure milestone, but you did not earn any XP from it."
            }
 
-       (`milestone_reached` is the existing, already-shipped key, listed
-       here only for placement context -- only `milestone_reached_named`
-       is new. One %s placeholder, filled with the milestone's own title,
-       e.g. "Bonded Pair" -- matches Lua's `string.format`/ox_lib's own
-       `locale(key, ...)` convention, confirmed against
-       tests/fixtures/sandbox.lua's own `Sandbox.locale`.)
+       (`milestone_reached`/`milestone_reached_named` are the existing,
+       already-shipped keys, listed here only for placement context -- the
+       four `..._with_xp`/`..._no_xp` keys are new, this pass, "a tenure
+       milestone congratulates both partners when only one earned
+       anything" fix. Each is a COMPLETE, self-contained sentence -- NOT a
+       fragment meant to be concatenated onto `milestone_reached[_named]`
+       -- see TenureMilestonePartyNotificationText's own header comment
+       (this file) for why an earlier draft that glued English fragments
+       onto a translated sentence was wrong and was corrected before
+       landing. `milestone_reached_named_with_xp` takes TWO placeholders in
+       order, %s (the milestone title) then %d (the real XP amount);
+       `milestone_reached_with_xp`/`milestone_reached_named_no_xp` each
+       take their own ONE placeholder (%d xp, or %s title, respectively);
+       `milestone_reached_no_xp` takes none. All four are tried via the
+       identical pcall-guarded soft-dependency shape `milestone_reached_named`
+       already uses, so this whole feature is a TOTAL NO-OP until all four
+       land (degrades to the exact, unchanged `milestone_reached[_named]`
+       text for BOTH parties, exactly like before this pass) and upgrades
+       automatically the moment they do, no further code change needed.
+       The XP amount is the REAL value AwardXP/AwardHandlerXP reported back
+       for that SPECIFIC party this crossing -- it can differ between the
+       K9 and handler messages for the SAME crossing, which is the whole
+       point of this fix.
 
     5. .luacheckrc `globals` ENTRY (repo root) -- only needed IF/WHEN
        GetPartnershipTenureProgress (this file, currently `local`) is

@@ -187,6 +187,10 @@ local function newMainFixture(opts)
         notifyCalls[#notifyCalls + 1] = { target = target, description = description, notifyType = notifyType }
     end
 
+    -- PERFORMANCE AUDIT FIX (this pass) -- see installForEachNearbyPlayer's
+    -- own comment near this fixture's return table for the full writeup.
+    local forEachNearbyPlayerCalls = {} -- { {coords=, radius=}, ... }
+
     local hasAccessBySource = {}
     local function HasK9Access(src) return hasAccessBySource[src] == true end
 
@@ -544,6 +548,33 @@ local function newMainFixture(opts)
             permissionGrants[citizenid][key] = value
         end,
         permissionCalls = permissionCalls,
+        -- PERFORMANCE AUDIT FIX (this pass) -- server/search.lua's
+        -- ForEachNearbyPlayer is a resource-global, loaded from a SEPARATE
+        -- file this fixture deliberately never loads (this file's own
+        -- header: server/main.lua's real dependency chain is
+        -- cooldowns.lua -> entities.lua -> main.lua only). It is therefore
+        -- genuinely UNDEFINED here by default -- exactly like a real server
+        -- would never see (server/search.lua always loads too), but exactly
+        -- what proves relayBark/relayDoorScratch's own documented
+        -- FALLBACK-TO-`-1`-BROADCAST path (every EXISTING test above/below,
+        -- none of which call installForEachNearbyPlayer, keeps exercising
+        -- that fallback unchanged -- see relayBark's own "success broadcasts
+        -- to -1" test for the pinned proof). installForEachNearbyPlayer
+        -- opts IN a minimal, faithful test double for the dedicated
+        -- distance-filter tests below -- never the real implementation
+        -- (that belongs to search_spec.lua alone), just enough to prove
+        -- relayBark/relayDoorScratch call it with the right (coords, radius)
+        -- and correctly fan out to whichever players it invites.
+        forEachNearbyPlayerCalls = forEachNearbyPlayerCalls,
+        installForEachNearbyPlayer = function(nearbyPlayerIds)
+            env.ForEachNearbyPlayer = function(coords, radius, callback)
+                forEachNearbyPlayerCalls[#forEachNearbyPlayerCalls + 1] = { coords = coords, radius = radius }
+                for _, playerId in ipairs(nearbyPlayerIds) do
+                    callback(playerId, pedBySource[playerId] or 0)
+                end
+            end
+        end,
+        uninstallForEachNearbyPlayer = function() env.ForEachNearbyPlayer = nil end,
     }
 end
 
@@ -742,6 +773,53 @@ t.test('relayBark: the per-source cooldown does not block a DIFFERENT source in 
 end)
 
 -- ------------------------------------------------------------------
+-- PERFORMANCE AUDIT FIX (this pass) -- distance-filtered broadcast via
+-- server/search.lua's ForEachNearbyPlayer, in place of an unconditional
+-- `-1` broadcast. See NEARBY_BROADCAST_RADIUS_METERS's own declaration
+-- comment in server/main.lua for the full writeup (bandwidth fix, never a
+-- privacy one -- a bark's netId is inert to a client that never has it
+-- streamed in).
+-- ------------------------------------------------------------------
+
+t.test('relayBark PERFORMANCE FIX: when ForEachNearbyPlayer is available, it is called with the BARKING K9\'s OWN live coords and the shared NEARBY_BROADCAST_RADIUS_METERS radius (300.0), and the event fans out only to whichever players it invites -- never a bare -1', function()
+    local f = newMainFixture()
+    f.setPed(7, 70, vec3(100, 200, 300))
+    f.setAccess(7, true)
+    f.installForEachNearbyPlayer({ 501, 502 }) -- two "nearby" players this test double invites
+
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 7, 'bark')
+
+    t.equals(#f.forEachNearbyPlayerCalls, 1, 'relayBark must call ForEachNearbyPlayer exactly once per accepted bark')
+    local call = f.forEachNearbyPlayerCalls[1]
+    t.equals(call.coords.x, 100)
+    t.equals(call.coords.y, 200)
+    t.equals(call.coords.z, 300)
+    t.equals(call.radius, 300.0, 'must be main.lua\'s own NEARBY_BROADCAST_RADIUS_METERS constant, not an ad-hoc value')
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playBark'), 2, 'exactly one playBark event per invited player, never a bare -1 broadcast when the helper is available')
+    local targets = {}
+    for _, ev in ipairs(f.clientEvents) do
+        if ev.event == 'qbx_k9unit:client:playBark' then targets[ev.target] = true end
+    end
+    t.isTrue(targets[501] and targets[502], 'both invited players must individually receive the event')
+    t.isNil(targets[-1], 'must never ALSO fire a bare -1 broadcast alongside the filtered ones')
+
+    f.uninstallForEachNearbyPlayer()
+end)
+
+t.test('relayBark PERFORMANCE FIX: when ForEachNearbyPlayer is unavailable (this fixture\'s own default -- server/search.lua genuinely not loaded alongside main.lua here, mirroring any real load-order edge case), relayBark falls back to the original, safe -1 broadcast rather than silently broadcasting to nobody', function()
+    local f = newMainFixture()
+    f.setPed(7, 70, ORIGIN)
+    f.setAccess(7, true)
+    -- Deliberately never calling installForEachNearbyPlayer -- proves the
+    -- fallback, not merely the happy path.
+    f.dispatchNetEvent('qbx_k9unit:server:relayBark', 7, 'bark')
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:playBark')
+    t.isNotNil(ev)
+    t.equals(ev.target, -1, 'a bark nobody hears because a helper failed to load is a worse bug than the bandwidth fix -- must fall back to broadcasting to everyone, never silently to no one')
+end)
+
+-- ------------------------------------------------------------------
 -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
 -- resolution) -- IsBasicBarkSoundsPermittedForCitizenId. Mirrors
 -- tests/pursuitsprint_spec.lua's own section of the same name.
@@ -901,6 +979,45 @@ t.test('relayDoorScratch: success broadcasts doorNetId to -1 (global -- a door l
     t.isNotNil(ev)
     t.equals(ev.target, -1)
     t.equals(ev.args[1], 9001)
+end)
+
+-- ------------------------------------------------------------------
+-- PERFORMANCE AUDIT FIX (this pass) -- same ForEachNearbyPlayer mechanism
+-- as relayBark's own section above, centered on the DOOR's own coords (the
+-- sound's actual source), not the calling K9's -- see the broadcast call
+-- site's own comment in server/main.lua.
+-- ------------------------------------------------------------------
+
+t.test('relayDoorScratch PERFORMANCE FIX: when ForEachNearbyPlayer is available, it is called with the DOOR\'s own coords (not the K9\'s) and the shared NEARBY_BROADCAST_RADIUS_METERS radius (300.0), fanning out only to invited players -- never a bare -1', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, vec3(1, 0, 0)) -- the K9's OWN position, deliberately different from the door's below
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = vec3(0, 0, 0) })
+    f.installForEachNearbyPlayer({ 501, 502 })
+
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+
+    t.equals(#f.forEachNearbyPlayerCalls, 1, 'relayDoorScratch must call ForEachNearbyPlayer exactly once per accepted scratch')
+    local call = f.forEachNearbyPlayerCalls[1]
+    t.equals(call.coords.x, 0, 'must be centered on the DOOR entity\'s own coords, not the K9\'s')
+    t.equals(call.coords.y, 0)
+    t.equals(call.coords.z, 0)
+    t.equals(call.radius, 300.0, 'must be main.lua\'s own shared NEARBY_BROADCAST_RADIUS_METERS constant, not an ad-hoc value')
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 2, 'exactly one playDoorScratch event per invited player, never a bare -1 broadcast when the helper is available')
+
+    f.uninstallForEachNearbyPlayer()
+end)
+
+t.test('relayDoorScratch PERFORMANCE FIX: when ForEachNearbyPlayer is unavailable (this fixture\'s own default), relayDoorScratch falls back to the original, safe -1 broadcast rather than silently broadcasting to nobody', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:playDoorScratch')
+    t.isNotNil(ev)
+    t.equals(ev.target, -1)
 end)
 
 -- ------------------------------------------------------------------

@@ -1594,34 +1594,144 @@ Config.XPTiers = {
 -- SOURCE AUDIT test that fails outright if either award is ever wired
 -- without that companion mint cooldown also present.
 --
--- UNREVIEWED PLACEHOLDER NUMBERS, same status Config.XPTiers/Config.XP
--- carry -- tune freely once a real handler-XP economy pass happens.
--- Cumulative by design (each tier restates every lower tier's own bonus
--- fields plus its own new one) so a handler's benefits only ever grow with
--- rank, never drop out at a higher tier the way Config.XPTiers' own Elite
--- row currently omits medkitCooldownMultiplier (an existing, pre-dating
+-- RESCALED 2026-08-26 (owner-directed audit: "the handler rank ladder
+-- cannot be reached in a human lifetime") -- REPLACES the "UNREVIEWED
+-- PLACEHOLDER NUMBERS, tune freely" text that used to sit here. What
+-- follows is the real arithmetic behind the new thresholds below, worked
+-- out against the REAL shipped Config.HandlerXP.awards values, the REAL
+-- per-award anti-farm cooldowns, and the REAL shared XP mint budget
+-- (server/progression.lua's XP_MINT_BUDGET_CAP_XP = 3600 XP/hour, SHARED
+-- with the K9 side's own Config.XP.awards for the same citizenid) -- not
+-- assumed from the old thresholds' own history. Re-derive this yourself
+-- before ever retuning these numbers again; do not carry the conclusion
+-- forward without re-checking the inputs it depends on.
+--
+-- THE REAL EARNABLE SET, TODAY: of the six Config.HandlerXP.awards keys,
+-- only FOUR are actually wired to AwardHandlerXP (see
+-- Config.Features.HandlerXPProgression's own header, "STILL DEFAULT
+-- FALSE" section, for exactly which and why):
+--   handlerCertifyK9              50 XP -- gated by
+--     server/certifications.lua's CertifyXpMintCooldown, a MINT cooldown
+--     per (granter, target) PAIR, 24 REAL HOURS. This is NOT an
+--     hours-of-play rate the way the K9 ladder's own mechanics are -- it
+--     can only be earned once per unique NEW person you personally
+--     certify (once per 24h for that same pair after that). It depends on
+--     how many genuinely new K9 candidates exist for you to certify, not
+--     on how many hours you personally spend on duty.
+--   handlerPartnershipTenure1Day/7Day/30Day -- 15 / 40 / 100 XP, each
+--     ONE-TIME, EVER, per partnership (server/tenure.lua) -- together a
+--     HARD, LIFETIME CAP of 15+40+100 = 155 XP for staying partnered with
+--     the SAME K9 for 30 real-world days, gated on both of you being
+--     online and near each other at the moment each threshold is checked
+--     (a light bar, not a grind). This is a WALL-CLOCK trickle, not an
+--     hours-played one -- idling the partnership for a year pays the exact
+--     same 155 XP total as 30 days does.
+-- handlerTreatK9 (12 XP) and handlerKennelDeploy (8 XP) are DELIBERATELY
+-- UNWIRED today (Config.Features.HandlerXPProgression's own header) -- they
+-- pay ZERO XP right now, no matter how many times either action is
+-- performed, until a dedicated per-actor mint cooldown is added to
+-- server/medkit.lua/server/kennel.lua. Any arithmetic that counts these
+-- two as earning something today is wrong.
+--
+-- WHAT THIS MEANS, PUT TOGETHER: a handler who never personally certifies
+-- anyone new -- most handlers, most of the time -- can earn AT MOST 155
+-- XP, EVER, from a single partnership, no matter how many hours or how
+-- many real-world YEARS they play. Under the OLD thresholds
+-- (750/2500/6000) that handler could not reach even the FIRST rank, ever.
+-- That is a HARDER failure than "3.2 years to the top" (the figure this
+-- audit started from): it is "never, for most players, at any threshold
+-- above 155, regardless of played time." The 3.2-year figure is roughly
+-- the right order of magnitude only for the OTHER case -- a handler who
+-- actively certifies other people at a generous, sustained pace of ~2 new
+-- candidates/week (100 XP/week): (6000 - 155) / 100-per-week is about 58
+-- weeks (a bit over a year) to the OLD Master threshold alone, and even
+-- that undercounts the real wait, since 2 genuinely NEW candidates a week
+-- is an optimistic pace few servers sustain indefinitely.
+--
+-- The shared 3600-XP/hour mint budget is NOT the binding constraint here,
+-- in either direction -- neither wired source can plausibly approach
+-- anywhere near 3600 XP inside one hour (certifying dozens of distinct new
+-- people in an hour is not realistic; the single biggest one-time tenure
+-- milestone is only 100 XP) -- named for completeness, not because it
+-- shapes the numbers below.
+--
+-- RESCALED THRESHOLDS BELOW, anchored to what a handler can ACTUALLY,
+-- REPEATABLY earn today (certifying + tenure), not to an hours-of-duty
+-- curve the way Config.XPTiers' own K9 arithmetic is -- there is currently
+-- no repeatable, solo, hours-based handler mechanic to anchor to (see the
+-- "STILL A REAL GAP" note below the table for why, and what would fix
+-- that properly). Each tier's own comment says, in plain English, roughly
+-- what a real player needs to actually do to get there. Cumulative by
+-- design (each tier restates every lower tier's own bonus fields plus its
+-- own new one) so a handler's benefits only ever grow with rank, never
+-- drop out at a higher tier the way Config.XPTiers' own Elite row
+-- currently omits medkitCooldownMultiplier (an existing, pre-dating
 -- inconsistency on the K9 ladder this pass observed but does not touch --
 -- flagged for whoever owns that table's own tuning next).
 Config.HandlerXPTiers = {
-    { xp = 0,    label = 'Rookie Handler' },
-    -- medkitTreatCooldownMultiplier -- WIRED (server/medkit.lua, via
-    -- GetHandlerXPTierMedkitCooldownMs). See this table's own header above
-    -- for the full field-by-field resolution and the feedback-loop
-    -- safety note.
-    { xp = 750,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
-    -- kennelDeployCooldownMultiplier -- WIRED (server/kennel.lua, via
-    -- GetHandlerXPTierKennelDeployCooldownMs). Same header, same note.
-    { xp = 2500, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.75 },
-    -- Master Handler's own combined worst-case floors (both cooldowns
-    -- stack with any lower tier already earned, by design -- see "cumulative
-    -- by design" above): medkit 60000ms * 0.70 = 42000ms alone, 31500ms
+    { xp = 0,   label = 'Rookie Handler' }, -- everyone starts here -- day one on the job, no XP earned yet
+    -- CERTIFIED HANDLER (medkitTreatCooldownMultiplier -- WIRED,
+    -- server/medkit.lua, via GetHandlerXPTierMedkitCooldownMs -- see this
+    -- table's own header above for the full field-by-field resolution).
+    -- WHAT IT TAKES: about ONE genuinely new K9 candidate you personally
+    -- certify (handlerCertifyK9, 50 XP) -- OR roughly a week of simply
+    -- staying partnered with your own K9 and playing together normally
+    -- (the 1-day + 7-day tenure milestones alone already total 55 XP, with
+    -- zero certifying). Reachable within a handler's first few real
+    -- shifts either way -- this is the "first promotion" rung.
+    { xp = 50,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
+    -- SENIOR HANDLER (kennelDeployCooldownMultiplier -- WIRED,
+    -- server/kennel.lua, via GetHandlerXPTierKennelDeployCooldownMs. Same
+    -- header, same note). WHAT IT TAKES: the full 30-day tenure trickle
+    -- (155 XP -- this ladder's own hard ceiling for a handler who never
+    -- certifies anyone) reaches this rank ON ITS OWN, with zero certifying
+    -- required -- about a month of ordinary, regular partnered play. A
+    -- handler who DOES certify gets here faster (three certifications, 150
+    -- XP, is already enough by itself).
+    { xp = 150, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.75 },
+    -- MASTER HANDLER -- deliberately ABOVE the 155-XP tenure ceiling: this
+    -- rank cannot be reached by tenure alone, on purpose (a genuine
+    -- long-term goal, not a passive one). WHAT IT TAKES: actually being
+    -- part of bringing new K9 handlers onto the force -- roughly seven to
+    -- ten personally-granted certifications (50 XP each, capped at one per
+    -- unique new person per 24 real hours) on top of a long-standing
+    -- partnership, spread across several weeks to a couple of months of
+    -- regular duty. Weeks of real, active involvement -- not a single
+    -- evening, and not the 3.2-YEAR WALL the old 6000 threshold produced
+    -- for anyone who does not personally recruit others.
+    --
+    -- Master Handler's own combined MULTIPLIER worst-case floors (both
+    -- cooldowns stack with any lower tier already earned, by design -- see
+    -- "cumulative by design" above -- unaffected by this xp-threshold
+    -- rescale, since only the xp values above changed, not these
+    -- multipliers): medkit 60000ms * 0.70 = 42000ms alone, 31500ms
     -- combined with a Veteran-tier K9 TARGET's own 0.75 (Config.XPTiers);
     -- kennel deploy 5000ms * 0.60 = 3000ms. These are the exact numbers
     -- server/progression.lua's own doc comment and the SOURCE AUDIT tests
-    -- above cite -- if you retune either multiplier here, that comment and
-    -- those tests go stale and need updating too.
-    { xp = 6000, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60 },
+    -- cite -- if you retune either MULTIPLIER here, that comment and those
+    -- tests go stale and need updating too (the xp threshold itself is not
+    -- referenced by either).
+    { xp = 500, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60 },
 }
+-- STILL A REAL GAP, DISCLOSED RATHER THAN PAPERED OVER BY THIS RESCALE: a
+-- handler who never personally certifies anyone new is HARD-CAPPED at
+-- Senior Handler (150 XP threshold, 155 XP lifetime ceiling from tenure
+-- alone) -- Master Handler stays out of reach for that player specifically,
+-- forever, regardless of hours played. Lowering thresholds cannot fix this
+-- on its own, because the underlying problem is not the thresholds -- it
+-- is that only TWO of six configured award actions are wired, and neither
+-- is a repeatable, solo, hours-based mechanic the way the K9 ladder's own
+-- search/track/bite/takedown mix is. The real, complete fix is finishing
+-- the work Config.Features.HandlerXPProgression's own header already
+-- calls for: a dedicated per-actor mint cooldown for handlerTreatK9
+-- (server/medkit.lua) and handlerKennelDeploy (server/kennel.lua), then
+-- wiring AwardHandlerXP into both success paths. That would give every
+-- handler a genuine, repeatable, hours-of-duty path to the top rank, the
+-- same way the K9 ladder already has one -- and would likely justify
+-- re-reviewing these thresholds upward again once it lands. Not done by
+-- this pass (needs edits to two files outside this rescale's own scope),
+-- flagged here so the next person who tunes this table does not have to
+-- rediscover it.
 
 -- ======================================================================
 -- XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).

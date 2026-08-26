@@ -2310,17 +2310,19 @@ end
 --- `type(RestoreInjury) == 'function'`, client/progression.lua's own
 --- `type(RecomputeK9MoveRate) == 'function'`).
 ---
---- HandlerXPProgression (this file's own FEATURE_TIERS entry, also
---- `tier = 'live'`) deliberately gets NO equivalent hook here, verified
---- before writing this comment, not assumed: grep confirms no client/*.lua
---- file references HandlerXPProgression/HandlerXP/handlerXpTier at all --
---- there is no client-side tier cache, move-rate modifier, or any other
---- persistent client-visible effect for this flag to leave stranded.
---- Every server-side reader (AwardHandlerXP, IsHandlerXPProgressionPermittedForCitizenId,
---- server/progression.lua's own onResourceStart backfill gate) already
---- re-checks Config.Features.HandlerXPProgression fresh at its own point of
---- use, so this flag was already genuinely live with nothing further
---- needed.
+--- HandlerXPProgression NOW HAS THE SAME HOOK, and this comment used to say
+--- the opposite. What it said was true when it was written and stopped
+--- being true the moment handlers could see their own rank: there was no
+--- client-side handler tier cache to leave stranded, because nothing had
+--- ever told a handler what their rank was. Now something does
+--- ('qbx_k9unit:client:handlerXpTierChanged', server/progression.lua), so
+--- the flag has exactly the client-visible state its K9-side sibling had,
+--- and needs exactly the same treatment: a handler already looking at a
+--- rank on screen must be told the moment high command switches the feature
+--- off, not on their next reconnect. Without this branch that is the
+--- identical bug that had to be fixed for XPProgression -- a `tier = 'live'`
+--- flag whose "no restart needed" promise quietly did not hold for anyone
+--- already connected.
 --- @param name string
 --- @param value boolean
 local function ApplyFeatureOverride(name, value)
@@ -2328,6 +2330,9 @@ local function ApplyFeatureOverride(name, value)
         Config.Features[name] = value
         if name == 'XPProgression' and type(RefreshXPProgressionLiveStateForAllOnline) == 'function' then
             RefreshXPProgressionLiveStateForAllOnline()
+        end
+        if name == 'HandlerXPProgression' and type(RefreshHandlerXPProgressionLiveStateForAllOnline) == 'function' then
+            RefreshHandlerXPProgressionLiveStateForAllOnline()
         end
     end
 end

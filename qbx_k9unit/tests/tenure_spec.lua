@@ -140,9 +140,40 @@ local function newTenureFixture(opts)
         return hasK9AccessBySource[source] == true
     end
 
+    -- RETURN-VALUE CONFIGURABILITY (honest-per-party-messaging pass) --
+    -- mirrors server/progression.lua's own REAL AwardXP/AwardHandlerXP
+    -- contract, this pass's own addition: "return the amount actually
+    -- applied on success, nothing (nil) on any rejection." Defaults to nil
+    -- for BOTH (matching this fixture's own pre-existing behavior, where
+    -- neither stub returned anything) -- a test that needs to simulate a
+    -- genuine, successful mint sets opts.awardXPReturns/
+    -- opts.awardHandlerXPReturns to a function(citizenid, actionKey) ->
+    -- number|nil.
     local awardXPCalls = {}
     local function AwardXP(citizenid, actionKey)
         awardXPCalls[#awardXPCalls + 1] = { citizenid = citizenid, actionKey = actionKey }
+        if type(opts.awardXPReturns) == 'function' then
+            return opts.awardXPReturns(citizenid, actionKey)
+        end
+        return nil
+    end
+
+    -- AwardHandlerXP -- ALWAYS present in this fixture's env, matching
+    -- production reality (server/progression.lua always defines it once
+    -- loaded, regardless of Config.Features.HandlerXPProgression's own
+    -- value -- that flag only decides what the REAL function returns, per
+    -- its own "no-op returns nothing" contract, never whether it exists).
+    -- Defaults to returning nil (matching a server with
+    -- HandlerXPProgression off, the shipped default) unless a test opts in
+    -- via opts.awardHandlerXPReturns to simulate the flag being on and the
+    -- award genuinely succeeding.
+    local awardHandlerXPCalls = {}
+    local function AwardHandlerXP(citizenid, actionKey)
+        awardHandlerXPCalls[#awardHandlerXPCalls + 1] = { citizenid = citizenid, actionKey = actionKey }
+        if type(opts.awardHandlerXPReturns) == 'function' then
+            return opts.awardHandlerXPReturns(citizenid, actionKey)
+        end
+        return nil
     end
 
     local notifyCalls = {}
@@ -211,10 +242,23 @@ local function newTenureFixture(opts)
             ProximityMeters = 5.0,
             TenureBonus = {
                 checkIntervalMs = 300000,
+                -- `handlerActionKey` on every default entry now, matching
+                -- the REAL shipped config.lua shape (Config.Partnership.
+                -- TenureBonus.milestones) -- previously omitted here, which
+                -- meant this fixture could never exercise the handler-XP
+                -- half of CheckTenureMilestonesForK9's award loop at all.
+                -- Harmless for every PRE-EXISTING test in this file that
+                -- never touches awardHandlerXPCalls/AwardHandlerXP: the
+                -- guard in production code still requires
+                -- `type(AwardHandlerXP) == 'function'`, which is now
+                -- always true here (see AwardHandlerXP's own declaration
+                -- above), but AwardHandlerXP itself still returns nil by
+                -- default, matching this fixture's own pre-existing "no
+                -- handler XP ever recorded as earned" behavior exactly.
                 milestones = {
-                    { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day' },
-                    { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day' },
-                    { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day' },
+                    { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day',  handlerActionKey = 'handlerPartnershipTenure1Day' },
+                    { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day',  handlerActionKey = 'handlerPartnershipTenure7Day' },
+                    { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day', handlerActionKey = 'handlerPartnershipTenure30Day' },
                 },
             },
         },
@@ -247,6 +291,7 @@ local function newTenureFixture(opts)
         GetActivePartnerCitizenId = GetActivePartnerCitizenId,
         HasK9Access = HasK9Access,
         AwardXP = AwardXP,
+        AwardHandlerXP = AwardHandlerXP,
         NotifyPlayer = NotifyPlayer,
         print = printStub,
         exports = {
@@ -323,6 +368,7 @@ local function newTenureFixture(opts)
         setPed = function(src, ped) pedBySource[src] = ped end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         awardXPCalls = awardXPCalls,
+        awardHandlerXPCalls = awardHandlerXPCalls,
         notifyCalls = notifyCalls,
         printedLines = printedLines,
         waitCalls = waitCalls,
@@ -859,20 +905,165 @@ end)
 -- DEEPER PROGRESSION PASS (this pass) -- titles + notification fallback
 -- ----------------------------------------------------------------------
 
-t.test('TITLES/NOTIFICATION: reaching a milestone notifies with the exact, unchanged, already-shipped locale text -- the PROPOSED tenure.milestone_reached_named key does not exist yet, so the soft-upgrade fallback in TenureMilestoneNotificationText degrades cleanly to it', function()
+--- Looks up both parties' notification text from the last tick, by target
+--- source. Fails the test outright (via t.isNotNil below at each call
+--- site) if either is missing -- every test in this section expects BOTH
+--- to have been notified.
+--- @param fx table
+--- @param k9Src number
+--- @param handlerSrc number
+--- @return string? k9Message, string? handlerMessage
+local function findPartyMessages(fx, k9Src, handlerSrc)
+    local k9Message, handlerMessage
+    for _, entry in ipairs(fx.notifyCalls) do
+        if entry.target == k9Src then k9Message = entry.description end
+        if entry.target == handlerSrc then handlerMessage = entry.description end
+    end
+    return k9Message, handlerMessage
+end
+
+t.test('TITLES/NOTIFICATION FALLBACK: with none of the four honest-XP locale keys available, both parties still fall back to the exact, unchanged, already-shipped generic/named text -- proves the degrade path itself, independent of whatever locales/en.json currently contains', function()
+    -- A thin wrapper around the REAL Sandbox.locale that simulates "the
+    -- four new keys have not landed yet" by raising for exactly those four
+    -- names (the same assert-on-missing-key shape Sandbox.locale itself
+    -- already uses) while delegating every OTHER key to the real file --
+    -- this keeps the test a genuine regression guard on the FALLBACK CODE
+    -- PATH itself (TenureMilestonePartyNotificationText's own pcall
+    -- chain), not merely a snapshot of whatever locales/en.json happens to
+    -- contain on the day this test runs.
+    local hiddenKeys = {
+        ['tenure.milestone_reached_named_with_xp'] = true,
+        ['tenure.milestone_reached_with_xp']       = true,
+        ['tenure.milestone_reached_named_no_xp']   = true,
+        ['tenure.milestone_reached_no_xp']         = true,
+    }
+    local function localeHidingNewKeys(key, ...)
+        if hiddenKeys[key] then error('locale key missing from locales/en.json: ' .. key) end
+        return Sandbox.locale(key, ...)
+    end
+
     local fx = newTenureFixture()
+    fx.env.locale = localeHidingNewKeys
     local k9Src, handlerSrc = wireHappyPath(fx)
     fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
     fx.setNow(86400)
     runOneTick(fx)
 
     local expected = Sandbox.locale('tenure.milestone_reached')
-    local sawK9, sawHandler = false, false
-    for _, entry in ipairs(fx.notifyCalls) do
-        if entry.target == k9Src then t.equals(entry.description, expected); sawK9 = true end
-        if entry.target == handlerSrc then t.equals(entry.description, expected); sawHandler = true end
-    end
-    t.isTrue(sawK9 and sawHandler)
+    local k9Message, handlerMessage = findPartyMessages(fx, k9Src, handlerSrc)
+    t.equals(k9Message, expected)
+    t.equals(handlerMessage, expected)
+end)
+
+t.test('TITLES/NOTIFICATION: named + neither party earned XP (e.g. Config.Features.HandlerXPProgression off, the shipped default -- AwardHandlerXP returns nil, AwardXP also returns nil here) -- BOTH parties get the SAME honest "no XP" text, because neither actually got anything', function()
+    local fx = newTenureFixture()
+    local k9Src, handlerSrc = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+
+    local expected = Sandbox.locale('tenure.milestone_reached_named_no_xp', 'Bonded Pair')
+    local k9Message, handlerMessage = findPartyMessages(fx, k9Src, handlerSrc)
+    t.equals(k9Message, expected)
+    t.equals(handlerMessage, expected)
+end)
+
+t.test('TITLES/NOTIFICATION: named + BOTH parties genuinely earned XP -- both get the SAME honest "with XP" text, each citing their own real amount', function()
+    local fx = newTenureFixture({
+        awardXPReturns = function() return 15 end,
+        awardHandlerXPReturns = function() return 15 end,
+    })
+    local k9Src, handlerSrc = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+
+    local expected = Sandbox.locale('tenure.milestone_reached_named_with_xp', 'Bonded Pair', 15)
+    local k9Message, handlerMessage = findPartyMessages(fx, k9Src, handlerSrc)
+    t.equals(k9Message, expected)
+    t.equals(handlerMessage, expected)
+end)
+
+t.test('THE FIX ITSELF: when only ONE party genuinely earned XP this crossing, the K9 and handler get DIFFERENT, individually honest messages -- no longer the byte-identical "you both progressed" text regardless of who actually earned anything', function()
+    -- K9 side genuinely mints (AwardXP succeeds); handler side does not
+    -- (AwardHandlerXP returns nil, e.g. Config.Features.HandlerXPProgression
+    -- is off, the shipped default) -- exactly the shipped-default scenario
+    -- the owner's own bug report described.
+    local fx = newTenureFixture({
+        awardXPReturns = function() return 15 end,
+        -- awardHandlerXPReturns left unset -> AwardHandlerXP returns nil
+    })
+    local k9Src, handlerSrc = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+
+    local expectedK9 = Sandbox.locale('tenure.milestone_reached_named_with_xp', 'Bonded Pair', 15)
+    local expectedHandler = Sandbox.locale('tenure.milestone_reached_named_no_xp', 'Bonded Pair')
+    local k9Message, handlerMessage = findPartyMessages(fx, k9Src, handlerSrc)
+
+    t.equals(k9Message, expectedK9, 'the K9, who genuinely earned 15 XP, must be told so')
+    t.equals(handlerMessage, expectedHandler, 'the handler, who earned NOTHING this crossing, must be told that -- never the K9\'s own "you progressed" text')
+    t.isTrue(k9Message ~= handlerMessage, 'the two parties to the SAME crossing must not see byte-identical text when only one of them actually earned anything -- this is the bug this whole section exists to close')
+end)
+
+t.test('TITLES/NOTIFICATION: unnamed (a milestone tier with no resolvable title -- ResolveMilestoneTitle returns nil) + both parties earned XP -- the GENERIC "with XP" key is used, never a title placeholder left blank', function()
+    local cfgWithUnnamedTier = {
+        ProximityMeters = 5.0,
+        TenureBonus = {
+            checkIntervalMs = 300000,
+            milestones = {
+                { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day',  handlerActionKey = 'handlerPartnershipTenure1Day' },
+                { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day',  handlerActionKey = 'handlerPartnershipTenure7Day' },
+                { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day', handlerActionKey = 'handlerPartnershipTenure30Day' },
+                -- 4th tier deliberately has NO `title` field AND sits past
+                -- TENURE_MILESTONE_TITLE_FALLBACKS' own 3-entry list
+                -- (server/tenure.lua) -- ResolveMilestoneTitle(milestone, 4)
+                -- returns nil for it, exercising the "unnamed" branch of
+                -- TenureMilestonePartyNotificationText.
+                { afterSeconds = 5184000, actionKey = 'partnershipTenure60DayTestOnly', handlerActionKey = 'handlerPartnershipTenure60DayTestOnly' },
+            },
+        },
+    }
+    local fx = newTenureFixture({
+        partnershipCfgOverride = cfgWithUnnamedTier,
+        awardXPReturns = function() return 100 end,
+        awardHandlerXPReturns = function() return 100 end,
+    })
+    local k9Src, handlerSrc = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 3, 0) -- first three tiers already granted; only tier 4 (unnamed) is new
+    fx.setNow(5184000)
+    runOneTick(fx)
+
+    local expected = Sandbox.locale('tenure.milestone_reached_with_xp', 100)
+    local k9Message, handlerMessage = findPartyMessages(fx, k9Src, handlerSrc)
+    t.equals(k9Message, expected)
+    t.equals(handlerMessage, expected)
+end)
+
+t.test('TITLES/NOTIFICATION: unnamed + neither party earned XP -- the GENERIC "no XP" key is used', function()
+    local cfgWithUnnamedTier = {
+        ProximityMeters = 5.0,
+        TenureBonus = {
+            checkIntervalMs = 300000,
+            milestones = {
+                { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day',  handlerActionKey = 'handlerPartnershipTenure1Day' },
+                { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day',  handlerActionKey = 'handlerPartnershipTenure7Day' },
+                { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day', handlerActionKey = 'handlerPartnershipTenure30Day' },
+                { afterSeconds = 5184000, actionKey = 'partnershipTenure60DayTestOnly', handlerActionKey = 'handlerPartnershipTenure60DayTestOnly' },
+            },
+        },
+    }
+    local fx = newTenureFixture({ partnershipCfgOverride = cfgWithUnnamedTier })
+    local k9Src, handlerSrc = wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 3, 0)
+    fx.setNow(5184000)
+    runOneTick(fx)
+
+    local expected = Sandbox.locale('tenure.milestone_reached_no_xp')
+    local k9Message, handlerMessage = findPartyMessages(fx, k9Src, handlerSrc)
+    t.equals(k9Message, expected)
+    t.equals(handlerMessage, expected)
 end)
 
 -- ----------------------------------------------------------------------

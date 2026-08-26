@@ -78,6 +78,19 @@
        only distinguishes (a) from a real tier-up for whether to show a
        "you leveled up" notification (never on the initial post-login
        snapshot).
+    2. 'qbx_k9unit:client:handlerXpTierChanged' (NEW, this pass -- "a
+       handler cannot see their own rank or XP anywhere" gap closure):
+       { totalXp: number, tier: table (a CopyTier()'d Config.HandlerXPTiers
+       entry), live: boolean }. Same delivery discipline as #1 above (the
+       handler's own client only, never broadcast; `.live` always carried,
+       never withheld while the flag is off) and the SAME three trigger
+       points: PlayerLoaded/resource-start backfill, a real tier crossing
+       inside AwardHandlerXP, and RefreshHandlerXPProgressionLiveStateForAllOnline
+       (a runtime-toggle refresh mirroring #1's own — see that function's
+       own doc comment for the one piece of wiring it still needs from
+       server/runtimecontrol.lua, out of this pass's own edit scope). See
+       PushHandlerTierSnapshot's own doc comment (further down this file)
+       for the full payload/"why a separate event" writeup.
 
     Commands: none.
 
@@ -93,7 +106,12 @@
     `local`) functions (a fourth, RefreshXPProgressionLiveStateForAllOnline,
     added this pass — see its own declaration below for the full contract;
     not repeated here since server/runtimecontrol.lua is its only caller
-    and that call site's own comment already carries the "why"):
+    and that call site's own comment already carries the "why". NOT an
+    exhaustive inventory of every resource-global this file has ever added
+    — AwardHandlerXP/GetHandlerXPTier/GetHandlerXPTierMedkitCooldownMs/
+    GetHandlerXPTierKennelDeployCooldownMs/RefreshHandlerXPProgressionLiveStateForAllOnline/
+    AwardXPDirect/GetXP/PushXPTierSnapshotIfOnline are each documented at
+    their own declaration instead, same as this "fourth" one already was):
         AwardXP(citizenid, actionKey)
             actionKey is a string key into Config.XP.awards (e.g.
             'searchContrabandFound', 'trackSourceResolved',
@@ -1932,8 +1950,17 @@ end
 --- client-claimed XP delta or tier — `actionKey` selects a flat, config-owned
 --- amount; there is no path for a caller (or, transitively, a client) to
 --- specify an arbitrary amount.
+--- RETURN VALUE (this pass): returns the actual `amount` applied on
+--- success, or nothing (`nil` in a single-value context) if the award was
+--- rejected for ANY reason (feature off, malformed citizenid, unknown
+--- actionKey, unpayable amount, per-person block, rate floor, or the
+--- shared mint budget). Purely additive — every existing caller ignores
+--- the return value already, so this changes nothing for them. Added so
+--- server/tenure.lua's milestone notification can say what a party
+--- actually earned instead of assuming every call succeeds.
 --- @param citizenid string
 --- @param actionKey string -- a key in Config.XP.awards
+--- @return number? amount
 function AwardXP(citizenid, actionKey)
     if not Config.Features.XPProgression then return end -- real server-side no-op regardless of caller state, per DEVELOPER_REFERENCE.md §3
     if type(citizenid) ~= 'string' or citizenid == '' then return end -- defensive: never trust a malformed caller argument
@@ -2137,6 +2164,19 @@ function AwardXP(citizenid, actionKey)
             PushTierSnapshot(onlineSrc, citizenid, newTier)
         end
     end
+
+    -- RETURN VALUE, ADDED (tenure-notification honesty pass, this pass) --
+    -- every early `return` above this point returns nothing (bare
+    -- `return`), which Lua callers already see as `nil` in a single-value
+    -- context -- so this addition is purely ADDITIVE, not a behavior change
+    -- for any existing caller that ignores the return value (every current
+    -- one does). `amount` is the real, validated XP just applied to
+    -- `K9XP[citizenid]` above -- server/tenure.lua's own
+    -- CheckTenureMilestonesForK9 is the first caller that actually reads
+    -- this, so it can tell a K9-role party what they genuinely earned this
+    -- crossing instead of assuming the call always succeeds.
+    -- @return number amount -- the XP actually applied (never reached if any check above returned early/nil)
+    return amount
 end
 
 -- ======================================================================
@@ -2176,6 +2216,106 @@ local function IsHandlerXPProgressionPermittedForCitizenId(citizenid)
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
+-- ======================================================================
+-- HANDLER TIER CLIENT VISIBILITY (this pass, coder-backend -- "a handler
+-- cannot see their own rank or XP anywhere" gap closure). Confirmed by
+-- direct grep before writing any of this: HandlerXP/GetHandlerXPTier were
+-- tracked and read server-side (GetHandlerXPTierMedkitCooldownMs/
+-- GetHandlerXPTierKennelDeployCooldownMs, server/tablet.lua's roster
+-- reads) but NOTHING ever reached the handler's own client -- unlike the
+-- K9 side, which has had PushTierSnapshot/xpTierChanged since Phase 4.
+-- Mirrors PushTierSnapshot/RefreshXPProgressionLiveStateForAllOnline's own
+-- shape for the K9 side as closely as this second ladder deserves,
+-- including the 144a432 "never withhold the payload, tag `.live` instead"
+-- fix -- see PushTierSnapshot's own doc comment above for the full
+-- "AN UNBOUNDED TRAP" writeup this follows verbatim.
+--
+-- WHY A SEPARATE EVENT, NOT A NEW FIELD ON xpTierChanged: the K9 and
+-- handler ladders are independent totals/tiers for the same citizenid
+-- (config.lua's own Config.HandlerXPTiers header, "why a second ladder,
+-- not a second reading") -- collapsing both into one event would force
+-- every existing xpTierChanged consumer (client/progression.lua) to start
+-- ignoring fields it does not own, and would fire that event for a
+-- citizenid whose K9 tier never changed at all. Kept as its own event,
+-- the same "one event per independent concern" precedent this resource
+-- already follows for wellbeing/certification/etc.
+--
+-- PAYLOAD SHAPE -- 'qbx_k9unit:client:handlerXpTierChanged':
+--     { totalXp: number, tier: table, live: boolean }
+-- `tier` is a CopyTier()'d snapshot of the resolved Config.HandlerXPTiers
+-- entry (xp = that TIER'S OWN THRESHOLD, label, and whichever optional
+-- multiplier fields that tier carries) -- the SAME shape xpTierChanged's
+-- own payload already uses for the K9 side. `totalXp` is the field this
+-- event carries that xpTierChanged does not: the citizenid's real,
+-- persisted accumulated handler_xp total (HandlerXP[citizenid]) -- needed
+-- because a tier object's own `xp` field is a THRESHOLD, not a running
+-- total, and "the handler's own XP total" was this pass's own explicit
+-- requirement, not just "their rank".
+--
+-- SENT TO THE HANDLER'S OWN CLIENT ONLY -- never broadcast, matching
+-- PushTierSnapshot's own delivery discipline.
+-- ======================================================================
+
+--- @param targetSrc number
+--- @param citizenid string
+--- @param totalXp number
+--- @param tier table
+local function PushHandlerTierSnapshot(targetSrc, citizenid, totalXp, tier)
+    TriggerClientEvent('qbx_k9unit:client:handlerXpTierChanged', targetSrc, {
+        totalXp = totalXp,
+        tier = CopyTier(tier),
+        -- UNBOUNDED-TRAP DISCIPLINE (144a432, mirrored exactly): ALWAYS
+        -- sent, regardless of the flag's current value -- withholding this
+        -- while the flag is off is exactly the bug that commit fixed for
+        -- the K9 side. The flag's CURRENT value rides along instead, so a
+        -- client keeping any handler-rank display up across a runtime
+        -- toggle can hide/gray it out immediately rather than staying
+        -- stuck showing a rank that no longer means anything.
+        live = Config.Features.HandlerXPProgression == true,
+    })
+end
+
+--- UNBOUNDED-TRAP FIX, HANDLER SIDE -- mirrors
+--- RefreshXPProgressionLiveStateForAllOnline above (same iteration shape,
+--- same in-memory-only/no-DB-read posture, same "runs precisely at the
+--- moment the flag may have just gone false" reasoning) -- see that
+--- function's own doc comment for the full writeup, not repeated here.
+---
+--- INTEGRATION NOTE FOR WHOEVER OWNS server/runtimecontrol.lua's
+--- ApplyFeatureOverride (NOT edited by this pass -- that file is outside
+--- this pass's own edit scope): that function's existing comment on
+--- HandlerXPProgression ("deliberately gets NO equivalent hook here...
+--- there is no client-side tier cache... for this flag to leave stranded")
+--- was accurate ONLY because no client push existed yet for this ladder.
+--- Now that PushHandlerTierSnapshot exists, that reasoning no longer
+--- holds -- an already-connected handler who already received a
+--- `live=true` snapshot (their own login push, or a real tier crossing)
+--- would be left stranded showing it forever if
+--- `Config.Features.HandlerXPProgression` is later flipped off at
+--- runtime, exactly the K9-side bug 144a432 fixed. ApplyFeatureOverride
+--- needs one more branch, symmetric with its existing XPProgression one:
+---     if name == 'HandlerXPProgression' and type(RefreshHandlerXPProgressionLiveStateForAllOnline) == 'function' then
+---         RefreshHandlerXPProgressionLiveStateForAllOnline()
+---     end
+--- and that file's own stale comment above HandlerXPProgression's case
+--- needs updating to match. Flagged here, not silently left for a future
+--- reader to rediscover, since this file cannot make that edit itself
+--- under this pass's own scope.
+--- @return nil
+function RefreshHandlerXPProgressionLiveStateForAllOnline()
+    for _, playerIdStr in ipairs(GetPlayers()) do
+        local src = tonumber(playerIdStr)
+        if src then
+            local Player = exports.qbx_core:GetPlayer(src)
+            if Player and Player.PlayerData and Player.PlayerData.citizenid then
+                local citizenid = Player.PlayerData.citizenid
+                local totalXp = HandlerXP[citizenid] or 0
+                PushHandlerTierSnapshot(src, citizenid, totalXp, ResolveHandlerTier(totalXp))
+            end
+        end
+    end
+end
+
 --- Resource-global -- HANDLER XP (Config.Features.HandlerXPProgression).
 --- Mirrors AwardXP above as closely as this second, HANDLER-facing total
 --- deserves -- the SAME order of checks (feature flag, malformed-argument
@@ -2196,27 +2336,36 @@ end
 --- header for why that budget exists and why splitting it per-mechanic-
 --- family would reopen the exact compound-farm gap that section closes.
 ---
---- DELIBERATELY SIMPLER THAN AwardXP IN ONE RESPECT: no tier-crossing
---- outbound event and no client-facing push. AwardXP's own tier crossing
---- fires 'qbx_k9unit:events:xpTierReached' and pushes
---- 'qbx_k9unit:client:xpTierChanged' because a K9-tier crossing changes a
---- live, client-visible mechanical effect (speedMultiplier/
---- scentRangeMultiplier/medkitCooldownMultiplier, per Config.XPTiers).
---- CORRECTED (dead-config-field pass, coder-backend): this used to say
---- Config.HandlerXPTiers' three effect fields were all "defined, not yet
---- wired" and speculated about adding a client push "in the same change
---- that wires the first real consumer." Two of the three are wired now
---- (medkitTreatCooldownMultiplier/kennelDeployCooldownMultiplier, see
---- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs's
---- own "HANDLER XP TIER UNLOCKS" doc comment above), and no client push was
---- needed after all: unlike Config.XPTiers' speedMultiplier/
---- scentRangeMultiplier (a K9's own ped behavior, visibly wrong on an
---- already-connected client until pushed), both wired effects are
---- consulted fresh, server-side only, at the exact moment their own
---- action's gate is checked -- there is no cached or client-visible copy of
---- "my current effective cooldown" that could ever go stale. The third
---- (leashRangeMultiplier) was removed rather than wired -- see config.lua's
---- own Config.HandlerXPTiers header for why.
+--- CORRECTED, THIS PASS ("a handler cannot see their own rank or XP
+--- anywhere" gap closure) -- this doc comment used to claim AwardHandlerXP
+--- was "DELIBERATELY SIMPLER THAN AwardXP IN ONE RESPECT: no tier-crossing
+--- outbound event and no client-facing push," reasoning that neither wired
+--- effect field (medkitTreatCooldownMultiplier/kennelDeployCooldownMultiplier)
+--- has a client-visible cached value that could go stale. That reasoning
+--- was correct for THOSE TWO FIELDS and remains true of them -- but it
+--- silently generalized to "no client push is needed at all," which
+--- stopped being true the moment anyone wanted to actually SHOW a handler
+--- their own rank/XP: there was no server->client channel to read it from,
+--- an oversight independent of the two cooldown-multiplier fields' own
+--- correct reasoning. FIXED here: this function now pushes
+--- 'qbx_k9unit:client:handlerXpTierChanged' to the handler's OWN client
+--- (never broadcast) on a real tier crossing, via PushHandlerTierSnapshot
+--- immediately below -- see that function's own doc comment for the exact
+--- payload shape and the "why a separate event, not a new xpTierChanged
+--- field" reasoning. The PlayerLoaded/onResourceStart-backfill call sites
+--- (further down this file) push the SAME shape on login/restart, so an
+--- offline tier crossing (e.g. a tenure milestone paid while the handler
+--- was logged out is not currently possible -- server/tenure.lua requires
+--- both parties online -- but a future award path might not share that
+--- constraint) is still caught up on next login, mirroring PushTierSnapshot's
+--- own K9-side contract exactly.
+---
+--- RETURN VALUE (this pass, same addition as AwardXP above): returns the
+--- actual `amount` applied on success, or nothing (`nil`) if the award was
+--- rejected for any reason. Purely additive for every existing caller.
+--- Added for the SAME reason as AwardXP's own identical addition:
+--- server/tenure.lua's milestone notification needs to know what the
+--- handler-role party actually got, not assume the call always succeeds.
 ---
 --- Persistence uses K9Store.HandlerXP_UpsertAdd's own SafeWrite (boolean)
 --- contract, DELIBERATELY UNLIKE AwardXP's own K9Store.XP_UpsertAdd call
@@ -2229,6 +2378,7 @@ end
 --- caller regardless).
 --- @param citizenid string
 --- @param actionKey string -- a key in Config.HandlerXP.awards
+--- @return number? amount
 function AwardHandlerXP(citizenid, actionKey)
     if not Config.Features.HandlerXPProgression then return end -- real server-side no-op regardless of caller state, per DEVELOPER_REFERENCE.md §3
     if type(citizenid) ~= 'string' or citizenid == '' then return end -- defensive: never trust a malformed caller argument
@@ -2297,10 +2447,12 @@ function AwardHandlerXP(citizenid, actionKey)
     end
 
     local oldXp = HandlerXP[citizenid] or 0
+    local oldTier = ResolveHandlerTier(oldXp)
     local newXp = oldXp + amount
     -- Update the in-memory cache SYNCHRONOUSLY, before the DB write below --
     -- same correctness reasoning as AwardXP's own K9XP write.
     HandlerXP[citizenid] = newXp
+    local newTier = ResolveHandlerTier(newXp)
 
     -- Non-blocking write via K9Store.HandlerXP_UpsertAdd's own SafeWrite
     -- (boolean) contract -- see this function's own doc comment for why
@@ -2311,6 +2463,23 @@ function AwardHandlerXP(citizenid, actionKey)
             print(('[qbx_k9unit] progression: AwardHandlerXP UPSERT failed for citizenid %s -- %d XP for actionKey %q was NOT persisted to k9_progression.handler_xp (in-memory handler-tier/session effects already applied and are unaffected)'):format(citizenid, amount, actionKey))
         end
     end)
+
+    -- CLIENT VISIBILITY (this pass) -- see PushHandlerTierSnapshot's own
+    -- doc comment above for the full payload/discipline writeup. Only on a
+    -- REAL tier crossing, only to a CURRENTLY connected player, mirroring
+    -- AwardXP's own identical "resolve by citizenid, no-op if not
+    -- currently online" shape -- an offline crossing is caught up by this
+    -- citizenid's own next PlayerLoaded push instead (see that call site
+    -- further down this file).
+    if newTier ~= oldTier then
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+        if type(onlineSrc) == 'number' then
+            PushHandlerTierSnapshot(onlineSrc, citizenid, newXp, newTier)
+        end
+    end
+
+    return amount
 end
 
 --- Awards an EXPLICIT XP amount, for /k9givexp only.
@@ -2417,10 +2586,23 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     -- session -- AwardHandlerXP's own `HandlerXP[citizenid] or 0` read would
     -- otherwise silently treat an un-warmed cache as "starts from zero,"
     -- exactly the same class of staleness LoadXPForCitizenid already exists
-    -- to prevent for the K9 side). No client push -- see GetHandlerXPTier's
-    -- own doc comment for why no xpTierChanged-shaped event exists yet for
-    -- the handler ladder.
-    LoadHandlerXPForCitizenid(citizenid)
+    -- to prevent for the K9 side).
+    --
+    -- CLIENT PUSH, ADDED THIS PASS -- see PushHandlerTierSnapshot's own doc
+    -- comment for the full payload/discipline writeup. UNCONDITIONAL, same
+    -- as the K9-side push two lines above -- NOT gated on
+    -- Config.Features.HandlerXPProgression (that flag's current value rides
+    -- along in the payload's own `.live` field instead, per this pass's own
+    -- "do not gate the push itself on the flag" requirement). This is what
+    -- makes "a handler who is offline when they cross a rank sees it on
+    -- next login" true: LoadHandlerXPForCitizenid always re-reads the REAL
+    -- persisted total fresh from the database, so whatever crossed while
+    -- this citizenid was offline is already reflected in the very first
+    -- snapshot they receive this session.
+    local handlerXp = LoadHandlerXPForCitizenid(citizenid)
+    if type(targetSrc) == 'number' then
+        PushHandlerTierSnapshot(targetSrc, citizenid, handlerXp, ResolveHandlerTier(handlerXp))
+    end
 end)
 
 -- STRUCTURAL GAP backfill (mirrors server/main.lua's identical backfill for
@@ -2502,7 +2684,22 @@ AddEventHandler('onResourceStart', function(resourceName)
                     PushTierSnapshot(src, citizenid, ResolveTier(xp))
                 end
                 if Config.Features.HandlerXPProgression then
-                    LoadHandlerXPForCitizenid(citizenid)
+                    -- Gated on the flag here for the SAME perf reason the
+                    -- K9-side branch above is not: if this flag has NEVER
+                    -- been turned on, no citizenid can have a real
+                    -- handler_xp row to warm, so a query here would be
+                    -- wasted (same PERFORMANCE FIX rationale already
+                    -- documented above this handler for the K9 side).
+                    -- KNOWN TRADE-OFF, same disclosed shape as the K9
+                    -- side's own: an operator who enables this flag, lets a
+                    -- citizenid earn real handler XP, disables it again,
+                    -- then restarts this resource while that citizenid is
+                    -- still online reintroduces the "cache/push sits at
+                    -- default until next reconnect" gap for that narrow
+                    -- case -- accepted for the identical reason the K9 side
+                    -- already accepts it.
+                    local handlerXp = LoadHandlerXPForCitizenid(citizenid)
+                    PushHandlerTierSnapshot(src, citizenid, handlerXp, ResolveHandlerTier(handlerXp))
                 end
             end
         end

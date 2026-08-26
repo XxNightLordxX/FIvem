@@ -484,6 +484,22 @@ t.test('SEARCHER-BUSY GUARD: IsK9CurrentlyHolding available and false does not b
     t.isTrue(result.ok)
 end)
 
+t.test('SEARCHER-BUSY GUARD, INCIDENT REGRESSION: IsPedInAnyVehicle undefined (a test sandbox that has not stubbed this native, e.g. tests/coopsearchbonus_spec.lua before this fix) degrades to "not busy", never to a thrown error', function()
+    -- This native is ALWAYS present on a real FXServer (see
+    -- IsSearcherBusyElsewhere's own INCIDENT FIX comment) -- this test
+    -- proves the ONLY scenario this guard actually matters for: a Lua test
+    -- sandbox that never stubbed it. Genuinely undefine it here (not merely
+    -- stub it to return false) to prove the guard, not just the outcome.
+    local originalIsPedInAnyVehicle = env.IsPedInAnyVehicle
+    env.IsPedInAnyVehicle = nil
+    fakeNow = 100040
+    local ok, result = pcall(searchVehicle, 805, 8040, 10)
+    env.IsPedInAnyVehicle = originalIsPedInAnyVehicle
+
+    t.isTrue(ok, 'IsPedInAnyVehicle being undefined must never throw a raw Lua error out of the search callback: ' .. tostring(result))
+    t.isTrue(ok and result.ok, 'the native being undefined must degrade to "not busy" and let the search proceed, never refuse it')
+end)
+
 -- ----------------------------------------------------------------------
 -- SearchMutex re-entrancy -- does a SECOND searchTarget request from the
 -- SAME source, arriving while the FIRST is genuinely mid-flight (yielded

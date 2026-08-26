@@ -1574,4 +1574,365 @@ t.test('CONFIG-ABORT REGRESSION: a Config.XP.awards value of exactly XP_MINT_BUD
     t.isFalse(warnedAboutAwards, 'a valid boundary value must never warn about Config.XP.awards at all (unrelated boot-time datastore prints are expected and irrelevant here)')
 end)
 
+-- ============================================================================
+-- RETURN VALUE (this pass -- server/tenure.lua's honest per-party
+-- notification fix needs to know whether an award genuinely succeeded, not
+-- just that it was attempted). Uses the SHARED top-of-file env/AwardXP --
+-- fresh citizenid, so it does not interact with any other test's own
+-- accumulated total.
+-- ============================================================================
+
+t.test('AwardXP: returns the real amount actually applied on success, and returns nothing on an unknown actionKey (never a number for a rejected call)', function()
+    fakeNow = fakeNow + 10000
+    local granted = AwardXP('cid-retval', 'smallAward')
+    t.equals(granted, 60, 'must return the exact amount just applied to K9XP')
+
+    fakeNow = fakeNow + 10000
+    local rejected = AwardXP('cid-retval', 'totallyUnknownActionKeyForThisTest')
+    t.isNil(rejected, 'an unknown actionKey must return nothing, never a number')
+end)
+
+-- ============================================================================
+-- HANDLER TIER CLIENT VISIBILITY (this pass, coder-backend -- "a handler
+-- cannot see their own rank or XP anywhere" gap closure). Own FRESH
+-- sandbox, mirroring newProgressionFixture's own reasoning for needing one
+-- (real, tunable Config.HandlerXPTiers/Config.HandlerXP), but going
+-- further: every fixture above this point gives TriggerClientEvent a
+-- byte-discarding no-op body, which cannot prove anything about a PAYLOAD
+-- this section needs to inspect -- so this one CAPTURES every call
+-- instead.
+-- ============================================================================
+
+--- @param opts table? -- { handlerXPProgression: boolean? (default true), handlerXpByCitizenid: table<string, number>? (seeds K9Store.HandlerXP_Get's own "no row yet" MySQL.scalar.await stub), prewarmedPlayers: {{src=number, citizenid=string}}? (populates GetPlayers()/exports.qbx_core BEFORE onResourceStart's own backfill loop runs, simulating players already connected across a restart) }
+--- @return table fixture
+local function newHandlerTierSnapshotFixture(opts)
+    opts = opts or {}
+    local fakeNow3 = 0
+    local function GetGameTimer3() return fakeNow3 end
+
+    local eventHandlers3 = {}
+    local function AddEventHandler3(eventName, handler)
+        eventHandlers3[eventName] = eventHandlers3[eventName] or {}
+        eventHandlers3[eventName][#eventHandlers3[eventName] + 1] = handler
+    end
+
+    local function GetCurrentResourceName3() return 'qbx_k9unit' end
+
+    local onlineSources = {}
+    local playerByCitizenId3 = {}
+    for _, p in ipairs(opts.prewarmedPlayers or {}) do
+        onlineSources[#onlineSources + 1] = p.src
+        playerByCitizenId3[p.citizenid] = { PlayerData = { citizenid = p.citizenid, source = p.src } }
+    end
+
+    local function GetPlayers3()
+        local out = {}
+        for i, src in ipairs(onlineSources) do out[i] = tostring(src) end
+        return out
+    end
+
+    local function TriggerEvent3(_eventName, ...) end
+
+    -- THE ONE MEANINGFUL DIFFERENCE FROM EVERY OTHER FIXTURE ABOVE: a REAL,
+    -- capturing TriggerClientEvent, because this section's own tests need
+    -- to inspect the exact payload shape server/progression.lua sends, not
+    -- merely that "some event fired."
+    local capturedClientEvents = {}
+    local function TriggerClientEvent3(eventName, target, payload)
+        capturedClientEvents[#capturedClientEvents + 1] = { eventName = eventName, target = target, payload = payload }
+    end
+
+    local capturedRecurringThreads3 = {}
+    local function CreateThread3(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('newHandlerTierSnapshotFixture: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+        if coroutine.status(co) ~= 'dead' then
+            capturedRecurringThreads3[#capturedRecurringThreads3 + 1] = co
+        end
+    end
+    local function Wait3(_ms) coroutine.yield() end
+
+    local printedLines3 = {}
+    local function printStub3(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines3[#printedLines3 + 1] = table.concat(parts, '\t')
+    end
+
+    local exportsStub3 = {
+        qbx_core = {
+            GetPlayerByCitizenId = function(_self, citizenid) return playerByCitizenId3[citizenid] end,
+            GetPlayer = function(_self, src)
+                for _, p in pairs(playerByCitizenId3) do
+                    if p.PlayerData.source == src then return p end
+                end
+                return nil
+            end,
+        },
+    }
+
+    local handlerXpByCitizenid = opts.handlerXpByCitizenid or {}
+    local MySQLStub3 = {
+        scalar = { await = function(_sql, params) return handlerXpByCitizenid[params[1]] end },
+        insert = { await = function(_sql, _params) return 1 end },
+    }
+
+    local Config3 = {
+        Features = { XPProgression = true, HandlerXPProgression = opts.handlerXPProgression ~= false },
+        XP = { scopePerCitizenidOrJob = 'citizenid', awards = { takedownSuccess = 30 } },
+        XPTiers = { { xp = 0, label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 } },
+        HandlerXP = { awards = { handlerCertifyK9 = 50 } },
+        HandlerXPTiers = {
+            { xp = 0,  label = 'Rookie Handler' },
+            { xp = 50, label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
+        },
+        FeatureControl = opts.featureControl,
+    }
+
+    local env3 = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer3,
+        AddEventHandler = AddEventHandler3,
+        GetCurrentResourceName = GetCurrentResourceName3,
+        GetPlayers = GetPlayers3,
+        TriggerEvent = TriggerEvent3,
+        TriggerClientEvent = TriggerClientEvent3,
+        CreateThread = CreateThread3,
+        Wait = Wait3,
+        exports = exportsStub3,
+        print = printStub3,
+        MySQL = MySQLStub3,
+        Config = Config3,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env3)
+    Sandbox.loadInto('../server/datastore.lua', env3)
+    Sandbox.loadInto('../server/events.lua', env3)
+    Sandbox.loadInto('../server/progression.lua', env3)
+
+    for _, handler in ipairs(eventHandlers3['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    return {
+        env = env3,
+        Config = Config3,
+        AwardHandlerXP = env3.AwardHandlerXP,
+        RefreshHandlerXPProgressionLiveStateForAllOnline = env3.RefreshHandlerXPProgressionLiveStateForAllOnline,
+        capturedClientEvents = capturedClientEvents,
+        printedLines = printedLines3,
+        setOnline = function(src, citizenid)
+            onlineSources[#onlineSources + 1] = src
+            playerByCitizenId3[citizenid] = { PlayerData = { citizenid = citizenid, source = src } }
+        end,
+        firePlayerLoaded = function(citizenid, src)
+            playerByCitizenId3[citizenid] = { PlayerData = { citizenid = citizenid, source = src } }
+            for _, handler in ipairs(eventHandlers3['QBCore:Server:PlayerLoaded'] or {}) do
+                handler(playerByCitizenId3[citizenid])
+            end
+        end,
+        --- Last 'qbx_k9unit:client:handlerXpTierChanged' sent to `target`
+        --- (or the last one sent to ANYONE, if `target` is nil).
+        lastHandlerEvent = function(target)
+            for i = #capturedClientEvents, 1, -1 do
+                local e = capturedClientEvents[i]
+                if e.eventName == 'qbx_k9unit:client:handlerXpTierChanged' and (target == nil or e.target == target) then
+                    return e
+                end
+            end
+            return nil
+        end,
+        countHandlerEvents = function()
+            local n = 0
+            for _, e in ipairs(capturedClientEvents) do
+                if e.eventName == 'qbx_k9unit:client:handlerXpTierChanged' then n = n + 1 end
+            end
+            return n
+        end,
+    }
+end
+
+t.test('HANDLER TIER PUSH: AwardHandlerXP returns the real amount on success, and nothing on a rejected call (feature off)', function()
+    local fxOn = newHandlerTierSnapshotFixture({ handlerXPProgression = true })
+    local granted = fxOn.AwardHandlerXP('cid-hxp1', 'handlerCertifyK9')
+    t.equals(granted, 50, 'must return the exact amount just applied to HandlerXP')
+
+    local fxOff = newHandlerTierSnapshotFixture({ handlerXPProgression = false })
+    local rejected = fxOff.AwardHandlerXP('cid-hxp2', 'handlerCertifyK9')
+    t.isNil(rejected, 'the whole-function no-op (feature off) must return nothing, never a number')
+end)
+
+t.test('HANDLER TIER PUSH: PlayerLoaded pushes qbx_k9unit:client:handlerXpTierChanged UNCONDITIONALLY -- even with Config.Features.HandlerXPProgression OFF, tagged live=false, never withheld', function()
+    local fx = newHandlerTierSnapshotFixture({ handlerXPProgression = false })
+    fx.firePlayerLoaded('cid-login1', 501)
+
+    local e = fx.lastHandlerEvent(501)
+    t.isNotNil(e, 'the push must happen regardless of the flag -- this pass\'s own "do not gate the push itself on the flag" requirement')
+    t.equals(e.payload.totalXp, 0, 'an uncached/no-row citizenid must show 0, never nil or an error')
+    t.equals(e.payload.tier.label, 'Rookie Handler')
+    t.isFalse(e.payload.live, 'must be tagged with the flag\'s REAL current value, never omitted')
+end)
+
+t.test('HANDLER TIER PUSH: PlayerLoaded pushes the REAL persisted total/tier and tags live=true when the flag is on -- this is what makes an offline-earned crossing visible on next login', function()
+    local fx = newHandlerTierSnapshotFixture({ handlerXPProgression = true, handlerXpByCitizenid = { ['cid-login2'] = 75 } })
+    fx.firePlayerLoaded('cid-login2', 502)
+
+    local e = fx.lastHandlerEvent(502)
+    t.isNotNil(e)
+    t.equals(e.payload.totalXp, 75, 'must reflect the REAL persisted total read fresh from the database, not a session-only accumulator')
+    t.equals(e.payload.tier.label, 'Certified Handler', 'must resolve to the tier that total actually earns (75 >= 50)')
+    t.isTrue(e.payload.live)
+end)
+
+t.test('HANDLER TIER PUSH: AwardHandlerXP pushes a tier-crossing snapshot to the online citizenid, and does NOT push at all when no tier boundary was crossed', function()
+    local fx = newHandlerTierSnapshotFixture({ handlerXPProgression = true })
+    fx.setOnline(503, 'cid-cross1')
+
+    -- Below the 50-xp Certified Handler threshold -- no crossing yet.
+    fx.AwardHandlerXP('cid-cross1', 'handlerCertifyK9') -- 50 XP -- lands EXACTLY on the boundary, so this SHOULD cross
+    local e = fx.lastHandlerEvent(503)
+    t.isNotNil(e, 'a genuine tier crossing (0 -> 50, Rookie -> Certified) must push')
+    t.equals(e.payload.totalXp, 50)
+    t.equals(e.payload.tier.label, 'Certified Handler')
+    t.isTrue(e.payload.live)
+
+    local countAfterCrossing = fx.countHandlerEvents()
+    -- A SECOND award for the same citizenid that does NOT cross another
+    -- tier boundary (Certified Handler is this fixture's own top tier)
+    -- must NOT push again -- mirrors AwardXP's own "only on newTier ~=
+    -- oldTier" discipline for the K9 side exactly.
+    fx.env.HasPermission = nil -- no-op, just documents nothing else gates this
+    local secondCallOk = pcall(fx.AwardHandlerXP, 'cid-cross1', 'handlerCertifyK9')
+    t.isTrue(secondCallOk)
+    t.equals(fx.countHandlerEvents(), countAfterCrossing, 'no NEW push when no tier boundary was crossed')
+end)
+
+t.test('HANDLER TIER PUSH: RefreshHandlerXPProgressionLiveStateForAllOnline pushes a snapshot to every currently-online citizenid, tagged with the CURRENT flag value -- the runtime-toggle "unbounded trap" fix, mirrored from the K9 side', function()
+    local fx = newHandlerTierSnapshotFixture({ handlerXPProgression = true })
+    fx.setOnline(504, 'cid-refresh1')
+    fx.setOnline(505, 'cid-refresh2')
+
+    fx.RefreshHandlerXPProgressionLiveStateForAllOnline()
+    local e504 = fx.lastHandlerEvent(504)
+    local e505 = fx.lastHandlerEvent(505)
+    t.isNotNil(e504)
+    t.isNotNil(e505)
+    t.isTrue(e504.payload.live)
+    t.isTrue(e505.payload.live)
+
+    -- Flip the flag off (simulating a runtime toggle from the tablet) and
+    -- refresh again -- BOTH already-online citizenids must now see
+    -- live=false, the same "never withheld, tagged instead" discipline
+    -- 144a432 established for the K9 side.
+    fx.Config.Features.HandlerXPProgression = false
+    fx.RefreshHandlerXPProgressionLiveStateForAllOnline()
+    t.isFalse(fx.lastHandlerEvent(504).payload.live)
+    t.isFalse(fx.lastHandlerEvent(505).payload.live)
+end)
+
+t.test('HANDLER TIER PUSH: onResourceStart backfill pushes for an already-connected citizenid when HandlerXPProgression was on at restart -- mirrors the K9 side\'s own "/restart while online" backfill', function()
+    local fx = newHandlerTierSnapshotFixture({
+        handlerXPProgression = true,
+        handlerXpByCitizenid = { ['cid-backfill1'] = 60 },
+        prewarmedPlayers = { { src = 601, citizenid = 'cid-backfill1' } },
+    })
+
+    local e = fx.lastHandlerEvent(601)
+    t.isNotNil(e, 'the backfill loop must push for a citizenid already connected across the simulated restart')
+    t.equals(e.payload.totalXp, 60)
+    t.equals(e.payload.tier.label, 'Certified Handler')
+    t.isTrue(e.payload.live)
+end)
+
+t.test('HANDLER TIER PUSH: onResourceStart backfill pushes NOTHING when HandlerXPProgression was OFF at restart -- same wasted-query avoidance the K9 side\'s own backfill already applies, not a withheld payload', function()
+    local fx = newHandlerTierSnapshotFixture({
+        handlerXPProgression = false,
+        prewarmedPlayers = { { src = 602, citizenid = 'cid-backfill2' } },
+    })
+
+    t.equals(fx.countHandlerEvents(), 0, 'no backfill push at all when the flag has never been enabled -- there is no real handler_xp row to warm or show')
+end)
+
+-- ============================================================================
+-- HANDLER LADDER CLIMBABILITY (this pass, coder-backend -- "the handler
+-- rank ladder cannot be reached in a human lifetime" audit). Loads the
+-- REAL, unmodified config.lua directly (not a fixture copy) so this is a
+-- genuine regression guard on the SHIPPED Config.HandlerXPTiers/
+-- Config.HandlerXP values, not on a description of them -- reverting the
+-- rescale back toward the old 750/2500/6000 thresholds (or changing the
+-- wired award amounts this arithmetic depends on) fails this test.
+-- ============================================================================
+
+local function loadRealConfig()
+    local realConfigEnv = Sandbox.newEnv({})
+    Sandbox.loadInto('../config.lua', realConfigEnv)
+    return realConfigEnv.Config
+end
+
+t.test('HANDLER LADDER: the real, shipped Config.HandlerXPTiers is non-empty, ascending, and starts at xp = 0 (the same baseline contract GetValidatedHandlerXPTiers enforces at runtime)', function()
+    local RealConfig = loadRealConfig()
+    local tiers = RealConfig.HandlerXPTiers
+    t.isTrue(type(tiers) == 'table' and #tiers >= 2)
+    t.equals(tiers[1].xp, 0)
+    for i = 2, #tiers do
+        t.isTrue(tiers[i].xp > tiers[i - 1].xp, ('tier %d (xp=%s) must exceed tier %d (xp=%s)'):format(i, tostring(tiers[i].xp), i - 1, tostring(tiers[i - 1].xp)))
+    end
+end)
+
+t.test('HANDLER LADDER: the FIRST promotion (rank index 2) is reachable via a SINGLE personally-granted certification (handlerCertifyK9) -- "a first promotion within a few shifts"', function()
+    local RealConfig = loadRealConfig()
+    local firstPromotionThreshold = RealConfig.HandlerXPTiers[2].xp
+    local certifyAward = RealConfig.HandlerXP.awards.handlerCertifyK9
+    t.isTrue(type(certifyAward) == 'number' and certifyAward > 0)
+    t.isTrue(firstPromotionThreshold <= certifyAward,
+        ('first promotion (xp=%d) must be reachable in ONE certification (worth %d XP) -- otherwise it is not a "few shifts" rank'):format(firstPromotionThreshold, certifyAward))
+end)
+
+t.test('HANDLER LADDER: the SECOND rank is reachable from the tenure-milestone trickle ALONE (no certifying required) -- a handler who only ever stays partnered still climbs at least this far in about a month', function()
+    local RealConfig = loadRealConfig()
+    local secondRankThreshold = RealConfig.HandlerXPTiers[3].xp
+    local tenureLifetimeCap = RealConfig.HandlerXP.awards.handlerPartnershipTenure1Day
+        + RealConfig.HandlerXP.awards.handlerPartnershipTenure7Day
+        + RealConfig.HandlerXP.awards.handlerPartnershipTenure30Day
+    t.isTrue(secondRankThreshold <= tenureLifetimeCap,
+        ('the second rank (xp=%d) must be reachable from tenure alone (lifetime cap=%d XP, ~30 days) -- a handler who never certifies anyone must not be stuck below it'):format(secondRankThreshold, tenureLifetimeCap))
+end)
+
+t.test('HANDLER LADDER: the TOP rank is deliberately ABOVE the tenure-alone lifetime cap (a genuine long-term goal, not a passive one) but still reachable within roughly ten personally-granted certifications, not hundreds', function()
+    local RealConfig = loadRealConfig()
+    local topTier = RealConfig.HandlerXPTiers[#RealConfig.HandlerXPTiers]
+    local tenureLifetimeCap = RealConfig.HandlerXP.awards.handlerPartnershipTenure1Day
+        + RealConfig.HandlerXP.awards.handlerPartnershipTenure7Day
+        + RealConfig.HandlerXP.awards.handlerPartnershipTenure30Day
+    local certifyAward = RealConfig.HandlerXP.awards.handlerCertifyK9
+
+    t.isTrue(topTier.xp > tenureLifetimeCap,
+        ('the top rank (xp=%d) must stay OUT of reach of tenure alone (cap=%d) -- otherwise idling a single partnership for a month would be enough for the top rank'):format(topTier.xp, tenureLifetimeCap))
+
+    -- "Roughly ten" certifications, generously combined with the full
+    -- tenure cap, must clear it -- this is the "weeks, not years" half of
+    -- the requirement. 15 certifications is a deliberately loose ceiling
+    -- (this pass's own report cites ~7-10) so this test does not become an
+    -- exact-tuning tripwire for a reasonable future adjustment.
+    local reachableWithGenerousCertifying = tenureLifetimeCap + (certifyAward * 15)
+    t.isTrue(topTier.xp <= reachableWithGenerousCertifying,
+        ('the top rank (xp=%d) must be reachable within roughly a dozen certifications plus full tenure (%d) -- otherwise it is a multi-year wall again, just a smaller one'):format(topTier.xp, reachableWithGenerousCertifying))
+end)
+
+t.test('HANDLER LADDER: the OLD, pre-rescale thresholds (750/2500/6000) would fail the "first promotion" and "second rank from tenure alone" checks above -- documents exactly what this rescale fixed, using the real award amounts', function()
+    local RealConfig = loadRealConfig()
+    local certifyAward = RealConfig.HandlerXP.awards.handlerCertifyK9
+    local tenureLifetimeCap = RealConfig.HandlerXP.awards.handlerPartnershipTenure1Day
+        + RealConfig.HandlerXP.awards.handlerPartnershipTenure7Day
+        + RealConfig.HandlerXP.awards.handlerPartnershipTenure30Day
+
+    local OLD_CERTIFIED_HANDLER_XP = 750
+    local OLD_SENIOR_HANDLER_XP = 2500
+
+    t.isTrue(OLD_CERTIFIED_HANDLER_XP > certifyAward, 'sanity: the OLD first-promotion threshold could NOT be reached by a single certification')
+    t.isTrue(OLD_SENIOR_HANDLER_XP > tenureLifetimeCap, 'sanity: the OLD second-rank threshold could NOT be reached by tenure alone, ever (155 XP lifetime cap)')
+end)
+
 os.exit(t.summary())
