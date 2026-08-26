@@ -37,10 +37,17 @@
       - client/inventory.lua's RequestOpenOwnK9Inventory().
       - client/medkit.lua's RequestTreatNearestK9().
       - client/main.lua's HasK9Access() directly (not just via CanShowK9UI())
-        for the one item — Fetch's Throw branch — whose own source file
-        documents that it is deliberately gated on HasK9Access() alone, not
-        the full CanShowK9UI() combinator (see that item's own comment for
-        why, quoting client/fetch.lua's RequestThrowFetchBall() verbatim).
+        for two items — Fetch's Throw branch and Training's Start/Stop
+        toggle's Start direction — whose own source files document that
+        each is deliberately gated on HasK9Access() alone, not the full
+        CanShowK9UI() combinator (see each item's own comment for why,
+        quoting client/fetch.lua's RequestThrowFetchBall()/
+        client/training.lua's RequestSetTrainingMode() verbatim).
+      - client/sarcalls.lua's RequestStartSarCall(), RequestAbandonSarCall(),
+        IsSarCallActive().
+      - client/training.lua's IsTrainingModeActive(),
+        RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
+        RequestTrainingBiteDrill().
       Every cross-file global added after this file's own initial Phase 1
       pass is called behind a `type(fn) == 'function'` runtime existence
       guard (this codebase's established soft-dependency convention — see
@@ -1456,6 +1463,161 @@ local function RegisterK9RadialMenu()
                     RequestTreatNearestK9()
                 end
             end,
+        }
+    end
+
+    --- Search & Rescue Call -- closes a real, disclosed gap:
+    --- client/sarcalls.lua's own header used to state plainly that
+    --- RequestStartSarCall()/RequestAbandonSarCall() were "not wired into
+    --- client/radial.lua by this pass" because, at the time that file was
+    --- written, this file was reported as owned by a different agent this
+    --- session -- both files are owned by the same pass now, closing that
+    --- gap. Until now this feature was reachable ONLY via
+    --- '/k9sarcall [stop]' -- exactly the "reachable only by remembering an
+    --- exact command" shape this resource's own radial menu exists to
+    --- avoid.
+    ---
+    --- A single context-sensitive toggle item, the SAME shape as
+    --- Attach/Detach Leash / Bite & Hold / Drag / Fetch above:
+    --- IsSarCallActive() (client/sarcalls.lua, added specifically for this)
+    --- plays the same role IsLeashed()/IsBiteHoldEngaged()/IsDragEngaged()/
+    --- IsFetchCarryEngaged() do for those toggles -- a pure, no-network
+    --- local-state read, never itself a gate.
+    ---
+    --- Abandon branch is NOT gated on CanShowK9UI() -- same "no unbounded
+    --- trap" requirement as every other release/termination branch above.
+    --- RequestAbandonSarCall()'s own doc comment states this explicitly:
+    --- "UNCONDITIONAL, never gated... a player who loses access, or simply
+    --- wants to give up, must always be able to abandon a call." The Start
+    --- branch keeps the same redundant "check here too, even though the
+    --- callee already checks" CanShowK9UI() posture every other initiation
+    --- item in this file uses (RequestStartSarCall() re-checks it again
+    --- internally regardless).
+    if Config.Features.SARCalls then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_sar_call',
+            label = locale('radial.sar_call_toggle_label'),
+            icon = 'life-ring',
+            onSelect = function()
+                -- type(...) == 'function' guards -- see k9_sit's identical
+                -- note above for the full HEADER/CODE DRIFT FIX writeup. An
+                -- absent IsSarCallActive() is treated as "no call active"
+                -- (falls through to the Start branch).
+                if type(IsSarCallActive) == 'function' and IsSarCallActive() then
+                    if type(RequestAbandonSarCall) == 'function' then
+                        RequestAbandonSarCall()
+                    end
+                    return
+                end
+
+                if not CanShowK9UI() then
+                    DenyK9UIAccess()
+                    return
+                end
+
+                if type(RequestStartSarCall) == 'function' then
+                    RequestStartSarCall()
+                end
+            end,
+        }
+    end
+
+    --- Training -- closes a real, disclosed gap: until this pass, Training
+    --- Mode and its two practice drills were reachable ONLY via
+    --- '/k9training <on|off>', '/k9trainsearch' and '/k9trainbite' --
+    --- exactly the "reachable only by remembering an exact command" shape
+    --- this resource's own radial menu exists to avoid, and worse than most:
+    --- '/k9training' with NO argument (the single most natural first thing
+    --- to type) produces only a usage error, never a toggle. See
+    --- client/training.lua's own header "RADIAL ENTRY POINT" section for
+    --- the full contract of the three globals this nested submenu calls.
+    ---
+    --- NESTED, mirroring Bark / Handler-Down Response / Fetch's own submenu
+    --- precedent (several related terminal actions sharing one theme), not
+    --- Track's flat precedent (independent, mutually exclusive actions).
+    ---
+    --- Start/Stop Training is a single context-sensitive toggle, same shape
+    --- as every other toggle in this file -- IsTrainingModeActive() plays
+    --- the same role IsLeashed()/IsSarCallActive() do. The Stop branch is
+    --- NOT gated on CanShowK9UI() -- same "no unbounded trap" reasoning as
+    --- every other release/termination branch above; server/training.lua's
+    --- own OFF branch is itself unconditional to match. The Start branch
+    --- checks HasK9Access() directly, NOT CanShowK9UI() -- mirrors the
+    --- Fetch "Throw" branch's own identical choice above verbatim:
+    --- server/training.lua's setTrainingMode handler checks HasK9Access(src)
+    --- plus a per-person feature grant, never a ped-model check, so this is
+    --- a human-handler action, not a "must currently be riding a K9" one --
+    --- using the stricter CanShowK9UI() combinator here would refuse an
+    --- otherwise-eligible handler simply for not being on a K9 model right
+    --- now.
+    ---
+    --- The two drill items below carry NO CanShowK9UI()/HasK9Access() gate
+    --- of their own -- RequestTrainingSearchDrill()/RequestTrainingBiteDrill()
+    --- themselves only ever check the local `trainingModeActive` flag
+    --- (client/training.lua's RunTrainingDrill, unmodified), and adding an
+    --- access gate here that the command path never had would make the
+    --- radial and the command behave DIFFERENTLY for the identical action --
+    --- see client/training.lua's own header for why this stays deliberately
+    --- symmetric instead.
+    if Config.Features.TrainingMode then
+        lib.registerRadial({
+            id = 'k9unit_training',
+            items = {
+                {
+                    id = 'k9_training_toggle',
+                    label = locale('radial.training_toggle_label'),
+                    icon = 'graduation-cap',
+                    onSelect = function()
+                        -- type(...) == 'function' guards -- see k9_sit's
+                        -- identical note above for the full HEADER/CODE
+                        -- DRIFT FIX writeup. An absent IsTrainingModeActive()
+                        -- is treated as "not currently training" (falls
+                        -- through to the Start branch).
+                        if type(IsTrainingModeActive) == 'function' and IsTrainingModeActive() then
+                            if type(RequestSetTrainingMode) == 'function' then
+                                RequestSetTrainingMode(false)
+                            end
+                            return
+                        end
+
+                        if not HasK9Access() then
+                            DenyK9UIAccess()
+                            return
+                        end
+
+                        if type(RequestSetTrainingMode) == 'function' then
+                            RequestSetTrainingMode(true)
+                        end
+                    end,
+                },
+                {
+                    id = 'k9_training_search',
+                    label = locale('radial.training_search_label'),
+                    icon = 'magnifying-glass',
+                    onSelect = function()
+                        if type(RequestTrainingSearchDrill) == 'function' then
+                            RequestTrainingSearchDrill()
+                        end
+                    end,
+                },
+                {
+                    id = 'k9_training_bite',
+                    label = locale('radial.training_bite_label'),
+                    icon = 'paw',
+                    onSelect = function()
+                        if type(RequestTrainingBiteDrill) == 'function' then
+                            RequestTrainingBiteDrill()
+                        end
+                    end,
+                },
+            },
+        })
+
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_training',
+            label = locale('radial.training_menu_label'),
+            icon = 'graduation-cap',
+            menu = 'k9unit_training',
         }
     end
 

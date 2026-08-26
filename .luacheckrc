@@ -541,6 +541,11 @@ globals = {
     -- because abandoning a call is a termination path, and gating one is
     -- how the unbounded trap this resource forbids gets built.
     "RequestStartSarCall", "RequestAbandonSarCall",
+    -- client/training.lua exposes these three so client/radial.lua can drive
+    -- Training Mode and the two drills from the menu without forking the
+    -- command bodies -- the same "one entry point, two surfaces" rule the
+    -- ScratchAtDoor/NudgeDoor incident in fxmanifest.lua exists to enforce.
+    "RequestSetTrainingMode", "RequestTrainingSearchDrill", "RequestTrainingBiteDrill",
     -- server/datastore.lua -- the single accessor layer behind
     -- Config.Database.enabled. ONE code path, TWO backends: every DB read
     -- and write in this resource goes through K9Store, which dispatches to

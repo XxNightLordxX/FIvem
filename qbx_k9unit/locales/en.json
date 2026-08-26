@@ -904,6 +904,11 @@
         "vest_prop_load_failed": "K9 vest prop failed to load."
     },
     "radial": {
+        "sar_call_toggle_label": "Search & Rescue Call",
+        "training_menu_label": "Training",
+        "training_toggle_label": "Start/Stop Training",
+        "training_search_label": "Practice Search",
+        "training_bite_label": "Practice Bite & Hold",
         "bark_label": "Bark",
         "bite_hold_toggle_label": "Bite & Hold / Release",
         "break_partnership_label": "Break Partnership",

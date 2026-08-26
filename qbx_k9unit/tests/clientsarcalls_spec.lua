@@ -325,12 +325,30 @@ t.test('Config.Features.SARCalls = false: registers NO command, NO net events, a
     t.isNil(f.env.RequestAbandonSarCall)
 end)
 
-t.test('Config.Features.SARCalls = true: registers the k9sarcall command and both net events; both resource-globals exist', function()
+t.test('Config.Features.SARCalls = true: registers the k9sarcall command and both net events; all three resource-globals exist', function()
     local f = newSarCallsFixture()
     t.equals(f.commandCount(), 1)
     t.equals(f.netEventCount(), 2)
     t.isNotNil(f.env.RequestStartSarCall)
     t.isNotNil(f.env.RequestAbandonSarCall)
+    t.isNotNil(f.env.IsSarCallActive)
+end)
+
+t.test('RESOLVED this pass: IsSarCallActive() tracks a call end-to-end -- false before start, true once granted, false again after abandon', function()
+    local f = newSarCallsFixture()
+    t.isFalse(f.env.IsSarCallActive())
+
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand()
+    t.isTrue(f.env.IsSarCallActive(), 'a granted call must read as active')
+
+    f.stopCommand()
+    t.isFalse(f.env.IsSarCallActive(), 'abandoning must immediately read as inactive again -- no unbounded trap')
+end)
+
+t.test('Config.Features.SARCalls = false: IsSarCallActive is never defined either, same as the other two globals', function()
+    local f = newSarCallsFixture({ sarCalls = false, sarCallsConfig = false })
+    t.isNil(f.env.IsSarCallActive)
 end)
 
 -- ----------------------------------------------------------------------

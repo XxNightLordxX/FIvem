@@ -23,12 +23,26 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 
 local THROW = setmetatable({}, { __tostring = function() return '<THROW sentinel>' end })
 
+--- @param opts { hasK9Access: boolean? }?
 --- @return table fixture
-local function newTrainingFixture()
+local function newTrainingFixture(opts)
+    opts = opts or {}
+
     local serverEvents = {}
     local function TriggerServerEvent(eventName, ...)
         serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
     end
+
+    -- HasK9Access()/DenyK9UIAccess() -- RESOLVED-this-pass courtesy gate on
+    -- RequestSetTrainingMode(true) only (see client/training.lua's own
+    -- header "RADIAL ENTRY POINT" section). Defaults to `true` so the two
+    -- pre-existing on/off command tests below keep exercising the "access
+    -- granted" path unless a test opts into the denial path explicitly.
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = true end
+    local denyCalls = 0
+    local function HasK9Access() return hasK9Access end
+    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
     local notifyCalls = {}
     local progressBarQueue = {}
@@ -96,6 +110,8 @@ local function newTrainingFixture()
         -- exercises the feature-ON path, so this is where it gets turned on.
         Config = { Features = { TrainingMode = true } },
         TriggerServerEvent = TriggerServerEvent,
+        HasK9Access = HasK9Access,
+        DenyK9UIAccess = DenyK9UIAccess,
         lib = lib,
         RegisterCommand = RegisterCommand,
         RegisterNetEvent = RegisterNetEvent,
@@ -127,6 +143,8 @@ local function newTrainingFixture()
         waitCalls = waitCalls,
         endTextCalls = endTextCalls,
         addedTextComponents = addedTextComponents,
+        denyCallCount = function() return denyCalls end,
+        isTrainingModeActive = function() return env.IsTrainingModeActive() end,
         --- Fires the trainingModeChanged handler as the server would
         --- (source == 65535) unless `forgedSource` is given.
         fireTrainingModeChanged = function(isOn, forgedSource)
@@ -152,6 +170,39 @@ t.test('/k9training off sends setTrainingMode(false)', function()
     f.commands.k9training(1, { 'off' })
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:setTrainingMode')
     t.isFalse(f.lastServerEvent().args[1])
+end)
+
+t.test('RESOLVED this pass: /k9training on with HasK9Access() = false is denied client-side, no server round trip', function()
+    local f = newTrainingFixture({ hasK9Access = false })
+    f.commands.k9training(1, { 'on' })
+    t.equals(#f.serverEvents, 0, 'a courtesy denial must not still forward the request to the server')
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('RESOLVED this pass: /k9training off with HasK9Access() = false is UNAFFECTED -- termination is never gated', function()
+    local f = newTrainingFixture({ hasK9Access = false })
+    f.commands.k9training(1, { 'off' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:setTrainingMode')
+    t.isFalse(f.lastServerEvent().args[1])
+    t.equals(f.denyCallCount(), 0, 'turning OFF must never consult HasK9Access()/DenyK9UIAccess() at all')
+end)
+
+t.test('RequestSetTrainingMode is a resource-global the radial can call directly, behaving identically to the command', function()
+    local f = newTrainingFixture()
+    f.env.RequestSetTrainingMode(true)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:setTrainingMode')
+    t.isTrue(f.lastServerEvent().args[1])
+end)
+
+t.test('IsTrainingModeActive() reflects the server-confirmed flag only, never a command handler alone', function()
+    local f = newTrainingFixture()
+    t.isFalse(f.isTrainingModeActive())
+    f.commands.k9training(1, { 'on' }) -- request sent, no server reply simulated yet
+    t.isFalse(f.isTrainingModeActive(), 'requesting ON must not itself flip the flag -- only a genuine server confirmation may')
+    f.fireTrainingModeChanged(true)
+    t.isTrue(f.isTrainingModeActive())
+    f.fireTrainingModeChanged(false)
+    t.isFalse(f.isTrainingModeActive())
 end)
 
 t.test('/k9training with no/unrecognized argument sends NOTHING to the server and shows a usage notice instead', function()
@@ -205,6 +256,12 @@ t.test('a command handler ALONE never flips the banner -- only the server-pushed
     f.commands.k9training(1, { 'on' }) -- sends the request, but no server reply simulated yet
     f.runner.step()
     t.equals(#f.endTextCalls, 0, 'requesting ON must not itself turn the visible banner on -- only a genuine server confirmation may')
+end)
+
+t.test('RESOLVED this pass: RequestTrainingSearchDrill/RequestTrainingBiteDrill are resource-globals, the exact functions the commands themselves call', function()
+    local f = newTrainingFixture()
+    t.equals(f.env.RequestTrainingSearchDrill, f.commands.k9trainsearch, 'the radial item must call the SAME function the command does, never a second copy')
+    t.equals(f.env.RequestTrainingBiteDrill, f.commands.k9trainbite, 'the radial item must call the SAME function the command does, never a second copy')
 end)
 
 -- ----------------------------------------------------------------------

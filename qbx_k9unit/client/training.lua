@@ -37,6 +37,52 @@
       CheckTrainingActionEligibility independently re-verifies everything
       regardless of what this local flag currently believes).
     - '/k9trainbite' -- practice bite-and-hold drill, identical shape.
+
+    RESOLVED (this pass) -- RADIAL ENTRY POINT, CLOSING A COMMAND-ONLY GAP:
+    all three commands above used to be the ONLY way to reach this feature
+    -- exactly the "reachable only by remembering an exact command" shape
+    this resource's own radial-menu convention exists to avoid for anything
+    used with any regularity. Every request is now ALSO exposed as a
+    resource-global, the same "global helper, private per-file state"
+    convention client/recall.lua's RequestRecall()/client/kennel.lua's
+    RequestDeployKennel() already establish, so client/radial.lua (this
+    session, same owner as this file) can call the identical path the
+    command below uses -- never a second, divergent request sequence:
+        IsTrainingModeActive() -> boolean
+            Pure, no-network read of `trainingModeActive` -- same shape as
+            client/movement.lua's IsLeashed()/client/combat.lua's
+            IsBiteHoldEngaged() -- backs the radial item's own
+            context-sensitive "Start Training / Stop Training" toggle
+            label-at-click-time branch.
+        RequestSetTrainingMode(desiredOn: boolean)
+            The '/k9training <on|off>' command's own body, extracted.
+            GATING, FIXED THIS PASS: turning ON now has a courtesy
+            HasK9Access() pre-check (DenyK9UIAccess() on failure) that the
+            raw TriggerServerEvent call never had before -- this file's
+            three drill/toggle requests were the only self-initiated
+            actions left in this resource with NO client-side courtesy gate
+            at all, an inconsistency with every other initiation
+            (RequestBiteHold/RequestDrag/RequestDeployKennel/
+            RequestStartSarCall all gate before sending). Deliberately
+            HasK9Access() ALONE, not the stricter CanShowK9UI() combinator
+            -- mirrors client/fetch.lua's RequestThrowFetchBall() precedent
+            exactly: server/training.lua's own setTrainingMode handler
+            checks HasK9Access(src) plus a per-person feature grant, never a
+            ped-model check, so this is a human-handler action, not a
+            "must currently be riding a K9" one; gating on CanShowK9UI()
+            here would refuse an otherwise-eligible handler simply for not
+            being on a K9 model right now. Turning OFF stays exactly as
+            UNCONDITIONAL as it already was -- no new gate of any kind --
+            same "no unbounded trap" requirement as every other
+            release/termination path in this resource; server/training.lua's
+            own OFF branch is itself unconditional to match.
+        RequestTrainingSearchDrill() / RequestTrainingBiteDrill()
+            '/k9trainsearch'/'/k9trainbite''s own bodies, extracted
+            unchanged -- same local `trainingModeActive` pre-check
+            (RunTrainingDrill's own, unmodified) and NO additional
+            CanShowK9UI()/HasK9Access() gate layered on by the radial item,
+            so the command path and the radial path stay behaviourally
+            identical to each other, not just superficially similar.
     ======================================================================
 
     NOT AN ox_target INTERACTION, DELIBERATELY, THIS PASS: every other
@@ -75,6 +121,17 @@ if not Config.Features.TrainingMode then return end
 -- Never set directly by a command handler in this file.
 local trainingModeActive = false
 
+--- RESOLVED (this pass) -- see this file's header EVENT/CALLBACK CONTRACT
+--- for the full writeup. Pure, no-network read -- same shape/precedent as
+--- client/movement.lua's IsLeashed()/client/combat.lua's
+--- IsBiteHoldEngaged(). Exists so client/radial.lua's own toggle item can
+--- decide, at click time, whether to request ON or OFF -- never itself a
+--- gate on anything.
+--- @return boolean
+function IsTrainingModeActive()
+    return trainingModeActive
+end
+
 -- Session-only, for the banner's own display purposes ONLY -- the
 -- authoritative rep count is server/training.lua's TrainingReps, echoed
 -- back to us in every drill's own `reps` field; this local mirror exists
@@ -97,12 +154,31 @@ RegisterNetEvent('qbx_k9unit:client:trainingModeChanged', function(isOn)
     end
 end)
 
+--- Requests turning Training Mode on or off -- see this file's header
+--- EVENT/CALLBACK CONTRACT "RADIAL ENTRY POINT" section for the full
+--- gating writeup (why ON gets a courtesy HasK9Access() pre-check this
+--- pass, and why OFF still gets none at all). Exposed as a resource-global
+--- so both the command below and client/radial.lua's own toggle item call
+--- this exact same path -- never two divergent request sequences for the
+--- same transition.
+--- @param desiredOn boolean
+function RequestSetTrainingMode(desiredOn)
+    desiredOn = desiredOn == true
+
+    if desiredOn and not HasK9Access() then
+        DenyK9UIAccess()
+        return
+    end
+
+    TriggerServerEvent('qbx_k9unit:server:setTrainingMode', desiredOn)
+end
+
 RegisterCommand('k9training', function(_source, args)
     local mode = args[1]
     if mode == 'on' then
-        TriggerServerEvent('qbx_k9unit:server:setTrainingMode', true)
+        RequestSetTrainingMode(true)
     elseif mode == 'off' then
-        TriggerServerEvent('qbx_k9unit:server:setTrainingMode', false)
+        RequestSetTrainingMode(false)
     else
         lib.notify({ title = locale('common.notify_title'), description = locale('training.usage'), type = 'error' })
     end
@@ -179,7 +255,12 @@ local function RunTrainingDrill(eventName, progressLabel, onSuccess)
     end
 end
 
-RegisterCommand('k9trainsearch', function()
+--- '/k9trainsearch''s own body, extracted as a resource-global -- see this
+--- file's header EVENT/CALLBACK CONTRACT "RADIAL ENTRY POINT" section. No
+--- additional gate here beyond RunTrainingDrill's own `trainingModeActive`
+--- check -- deliberately, so the radial item and the command stay
+--- behaviourally identical.
+function RequestTrainingSearchDrill()
     RunTrainingDrill('qbx_k9unit:server:trainingSearch', locale('training.search_progress_label'), function(result)
         lib.notify({
             title = locale('common.notify_title'),
@@ -187,13 +268,19 @@ RegisterCommand('k9trainsearch', function()
             type = result.contrabandFound and 'success' or 'info',
         })
     end)
-end, false)
+end
 
-RegisterCommand('k9trainbite', function()
+RegisterCommand('k9trainsearch', RequestTrainingSearchDrill, false)
+
+--- '/k9trainbite''s own body, extracted as a resource-global -- same
+--- reasoning as RequestTrainingSearchDrill() immediately above.
+function RequestTrainingBiteDrill()
     RunTrainingDrill('qbx_k9unit:server:trainingBiteHold', locale('training.bite_hold_progress_label'), function()
         lib.notify({ title = locale('common.notify_title'), description = locale('training.bite_hold_complete'), type = 'success' })
     end)
-end, false)
+end
+
+RegisterCommand('k9trainbite', RequestTrainingBiteDrill, false)
 
 -- ======================================================================
 -- PERSISTENT ON-SCREEN BANNER -- server/training.lua's header point 4

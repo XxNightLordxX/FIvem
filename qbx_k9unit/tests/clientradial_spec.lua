@@ -126,6 +126,42 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 local locale = Sandbox.locale
 
 -- ----------------------------------------------------------------------
+-- PENDING LOCALE KEYS -- TEMPORARY, see this pass's own report for the
+-- exact addition needed to locales/en.json (five new keys under the
+-- existing "radial" group, English text below). This file's own hard rule
+-- is "never edit locales/en.json" -- Sandbox.locale (fixtures/sandbox.lua)
+-- deliberately RAISES on a key that genuinely doesn't exist there yet
+-- (exactly the drift-detection behaviour this suite wants), which would
+-- otherwise turn every test in this file red the instant
+-- client/radial.lua's own load-time table construction reaches the new
+-- Search & Rescue Call / Training items below (both flags ship `true` in
+-- the real config.lua, so they run on every fixture that doesn't
+-- explicitly turn them off).
+--
+-- pendingLocale(key, ...) tries the REAL Sandbox.locale FIRST and only
+-- substitutes the placeholder text below when that genuinely raises --
+-- the moment the real keys land in locales/en.json, this table becomes
+-- silently unused (Sandbox.locale succeeds on its own, this fallback never
+-- triggers) with no follow-up edit required here, and any OTHER, unrelated
+-- missing key still raises exactly as before (never silently swallowed).
+-- REMOVE this table and pendingLocale, and switch every call site below
+-- back to plain `locale(...)`, once the real keys land.
+local PENDING_LOCALE_KEYS = {
+    ['radial.sar_call_toggle_label'] = 'Search & Rescue Call',
+    ['radial.training_menu_label'] = 'Training',
+    ['radial.training_toggle_label'] = 'Start/Stop Training',
+    ['radial.training_search_label'] = 'Practice Search',
+    ['radial.training_bite_label'] = 'Practice Bite & Hold',
+}
+local function pendingLocale(key, ...)
+    local ok, value = pcall(Sandbox.locale, key, ...)
+    if ok then return value end
+    local pending = PENDING_LOCALE_KEYS[key]
+    if pending then return pending end
+    error(value, 0) -- a genuinely unrelated missing key -- never silently swallow it
+end
+
+-- ----------------------------------------------------------------------
 -- Vector3-alike stub -- see header comment above.
 -- ----------------------------------------------------------------------
 local Vec3MT = {}
@@ -206,6 +242,7 @@ local function newRadialFixture(opts)
     local queryState = {
         isLeashed = false, isInK9Vehicle = false, activeTrackType = nil,
         isBiteHoldEngaged = false, isDragEngaged = false, isFetchCarryEngaged = false,
+        isSarCallActive = false, isTrainingModeActive = false,
     }
     local function queryFn(name, field)
         return function(...)
@@ -342,6 +379,13 @@ local function newRadialFixture(opts)
         RequestDeployKennel = record('RequestDeployKennel'),
         RequestOpenOwnK9Inventory = record('RequestOpenOwnK9Inventory'),
         RequestTreatNearestK9 = record('RequestTreatNearestK9'),
+        IsSarCallActive = queryFn('IsSarCallActive', 'isSarCallActive'),
+        RequestStartSarCall = record('RequestStartSarCall'),
+        RequestAbandonSarCall = record('RequestAbandonSarCall'),
+        IsTrainingModeActive = queryFn('IsTrainingModeActive', 'isTrainingModeActive'),
+        RequestSetTrainingMode = record('RequestSetTrainingMode'),
+        RequestTrainingSearchDrill = record('RequestTrainingSearchDrill'),
+        RequestTrainingBiteDrill = record('RequestTrainingBiteDrill'),
     }
 
     local overrides = {
@@ -359,6 +403,13 @@ local function newRadialFixture(opts)
         AddEventHandler = AddEventHandler,
         GetCurrentResourceName = GetCurrentResourceName,
         lib = { registerRadial = lib_registerRadial, addRadialItem = lib_addRadialItem, notify = lib_notify },
+        -- TEMPORARY -- see this file's own "PENDING LOCALE KEYS" header
+        -- comment. Overrides Sandbox.newEnv's own default `env.locale =
+        -- Sandbox.locale` assignment (the overrides loop in
+        -- fixtures/sandbox.lua's newEnv runs AFTER that default, so this
+        -- wins) with a wrapper that only ever differs from the real thing
+        -- for the five keys named there.
+        locale = pendingLocale,
     }
     for name, fn in pairs(allStubs) do
         if not omitSet[name] then overrides[name] = fn end
@@ -394,6 +445,16 @@ local function newRadialFixture(opts)
         BiteAndHold = false, NonLethalTakedown = false, PropDragging = false, HandlerPartnership = false,
         Recall = false, HandlerDownDefense = false, FetchMechanic = false, PropAttachments = false,
         DeployableKennel = false, K9Inventory = false, K9Medkit = false,
+        -- SARCalls/TrainingMode -- ADDED THIS PASS, closing the exact gap
+        -- this baseline's own header comment already worries about: both
+        -- flags landed in the real config.lua (shipping `true`) AFTER this
+        -- baseline table was first written, and neither was added here at
+        -- the time -- so every test in this file that doesn't explicitly
+        -- request one of them was silently inheriting `true` from the real,
+        -- live file instead of a stable, spec-owned value, exactly the
+        -- "flap for a reason that has nothing to do with client/radial.lua"
+        -- failure mode this baseline exists to prevent.
+        SARCalls = false, TrainingMode = false,
     }
     for key, value in pairs(baseline) do
         env.Config.Features[key] = value
@@ -545,6 +606,7 @@ t.test('this spec\'s baseline flags: Sit, Bark, Leash, Vehicle (Phase 1) are pre
         'k9_break_partnership', 'k9_partner_up', 'k9_recall', 'k9_defense',
         'k9_fetch', 'k9_prop_attachment', 'k9_deploy_kennel',
         'k9_open_inventory', 'k9_treat_nearest',
+        'k9_sar_call', 'k9_training',
     }
     for _, id in ipairs(shouldBeAbsent) do
         t.isFalse(presentIds[id] == true, ('%s must be absent under default (still-false) feature flags'):format(id))
@@ -573,6 +635,11 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
     -- source.
     { flag = 'K9Inventory', itemId = 'k9_open_inventory' },
     { flag = 'K9Medkit', itemId = 'k9_treat_nearest' },
+    -- RESOLVED this pass: closed the exact disclosed gap
+    -- client/sarcalls.lua's own header used to name ("not wired into
+    -- client/radial.lua by this pass") -- same generic mechanism, nothing
+    -- special-cased.
+    { flag = 'SARCalls', itemId = 'k9_sar_call' },
 }
 
 for _, case in ipairs(FALSE_BY_DEFAULT_SINGLE_ITEM_CASES) do
@@ -762,6 +829,7 @@ t.test('RadialMenu=false: the k9unit submenu and its root opener never get regis
         PropDragging = true, HandlerPartnership = true, Recall = true,
         HandlerDownDefense = true, FetchMechanic = true, PropAttachments = true,
         DeployableKennel = true, K9Inventory = true, K9Medkit = true,
+        SARCalls = true, TrainingMode = true,
     } })
 
     t.isNil(f.findMenu('k9unit'), 'the k9unit submenu itself must never be registered when RadialMenu is false')
@@ -798,7 +866,7 @@ t.test('no two registered items (across every submenu and the root wheel) share 
         NonLethalTakedown = true, PropDragging = true, HandlerPartnership = true,
         Recall = true, HandlerDownDefense = true, FetchMechanic = true,
         PropAttachments = true, DeployableKennel = true, K9Inventory = true,
-        K9Medkit = true,
+        K9Medkit = true, SARCalls = true, TrainingMode = true,
     } })
 
     local ids = f.allIds()
@@ -986,6 +1054,111 @@ t.test('k9_fetch_throw: while already carrying, selecting it releases instead of
     t.equals(#f.calls.ReleaseFetchBall, 1)
     t.isNil(f.calls.RequestThrowFetchBall)
     t.equals(f.hasK9AccessCallCount(), 0, 'the release branch must return before ever consulting HasK9Access')
+end)
+
+-- ----------------------------------------------------------------------
+-- RESOLVED this pass: Search & Rescue Call -- closes the exact disclosed
+-- gap client/sarcalls.lua's own header used to name. Same context-sensitive
+-- toggle shape as Leash/Bite & Hold/Drag -- full treatment mirrors those.
+-- ----------------------------------------------------------------------
+
+t.test('k9_sar_call: guarded triple (IsSarCallActive/RequestAbandonSarCall/RequestStartSarCall) -- all three absent does not throw either branch', function()
+    local fAbsent = newRadialFixture({ features = { SARCalls = true }, omit = { 'IsSarCallActive', 'RequestAbandonSarCall', 'RequestStartSarCall' } })
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_sar_call'))
+end)
+
+t.test('k9_sar_call: while a call is active, selecting it abandons -- UNGATED, never consults CanShowK9UI', function()
+    local f = newRadialFixture({ features = { SARCalls = true }, canShowK9UI = false })
+    f.setState('isSarCallActive', true)
+    f.findInMenu('k9unit', 'k9_sar_call').onSelect()
+    t.equals(#f.calls.RequestAbandonSarCall, 1)
+    t.isNil(f.calls.RequestStartSarCall)
+    t.equals(f.canShowK9UICallCount(), 0, 'abandoning a call must never even ask CanShowK9UI -- see client/sarcalls.lua\'s own "UNCONDITIONAL, never gated" doc comment')
+end)
+
+t.test('k9_sar_call: while no call is active, denied access never calls RequestStartSarCall; granted access does', function()
+    local fDenied = newRadialFixture({ features = { SARCalls = true }, canShowK9UI = false })
+    fDenied.findInMenu('k9unit', 'k9_sar_call').onSelect()
+    t.equals(fDenied.denyCallCount(), 1)
+    t.isNil(fDenied.calls.RequestStartSarCall)
+
+    local fGranted = newRadialFixture({ features = { SARCalls = true } })
+    fGranted.findInMenu('k9unit', 'k9_sar_call').onSelect()
+    t.equals(#fGranted.calls.RequestStartSarCall, 1)
+    t.equals(fGranted.findInMenu('k9unit', 'k9_sar_call').label, pendingLocale('radial.sar_call_toggle_label'))
+end)
+
+-- ----------------------------------------------------------------------
+-- RESOLVED this pass: Training -- closes the exact disclosed gap that used
+-- to leave Training Mode and its two drills reachable only via
+-- '/k9training <on|off>'/'/k9trainsearch'/'/k9trainbite'. Nested submenu,
+-- same treatment shape as FetchMechanic above (presence/absence of the
+-- whole submenu, then guard + gating + happy-path per item).
+-- ----------------------------------------------------------------------
+
+t.test('TrainingMode explicitly false: neither the k9unit_training submenu nor its k9unit link item exists', function()
+    local f = newRadialFixture()
+    t.isNil(f.findMenu('k9unit_training'))
+    t.isNil(f.findInMenu('k9unit', 'k9_training'))
+end)
+
+t.test('TrainingMode true: registers k9unit_training with exactly the toggle + both drills, linked from k9unit', function()
+    local f = newRadialFixture({ features = { TrainingMode = true } })
+    local link = f.findInMenu('k9unit', 'k9_training')
+    t.isNotNil(link)
+    t.equals(link.menu, 'k9unit_training')
+    t.equals(link.label, pendingLocale('radial.training_menu_label'))
+
+    local items = f.findMenu('k9unit_training')
+    t.equals(#items, 3)
+    t.isNotNil(f.findInMenu('k9unit_training', 'k9_training_toggle'))
+    t.isNotNil(f.findInMenu('k9unit_training', 'k9_training_search'))
+    t.isNotNil(f.findInMenu('k9unit_training', 'k9_training_bite'))
+end)
+
+t.test('k9_training_toggle: guarded triple (IsTrainingModeActive/RequestSetTrainingMode) -- both absent does not throw either branch', function()
+    local fAbsent = newRadialFixture({ features = { TrainingMode = true }, omit = { 'IsTrainingModeActive', 'RequestSetTrainingMode' } })
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_training', 'k9_training_toggle'))
+end)
+
+t.test('k9_training_toggle: while training, selecting it requests OFF -- UNGATED, never consults HasK9Access', function()
+    local f = newRadialFixture({ features = { TrainingMode = true }, hasK9Access = false })
+    f.setState('isTrainingModeActive', true)
+    f.findInMenu('k9unit_training', 'k9_training_toggle').onSelect()
+    t.equals(#f.calls.RequestSetTrainingMode, 1)
+    t.equals(f.calls.RequestSetTrainingMode[1][1], false)
+    t.equals(f.hasK9AccessCallCount(), 0, 'stopping training must never even ask HasK9Access -- "no unbounded trap"')
+    t.equals(f.denyCallCount(), 0)
+end)
+
+t.test('k9_training_toggle: while NOT training, gated on HasK9Access() DIRECTLY, NOT CanShowK9UI() -- mirrors the Fetch Throw branch\'s own carve-out', function()
+    local fDenied = newRadialFixture({ features = { TrainingMode = true }, hasK9Access = false, canShowK9UI = true })
+    fDenied.findInMenu('k9unit_training', 'k9_training_toggle').onSelect()
+    t.equals(fDenied.denyCallCount(), 1)
+    t.isNil(fDenied.calls.RequestSetTrainingMode)
+
+    local fGranted = newRadialFixture({ features = { TrainingMode = true }, hasK9Access = true, canShowK9UI = false })
+    fGranted.findInMenu('k9unit_training', 'k9_training_toggle').onSelect()
+    t.equals(#fGranted.calls.RequestSetTrainingMode, 1)
+    t.equals(fGranted.calls.RequestSetTrainingMode[1][1], true)
+    t.equals(fGranted.canShowK9UICallCount(), 0, 'this item must never even ask CanShowK9UI')
+end)
+
+t.test('k9_training_search / k9_training_bite: guarded -- absent RequestTrainingSearchDrill/RequestTrainingBiteDrill does not throw', function()
+    local fAbsent = newRadialFixture({ features = { TrainingMode = true }, omit = { 'RequestTrainingSearchDrill', 'RequestTrainingBiteDrill' } })
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_training', 'k9_training_search'))
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_training', 'k9_training_bite'))
+end)
+
+t.test('k9_training_search / k9_training_bite: carry NO access gate of their own -- call straight through even with CanShowK9UI/HasK9Access both forced false, matching the command path', function()
+    local f = newRadialFixture({ features = { TrainingMode = true }, canShowK9UI = false, hasK9Access = false })
+    f.findInMenu('k9unit_training', 'k9_training_search').onSelect()
+    f.findInMenu('k9unit_training', 'k9_training_bite').onSelect()
+    t.equals(#f.calls.RequestTrainingSearchDrill, 1)
+    t.equals(#f.calls.RequestTrainingBiteDrill, 1)
+    t.equals(f.canShowK9UICallCount(), 0)
+    t.equals(f.hasK9AccessCallCount(), 0)
+    t.equals(f.denyCallCount(), 0)
 end)
 
 -- ----------------------------------------------------------------------
@@ -1253,7 +1426,7 @@ end)
 
 t.test('ox_lib restarting (simulated: its own file-local menus/menuItems wiped, then its OWN onResourceStart fires) re-registers every menu this resource owns', function()
     local f = newRadialFixture({ features = {
-        HandlerDownDefense = true, FetchMechanic = true, AdvancedBarkRadial = true,
+        HandlerDownDefense = true, FetchMechanic = true, AdvancedBarkRadial = true, TrainingMode = true,
     } })
 
     -- Sanity: everything is present before the simulated restart.
@@ -1261,6 +1434,7 @@ t.test('ox_lib restarting (simulated: its own file-local menus/menuItems wiped, 
     t.isNotNil(f.findMenu('k9unit_bark'))
     t.isNotNil(f.findMenu('k9unit_defense'))
     t.isNotNil(f.findMenu('k9unit_fetch'))
+    t.isNotNil(f.findMenu('k9unit_training'))
     t.isNotNil(f.findRootItem('k9unit_open'))
 
     -- Simulates ox_lib's OWN restart: its file-local `menus`/`menuItems`
@@ -1279,12 +1453,13 @@ t.test('ox_lib restarting (simulated: its own file-local menus/menuItems wiped, 
     t.isNotNil(f.findMenu('k9unit_bark'), 'the nested bark variants submenu must be re-registered')
     t.isNotNil(f.findMenu('k9unit_defense'), 'the nested defense submenu must be re-registered')
     t.isNotNil(f.findMenu('k9unit_fetch'), 'the nested fetch submenu must be re-registered')
+    t.isNotNil(f.findMenu('k9unit_training'), 'the nested training submenu must be re-registered')
     t.isNotNil(f.findRootItem('k9unit_open'), 'the single root opener must be re-registered')
     t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'the re-registered opener must still navigate into the re-registered k9unit submenu')
 end)
 
 t.test('ox_lib restart re-registration preserves ORDERING: every submenu is registered before the item that navigates into it via `menu`, even on the re-registration pass, not just the first', function()
-    local f = newRadialFixture({ features = { HandlerDownDefense = true, FetchMechanic = true } })
+    local f = newRadialFixture({ features = { HandlerDownDefense = true, FetchMechanic = true, TrainingMode = true } })
 
     f.wipeOxLibRadialState()
     f.fireResourceStart('ox_lib')
@@ -1295,18 +1470,21 @@ t.test('ox_lib restart re-registration preserves ORDERING: every submenu is regi
 
     t.isNotNil(indexOf.k9unit_defense, 'k9unit_defense must have been (re-)registered')
     t.isNotNil(indexOf.k9unit_fetch, 'k9unit_fetch must have been (re-)registered')
+    t.isNotNil(indexOf.k9unit_training, 'k9unit_training must have been (re-)registered')
     t.isNotNil(indexOf.k9unit, 'k9unit must have been (re-)registered')
     t.isTrue(indexOf.k9unit_defense < indexOf.k9unit, 'k9unit_defense (referenced via a `menu` field from inside k9unit) must be registered BEFORE k9unit itself, on the re-registration pass too -- violating this order is exactly what makes ox_lib\'s showRadial hard-error on an unregistered id')
     t.isTrue(indexOf.k9unit_fetch < indexOf.k9unit, 'k9unit_fetch must likewise be registered before k9unit on the re-registration pass')
+    t.isTrue(indexOf.k9unit_training < indexOf.k9unit, 'k9unit_training must likewise be registered before k9unit on the re-registration pass')
 
     -- The link items themselves must still correctly point at those
     -- already-registered ids after the re-registration.
     t.equals(f.findInMenu('k9unit', 'k9_defense').menu, 'k9unit_defense')
     t.equals(f.findInMenu('k9unit', 'k9_fetch').menu, 'k9unit_fetch')
+    t.equals(f.findInMenu('k9unit', 'k9_training').menu, 'k9unit_training')
 end)
 
 t.test('Re-registering with NO wipe in between (this resource\'s own start firing twice, or ox_lib\'s restart happening twice back to back) does not duplicate any item -- verified against ox_lib\'s own real dedup semantics (registerRadial is a keyed table write; addRadialItem replaces an existing id in place)', function()
-    local f = newRadialFixture({ features = { HandlerDownDefense = true, FetchMechanic = true, AdvancedBarkRadial = true } })
+    local f = newRadialFixture({ features = { HandlerDownDefense = true, FetchMechanic = true, AdvancedBarkRadial = true, TrainingMode = true } })
 
     local idsBefore = f.allIds()
     local countBefore = #idsBefore

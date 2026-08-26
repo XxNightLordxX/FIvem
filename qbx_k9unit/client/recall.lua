@@ -5,12 +5,13 @@
     (DEVELOPER_REFERENCE.md §12.5.1's "Recall actor" -- read that file's header in
     full before touching this one; it is the authoritative contract for
     everything below). Provides the handler-facing entry point for Recall
-    -- a chat command, per this pass's own scope (a client/radial.lua
-    "Recall" entry is a natural follow-up, out of scope here -- coder-frontend
-    owns that file; the exported `RequestRecall()` below is ready for it,
-    same "global helper, private per-file state" convention as
-    client/combat.lua's `RequestBiteHold()`/`RequestDrag()` or
-    client/partnership.lua's `BreakPartnership()`).
+    -- a chat command, per this pass's own scope. RESOLVED (a later pass):
+    client/radial.lua now also calls the exported `RequestRecall()` below
+    from its own "Recall" item -- the command stays as an additional,
+    equally-valid entry point, never replaced by it. Same "global helper,
+    private per-file state" convention as client/combat.lua's
+    `RequestBiteHold()`/`RequestDrag()` or client/partnership.lua's
+    `BreakPartnership()`.
 
     ======================================================================
     TERMINATION MUST NEVER BE GATED -- `RequestRecall()` below calls NEITHER
@@ -40,10 +41,9 @@
 
     FILE-TO-FILE CONTRACT:
     - Exposes `RequestRecall()` as a bare global (this resource's
-      established "global helper, private per-file state" convention),
-      ready for a future client/radial.lua "Recall" entry -- NOT wired into
-      radial.lua by this pass (out of scope, mirrors client/combat.lua's
-      own identical disclosed gap for its three combat actions).
+      established "global helper, private per-file state" convention).
+      RESOLVED: client/radial.lua's own "Recall" item now calls this exact
+      function -- this file needed no change for that to happen.
     - Registers the `k9recall` chat command as this pass's own concrete
       entry point, per the task's "handler command/interaction" framing --
       command REGISTRATION is gated on `Config.Features.Recall` only (see
