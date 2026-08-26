@@ -558,10 +558,11 @@ end
 -- Reusing cooldowns.lua's fail-closed convention here would mean a single
 -- bad constant (a future edit that typos XP_MINT_BUDGET_WINDOW_MS to 0, or
 -- a future refactor that starts reading either constant from Config without
--- re-deriving the same validation this file's own onResourceStart guards
--- already apply to Config.XPTiers) could silently and PERMANENTLY block ALL
--- XP progression for the ENTIRE server, forever, until a restart -- a far
--- larger and far less visible outcome than this one security floor going
+-- re-deriving the same validation GetValidatedXPTiers/ValidateXPAwardAmount
+-- below already apply to Config.XPTiers/Config.XP.awards) could silently and
+-- PERMANENTLY block ALL XP progression for the ENTIRE server, forever, until
+-- a restart -- a far larger and far less visible outcome than this one
+-- security floor going
 -- temporarily unenforced while the four independent per-mechanic mint
 -- cooldowns above (unaffected by this flag either way) keep doing their own
 -- job. Explicit, not accidental: when either constant fails validation,
@@ -666,57 +667,53 @@ if XPMintBudgetEnabled then
     end)
 end
 
--- STRUCTURAL GUARD (this pass): if the budget is enabled, verify at resource
--- start that its cap can never make a single genuine award un-payable. A cap
--- below some Config.XP.awards[key] value would mean even a FULLY refilled
--- bucket (tokens == cap) is smaller than that one award's own amount, so
--- `bucket.tokens < amount` inside AwardXP below would be true FOREVER for
--- that actionKey, for every citizenid, regardless of how long they wait --
--- a self-inflicted version of exactly the "permanently blocked" footgun this
--- section's own fail-OPEN choice above otherwise avoids for a BAD CONSTANT,
--- but which a bad constant RELATIONSHIP (cap too small relative to a real
--- award) would still reintroduce. Fails loudly at resource start, matching
--- this file's existing Config.XPTiers/scopePerCitizenidOrJob asserts below.
-AddEventHandler('onResourceStart', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-    if not XPMintBudgetEnabled then return end
-    if type(Config.XP) ~= 'table' or type(Config.XP.awards) ~= 'table' then return end -- defensive only -- every other AwardXP call site in this file already assumes this table exists
+-- Config.XP.awards' own value-range validation -- CLAMP AND WARN, same
+-- shape as ValidateHandlerAwardAmount below (Config.HandlerXP.awards'
+-- identical guard) -- this REPLACES what used to be a pair of bare
+-- per-actionKey `assert`s inside an onResourceStart handler here. Every
+-- value in Config.XP.awards is documented in config.lua as a "pure balance
+-- placeholder -- tune freely" -- exactly the plausible-owner-typo class
+-- this codebase has already been bitten by twice (this file's own header
+-- names the ambient-audio incident; a handler-rank assert was removed
+-- elsewhere in this same pass). The old asserts' own comment argued
+-- Config.Features.XPProgression shipping `true` by default made a bare
+-- assert "correct" here, unlike Config.HandlerXP.awards -- that reasoning
+-- does not survive a closer look: nothing else was ever registered in that
+-- onResourceStart handler either, so the assert bought no sibling-
+-- registration protection, while still being able to abort resource start
+-- outright over one placeholder value an owner is explicitly invited to
+-- tune. Warns AT MOST ONCE per actionKey per resource lifetime, checked
+-- lazily inside AwardXP itself rather than eagerly at boot -- see
+-- ValidateHandlerAwardAmount's own header for the fuller "why clamp-and-
+-- warn, not assert" writeup this mirrors.
+local XPAwardAmountWarned = {} -- actionKey -> true
 
-    for actionKey, amount in pairs(Config.XP.awards) do
-        assert(
-            type(amount) ~= 'number' or amount <= XP_MINT_BUDGET_CAP_XP,
-            ('[qbx_k9unit] progression: Config.XP.awards.%s (%s XP) exceeds XP_MINT_BUDGET_CAP_XP (%d XP) -- ' ..
-             'a single award larger than the shared budget\'s own full capacity could never be paid, for any ' ..
-             'citizenid, ever, regardless of how long they wait between awards. Raise XP_MINT_BUDGET_CAP_XP ' ..
-             '(server/progression.lua) to at least this amount.')
-                :format(tostring(actionKey), tostring(amount), XP_MINT_BUDGET_CAP_XP)
-        )
-        -- SECOND GUARD (coordinator-prompted re-check, this pass): a
-        -- non-positive award amount breaks the shared budget's own math in
-        -- a DIFFERENT way than "too large" above -- see AwardXP's own
-        -- runtime `amount > 0` guard on this same block for the exact
-        -- mechanism (a NEGATIVE amount would silently INCREASE the bucket
-        -- instead of spending it, since `tokens < amount` never trips and
-        -- `tokens - amount` then subtracts a negative number). ZERO is
-        -- explicitly allowed here, deliberately NOT bundled into this
-        -- guard: a 0-XP award is a harmless no-op either way (AwardXP's own
-        -- `amount > 0` runtime check already skips the budget entirely for
-        -- it, and `K9XP[citizenid] = oldXp + 0` changes nothing) -- some
-        -- callers legitimately use a 0-value actionKey as a placeholder
-        -- (this file's own test suite does), and this guard exists to catch
-        -- the genuinely dangerous case, not to forbid a harmless one. No
-        -- currently shipped Config.XP.awards value is negative, but nothing
-        -- before this pass ever asserted that -- fails loudly here rather
-        -- than relying solely on the runtime guard to silently no-op it.
-        assert(
-            type(amount) ~= 'number' or amount >= 0,
-            ('[qbx_k9unit] progression: Config.XP.awards.%s (%s XP) must not be negative -- a negative award ' ..
-             'amount would silently inflate the shared XP mint budget instead of spending it (see AwardXP\'s ' ..
-             'own runtime `amount > 0` guard on the XPMintBudget block for the exact mechanism).')
-                :format(tostring(actionKey), tostring(amount))
-        )
+--- @param actionKey string
+--- @param amount number -- already confirmed `type(amount) == 'number'` by the caller
+--- @return number? validAmount -- `amount` unchanged if it passes, nil if it does not (caller then treats this exactly like any other unpayable award: a silent no-op)
+local function ValidateXPAwardAmount(actionKey, amount)
+    if amount >= 0 and (not XPMintBudgetEnabled or amount <= XP_MINT_BUDGET_CAP_XP) then
+        return amount
     end
-end)
+    if not XPAwardAmountWarned[actionKey] then
+        XPAwardAmountWarned[actionKey] = true
+        if amount < 0 then
+            -- The real risk a negative amount creates: AwardXP's own
+            -- XPMintBudget block only ever runs `if ... and amount > 0`
+            -- (see that function's own comment on this exact guard), so a
+            -- negative amount skips the shared budget ENTIRELY -- it does
+            -- not "spend" it, positive or negative -- and falls straight
+            -- through to `K9XP[citizenid] = oldXp + amount`, silently
+            -- SUBTRACTING XP directly from that citizenid's own persisted
+            -- total, completely bypassing the mint-budget mechanism this
+            -- section exists to enforce.
+            print(('[qbx_k9unit] progression: Config.XP.awards.%s (%s XP) must not be negative -- a negative amount would bypass the shared XP mint budget entirely (it is only ever consulted for amount > 0) and instead subtract directly from the citizenid\'s own persisted XP total. Treating this actionKey as unpayable rather than risking that. Fix this value in config.lua.'):format(actionKey, tostring(amount)))
+        else
+            print(('[qbx_k9unit] progression: Config.XP.awards.%s (%s XP) exceeds XP_MINT_BUDGET_CAP_XP (%d XP) -- this award could never be paid, for any citizenid, ever, regardless of how long they wait. Treating this actionKey as unpayable rather than crashing. Fix this value in config.lua, or raise XP_MINT_BUDGET_CAP_XP (server/progression.lua).'):format(actionKey, tostring(amount), XP_MINT_BUDGET_CAP_XP))
+        end
+    end
+    return nil
+end
 
 -- CONFIG-SAFETY GUARD (config audit finding, this pass — same precedent as
 -- server/inventory.lua's `Config.K9Inventory.accessScope` assert and
@@ -1867,6 +1864,16 @@ function AwardXP(citizenid, actionKey)
         return
     end
 
+    -- Value-range validation -- see ValidateXPAwardAmount's own doc comment
+    -- for why this is clamp-and-warn, not an onResourceStart assert. A known
+    -- actionKey with an unpayable amount (negative, or larger than the
+    -- shared budget could ever cover) is treated as a silent no-op here,
+    -- same as the unknown-actionKey branch above, except the warning (at
+    -- most once per actionKey) names the value problem specifically rather
+    -- than "unknown actionKey".
+    amount = ValidateXPAwardAmount(actionKey, amount)
+    if type(amount) ~= 'number' then return end
+
     -- PER-PERSON FEATURE CONTROL -- see IsXPProgressionPermittedForCitizenId
     -- above. Checked here, BEFORE AwardXPCooldown.Consume below -- no state
     -- has been touched yet at this point (same "pure entry guard" territory
@@ -1902,22 +1909,18 @@ function AwardXP(citizenid, actionKey)
     -- rejected call must never spend this shared budget either), BEFORE any
     -- cache/DB mutation below -- same "reject before touching state" order
     -- this function already follows throughout.
-    -- EDGE CASE, checked before touching the bucket at all (coordinator-
-    -- prompted re-check, this pass, of "what else could go wrong here"):
-    -- `amount` is only type-checked as `type(amount) == 'number'` above --
-    -- never asserted positive. Every Config.XP.awards value shipped today
-    -- IS positive, but nothing enforces that for a future entry, and this
-    -- budget's own math silently breaks on a non-positive one: `bucket.
-    -- tokens < amount` is FALSE for any non-positive amount (tokens is
-    -- never negative), so the deny-path never triggers, and `tokens =
-    -- tokens - amount` then SUBTRACTS a non-positive number, i.e. INCREASES
-    -- the bucket -- a negative/zero award would silently mint free budget
-    -- instead of spending it. `amount > 0` is asserted at resource start
-    -- below for every currently-configured award (see the STRUCTURAL GUARD
-    -- assert further above) precisely so this can never fire against a real
-    -- shipped value -- kept here anyway as an explicit runtime guard, not
-    -- just a start-time assert, matching this file's own "fail loud enough
-    -- to be caught, never silently wrong" posture elsewhere.
+    -- `amount > 0` here (rather than merely `type(amount) == 'number'`) is
+    -- ONLY ever false for a genuinely valid, currently-shipped 0-XP award
+    -- now -- ValidateXPAwardAmount above already rejects every negative or
+    -- over-cap amount outright (returns nil, which the earlier `if
+    -- type(amount) ~= 'number' then return end` check has already turned
+    -- into an early return), so `amount` reaching this line is guaranteed
+    -- `>= 0` and `<= XP_MINT_BUDGET_CAP_XP`. This condition therefore exists
+    -- purely to skip the budget bucket for a harmless 0-XP award (some
+    -- callers legitimately use a 0-value actionKey as a placeholder -- this
+    -- file's own test suite does), not as a safety backstop against a
+    -- malformed config value reaching this math -- that risk is closed
+    -- earlier, at the validation call above, not here.
     if XPMintBudgetEnabled and amount > 0 then
         local budgetNow = GetGameTimer()
         local bucket = XPMintBudget[citizenid]
