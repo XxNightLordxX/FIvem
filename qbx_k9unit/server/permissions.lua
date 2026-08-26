@@ -1147,6 +1147,74 @@ end
 --- matching server/highcommand.lua's IsHighCommand -- see header for why.
 --- Fails CLOSED on every unresolvable shape: feature off, a non-string/
 --- empty citizenid, or a permissionKey not in Config.Permissions.
+---
+--- MEMORY-MODE BLOCK ASYMMETRY (security pass, this pass -- closes a gap
+--- made materially more reachable by server/datastore.lua's own per-table
+--- fallback: a missing `k9_permissions` table used to take the WHOLE
+--- resource to memory mode, an obviously-degraded state; now it can be the
+--- ONLY table affected while everything else looks completely normal).
+---
+--- THE BUG: `PermissionCache[citizenid]` is built from
+--- `K9Store.Perm_GetActiveForCitizen`, which reads `k9_permissions`'
+--- memory-mode mirror (`PermRows`, server/datastore.lua) whenever that
+--- table is not database-backed this session. `PermRows` ALWAYS starts
+--- completely empty on a fresh boot (server/datastore.lua's own
+--- "FAIL-CLOSED, BY CONSTRUCTION" header) -- a real, un-erroring, `ok =
+--- true` read of a store that structurally cannot contain a row nobody has
+--- re-granted THIS session, not a query failure RefreshPermissionCache's
+--- own bounded-retry/"leave unset" handling (above) was ever built to
+--- catch. For every OTHER permission namespace ('k9.access'/'k9.certify'/
+--- 'k9.audit'/'k9.givexp'/'feature.<Name>') that empty answer fails SAFE:
+--- an absent POSITIVE grant reads as `false`, exactly the deny a working
+--- database would also give a citizenid nobody (re-)granted yet this
+--- session -- ordinary, honest data loss, never more access than before.
+--- For `block.<Name>` it fails OPEN instead, because a block is a NEGATIVE
+--- grant: a real, still-active block row sitting in a database this table
+--- simply cannot reach right now reads back as absent -- indistinguishable
+--- from "never blocked" -- which un-blocks, this session, a specific
+--- person a human admin deliberately restricted. That is exactly what
+--- config.lua's own invariant on this feature forbids ("nobody ever ends
+--- up with MORE access than they would have on a database-backed server"),
+--- and it is worse than an ordinary lost grant precisely because it is
+--- silent and targeted rather than an obvious, blanket "everyone looks
+--- decertified" failure.
+---
+--- WHY THE FIX GOES THE OPPOSITE DIRECTION FROM RefreshPermissionCache's
+--- OWN "COULD NOT DETERMINE -> KEEP/LEAVE UNSET" POLICY ABOVE, DELIBERATELY:
+--- that policy exists so a transient read failure never LOSES a positive
+--- grant someone already had -- "could not confirm" defers to whatever
+--- access was already established, because the harm to guard against is
+--- losing access you earned. Here the harm runs the other way: "could not
+--- confirm" must deny, because the harm to guard against is GAINING access
+--- someone else took away. Same file, same "could not determine" shape,
+--- opposite resolution -- because a positive grant and a block are opposite
+--- questions, and only one direction is safe for each.
+---
+--- THE FIX: for the 'block.<Name>' namespace ONLY, checked BEFORE the
+--- ordinary cache read below, an absent answer is never trusted while
+--- `k9_permissions` itself is not database-backed this session
+--- (`K9Store.IsDatabaseEnabled('k9_permissions')` -- false whether by
+--- Config.Database.enabled = false, this table's own PART-INSTALLED
+--- fallback, or a whole-resource schema collision; all three route through
+--- that one function, see its own header) -- HasPermission reports the
+--- feature BLOCKED, unconditionally, for EVERY citizenid, until the table
+--- is restored and this resource restarts. This denies the (finite, named)
+--- list of block-gated features to everyone rather than risk handing even
+--- one of them back to someone specifically restricted from it -- exactly
+--- mirroring how a feature listed in Config.FeatureControl.RequireGrant
+--- already, correctly, denies everyone the moment its own positive grant
+--- cannot be confirmed (see that config block's own neighbouring check,
+--- unaffected by and untouched by this fix, since an absent POSITIVE grant
+--- already failed closed before this pass). Every OTHER permission
+--- namespace ('k9.access'/'k9.certify'/'k9.audit'/'k9.givexp'/
+--- 'feature.<Name>') is completely unaffected -- an ordinary citizenid's
+--- own certification, admin capabilities and positive feature grants are
+--- untouched by this branch, which matches only the literal `'block.'`
+--- prefix. The operator is warned about this loudly, once, from within this
+--- file's own pre-existing `onResourceStart` backfill-loop handler below
+--- ("BLOCK STATE CANNOT BE VERIFIED" section, folded into that handler
+--- rather than a new one of its own -- see that section's own comment for
+--- why) -- never repeated on this hot path.
 --- @param citizenid string
 --- @param permissionKey string
 --- @return boolean
@@ -1154,6 +1222,12 @@ function HasPermission(citizenid, permissionKey)
     if not (Config.Features and Config.Features.PermissionGrants == true) then return false end
     if type(citizenid) ~= 'string' or citizenid == '' then return false end
     if not IsValidPermissionKey(permissionKey) then return false end
+
+    if permissionKey:match('^block%.')
+        and type(K9Store) == 'table' and type(K9Store.IsDatabaseEnabled) == 'function'
+        and not K9Store.IsDatabaseEnabled('k9_permissions') then
+        return true
+    end
 
     local set = PermissionCache[citizenid]
     return set ~= nil and set[permissionKey] == true
@@ -2203,6 +2277,44 @@ AddEventHandler('onResourceStart', function(resourceName)
     if not K9Store.WaitForSchemaCheckToSettle() then
         print('[qbx_k9unit] permissions: the schema-collision check had not finished within its wait budget -- skipping this restart\'s permission-cache backfill for every already-connected officer (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next PlayerLoaded (or a restart once the check has had time to finish) re-syncs it as normal.')
         return
+    end
+
+    -- BLOCK STATE CANNOT BE VERIFIED (security pass, this pass) -- the
+    -- loud, once-per-boot half of HasPermission's own "MEMORY-MODE BLOCK
+    -- ASYMMETRY" doc comment above; read that first for the full "why"
+    -- this exists at all. Folded into THIS handler (rather than a new,
+    -- separate `onResourceStart` registration) specifically so it reuses
+    -- the WaitForSchemaCheckToSettle() call immediately above instead of
+    -- parking a SECOND independent coroutine on that same wait -- this
+    -- file already has exactly one participant in the boot-order-race
+    -- sequence tests/permissionkeycatalog_spec.lua's own "BOOT-ORDER RACE"
+    -- section hand-counts (`resumeNext()` calls, one per parked handler,
+    -- in registration order); adding a second one here would silently
+    -- desync that count for every file that registers its own
+    -- onResourceStart AFTER this one in fxmanifest.lua's load order, not
+    -- just fail loudly in a test made specifically to catch drift like it.
+    --
+    -- FIRES ONLY ONCE, on THIS handler's own single pass -- HasPermission's
+    -- own fail-closed behavior above does NOT depend on this print running
+    -- (it reads K9Store.IsDatabaseEnabled('k9_permissions') fresh, every
+    -- call, on its own) -- this exists purely so the operator is told WHY
+    -- every 'block.<Name>' feature just started denying everyone, in one
+    -- place, instead of having to notice it from missing tablet
+    -- functionality.
+    if Config.Features and Config.Features.PermissionGrants == true and not K9Store.IsDatabaseEnabled('k9_permissions') then
+        print(
+            '[qbx_k9unit] permissions.lua WARNING: k9_permissions is not database-backed this session (see ' ..
+            'server/datastore.lua\'s own boot message above for exactly why -- Config.Database.enabled = false, ' ..
+            'this one table missing from an otherwise-intact database, or a schema collision). Any per-person ' ..
+            '`block.<Name>` restriction granted before this restart cannot be verified right now, so -- to avoid ' ..
+            'silently handing access back to someone a human admin specifically restricted -- EVERY block-gated ' ..
+            'feature is being treated as BLOCKED FOR EVERYONE for the rest of this session, regardless of who ' ..
+            'was actually on a block list. Certifications, XP, positive permission/feature grants, and every ' ..
+            'feature NOT gated by a per-person block are completely unaffected and continue to work normally. ' ..
+            'TO FIX: restore k9_permissions (see server/datastore.lua\'s own TO FIX instructions) and restart ' ..
+            'this resource -- every block-gated feature resumes normal per-person enforcement the moment that ' ..
+            'table is reachable again.'
+        )
     end
 
     for _, playerId in ipairs(GetPlayers()) do

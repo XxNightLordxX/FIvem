@@ -346,7 +346,7 @@ t.test('a rejected toggle (protected_feature/unaudited_feature refusal) renders 
     t.isTrue(findByText(h.getRoot(), 'This feature has not yet been classified for runtime control, and is refused for safety. Ask a developer to audit it before it can be toggled here.').length >= 1);
 });
 
-t.test('Reset to config.lua default only appears when overridden, requires two clicks, sends {name}', async () => {
+t.test('Reset to default only appears when overridden, requires two clicks, sends {name}', async () => {
     let resetBody = null;
     let listCalls = 0;
     const h = createHarness({
@@ -365,7 +365,7 @@ t.test('Reset to config.lua default only appears when overridden, requires two c
 
     t.isTrue(findByText(h.getRoot(), 'Overridden by CIT1 at 2026-01-01 00:00:00').length >= 1);
 
-    const resetBtn = findByText(h.getRoot(), 'Reset to config.lua default')[0];
+    const resetBtn = findByText(h.getRoot(), 'Reset to default')[0];
     resetBtn.click();
     t.isNull(resetBody);
     resetBtn.click();
@@ -385,7 +385,7 @@ t.test('a non-overridden feature shows no Reset button at all', async () => {
     await openTablet(h);
     openRuntimeControlTab(h);
     await settle();
-    t.equals(findByText(h.getRoot(), 'Reset to config.lua default').length, 0);
+    t.equals(findByText(h.getRoot(), 'Reset to default').length, 0);
 });
 
 // ======================================================================
@@ -561,7 +561,7 @@ t.test('Reset (tunable) only appears when overridden, requires two clicks, sends
 
     t.isTrue(findByText(h.getRoot(), 'Overridden by CIT9 at 2026-02-02 00:00:00').length >= 1);
 
-    const resetBtn = findByText(h.getRoot(), 'Reset to config.lua default')[0];
+    const resetBtn = findByText(h.getRoot(), 'Reset to default')[0];
     resetBtn.click();
     resetBtn.click();
     await new Promise((r) => setTimeout(r, 30));
@@ -790,7 +790,7 @@ t.test('SAFETY: Reset (config.lua default) on a lockoutRisk feature goes through
     openRuntimeControlTab(h);
     await settle();
 
-    const resetBtn = findByText(h.getRoot(), 'Reset to config.lua default')[0];
+    const resetBtn = findByText(h.getRoot(), 'Reset to default')[0];
     resetBtn.click(); // must NOT arm a two-click confirm -- opens the read-and-type panel instead
     await settle();
     t.equals(resetCalls.length, 0, 'opening the confirmation panel alone never sends a request');

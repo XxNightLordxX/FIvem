@@ -197,12 +197,11 @@ t.test('a certified, non-high-command viewer sees NO trace of Guided Flows anywh
     t.equals(findByText(h.getRoot(), 'Guided Flows').length, 0, 'still absent after navigating elsewhere');
 });
 
-t.test('a high-command viewer sees the Guided Flows tab, the Home shortcut, and all four job cards in the hub', async () => {
+t.test('a high-command viewer sees the Guided Flows tab (grouped into the High Command tab band) and all four job cards in the hub', async () => {
     const rec = makePersonRecord();
     const h = await openTablet(baseHandlers(rec, HIGH_COMMAND_VIEWER));
 
     t.equals(findByText(h.getRoot(), 'Guided Flows').length, 1, 'the tab itself, on the default Home screen');
-    t.equals(findByText(h.getRoot(), 'Guided Flows →').length, 1, 'the Home "High Command Tools" shortcut too, distinctly labelled per buildHomeToolLink()\'s own convention');
 
     findByText(h.getRoot(), 'Guided Flows')[0].click();
     await settle();

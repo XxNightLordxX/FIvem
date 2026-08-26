@@ -943,6 +943,7 @@ local TABLET_STRING_KEYS = {
     -- page's own copy for `reason='confirmation_required'` -- NEVER the
     -- server's raw `lockoutWarning` text, which is instead shown VERBATIM
     -- (never paraphrased) in html/tablet.js's own confirmation panel.
+    'runtime_lockout_legend',
     'runtime_lockout_badge', 'runtime_lockout_row_hint',
     'runtime_session_only_badge', 'runtime_session_only_hint',
     'runtime_lockout_confirm_heading', 'runtime_lockout_confirm_instruction',
@@ -1109,7 +1110,8 @@ local TABLET_STRING_KEYS = {
     'home_not_partnered_badge', 'home_certified_count_template',
     'home_quick_actions_heading', 'home_view_my_record_label', 'home_view_my_record_hint',
     'home_open_console_label', 'home_open_console_hint', 'home_high_command_heading',
-    'home_high_command_hint', 'home_no_certification_title', 'home_no_certification_body',
+    'home_high_command_hint', 'home_high_command_tabs_pointer',
+    'home_no_certification_title', 'home_no_certification_body', 'home_no_certification_next_steps',
     'home_ready_abilities_heading', 'home_no_ready_abilities', 'home_view_all_abilities_label',
     'home_blocked_count_template',
     -- COMMAND REFERENCE (this pass -- "the resource registers 36 commands,

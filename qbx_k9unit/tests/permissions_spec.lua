@@ -96,7 +96,7 @@ end
 -- Fixture 1: UNIT level. server/cooldowns.lua + server/permissions.lua only.
 -- ----------------------------------------------------------------------
 
---- @param opts table? -- { permissions: table (default 4-key catalog), departments: table (default police w/ certifierGrade=4,auditGrade=4), isHighCommand: fun(source):boolean (default: always false), hasK9Access: fun(source):boolean (default: always false), commandTablet: boolean (default false), featureControl: table? (default absent -- Config.FeatureControl.RequireGrant, for the STARTUP WARNING section), commandTabletConfig: table? (default absent -- Config.CommandTablet, for the STARTUP WARNING section's openMode check), locale: (fun(key, ...):string)? (default nil -- keeps this fixture's existing "real locale() over real en.json" behavior; only the CONSOLE/CHAT COMMAND section overrides this, to resolve this pass's own not-yet-landed 'permissions.command_*' keys -- see that section's own comment) }
+--- @param opts table? -- { permissions: table (default 4-key catalog), departments: table (default police w/ certifierGrade=4,auditGrade=4), isHighCommand: fun(source):boolean (default: always false), hasK9Access: fun(source):boolean (default: always false), commandTablet: boolean (default false), featureControl: table? (default absent -- Config.FeatureControl.RequireGrant, for the STARTUP WARNING section), commandTabletConfig: table? (default absent -- Config.CommandTablet, for the STARTUP WARNING section's openMode check), locale: (fun(key, ...):string)? (default nil -- keeps this fixture's existing "real locale() over real en.json" behavior; only the CONSOLE/CHAT COMMAND section overrides this, to resolve this pass's own not-yet-landed 'permissions.command_*' keys -- see that section's own comment), forcePermissionsTableMissing: boolean (default false -- MEMORY-MODE BLOCK ASYMMETRY section: answers server/datastore.lua's boot schema probe as PART-INSTALLED with every OTHER table intact and ONLY `k9_permissions` missing -- server/datastore.lua's own real per-table fallback, not a whole-resource one, modelling this pass's exact "materially more reachable" scenario) }
 --- @return table fixture
 local function newFixture(opts)
     opts = opts or {}
@@ -163,7 +163,25 @@ local function newFixture(opts)
             -- mode -- which would quietly turn every database-backed
             -- assertion below into a memory-mode assertion. See
             -- tests/datastore_spec.lua's SETTLEMENT tests.
-            if Sandbox.isSchemaProbe(sql) then return Sandbox.installedSchemaRows() end
+            -- MEMORY-MODE BLOCK ASYMMETRY section (this pass):
+            -- `opts.forcePermissionsTableMissing` strips `k9_permissions`
+            -- alone out of that otherwise-fully-installed answer -- every
+            -- OTHER table still reports intact, matching server/
+            -- datastore.lua's own PART-INSTALLED branch (tests/
+            -- datastore_spec.lua's own identical technique for its
+            -- k9_certifications cascade test), never the old
+            -- whole-resource "nothing was ever imported" branch this pass
+            -- is specifically about no longer triggering.
+            if Sandbox.isSchemaProbe(sql) then
+                if opts.forcePermissionsTableMissing then
+                    local rowsOut = {}
+                    for _, row in ipairs(Sandbox.installedSchemaRows()) do
+                        if row.tbl ~= 'k9_permissions' then rowsOut[#rowsOut + 1] = row end
+                    end
+                    return rowsOut
+                end
+                return Sandbox.installedSchemaRows()
+            end
             local out = {}
             if sql:find('SELECT permission FROM k9_permissions', 1, true) then
                 for _, row in ipairs(rows) do
@@ -2689,6 +2707,138 @@ t.test('STARTUP WARNING: a DIFFERENT resource starting is ignored entirely -- mi
         handler('some_other_resource')
     end
     t.isFalse(anyPrintLineContains(f, 'RequireGrant'))
+end)
+
+-- ============================================================================
+-- MEMORY-MODE BLOCK ASYMMETRY (coder-security pass, this pass) -- see
+-- server/permissions.lua's own HasPermission doc comment "MEMORY-MODE BLOCK
+-- ASYMMETRY" for the full "why" this exists at all. Made materially more
+-- reachable by server/datastore.lua's own per-table fallback: k9_permissions
+-- alone can now go memory-only while every other table (and therefore every
+-- other feature) keeps working and looking completely normal -- the exact
+-- shape `opts.forcePermissionsTableMissing` (this file's own fixture, see
+-- its own doc comment above) reproduces: the boot schema probe answers
+-- PART-INSTALLED with ONLY k9_permissions missing, never the old
+-- whole-resource "nothing was ever imported" branch.
+--
+-- PermRows (server/datastore.lua) starts genuinely EMPTY every time this
+-- table falls back -- an absent `block.<Name>` row is therefore unknowable,
+-- not confirmed, and HasPermission must never read it as "confirmed not
+-- blocked" while that is true.
+-- ============================================================================
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: FAILS CLOSED -- a block.<Name> check reports BLOCKED for a citizenid nobody has ever explicitly (re-)blocked THIS session, the moment k9_permissions falls back to memory mode', function()
+    local f = newFixture({ forcePermissionsTableMissing = true })
+    f.fireOnResourceStart()
+
+    t.isFalse(f.env.K9Store.IsDatabaseEnabled('k9_permissions'), 'sanity: this table alone must be memory-only')
+    t.isTrue(f.env.K9Store.IsDatabaseEnabled('k9_progression'), 'sanity: an UNRELATED table must stay database-backed -- this is the per-table fallback, not the old whole-resource one')
+    t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'sanity: the resource-wide flag must stay true -- only one table is affected')
+
+    t.isTrue(f.env.HasPermission('NEVER-TOUCHED-CITIZEN', 'block.BiteAndHold'), 'an unverifiable block must read as ACTIVE, never as "confirmed not blocked"')
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: a citizenid who genuinely held an active block.<Name> row in the now-unreachable real table stays blocked -- proves this does not depend on that stale row remaining reachable', function()
+    local f = newFixture({ forcePermissionsTableMissing = true })
+    -- Seeds the FAKE k9_permissions table exactly like a real pre-existing
+    -- block grant would look, made BEFORE this boot. Once k9_permissions
+    -- itself is flagged missing, server/datastore.lua's K9Store.Perm_*
+    -- `false` branches never call MySQL.*.await again at all -- this row is
+    -- never actually re-read. The assertion below must still hold, and for
+    -- the RIGHT reason (HasPermission's own fail-closed policy), not by
+    -- accident.
+    f.rows[#f.rows + 1] = {
+        id = 1, citizenid = 'PREVIOUSLY-BLOCKED', permission = 'block.BiteAndHold',
+        granted_by = 'HC1', granted_at = '2026-01-01 00:00:00', revoked_by = nil, revoked_at = nil, active = 1,
+    }
+    f.fireOnResourceStart()
+
+    t.isTrue(f.env.HasPermission('PREVIOUSLY-BLOCKED', 'block.BiteAndHold'), 'stays blocked even though the row that recorded it is no longer being read at all')
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: an ORDINARY person is NOT accidentally denied everything by the same change -- only the block.<Name> namespace is affected', function()
+    local f = newFixture({ forcePermissionsTableMissing = true, isHighCommand = function(source) return source == 100 end })
+    local hcSrc = f.registerPlayer(100, 'HC-GRANTER', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(102, 'ORDINARY-CITIZEN', { name = 'police', grade = { level = 1 } })
+    f.fireOnResourceStart()
+
+    -- Unrelated positive capabilities nobody granted must still simply
+    -- deny -- the pre-existing, correct "absence fails safe" behavior for a
+    -- POSITIVE grant, never swept into the new block-only branch.
+    t.isFalse(f.env.HasPermission('ORDINARY-CITIZEN', 'k9.access'), 'an ungranted capability must still just read false, not get caught by the new block-only fail-closed branch')
+    t.isFalse(f.env.HasPermission('ORDINARY-CITIZEN', 'feature.BiteAndHold'), 'ditto for an ungranted feature.<Name> grant')
+
+    -- A real, in-session positive grant -- made WHILE the table is still
+    -- down -- must still be tracked correctly and honoured: memory mode's
+    -- own grant bookkeeping (PermRows/PermissionCache) is completely
+    -- untouched by this fix; only the MEANING of an absent block changed.
+    local ok, outcome = f.env.GrantPermission(hcSrc, 'ORDINARY-CITIZEN', 'feature.BiteAndHold')
+    t.isTrue(ok, tostring(outcome))
+    t.isTrue(f.env.HasPermission('ORDINARY-CITIZEN', 'feature.BiteAndHold'), 'a real, in-session grant must still be honoured even while k9_permissions itself is memory-only')
+
+    -- And this SAME citizenid, at the SAME time, is still correctly denied
+    -- a block.<Name> they were never actually granted -- fail-closed
+    -- applies uniformly to the block namespace, not selectively, and does
+    -- not leak into (or get bypassed by) their own unrelated positive grant.
+    t.isTrue(f.env.HasPermission('ORDINARY-CITIZEN', 'block.BiteAndHold'), 'the same citizenid must still be treated as blocked for block.<Name> -- the point is that ONLY the block namespace denies-by-default, nothing else')
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: with k9_permissions genuinely database-backed, an unblocked citizenid still correctly reads NOT blocked -- this fix changes nothing on the healthy path', function()
+    local f = newFixture()
+    f.fireOnResourceStart()
+    t.isFalse(f.env.HasPermission('NEVER-BLOCKED', 'block.BiteAndHold'))
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: the operator is warned ONCE, clearly, that block state cannot be verified this session -- not once per HasPermission call, not silently', function()
+    local f = newFixture({ forcePermissionsTableMissing = true })
+    f.fireOnResourceStart()
+
+    local function countWarnings()
+        local n = 0
+        for _, line in ipairs(f.printLog) do
+            if line:find('block', 1, true) and line:find('cannot be verified', 1, true) then n = n + 1 end
+        end
+        return n
+    end
+
+    t.equals(countWarnings(), 1, 'must warn exactly once, at boot')
+    local warningLine
+    for _, line in ipairs(f.printLog) do
+        if line:find('cannot be verified', 1, true) then warningLine = line end
+    end
+    t.isNotNil(warningLine, 'the warning must actually print')
+    t.isTrue(warningLine:find('BLOCKED FOR EVERYONE', 1, true) ~= nil, 'must plainly say what is now happening, not just that something is wrong')
+    t.isTrue(warningLine:find('unaffected', 1, true) ~= nil, 'must reassure the operator that certifications/positive grants are NOT also affected')
+
+    -- Drive HasPermission repeatedly afterward (mirrors real gameplay
+    -- hammering this hot path many times a second) -- the warning must
+    -- never be tied to this call, only to onResourceStart.
+    for i = 1, 20 do f.env.HasPermission('SOME-CITIZEN-' .. i, 'block.BiteAndHold') end
+    t.equals(countWarnings(), 1, 'repeated HasPermission calls must never add duplicate warnings -- the print lives at onResourceStart, not on this hot path')
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: the operator warning does NOT fire when Config.Features.PermissionGrants is off -- nothing to warn about if the whole grant/block system is disabled', function()
+    local f = newFixture({ forcePermissionsTableMissing = true, permissionGrantsEnabled = false })
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'cannot be verified'))
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: the operator warning does NOT fire when k9_permissions is genuinely database-backed -- nothing to warn about on a healthy install', function()
+    local f = newFixture()
+    f.fireOnResourceStart()
+    t.isFalse(anyPrintLineContains(f, 'cannot be verified'))
+end)
+
+t.test('MEMORY-MODE BLOCK ASYMMETRY: a DIFFERENT resource starting is ignored entirely -- mirrors this resource\'s own GetCurrentResourceName() guard convention', function()
+    local f = newFixture({ forcePermissionsTableMissing = true })
+    for _, handler in ipairs(f.eventHandlers['onResourceStart'] or {}) do
+        handler('some_other_resource')
+    end
+    t.isFalse(anyPrintLineContains(f, 'cannot be verified'))
+    -- The schema probe itself never ran either (also gated on the same
+    -- resource-name check in server/datastore.lua) -- so this is not yet
+    -- settled; nothing this test needs to additionally assert beyond "no
+    -- warning fired for someone else's restart".
 end)
 
 os.exit(t.summary())

@@ -267,6 +267,7 @@ body {
 
 .k9tablet-tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
     padding: 10px 18px 0 18px;
 }
@@ -286,6 +287,32 @@ body {
     color: var(--k9tablet-text, #f2f2f2);
     font-weight: 600;
     box-shadow: inset 0 -2px 0 var(--k9tablet-primary, #2563eb);
+}
+
+/*
+    ONE NAVIGATION STRUCTURE, NOT TWO (this pass) -- the tab bar used to be
+    a single flat row with every High Command/delegated screen mixed in
+    among the five universal tabs, AND Home separately offered its own
+    full set of shortcuts to the same twelve screens -- two different-
+    looking answers to "how do I reach the runtime control screen", never
+    reconciled. Resolved by keeping the tab bar as the ONE real navigation
+    surface (every tab below keeps its own exact label and click
+    behaviour, unchanged) and grouping the administrative cluster into its
+    own visually distinct band, so a flat "wall of tabs" reads instead as
+    "your tabs, then a clearly separate High Command group" -- Home's own
+    admin section (.k9tablet-home-highcommand below) now only POINTS at
+    this group rather than duplicating it link-for-link.
+*/
+.k9tablet-tab-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.k9tablet-tab-group--admin {
+    margin-left: 8px;
+    padding-left: 10px;
+    border-left: 2px solid var(--k9tablet-accent, #f59e0b);
 }
 
 .k9tablet-id-toolbar {
@@ -951,18 +978,48 @@ body {
 
 /*
     LOCKOUT-RISK CONFIRMATION (HighCommand/PermissionGrants/
-    RuntimeFeatureControl/TabletTheming/CommandTablet) -- see html/tablet.js's
-    own buildRuntimeFeatureRow()/buildRuntimeLockoutConfirmPanel() header
-    notes. The row itself must look different BEFORE any click (a subtle
-    left-border + tint, same red as .k9tablet-runtime-tier--protected above
-    -- both are "this is dangerous" signals), the risk badge is that same
-    red, and the session-only badge is a DELIBERATELY DIFFERENT colour
-    (the existing link-button blue) so the two are never visually confused:
-    one is a warning, the other is reassurance.
+    RuntimeFeatureControl/TabletTheming/CommandTablet, plus the four
+    active-usage features while a player is genuinely mid-action -- see
+    html/tablet.js's own buildRuntimeFeatureRow()/
+    buildRuntimeLockoutConfirmPanel() header notes) -- BETTER DISTINCTION
+    (this pass): the row itself must look OBVIOUSLY different BEFORE any
+    click, not just subtly -- a strong left-border + tint, same red as
+    .k9tablet-runtime-tier--protected above (both are "this is dangerous"
+    signals), a warning-triangle icon on the feature's own name (the FIRST
+    thing read, left of the Effect column), the risk badge in that same
+    red, and the session-only badge in a DELIBERATELY DIFFERENT colour (the
+    existing link-button blue) so the two are never visually confused: one
+    is a warning, the other is reassurance.
 */
-.k9tablet-runtime-lockout-row {
-    background: rgba(224, 138, 138, 0.05);
+.k9tablet-runtime-legend {
+    margin: 0 0 10px 0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(224, 138, 138, 0.08);
     border-left: 3px solid #e08a8a;
+    font-size: 13px;
+}
+
+.k9tablet-runtime-lockout-row {
+    background: rgba(224, 138, 138, 0.09);
+    border-left: 5px solid #e08a8a;
+}
+
+.k9tablet-runtime-name-cell--risk {
+    font-weight: 700;
+}
+
+/*
+    Generated content, not a real DOM node -- see buildRuntimeFeatureRow()'s
+    own comment for why the icon must never become a second child of this
+    cell (it would change this cell's real textContent in every browser,
+    not only this codebase's own test stub, and every exact-name lookup in
+    this file's test suite depends on that textContent being feature.name
+    alone).
+*/
+.k9tablet-runtime-name-cell--risk::before {
+    content: '⚠ ';
+    color: #e08a8a;
 }
 
 .k9tablet-runtime-lockout-badge,
@@ -1170,14 +1227,25 @@ body {
     color: #9aa0ab;
 }
 
-.k9tablet-home-tools {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.k9tablet-home-tool-link {
-    font-size: 12px;
+/*
+    THE DUAL-ROLE BOUNDARY (this pass) -- a High Command officer who is
+    also a certified Handler/K9 (the common case for anyone senior enough
+    to reach these screens at all, never an edge case -- see
+    buildHomeHighCommandSignpost()'s own doc comment) used to see this
+    section separated from their own personal content by nothing more than
+    a heading and ordinary paragraph spacing. A real visual break now marks
+    it: a top rule and a faint background tint, both in the tablet's own
+    accent colour (the SAME custom property already used for the role
+    badge and the active-tab underline -- never a new, unrelated colour),
+    so nobody mistakes "this is you, the administrator" for "this is you,
+    the handler/K9" above it.
+*/
+.k9tablet-home-highcommand {
+    margin-top: 20px;
+    padding: 16px;
+    border-top: 3px solid var(--k9tablet-accent, #f59e0b);
+    background: rgba(127, 127, 127, 0.05);
+    border-radius: 0 0 8px 8px;
 }
 
 /*

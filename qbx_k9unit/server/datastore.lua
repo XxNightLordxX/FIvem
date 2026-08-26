@@ -3435,7 +3435,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
     k9_partnerships                    = 'K9/handler partnerships',
     k9_partnership_pair_progress       = 'partnership tenure-bonus anti-farm history -- NOTE: while this table is missing, a pair that breaks up and reforms AFTER a restart can re-earn tenure-bonus XP milestones they already collected (see MISSING_TABLE_CASCADES\'s own doc comment for the full "why" and why this is disclosed here rather than fixed by a cascade)',
     k9_progression                     = 'XP and handler XP',
-    k9_permissions                     = 'individual permission grants and feature blocks',
+    k9_permissions                     = 'individual permission grants and feature blocks -- NOTE: while this table is missing, every per-person `block.<Name>` restriction is treated as ACTIVE FOR EVERYONE rather than silently lifted for whoever it targeted (see server/permissions.lua\'s own HasPermission doc comment "MEMORY-MODE BLOCK ASYMMETRY" for the full "why") -- positive grants and certifications are unaffected',
     k9_certification_specializations   = 'certification specializations',
     k9_runtime_feature_overrides       = 'live feature on/off overrides',
     k9_runtime_override_audit          = 'the feature-override audit log',
@@ -3496,10 +3496,38 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
 --- K9Store.WaitForSchemaCheckToSettle's own callers), and every grant
 --- table's own USE-time check (HasK9Access, HasPermission,
 --- GetActivePartnerCitizenId) reads that SAME table's own current backend,
---- never a different one -- so a missing k9_progression, k9_partnerships,
---- or k9_permissions table produces ordinary, honest DATA LOSS ("a
---- returning veteran looks like a rookie for the session"), never an
---- authorization state a working database would not also produce.
+--- never a different one -- so a missing k9_progression or k9_partnerships
+--- table produces ordinary, honest DATA LOSS ("a returning veteran looks
+--- like a rookie for the session"), never an authorization state a working
+--- database would not also produce.
+---
+--- CORRECTED, THIS PASS (coder-security -- the claim above used to also
+--- name k9_permissions as "ordinary, honest data loss", which is true for
+--- the four named capabilities and every `feature.<Name>` row it holds,
+--- but WRONG for the `block.<Name>` rows that same table also holds.
+--- HasPermission's own "reads that SAME table's own current backend, never
+--- a different one" is exactly the problem for a NEGATIVE grant: a missing
+--- k9_permissions table means a positive grant/certification READS as
+--- absent -- ordinary data loss, fails safe -- but a `block.<Name>` row
+--- ALSO reads as absent, and for a block, absent means UNBLOCKED --
+--- handing back access a human admin specifically took away, exactly the
+--- "authorization state a working database would not also produce" this
+--- paragraph claims cannot happen. Grant tables and block tables are not
+--- the same shape even when they share one physical table: a missing GRANT
+--- fails toward less access, a missing BLOCK fails toward more, and only
+--- the first of those is safe to let happen silently. See server/
+--- permissions.lua's own HasPermission doc comment, "MEMORY-MODE BLOCK
+--- ASYMMETRY", for the fix -- `block.<Name>` is reported ACTIVE for every
+--- citizenid, unconditionally, for as long as k9_permissions itself is not
+--- database-backed this session, rather than trust an absence this table
+--- structurally cannot distinguish from "never blocked." Not fixed here,
+--- in this file, because the fix is a HasPermission-level policy decision
+--- (what an unverifiable answer should mean), not a K9Store-level data
+--- question (what the memory-mode mirror currently holds) -- this file's
+--- own job stops at "here is what is actually in the table right now,"
+--- truthfully; server/permissions.lua is what decides an absent block
+--- cannot be trusted).
+---
 --- `k9_partnership_pair_progress` was the other candidate raised during
 --- this review (it exists specifically to survive a k9_partnerships row
 --- being superseded on reform). UPDATE, corrected rather than left stale:

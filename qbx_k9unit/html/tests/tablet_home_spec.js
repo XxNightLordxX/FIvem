@@ -89,7 +89,7 @@ async function openTablet(myRecordResult, extraHandlers) {
 // (no-click) Home screen.
 // ======================================================================
 
-t.test('HIGH COMMAND: lands on Home by default, role badge reads "High Command", and the High Command Tools shortcuts are all present', async () => {
+t.test('HIGH COMMAND: lands on Home by default, role badge reads "High Command", and the High Command signpost names its own access in plain language', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'HC1', name: 'Chief Hopps', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false },
@@ -101,18 +101,30 @@ t.test('HIGH COMMAND: lands on Home by default, role badge reads "High Command",
     t.equals(findByText(h.getRoot(), 'High Command').length, 1, 'role badge reads High Command');
     t.equals(findByText(h.getRoot(), 'View My Record').length, 1);
     t.equals(findByText(h.getRoot(), 'Open Command Console').length, 1, 'high command also gets the console quick action');
-    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'the progressive-disclosure admin section is present');
+    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'the signpost heading is present');
 
-    // Every admin shortcut exists, distinctly labelled from its own tab
-    // (arrow suffix -- see buildHomeToolLink()'s own doc comment) so it
-    // never collides with, or replaces, that tab's own single occurrence.
+    // ONE NAVIGATION STRUCTURE, NOT TWO (this pass) -- the signpost no
+    // longer duplicates every admin screen as its own shortcut; it points
+    // at the tab row instead. Every real tab still appears exactly once,
+    // grouped into its own band (see html/tablet.css's own
+    // ".k9tablet-tab-group--admin" comment) -- checked here as "exactly
+    // one occurrence", never a second, arrow-suffixed copy on Home.
     for (const label of ['Tablet Theme', 'Certification Tiers', 'Permission Keys', 'Shop Locations', 'Shop Items', 'Runtime Control', 'XP Ranks', 'Audit Trail']) {
-        t.equals(findByText(h.getRoot(), label).length, 1, `"${label}" tab itself still appears exactly once`);
-        t.equals(findByText(h.getRoot(), label + ' →').length, 1, `"${label}" ALSO has a Home shortcut`);
+        t.equals(findByText(h.getRoot(), label).length, 1, `"${label}" tab appears exactly once -- no competing Home shortcut`);
     }
+
+    // The signpost's own plain-language pointer at the grouped tab row --
+    // proves the section explains where to go instead of re-listing every
+    // destination itself.
+    t.isTrue(findByText(h.getRoot(), "You'll find all of these in the tabs at the top of the screen -- they're grouped together there, set apart from your own tabs, so they're easy to spot.").length >= 1);
+
+    // The admin tab cluster is a real, labelled group in the DOM (not just
+    // a visual illusion) -- a screen reader announces it as one.
+    const adminGroups = findAll(h.getRoot(), (n) => n.getAttribute && n.getAttribute('role') === 'group');
+    t.equals(adminGroups.length, 1, 'exactly one admin tab group exists');
 });
 
-t.test('HIGH COMMAND: clicking a High Command Tools shortcut actually navigates to that real screen (not a dead link)', async () => {
+t.test('HIGH COMMAND: the real Certification Tiers tab (now grouped into the High Command tab band) still opens the real screen', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false },
@@ -121,14 +133,14 @@ t.test('HIGH COMMAND: clicking a High Command Tools shortcut actually navigates 
         'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' } }),
     });
 
-    findByText(h.getRoot(), 'Tablet Theme →')[0].click();
+    findByText(h.getRoot(), 'Tablet Theme')[0].click();
     await settle();
 
-    t.isTrue(findByText(h.getRoot(), 'Tablet Appearance').length >= 1, 'the Home shortcut opened the real Tablet Theme screen');
-    t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:getTheme')), 'clicking the shortcut fired the SAME server round trip the real tab would');
+    t.isTrue(findByText(h.getRoot(), 'Tablet Appearance').length >= 1, 'the grouped tab opened the real Tablet Theme screen');
+    t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:getTheme')), 'clicking the tab fired the real server round trip');
 });
 
-t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command Tools section appears with ONLY that one shortcut, no others', async () => {
+t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command signpost appears, and only that ONE capability\'s tab is grouped into the admin band', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'DELEGATE1', name: 'Delegate', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.certify', 'k9.runtimecontrol'], allowSelfGrant: false },
@@ -141,19 +153,20 @@ t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command 
 
     t.equals(findByText(h.getRoot(), 'Certified Handler').length, 1, 'not high command, so the ordinary role badge shows');
     t.equals(findByText(h.getRoot(), 'High Command').length, 0);
-    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'section now built for a delegated non-high-command viewer too');
-    t.equals(findByText(h.getRoot(), 'Runtime Control →').length, 1, 'the ONE capability this viewer actually holds gets its shortcut');
+    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'signpost still built for a delegated non-high-command viewer too');
+    t.equals(findByText(h.getRoot(), 'Runtime Control').length, 1, 'the ONE capability this viewer actually holds still has its own tab');
 
-    // Every high-command-only shortcut (no delegation exists for any of
-    // these) and every OTHER delegable one this viewer does NOT hold stays
-    // absent -- never a wider grid than this viewer's own real access.
+    // Every high-command-only tab (no delegation exists for any of these)
+    // and every OTHER delegable one this viewer does NOT hold stays
+    // absent -- never a wider admin band than this viewer's own real
+    // access, exactly as buildTabs() itself already gates.
     for (const label of ['Guided Flows', 'Tablet Theme', 'Certification Tiers', 'Permission Keys', 'Shop Locations', 'Shop Items', 'XP Ranks', 'K9 Overrides', 'Audit Trail']) {
-        t.equals(findByText(h.getRoot(), label + ' →').length, 0, `"${label}" shortcut must NOT appear for this viewer`);
+        t.equals(findByText(h.getRoot(), label).length, 0, `"${label}" tab must NOT appear for this viewer`);
     }
 
-    findByText(h.getRoot(), 'Runtime Control →')[0].click();
+    findByText(h.getRoot(), 'Runtime Control')[0].click();
     await settle();
-    t.isTrue(findByText(h.getRoot(), 'Runtime Feature Control').length >= 1, 'the shortcut opens the real screen, not a dead end');
+    t.isTrue(findByText(h.getRoot(), 'Runtime Feature Control').length >= 1, 'the tab opens the real screen, not a dead end');
 });
 
 t.test('CERTIFIED HANDLER (not high command, not a K9 model, k9.access only): role badge reads "Certified Handler", NO console quick action, NO High Command Tools section', async () => {
@@ -249,6 +262,10 @@ t.test('a viewer with ZERO active certifications and no console access sees real
     t.equals(findByText(h.getRoot(), 'New Arrival').length, 1, 'role badge for a not-yet-certified viewer');
     t.equals(findByText(h.getRoot(), "You're not certified yet").length, 1, 'the explicit no-certification notice title is shown');
     t.isTrue(findByText(h.getRoot(), 'Ask a certifier or a High Command officer to certify you in a department. Once certified, your abilities and record will appear here.').length >= 1);
+    // THE "PRE-FACE" STATE (this pass) -- a concrete next step, not just an
+    // explanation of the current state, naming the two tabs this resource
+    // already has for exactly this question.
+    t.isTrue(findByText(h.getRoot(), 'Not sure how to get started? The Help tab walks you through it, and the Commands tab shows everything there is to earn.').length >= 1);
     t.equals(findByText(h.getRoot(), 'Open Command Console').length, 0, 'no console access for this viewer -- the quick action is correctly absent, never a dead-click');
     t.equals(findByText(h.getRoot(), 'Command Console').length, 0, 'the Console TAB is also absent for the same reason');
 

@@ -978,12 +978,19 @@
         runtime_overridden_by_at: 'Overridden by {who} at {when}',
         runtime_feature_toggle_on_label: 'Enable',
         runtime_feature_toggle_off_label: 'Disable',
-        runtime_feature_reset_label: 'Reset to config.lua default',
+        runtime_feature_reset_label: 'Reset to default',
         runtime_error_denied: 'You are not authorized to manage runtime feature control.',
         runtime_error_rate_limited: 'Please wait a moment before trying again.',
         runtime_error_db_error: 'A database error occurred. Try again.',
         runtime_feature_error_invalid_feature: 'That feature no longer exists.',
         runtime_feature_error_invalid_value: 'That value was rejected by the server.',
+        // BETTER DISTINCTION FOR DANGEROUS SETTINGS (this pass) -- the data
+        // already told the truth (lockoutRisk/sessionOnly/lockoutWarning,
+        // see the comment block just below), but nothing summarised it
+        // BEFORE a viewer started reading individual rows. This legend is
+        // shown once, above the Features table, in the same plain language
+        // as the row-level hint immediately below it.
+        runtime_lockout_legend: "A warning triangle means extra care is needed: some settings can lock High Command out of the tablet entirely, others only warn while a player is doing that thing right now. Either way, you'll need to read the warning and type the setting's name before anything changes.",
         // LOCKOUT-RISK CONFIRMATION (this pass) -- server/runtimecontrol.lua's
         // own runtimeListFeatures already returned `lockoutRisk`/`sessionOnly`/
         // `lockoutWarning` per row, and runtimeSetFeature/runtimeResetFeature
@@ -1010,7 +1017,7 @@
         runtime_tunable_edit_label: 'Edit',
         runtime_tunable_save_label: 'Save Value',
         runtime_tunable_cancel_label: 'Cancel',
-        runtime_tunable_reset_label: 'Reset to config.lua default',
+        runtime_tunable_reset_label: 'Reset to default',
         runtime_tunable_type_integer: 'Whole number',
         runtime_tunable_type_decimal: 'Decimal',
         runtime_tunable_error_invalid_key: 'That tunable no longer exists.',
@@ -1328,9 +1335,11 @@
         home_open_console_label: 'Open Command Console',
         home_open_console_hint: 'Look up and manage handlers and K9s.',
         home_high_command_heading: 'High Command Tools',
-        home_high_command_hint: 'Server-wide settings: theming, certification tiers, permission keys, the supply shop, runtime switches, XP ranks, and the audit trail.',
+        home_high_command_hint: 'Settings that affect the whole server: how the tablet looks, certification ranks, permission keys, the supply shop, which features are turned on, XP ranks, and the audit trail.',
+        home_high_command_tabs_pointer: "You'll find all of these in the tabs at the top of the screen -- they're grouped together there, set apart from your own tabs, so they're easy to spot.",
         home_no_certification_title: "You're not certified yet",
         home_no_certification_body: 'Ask a certifier or a High Command officer to certify you in a department. Once certified, your abilities and record will appear here.',
+        home_no_certification_next_steps: 'Not sure how to get started? The Help tab walks you through it, and the Commands tab shows everything there is to earn.',
         home_ready_abilities_heading: 'Ready to use right now',
         home_no_ready_abilities: 'Nothing is ready to use right now.',
         home_view_all_abilities_label: 'View all abilities',
@@ -3668,6 +3677,33 @@
     function buildTabs() {
         var tabs = mk('div', { class: 'k9tablet-tabs' });
 
+        // ONE NAVIGATION STRUCTURE, NOT TWO (this pass) -- see
+        // html/tablet.css's own ".k9tablet-tab-group--admin" comment for
+        // the full reasoning. Every High Command/delegated screen below
+        // (Flows, Theme, Cert Tiers, Permission Keys, Shop Locations, Shop
+        // Items, Runtime Control, XP Tiers, K9 Profiles, Audit -- NOT
+        // Command Console, which stays alongside the five universal tabs
+        // as an ordinary, non-administrative capability) is appended into
+        // this ONE shared group instead of straight onto the flat tab bar,
+        // so the tab row itself visually reads as "your tabs, then a
+        // clearly separate High Command group" rather than an
+        // undifferentiated wall of up to sixteen buttons. Built LAZILY --
+        // never appended at all for a viewer who qualifies for none of
+        // these -- and every individual tab inside keeps its EXACT same
+        // label/click behaviour as before; only WHERE it is appended
+        // changed, never what it does or how it is reached.
+        var adminTabGroup = null;
+        function appendAdminTab(button) {
+            if (!adminTabGroup) {
+                adminTabGroup = mk('div', {
+                    class: 'k9tablet-tab-group k9tablet-tab-group--admin',
+                    attrs: { role: 'group', 'aria-label': S('home_high_command_heading') },
+                });
+                tabs.appendChild(adminTabGroup);
+            }
+            adminTabGroup.appendChild(button);
+        }
+
         // HOME -- the new landing view (owner-directed "restructure the
         // tablet around WHO IS HOLDING IT... a first-time player who has
         // read nothing should open this and know what to do within
@@ -3792,7 +3828,7 @@
             var flowsTab = mkButton(S('tab_flows'), 'k9tablet-tab' + ((state.screen === 'flows' || state.screen === 'flow_onboard' || state.screen === 'flow_offboard' || state.screen === 'flow_problem' || state.screen === 'flow_tuning') ? ' k9tablet-tab--active' : ''), function () {
                 goToFlowsScreen();
             });
-            tabs.appendChild(flowsTab);
+            appendAdminTab(flowsTab);
         }
 
         // Tablet theming -- NOT high-command-only: server/runtimecontrol.lua's
@@ -3817,7 +3853,7 @@
                 render();
                 loadTheme();
             });
-            tabs.appendChild(themeTab);
+            appendAdminTab(themeTab);
         }
 
         if (state.viewer.isHighCommand) {
@@ -3837,7 +3873,7 @@
                 render();
                 loadCertTiers();
             });
-            tabs.appendChild(certTiersTab);
+            appendAdminTab(certTiersTab);
 
             // Permission-key catalog editing -- owner-directed "...even add
             // or remove permissions" pass, server/permissionkeycatalog.lua.
@@ -3857,7 +3893,7 @@
                 render();
                 loadPermissionKeys();
             });
-            tabs.appendChild(permissionKeysTab);
+            appendAdminTab(permissionKeysTab);
         }
 
         // K9 Supply Shop location management -- NOT high-command-only:
@@ -3878,7 +3914,7 @@
                 render();
                 loadShopLocations();
             });
-            tabs.appendChild(shopLocationsTab);
+            appendAdminTab(shopLocationsTab);
         }
 
         // K9 Supply Shop ITEM CATALOG editing -- NOT high-command-only:
@@ -3911,7 +3947,7 @@
                 loadEquipmentShopItems();
                 loadCertTiers();
             });
-            tabs.appendChild(shopItemsTab);
+            appendAdminTab(shopItemsTab);
         }
 
         // Runtime feature control + tuning -- NOT high-command-only:
@@ -3936,7 +3972,7 @@
                 loadRuntimeFeatures();
                 loadRuntimeTunables();
             });
-            tabs.appendChild(runtimeControlTab);
+            appendAdminTab(runtimeControlTab);
         }
 
         if (state.viewer.isHighCommand) {
@@ -3957,7 +3993,7 @@
                 render();
                 loadXpTiers();
             });
-            tabs.appendChild(xpTiersTab);
+            appendAdminTab(xpTiersTab);
 
             // K9 Individual Overrides -- SAME high-command gate as every tab
             // in this block (a UX convenience only: CanManageK9Profiles is
@@ -3970,7 +4006,7 @@
             var k9ProfilesTab = mkButton(S('tab_k9_profiles'), 'k9tablet-tab' + (state.screen === 'k9_profiles' ? ' k9tablet-tab--active' : ''), function () {
                 goToK9ProfilesScreen();
             });
-            tabs.appendChild(k9ProfilesTab);
+            appendAdminTab(k9ProfilesTab);
         }
 
         // K9 Audit Trail viewer -- DELIBERATELY its own gate, NOT nested in
@@ -3987,7 +4023,7 @@
                 state.screen = 'audit';
                 render();
             });
-            tabs.appendChild(auditTab);
+            appendAdminTab(auditTab);
         }
         return tabs;
     }
@@ -4067,75 +4103,6 @@
         state.screen = 'console';
         render();
         loadRoster(state.rosterQuery);
-    }
-
-    function goToThemeScreen() {
-        state.screen = 'theme';
-        render();
-        loadTheme();
-    }
-
-    function goToCertTiersScreen() {
-        state.screen = 'cert_tiers';
-        state.certTierDraft = null;
-        state.certTierFieldError = null;
-        state.certTierActionError = null;
-        state.certTierWarning = null;
-        render();
-        loadCertTiers();
-    }
-
-    function goToPermissionKeysScreen() {
-        state.screen = 'permission_keys';
-        state.permissionKeyDraft = null;
-        state.permissionKeyFieldError = null;
-        state.permissionKeyActionError = null;
-        render();
-        loadPermissionKeys();
-    }
-
-    function goToShopLocationsScreen() {
-        state.screen = 'shop_locations';
-        state.shopLocationDraft = null;
-        state.shopLocationActionError = null;
-        render();
-        loadShopLocations();
-    }
-
-    function goToShopItemsScreen() {
-        state.screen = 'shop_items';
-        state.shopItemDraft = null;
-        state.shopItemFieldError = null;
-        state.shopItemActionError = null;
-        render();
-        loadEquipmentShopItems();
-        loadCertTiers();
-    }
-
-    function goToRuntimeControlScreen() {
-        state.screen = 'runtime_control';
-        state.runtimeFeatureActionError = null;
-        state.runtimeLockoutConfirm = null;
-        state.runtimeTunableDraft = null;
-        state.runtimeTunableFieldError = null;
-        render();
-        loadRuntimeFeatures();
-        loadRuntimeTunables();
-    }
-
-    function goToXpTiersScreen() {
-        state.screen = 'xp_tiers';
-        state.xpTierDraft = null;
-        state.xpTierFieldError = null;
-        state.xpTierActionError = null;
-        state.xpTierWarning = null;
-        render();
-        loadXpTiers();
-    }
-
-    function goToAuditScreen() {
-        state.screen = 'audit';
-        render();
     }
 
     /**
@@ -4261,6 +4228,16 @@
             var notice = mk('div', { class: 'k9tablet-home-notice' });
             notice.appendChild(mk('p', { class: 'k9tablet-home-notice-title', text: S('home_no_certification_title') }));
             notice.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_no_certification_body') }));
+            // THE "PRE-FACE" STATE (this pass) -- a brand-new arrival is
+            // not a fourth role, it is the state before any of the three
+            // faces applies, and it deserves a concrete next step rather
+            // than a single paragraph that only explains the CURRENT state
+            // with no path out of it. Points at the two tabs this resource
+            // already has for exactly this question -- Help (a walkthrough)
+            // and Commands (what there is to earn) -- both always present
+            // for every viewer, including this one (see buildTabs()'s own
+            // comments on why those two tabs are never gated).
+            notice.appendChild(mk('p', { class: 'k9tablet-hint', text: S('home_no_certification_next_steps') }));
             card.appendChild(notice);
         }
 
@@ -4328,88 +4305,33 @@
     }
 
     /**
-     * A Home-screen shortcut to an existing high-command tab. DELIBERATELY
-     * NOT rendered with the tab's own exact label string -- an arrow
-     * suffix keeps the SAME recognizable name (never a second, different
-     * name for the same screen -- see this block's own "Name things in
-     * the player's language... consistency" header note) while keeping
-     * this shortcut's own DOM node textually distinct from the real tab
-     * button that ALSO sits in the document at the same time (buildTabs()
-     * is always rendered alongside every screen, including Home) --
-     * several existing specs assert a tab exists via an EXACT, single
-     * textContent match (e.g. tablet_xp_tiers_spec.js / tablet_audit_spec.js),
-     * an assumption this screen must not break just by adding a second,
-     * synonymous way to reach the same place.
-     * @param {string} label @param {() => void} onClick */
-    function buildHomeToolLink(label, onClick) {
-        return mkButton(label + ' →', 'k9tablet-btn k9tablet-home-tool-link', onClick);
-    }
-
-    /** HIGH-COMMAND-OR-DELEGATED (see buildHomeScreen()'s own call site,
-     * widened this pass to also call this for a non-high-command viewer
-     * holding one of the four delegable capabilities below) -- the
-     * PROGRESSIVE-DISCLOSURE section: every admin screen this page has,
-     * grouped under one heading, below the two or three actions an
-     * ordinary viewer wants. Reuses the EXISTING tab_* labels
-     * (tab_theme/tab_cert_tiers/...) rather than inventing a second name
-     * for each screen -- one name per screen, everywhere it appears, per
-     * this pass's own "Name things in the player's language... consistency"
-     * requirement. Each link is a plain S('tab_x')-labelled button, not a
-     * hinted card like buildHomeActionCard() above -- deliberately
-     * LOWER-EMPHASIS than the two common actions, never competing with
-     * them for attention.
-     *
-     * PER-LINK GATING (this pass, matching this section's own PRE-EXISTING
-     * Audit-link pattern immediately below): Flows/Cert Tiers/Permission
-     * Keys/XP Tiers/K9 Profiles have no server-side delegation at all and
-     * stay isHighCommand-only, exactly like buildTabs()'s own identical
-     * split (see that function's own comments for the same five names).
-     * Theme/Shop Locations/Shop Items/Runtime Control use their
-     * canManageX() capability gate instead, so a delegated non-high-command
-     * officer -- who this section is now BUILT for at all, per the call
-     * site above -- sees exactly the links buildTabs() would also show
-     * them, never a shortcut to a tab they do not have. */
-    function buildHomeHighCommandTools() {
+     * HIGH-COMMAND-OR-DELEGATED SIGNPOST (this pass) -- called for the same
+     * viewers as before (see buildHomeScreen()'s own call site: high
+     * command, or a non-high-command officer holding any one of the four
+     * delegable capabilities), but no longer duplicates the twelve admin
+     * screens link-for-link. THAT grid used to be a SECOND, differently-
+     * organised answer to "how do I reach the Runtime Control screen"
+     * existing at the same time as the tab bar's own flat list of the
+     * exact same twelve screens -- two competing navigation structures for
+     * one set of destinations, with nothing on screen explaining why they
+     * differed. Resolved by settling on ONE real navigation surface (the
+     * tab bar, now visually grouped into its own band -- see
+     * html/tablet.css's own ".k9tablet-tab-group--admin" comment) and
+     * turning this section into what its own heading always implied it
+     * was: a SIGNPOST, not a second menu. It still names, in plain
+     * language, what this viewer's admin access actually covers, and it
+     * still marks a real visual boundary between "this is you, the
+     * handler/K9" (everything above) and "this is you, the administrator"
+     * (this section) -- see .k9tablet-home-highcommand's own CSS comment
+     * for that boundary. NEVER decides what to show by itself: the caller
+     * (buildHomeScreen()) already re-checks state.viewer.isHighCommand OR
+     * one of the four canManageX() capabilities before calling this at
+     * all, exactly as before. */
+    function buildHomeHighCommandSignpost() {
         var section = mk('div', { class: 'k9tablet-home-section k9tablet-home-highcommand' });
         section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_high_command_heading') }));
         section.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_high_command_hint') }));
-
-        var grid = mk('div', { class: 'k9tablet-home-tools' });
-        // GUIDED FLOWS (this pass) -- see buildFlowsHubScreen()'s own
-        // header. Listed FIRST, ahead of every individual screen below,
-        // as the RECOMMENDED path for the four jobs it covers. High-
-        // command-only -- no server-side delegation exists for this hub.
-        if (state.viewer.isHighCommand) {
-            grid.appendChild(buildHomeToolLink(S('tab_flows'), goToFlowsScreen));
-        }
-        // Theme/Shop Locations/Shop Items/Runtime Control -- NOT high-
-        // command-only, see canManageTabletTheme()'s own doc comment for
-        // the full verified server-side delegation contract each of these
-        // four mirrors.
-        if (canManageTabletTheme()) {
-            grid.appendChild(buildHomeToolLink(S('tab_theme'), goToThemeScreen));
-        }
-        if (state.viewer.isHighCommand) {
-            grid.appendChild(buildHomeToolLink(S('tab_cert_tiers'), goToCertTiersScreen));
-            grid.appendChild(buildHomeToolLink(S('tab_permission_keys'), goToPermissionKeysScreen));
-        }
-        if (canManageShopLocations()) {
-            grid.appendChild(buildHomeToolLink(S('tab_shop_locations'), goToShopLocationsScreen));
-        }
-        if (canManageShopItems()) {
-            grid.appendChild(buildHomeToolLink(S('tab_shop_items'), goToShopItemsScreen));
-        }
-        if (canManageRuntimeControl()) {
-            grid.appendChild(buildHomeToolLink(S('tab_runtime_control'), goToRuntimeControlScreen));
-        }
-        if (state.viewer.isHighCommand) {
-            grid.appendChild(buildHomeToolLink(S('tab_xp_tiers'), goToXpTiersScreen));
-            grid.appendChild(buildHomeToolLink(S('tab_k9_profiles'), goToK9ProfilesScreen));
-        }
-        if (canViewAudit()) {
-            grid.appendChild(buildHomeToolLink(S('tab_audit'), goToAuditScreen));
-        }
-        section.appendChild(grid);
+        section.appendChild(mk('p', { class: 'k9tablet-hint', text: S('home_high_command_tabs_pointer') }));
         return section;
     }
 
@@ -4463,21 +4385,14 @@
         }
         wrap.appendChild(buildHomeReadyAbilities());
 
-        // Widened this pass (was isHighCommand-only) -- a non-high-command
-        // officer holding any ONE of the four delegable capabilities
-        // (Theme/Shop Locations/Shop Items/Runtime Control -- see
-        // canManageTabletTheme()'s own doc comment) must still get this
-        // section built at all, or buildHomeHighCommandTools()'s own new
-        // per-link canManageX() checks are unreachable dead code: nobody
-        // who could pass one would ever have the section CALLED for them
-        // in the first place. Every link inside still gates itself
-        // individually (isHighCommand for the five non-delegable ones,
-        // canManageX()/canViewAudit() for the rest) -- this OR only
-        // decides whether the section is worth building at all for this
-        // viewer, never which links inside it show.
+        // A non-high-command officer holding any ONE of the four delegable
+        // capabilities (Theme/Shop Locations/Shop Items/Runtime Control --
+        // see canManageTabletTheme()'s own doc comment) still gets this
+        // section, same as high command -- it is a signpost naming what
+        // admin access this viewer holds, not a gate of its own.
         if (state.viewer.isHighCommand || canManageTabletTheme() || canManageShopLocations()
             || canManageShopItems() || canManageRuntimeControl()) {
-            wrap.appendChild(buildHomeHighCommandTools());
+            wrap.appendChild(buildHomeHighCommandSignpost());
         }
 
         return wrap;
@@ -7672,6 +7587,14 @@
             wrap.appendChild(mk('p', { text: S('loading') }));
             return wrap;
         }
+        // BETTER DISTINCTION FOR DANGEROUS SETTINGS -- read this ONCE,
+        // before scanning any individual row, so the warning-triangle
+        // icon on a lockout-risk row (buildRuntimeFeatureRow() below)
+        // means something the very first time it is seen, not only after
+        // clicking into a row and reading its own hint text.
+        if (state.runtimeFeatures.length > 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-runtime-legend', text: S('runtime_lockout_legend') }));
+        }
         wrap.appendChild(buildRuntimeFeaturesTable());
         return wrap;
     }
@@ -7703,7 +7626,20 @@
     function buildRuntimeFeatureRow(feature) {
         var isLockoutRisk = feature.lockoutRisk === true;
         var tr = isLockoutRisk ? mk('tr', { class: 'k9tablet-runtime-lockout-row' }) : mk('tr');
-        tr.appendChild(mk('td', { text: feature.name }));
+        // BETTER DISTINCTION FOR DANGEROUS SETTINGS -- the warning triangle
+        // sits on the FIRST column a viewer reads (Name), not only on the
+        // Effect column further right, so a viewer scanning down the Name
+        // column alone still sees which rows need extra care. The icon is
+        // pure CSS (::before on .k9tablet-runtime-name-cell--risk, see
+        // html/tablet.css), deliberately NOT a second DOM node inside this
+        // cell: this cell's `text` must stay feature.name and NOTHING else
+        // -- html/tests/tablet_runtime_control_spec.js and others locate a
+        // row by its EXACT feature name (a single element's own
+        // textContent, including a plain child-text concatenation in a
+        // real browser), and generated CSS content is never part of
+        // textContent in any browser, so this reads identically to a
+        // non-risk row's name cell while still painting the icon.
+        tr.appendChild(mk('td', { class: isLockoutRisk ? 'k9tablet-runtime-name-cell k9tablet-runtime-name-cell--risk' : 'k9tablet-runtime-name-cell', text: feature.name }));
 
         var tierTd = mk('td');
         tierTd.appendChild(mk('span', { class: 'k9tablet-runtime-tier k9tablet-runtime-tier--' + feature.tier, text: runtimeTierLabel(feature.tier) }));
@@ -9367,11 +9303,10 @@
     // partial failure two steps back is caught at the summary even if the
     // operator missed the notice in the moment.
     //
-    // UNAUTHORIZED VIEWERS NEVER SEE THIS AT ALL: the hub tab (buildTabs()),
-    // the Home shortcut (buildHomeHighCommandTools()), AND buildBackdrop()'s
-    // own screen dispatch are ALL independently gated on
-    // state.viewer.isHighCommand, matching every other admin-only screen on
-    // this page -- a non-high-command viewer sees no tab, no Home link, and
+    // UNAUTHORIZED VIEWERS NEVER SEE THIS AT ALL: the hub tab (buildTabs())
+    // AND buildBackdrop()'s own screen dispatch are BOTH independently
+    // gated on state.viewer.isHighCommand, matching every other admin-only
+    // screen on this page -- a non-high-command viewer sees no tab, and
     // (even if `state.screen` were forced to one of these five values some
     // other way) falls through to buildMyRecordScreen() like any other
     // unauthorized screen request.
