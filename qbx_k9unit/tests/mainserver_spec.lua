@@ -1953,11 +1953,73 @@ end)
 -- is safe to run against a small, actively-mutating LeashPairs table.
 -- ========================================================================
 
-t.test('DEATH-DETECTION: with Config.Features.LeashMechanics off, no death-detection thread is created at all', function()
+-- INVERTED ON PURPOSE (2026-08-26). This test used to REQUIRE that the
+-- death-detection thread only be created when Config.Features.LeashMechanics
+-- was already true AT THIS FILE'S OWN LOAD TIME -- that boot-time snapshot
+-- WAS the live-flip bug (see server/main.lua's own doc comment immediately
+-- above this thread's `CreateThread` call): server/runtimecontrol.lua's
+-- FEATURE_TIERS lists LeashMechanics as `tier = 'live'`, so an operator who
+-- boots with the flag off and flips it on later, from the tablet, got a
+-- fully live CheckLeashEligibility/respondLeashAttach (each re-checks the
+-- flag fresh) writing real LeashPairs entries with the ONE thread that ever
+-- auto-detaches a dead party's pairing never having started -- a leashed
+-- player who died had nothing to auto-detach their surviving partner for the
+-- rest of that server's uptime (client/movement.lua's own elastic pull-back
+-- mitigates the worst case down to "has to walk away from a corpse," but
+-- that is a mitigation, not a fix). FIXED: this thread now always starts,
+-- unconditionally, with no inner flag check at all -- unlike
+-- server/combat.lua's K9-position-history thread (which DOES need one, see
+-- that thread's own comment for why), this loop iterates ONLY
+-- `pairs(LeashPairs)`, never an always-populated collection like
+-- GetPlayers(), so an idle/never-used server pays nothing extra for it. So
+-- this test now asserts the OPPOSITE of what it once did -- see the
+-- LIVE-FLIP FIX test immediately below for the real regression coverage (a
+-- pairing formed AFTER a live flip really does get its dead party
+-- auto-detached, no restart required).
+t.test('DEATH-DETECTION: the death-detection thread is created UNCONDITIONALLY, regardless of Config.Features.LeashMechanics at load time -- gating its START on this flag was the bug, now fixed', function()
     local fOff = newMainFixture({ features = { LeashMechanics = false } })
     local fOn = newMainFixture({ features = { LeashMechanics = true } })
-    t.equals(fOn.threadCreateCount(), fOff.threadCreateCount() + 1,
-        'LeashMechanics=true must create exactly one MORE thread than LeashMechanics=false -- the door-scratch sweep thread exists either way, unconditionally, so the difference isolates the new death-detection thread specifically')
+    t.equals(fOff.threadCreateCount(), fOn.threadCreateCount(),
+        'LeashMechanics=false must create exactly the SAME number of threads as LeashMechanics=true -- the death-detection thread (like the door-scratch sweep) now starts every time this file loads, never gated on this flag\'s boot-time value')
+end)
+
+t.test('LIVE-FLIP FIX: a pairing formed after flipping LeashMechanics on LIVE (booted with the flag off) still gets a dead party auto-detached -- no restart of this resource required', function()
+    local f = newMainFixture({ features = { LeashMechanics = false } })
+    setupEligiblePair(f, 1, 2)
+
+    -- Boot-time state: request-time gating still denies -- this fix never
+    -- widens that check.
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttachRequest'), 0, 'still denied while the flag is off at boot')
+    f.clearCaptures()
+
+    -- Prime the death-detection thread's own first Wait() BEFORE the flag
+    -- ever flips -- this is the whole point: the thread genuinely started
+    -- while LeashMechanics was still false at boot. The old, buggy gate
+    -- would never have created this thread at all in that case.
+    f.runOneTick()
+
+    -- High command flips LeashMechanics on LIVE, mid-session -- exactly the
+    -- scenario server/runtimecontrol.lua's own FEATURE_TIERS entry for this
+    -- flag documents (`tier = 'live'`, `restartRequired = false`).
+    f.config.Features.LeashMechanics = true
+
+    formLeashPair(f, 1, 2, 1, true) -- keepCaptures: prove the pairing genuinely formed
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttached'), 2, 'the request-time gate (CheckLeashEligibility) is genuinely live -- a real pairing is formed')
+    f.clearCaptures()
+
+    -- THE ACTUAL BUG, pre-fix: the death-detection thread never started (the
+    -- flag was false when this fixture's server/main.lua loaded), so nothing
+    -- server-authoritative would ever have auto-detached this pairing on
+    -- either party's death. Prove the opposite now holds -- the SAME thread
+    -- that has been idling over an empty LeashPairs since load time (already
+    -- primed above) picks this pairing up and detaches it, with no restart
+    -- of this resource in between.
+    f.setHealth(10, 50) -- k9Src(1) * 10 == ped handle 10 (setupEligiblePair's own convention), well below the death threshold (100)
+    f.runOneTick()
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2,
+        'a pairing formed after a LIVE flag flip must still be auto-detached when a party dies -- the survivor must never be stranded waiting for a resource restart')
 end)
 
 t.test('DEATH-DETECTION: the K9-role party\'s health crossing the death threshold (<=100) ends the pairing as partner_died, broadcast to BOTH parties', function()

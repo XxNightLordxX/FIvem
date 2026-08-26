@@ -1407,50 +1407,88 @@ end
 -- the mercy of an operator-tunable interval" reason).
 local LEASH_DEATH_CHECK_INTERVAL_MS = 2000
 
--- GATED, same reasoning combat.lua's own shared maintenance thread already
--- documents for its identical gate: LeashPairs can only ever receive an
+-- CONFIRMED LIVE-FLIP BUG, FIXED (this pass) -- this thread used to be
+-- wrapped in `if Config.Features.LeashMechanics then CreateThread(...) end`,
+-- a boot-time snapshot of the flag read exactly once, at this file's own
+-- load time. The stated justification ("LeashPairs can only ever receive an
 -- entry via respondLeashAttach, which itself routes through
--- CheckLeashEligibility's OWN `Config.Features.LeashMechanics` gate (see
--- that function, above) -- with the flag off, LeashPairs is PROVABLY always
--- empty, so not running this thread is behaviorally identical to running it
--- forever against an empty table. No pairing can ever be stranded by this
--- gate: Config is read once at resource start in this resource's own
--- established convention (see e.g. server/combat.lua's own sibling
--- comments), never toggled live mid-session.
-if Config.Features.LeashMechanics then
-    CreateThread(function()
-        while true do
-            Wait(LEASH_DEATH_CHECK_INTERVAL_MS)
+-- CheckLeashEligibility's OWN `Config.Features.LeashMechanics` gate, so with
+-- the flag off LeashPairs is PROVABLY always empty, so not running this
+-- thread is behaviorally identical to running it forever against an empty
+-- table") was true only for as long as the flag stayed exactly what it was
+-- at boot -- server/runtimecontrol.lua's own FEATURE_TIERS registry lists
+-- LeashMechanics as `tier = 'live'`, and ApplyFeatureOverride mutates
+-- Config.Features.* immediately and unconditionally, so an operator booting
+-- with the flag off and then flipping it on live (high command, from the
+-- tablet, in one click) breaks the premise: CheckLeashEligibility re-checks
+-- its OWN flag fresh on every call and would start writing real entries
+-- into LeashPairs, while THIS thread -- the only place a leash pairing is
+-- ever auto-detached on either party's death -- would never have started,
+-- for the rest of that server's uptime. A pairing that can be formed must
+-- always be detachable; gating this thread's START on a boot-time flag
+-- snapshot let a release path be permanently absent instead. This is a
+-- TERMINATION path (this resource's "no unbounded trap" guarantee, the same
+-- discipline server/combat.lua's own shared expiry thread's doc comment
+-- documents for the identical bug shape it was fixed for) -- this
+-- resource's own standing rule is to gate the START of a thing, never the
+-- STOP, and this gate was on the stop.
+--
+-- MITIGATED, not masked, by client/movement.lua's own elastic pull-back
+-- thread (registered unconditionally, force-detaches once distance from a
+-- dead partner exceeds 1.5x LeashMaxDistance) and its onResourceStop
+-- force-detach -- both already exist independently of this thread and lower
+-- the worst case from "stuck forever" to "has to walk away from a corpse,"
+-- but neither is a substitute for the real, immediate, server-authoritative
+-- detach this thread provides once it is actually running.
+--
+-- FIXED the same way as combat.lua's shared expiry thread (see that
+-- thread's own comment for the fuller writeup of both shapes and when each
+-- applies): this thread now always starts, with NO inner flag check, unlike
+-- combat.lua's sibling K9-position-history thread (which DOES need one).
+-- The deciding factor there is exactly what combat.lua's own comment names
+-- it as: whether the loop body is free to run with the flag off. This loop
+-- iterates ONLY `pairs(LeashPairs)` -- never GetPlayers() or any other
+-- always-populated collection -- and the "provably always empty" argument
+-- the old gate relied on still holds exactly as before with the flag off:
+-- pairs() over an empty table is a single, immediate no-op, so an idle (or
+-- LeashMechanics-never-used) server pays for one LEASH_DEATH_CHECK_INTERVAL_MS
+-- (2s) Wait() per tick and nothing else. Unlike combat.lua's
+-- K9-position-history thread, there is no always-populated collection this
+-- loop would otherwise have to scan "just in case" -- so unconditional start
+-- with no inner check is the right shape here, not merely the convenient
+-- one.
+CreateThread(function()
+    while true do
+        Wait(LEASH_DEATH_CHECK_INTERVAL_MS)
 
-            -- Iterating `pairs(LeashPairs)` while doDetachLeash clears
-            -- EXISTING keys from underneath this same loop is safe per the
-            -- Lua 5.4 reference manual's own explicit carve-out ("you may
-            -- however modify existing fields... set existing fields to
-            -- nil") -- the identical property server/combat.lua's own
-            -- shared maintenance thread already relies on for its
-            -- `for targetNetId, hold in pairs(ActiveHolds) do ... EndHold(...)`
-            -- loop, not a new assumption introduced here.
-            for src, pairing in pairs(LeashPairs) do
-                -- Re-check LeashPairs[src] still equals this SAME pairing
-                -- table before acting: a partner's own death, visited
-                -- EARLIER in this exact same `pairs` traversal, may have
-                -- already called doDetachLeash and cleared this src's own
-                -- entry (both directions are cleared together) — without
-                -- this guard, this iteration would go on to call
-                -- doDetachLeash a SECOND time for an already-cleared src,
-                -- which is a harmless no-op today (doDetachLeash itself
-                -- checks `if not pairing then return false end`) but is
-                -- cheaper and clearer to skip outright here.
-                if LeashPairs[src] == pairing then
-                    local ped = GetPlayerPed(src)
-                    if IsLeashPartyDead(src, ped) then
-                        doDetachLeash(src, 'partner_died')
-                    end
+        -- Iterating `pairs(LeashPairs)` while doDetachLeash clears
+        -- EXISTING keys from underneath this same loop is safe per the
+        -- Lua 5.4 reference manual's own explicit carve-out ("you may
+        -- however modify existing fields... set existing fields to
+        -- nil") -- the identical property server/combat.lua's own
+        -- shared maintenance thread already relies on for its
+        -- `for targetNetId, hold in pairs(ActiveHolds) do ... EndHold(...)`
+        -- loop, not a new assumption introduced here.
+        for src, pairing in pairs(LeashPairs) do
+            -- Re-check LeashPairs[src] still equals this SAME pairing
+            -- table before acting: a partner's own death, visited
+            -- EARLIER in this exact same `pairs` traversal, may have
+            -- already called doDetachLeash and cleared this src's own
+            -- entry (both directions are cleared together) — without
+            -- this guard, this iteration would go on to call
+            -- doDetachLeash a SECOND time for an already-cleared src,
+            -- which is a harmless no-op today (doDetachLeash itself
+            -- checks `if not pairing then return false end`) but is
+            -- cheaper and clearer to skip outright here.
+            if LeashPairs[src] == pairing then
+                local ped = GetPlayerPed(src)
+                if IsLeashPartyDead(src, ped) then
+                    doDetachLeash(src, 'partner_died')
                 end
             end
         end
-    end)
-end
+    end
+end)
 
 --- Cleans up an orphaned leash pairing if one half disconnects, so the
 --- remaining party's client isn't left thinking it's still leashed to
