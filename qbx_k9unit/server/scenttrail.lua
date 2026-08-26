@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/scenttrail.lua
 
-    Server half of "Follow your nose" (K9_IDEAS.md §2) -- client/scenttrail.lua's
+    Server half of "Follow your nose" (PROJECT_HISTORY.md §2) -- client/scenttrail.lua's
     own header carries the full feature writeup (design rationale, why no
     marker/blip/coordinate is ever sent to the client, the omitted
     screen-tint layer, native verification). This file owns the one thing
@@ -12,7 +12,7 @@
     Unlike client/tracking.lua's Scent/Blood/Gunpowder trails (which hand
     the resolved coordinate to the client so it can render explicit ground
     markers -- that IS the feature), this one's entire design point is that
-    the K9 is never told where the spot is (K9_IDEAS.md §2's explicit
+    the K9 is never told where the spot is (PROJECT_HISTORY.md §2's explicit
     "you don't get told where the thing is... you're guided toward it"
     framing). The ONLY thing `pollScentHunt` below ever answers is "how far
     is the caller's OWN live position from the target, right now" -- never
@@ -43,7 +43,7 @@
     with real vertical separation (a target one floor up in a multi-story
     building, a cliff edge) will read as closer than it plays -- acceptable
     for a v1 whose stated area is "somewhere in this yard/house" at ground
-    level (K9_IDEAS.md §2's own framing), not claimed to handle every
+    level (PROJECT_HISTORY.md §2's own framing), not claimed to handle every
     possible terrain shape.
 
     ======================================================================

@@ -182,6 +182,37 @@ t.test('a plain handler (not High Command) sees the non-admin commands only -- n
     t.equals(findByText(h.getRoot(), 'Turn Someone Into a K9').length, 0);
 });
 
+t.test('DELEGATED, NOT HIGH COMMAND: a rank-based certifier holding only the k9.certify capability sees the certification admin table and the Certify Someone task, but NOT Turn Someone Into a K9 or the Runtime Control task', async () => {
+    const DELEGATED_CERTIFIER = { citizenid: 'D1', name: 'Sergeant Certifier', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.certify'] };
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(DELEGATED_CERTIFIER, { certifications: [{ active: true }] }),
+        }),
+    });
+    await openHelpScreen(h);
+
+    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 1, 'a delegated k9.certify holder IS taught the admin command table exists');
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1, 'and gets the Certify Someone walkthrough');
+    t.equals(findByText(h.getRoot(), 'Turn Someone Into a K9').length, 0, 'but NOT the true-high-command-only Assign K9 Role walkthrough');
+    t.equals(findByText(h.getRoot(), 'Turn a Feature On or Off').length, 0, 'and NOT the Runtime Control walkthrough, which this viewer has no capability for');
+    t.equals(findByText(h.getRoot(), 'Runtime Control').length, 0, 'nor is the Runtime Control tab itself explained to them');
+});
+
+t.test('DELEGATED, NOT HIGH COMMAND: a runtime-control-only delegate sees the Runtime Control tab/task but NOT the certification admin table', async () => {
+    const DELEGATED_RUNTIME = { citizenid: 'D2', name: 'Ops Delegate', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.runtimecontrol'] };
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(DELEGATED_RUNTIME, { certifications: [{ active: true }] }),
+        }),
+    });
+    await openHelpScreen(h);
+
+    t.isTrue(findByTextContaining(h.getRoot(), 'Turn individual features on or off for the whole server').length >= 1, 'the Runtime Control tab is explained to this delegate');
+    t.equals(findByText(h.getRoot(), 'Turn a Feature On or Off').length, 1, 'and they get the matching task walkthrough');
+    t.equals(findByText(h.getRoot(), 'Admin Commands (High Command Only)').length, 0, 'but the certification/audit/xp admin command table is NOT shown -- this capability gates no real command');
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 0);
+});
+
 t.test('Every Tab, Explained only lists tabs this viewer can actually see -- High Command gets more entries than a plain handler', async () => {
     const handlerHarness = createHarness({
         fetchImpl: routeFetch({ 'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, { certifications: [{ active: true }] }) }),

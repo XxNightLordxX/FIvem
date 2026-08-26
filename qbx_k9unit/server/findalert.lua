@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/findalert.lua
 
-    K9_IDEAS.md §1 ("Make finds feel like a real alert, not a pop-up
+    PROJECT_HISTORY.md §1 ("Make finds feel like a real alert, not a pop-up
     message"). Server half of client/findalert.lua -- see that file's own
     header for the client-side reaction contract. This file adds ZERO new
     detection logic of its own: it is a pure ADDITIONAL CONSUMER of two

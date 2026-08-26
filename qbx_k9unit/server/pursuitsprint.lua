@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/pursuitsprint.lua
 
-    K9_IDEAS.md §5 ("Pursuit sprint -- a short burst of 'the dog is
+    PROJECT_HISTORY.md §5 ("Pursuit sprint -- a short burst of 'the dog is
     genuinely faster than you'"). Server half of a short, cooldown-gated
     speed burst for a certified K9 actively chasing a player this server's
     own system has already flagged wanted/suspect. Client half:
@@ -9,7 +9,7 @@
     contract for the client-side application/expiry of the effect itself --
     read it together with this one).
 
-    Explicitly NOT building "crowd-control barking" (K9_IDEAS.md's own
+    Explicitly NOT building "crowd-control barking" (PROJECT_HISTORY.md's own
     not-recommended section) -- nothing here or in client/pursuitsprint.lua
     touches any ped other than the requesting K9's own, and nothing here
     applies any effect to the target at all (see "WHAT THIS FILE DOES NOT
@@ -104,7 +104,7 @@
         CONFIRMED" header block). This file only ever tells the REQUESTING
         K9's own client "you are cleared to boost yourself"; the target
         never receives any event, message, or effect from this file at all.
-      - Not "crowd-control barking" (K9_IDEAS.md's not-recommended idea) --
+      - Not "crowd-control barking" (PROJECT_HISTORY.md's not-recommended idea) --
         no bark, no lunge, no effect on a bystander, no effect on anyone who
         did not opt into being the one specific suspect being chased.
 
@@ -556,7 +556,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPursuitSprint', function(targetNetId)
     -- "wanted/suspect" flag is a player-only concept in this codebase
     -- (config.lua's own comment on Config.Combat.RequireWantedStatus:
     -- "Does NOT affect NPC targets... this resource has no reason to
-    -- protect [an NPC] from griefing") and K9_IDEAS.md §5 itself frames
+    -- protect [an NPC] from griefing") and PROJECT_HISTORY.md §5 itself frames
     -- this feature as "actually chasing someone your server's own system
     -- has already flagged as a suspect" -- an NPC pursuit target would
     -- have no such flag to ever check, and allowing one would reopen

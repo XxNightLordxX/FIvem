@@ -1,13 +1,13 @@
 --[[
     qbx_k9unit/client/scenttrail.lua
 
-    "Follow your nose" -- K9_IDEAS.md §2. Turns a search into a hunt instead
+    "Follow your nose" -- PROJECT_HISTORY.md §2. Turns a search into a hunt instead
     of a single click: a K9 starts a Scent Trail Hunt near its own current
     position, is never told where the hidden spot actually is, and is
     instead guided toward it purely by a felt cue -- a growl/pant pulse that
     speeds up the closer the K9 gets -- ending in an automatic "trained
     final response" (the dog sits and barks on its own) once it's close
-    enough, reusing K9_IDEAS.md §1's exact framing rather than a text
+    enough, reusing PROJECT_HISTORY.md §1's exact framing rather than a text
     pop-up.
 
     This is a NEW file alongside client/tracking.lua, not an extension of
@@ -20,7 +20,7 @@
 
     ======================================================================
     WHY NO COORDINATE, NO MARKER, NO BLIP (design, not a limitation):
-    K9_IDEAS.md §2's own "watch out for" section explicitly warns against
+    PROJECT_HISTORY.md §2's own "watch out for" section explicitly warns against
     turning a sense into "a menu that hands you the answer" (citing
     Batman/Witcher detective-vision criticism). The server therefore never
     reveals the hidden target's coordinate to this client at all -- it only
@@ -35,7 +35,7 @@
 
     ======================================================================
     HOW THE FEEDBACK WORKS -- reusing an already-proven building block, per
-    K9_IDEAS.md §2's own note that this trick is not a new invention:
+    PROJECT_HISTORY.md §2's own note that this trick is not a new invention:
     client/proximityaudio.lua already plays a sound that gets louder/
     quieter with distance to a nearby K9 ENTITY. This feature has no entity
     to fall back on (the hidden spot is a bare coordinate, not an entity),
@@ -77,7 +77,7 @@
     ======================================================================
     DELIBERATELY OMITTED, DISCLOSED (not oversights):
 
-    1. NO SCREEN-TINT LAYER. K9_IDEAS.md §2 mentions "your view tints
+    1. NO SCREEN-TINT LAYER. PROJECT_HISTORY.md §2 mentions "your view tints
        slightly" as a possible SECOND channel alongside sound.
        client/screenfx.lua already owns the ONE engine-global
        SetTimecycleModifier/ClearTimecycleModifier slot this resource uses
@@ -376,7 +376,7 @@ end
 --- "simplest possible curve, not a claim of realism" honesty this
 --- resource's client/audio.lua already states for its own analogous
 --- DistanceToGain -- a more considered curve is a pure tuning change,
---- flagged (per K9_IDEAS.md §2's own "budget real playtesting time for
+--- flagged (per PROJECT_HISTORY.md §2's own "budget real playtesting time for
 --- this, it's easy to get the strength wrong") as worth an actual in-game
 --- pass before treating the numbers here as final.
 --- @param distance number?
@@ -406,7 +406,7 @@ local function StopScentHunt()
     TriggerServerEvent('qbx_k9unit:server:stopScentHunt')
 end
 
---- The "trained final response" -- K9_IDEAS.md §1's exact framing reused
+--- The "trained final response" -- PROJECT_HISTORY.md §1's exact framing reused
 --- here rather than a text pop-up: the dog itself reacts (sits, barks),
 --- the player is never told "found!" in a toast. Idempotent via
 --- huntCompleted -- the pushed 'qbx_k9unit:client:scentHuntFound' event

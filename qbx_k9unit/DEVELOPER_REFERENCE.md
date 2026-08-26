@@ -565,16 +565,16 @@ so those citations keep resolving to something meaningful.
 
 ---
 
-## 10. Consultations not available this session
+## 10. One design choice never got a second, independent review
 
-Peer-agent spawning was restricted to the top-level session when this
-document was written, so **db-schema** was not able to review §11.3/§11.4's
-ephemeral (non-persisted) tracking-event-log design (`server/tracking.lua`)
-to confirm in-memory-only is the right call there, the same way it reviewed
-§4.3's certification table. Still cited from inside `server/tracking.lua`
-as a standing, not-yet-closed item — if that design is ever revisited,
-confirm in-memory-only against `LeashPairs`' identical precedent rather
-than assuming it's settled by precedent alone.
+§11.3/§11.4's tracking-event-log design (`server/tracking.lua`) — logging
+each blood/gunpowder event in memory only, never persisted to the database
+— was never independently reviewed against a real schema-design question
+the way §4.3's certification table was. It has shipped and works, but if
+this design is ever revisited, confirm the in-memory-only choice against
+`LeashPairs`' identical precedent (§10, cited from inside
+`server/tracking.lua`) rather than assuming it was already settled by a
+review that never actually happened.
 
 ---
 
@@ -1662,7 +1662,7 @@ important "map-wide oracle" risk that note flags, applied here to a heal
 effect instead of an inventory read, (3) target-type re-verified
 server-side via `GetEntityModel`, (4) item consumption is
 server-authoritative via ox_inventory (exact export/registration pattern
-not independently verified this session — same caveat class as §9 item
+not independently verified — same caveat class as §9 item
 11), (5) cooldown stamped **before** the heal completes, not after, (6)
 restoration clamped to each value's own max, never allowed to overheal.
 
@@ -2256,14 +2256,13 @@ arguably more exploit-sensitive than a search.
 (five real `.ogg` files ship under `html/sounds/`, per
 `html/sounds/CREDITS.md`; `prop_doghouse_01` was refuted during
 implementation and replaced with the confirmed-real `prop_dog_cage_01`).
-**CORRECTED, 2026-08-26 — this paragraph is stale, kept for the research
-trail below it, not as a current status claim.** `CameraFeedPiP` no
-longer ships `false`; a later, owner-directed pass built exactly the
-narrower spike this paragraph describes as achievable (`client/vision.lua`'s
-`ToggleCameraFeed()` — `CreateCam`/`RenderScriptCams`, a full-screen
-takeover of your active partner's viewpoint, not an inset). The research
-below about a true inset being unachievable is still accurate and was
-re-confirmed independently at build time, not superseded:
+**Update: `CameraFeedPiP` has since shipped and no longer ships `false`.**
+What was built is exactly the narrower spike described below as
+achievable — `client/vision.lua`'s `ToggleCameraFeed()`
+(`CreateCam`/`RenderScriptCams`), a full-screen takeover of your active
+partner's viewpoint, not an inset. The research below about a true inset
+being unachievable is still accurate and was re-confirmed at build time,
+not superseded:
 
 A true inset live-3D-video picture-in-picture is **not achievable** with stock FiveM
 natives (DUI/NUI textures render HTML, not the 3D scene), corroborated by a

@@ -117,25 +117,22 @@
        itself, prevent a K9 who is standing in a training zone with
        Training Mode ON from ALSO using the REAL search/bite-and-hold
        commands (server/search.lua / server/combat.lua) against a REAL
-       nearby player -- those two files are owned by a different,
-       concurrently-active pass this session (see
-       scratchpad/COORDINATION.md's ownership map) and this file does not
-       edit them. The real commands remain completely unaware of
-       TrainingMode below and keep working exactly as before, everywhere,
-       including inside a training zone. Two structural properties keep
-       this gap narrow rather than open: (a) this file's own training
-       actions can NEVER touch a real target regardless (see point 1
-       above), so the only failure direction is "a real action still works
-       while training is flagged on," never "a training action secretly
-       does something real"; (b) a training zone is expected to be an
-       out-of-the-way yard, not a place real suspects are searched, so the
-       practical exposure is low. A precise, minimal, additive one-line
-       guard for each of server/search.lua's and server/combat.lua's own
-       success paths (an early return when `IsCitizenIdInTrainingMode`,
-       exposed resource-global by this file for exactly this purpose,
-       returns true for the acting citizenid) has been reported to that
-       pass's owner rather than applied here -- see this pass's own report
-       for the exact proposed diff.
+       nearby player -- those two files are not edited by this file. The
+       real commands remain completely unaware of TrainingMode below and
+       keep working exactly as before, everywhere, including inside a
+       training zone. Two structural properties keep this gap narrow
+       rather than open: (a) this file's own training actions can NEVER
+       touch a real target regardless (see point 1 above), so the only
+       failure direction is "a real action still works while training is
+       flagged on," never "a training action secretly does something
+       real"; (b) a training zone is expected to be an out-of-the-way
+       yard, not a place real suspects are searched, so the practical
+       exposure is low. A precise, minimal, additive one-line guard for
+       each of server/search.lua's and server/combat.lua's own success
+       paths (an early return when a proposed `IsCitizenIdInTrainingMode`
+       accessor -- not yet added to this file, see FILE-TO-FILE CONTRACT
+       below -- returns true for the acting citizenid) would close this
+       gap; it requires edits to those two files and is not applied here.
     ======================================================================
 
     ======================================================================
@@ -184,27 +181,25 @@
     - THIS FILE exposes NO resource-global function of its own today (see
       point 5 above for the one PROPOSED-but-not-yet-added export,
       `IsCitizenIdInTrainingMode`, which is intentionally not added until
-      a real consumer -- server/search.lua/server/combat.lua's owner --
-      confirms they will call it; an unused export is dead surface, not a
-      readiness signal).
+      server/search.lua/server/combat.lua actually call it -- an unused
+      export is dead surface, not a readiness signal).
     - Never calls AwardXP/AwardXPDirect/GetXP/GetXPTier, never reads
       Config.XP, never inserts into k9_search_log or k9_progression -- see
       "THE XP DECISION" above.
     ======================================================================
 
-    CONFIG THIS FILE ASSUMES EXISTS -- NOT owned by this file for this
-    task (coder-backend does not own config.lua here; reported separately
-    to whoever does). A missing `Config.Features.TrainingMode` is treated
-    as `false` (whole file inert, matching server/recall.lua's own
-    top-of-file gate) -- but every OTHER field below degrades to a safe,
-    loudly-logged built-in default rather than erroring, mirroring
-    server/recall.lua's own "a termination-adjacent feature must never
-    fail closed on a missing config block" posture (turning Training Mode
-    ON is not itself a termination path, but a broken config here has no
-    security/economy consequence either way -- see "THE XP DECISION" --
-    so the softer, always-degrades-gracefully convention is the right one,
-    not admin.lua's harder assert-at-startup posture, which this task
-    reserves for genuinely security-relevant thresholds):
+    CONFIG THIS FILE ASSUMES EXISTS (not owned by this file; see
+    config.lua). A missing `Config.Features.TrainingMode` is treated as
+    `false` (whole file inert, matching server/recall.lua's own top-of-file
+    gate) -- but every OTHER field below degrades to a safe, loudly-logged
+    built-in default rather than erroring, mirroring server/recall.lua's
+    own "a termination-adjacent feature must never fail closed on a
+    missing config block" posture (turning Training Mode ON is not itself
+    a termination path, but a broken config here has no security/economy
+    consequence either way -- see "THE XP DECISION" -- so the softer,
+    always-degrades-gracefully convention is the right one, not admin.lua's
+    harder assert-at-startup posture, which is reserved for genuinely
+    security-relevant thresholds):
       Config.Features.TrainingMode      : boolean (new; default false)
       Config.TrainingZones              : array of { label: string, x: number, y: number, z: number, radius: number } (new)
       Config.Training.ToggleCooldownMs  : number  (new; built-in fallback 3000 if missing/invalid)
@@ -217,22 +212,22 @@
     (IsWithinAnyTrainingZone's own per-entry type guards were the ONLY
     thing standing between a typo'd zone and Training Mode being
     permanently, silently un-turn-on-able with zero diagnostic printed
-    anywhere -- exactly the "config table the server read that did not
-    exist"-shaped defect this task named explicitly, just one layer
-    deeper: a config table the server read that existed, but whose one
-    and only entry could never actually match). A missing/non-numeric
-    x/y/z is NOT clampable (there is no sane position to invent) and drops
-    THAT ONE entry, loudly, by name/index -- every other, well-formed zone
-    is unaffected. A missing/non-positive/non-numeric radius IS clampable
-    (same posture as ToggleCooldownMs/ActionCooldownMs/
-    ContrabandFoundChance above) and is clamped to ZONE_RADIUS_FALLBACK_M
-    with a loud warning instead of dropping an otherwise-good zone over
-    one bad field. A raw config with entries but ZERO surviving valid
-    zones prints the SAME "cannot be turned ON anywhere" notice as a
-    genuinely empty/missing Config.TrainingZones -- but, unlike an earlier
-    version of this file, that notice is now always accompanied by one
-    explicit, named reason per rejected entry, never a bare "0 zones" the
-    operator has to go guess at.
+    anywhere -- exactly the same "config table the server read that did
+    not exist"-shaped defect, just one layer deeper: a config table the
+    server read that existed, but whose one and only entry could never
+    actually match). A missing/non-numeric x/y/z is NOT clampable (there
+    is no sane position to invent) and drops THAT ONE entry, loudly, by
+    name/index -- every other, well-formed zone is unaffected. A
+    missing/non-positive/non-numeric radius IS clampable (same posture as
+    ToggleCooldownMs/ActionCooldownMs/ContrabandFoundChance above) and is
+    clamped to ZONE_RADIUS_FALLBACK_M with a loud warning instead of
+    dropping an otherwise-good zone over one bad field. A raw config with
+    entries but ZERO surviving valid zones prints the SAME "cannot be
+    turned ON anywhere" notice as a genuinely empty/missing
+    Config.TrainingZones -- but, unlike an earlier version of this file,
+    that notice is now always accompanied by one explicit, named reason
+    per rejected entry, never a bare "0 zones" the operator has to go
+    guess at.
 ]]
 
 if not Config.Features.TrainingMode then return end
@@ -417,8 +412,8 @@ end
 --- NEVER on OFF, which is this file's own explicitly documented
 --- unconditional "no unbounded trap" exit path (point 4/EVENT CONTRACT
 --- above: "no cooldown, no HasK9Access check, no zone check") and is one of
---- the specific termination paths ("end training") this pass is required to
---- leave untouched.
+--- the specific termination paths ("end training") that must stay
+--- untouched.
 ---   2. an explicit block.TrainingMode grant -> DENY
 ---   3. TrainingMode listed in RequireGrant -> ALLOW only with an active
 ---      feature.TrainingMode grant
@@ -480,11 +475,10 @@ RegisterNetEvent('qbx_k9unit:server:setTrainingMode', function(desiredOn)
 
     -- ON is a real, gated transition -- see this file's header point 2.
     -- HasK9Access and the PER-PERSON FEATURE CONTROL check below both run
-    -- BEFORE ToggleCooldown.Consume (moved ahead of it this pass, together
-    -- with HasK9Access, specifically so a block never burns the toggle
-    -- cooldown for a request that was always going to be refused -- same
-    -- "cheapest/no-side-effect checks first" discipline as every other
-    -- migrated file's request handler).
+    -- BEFORE ToggleCooldown.Consume, together, specifically so a block
+    -- never burns the toggle cooldown for a request that was always going
+    -- to be refused -- same "cheapest/no-side-effect checks first"
+    -- discipline as every other request handler in this resource.
     if type(HasK9Access) ~= 'function' or not HasK9Access(src) then
         NotifyPlayer(src, locale('training.no_access'), 'error')
         return
@@ -549,10 +543,10 @@ lib.callback.register('qbx_k9unit:server:trainingSearch', function(source)
 end)
 
 --- Practice bite-and-hold drill -- same contract/guarantees as
---- trainingSearch above, adapted for the other mechanic this task named
---- explicitly. A pure scripted acknowledgement: no target argument, no
---- entity resolution, no ragdoll/control-disable/damage-immunity applied
---- to anything, no AwardXP.
+--- trainingSearch above, adapted for the other mechanic (bite-and-hold). A
+--- pure scripted acknowledgement: no target argument, no entity
+--- resolution, no ragdoll/control-disable/damage-immunity applied to
+--- anything, no AwardXP.
 --- @param source number
 --- @return table { ok: boolean, reason: string?, reps: number? }
 lib.callback.register('qbx_k9unit:server:trainingBiteHold', function(source)

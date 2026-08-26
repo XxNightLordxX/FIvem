@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/progression.lua
 
-    Phase 4 (coder-backend). Client half of `Config.Features.XPProgression`
+    Phase 4. Client half of `Config.Features.XPProgression`
     (server/progression.lua owns the server-authoritative half — award
     logic, persistence, the tier lookup). THIS FILE has NO authority of its
     own: it only ever RECEIVES an already-resolved, server-computed tier and
@@ -44,61 +44,47 @@
             authorization surface" framing) — not currently consumed
             anywhere else in this resource.
     - COORDINATION POINT WITH THE SHARED MOVE-RATE COMPOSER (DEVELOPER_REFERENCE.md
-      §13.0 Decision 2, §13.5): by the time Phase 3's PropDragging and this
-      phase's wellbeing subsystem both exist, at least three independent
-      systems want to call SetPedMoveRateOverride on the K9's own ped —
-      last-caller-wins on that native means uncoordinated calls silently
-      clobber each other. The spec's answer is a SINGLE shared composer,
-      `RecomputeK9MoveRate()` + a `K9MoveRateModifiers` table (both intended
-      to live in client/movement.lua, owned by whichever of {wellbeing
-      subsystem, Phase 3 PropDragging} lands first per §13.5), where every
-      contributing system sets its OWN named slot
-      (`K9MoveRateModifiers.xpTier` for this file) and calls
-      `RecomputeK9MoveRate()` rather than calling the native directly.
-      NEITHER SYMBOL EXISTED IN THIS CODEBASE AS OF THE PASS THAT WROTE THIS
-      FILE (verified by grep immediately before writing it — no
-      client/wellbeing.lua, no server/combat.lua, no composer in
-      client/movement.lua yet). Per that task's own explicit direction, THIS
-      FILE THEREFORE DOES NOT CALL SetPedMoveRateOverride ITSELF — doing so
-      would be exactly the uncoordinated-caller bug §13.0 Decision 2 exists
-      to prevent. Instead:
+      §13.0 Decision 2, §13.5): multiple independent systems want to call
+      SetPedMoveRateOverride on the K9's own ped (this file, PropDragging,
+      the wellbeing subsystem) — last-caller-wins on that native means
+      uncoordinated calls silently clobber each other. The shared answer is
+      a SINGLE composer, `RecomputeK9MoveRate()` + a `K9MoveRateModifiers`
+      table (both defined in client/movement.lua), where every contributing
+      system sets its OWN named slot (`K9MoveRateModifiers.xpTier` for this
+      file) and calls `RecomputeK9MoveRate()` rather than calling the
+      native directly. THIS FILE THEREFORE NEVER CALLS
+      SetPedMoveRateOverride ITSELF — doing so would be exactly the
+      uncoordinated-caller bug this composer exists to prevent. Instead:
         - `CachedXPTierSpeedMultiplier` (below) always holds the latest
           server-pushed tier's speedMultiplier, updated on every
-          xpTierChanged event, regardless of whether the composer exists
-          yet.
+          xpTierChanged event.
         - `ApplyXPTierMoveRateEffect()` (below) is THIS FILE's own
           clearly-named, separately-callable contribution: if
           `K9MoveRateModifiers` exists (a plain table check, not a function
-          call — the spec names it as a shared table, not a function), it
-          writes `K9MoveRateModifiers.xpTier = CachedXPTierSpeedMultiplier`
-          and then calls `RecomputeK9MoveRate()` IF that also exists
+          call — it is a shared table, not a function), it writes
+          `K9MoveRateModifiers.xpTier = CachedXPTierSpeedMultiplier` and
+          then calls `RecomputeK9MoveRate()` IF that also exists
           (`type(...) == 'function'` guard, mirroring server/medkit.lua's
           established `type(RestoreInjury) == 'function'` soft-dependency
-          convention for the identical "the other half of this hasn't
-          shipped yet" situation). If the composer does not exist yet, this
-          function is a harmless no-op beyond updating the cached value —
-          it does NOT fall back to calling SetPedMoveRateOverride directly.
-        - COORDINATION POINT CLOSED (issue-closer sweep, 2026-08-25):
-          `client/movement.lua` now defines both symbols — its
-          `K9MoveRateModifiers` table has a `xpTier = 1.0,` entry
-          (`client/movement.lua:1013`, commented
-          "client/progression.lua, Config.Features.XPProgression") and
-          `RecomputeK9MoveRate()` is defined a few lines below it — the
-          exact slot name and table shape this file already assumed. Both
-          halves confirmed by direct read, not assumed from either file's
-          own comment. Nothing further to do here; this is no longer an
-          open coordination point.
+          convention, kept here as a defensive guard against a future
+          load-order change rather than as an assumption the composer
+          might still be missing today). `client/movement.lua` defines
+          both symbols — its `K9MoveRateModifiers` table has an
+          `xpTier = 1.0,` entry (commented "client/progression.lua,
+          Config.Features.XPProgression") and `RecomputeK9MoveRate()` is
+          defined a few lines below it, the exact slot name and table
+          shape this file assumes. If the composer were ever absent, this
+          function would be a harmless no-op beyond updating the cached
+          value — it does NOT fall back to calling SetPedMoveRateOverride
+          directly.
     ======================================================================
 
-    TOP-OF-FILE FEATURE GATE (coder-security, this pass -- coordinator-flagged
-    finding, verified against this file's own code before fixing): no line in
-    this file previously checked Config.Features.XPProgression at all (grepped
-    the whole file -- the only hits were this header's own prose). That meant
-    'qbx_k9unit:client:xpTierChanged' was reachable, and ApplyXPTierMoveRateEffect()
-    would feed a forged payload's speedMultiplier straight into the shared
-    move-rate composer, with XPProgression = false -- breaking this resource's
-    "flag off means genuinely inert" invariant (client/hud.lua / client/vision.lua
-    / client/partnership.lua / client/combat.lua precedent). Gated at the top
+    TOP-OF-FILE FEATURE GATE: without it, 'qbx_k9unit:client:xpTierChanged'
+    would be reachable, and ApplyXPTierMoveRateEffect() would feed a forged
+    payload's speedMultiplier straight into the shared move-rate composer,
+    with XPProgression = false -- breaking this resource's "flag off means
+    genuinely inert" invariant (client/hud.lua / client/vision.lua /
+    client/partnership.lua / client/combat.lua precedent). Gated at the top
     of the file, not per-handler, because -- like client/partnership.lua --
     this file's ONLY responsibility is Config.Features.XPProgression's client
     half; there is no other concern here that would be wrongly silenced by a
@@ -109,16 +95,14 @@
     ======================================================================
 
     ======================================================================
-    PRIORITY 1 FIX (quality-agent-15 pass) -- A CONFIRMED UNBOUNDED TRAP,
-    IDENTICAL IN SHAPE TO THE ONE client/wellbeing.lua's "LIVE FEATURE
-    FLAGS" section already closed for its own five flags (read that
-    section in full -- this fix reuses its exact reasoning and shape,
-    applied to this file's one flag).
+    AN UNBOUNDED TRAP, IDENTICAL IN SHAPE TO THE ONE client/wellbeing.lua's
+    "LIVE FEATURE FLAGS" section already closed for its own five flags
+    (read that section in full -- this fix reuses its exact reasoning and
+    shape, applied to this file's one flag).
 
-    THE TRAP, CONFIRMED BEFORE FIXING (not assumed from the report alone):
-    the top-of-file gate above reads Config.Features.XPProgression exactly
-    ONCE, at THIS CLIENT's own resource start -- this client's own static
-    copy of config.lua, never updated afterward. server/runtimecontrol.lua
+    THE TRAP: the top-of-file gate above reads Config.Features.XPProgression
+    exactly ONCE, at THIS CLIENT's own resource start -- this client's own
+    static copy of config.lua, never updated afterward. server/runtimecontrol.lua
     classifies XPProgression as `tier = 'live'` specifically because
     server/progression.lua's AwardXP and PushTierSnapshot both re-check
     Config.Features.XPProgression fresh on every call -- a genuinely LIVE,
@@ -138,7 +122,7 @@
     reconsider. K9MoveRateModifiers.xpTier=1.10 -- and the composed
     SetPedMoveRateOverride effect derived from it -- is stuck at that value
     until this client relogs or the resource restarts, exactly the
-    unbounded trap this task's own rules forbid, and the SAME root cause
+    unbounded trap this resource's own rules forbid, and the SAME root cause
     (a server-side toggle with literally nothing telling an already-
     connected client) client/wellbeing.lua's own header already documents
     finding and fixing for FatigueSystem/MoodSystem/FearStressSystem/
@@ -152,9 +136,9 @@
     push, PushTierSnapshot, is gated on the very same single flag this fix
     needs to detect going false, so it stops sending ANYTHING the instant
     the flag flips, with no recurring channel left to reuse. Closing this
-    completely needs a small, server-side change this pass is not permitted
-    to make (server/*.lua is out of scope for this pass) -- reported in
-    full to coder-backend, not applied here. What THIS file does, right
+    completely needs a small, server-side change (server/*.lua is out of
+    this file's scope) -- see below for the exact change needed; it is
+    documented here, not applied in this file. What THIS file does, right
     now, unconditionally:
       1. Tracks `LiveXPProgressionEnabled`, mirroring
          client/wellbeing.lua's `LiveFeatureFlags` shape exactly (seeded
@@ -177,10 +161,10 @@
          signal ever does arrive, the reset is unconditional.
 
     THE EXACT SERVER-SIDE CHANGE THIS DEPENDS ON TO EVER BE INVOKED WHILE
-    THE FEATURE IS OFF (reported to coder-backend, NOT applied by this
-    pass -- server/*.lua is out of scope here). Two small, additive edits,
-    reusing the EXISTING 'qbx_k9unit:client:xpTierChanged' channel end to
-    end -- no new event name, no new lib.callback, no new poll thread:
+    THE FEATURE IS OFF (belongs in server/*.lua, outside this file's scope
+    -- not applied here). Two small, additive edits, reusing the EXISTING
+    'qbx_k9unit:client:xpTierChanged' channel end to end -- no new event
+    name, no new lib.callback, no new poll thread:
       a) server/progression.lua's `PushTierSnapshot` (currently: `if not
          Config.Features.XPProgression then return end` before ever
          calling TriggerClientEvent -- a hard no-op that sends nothing at
@@ -263,8 +247,8 @@ local hasReceivedInitialTier = false
 local CachedXPTierSpeedMultiplier = 1.0
 
 --- Mirrors client/wellbeing.lua's own `LiveFeatureFlags` pattern exactly --
---- see this file's header "PRIORITY 1 FIX" section for the full "why" and
---- the confirmed unbounded trap this closes. The SERVER's CURRENT
+--- see this file's header "AN UNBOUNDED TRAP" section for the full "why" and
+--- the unbounded trap this closes. The SERVER's CURRENT
 --- Config.Features.XPProgression value, kept fresh by an OPTIONAL `.live`
 --- field on every 'qbx_k9unit:client:xpTierChanged' payload -- NOT this
 --- client's own static Config.Features.XPProgression copy (fixed at this
@@ -292,7 +276,7 @@ local function ApplyXPTierMoveRateEffect()
     -- else: defensive only now — the shared composer (client/movement.lua,
     -- DEVELOPER_REFERENCE.md §13.0 Decision 2) has shipped and is confirmed to
     -- define `K9MoveRateModifiers` (see this file's header, "COORDINATION
-    -- POINT CLOSED"), so this branch is not expected to be taken on a
+    -- POINT"), so this branch is not expected to be taken on a
     -- normal load order. Left in place as a harmless no-op rather than an
     -- assert, matching this resource's own soft-dependency convention
     -- (server/medkit.lua's `type(RestoreInjury) == 'function'` guard) for
@@ -308,19 +292,18 @@ end
 
 --- @param newTier table -- { xp, label, speedMultiplier, scentRangeMultiplier }, a full Config.XPTiers entry
 RegisterNetEvent('qbx_k9unit:client:xpTierChanged', function(newTier)
-    -- SOURCE-ORIGIN GUARD (coder-security, same pass/reasoning as
-    -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block — read that
-    -- for the full confidence writeup; not re-derived here). Without this,
-    -- a modified client could locally fire
-    -- `TriggerEvent('qbx_k9unit:client:xpTierChanged', { speedMultiplier =
-    -- 999 })` — the shape check below only validates TYPE, never RANGE, so
-    -- an arbitrary numeric speedMultiplier would pass it and feed straight
-    -- into ApplyXPTierMoveRateEffect()'s move-rate composer — a real,
-    -- uncapped self-benefit vector via zero server contact. Graded
-    -- MEDIUM-HIGH, not certain: see client/combat.lua's own header for why
-    -- (the `source ~= 65535` client-side sentinel is the official
-    -- documented pattern for this, but was not empirically verified
-    -- in-engine as part of this change).
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block — read that for the full confidence writeup; not
+    -- re-derived here). Without this, a modified client could locally
+    -- fire `TriggerEvent('qbx_k9unit:client:xpTierChanged', {
+    -- speedMultiplier = 999 })` — the shape check below only validates
+    -- TYPE, never RANGE, so an arbitrary numeric speedMultiplier would
+    -- pass it and feed straight into ApplyXPTierMoveRateEffect()'s
+    -- move-rate composer — a real, uncapped self-benefit vector via zero
+    -- server contact. Graded MEDIUM-HIGH, not certain: see
+    -- client/combat.lua's own header for why (the `source ~= 65535`
+    -- client-side sentinel is the official documented pattern for this,
+    -- but was not empirically verified in-engine).
     if source ~= 65535 then return end
 
     -- Defensive shape validation even though this is server-authoritative
@@ -333,7 +316,7 @@ RegisterNetEvent('qbx_k9unit:client:xpTierChanged', function(newTier)
         return
     end
 
-    -- LIVE FEATURE FLAG INGEST — see this file's header "PRIORITY 1 FIX"
+    -- LIVE FEATURE FLAG INGEST — see this file's header "AN UNBOUNDED TRAP"
     -- section. Done BEFORE CachedXPTierSpeedMultiplier is touched below, so
     -- the reset branch always acts on the freshest known flag state for
     -- THIS same payload. `.live` is OPTIONAL (absent on an unpatched

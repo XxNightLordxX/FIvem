@@ -2,7 +2,8 @@
 
 A K9 unit add-on for Qbox police/security departments: certification,
 leash, vehicle loading, tracking, contraband search, combat mechanics,
-wellbeing, XP, a supply shop, a leaderboard, training drills, and an
+wellbeing, XP, a supply shop, a leaderboard, training drills, five
+"hunting"/reaction mini-games (see "What's included" below), and an
 in-game "K9 Command Tablet" for high command to run all of it.
 
 Proprietary, not open source — licensed for use on the purchaser's own
@@ -15,6 +16,100 @@ search, and so on — lives in the K9 Command Tablet's own in-game Help tab
 (`/k9tablet`), not here. This document covers what that tablet can't:
 getting the resource running in the first place, the decisions you need
 to make before real players touch it, and what to do if it misbehaves.
+
+---
+
+## What's included
+
+The full feature set, in brief, so nothing here is a surprise you find
+out about from a support ticket. All of these ship **on** by default
+unless noted; every one is an independent switch in `Config.Features`
+and can be turned off. Full command syntax for all of these is in the
+tablet's own Help tab, not here.
+
+- **Certification** — the access-control core: a supervisor certifies a
+  department member as a K9 handler, or high command assigns the role
+  directly from the tablet. See "How a K9 gets made" below.
+- **Leash, vehicle loading, radial menu, basic bark** — the core
+  day-to-day handler/K9 interactions.
+- **Tracking** (scent/blood/gunpowder trails), **search zones and
+  contraband alerts**, **thermal/night vision**, **door interaction**.
+- **Combat**: Bite & Hold, Non-Lethal Takedown, Prop Dragging,
+  Handler-Down Defense — see "Before you trust the combat features in
+  production" below before relying on these.
+- **Wellbeing**: mood, fatigue, fear/stress, distraction, injury/limping
+  — each independently switched, each with a small movement-speed
+  effect when it's low.
+- **XP/progression, K9 inventory, a K9 medkit, a vitality HUD, prop
+  attachments (a cosmetic vest), fetch, a deployable kennel, a K9 supply
+  shop, and a leaderboard.**
+- **Handler Partnership** — a longer-term bond distinct from the leash,
+  with an optional one-time tenure milestone XP bonus (see "Known
+  limitations" below for the one real gap in its anti-farming guard) and
+  a partner camera-feed toggle (full-screen view-switch to your
+  partner's viewpoint, not a literal picture-in-picture — see below).
+- **Five reaction/"hunting" features, easy to miss because they're new
+  enough that even this resource's own internal history file hadn't
+  caught up on them — all shipped, on by default, and worth knowing
+  about specifically:**
+  - **Find Alerts** — a search or completed track makes the K9
+    automatically sit and bark, reacting differently depending on the
+    outcome. No manual trigger, and it doesn't depend on the XP system
+    being on.
+  - **Scent Trail Hunt** — turns a search into a hunt: the K9 is guided
+    only by a growl that gets stronger as it gets closer to a hidden
+    spot. The location itself is never sent to the player's game, only
+    the growl intensity — there is nothing to read the answer out of.
+    No marker, no XP.
+  - **Pursuit Sprint** — a short, cooldown-gated burst of genuinely
+    extra speed for a certified K9 chasing a *wanted* target only.
+    Every speed source this resource has (breed, XP tier, fatigue,
+    this burst) is clamped to a combined maximum, so it can't be
+    stacked into something an escaping target has no real chance
+    against.
+  - **Scent Lineup** — several players line up and must all explicitly
+    accept; the server secretly picks one and reveals nothing until the
+    K9 commits a single final guess. No XP, since the outcome is random.
+  - **SAR Calls** — a hidden search-and-rescue target (a missing person
+    or lost property); the K9 reacts more strongly on approach. Always
+    resolves as a rescue, never an arrest, and the "target" is always
+    scenery, never a real player without their consent.
+  - All five need an individual grant from high command on top of their
+    global switch by default (see `Config.FeatureControl.RequireGrant`
+    in "The command tablet" section below) — nobody has any of them
+    until high command hands them out one person at a time.
+- **A training mode** — a practice sandbox against a scripted dummy;
+  touches no real player, no real inventory, and awards zero XP.
+
+---
+
+## How a K9 gets made
+
+Two ways, both server-authoritative:
+
+- **Certify an existing department member.** A qualifying supervisor
+  (or, by default, the officer themselves) grants a certification with
+  `/k9certify` or the "Certify K9 Handler" ox_target option. The target
+  does **not** need to already look like a dog — any member of an
+  eligible department is a valid target.
+- **High command assigns the role directly**, from the K9 Command
+  Tablet, to any citizenid, with a chosen model.
+
+By default (`Config.K9Appearance.applyPedModelOnCertify = true`), either
+path **actually changes that player's character** into the configured
+K9 ped — their original appearance is recorded first, so losing the
+role (revoke, job change, or a high-command "revert") changes them
+back. If you don't want this resource ever touching a player's
+appearance, set `applyPedModelOnCertify = false`; certification then
+behaves the old way — a pure access-control layer on top of a character
+who already chose to look like a dog on their own.
+
+The "K9 role" itself (what you're allowed to *do*) and "what you look
+like" are independent: `Config.K9Appearance.requireK9ModelForRole`
+(default `false`) means a role-holder on any model, including an
+ordinary human, still gets every K9 ability. Every server-side check
+re-verifies the role live — nothing about it is cached client-side or
+trusted from what a player's game claims.
 
 ---
 

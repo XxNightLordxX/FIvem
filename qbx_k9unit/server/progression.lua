@@ -792,20 +792,30 @@ end
 --     ).xp <= 0 or GetXPTier(partnerCitizenid).xp <= 0` gate) -- nothing
 --     needed here beyond the already-existing GetXPTier this reuses
 --     unchanged.
---   Veteran (4,000 XP) -- ACCESSOR WIRED, CALL SITE NOT YET APPLIED.
---     GetXPTierMedkitCooldownMs below is complete, defensively bounded (see
---     its own doc comment) and covered end to end by
---     tests/xptierunlocks_spec.lua -- config.lua's Elite/Veteran rows
---     already carry `medkitCooldownMultiplier = 0.75`. The only missing
---     piece is a ONE-LINE call at server/medkit.lua's own
---     `MedkitCooldown.IsOnCooldown(targetCitizenid, Config.K9Medkit.cooldownMs,
---     requestedAt)` site (that file's own RunUseK9MedkitMutation, currently
---     reading Config.K9Medkit.cooldownMs raw, never this accessor) -- an
---     exact, ready-to-apply patch for that site was sent to main/that
---     file's current owner rather than applied here, since this pass does
---     not have write access to server/medkit.lua. Until that patch lands,
---     every K9 medkit cooldown is the flat configured value regardless of
---     tier, and config.lua's own Veteran-row comment overpromises.
+--   Veteran (4,000 XP) -- WIRED, CALL SITE APPLIED. CORRECTED (this pass,
+--     coder-backend) -- this bullet used to read "ACCESSOR WIRED, CALL SITE
+--     NOT YET APPLIED" and claimed server/medkit.lua reads
+--     Config.K9Medkit.cooldownMs raw; both claims are false today and were
+--     re-verified false by direct read of the real server/medkit.lua before
+--     writing this correction, not assumed. GetXPTierMedkitCooldownMs below
+--     is complete, defensively bounded (see its own doc comment) and
+--     covered end to end by tests/xptierunlocks_spec.lua -- config.lua's
+--     Elite/Veteran rows already carry `medkitCooldownMultiplier = 0.75`.
+--     The one-line call this bullet used to describe as "sent to main, not
+--     yet applied" IS APPLIED: server/medkit.lua's RunUseK9MedkitMutation
+--     resolves `baseCooldownMs` via `ResolveMedkitBaseCooldownMs()` (the
+--     validated, never-raw config read) and then calls
+--     `GetXPTierMedkitCooldownMs(targetCitizenid, baseCooldownMs)`
+--     (soft-guarded, `type(GetXPTierMedkitCooldownMs) == 'function'`) to
+--     get the threshold its own `MedkitCooldown.IsOnCooldown` call actually
+--     checks against — see that file's own FILE-TO-FILE CONTRACT entry for
+--     GetXPTierMedkitCooldownMs, and tests/medkit_spec.lua's own "GAP
+--     CLOSURE" section, which loads the REAL server/datastore.lua +
+--     server/progression.lua + server/medkit.lua together and proves a
+--     Veteran-tier citizenid's medkit cooldown is genuinely shortened, not
+--     merely wired-but-unreachable. Every K9 medkit cooldown DOES reflect
+--     this tier unlock today, and config.lua's own Veteran-row comment no
+--     longer overpromises.
 --   Elite (9,000 XP) -- SERVER HALF WIRED, DISPLAY NOT WIRED. NO CODE
 --     CHANGE NEEDED IN THIS FILE: PushTierSnapshot/CopyTier already forward
 --     EVERY field present on a Config.XPTiers[n] row to the client verbatim

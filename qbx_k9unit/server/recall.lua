@@ -1,15 +1,14 @@
 --[[
     qbx_k9unit/server/recall.lua
 
-    Phase 3 implementation, DEVELOPER_REFERENCE.md §12.5.1's "Recall actor" (§12.0
-    item 7, Revision 5's resolution) -- the one consumer server/partnership.lua's
-    own "FUTURE CONSUMERS" header section names as still unbuilt for
-    BiteAndHold's Recall path, and this resource's PRIMARY escape hatch for
-    every one of server/combat.lua's non-consensual engaged states
-    (bite-and-hold, non-lethal takedown's ragdoll window, and prop
-    dragging) -- see "SCOPE: ALL THREE ENGAGEMENT TYPES, NOT JUST
-    BITEANDHOLD" below for why this is not narrowed to §12.5.1's own literal
-    text.
+    DEVELOPER_REFERENCE.md §12.5.1's "Recall actor" (§12.0 item 7) -- the
+    one consumer server/partnership.lua's own "FUTURE CONSUMERS" header
+    section names as still unbuilt for BiteAndHold's Recall path, and this
+    resource's PRIMARY escape hatch for every one of server/combat.lua's
+    non-consensual engaged states (bite-and-hold, non-lethal takedown's
+    ragdoll window, and prop dragging) -- see "SCOPE: ALL THREE ENGAGEMENT
+    TYPES, NOT JUST BITEANDHOLD" below for why this is not narrowed to
+    §12.5.1's own literal text.
 
     CONCRETE BEHAVIOR: a certified handler's own established K9 PARTNER
     (server/partnership.lua's `Partnerships` registry -- never a
@@ -52,9 +51,8 @@
     client/tablet.lua's Block/Unblock control) IS DELIBERATELY NOT
     IMPLEMENTED HERE, EVEN THOUGH THE TABLET OFFERS A Block/Unblock CONTROL
     FOR Recall LIKE EVERY OTHER Config.Features ENTRY. This is not an
-    oversight matching the audit gap every other feature in this pass
-    closed -- it is the one deliberate exception, for exactly the reason
-    stated above: Recall is this resource's primary escape hatch, and "no
+    oversight -- it is a deliberate exception, for exactly the reason stated
+    above: Recall is this resource's primary escape hatch, and "no
     termination/cleanup path may be gated" is a hard rule, not a preference,
     for the identical reason `ForceDetachLeashForSource`/`doDetachLeash`/
     `releaseFetchBall`/kennel pickup/training-off never consult a block
@@ -147,11 +145,11 @@
 if not Config.Features.Recall then return end
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
--- audit). It is now server/notify.lua's single shared resource-global
--- implementation -- see that file's own header for the extraction writeup.
--- Every call site below is unchanged: this file never passed a custom
--- title, which is server/notify.lua's own default.
+-- independent hand-rolled copies across this resource). It is now
+-- server/notify.lua's single shared resource-global implementation -- see
+-- that file's own header for the extraction writeup. Every call site below
+-- is unchanged: this file never passed a custom title, which is
+-- server/notify.lua's own default.
 
 -- Rate-limits the CALLER (the handler issuing Recall), never the K9 being
 -- recalled -- a spam-prevention measure only, never a barrier to a
@@ -166,11 +164,11 @@ if not Config.Features.Recall then return end
 -- start rather than degrading -- and it would do so only for the operator who
 -- flipped Config.Features.Recall on without adding the config block, i.e. at
 -- the worst possible moment. server/tenure.lua already guards its equivalent
--- read this way; this file did not, and that inconsistency was the finding.
--- The fallback matches config.lua's own shipped default, so a server missing
--- the block gets a working recall rather than a boot loop -- correct for a
--- TERMINATION path, where failing closed would mean nobody can call their dog
--- off.
+-- read this way; this file previously did not, which is the gap this guard
+-- closes. The fallback matches config.lua's own shipped default, so a server
+-- missing the block gets a working recall rather than a boot loop -- correct
+-- for a TERMINATION path, where failing closed would mean nobody can call
+-- their dog off.
 local RECALL_COOLDOWN_FALLBACK_MS = 2000
 local recallCfg = Config.Recall
 local configuredCooldownMs = type(recallCfg) == 'table' and recallCfg.RequestCooldownMs or nil

@@ -4,26 +4,23 @@
     Handler leaderboard / '/k9stats' -- DEVELOPER_REFERENCE.md Part A Tier C
     §10. A pure, read-only ranking over `k9_progression` (server/
     progression.lua's own XP persistence table) -- no new state, no new
-    write path, no new risk to the economy. Exactly matches this idea's
-    own "Effort: small... zero value before Phase 4 exists to feed it"
-    framing: Phase 4 (XPProgression) has shipped, so this is now buildable
-    for real.
+    write path, no new risk to the economy. This depended on XPProgression
+    already existing to feed it (k9_progression is populated by
+    server/progression.lua), which it now does.
 
     ======================================================================
     QUERY SHAPE -- READ BEFORE TOUCHING sql/migrations/0009_*.
 
     `SELECT citizenid, xp FROM k9_progression ORDER BY xp DESC LIMIT ?`.
-    `k9_progression` (sql/install.sql, server/progression.lua) had exactly
-    ONE key before this pass -- `PRIMARY KEY (citizenid)` -- which has no
-    bearing on an `ORDER BY xp` at all. A real EXPLAIN pass this session
-    (per this task's own explicit instruction: measure, do not assume)
-    confirmed the obvious consequence on a REAL MariaDB 10.11 instance and
-    this session's own MySQL 5.7.44 / 8.0.46 containers, at 20,000 and
-    150,000 synthetic rows: `type=ALL, rows=<table size>, Extra=Using
-    filesort` -- a full table scan PLUS a sort of every row, on every
-    single invocation, to return the top N. Exactly the anti-pattern this
-    task named by example (an existing admin query filesorting 8,572 rows;
-    a maintenance script full-scanning 150k) -- this file does not add a
+    `k9_progression`'s only key is `PRIMARY KEY (citizenid)`, which has no
+    bearing on an `ORDER BY xp` at all. An EXPLAIN check against a real
+    MariaDB 10.11 instance and MySQL 5.7.44 / 8.0.46, at 20,000 and 150,000
+    synthetic rows, confirmed the obvious consequence: `type=ALL,
+    rows=<table size>, Extra=Using filesort` -- a full table scan PLUS a
+    sort of every row, on every single invocation, to return the top N.
+    This is the same filesort/full-table-scan anti-pattern already found
+    elsewhere in this codebase (an admin query filesorting 8,572 rows; a
+    maintenance script full-scanning 150k) -- this file does not add a
     third instance of it. `sql/migrations/0009_add_k9_progression_idx_xp.sql`
     (+ matching `sql/rollback/0009_down.sql`) adds a plain `KEY idx_xp
     (xp)`, after which the SAME query measures `type=index, key=idx_xp,
@@ -33,10 +30,9 @@
     contains both columns this query selects) whose cost is the LIMIT, not
     the table size -- confirmed IDENTICAL `rows=50` at both 20,000 and
     150,000 rows. See that migration's own header for the full numbers.
-    `sql/install.sql`'s own `k9_progression` CREATE TABLE is being updated
-    in the same pass to carry this index directly, per this repo's
-    established "install.sql has final shape, a migration backfills an
-    existing DB" convention.
+    `sql/install.sql`'s own `k9_progression` CREATE TABLE carries this index
+    directly, per this repo's established "install.sql has final shape, a
+    migration backfills an existing DB" convention.
 
     Row LIMIT is embedded via string.format after being floor+range-clamped
     into `[1, HARD_MAX_RESULTS]` by ClampLimit below -- NEVER a raw
@@ -56,10 +52,9 @@
     same reasoning server/admin.lua's own `/k9auditxp` already documents for
     the identical table: recomputing server/progression.lua's `ResolveTier`
     threshold walk here would be a SECOND, driftable copy of that logic
-    (and a real correctness trap this pass specifically ruled out for
-    itself -- see "WHY NOT GetXPTier()" below), not a genuine
-    'COMPUTES NOTHING NEW' wrapper. A player can compare a reported total
-    against Config.XPTiers directly.
+    (and a real correctness trap ruled out deliberately -- see "WHY NOT
+    GetXPTier()" below), not a genuine 'COMPUTES NOTHING NEW' wrapper. A
+    player can compare a reported total against Config.XPTiers directly.
 
     WHY NOT GetXPTier() -- CONSIDERED AND REJECTED, NOT MERELY UNCONSIDERED:
     server/progression.lua's own `GetXPTier(citizenid)` reads the IN-MEMORY
@@ -81,8 +76,8 @@
     ======================================================================
 
     ======================================================================
-    ACCESS MODEL -- DECIDED, WITH THE PRIVACY QUESTION ANSWERED EXPLICITLY
-    (this task's own instruction), NOT DEFAULTED EITHER WAY.
+    ACCESS MODEL -- decided, with the privacy question answered explicitly,
+    not defaulted either way.
 
     Gated on `HasK9Access(source)` -- the caller must be a CURRENTLY VALID,
     certified K9/handler right now, the exact same gate the leash, radial,
@@ -165,13 +160,12 @@
       this resource needs to call into a leaderboard query.
     ======================================================================
 
-    CONFIG THIS FILE ASSUMES EXISTS -- NOT owned by this file for this task
-    (coder-backend does not own config.lua here; reported separately). A
-    missing `Config.Features.K9Leaderboard` is treated as `false` (command
-    never registered at all, matching server/admin.lua's own
-    AdminAuditCommands registration-time gate convention) -- every OTHER
-    field below degrades to a safe, loudly-logged built-in default rather
-    than erroring (same softer, server/recall.lua-style posture
+    CONFIG THIS FILE ASSUMES EXISTS (not owned by this file; see
+    config.lua). A missing `Config.Features.K9Leaderboard` is treated as
+    `false` (command never registered at all, matching server/admin.lua's
+    own AdminAuditCommands registration-time gate convention) -- every
+    OTHER field below degrades to a safe, loudly-logged built-in default
+    rather than erroring (same softer, server/recall.lua-style posture
     server/training.lua's own header already argues for and for the
     identical reason: a broken config here has no security/economy
     consequence, only a wrong default row count/cooldown, so this does not

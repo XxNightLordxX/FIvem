@@ -1,21 +1,20 @@
 --[[
     qbx_k9unit/client/exports.lua
 
-    PUBLIC API SURFACE (client half) — coder-architect pass, 2026-08-24.
-    Companion to server/exports.lua — read that file's header first, it
-    covers the shared design principles (read-only, re-derive/never trust,
-    no raw internal tables, wrap-don't-reimplement, fail closed) which apply
-    here identically. This file exists because a client-side justification
-    is genuinely different from the server one, not by default symmetry:
+    PUBLIC API SURFACE (client half). Companion to server/exports.lua —
+    read that file's header first, it covers the shared design principles
+    (read-only, re-derive/never trust, no raw internal tables,
+    wrap-don't-reimplement, fail closed) which apply here identically. This
+    file exists because a client-side justification is genuinely different
+    from the server one, not by default symmetry:
 
-    JUSTIFICATION FOR A CLIENT COUNTERPART (task explicitly asks this be
-    argued, not assumed): the server surface answers "is this player
-    allowed/what is their state," which is what dispatch/MDT/evidence-style
-    integrations need. A client-side integration need is narrower but real
-    — another CLIENT resource running in the SAME player's game session may
-    need to read this resource's LOCAL, already-computed UI/interaction
-    state to avoid stepping on it, without standing up its own server
-    round-trip:
+    JUSTIFICATION FOR A CLIENT COUNTERPART: the server surface answers "is
+    this player allowed/what is their state," which is what dispatch/MDT/
+    evidence-style integrations need. A client-side integration need is
+    narrower but real — another CLIENT resource running in the SAME
+    player's game session may need to read this resource's LOCAL,
+    already-computed UI/interaction state to avoid stepping on it, without
+    standing up its own server round-trip:
       - A vision/goggle-item resource activating its OWN screen effect has
         a concrete reason to check IsThermalVisionActive()/
         IsNightVisionActive() first — client/vision.lua's own
@@ -57,32 +56,18 @@
     underlying vision-effect natives are simply never toggled on in that
     case — this file adds no separate gate on top of that).
 
-    VERSIONING: GetAPIVersion() started as a literal mirror of
-    server/exports.lua's value (both 1.0.0) — CORRECTION, this pass
-    (2026-08-25): the original wording here said that mirror was "kept in
-    sync manually," implying the two files' version numbers were meant to
-    move together. That framing was wrong from the start and is discarded
-    now rather than carried forward: this file's exports and
-    server/exports.lua's exports are two independent contracts (a consumer
-    resource may use only one, or use them at different points in its own
-    lifecycle), each describing a different set of reads over a different
-    realm's state. That 2026-08-25 pass added two genuinely new client-side
-    reads (`IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
-    `GetDefenseSuggestedTargetNetId` — see FETCH ENGAGEMENT STATE /
-    HANDLER-DOWN DEFENSE STATE below) with NOTHING new landing in
-    server/exports.lua that same pass (see that file's own "SIX-FEATURE
-    COVERAGE AUDIT" section for why) — bumping THIS file's API_VERSION to
-    1.1.0 while server/exports.lua's stayed at 1.0.0. A FOLLOW-UP PASS
-    (2026-08-26) found that same "SIX-FEATURE COVERAGE AUDIT" had missed a
-    real read on the PropAttachments feature (see PROP ATTACHMENT ENGAGEMENT
-    STATE below and the corrected PropAttachments paragraph above) and adds
-    `IsPropAttachmentEngaged` — one more additive export, so this file's
-    API_VERSION bumps again, to 1.2.0, per this resource's own documented
-    semver posture (an additive export bumps MINOR — see
+    VERSIONING: GetAPIVersion() returns this file's own version,
+    independent of server/exports.lua's GetAPIVersion() — the two are
+    separate contracts (a consumer resource may use only one, or use them
+    at different points in its own lifecycle), each describing a different
+    set of reads over a different realm's state. A consumer that reads
+    both files' versions must not assume they are ever numerically equal;
+    each should be checked independently via its own GetAPIVersion() call.
+    Current value: 1.2.0 (see API_VERSION below) — every export in this
+    file is additive over the original 1.0.0 surface, so each addition
+    bumps MINOR only, per this resource's documented semver posture (see
     server/exports.lua's VERSIONING paragraph for the shared policy
-    statement). A consumer that reads both files' versions must not assume
-    they are ever numerically equal; each should be checked independently
-    via its own GetAPIVersion() call.
+    statement).
 
     NOT IN THIS FILE: RequestPartnerUp/BreakPartnership/RequestLeashAttach/
     DetachLeash/RequestBiteHold/ReleaseBiteHold/RequestTakedown/RequestDrag/
@@ -93,8 +78,8 @@
     them already has its own consent/proximity/cooldown context tied to
     THIS resource's own UI flow (radial menu selection, ox_target option,
     etc.) that an external resource driving them directly would bypass.
-    EXTENDED, this pass, to name the self-initiated actions added by the
-    six features audited below (same exclusion, not a new category):
+    This also names the self-initiated actions added by the six features
+    audited below (same exclusion, not a new category):
     `RequestRecall` (client/recall.lua — a termination action deliberately
     ungated on CanShowK9UI, but still self-initiated by the calling player
     for their own partner K9; excluding it here does not reopen the "must
@@ -111,32 +96,24 @@
     named above — see PROPATTACHMENT / PROXIMITY AUDIO note below for why
     those two features contribute no exports here at all.
 
-    PropAttachments (client/propattachment.lua) — CORRECTION, this pass
-    (2026-08-26): the coverage-audit paragraph above (as it read before this
-    correction) claimed this feature "exposes NO resource-global READ
-    accessor at all." That was wrong, found by re-reading
-    client/propattachment.lua directly rather than trusting the prior pass's
-    summary of it: `IsPropAttachmentEngaged()` (client/propattachment.lua) is
-    a genuine, purpose-built, zero-argument resource-global read predicate —
-    added specifically so client/appearance.lua's own K9-model-swap guard
-    could ask "does this client currently have a vest attached right now,"
-    the exact same shape/role as IsBiteHoldEngaged()/IsDragEngaged()/
-    IsFetchCarryEngaged() below, all three of which ARE exported. It was
-    missed by the prior audit, not deliberately excluded — closed below as
-    `IsPropAttachmentEngaged` (see PROP ATTACHMENT ENGAGEMENT STATE), API
-    version bumped accordingly. `AttachPropToOwnPed`/`DetachAndDeleteProp`
-    (internal plumbing shared with FetchMechanic, not domain state — same
-    exclusion class server/exports.lua's header already applies to
-    `ResolveNetworkEntity`/`NewCooldown`) and the `RequestToggleK9PropAttachment`
-    action (this file's header "NOT IN THIS FILE" list) are both still
-    correctly excluded — only the "no read accessor exists at all" claim was
-    incorrect.
+    PropAttachments (client/propattachment.lua): `IsPropAttachmentEngaged()`
+    is a genuine, purpose-built, zero-argument resource-global read
+    predicate — added specifically so client/appearance.lua's own
+    K9-model-swap guard could ask "does this client currently have a vest
+    attached right now," the exact same shape/role as
+    IsBiteHoldEngaged()/IsDragEngaged()/IsFetchCarryEngaged() below, all
+    three of which ARE exported — closed below as `IsPropAttachmentEngaged`
+    (see PROP ATTACHMENT ENGAGEMENT STATE). `AttachPropToOwnPed`/
+    `DetachAndDeleteProp` (internal plumbing shared with FetchMechanic, not
+    domain state — same exclusion class server/exports.lua's header already
+    applies to `ResolveNetworkEntity`/`NewCooldown`) and the
+    `RequestToggleK9PropAttachment` action (this file's header "NOT IN THIS
+    FILE" list) are both correctly excluded.
 
-    ProximityAudioFX (client/proximityaudio.lua) contributes NOTHING to this
-    file, audited this pass alongside the other five features (full
-    reasoning in server/exports.lua's "SIX-FEATURE COVERAGE AUDIT" section,
-    which covers both realms even though it lives in the server file):
-    client/audio.lua's `IsK9SoundActive(id)` (added alongside
+    ProximityAudioFX (client/proximityaudio.lua) contributes NOTHING to
+    this file (full reasoning in server/exports.lua's "SIX-FEATURE COVERAGE
+    AUDIT" section, which covers both realms even though it lives in the
+    server file): client/audio.lua's `IsK9SoundActive(id)` (added alongside
     ProximityAudioFX) takes an opaque `id` minted only by `PlayK9Sound`,
     which is itself correctly not exported (an unbounded external
     NUI-message trigger with no proximity/cost context, the same category
@@ -360,7 +337,7 @@ exports('IsDragEngaged', function()
 end)
 
 -- ======================================================================
--- HANDLER-DOWN DEFENSE STATE (wraps client/defense.lua) — ADDED THIS PASS
+-- HANDLER-DOWN DEFENSE STATE (wraps client/defense.lua)
 -- (Config.Features.HandlerDownDefense, still `false` by default). Both
 -- exports below are zero-argument reads of PendingDefensePrompt, a plain
 -- in-memory Lua table local to client/defense.lua with no game-state
@@ -408,7 +385,7 @@ exports('GetDefenseSuggestedTargetNetId', function()
 end)
 
 -- ======================================================================
--- FETCH ENGAGEMENT STATE (wraps client/fetch.lua) — ADDED THIS PASS
+-- FETCH ENGAGEMENT STATE (wraps client/fetch.lua)
 -- (Config.Features.FetchMechanic, still `false` by default). Same shape
 -- and justification as IsBiteHoldEngaged/IsDragEngaged above (an
 -- animation/ragdoll-management resource may want to know a K9 is
@@ -432,10 +409,7 @@ exports('IsFetchCarryEngaged', function()
 end)
 
 -- ======================================================================
--- PROP ATTACHMENT ENGAGEMENT STATE (wraps client/propattachment.lua) —
--- ADDED THIS PASS (2026-08-26), closing a real gap: this feature was
--- previously audited (see this file's header, corrected PropAttachments
--- paragraph) as having no exportable read at all. It does —
+-- PROP ATTACHMENT ENGAGEMENT STATE (wraps client/propattachment.lua) --
 -- `IsPropAttachmentEngaged()` is a zero-argument, resource-global read
 -- predicate ("does this client currently have a vest/prop attached to its
 -- own ped via this feature right now"), the same shape/role as

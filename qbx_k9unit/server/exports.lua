@@ -580,6 +580,40 @@ end)
 --- this resource's own "unknown state defaults to least privilege"
 --- convention, so an unresolved lookup can only ever under-report, never
 --- over-report, a K9's real tier.
+---
+--- COMPOSES THE INDIVIDUAL OVERRIDE (bugfix, this pass): this used to
+--- return the PLAIN tier — correct for a citizenid with no operator
+--- override, but silently wrong for one that has a live per-K9
+--- speedMultiplier/scentRangeMultiplier/medkitCooldownMultiplier override
+--- set through the tablet (server/k9profiles.lua), since that override was
+--- never consulted at all. server/progression.lua's own
+--- BuildEffectiveTierSnapshot (the server->client `xpTierChanged` push) and
+--- server/tracking.lua's own scent-range consumer both already resolve
+--- through `GetK9EffectiveMultipliers(citizenid)` — server/k9profiles.lua's
+--- ONE seam for its documented GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL
+--- OVERRIDE resolution order — instead of reading a raw tier. This export
+--- now does the identical overlay: same fresh tier copy as before, with
+--- `GetK9EffectiveMultipliers`'s answer composed onto it field-by-field,
+--- never a re-implementation of that order (see server/progression.lua's
+--- BuildEffectiveTierSnapshot for the exact overlay this mirrors — a
+--- 3-field `if type(...) == 'number' then snapshot.x = effective.x end`
+--- overlay onto the plain copy, not a new ladder).
+---
+--- SOFT-GUARDED, this resource's established `type(...) == 'function'`
+--- convention: when server/k9profiles.lua is absent (an install that
+--- predates it) or the pcall'd call throws, this degrades to the PLAIN
+--- tier copy — this export's own pre-fix behavior, byte-for-byte — never an
+--- error, and never nil to a caller resource with no idea why. A
+--- citizenid with no live override is unaffected either way:
+--- GetK9EffectiveMultipliers itself only overwrites a field when an
+--- override row actually sets it, so this is a strict widening of
+--- correctness, never a narrowing of what a non-overridden citizenid saw
+--- before.
+---
+--- SHAPE UNCHANGED: still a copy of a Config.XPTiers-shaped entry
+--- (xp/label/speedMultiplier/scentRangeMultiplier/medkitCooldownMultiplier?
+--- /badge?) — only the VALUES of the three overridable fields can now
+--- differ from the raw tier, never the table's shape.
 --- @param citizenid string
 --- @return table { xp: number, label: string, speedMultiplier: number, scentRangeMultiplier: number }
 exports('GetXPTier', function(citizenid)
@@ -588,7 +622,19 @@ exports('GetXPTier', function(citizenid)
 
     local ok, tier = pcall(GetXPTier, citizenid)
     if not ok or type(tier) ~= 'table' then return BaseTierCopy() end
-    return CopyTier(tier)
+
+    local snapshot = CopyTier(tier)
+
+    if type(GetK9EffectiveMultipliers) == 'function' then
+        local effOk, effective = pcall(GetK9EffectiveMultipliers, citizenid)
+        if effOk and type(effective) == 'table' then
+            if type(effective.speedMultiplier) == 'number' then snapshot.speedMultiplier = effective.speedMultiplier end
+            if type(effective.scentRangeMultiplier) == 'number' then snapshot.scentRangeMultiplier = effective.scentRangeMultiplier end
+            if type(effective.medkitCooldownMultiplier) == 'number' then snapshot.medkitCooldownMultiplier = effective.medkitCooldownMultiplier end
+        end
+    end
+
+    return snapshot
 end)
 
 -- ======================================================================

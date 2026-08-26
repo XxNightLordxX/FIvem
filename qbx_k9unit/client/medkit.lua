@@ -129,6 +129,18 @@ local function RequestTreatK9(targetServerId)
         local reasonLabel = ({
             feature_disabled      = locale('medkit.reason_feature_disabled'),
             no_access             = locale('medkit.reason_no_access'),
+            -- 'not_granted' — server/medkit.lua's own REASON SPLIT pass:
+            -- distinct from 'no_access' above ("your job does not permit
+            -- treating K9s at all") -- this one means "your job permits it,
+            -- but this server additionally requires an explicit
+            -- feature.K9Medkit grant you do not (yet) hold" (mirrors
+            -- server/pursuitsprint.lua's own no_access/not_granted split
+            -- for the identical class of gate). Before this mapping was
+            -- added, this reason fell through to the unrecognized-reason
+            -- fallback below (medkit_failed) -- a real, distinguishable
+            -- refusal cause the server already computes, made invisible to
+            -- the player again at this exact seam.
+            not_granted           = locale('medkit.reason_not_granted'),
             invalid_target        = locale('medkit.reason_invalid_target'),
             -- 'target_dead' — server/medkit.lua's own correctness
             -- pass: a medkit heals an injured, ALIVE K9, never

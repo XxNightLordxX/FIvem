@@ -1,7 +1,7 @@
 --[[
     tests/scentlineup_spec.lua
 
-    Direct tests of server/scentlineup.lua (K9_IDEAS.md §4, "Scent lineup")
+    Direct tests of server/scentlineup.lua (PROJECT_HISTORY.md §4, "Scent lineup")
     against the REAL, unmodified production file.
 
     THE LOAD-BEARING TEST IN THIS FILE, per this task's own instruction:

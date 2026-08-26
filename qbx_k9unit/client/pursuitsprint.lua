@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/pursuitsprint.lua
 
-    K9_IDEAS.md §5 ("Pursuit sprint -- a short burst of 'the dog is
+    PROJECT_HISTORY.md §5 ("Pursuit sprint -- a short burst of 'the dog is
     genuinely faster than you'"). Client half of a short, cooldown-gated
     speed burst for a certified K9 actively chasing a player this server's
     own system has already flagged wanted/suspect. Server half:
@@ -13,7 +13,7 @@
     boundary), and applying/expiring the effect on the K9's OWN ped once
     the server has granted it.
 
-    Explicitly NOT building "crowd-control barking" (K9_IDEAS.md's own
+    Explicitly NOT building "crowd-control barking" (PROJECT_HISTORY.md's own
     not-recommended section) -- see server/pursuitsprint.lua's own header
     "WHAT THIS FILE DOES NOT DO" for the full statement; nothing here
     targets, resolves, or affects any ped other than the local player's own.

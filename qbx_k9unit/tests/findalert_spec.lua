@@ -2,7 +2,7 @@
     tests/findalert_spec.lua
 
     Direct, black-box tests of server/findalert.lua AND client/findalert.lua
-    (K9_IDEAS.md §1, "Make finds feel like a real alert, not a pop-up
+    (PROJECT_HISTORY.md §1, "Make finds feel like a real alert, not a pop-up
     message") against the REAL, unmodified production files -- both loaded
     into their own independent sandboxes in this ONE spec file (this
     feature's file-ownership allowance for this pass was exactly these two

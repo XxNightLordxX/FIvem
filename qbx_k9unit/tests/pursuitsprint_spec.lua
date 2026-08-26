@@ -3,7 +3,7 @@
 
     Direct, black-box tests of server/pursuitsprint.lua and
     client/pursuitsprint.lua against the REAL, unmodified production files
-    (K9_IDEAS.md §5, "Pursuit sprint"). One file, per this task's own file
+    (PROJECT_HISTORY.md §5, "Pursuit sprint"). One file, per this task's own file
     allowlist -- server-side tests first, client-side tests second, each
     with its own fixture builder, mirroring how tests/defense_spec.lua and
     tests/clientagility_spec.lua are each structured internally even though

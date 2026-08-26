@@ -1523,7 +1523,514 @@ end)
 -- declaration comment) for the exact same key shape (keyed by a single
 -- source, no initiator/target pairing to additionally scan for, unlike
 -- PendingLeashRequests' own two-sided cleanup).
+-- ======================================================================
+-- SCENT VISION (Config.Features.ScentVision) -- owner-directed pass: "make
+-- scent tracking... a keybind that makes a colour dot appear where players['
+-- ] blood etc have walked and have a delay before the scent markers go
+-- away... if multiple people, multiple different colours... to
+-- differentiate smells." Coordinator follow-ups (verbatim, folded into this
+-- design as it evolved): "person" (colour is per PERSON, never per
+-- permission -- that reading was raised and explicitly closed); "big
+-- population... won't cause an issue" (bounded capture, bounded reveal, no
+-- server-wide broadcast); "handful near the dog" / "they go away after 45
+-- seconds" (colours scoped to a small proximity-ranked set, 45s default dot
+-- lifetime); "diffrent dots will be all seprate timers... slowly go away"
+-- (EACH DOT expires on its OWN individual timer from its OWN capture time --
+-- never one shared trail-wide clock).
+--
+-- WHAT THIS IS, AND IS NOT, RELATIVE TO THE REST OF THIS FILE: Track
+-- Scent/Blood/Gunpowder above (findTrackableSource) resolve and reveal
+-- exactly ONE nearest logged EVENT (a damage hit, a gunshot, an item drop)
+-- and hand the client a coordinate to walk toward. ScentVision instead
+-- reveals SEVERAL people's own recent walked PATHS at once, colour-coded so
+-- more than one trail through the same ground can be told apart -- a
+-- different SHAPE of reveal, built on a NEW, separate capture stream
+-- (PositionTrail below), not on TrackableLog. Kept separate deliberately:
+-- TrackableLog's own anti-farm ticket-minting machinery (ticketIssued,
+-- MIN_TRACK_XP_DISTANCE, TrackTicketMintCooldown, ...) exists entirely to
+-- guard trackSourceResolved XP, which ScentVision never awards (this
+-- feature mints ZERO XP, same "cosmetic reveal, no real capability granted"
+-- framing DEVELOPER_REFERENCE.md §11.6 already established for the three trail types
+-- above) -- entangling a brand-new, always-on, population-wide capture
+-- stream with that machinery would have changed its risk profile for no
+-- reason. This does mean an existing K9 handler's own recent
+-- blood/gunpowder/scent-drop TrackableLog events are NOT folded in as extra
+-- ScentVision dots this pass -- a disclosed, deliberate scope decision (see
+-- this pass's own report), not an oversight; nothing here prevents adding
+-- that later as a genuinely separate, additive reveal source.
+--
+-- SCALE, WORKED OUT, NOT ASSUMED (owner's own explicit requirement: this
+-- must stay smooth on a populated server) -- full arithmetic in this pass's
+-- own report; summarised at each bound below:
+--   - CAPTURE cost: one GetPlayerPed+GetEntityCoords pair per CONNECTED
+--     player, once per sampleIntervalMs (4s shipped) -- at 200 concurrent
+--     players that is 50 native-call-pairs/sec, the same shape and order of
+--     magnitude as this file's own pre-existing GetPlayers() population
+--     scans (server/entities.lua's ResolveConnectedPlayerFromPed) and
+--     server/wellbeing.lua's GetAllObjects/GetAllVehicles scans -- nothing
+--     new in KIND, only in cadence.
+--   - STORAGE ceiling: maxPointsPerPerson (15 shipped) is a HARD cap,
+--     independent of dotLifetimeMs/sampleIntervalMs math, enforced on every
+--     write (oldest evicted first) -- so total stored points can never
+--     exceed connectedPlayers x maxPointsPerPerson regardless of how the
+--     other two are configured. Each point is a 4-number array-style table
+--     ({x, y, z, loggedAt}, never string-keyed) -- a conservative ~150
+--     bytes/point estimate (a reasoned order-of-magnitude figure, NOT
+--     profiled against a live FXServer's real Lua 5.4 allocator this pass --
+--     disclosed as an estimate, not measured) puts 200 players x 15 points
+--     x 150 bytes at roughly 440KB, and even FiveM's documented 1024-slot
+--     hard ceiling x 15 x 150 bytes at roughly 2.2MB -- trivial against a
+--     real server's memory budget either way, and a number the owner can
+--     lower further via maxPointsPerPerson/dotLifetimeMs if a real profile
+--     ever disagrees. DISCARDED ON WRITE (every capture pass drops that
+--     SAME person's already-expired points before appending a new one, per
+--     each point's OWN loggedAt timestamp -- never a decremented countdown)
+--     -- never accumulated indefinitely and filtered only at query time; the
+--     sweep thread below additionally catches a person who stops moving
+--     (and so stops triggering that on-write sweep) on its own periodic
+--     cadence.
+--   - REVEAL cost: a query scans PositionTrail once (O(connectedPlayers x
+--     maxPointsPerPerson) point-distance checks -- 200 x 15 = 3,000 at the
+--     shipped defaults, microseconds of Lua work), then returns AT MOST
+--     maxVisibleTrails (5, "a handful", the owner's own word) distinct
+--     people's trails, each capped at queryMaxPointsPerTrail (12) points,
+--     nearest-first -- so the PAYLOAD sent to any one client, and the
+--     number of dots that client ever has to draw, is bounded at 60 points
+--     REGARDLESS of server population. Degradation under load always drops
+--     the FURTHEST trail/point first, per the owner's own instruction, at
+--     both the trail-selection and per-trail-point levels below.
+--   - COLOUR SPACE: exactly `maxVisibleTrails` (5) fixed, curated swatches
+--     (Config.Tracking.ScentVision.palette), one per "handful" slot -- see
+--     ResolveScentVisionColors below for why scoping colours to this same
+--     small, proximity-ranked visible set (never the server's whole
+--     population) makes a colour COLLISION between two SIMULTANEOUSLY SHOWN
+--     trails structurally impossible, not merely statistically unlikely.
+--
+-- TRUST BOUNDARY: every point returned by getScentVisionPoints below is
+-- this SERVER's own resolved position for some OTHER connected player,
+-- gathered by this file's own capture thread -- never a client-supplied
+-- coordinate, and never a coordinate for anyone outside the caller's own
+-- queryRangeMeters/maxVisibleTrails/queryMaxPointsPerTrail limits. A client
+-- is never handed the whole server's positions, and never learns WHO a dot
+-- belongs to (no citizenid/name/source is ever put on the wire) -- only
+-- WHERE, and which of its own "handful" colours that trail currently holds.
+-- ======================================================================
+
+-- Load-time sanity check -- see `palette`'s own config.lua comment for what
+-- happens if it is shorter than maxVisibleTrails (colour REUSE across two
+-- simultaneously-visible trails -- the one case this design cannot make
+-- structurally impossible, since there are only as many fixed swatches as
+-- the operator configured).
+do
+    local svConfig = Config.Tracking.ScentVision
+    if type(svConfig) == 'table' then
+        local paletteLen = type(svConfig.palette) == 'table' and #svConfig.palette or 0
+        local wantSlots = type(svConfig.maxVisibleTrails) == 'number' and svConfig.maxVisibleTrails or 0
+        if paletteLen > 0 and wantSlots > paletteLen then
+            print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.maxVisibleTrails (%s) exceeds ' ..
+                'Config.Tracking.ScentVision.palette\'s length (%d) -- colours will be REUSED across ' ..
+                'simultaneously-visible trails once more than %d distinct people are shown to the same K9 ' ..
+                'at once. Add more palette entries or lower maxVisibleTrails to keep every visible trail a ' ..
+                'genuinely distinct colour.'):format(tostring(wantSlots), paletteLen, paletteLen))
+        end
+    end
+end
+
+-- PositionTrail[source] = { {x, y, z, loggedAt}, ... } -- one array-style
+-- (never string-keyed) table per CONNECTED player, oldest points evicted
+-- first. TrackableLog above is the event-based cousin -- see this section's
+-- own header for why the two are kept deliberately separate. Ephemeral,
+-- in-memory only, cleared entirely on that source's own playerDropped (see
+-- the bottom of this file) -- never persisted, same "live-session data, not
+-- account data" posture TrackableLog's own header already documents for
+-- itself.
+local PositionTrail = {}
+
+-- Per-OBSERVER (the QUERYING K9's own source) stable colour-slot
+-- assignment. ScentVisionColorSlots[observerSource][slotIndex] =
+-- targetSource -- see ResolveScentVisionColors below for the full stability
+-- rule (owner's own words: "hold a colour stable for as long as that trail
+-- stays in the visible set, reassign only when it drops out entirely").
+-- Bounded at (connected observers) x maxVisibleTrails entries, trivial
+-- regardless of population -- cleared on the OBSERVING source's own
+-- playerDropped.
+local ScentVisionColorSlots = {}
+
+local ScentVisionQueryCooldown = NewCooldown()
+ScentVisionQueryCooldown.RegisterPlayerDropped()
+
+-- How often this thread merely re-checks Config.Features.ScentVision while
+-- the feature is off -- cheap, matches client/tracking.lua's own
+-- gunpowder-capture-thread idle-poll precedent for the identical
+-- "always-existing thread, real work only while the flag is on" shape.
+local SCENT_VISION_CAPTURE_IDLE_MS = 5000
+
+--- Simple clamp-and-warn for a ScentVision numeric field that is NOT a
+--- millisecond threshold (those go through ResolveConfiguredThresholdMs at
+--- each of their own call sites below instead -- see server/cooldowns.lua's
+--- own header for why that specific helper exists and is reused rather than
+--- duplicated). This one is for a plain count/distance floor -- clamps and
+--- warns once per bad read, never throws, same "clamp and warn, never
+--- assert" posture this whole resource applies to every operator-editable
+--- Config field (a bare assert here would kill every registration below it
+--- for this file's whole uptime over one bad number in a 2,000+ line
+--- config.lua).
+--- @param configuredValue any
+--- @param fallback number
+--- @param minAllowed number
+--- @param configKeyName string
+--- @return number
+local function ResolveScentVisionNumber(configuredValue, fallback, minAllowed, configKeyName)
+    if type(configuredValue) == 'number' and configuredValue == configuredValue and configuredValue >= minAllowed then
+        return configuredValue
+    end
+    print(('[qbx_k9unit] ScentVision: %s must be a number >= %s (found: %s) -- falling back to %s.')
+        :format(configKeyName, tostring(minAllowed), tostring(configuredValue), tostring(fallback)))
+    return fallback
+end
+
+--- Drops every already-expired point from `bucket` IN PLACE, evaluated
+--- against EACH POINT'S OWN `loggedAt` timestamp compared to `now` -- never
+--- a decremented per-frame countdown (owner's own explicit requirement: a
+--- stutter, an alt-tab, or a paused resource must never stretch a 45s dot
+--- into something longer). Used both at CAPTURE time (discard-on-write,
+--- below) and by the periodic sweep thread further below (for a person who
+--- has stopped moving and so stopped triggering the on-write sweep).
+--- @param bucket table
+--- @param now number
+--- @param lifetimeMs number
+local function DiscardExpiredScentVisionPoints(bucket, now, lifetimeMs)
+    local i = 1
+    while i <= #bucket do
+        if (now - bucket[i][4]) >= lifetimeMs then
+            table.remove(bucket, i) -- cheap: bucket is capped at maxPointsPerPerson (15 shipped), never a real hot-path array
+        else
+            i = i + 1
+        end
+    end
+end
+
+--- Records one fresh sample of `src`'s own live position, IF they have
+--- moved far enough since their own last recorded point. DISCARD ON WRITE
+--- (owner's own explicit instruction): every call first drops this SAME
+--- person's already-expired points before deciding whether to append a new
+--- one -- never accumulate-then-filter-only-at-read.
+--- @param src number
+--- @param coords vector3
+--- @param now number
+--- @param minMovement number
+--- @param maxPoints number
+--- @param lifetimeMs number
+local function RecordScentVisionPoint(src, coords, now, minMovement, maxPoints, lifetimeMs)
+    local bucket = PositionTrail[src]
+    if not bucket then
+        bucket = {}
+        PositionTrail[src] = bucket
+    end
+
+    DiscardExpiredScentVisionPoints(bucket, now, lifetimeMs)
+
+    local last = bucket[#bucket]
+    if last then
+        local dx, dy, dz = coords.x - last[1], coords.y - last[2], coords.z - last[3]
+        if (dx * dx + dy * dy + dz * dz) < (minMovement * minMovement) then
+            return -- hasn't moved far enough since their own last recorded point
+        end
+    end
+
+    bucket[#bucket + 1] = { coords.x, coords.y, coords.z, now }
+
+    -- Hard count ceiling, independent of the age-based discard above -- see
+    -- this section's own header "STORAGE ceiling" note for why this is the
+    -- number this pass's memory math is actually computed from.
+    while #bucket > maxPoints do
+        table.remove(bucket, 1)
+    end
+end
+
+-- CAPTURE THREAD -- population-wide, unconditional while the feature flag
+-- is on (mirrors this file's own established "capture is population-wide by
+-- design" posture already documented above for blood/gunpowder/scent --
+-- ScentVision is not a suspect-targeted mechanic, it is a general "who
+-- walked through here" reveal). `Wait` is the FIRST statement of every pass
+-- through this loop, matching PruneTrackableLogs' own thread above and this
+-- resource's general sweep-thread convention.
+CreateThread(function()
+    while true do
+        if Config.Features.ScentVision then
+            local svConfig = Config.Tracking.ScentVision or {}
+            local interval = ResolveConfiguredThresholdMs(svConfig.sampleIntervalMs, 4000, 'Config.Tracking.ScentVision.sampleIntervalMs')
+            Wait(interval)
+
+            local minMovement = ResolveScentVisionNumber(svConfig.minSampleMovementMeters, 2.0, 0.0, 'Config.Tracking.ScentVision.minSampleMovementMeters')
+            local maxPoints = ResolveScentVisionNumber(svConfig.maxPointsPerPerson, 15, 1, 'Config.Tracking.ScentVision.maxPointsPerPerson')
+            local lifetimeMs = ResolveConfiguredThresholdMs(svConfig.dotLifetimeMs, 45000, 'Config.Tracking.ScentVision.dotLifetimeMs')
+            local now = GetGameTimer()
+
+            for _, playerIdStr in ipairs(GetPlayers()) do
+                local src = tonumber(playerIdStr)
+                if src then
+                    local ped = GetPlayerPed(src)
+                    if ped ~= 0 then
+                        RecordScentVisionPoint(src, GetEntityCoords(ped), now, minMovement, maxPoints, lifetimeMs)
+                    end
+                end
+            end
+        else
+            Wait(SCENT_VISION_CAPTURE_IDLE_MS)
+        end
+    end
+end)
+
+--- Age-based sweep for PositionTrail, on its OWN independent thread/cadence
+--- (TRACKABLE_LOG_PRUNE_INTERVAL_MS, the same interval PruneTrackableLogs'
+--- own thread already uses above, reused here for consistency rather than
+--- inventing a second magic number -- kept as a SEPARATE thread rather than
+--- folded into that existing one so this section stays self-contained and
+--- does not require editing that earlier, already-tested thread body).
+--- Belt-and-suspenders alongside RecordScentVisionPoint's own
+--- discard-on-write above, for a person who has stopped moving (and so
+--- stopped triggering that on-write sweep) or disconnected without a clean
+--- playerDropped firing for some reason. Drops the whole bucket once it
+--- holds no remaining live points, so an idle/departed player's entry does
+--- not linger in PositionTrail forever.
+local function PruneScentVisionPoints()
+    local svConfig = Config.Tracking.ScentVision or {}
+    local lifetimeMs = ResolveConfiguredThresholdMs(svConfig.dotLifetimeMs, 45000, 'Config.Tracking.ScentVision.dotLifetimeMs')
+    local now = GetGameTimer()
+
+    for src, bucket in pairs(PositionTrail) do
+        DiscardExpiredScentVisionPoints(bucket, now, lifetimeMs)
+        if #bucket == 0 then
+            PositionTrail[src] = nil
+        end
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait(TRACKABLE_LOG_PRUNE_INTERVAL_MS)
+        PruneScentVisionPoints()
+    end
+end)
+
+--- @return table[] -- Config.Tracking.ScentVision.palette, defensively
+--- defaulted to a single fallback swatch if config.lua's own array is
+--- missing/empty (should never happen with a shipped config.lua -- see this
+--- section's own load-time sanity check above for the "too SHORT" case,
+--- which degrades to colour reuse rather than this near-impossible "empty"
+--- case).
+local function ResolveScentVisionPalette()
+    local palette = Config.Tracking.ScentVision and Config.Tracking.ScentVision.palette
+    if type(palette) == 'table' and #palette > 0 then
+        return palette
+    end
+    return { { r = 255, g = 255, b = 255 } }
+end
+
+--- Resolves a STABLE colour for each entry in `visibleSources` (already
+--- ranked nearest-first, length already capped at maxVisibleTrails by the
+--- caller) for THIS ONE observer. Reuses `observerSource`'s own existing
+--- slot for a trail that was already visible on that same observer's last
+--- query; only hands out a fresh slot to a trail newly entering the visible
+--- set; frees a slot the INSTANT its trail is no longer anywhere in the
+--- current visible set -- never merely because it slipped a rank within it.
+--- This is deliberately PER-OBSERVER state (two different K9s can, and
+--- will, assign the same suspect two different colours, independently) and
+--- deliberately PROXIMITY-scoped rather than a global per-citizenid hash --
+--- see this section's own header for why: the owner's own resolution to
+--- "colours only for a handful near the dog" is what makes a colour
+--- COLLISION between two SIMULTANEOUSLY VISIBLE trails structurally
+--- impossible (one fixed swatch per slot, and never more slots handed out
+--- than `visibleSources` has entries), not merely statistically unlikely.
+--- @param observerSource number
+--- @param visibleSources number[]
+--- @return table<number, table> colorBySource
+local function ResolveScentVisionColors(observerSource, visibleSources)
+    local palette = ResolveScentVisionPalette()
+
+    local slots = ScentVisionColorSlots[observerSource]
+    if not slots then
+        slots = {}
+        ScentVisionColorSlots[observerSource] = slots
+    end
+
+    local stillVisible = {}
+    for _, src in ipairs(visibleSources) do stillVisible[src] = true end
+
+    -- Free a slot ONLY when its trail has left the visible set ENTIRELY --
+    -- owner's own explicit rule: never reassign merely because a trail's
+    -- RANK moved within an already-visible set.
+    for slotIndex, holder in pairs(slots) do
+        if not stillVisible[holder] then
+            slots[slotIndex] = nil
+        end
+    end
+
+    local slotOfSource = {}
+    for slotIndex, holder in pairs(slots) do
+        slotOfSource[holder] = slotIndex
+    end
+
+    local colorBySource = {}
+    local nextFreeSlot = 1
+    for _, src in ipairs(visibleSources) do
+        local slotIndex = slotOfSource[src]
+        if not slotIndex then
+            while slots[nextFreeSlot] ~= nil do
+                nextFreeSlot = nextFreeSlot + 1
+            end
+            slotIndex = nextFreeSlot
+            slots[slotIndex] = src
+            slotOfSource[src] = slotIndex
+        end
+        colorBySource[src] = palette[((slotIndex - 1) % #palette) + 1]
+    end
+
+    return colorBySource
+end
+
+--- Owner-directed pass ("scent vision" keybind). Resolves the caller's own
+--- live server position (never a client-supplied one) and returns AT MOST
+--- Config.Tracking.ScentVision.maxVisibleTrails distinct OTHER connected
+--- players' own recent walked-path points, nearest trail first, each
+--- ALREADY coloured server-side (see ResolveScentVisionColors above) -- the
+--- client never learns WHO a dot belongs to, never learns about anyone
+--- outside range/the visible-set cap, and never receives the server's whole
+--- population regardless of how many people are actually connected. See
+--- this section's own header for the full per-query cost bound.
+lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
+    if not Config.Features.ScentVision then return { points = {} } end
+    if not HasK9Access(source) then return { points = {} } end
+
+    -- PER-PERSON FEATURE CONTROL -- same shared 4-step resolution as
+    -- Scent/Blood/Gunpowder above (IsTrackingFeaturePermittedForCitizenId),
+    -- checked BEFORE the query cooldown below is ever consumed, same "a
+    -- block must never burn a cooldown slot" ordering findTrackableSource
+    -- already establishes.
+    local callerPlayer = exports.qbx_core:GetPlayer(source)
+    local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
+    if not callerCitizenid or not IsTrackingFeaturePermittedForCitizenId(callerCitizenid, 'ScentVision') then
+        return { points = {} }
+    end
+
+    local svConfig = Config.Tracking.ScentVision or {}
+    local now = GetGameTimer()
+    local cooldownMs = ResolveConfiguredThresholdMs(svConfig.queryCooldownMs, 1000, 'Config.Tracking.ScentVision.queryCooldownMs')
+    if not ScentVisionQueryCooldown.Consume(source, cooldownMs, now) then
+        return { points = {} } -- rate-limited -- same bare, reasonless shape every other denial in this callback uses
+    end
+
+    local ped = GetPlayerPed(source)
+    if ped == 0 then return { points = {} } end
+    local myCoords = GetEntityCoords(ped)
+
+    local range = ResolveScentVisionNumber(svConfig.queryRangeMeters, 40.0, 1.0, 'Config.Tracking.ScentVision.queryRangeMeters')
+    local rangeSq = range * range
+    local lifetimeMs = ResolveConfiguredThresholdMs(svConfig.dotLifetimeMs, 45000, 'Config.Tracking.ScentVision.dotLifetimeMs')
+    local maxVisible = ResolveScentVisionNumber(svConfig.maxVisibleTrails, 5, 1, 'Config.Tracking.ScentVision.maxVisibleTrails')
+    local maxPerTrail = ResolveScentVisionNumber(svConfig.queryMaxPointsPerTrail, 12, 1, 'Config.Tracking.ScentVision.queryMaxPointsPerTrail')
+
+    -- Rank every OTHER connected player with at least one still-live point
+    -- in range by THAT trail's OWN nearest point -- never the caller's own
+    -- trail (showing a K9 handler their own footprints is not useful; see
+    -- this section's header).
+    local ranked = {}
+    for src, bucket in pairs(PositionTrail) do
+        if src ~= source then
+            local nearestDistSq
+            for _, pt in ipairs(bucket) do
+                if (now - pt[4]) < lifetimeMs then
+                    local dx, dy, dz = pt[1] - myCoords.x, pt[2] - myCoords.y, pt[3] - myCoords.z
+                    local distSq = dx * dx + dy * dy + dz * dz
+                    if distSq <= rangeSq and (not nearestDistSq or distSq < nearestDistSq) then
+                        nearestDistSq = distSq
+                    end
+                end
+            end
+            if nearestDistSq then
+                ranked[#ranked + 1] = { src = src, distSq = nearestDistSq }
+            end
+        end
+    end
+    table.sort(ranked, function(a, b) return a.distSq < b.distSq end)
+
+    -- DEGRADE RULE (owner's own explicit instruction): under load, drop the
+    -- FURTHEST trail first -- `ranked` is already nearest-first, so simple
+    -- truncation IS that rule.
+    local visibleSources = {}
+    for i = 1, math.min(#ranked, maxVisible) do
+        visibleSources[#visibleSources + 1] = ranked[i].src
+    end
+
+    local colorBySource = ResolveScentVisionColors(source, visibleSources)
+
+    local points = {}
+    for _, src in ipairs(visibleSources) do
+        local bucket = PositionTrail[src]
+        local color = colorBySource[src]
+        if bucket and color then
+            -- Nearest-first WITHIN this one trail too, so a per-trail cap
+            -- also drops the FURTHEST points of that one trail first.
+            local trailPoints = {}
+            for _, pt in ipairs(bucket) do
+                local age = now - pt[4]
+                if age < lifetimeMs then
+                    local dx, dy, dz = pt[1] - myCoords.x, pt[2] - myCoords.y, pt[3] - myCoords.z
+                    local distSq = dx * dx + dy * dy + dz * dz
+                    if distSq <= rangeSq then
+                        trailPoints[#trailPoints + 1] = { x = pt[1], y = pt[2], z = pt[3], ageMs = age, distSq = distSq }
+                    end
+                end
+            end
+            table.sort(trailPoints, function(a, b) return a.distSq < b.distSq end)
+
+            for i = 1, math.min(#trailPoints, maxPerTrail) do
+                local tp = trailPoints[i]
+                points[#points + 1] = {
+                    x = tp.x, y = tp.y, z = tp.z,
+                    -- RELATIVE age, in milliseconds, as measured by THIS
+                    -- SERVER's own clock at THIS instant -- never a raw
+                    -- GetGameTimer() timestamp handed to the client. Server
+                    -- and client each run their OWN independent
+                    -- GetGameTimer() counter (process uptime, not a shared
+                    -- wall clock), so sending a raw server timestamp for the
+                    -- client to compare against its own GetGameTimer() would
+                    -- be comparing two unrelated counters. The client instead
+                    -- anchors this relative age to ITS OWN GetGameTimer() the
+                    -- instant this response arrives and counts up locally
+                    -- from there -- see client/tracking.lua's own comment on
+                    -- this exact field for the receiving side.
+                    ageMs = tp.ageMs,
+                    r = color.r, g = color.g, b = color.b,
+                }
+            end
+        end
+    end
+
+    return {
+        points = points,
+        -- Echoed back so the client fades/expires every point in THIS
+        -- response against the SAME lifetime THIS SERVER actually enforced
+        -- for it, rather than trusting its own possibly-stale local config
+        -- copy -- informational/defense-in-depth, same posture
+        -- findTrackableSource's own `breaksAtWater` field already documents
+        -- for itself above.
+        dotLifetimeMs = lifetimeMs,
+    }
+end)
+
 AddEventHandler('playerDropped', function(_reason)
     local src = source
     PendingTrackArrival[src] = nil
+    -- SCENT VISION cleanup -- see PositionTrail's/ScentVisionColorSlots' own
+    -- declaration comments above. Clearing PositionTrail[src] here (rather
+    -- than waiting for PruneScentVisionPoints' own periodic sweep) also
+    -- means every OTHER observer's ResolveScentVisionColors call frees any
+    -- slot this disconnecting player held on their own very next query --
+    -- no special cross-observer cleanup is needed for that half, since a
+    -- source with no PositionTrail entry can never again appear in a future
+    -- query's `ranked` candidate list for anyone.
+    PositionTrail[src] = nil
+    ScentVisionColorSlots[src] = nil
 end)

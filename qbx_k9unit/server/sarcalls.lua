@@ -1,8 +1,8 @@
 --[[
     qbx_k9unit/server/sarcalls.lua
 
-    Missing-person / search-and-rescue calls -- K9_IDEAS.md §3. Sibling to
-    server/scenttrail.lua (K9_IDEAS.md §2's "follow your nose" hunting
+    Missing-person / search-and-rescue calls -- PROJECT_HISTORY.md §3. Sibling to
+    server/scenttrail.lua (PROJECT_HISTORY.md §2's "follow your nose" hunting
     feel): same core shape (a hidden point near the officer's own current
     position, closed on purely by a felt distance cue, never a revealed
     coordinate), pointed at a different kind of call -- nobody is a
@@ -33,7 +33,7 @@
     Identical reasoning to server/scenttrail.lua's own "WHY THE COORDINATE
     NEVER LEAVES THIS FILE" section, restated here because it is equally
     load-bearing for this file: the K9 is never told where the spot is
-    (K9_IDEAS.md §2's "you don't get told where the thing is... you're
+    (PROJECT_HISTORY.md §2's "you don't get told where the thing is... you're
     guided toward it" framing, which §3 explicitly reuses). The tick loop
     below only ever PUSHES a coarse tier label ('cold'/'warm'/'hot'/
     'burning') to the caller's own client -- never the target's coordinate,

@@ -8,36 +8,25 @@
     NUI page, alongside its current, harmless-no-op PlaySoundFromEntity
     call into the RAGE audio engine.
 
-    CORRECTED THIS PASS (was stale): earlier drafts of this header described
-    the one-line PlaySoundOnNetworkEntity -> PlayK9Sound delegate call as
-    "STILL NEEDED" / not yet wired. That is no longer true and was found
-    stale on re-read: client/main.lua's PlaySoundOnNetworkEntity function
-    body already calls `if type(PlayK9Sound) == 'function' then
-    PlayK9Sound(netId, soundName) end` immediately after its existing
-    PlaySoundFromEntity call, with exactly the runtime-existence guard this
-    file's own "GATING" section below requires. This file itself was NOT
-    edited to make that happen (still true) — the wiring lives entirely in
-    client/main.lua, owned by someone else — but readers of this header
-    should not go looking for a pending integration note; there isn't one
-    anymore. (fxmanifest.lua's own load-order comment on this file used to
-    say "Has no caller yet", which was ALSO stale for the same reason — that
-    has since been corrected there too, by this file's manifest owner, to
-    describe the live PlaySoundOnNetworkEntity -> PlayK9Sound wiring
-    directly; nothing left to flag here.)
+    client/main.lua's PlaySoundOnNetworkEntity function body already calls
+    `if type(PlayK9Sound) == 'function' then PlayK9Sound(netId, soundName)
+    end` immediately after its existing PlaySoundFromEntity call, with
+    exactly the runtime-existence guard this file's own "GATING" section
+    below requires. This file itself is not edited to make that happen —
+    the wiring lives entirely in client/main.lua.
 
     AUTHORITATIVE BACKGROUND — read before touching this file:
-      - DEVELOPER_REFERENCE.md#dependencies-and-audio (the pass
-        that concluded extending this resource's already-live NUI bridge
-        is cheaper than authoring a real .awc/dat151/dat54 RAGE audio bank
-        — this file, plus html/app.js's matching additions, IS that
-        extension, built for real this pass, not just proposed).
+      - DEVELOPER_REFERENCE.md#dependencies-and-audio (concluded that
+        extending this resource's already-live NUI bridge is cheaper than
+        authoring a real .awc/dat151/dat54 RAGE audio bank — this file,
+        plus html/app.js's matching additions, IS that extension).
       - DEVELOPER_REFERENCE.md#phase-5-research (confirms a
         Web Audio GainNode does continuous volume scripting natively, with
         zero dependency on any FiveM native, RAGE metadata, or authored
         RTPC variable — the reason this path can do distance-based gain at
         all. Also confirms the ecosystem's own most-used NUI audio library,
         plunkettscott/interact-sound, has a still-open TODO for even the
-        SIMPLE, single-factor version of this — treat this file's falloff
+        SIMPLE, single-factor version of this. Treat this file's falloff
         math as new, unverified-in-the-wild plumbing, not a copy of a
         proven pattern.)
       - client/hud.lua (the existing NUI bridge file this one is modeled
@@ -51,15 +40,15 @@
     WHAT THIS FILE DELIBERATELY DOES NOT DO:
 
       - Does NOT ship, fabricate, download, or reference the bytes of any
-        real .ogg file. No such file exists in this resource as of this
-        pass, and none was added to produce this file. This file's entire
-        job is the PLUMBING that plays a real file once a server operator
-        drops one in at html/sounds/<key>.ogg — see ToAudioFileKey() below
-        for the exact name this file will look up, and html/app.js's
-        loadSoundBuffer() for the fetch path convention. Every play attempt
-        against a not-yet-supplied file degrades to a silent, zero-console-
-        output no-op end to end (this file never even learns whether the
-        file existed — see "NO ACK CHANNEL" below).
+        real .ogg file. No such file exists in this resource, and none was
+        added to produce this file. This file's entire job is the PLUMBING
+        that plays a real file once a server operator drops one in at
+        html/sounds/<key>.ogg — see ToAudioFileKey() below for the exact
+        name this file will look up, and html/app.js's loadSoundBuffer()
+        for the fetch path convention. Every play attempt against a
+        not-yet-supplied file degrades to a silent, zero-console-output
+        no-op end to end (this file never even learns whether the file
+        existed — see "NO ACK CHANNEL" below).
 
       - Does NOT call SetNuiFocus, anywhere. This resource's one NUI page
         (html/index.html) has never called it — client/hud.lua's own header
@@ -76,9 +65,7 @@
       - Does NOT edit client/main.lua. This file only DEFINES PlayK9Sound/
         StopK9Sound/IsK9SoundActive; client/main.lua's PlaySoundOnNetworkEntity
         is the one that CALLS PlayK9Sound (guarded with
-        `type(PlayK9Sound) == 'function'`) — already wired there as of this
-        pass, not a pending integration. See this file's header correction
-        above.
+        `type(PlayK9Sound) == 'function'`) — already wired there.
 
       - Does NOT add a JS -> Lua NUI callback / RegisterNUICallback of any
         kind. Every message this file sends is one-directional
@@ -95,8 +82,9 @@
         attempts to play a locally-fetched, read-only audio file at a
         gain the caller also controls" — a purely local, purely cosmetic
         effect with no server-authoritative state and no other player ever
-        exposed to it. Flagged for coder-security's own read regardless,
-        per this resource's standing convention.
+        exposed to it. Disclosed here regardless, per this resource's
+        standing convention of naming trust-relevant details even when the
+        practical severity is low.
 
       - NO ACK CHANNEL, ON PURPOSE, UNLIKE client/hud.lua's 'hud:ready':
         client/hud.lua's design deliberately waits for an explicit
@@ -141,14 +129,13 @@
     (config.lua's own Config.AdvancedBarkRadial header comment) —
     ProximityAudioFX, if it is ever built on top of this bridge, would
     need this flag true anyway for the same reason. client/main.lua's
-    one-line delegate call (reported separately) MUST guard with
-    `type(PlayK9Sound) == 'function'` before calling it, per this
-    resource's own established "runtime existence guard, not a load-order
-    assumption" convention (see config.lua's globals comment on
-    RestoreInjury/AwardXP/GetXPTier for the precedent this follows) — with
-    Config.Features.BasicBarkSounds false, PlayK9Sound simply does not
-    exist as a global at all, and that guard is what keeps that call site
-    from hard-erroring in that state.
+    one-line delegate call MUST guard with `type(PlayK9Sound) ==
+    'function'` before calling it, per this resource's own established
+    "runtime existence guard, not a load-order assumption" convention (see
+    config.lua's globals comment on RestoreInjury/AwardXP/GetXPTier for the
+    precedent this follows) — with Config.Features.BasicBarkSounds false,
+    PlayK9Sound simply does not exist as a global at all, and that guard is
+    what keeps that call site from hard-erroring in that state.
 ]]
 
 if not Config.Features.BasicBarkSounds then return end
@@ -172,12 +159,12 @@ local AUDIO_MAX_DISTANCE = 30.0
 --- caller in another file (client/proximityaudio.lua's own
 --- PROXIMITY_TRIGGER_DISTANCE_METERS clamp) can stay live-consistent with
 --- this file's actual falloff cutoff instead of hand-syncing a duplicate
---- constant of its own. Added this pass specifically for that consumer,
---- after the root .luacheckrc `globals` list was extended to allow it (see
---- that file's own comment on this entry). Every caller MUST still guard
---- with `type(GetK9AudioMaxDistance) == 'function'` before calling this --
---- this resource's own "runtime existence guard, not a load-order
---- assumption" convention (config.lua's globals comment on RestoreInjury/
+--- constant of its own. Added specifically for that consumer, after the
+--- root .luacheckrc `globals` list was extended to allow it (see that
+--- file's own comment on this entry). Every caller MUST still guard with
+--- `type(GetK9AudioMaxDistance) == 'function'` before calling this -- this
+--- resource's own "runtime existence guard, not a load-order assumption"
+--- convention (config.lua's globals comment on RestoreInjury/
 --- AwardXP/GetXPTier is the precedent) -- this file does not define this
 --- function at all while Config.Features.BasicBarkSounds is false, no
 --- matter what fxmanifest.lua's own load order promises.
@@ -189,12 +176,11 @@ end
 -- How often a LOOPING sound's gain gets recomputed against its source
 -- entity's live position (see PlayK9Sound's `opts.loop`). Only relevant to
 -- loop=true playback — client/proximityaudio.lua's continuous ambient
--- growl loop (Config.Features.ProximityAudioFX) is this pass's real
--- consumer (corrected from an earlier draft of this comment, which
--- predated that file and claimed "nothing... passes loop=true yet").
--- Deliberately slower than client/hud.lua's 250ms vitals poll: a loop's
--- volume drifting smoothly over half a second is inaudible as "steps" the
--- way a fast-changing numeric HUD readout would be.
+-- growl loop (Config.Features.ProximityAudioFX) is the real consumer of
+-- loop=true playback. Deliberately slower than client/hud.lua's 250ms
+-- vitals poll: a loop's volume drifting smoothly over half a second is
+-- inaudible as "steps" the way a fast-changing numeric HUD readout would
+-- be.
 local AUDIO_GAIN_POLL_MS = 500
 
 -- Hard safety ceiling on a looping sound's own polling thread. If nothing
@@ -217,20 +203,18 @@ local AUDIO_MAX_LOOP_MS = 60000
 --- unrelated to whether a real .ogg file exists yet at the key they map
 --- to here.
 ---
---- ADDED THIS PASS: 'DoorScratch'/'DoorNudge' (client/movement.lua's
---- DOOR_SCRATCH_SOUND_NAME/DOOR_NUDGE_SOUND_NAME), now that those two call
---- sites route through PlayK9Sound at all (see that file's own comment on
---- DOOR_SCRATCH_SOUND_NAME for the fix this closes — they used to call the
---- native PlaySoundFromEntity directly and never reached this file). Neither
---- key has a shipped html/sounds/*.ogg as of this pass (only bark/
---- bark_alert/bark_aggressive/bark_calm/growl_ambient do); listed explicitly
---- anyway, same as the four Bark entries below, purely so the intended
---- filename (door_scratch/door_nudge, underscored to match this table's own
---- naming convention) is documented rather than left to ToAudioFileKey()'s
---- best-effort fallback transform (which would guess 'doorscratch'/
---- 'doornudge' instead — still a harmless no-op either way, just a
---- less-obvious filename for an operator to guess when eventually adding
---- the asset).
+--- 'DoorScratch'/'DoorNudge' (client/movement.lua's
+--- DOOR_SCRATCH_SOUND_NAME/DOOR_NUDGE_SOUND_NAME) route through
+--- PlayK9Sound too (see that file's own comment on
+--- DOOR_SCRATCH_SOUND_NAME). Neither key has a shipped html/sounds/*.ogg
+--- (only bark/bark_alert/bark_aggressive/bark_calm/growl_ambient do);
+--- listed explicitly anyway, same as the four Bark entries below, purely
+--- so the intended filename (door_scratch/door_nudge, underscored to
+--- match this table's own naming convention) is documented rather than
+--- left to ToAudioFileKey()'s best-effort fallback transform (which would
+--- guess 'doorscratch'/'doornudge' instead — still a harmless no-op
+--- either way, just a less-obvious filename for an operator to guess when
+--- eventually adding the asset).
 local SOUND_NAME_TO_FILE_KEY = {
     ['Bark']            = 'bark',           -- client/main.lua's BARK_SOUND_NAME, the Phase 1 generic bark
     ['Bark_Alert']      = 'bark_alert',      -- config.lua's Config.AdvancedBarkRadial
@@ -312,23 +296,21 @@ local function GainToEntity(entity)
     return DistanceToGain(distance)
 end
 
---- The one entry point client/main.lua's PlaySoundOnNetworkEntity could
---- delegate to (NOT wired there as of this pass — see this file's header
---- "WHAT THIS FILE DELIBERATELY DOES NOT DO" / the integration note handed
---- back alongside this file). Resolves netId to a live, currently-
---- streamed-in entity exactly the way PlaySoundOnNetworkEntity itself
---- already does, computes THIS client's own distance-based gain to it, and
---- pushes an 'audio:play' SendNUIMessage into html/app.js — the only place
---- that actually touches Web Audio. Every guard below fails CLOSED to
---- "don't send the message" rather than sending a payload already known
---- here to be meaningless, mirroring client/hud.lua's own
---- ReadVitals/clampPercent defensiveness (html/app.js additionally
---- defends its own side of this same contract independently, per this
---- codebase's standing "assume the other side of an NUI bridge can be
---- wrong or absent" posture).
+--- The one entry point client/main.lua's PlaySoundOnNetworkEntity
+--- delegates to (see this file's header for the wiring). Resolves netId to
+--- a live, currently-streamed-in entity exactly the way
+--- PlaySoundOnNetworkEntity itself already does, computes THIS client's
+--- own distance-based gain to it, and pushes an 'audio:play' SendNUIMessage
+--- into html/app.js — the only place that actually touches Web Audio.
+--- Every guard below fails CLOSED to "don't send the message" rather than
+--- sending a payload already known here to be meaningless, mirroring
+--- client/hud.lua's own ReadVitals/clampPercent defensiveness (html/app.js
+--- additionally defends its own side of this same contract independently,
+--- per this codebase's standing "assume the other side of an NUI bridge
+--- can be wrong or absent" posture).
 --- @param netId number netId of the entity the sound should appear to come from — same resolution path as client/main.lua's ResolveNetworkEntity/PlaySoundOnNetworkEntity
 --- @param soundName string one of this resource's existing placeholder sound-name strings (client/main.lua's BARK_SOUND_NAME, config.lua's Config.AdvancedBarkRadial `sound` values) — NOT a filename; see ToAudioFileKey() above for the translation
---- @param opts table? optional `{ loop: boolean }`. client/proximityaudio.lua's ambient growl loop is the current loop=true consumer (see this file's header correction near AUDIO_GAIN_POLL_MS).
+--- @param opts table? optional `{ loop: boolean }`. client/proximityaudio.lua's ambient growl loop is the current loop=true consumer (see this file's header note near AUDIO_GAIN_POLL_MS).
 --- @return number? id the id to later pass to StopK9Sound (only meaningful for loop=true), or nil if nothing was sent (bad args / entity not resolvable on this client)
 function PlayK9Sound(netId, soundName, opts)
     if type(soundName) ~= 'string' or soundName == '' then return nil end
@@ -414,22 +396,22 @@ function StopK9Sound(id)
     SendNUIMessage({ action = 'audio:stop', data = { id = id } })
 end
 
---- ADDED THIS PASS (client/proximityaudio.lua, Config.Features.
---- ProximityAudioFX) -- a pure Lua-side query helper, NOT a new NUI message:
---- it reads this file's own private `activeLoops` bookkeeping table and
---- sends nothing to html/app.js, so it carries zero risk to the "payload
---- shapes must match byte-for-byte" contract that file's own header warns
---- about. Exists because AUDIO_MAX_LOOP_MS above (this file's own 60s
---- safety ceiling) can force-stop a long-lived loop out from under a caller
---- that never itself called StopK9Sound -- a caller managing a
---- longer-than-60s ambient effect (the realistic first real one:
---- ProximityAudioFX's continuous proximity loop) needs a way to notice that
---- happened on its OWN polling cadence and decide whether to re-issue a
---- fresh PlayK9Sound call to keep the effect going. Deliberately NOT an
---- auto-renew mechanism on this file's own side -- see AUDIO_MAX_LOOP_MS's
---- own comment: a caller bug should not silently become "loops forever"
---- just because this query helper exists; renewal, if any, is entirely the
---- CALLER's decision, made with fresh information each time.
+--- (client/proximityaudio.lua, Config.Features.ProximityAudioFX) -- a pure
+--- Lua-side query helper, NOT a new NUI message: it reads this file's own
+--- private `activeLoops` bookkeeping table and sends nothing to
+--- html/app.js, so it carries zero risk to the "payload shapes must match
+--- byte-for-byte" contract that file's own header warns about. Exists
+--- because AUDIO_MAX_LOOP_MS above (this file's own 60s safety ceiling)
+--- can force-stop a long-lived loop out from under a caller that never
+--- itself called StopK9Sound -- a caller managing a longer-than-60s
+--- ambient effect (the realistic first real one: ProximityAudioFX's
+--- continuous proximity loop) needs a way to notice that happened on its
+--- OWN polling cadence and decide whether to re-issue a fresh PlayK9Sound
+--- call to keep the effect going. Deliberately NOT an auto-renew mechanism
+--- on this file's own side -- see AUDIO_MAX_LOOP_MS's own comment: a
+--- caller bug should not silently become "loops forever" just because this
+--- query helper exists; renewal, if any, is entirely the CALLER's
+--- decision, made with fresh information each time.
 --- @param id number an id previously returned by PlayK9Sound(..., {loop = true})
 --- @return boolean active true if this file still considers `id` a live, tracked loop (not yet stopped, not yet past its own AUDIO_MAX_LOOP_MS ceiling)
 function IsK9SoundActive(id)

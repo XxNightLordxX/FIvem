@@ -2,7 +2,7 @@
     tests/sarcalls_spec.lua
 
     Covers BOTH halves of missing-person / search-and-rescue calls
-    (K9_IDEAS.md §3) in one file, per this task's own file-ownership
+    (PROJECT_HISTORY.md §3) in one file, per this task's own file-ownership
     constraint (only ONE new spec file permitted for this feature). Two
     independent sandboxes, one per file, following tests/scenttrail_spec.lua's
     own established two-section convention for this exact class of sibling

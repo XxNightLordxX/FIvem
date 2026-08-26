@@ -698,7 +698,7 @@ t.test('EIGHTH XP-FARM FIX (cross-file integration): once the shared budget has 
 end)
 
 -- ============================================================================
--- QB-INVENTORY VEHICLE SEARCH FIX (coder-backend, this pass) -- ISSUES.md's
+-- QB-INVENTORY VEHICLE SEARCH FIX (coder-backend, this pass) -- KNOWN_ISSUES.md's
 -- "vehicle search always returns empty on qb-inventory" gap.
 --
 -- ROOT CAUSE, CONFIRMED against qbcore-framework/qb-inventory's real `main`

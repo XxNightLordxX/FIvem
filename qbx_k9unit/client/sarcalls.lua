@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/sarcalls.lua
 
-    Missing-person / search-and-rescue calls -- K9_IDEAS.md §3. Client half
+    Missing-person / search-and-rescue calls -- PROJECT_HISTORY.md §3. Client half
     of server/sarcalls.lua -- read that file's header in full first; it is
     the authoritative contract for the hunt mechanic itself (where the
     target is, how the hint tiers are decided, the XP/anti-farm reasoning,
@@ -39,7 +39,7 @@
     A CONSEQUENCE WORTH STATING EXPLICITLY: because the reveal is never
     networked, only the FINDING player's own client ever sees it -- no
     other nearby player, however close, will see the rescued hiker/found
-    item appear. That is a real, disclosed trade-off (K9_IDEAS.md's own
+    item appear. That is a real, disclosed trade-off (PROJECT_HISTORY.md's own
     "a short visual effect on one specific player's own screen" precedent,
     client/screenfx.lua) chosen deliberately over the alternative (a real,
     networked, claimed-and-tracked entity everyone could see), because the
@@ -54,7 +54,7 @@
 
     ======================================================================
     HOW THE FEEDBACK WORKS, AND WHY IT DIFFERS FROM client/scenttrail.lua's
-    CONTINUOUS PULSE-PACING: that file (K9_IDEAS.md §2) encodes distance in
+    CONTINUOUS PULSE-PACING: that file (PROJECT_HISTORY.md §2) encodes distance in
     the CADENCE of a repeating one-shot pulse (closer = faster pulses).
     This file instead reacts only to DISCRETE TIER CHANGES pushed by
     server/sarcalls.lua ('cold'/'warm'/'hot'/'burning') -- one notification
@@ -62,14 +62,14 @@
     never a continuous loop. This is a deliberate, simpler choice for this
     feature (a "getting warmer" search over a much larger area -- up to
     Config.SARCalls.maxRadius meters -- than Scent Trail Hunt's tighter
-    hunt radius), not a claim that it feels better -- K9_IDEAS.md §2/§3's
+    hunt radius), not a claim that it feels better -- PROJECT_HISTORY.md §2/§3's
     own "budget real playtesting time for this" caution applies equally
     here: HONEST CONFIDENCE GRADING, stated plainly rather than presented
     as tuned: the exact distances in Config.SARCalls (burningDistance/
     hotDistance/warmDistance) and which sound plays at which tier are a
     first-pass judgment call, not something verified to feel good in-game
     this session. The mechanic is correct and safe; the FEEL of it is
-    exactly the kind of thing this resource's own K9_IDEAS.md repeatedly
+    exactly the kind of thing this resource's own PROJECT_HISTORY.md repeatedly
     warns needs an actual playtest before being treated as final.
 
     Sounds reused, zero new assets needed (all four already ship per
@@ -81,12 +81,12 @@
       'hot'     -> 'Bark_Calm'
       'burning' -> 'Bark_Alert'
       'found'   -> 'Bark_Alert' again, PLUS K9Sit() -- the "trained final
-                   response" (K9_IDEAS.md §1's exact framing, reused here
+                   response" (PROJECT_HISTORY.md §1's exact framing, reused here
                    verbatim per §3's own suggestion, exactly like
                    client/scenttrail.lua's CompleteHunt already does).
       'cold'    -> no sound, notification only (this resource's own
                    "watch out for... doing it so often it gets annoying"
-                   caution, K9_IDEAS.md §1, applies just as much to a
+                   caution, PROJECT_HISTORY.md §1, applies just as much to a
                    losing-interest cue as a gaining-interest one).
     Every PlayK9Sound call is a ONE-SHOT (opts omitted => loop = false, per
     that function's own doc comment) against THIS client's own ped's own
@@ -642,7 +642,7 @@ RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, ca
     currentSarCallId = nil
 
     if reason == 'found' then
-        -- The "trained final response" -- K9_IDEAS.md §1's exact framing,
+        -- The "trained final response" -- PROJECT_HISTORY.md §1's exact framing,
         -- reused here per §3's own suggestion, exactly like
         -- client/scenttrail.lua's CompleteHunt does for its own hunt type.
         -- The player is never told "found!" in a toast for THIS specific

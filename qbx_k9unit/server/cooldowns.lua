@@ -1,13 +1,12 @@
 --[[
     qbx_k9unit/server/cooldowns.lua
 
-    coder-architect, DEVELOPER_REFERENCE.md item 1 ("Extract the shared
-    cooldown/TTL/mutex helper now — retroactively, not preemptively").
-    Pure structural extraction, NOT a redesign: every one of the 11
-    independent hand-rolled cooldown/mutex tables inventoried in the
-    roadmap's Phase 2 retrospective is migrated onto the constructors below
-    with its exact existing threshold, keying, and cleanup timing preserved
-    — see each call site's own comment (server/main.lua,
+    DEVELOPER_REFERENCE.md item 1 ("Extract the shared cooldown/TTL/mutex
+    helper now — retroactively, not preemptively"). Pure structural
+    extraction, not a redesign: every one of the 11 independent hand-rolled
+    cooldown/mutex tables in this resource is migrated onto the constructors
+    below with its exact existing threshold, keying, and cleanup timing
+    preserved — see each call site's own comment (server/main.lua,
     server/certifications.lua, server/tracking.lua, server/search.lua) for
     the "migrated from X, behavior unchanged" note.
 
@@ -24,19 +23,17 @@
     server/main.lua: this resource's existing convention (per both of
     those files' own headers) is that a shared file should be scoped to ONE
     responsibility so it doesn't balloon into an everything-file as later
-    phases add more call sites — certifications.lua is scoped to
+    call sites accumulate — certifications.lua is scoped to
     grant/revoke/check, main.lua to small gated actions + the leash
     subsystem. A generic timing/mutex primitive used by all four
-    server files (plus, per the roadmap's own "Order" note, whatever
-    Phase 3 combat/agility cooldown comes next) is exactly the kind of
-    cross-cutting mechanism that belongs in its own file rather than
-    attached to one of the four call sites as if it were that file's
-    private concern.
+    server files (plus whatever future combat/agility cooldown comes next)
+    is exactly the kind of cross-cutting mechanism that belongs in its own
+    file rather than attached to one of the four call sites as if it were
+    that file's private concern.
 
     THREE CONSTRUCTORS, not one over-generalized function — because the 11
     real call sites genuinely split into three different shapes, confirmed
-    by reading all four files' actual implementations (not just the
-    roadmap's summary table) before writing this:
+    by reading all four files' actual implementations before writing this:
 
     1. NewCooldown(defaultThresholdMs?) — a flat `key -> lastTouchedAtMs`
        tracker. Covers every single-level cooldown in this resource:
@@ -95,20 +92,20 @@
         by the caller's own staleness predicate and interval instead of
         each file hand-writing the loop.
 
-    DELIBERATELY NOT MIGRATED, OUT OF SCOPE FOR THIS PASS:
+    DELIBERATELY NOT MIGRATED, OUT OF SCOPE FOR THIS FILE:
     server/tracking.lua's `TrackableLog` (the blood/gunpowder event log) and
     its `PruneTrackableLogs` sweep thread are NOT one of the 11 cooldown/
     mutex tables and are NOT touched here. They're a different shape
     entirely — an append-only ARRAY of `{coords, loggedAt}` entries pruned
     by age and separately scanned-by-distance at query time, not a
-    `key -> lastTouchedAtMs` map at all. DEVELOPER_REFERENCE.md's own inventory
-    table (and its item-1 tally of exactly 11 tables) does not count
-    TrackableLog among them, and separately flags the "array of aged log
-    entries, nearest-match scan" shape as medium-term item 5
+    `key -> lastTouchedAtMs` map at all. DEVELOPER_REFERENCE.md's own
+    inventory table (and its item-1 tally of exactly 11 tables) does not
+    count TrackableLog among them, and separately flags the "array of aged
+    log entries, nearest-match scan" shape as medium-term item 5
     (`FindNearestEntity`), explicitly deferred as "worth a light look, not
-    urgent" rather than folded into this pass. Forcing it onto NewCooldown/
-    NewNestedCooldown here would be exactly the "over-generalized function"
-    the task asked this extraction to avoid.
+    urgent" rather than folded in here. Forcing it onto NewCooldown/
+    NewNestedCooldown here would be exactly the kind of over-generalized
+    function this extraction is meant to avoid.
 
     API surface below intentionally mirrors the exact read/check/stamp
     ORDER every migrated call site already used, so migrating a call site is
@@ -128,9 +125,8 @@
     cooldown pretending to have no expiry" reasoning above.
 
     ======================================================================
-    FAIL-CLOSED THRESHOLD HANDLING — SETTLED THIS PASS (coder-backend,
-    following a Phase 5 review that found the live consequence of this in
-    server/fetch.lua's releaseFetchBall, fixed separately in that file):
+    FAIL-CLOSED THRESHOLD HANDLING (the live consequence of this was found
+    in server/fetch.lua's releaseFetchBall, fixed separately in that file):
     IsOnCooldown/Consume on BOTH constructors below have always treated a
     missing/non-positive threshold as "permanently on cooldown" (fail
     closed), never as "no cooldown" — correct for this file's own stated
@@ -154,10 +150,10 @@
          exact constructor, not a report filed weeks later. Verified against
          EVERY current NewCooldown/NewNestedCooldown call site in this
          resource before landing this (grep of every call site + every
-         corresponding config.lua default, this pass's own report) — every
-         shipped default is already a positive number, so this is a new
-         backstop against FUTURE misconfiguration, not a behavior change for
-         anything currently deployed.
+         corresponding config.lua default) — every shipped default is
+         already a positive number, so this is a new backstop against
+         FUTURE misconfiguration, not a behavior change for anything
+         currently deployed.
       2. CALL TIME (inside :IsOnCooldown itself, both constructors): a
          per-call `thresholdMs` override read fresh from Config on every
          invocation (the OTHER real shape in this resource — e.g.
@@ -178,26 +174,23 @@
     alone does NOT catch NaN, since every comparison against NaN is false,
     which would otherwise slip through as "looks positive" and then make
     every later `elapsed < threshold` comparison ALSO always false —
-    fail OPEN, unlimited spam, the one outcome this whole file exists to
+    fail OPEN, unlimited spam — the one outcome this whole file exists to
     prevent). See IsValidThreshold's own doc comment below for the full
     reasoning.
 
     NOT CHANGED, DELIBERATELY: the GetGameTimer() wraparound caveat
     documented on both IsOnCooldown implementations below is a SEPARATE,
     already-disclosed issue (a ~24.85-day int32 wrap, not a
-    threshold-validity question) and still needs the coordinated,
-    reported pass its own comment already calls for — not folded into this
-    pass.
+    threshold-validity question) and still needs a coordinated fix across
+    every call-time consumer — not folded in here.
     ======================================================================
 
-    ADDENDUM (this pass, coder-backend — QA sandbox repro, re-verified
-    before landing this, not taken on the report alone): backstop 1 above
-    (constructor-time hard error) was written on the assumption that
-    "crash at resource start naming the bad value" is strictly better than
-    "silently permanent fail-closed" — true in isolation, but QA proved a
-    worse consequence that assumption hadn't accounted for. `error()`
-    thrown from the middle of a file's own top-level chunk — e.g. `local X
-    = NewCooldown(Config.Y.zMs)` sitting between other top-level
+    ADDENDUM: backstop 1 above (constructor-time hard error) was written on
+    the assumption that "crash at resource start naming the bad value" is
+    strictly better than "silently permanent fail-closed" — true in
+    isolation, but that assumption did not account for a worse consequence.
+    `error()` thrown from the middle of a file's own top-level chunk — e.g.
+    `local X = NewCooldown(Config.Y.zMs)` sitting between other top-level
     statements, which is exactly the shape every real call site in this
     resource uses — aborts execution of THAT ENTIRE FILE from that line
     onward: every function definition, RegisterNetEvent, AddEventHandler,
@@ -222,23 +215,22 @@
     RESOLUTION: `ResolveConfiguredThresholdMs` below — CLAMP AND WARN
     (print, not error) — for exactly the shape that made this reachable: a
     RAW, operator-editable Config field read straight into NewCooldown/
-    NewNestedCooldown as the constructor default. Applied at this pass's
-    own re-derived (not assumed) 11 call sites: server/combat.lua (x4:
-    BiteHoldCooldown, TakedownCooldown, TakedownTargetCooldown,
-    BiteHoldTargetCooldown), server/defense.lua (x2: AttackerReportCooldown,
-    DefenseTriggerCooldown), server/fetch.lua (x2: ThrowCooldown,
-    PickupCooldown — the latter's old `Config.FetchMechanic.pickupCooldownMs
-    or 500` idiom is REPLACED here, not layered under, since `0 or 500`
-    evaluates to `0` in Lua and never actually guarded the one value an
-    operator is most likely to set — this was a real, live gap, not a
-    hypothetical), server/kennel.lua (x1: DeployCooldown),
-    server/partnership.lua (x1: PartnerRequestCooldown), and
-    server/pursuitsprint.lua (x1: PursuitSprintCooldown — that file's own
-    PRE-EXISTING `assert` ahead of its NewCooldown call, which independently
-    hard-errored on the same input, is replaced by the same call-site
-    pattern for the same reason, not left in place beside it). Grep for
-    `ResolveConfiguredThresholdMs` across server/*.lua to keep this list
-    honest as new call sites are added.
+    NewNestedCooldown as the constructor default. Applied at the following
+    re-derived 11 call sites: server/combat.lua (x4: BiteHoldCooldown,
+    TakedownCooldown, TakedownTargetCooldown, BiteHoldTargetCooldown),
+    server/defense.lua (x2: AttackerReportCooldown, DefenseTriggerCooldown),
+    server/fetch.lua (x2: ThrowCooldown, PickupCooldown — the latter's old
+    `Config.FetchMechanic.pickupCooldownMs or 500` idiom is REPLACED here,
+    not layered under, since `0 or 500` evaluates to `0` in Lua and never
+    actually guarded the one value an operator is most likely to set — this
+    was a real, live gap, not a hypothetical), server/kennel.lua (x1:
+    DeployCooldown), server/partnership.lua (x1: PartnerRequestCooldown),
+    and server/pursuitsprint.lua (x1: PursuitSprintCooldown — that file's
+    own PRE-EXISTING `assert` ahead of its NewCooldown call, which
+    independently hard-errored on the same input, is replaced by the same
+    call-site pattern for the same reason, not left in place beside it).
+    Grep for `ResolveConfiguredThresholdMs` across server/*.lua to keep this
+    list honest as new call sites are added.
 
     AssertValidDefaultThreshold's constructor-time hard error is
     DELIBERATELY UNCHANGED and remains the correct behavior for the OTHER
@@ -279,24 +271,23 @@
 ---     whole file exists to prevent).
 ---
 --- FOOTGUN THIS EXISTS TO CATCH (found for real in server/fetch.lua's
---- releaseFetchBall, a path documented as "always let go", by a Phase 5
---- review — coder-architect/coder-backend, this pass): an operator setting
---- a cooldown Config field to `0` meaning "no throttle" instead silently
---- got "blocked forever", because `0 or 500`-style fallback idioms treat 0
---- as present (0 is truthy in Lua) and this file's own :IsOnCooldown then
---- fails closed on it. server/recall.lua already worked around this
---- independently for Config.Recall.RequestCooldownMs (falls back to a
---- built-in constant and prints a warning rather than trusting a raw
---- non-positive config read) — this constructor-time guard below makes
---- that same class of mistake loud AT RESOURCE START for the common
---- "NewCooldown(Config.X.cooldownMs)" shape (verified: every current
---- NewCooldown/NewNestedCooldown call site's shipped config.lua default is
---- a positive number — see this pass's own report — so this is a new
---- backstop, not a behavior change for any currently-shipped config), and
---- :IsOnCooldown's own call-time branch below now prints a one-time loud
---- warning (never silent) for the remaining shape this can't catch at
---- construction: a per-call threshold read fresh from Config on every
---- invocation rather than captured as a constructor default.
+--- releaseFetchBall, a path documented as "always let go"): an operator
+--- setting a cooldown Config field to `0` meaning "no throttle" instead
+--- silently got "blocked forever", because `0 or 500`-style fallback
+--- idioms treat 0 as present (0 is truthy in Lua) and this file's own
+--- :IsOnCooldown then fails closed on it. server/recall.lua already
+--- worked around this independently for Config.Recall.RequestCooldownMs
+--- (falls back to a built-in constant and prints a warning rather than
+--- trusting a raw non-positive config read) — this constructor-time guard
+--- below makes that same class of mistake loud AT RESOURCE START for the
+--- common "NewCooldown(Config.X.cooldownMs)" shape (verified: every
+--- current NewCooldown/NewNestedCooldown call site's shipped config.lua
+--- default is a positive number, so this is a new backstop, not a
+--- behavior change for any currently-shipped config), and :IsOnCooldown's
+--- own call-time branch below now prints a one-time loud warning (never
+--- silent) for the remaining shape this can't catch at construction: a
+--- per-call threshold read fresh from Config on every invocation rather
+--- than captured as a constructor default.
 --- @param value any
 --- @return boolean
 local function IsValidThreshold(value)
@@ -341,9 +332,9 @@ end
 --- WARN (print), never error-and-abort — for exactly the "raw,
 --- operator-editable Config value passed straight through as a constructor
 --- default" call shape. See this file's header ADDENDUM section for the
---- QA-found incident this responds to, the full list of call sites it is
---- applied at, and — just as importantly — why AssertValidDefaultThreshold
---- itself is deliberately NOT changed to do this for every caller.
+--- incident this responds to, the full list of call sites it is applied
+--- at, and — just as importantly — why AssertValidDefaultThreshold itself
+--- is deliberately NOT changed to do this for every caller.
 ---
 --- Call this BEFORE NewCooldown/NewNestedCooldown, at the call site, for
 --- any constructor default sourced directly from a Config field an
@@ -381,8 +372,8 @@ function ResolveConfiguredThresholdMs(configuredValue, fallbackMs, configKeyName
     end
 
     -- LOUD, but never fatal: names the exact key, the value found, and
-    -- what was substituted, per this task's own requirement -- "invalid
-    -- cooldown" helps nobody find one bad field in a 2,000+ line config.
+    -- what was substituted -- "invalid cooldown" helps nobody find one bad
+    -- field in a 2,000+ line config.
     print(
         ('[qbx_k9unit] cooldowns.lua: %s is missing or not a positive number (found: %s). 0/negative/nil/NaN ' ..
          'here does NOT mean "no cooldown" in this resource\'s cooldown API -- it would otherwise permanently ' ..
@@ -427,15 +418,15 @@ function NewCooldown(defaultThresholdMs)
             -- cooldown for every already-touched key instead of erroring
             -- loudly. Never let a bad threshold turn into unlimited spam.
             --
-            -- NOT SILENT ANYMORE (this pass): a non-nil `thresholdMs`
-            -- override reaching this branch could not be caught by
-            -- AssertValidDefaultThreshold above (that only validates the
-            -- CONSTRUCTOR's default) — this is the per-call-Config-read
-            -- shape (e.g. a file calling `.IsOnCooldown(key,
-            -- Config.X.cooldownMs)` fresh every invocation). Printed once
-            -- per tracker instance, not once per call, so a live server
-            -- under normal call volume against an already-broken config
-            -- gets exactly one unmissable line instead of a flood.
+            -- NOT SILENT ANYMORE: a non-nil `thresholdMs` override reaching
+            -- this branch could not be caught by AssertValidDefaultThreshold
+            -- above (that only validates the CONSTRUCTOR's default) — this
+            -- is the per-call-Config-read shape (e.g. a file calling
+            -- `.IsOnCooldown(key, Config.X.cooldownMs)` fresh every
+            -- invocation). Printed once per tracker instance, not once per
+            -- call, so a live server under normal call volume against an
+            -- already-broken config gets exactly one unmissable line
+            -- instead of a flood.
             if not warnedBadCallTimeThreshold then
                 warnedBadCallTimeThreshold = true
                 print(
@@ -450,26 +441,25 @@ function NewCooldown(defaultThresholdMs)
             end
             return true
         end
-        -- CAVEAT, not fixed here (documentation only — see this pass's own
-        -- report to coder-architect before this math is ever changed):
-        -- GetGameTimer() is FXServer's process-uptime millisecond counter,
-        -- reported to have gone negative on some long-uptime servers
-        -- (consistent with the underlying native being a 32-bit signed
-        -- counter that wraps after ~24.85 days of continuous uptime,
-        -- well within a real server's lifetime between restarts). This
-        -- naive `now - lastAt` subtraction is NOT wraparound-safe: a `key`
-        -- touched shortly before a wrap would read as still on cooldown
-        -- (elapsed appears deeply negative, and negative < any positive
-        -- threshold is true) until enough real wall-clock time passes for
-        -- `now` to numerically catch back up — up to ~24.85 days, not just
-        -- until the configured threshold elapses. Every call site in this
-        -- resource already tolerates "cooldown briefly stuck on" as a
-        -- fail-safe direction (never "cooldown silently disabled"), so this
-        -- is flagged as a known caveat for a resource restarted well under
-        -- monthly, not silently patched — a wraparound-safe rewrite of this
-        -- subtraction changes observable timing behavior across every one
-        -- of this file's 16 call-time consumers and needs a reported,
-        -- coordinated pass, not a quiet fix buried in an audit.
+        -- CAVEAT, not fixed here (documentation only): GetGameTimer() is
+        -- FXServer's process-uptime millisecond counter, reported to have
+        -- gone negative on some long-uptime servers (consistent with the
+        -- underlying native being a 32-bit signed counter that wraps after
+        -- ~24.85 days of continuous uptime, well within a real server's
+        -- lifetime between restarts). This naive `now - lastAt` subtraction
+        -- is NOT wraparound-safe: a `key` touched shortly before a wrap
+        -- would read as still on cooldown (elapsed appears deeply negative,
+        -- and negative < any positive threshold is true) until enough real
+        -- wall-clock time passes for `now` to numerically catch back up —
+        -- up to ~24.85 days, not just until the configured threshold
+        -- elapses. Every call site in this resource already tolerates
+        -- "cooldown briefly stuck on" as a fail-safe direction (never
+        -- "cooldown silently disabled"), so this is flagged as a known
+        -- caveat for a resource restarted well under monthly, not silently
+        -- patched — a wraparound-safe rewrite of this subtraction changes
+        -- observable timing behavior across every one of this file's 16
+        -- call-time consumers and needs a coordinated pass, not a quiet fix
+        -- buried in an audit.
         return ((now or GetGameTimer()) - lastAt) < threshold
     end
 
@@ -565,11 +555,11 @@ function NewNestedCooldown(defaultThresholdMs)
         if not IsValidThreshold(threshold) then
             -- FAIL CLOSED — see NewCooldown's IsOnCooldown for the full
             -- reasoning: a bad/missing threshold must never silently
-            -- disable this cooldown. NOT SILENT ANYMORE (this pass) — same
-            -- one-time-per-tracker loud warning as NewCooldown's
-            -- IsOnCooldown above, for the same reason (a per-call
-            -- threshold read fresh from Config can't be caught by
-            -- AssertValidDefaultThreshold at construction time).
+            -- disable this cooldown. NOT SILENT ANYMORE — same one-time-
+            -- per-tracker loud warning as NewCooldown's IsOnCooldown above,
+            -- for the same reason (a per-call threshold read fresh from
+            -- Config can't be caught by AssertValidDefaultThreshold at
+            -- construction time).
             if not warnedBadCallTimeThreshold then
                 warnedBadCallTimeThreshold = true
                 print(
@@ -646,10 +636,8 @@ end
 --- primitive in this file: a mutex "expiring" would defeat the point of a
 --- mutex. That makes "is a mutex ever left held with no way to release it"
 --- entirely a caller-discipline question, not something this constructor
---- can enforce — RE-AUDITED THIS PASS (quality-agent-14; the count below had
---- drifted, see CORRECTION note at the end of this comment before trusting
---- it again without re-measuring). Grouped by release discipline, not by
---- age, since the two groups genuinely differ:
+--- can enforce. Grouped by release discipline, not by age, since the two
+--- groups genuinely differ:
 ---
 --- GROUP A — the original 5, released via pcall (server/search.lua
 --- SearchMutex, server/combat.lua TakedownMutex, server/inventory.lua

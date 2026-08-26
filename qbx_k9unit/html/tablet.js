@@ -4482,6 +4482,38 @@
      * a second, independently-derived copy. */
     function helpHighCommandOnly() { return !!(state.viewer && state.viewer.isHighCommand === true); }
 
+    /** @returns {boolean} true when this viewer holds isHighCommand OR the
+     * named capability in state.viewer.effectivePermissions -- the SAME
+     * "isHighCommand OR the matching effectivePermissions entry" shape
+     * hasDelegatedCapability() above already uses for the Theme/Shop/
+     * Runtime Control tabs, applied here for the three CAPABILITY-kind
+     * admin command groups (certification/audit/xp) instead of a fourth,
+     * differently-named copy of the identical check. */
+    function helpHasCapability(capability) {
+        if (!state.viewer) return false;
+        if (state.viewer.isHighCommand === true) return true;
+        var perms = state.viewer.effectivePermissions;
+        return Array.isArray(perms) && perms.indexOf(capability) !== -1;
+    }
+
+    /** @returns {boolean} gates buildHelpCommandsSection()'s own admin
+     * table -- true for isHighCommand OR any ONE of the three delegatable
+     * admin capabilities real COMMAND_REFERENCE entries actually use
+     * (k9.certify/k9.audit/k9.givexp -- see COMMAND_REFERENCE's own
+     * certification/xp/audit categories). Deliberately does NOT also check
+     * canManageTabletTheme()/canManageShopLocations()/canManageShopItems()/
+     * canManageRuntimeControl(): none of those four capabilities gate any
+     * real chat command at all (they are pure tablet-screen actions with
+     * no RegisterCommand equivalent), so including them here would show
+     * this heading to a shop/theme/runtime delegate who cannot actually
+     * use a single row in the table underneath it. */
+    function helpSeesAdminCommands() {
+        return helpHighCommandOnly()
+            || helpHasCapability('k9.certify')
+            || helpHasCapability('k9.audit')
+            || helpHasCapability('k9.givexp');
+    }
+
     /** @type {Array<{tabLabelKey:string, descKey:string, visible:() => boolean}>}
      * See this block's own header for the drift guard
      * (tests/helptabcoverage_spec.lua) that keeps this list's `tabLabelKey`
@@ -4501,12 +4533,20 @@
         { tabLabelKey: 'tab_help', descKey: 'help_tab_help_desc', visible: helpAlwaysVisible },
         { tabLabelKey: 'tab_console', descKey: 'help_tab_console_desc', visible: canAccessConsole },
         { tabLabelKey: 'tab_flows', descKey: 'help_tab_flows_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_theme', descKey: 'help_tab_theme_desc', visible: helpHighCommandOnly },
+        // Theme/Shop Locations/Shop Items/Runtime Control each moved off a
+        // bare state.viewer.isHighCommand check onto their own
+        // hasDelegatedCapability()-based gate (sibling gate-bug-fix pass,
+        // landed concurrently with this one) -- these four now show up for
+        // a NON-high-command delegate who holds the matching capability
+        // too, so this catalog reuses the SAME real function buildTabs()
+        // itself gates the tab on, never a second, stale copy of "high
+        // command only" for a tab that no longer means that.
+        { tabLabelKey: 'tab_theme', descKey: 'help_tab_theme_desc', visible: canManageTabletTheme },
         { tabLabelKey: 'tab_cert_tiers', descKey: 'help_tab_cert_tiers_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_permission_keys', descKey: 'help_tab_permission_keys_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_shop_locations', descKey: 'help_tab_shop_locations_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_shop_items', descKey: 'help_tab_shop_items_desc', visible: helpHighCommandOnly },
-        { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_shop_locations', descKey: 'help_tab_shop_locations_desc', visible: canManageShopLocations },
+        { tabLabelKey: 'tab_shop_items', descKey: 'help_tab_shop_items_desc', visible: canManageShopItems },
+        { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: canManageRuntimeControl },
         { tabLabelKey: 'tab_xp_tiers', descKey: 'help_tab_xp_tiers_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_k9_profiles', descKey: 'help_tab_k9_profiles_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_audit', descKey: 'help_tab_audit_desc', visible: canViewAudit },
@@ -4586,10 +4626,25 @@
             wrap.appendChild(buildHelpCommandTable(rows));
         }
 
-        // ADDITIVE ONLY -- high command sees the base list above PLUS this,
-        // never a replacement for it (this screen's own header, "high
-        // command is a handler or K9 who also administers").
-        if (helpHighCommandOnly()) {
+        // ADDITIVE ONLY -- someone who administers sees the base list above
+        // PLUS this, never a replacement for it (this screen's own header,
+        // "high command is a handler or K9 who also administers"). NOT
+        // narrowed to state.viewer.isHighCommand alone: every admin-tier
+        // COMMAND_REFERENCE entry's own gate is either `highCommandOnly`
+        // (bonetool, permission grants -- isHighCommand truly is the only
+        // way in, per commandReferenceStatus()'s own resolution) or
+        // `capability` for k9.certify/k9.audit/k9.givexp specifically
+        // (which a NON-high-command delegate can also hold -- see
+        // hasDelegatedCapability()'s own doc comment for the identical
+        // "isHighCommand OR the matching effectivePermissions entry"
+        // pattern this reuses) -- helpSeesAdminCommands() below checks for
+        // ANY of those three delegated capabilities too, so a
+        // rank-based/delegated certifier who is not high command still
+        // gets taught that this section exists, with each individual
+        // row's own live status badge (unchanged, computed the SAME way
+        // the Commands Reference screen computes it) honestly showing
+        // which specific rows they can and cannot use.
+        if (helpSeesAdminCommands()) {
             wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_commands_admin_heading') }));
             wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_commands_admin_intro') }));
             for (var c2 = 0; c2 < COMMAND_REFERENCE_CATEGORIES.length; c2++) {
@@ -4655,28 +4710,51 @@
             S('help_task_treat_3'),
         ]));
 
-        // ADDITIVE ONLY, same posture as buildHelpCommandsSection() above.
-        if (helpHighCommandOnly()) {
+        // ADDITIVE ONLY, same posture as buildHelpCommandsSection() above --
+        // but each of these four gets its OWN real gate rather than one
+        // blanket flag, because each is genuinely different:
+        //   - Certify Someone: isHighCommand OR the k9.certify capability
+        //     (server/certifications.lua's own rank-based-certifier-or-grant
+        //     shape -- matches helpSeesAdminCommands()'s own certification
+        //     row check).
+        //   - Turn Someone Into a K9: TRUE high command only, verified
+        //     directly against server/tablet.lua's tabletAssignK9Role (a
+        //     thin wrapper over server/appearance.lua's ApplyK9PedRole,
+        //     which "already re-verifies IsHighCommand internally" per
+        //     that function's own comment) -- there is no delegated
+        //     capability for this action at all, unlike certify/audit/xp.
+        //   - Turn a Feature On or Off: canManageRuntimeControl() -- the
+        //     SAME hasDelegatedCapability('k9.runtimecontrol') gate the
+        //     Runtime Control tab itself now uses.
+        //   - Check What Someone Did: canViewAudit() -- the SAME gate the
+        //     Audit Trail tab itself uses, already isHighCommand-inclusive.
+        if (helpHasCapability('k9.certify')) {
             wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_certify_someone_heading'), [
                 S('help_task_hc_certify_someone_1'),
                 formatTemplate(S('help_task_hc_certify_someone_2_template'), { certifyLabel: S('certify_label') }),
                 S('help_task_hc_certify_someone_3'),
                 formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowOnboardStepLabels().join(' → ') }),
             ]));
+        }
 
+        if (helpHighCommandOnly()) {
             wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_assign_k9_heading'), [
                 S('help_task_hc_assign_k9_1'),
                 formatTemplate(S('help_task_hc_assign_k9_2_template'), { assignLabel: S('role_assign_label') }),
                 formatTemplate(S('help_task_hc_assign_k9_3_template'), { revertLabel: S('role_revert_label') }),
             ]));
+        }
 
+        if (canManageRuntimeControl()) {
             wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_toggle_feature_heading'), [
                 S('help_task_hc_toggle_feature_1'),
                 S('help_task_hc_toggle_feature_2'),
                 S('help_task_hc_toggle_feature_3'),
                 formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowTuningStepLabels().join(' → ') }),
             ]));
+        }
 
+        if (canViewAudit()) {
             wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_check_history_heading'), [
                 S('help_task_hc_check_history_1'),
                 S('help_task_hc_check_history_2'),

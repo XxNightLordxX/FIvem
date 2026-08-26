@@ -106,9 +106,13 @@ local function newMedkitFixture(opts)
     local netEventHandlers = {}
     local function RegisterNetEvent(eventName, handler) netEventHandlers[eventName] = handler end
 
-    -- ---- request-side (ox_target/onResourceStart) plumbing -- present
-    -- only so the file loads without erroring; never exercised for its own
-    -- behavior by this spec (see this file's header).
+    -- ---- request-side (ox_target/onResourceStart) plumbing -- present so
+    -- the file loads without erroring, and ALSO (this pass, coder-backend
+    -- reason-mapping fix) reused by SECTION G below to exercise
+    -- RequestTreatK9's reason-mapping table specifically -- see this file's
+    -- header for the still-current, narrower scope boundary on the REST of
+    -- the request side (FindNearestTreatableK9/RequestTreatNearestK9/the
+    -- real K9Compat target-adapter wiring itself).
     local addGlobalPlayerCalls = {}
     local K9Compat = {
         Get = function(_system)
@@ -124,8 +128,21 @@ local function newMedkitFixture(opts)
     end
     local function IsEntityModelK9(_entity) return false end
     local function IsK9RoleForPlayer(_serverId) return false end
-    local function ResolvePlayerServerIdFromPed(_ped) return nil end
-    local libStub = { callback = { await = function() return nil end }, notify = function() end }
+    -- Settable via f.setResolvedServerId (SECTION G) -- defaults to nil,
+    -- matching this fixture's own pre-existing default, so every test
+    -- ABOVE section G that never calls that setter is completely
+    -- unaffected by this addition.
+    local resolvedServerId = nil
+    local function ResolvePlayerServerIdFromPed(_ped) return resolvedServerId end
+    -- Settable via f.setAwaitResult (SECTION G) -- defaults to nil, the
+    -- exact same "no result" shape this fixture's own pre-existing stub
+    -- always returned, so nothing above section G observes any change.
+    local awaitResult = nil
+    local notifyCalls = {}
+    local libStub = {
+        callback = { await = function() return awaitResult end },
+        notify = function(opts) notifyCalls[#notifyCalls + 1] = opts end,
+    }
 
     local overrides = {
         PlayerPedId = PlayerPedId,
@@ -182,6 +199,29 @@ local function newMedkitFixture(opts)
         --- Requires the handler to have been captured by a PRIOR fixture
         --- built with k9Medkit = true (see section C below).
         rawHandler = function() return netEventHandlers['qbx_k9unit:client:applyMedkitHeal'] end,
+
+        -- ---- SECTION G plumbing (RequestTreatK9 reason-mapping) ----
+        --- Fires every captured `onResourceStart` handler, exactly like a
+        --- real FXServer resource start would -- same convention as
+        --- clientkennel_spec.lua's own `fireResourceStart`. Needed to reach
+        --- `RegisterMedkitOxTargetOption()`, which this file's own
+        --- `AddEventHandler('onResourceStart', ...)` call only registers
+        --- FROM, never runs eagerly at load time.
+        fireResourceStart = function(resourceName)
+            for _, handler in ipairs(resourceStartHandlers['onResourceStart'] or {}) do handler(resourceName) end
+        end,
+        --- The captured "Treat This K9's Injuries" ox_target option's own
+        --- `onSelect` closure -- nil until `fireResourceStart('qbx_k9unit')`
+        --- has run at least once.
+        getTreatOnSelect = function()
+            local optsList = addGlobalPlayerCalls[1]
+            return optsList and optsList[1] and optsList[1].onSelect
+        end,
+        setResolvedServerId = function(id) resolvedServerId = id end,
+        --- @param result table|nil -- the `{ ok, reason? }` shape server/medkit.lua's own useK9Medkit callback returns
+        setAwaitResult = function(result) awaitResult = result end,
+        notifyCalls = notifyCalls,
+        lastNotify = function() return notifyCalls[#notifyCalls] end,
     }
 end
 
@@ -408,18 +448,99 @@ t.test('COMPOSED: a genuine, alive, in-bounds push still succeeds even after exe
 end)
 
 -- ----------------------------------------------------------------------
+-- SECTION G -- RequestTreatK9's REASON-MAPPING TABLE (added this pass,
+-- coder-backend). Server/medkit.lua's own useK9Medkit callback can refuse
+-- for ten distinct `reason` values; this table is the ONLY place any of
+-- them ever reaches player-visible text. A reason present on the server
+-- but absent from this table is not a crash and not untested-looking --
+-- it silently falls through to the generic `medkit_failed` text, exactly
+-- the "split exists and the player still cannot see it" defect class this
+-- pass exists to close (`not_granted` was the one real instance found).
+-- These tests drive the REAL onSelect closure captured off a REAL
+-- `fireResourceStart`, not a reimplementation of RequestTreatK9's own
+-- logic, so a future edit to the mapping table is proven correct against
+-- the production file itself, not against this spec's assumptions about
+-- it. `locale()` here is the REAL reader (tests/fixtures/sandbox.lua's own
+-- Sandbox.locale), which raises loudly if a mapped key is missing from
+-- locales/en.json -- so every case below also doubles as a check that the
+-- key it names actually exists.
+-- ----------------------------------------------------------------------
+
+--- @param f table fixture returned by newMedkitFixture
+--- @param reason string
+local function selectAndAwaitReason(f, reason)
+    f.fireResourceStart('qbx_k9unit')
+    local onSelect = f.getTreatOnSelect()
+    assert(onSelect, 'ox_target option was never registered -- fixture bug')
+    f.setResolvedServerId(7)
+    f.setAwaitResult({ ok = false, reason = reason })
+    onSelect({ entity = 999 })
+end
+
+t.test('REASON MAPPING: "not_granted" (this pass\'s own fix) renders its OWN distinct text, not the no_access text and not the generic fallback', function()
+    local f = newMedkitFixture()
+    selectAndAwaitReason(f, 'not_granted')
+    local notice = f.lastNotify()
+    t.isNotNil(notice, 'lib.notify must have been called')
+    t.equals(notice.description, Sandbox.locale('medkit.reason_not_granted'))
+    t.isTrue(notice.description ~= Sandbox.locale('medkit.reason_no_access'), 'not_granted must not collapse into the job-based no_access text')
+    t.isTrue(notice.description ~= Sandbox.locale('medkit.reason_medkit_failed'), 'not_granted must not fall through to the generic catch-all')
+end)
+
+t.test('REASON MAPPING: every OTHER reason server/medkit.lua can return still maps to its own distinct, non-fallback text', function()
+    local reasonToLocaleKey = {
+        feature_disabled      = 'medkit.reason_feature_disabled',
+        no_access             = 'medkit.reason_no_access',
+        invalid_target        = 'medkit.reason_invalid_target',
+        target_dead           = 'medkit.reason_target_dead',
+        on_cooldown           = 'medkit.reason_on_cooldown',
+        no_item               = 'medkit.reason_no_item',
+        treatment_in_progress = 'medkit.reason_treatment_in_progress',
+    }
+    for reason, localeKey in pairs(reasonToLocaleKey) do
+        local f = newMedkitFixture()
+        selectAndAwaitReason(f, reason)
+        local notice = f.lastNotify()
+        t.isNotNil(notice, 'lib.notify must have been called for reason ' .. reason)
+        t.equals(notice.description, Sandbox.locale(localeKey), 'reason ' .. reason .. ' must render its own dedicated text')
+    end
+end)
+
+t.test('REASON MAPPING: "too_far" is deliberately mapped to the SHARED common.too_far_from_k9 key, not a medkit-only duplicate', function()
+    local f = newMedkitFixture()
+    selectAndAwaitReason(f, 'too_far')
+    t.equals(f.lastNotify().description, Sandbox.locale('common.too_far_from_k9'))
+end)
+
+t.test('REASON MAPPING: an unrecognized reason value falls back to the generic medkit_failed text, never a raw key or a crash', function()
+    local f = newMedkitFixture()
+    selectAndAwaitReason(f, 'some_future_reason_this_client_does_not_know_yet')
+    t.equals(f.lastNotify().description, Sandbox.locale('medkit.reason_medkit_failed'))
+end)
+
+t.test('REASON MAPPING: a successful result (ok = true) never fires a notify at all -- the server\'s own success notify is the only feedback, no client-side duplicate', function()
+    local f = newMedkitFixture()
+    f.fireResourceStart('qbx_k9unit')
+    local onSelect = f.getTreatOnSelect()
+    f.setResolvedServerId(7)
+    f.setAwaitResult({ ok = true })
+    onSelect({ entity = 999 })
+    t.equals(#f.notifyCalls, 0)
+end)
+
+-- ----------------------------------------------------------------------
 -- WHAT THIS FILE DOES NOT COVER, AND WHY:
 --
--- 1. THE REQUEST SIDE (RegisterMedkitOxTargetOption/onResourceStart/
---    K9Compat wiring, FindNearestTreatableK9, RequestTreatNearestK9,
---    RequestTreatK9's own lib.callback.await/reason-mapping logic) -- pure
---    UX affordance per this file's own header ("nothing below is a
---    security boundary... the client hides the option, server is the real
---    gate"), and this task's own brief scopes coverage to the
---    applyMedkitHeal RECEIVER specifically, the handler with five distinct
---    guards and zero prior coverage. Exercising the request side would
---    require IsEntityModelK9/IsK9RoleForPlayer/ResolvePlayerServerIdFromPed/
---    a real K9Compat target-adapter fixture (a DIFFERENT file's own
+-- 1. THE REST OF THE REQUEST SIDE (FindNearestTreatableK9,
+--    RequestTreatNearestK9, and the real K9Compat/ox_target ADAPTER
+--    wiring itself) -- pure UX affordance per this file's own header
+--    ("nothing below is a security boundary... the client hides the
+--    option, server is the real gate"). SECTION G above now DOES cover
+--    RequestTreatK9's own reason-mapping table specifically (added this
+--    pass, alongside the client-side fix it verifies) -- this exclusion no
+--    longer applies to that one piece, corrected here rather than left to
+--    go stale. The remaining pieces still excluded would require a real
+--    K9Compat target-adapter fixture (a DIFFERENT file's own
 --    concern, per this suite's per-file ownership convention) for
 --    marginal, non-security-relevant value.
 --

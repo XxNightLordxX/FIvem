@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/scentlineup.lua
 
-    SCENT LINEUP (Config.Features.ScentLineup) -- K9_IDEAS.md §4, "Scent
+    SCENT LINEUP (Config.Features.ScentLineup) -- PROJECT_HISTORY.md §4, "Scent
     lineup -- 'sniff the row and pick the match'". A certified K9 invites
     several online players to stand in a lineup; the server picks ONE of
     them as "the match" once every invite is accepted, and the K9 makes a
@@ -50,7 +50,7 @@
         leak.
 
     WHY THIS RULES OUT THE "GROWL GETS SHARPER AS YOU GET CLOSER"
-    LIVE-PROXIMITY EFFECT K9_IDEAS.md §4 DESCRIBES -- DELIBERATELY LEFT OUT,
+    LIVE-PROXIMITY EFFECT PROJECT_HISTORY.md §4 DESCRIBES -- DELIBERATELY LEFT OUT,
     NOT FORGOTTEN: idea #2's own version of that effect (client/audio.lua's
     distance-scaled gain, client/proximityaudio.lua) works because the
     thing being searched for is a single hidden COORDINATE with no identity
@@ -97,7 +97,7 @@
     server/training.lua's own precedent (see tests/scentlineup_spec.lua's
     "no AwardXP reference anywhere in this file's source text" case). The
     genuine payoff this feature offers is the shared multiplayer moment
-    K9_IDEAS.md §4 describes ("a whole little scene involving several
+    PROJECT_HISTORY.md §4 describes ("a whole little scene involving several
     players standing in a row while everyone watches the dog work its way
     down the line") -- that is real value on its own and does not need an
     XP top-up to justify existing.
@@ -600,7 +600,7 @@ local function LockSession(conductorSrc, session)
     -- Fisher-Yates shuffle. Purely cosmetic (see header -- order carries no
     -- information about matchSrc either way), kept because "the row" being
     -- in invite-typed order every single time would be a needlessly flat
-    -- presentation of what K9_IDEAS.md §4 describes as a physical scene.
+    -- presentation of what PROJECT_HISTORY.md §4 describes as a physical scene.
     for i = #order, 2, -1 do
         local j = math.random(i)
         order[i], order[j] = order[j], order[i]

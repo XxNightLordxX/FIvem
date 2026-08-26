@@ -714,6 +714,24 @@ end)
 -- genuinely does need per-frame execution to actually be visible.
 local TRACK_RENDER_IDLE_TICK_MS = 250
 
+-- FORWARD DECLARATION (ScentVision hand-off, this pass): the real
+-- implementation lives further below in this file's own SCENT VISION
+-- section, alongside the state (`scentVisionSnapshot`) it reads and the
+-- config it validates — kept together there rather than splitting that
+-- feature's logic across two widely separated parts of this file. Declared
+-- `local` here, ASSIGNED (not `local function`-redeclared) later, so this
+-- existing thread — which loads first, textually — captures it as a real
+-- upvalue and always sees whatever the later assignment set by the time
+-- this loop actually runs (file loading completes, in full, before any
+-- CreateThread body's first resume). Folding ScentVision's own dots into
+-- THIS SAME per-frame thread (rather than a second Wait(0) loop) is a
+-- deliberate perf choice — see this resource's own "no thread left
+-- spinning at full frequency while its feature is inactive" standard;
+-- two independent Wait(0) render loops would double the per-frame
+-- call overhead for as long as EITHER feature is active, for no benefit.
+-- @type fun(): boolean drewAnything
+local DrawScentVisionPoints
+
 CreateThread(function()
     while true do
         -- CORRECTNESS FIX (coder-frontend, this pass): must check for a
@@ -731,11 +749,30 @@ CreateThread(function()
         -- it to nil on its very next tick once brokenByWater is set), but
         -- still a genuine "idle path doesn't actually idle" instance, not
         -- just a cosmetic no-op.
+        local drewTrailMarkers = false
         if currentTrailMarkers and #currentTrailMarkers > 0 then
             for i = 1, #currentTrailMarkers do
                 local marker = currentTrailMarkers[i]
                 DrawTrailMarker(marker.coords, marker.underwater)
             end
+            drewTrailMarkers = true
+        end
+
+        -- ScentVision (this pass) — a SEPARATE feature/state from the
+        -- Track <Type> trail above (see this file's own SCENT VISION
+        -- section header for the full "why separate" writeup); folded into
+        -- this SAME frame/Wait decision purely for perf, not because the
+        -- two features are otherwise related. `DrawScentVisionPoints` is
+        -- nil until the section below runs at file-load time (which always
+        -- happens before this thread's first resume) — guarded anyway,
+        -- defensively, in case this file is ever loaded partially by a
+        -- future test harness.
+        local drewScentVisionPoints = false
+        if type(DrawScentVisionPoints) == 'function' then
+            drewScentVisionPoints = DrawScentVisionPoints()
+        end
+
+        if drewTrailMarkers or drewScentVisionPoints then
             Wait(0)
         else
             Wait(TRACK_RENDER_IDLE_TICK_MS)
@@ -866,3 +903,309 @@ CreateThread(function()
         end
     end
 end)
+
+--[[
+    ======================================================================
+    SCENT VISION (Config.Features.ScentVision) — owner-directed pass: "make
+    scent tracking... a keybind that makes a colour dot appear where players'
+    blood etc have walked and have a delay before the scent markers go
+    away... if multiple people, multiple different colours... to
+    differentiate smells." Coordinator follow-ups folded in as the design
+    evolved: "person" (colour per PERSON, never per permission); "handful
+    near the dog" / "they go away after 45 seconds" (server scopes colours
+    and reveal to a small proximity-ranked set, 45s default lifetime);
+    "diffrent dots will be all seprate timers... slowly go away" (EACH DOT
+    expires on its OWN individual timer from its OWN capture time).
+
+    A SEPARATE feature/state from this file's Track Scent/Blood/Gunpowder
+    trio above (`trackingState`/`currentTrailMarkers`) — that trio resolves
+    and walks toward exactly ONE nearest logged event; this instead shows
+    several OTHER people's own recent walked paths at once, colour-coded so
+    more than one trail can be told apart. The two can run concurrently
+    (there is no reason to force mutual exclusion — one is "walk to this one
+    thing", the other is "look around"); only the per-frame RENDER decision
+    is shared (see the forward-declared `DrawScentVisionPoints` hook near
+    this file's own TRACK_RENDER_IDLE_TICK_MS declaration above), purely for
+    the perf reason documented at that call site.
+
+    SERVER IS AUTHORITATIVE THROUGHOUT — this file never decides who may use
+    this, never decides what is "nearby", and never learns anyone's raw
+    identity. Every point this file ever draws is exactly what
+    server/tracking.lua's getScentVisionPoints callback chose to send —
+    already position-checked, already range-checked, already capped to a
+    "handful" of trails, already coloured. See that callback's own header
+    for the full trust-boundary and scale writeup (population-wide capture
+    cost, storage ceiling, per-query cost bound, and why colours can never
+    collide within one visible set).
+
+    PER-DOT EXPIRY, EVALUATED AGAINST A TIMESTAMP, NEVER A COUNTDOWN (owner's
+    own explicit requirement): the server sends each point's own age AT THE
+    MOMENT OF THE RESPONSE (`ageMs`, relative — never a raw server
+    GetGameTimer() value, since server and client run independent
+    GetGameTimer() counters and are not the same clock). This file anchors
+    that relative age to ITS OWN GetGameTimer() the instant the response
+    arrives (`receivedAtClientMs` below) and, every frame, recomputes each
+    point's CURRENT effective age as `ageMs + (GetGameTimer() -
+    receivedAtClientMs)` — never a value decremented once per frame. A
+    stutter, an alt-tab, or a paused resource therefore cannot stretch a 45s
+    dot into something longer: whatever real wall-clock time actually
+    passed is exactly what this subtraction reflects the next time this
+    file's thread actually resumes.
+
+    THE ENTIRE "DELAY BEFORE MARKERS GO AWAY" MECHANISM, ON TOGGLE-OFF:
+    ToggleScentVision() turning the ability OFF does NOT clear
+    `scentVisionSnapshot` — it only stops polling for FRESH data. The render
+    hook below keeps drawing whatever was last received, with each
+    individual dot still fading/expiring on its own already-established
+    per-dot timer, until the snapshot naturally empties (every dot expired)
+    — at which point `DrawScentVisionPoints` clears it itself and the shared
+    render thread above goes back to idling. There is deliberately no
+    second "linger" timer to configure or maintain: each dot's own
+    dotLifetimeMs already IS the delay the owner asked for, so a second
+    knob would only be a second, redundant way to get the same answer wrong.
+    ======================================================================
+]]
+
+-- CLAMP AND WARN (this resource's standing "a non-positive/invalid
+-- millisecond value must never silently mean something dangerous" rule —
+-- server/cooldowns.lua's own header names the sibling risk for a cooldown
+-- threshold; the risk here is a Wait(0)-or-worse poll loop). Resolved ONCE
+-- at file load, mirroring client/scenttrail.lua's own PULSE_MAX_INTERVAL_MS
+-- precedent exactly (read before writing this), rather than re-validated on
+-- every poll.
+local SCENT_VISION_POLL_INTERVAL_MS_DEFAULT = 1500
+local SCENT_VISION_POLL_INTERVAL_MS = SCENT_VISION_POLL_INTERVAL_MS_DEFAULT
+do
+    local configured = Config.Tracking.ScentVision and Config.Tracking.ScentVision.pollIntervalMs
+    if type(configured) == 'number' and configured == configured and configured > 0 then
+        SCENT_VISION_POLL_INTERVAL_MS = configured
+    else
+        print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.pollIntervalMs must be a positive number of milliseconds (got %s) -- falling back to the shipped default of %dms.'):format(tostring(configured), SCENT_VISION_POLL_INTERVAL_MS_DEFAULT))
+    end
+end
+
+-- Used ONLY until the first server response arrives (which always echoes
+-- back the lifetime it actually enforced for that response — see
+-- server/tracking.lua's own comment on `dotLifetimeMs`) — never trusted
+-- over a real response. Kept numerically equal to config.lua's own shipped
+-- Config.Tracking.ScentVision.dotLifetimeMs default and
+-- server/tracking.lua's own ResolveConfiguredThresholdMs fallback so a
+-- fresh client's very first frame (before any response has arrived at all,
+-- which cannot happen anyway since `scentVisionSnapshot` starts nil and
+-- this constant is never read until a response exists) stays consistent
+-- with the rest of this resource's defaults.
+local SCENT_VISION_DOT_LIFETIME_MS_DEFAULT = 45000
+
+-- Same clamp-and-warn treatment as SCENT_VISION_POLL_INTERVAL_MS above.
+-- Clamped to [0, 1) — a dot must stay fully opaque for SOME leading
+-- fraction of its life (0 is allowed: fade starts immediately) and must
+-- never be told to start fading at or past 100% of its own lifetime (which
+-- would either never fade at all before expiring or divide by zero in the
+-- fade-progress math below).
+local SCENT_VISION_FADE_START_FRACTION_DEFAULT = 0.5
+local SCENT_VISION_FADE_START_FRACTION = SCENT_VISION_FADE_START_FRACTION_DEFAULT
+do
+    local configured = Config.Tracking.ScentVision and Config.Tracking.ScentVision.fadeStartFraction
+    if type(configured) == 'number' and configured == configured and configured >= 0.0 and configured < 1.0 then
+        SCENT_VISION_FADE_START_FRACTION = configured
+    else
+        print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.fadeStartFraction must be a number in [0, 1) (got %s) -- falling back to the shipped default of %.2f.'):format(tostring(configured), SCENT_VISION_FADE_START_FRACTION_DEFAULT))
+    end
+end
+
+-- Full opacity for a not-yet-fading dot -- matches TRAIL_MARKER_COLOR.a
+-- above (180) closely enough to read as "the same kind of marker", picked
+-- independently since ScentVision markers carry their own per-point colour
+-- rather than one fixed TRAIL_MARKER_COLOR.
+local SCENT_VISION_MARKER_ALPHA = 200
+
+--- @type boolean
+local scentVisionActive = false
+--- In-flight/staleness token — same shape/reasoning as this file's own
+--- `trackRequestGeneration` above and client/scenttrail.lua's
+--- `huntGeneration`: bumped by every toggle so a poll loop started before a
+--- toggle-off can never keep acting past it.
+--- @type number
+local scentVisionGeneration = 0
+--- Cached last-received render snapshot, or nil when nothing has ever been
+--- received (or everything in it has since individually expired — see
+--- DrawScentVisionPoints below, which is the ONLY place this is ever set
+--- back to nil once populated).
+--- @type { dotLifetimeMs: number, receivedAtClientMs: number, points: { x: number, y: number, z: number, r: number, g: number, b: number, ageMs: number }[] } | nil
+local scentVisionSnapshot = nil
+
+--- @return boolean
+function IsScentVisionActive()
+    return scentVisionActive
+end
+
+--- Draws every still-live point in `scentVisionSnapshot` this frame
+--- (already-expired ones are skipped, never drawn) and reports whether
+--- anything was actually drawn, so the shared render thread (this file's
+--- own TRACK_RENDER_IDLE_TICK_MS block above) can decide whether to keep
+--- running at Wait(0) or go back to idling. Also clears
+--- `scentVisionSnapshot` to nil entirely once EVERY point in it has
+--- individually expired, so that thread does not keep re-evaluating an
+--- empty, fully-expired snapshot forever — this is also the ENTIRE
+--- mechanism behind dots persisting for a while after ToggleScentVision()
+--- turns the ability off (see this section's own header).
+---
+--- DrawMarker — VERIFIED (this pass): its own ext/native-decls page 404s
+--- (https://raw.githubusercontent.com/citizenfx/fivem/master/ext/native-decls/DrawMarker.md
+--- — a 404 there is NOT proof of absence for a legacy R* native, per this
+--- resource's own standing rule and .luacheckrc's own DrawMarker precedent).
+--- Confirmed instead against the documented fallback,
+--- runtime.fivem.net/doc/natives.json (fetched this pass): GRAPHICS
+--- namespace, hash 0x28477EC23D892089, name DRAW_MARKER, no `apiset` key —
+--- which, per this resource's own established reading of that field
+--- elsewhere (.luacheckrc's own comments on SetPlayerModel/CreatePed/etc.),
+--- means the default, CLIENT-ONLY, matching this file's own existing,
+--- already-shipped DrawTrailMarker() call site above and the realm this
+--- function itself runs in. No new native is introduced here — this
+--- function reuses the EXACT same already-verified DrawMarker call shape
+--- DrawTrailMarker() above already uses (type 1, a flat cylinder/checkpoint
+--- ring), only parameterized by each point's own colour instead of one
+--- fixed TRAIL_MARKER_COLOR.
+--- @return boolean drewAnything
+DrawScentVisionPoints = function()
+    if not scentVisionSnapshot then return false end
+
+    local nowClient = GetGameTimer()
+    local elapsedSinceReceived = nowClient - scentVisionSnapshot.receivedAtClientMs
+    local lifetimeMs = scentVisionSnapshot.dotLifetimeMs
+    local fadeEnabled = Config.Tracking.ScentVision and Config.Tracking.ScentVision.fadeEnabled == true
+
+    local anyLive = false
+    local points = scentVisionSnapshot.points
+    for i = 1, #points do
+        local point = points[i]
+        -- EACH DOT'S OWN individual age, evaluated against a TIMESTAMP —
+        -- see this section's own header for why this is never a
+        -- per-frame-decremented countdown.
+        local effectiveAgeMs = point.ageMs + elapsedSinceReceived
+        if effectiveAgeMs < lifetimeMs then
+            anyLive = true
+            local alpha = SCENT_VISION_MARKER_ALPHA
+            if fadeEnabled then
+                local lifeFraction = effectiveAgeMs / lifetimeMs
+                if lifeFraction > SCENT_VISION_FADE_START_FRACTION then
+                    local fadeProgress = (lifeFraction - SCENT_VISION_FADE_START_FRACTION) / (1.0 - SCENT_VISION_FADE_START_FRACTION)
+                    alpha = math.floor(SCENT_VISION_MARKER_ALPHA * (1.0 - fadeProgress) + 0.5)
+                    if alpha < 0 then alpha = 0 end
+                end
+            end
+
+            DrawMarker(
+                TRAIL_MARKER_TYPE,
+                point.x, point.y, point.z - 0.9,
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                TRAIL_MARKER_SCALE, TRAIL_MARKER_SCALE, TRAIL_MARKER_SCALE,
+                point.r, point.g, point.b, alpha,
+                false, false, 2, false, '', '', false
+            )
+        end
+    end
+
+    if not anyLive then
+        scentVisionSnapshot = nil
+    end
+
+    return anyLive
+end
+
+--- Poll loop — same pcall/generation-staleness shape as this file's own
+--- StartTrack() above and client/scenttrail.lua's
+--- EnsureHuntPollThreadRunning (read before writing this, per this pass's
+--- own instruction to extend an established pattern rather than invent a
+--- new one). Runs on an INTERVAL, never per-frame — all per-frame work is
+--- the separate, shared render thread's job (DrawScentVisionPoints above),
+--- reading whatever this loop last stored in `scentVisionSnapshot`.
+local function EnsureScentVisionPollThreadRunning()
+    CreateThread(function()
+        local myGeneration = scentVisionGeneration
+
+        while scentVisionActive and myGeneration == scentVisionGeneration do
+            -- OWN-DEATH EXIT PATH — same precedent as this file's own
+            -- Track <Type> compute thread above (see that block's own doc
+            -- comment for the full reasoning): continuing to poll from a
+            -- dead ped's position is narratively nonsensical, and silently
+            -- resuming on respawn from an unrelated coordinate would be
+            -- worse than just stopping and saying so.
+            if IsEntityDead(PlayerPedId()) then
+                scentVisionGeneration = scentVisionGeneration + 1
+                scentVisionActive = false
+                lib.notify({ title = locale('common.notify_title'), description = locale('tracking.scent_vision_lost_death'), type = 'error' })
+                break
+            end
+
+            -- FAIL-CLOSED GUARD — same reasoning/precedent as StartTrack()
+            -- above and client/scenttrail.lua's own poll loop:
+            -- lib.callback.await throws rather than returning nil on a
+            -- timeout/rejection. Uncaught here, a throw would abort this
+            -- whole CreateThread body, silently killing the poll loop with
+            -- `scentVisionActive` still stuck true and no further updates
+            -- ever arriving.
+            local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:getScentVisionPoints', false)
+            if not ok then result = nil end
+
+            -- Staleness check — a ToggleScentVision() off-then-on cycle
+            -- that ran while the await above was pending must not let this
+            -- stale result resurrect a session the player already moved
+            -- past.
+            if myGeneration ~= scentVisionGeneration then break end
+
+            if result and type(result.points) == 'table' then
+                scentVisionSnapshot = {
+                    dotLifetimeMs = type(result.dotLifetimeMs) == 'number' and result.dotLifetimeMs or SCENT_VISION_DOT_LIFETIME_MS_DEFAULT,
+                    receivedAtClientMs = GetGameTimer(),
+                    points = result.points,
+                }
+            end
+            -- A failed/empty response is NOT treated as "clear the
+            -- snapshot" — the last-known trails simply keep fading on
+            -- their own already-established per-dot timers (same "a
+            -- transient hiccup should not visibly blank the screen"
+            -- posture as leaving `scentVisionSnapshot` alone on
+            -- ToggleScentVision() off, per this section's own header).
+
+            Wait(SCENT_VISION_POLL_INTERVAL_MS)
+        end
+    end)
+end
+
+--- Resource-global keybind entry point (client/keybinds.lua). A single
+--- context-sensitive toggle — mirrors this resource's own established
+--- Toggle*() shape (ToggleThermalVision/ToggleNightVision/ToggleK9Camera in
+--- client/vision.lua/client/movement.lua) rather than a Start/Stop pair,
+--- since there is exactly one on/off state here with no third "which one"
+--- choice to make.
+---
+--- TERMINATION IS NEVER GATED — turning the ability OFF always works,
+--- unconditionally, per this resource's standing "no unbounded trap" rule
+--- (the same rule StopTracking()/StopScentHunt() above and elsewhere in
+--- this resource already document for themselves). Toggling off does NOT
+--- clear `scentVisionSnapshot` — see this section's own header for why
+--- that omission IS the "delay before markers go away" mechanism, not a
+--- bug.
+function ToggleScentVision()
+    if not Config.Features.ScentVision then
+        DenyK9UIAccess()
+        return
+    end
+
+    if scentVisionActive then
+        scentVisionGeneration = scentVisionGeneration + 1
+        scentVisionActive = false
+        return
+    end
+
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return
+    end
+
+    scentVisionGeneration = scentVisionGeneration + 1
+    scentVisionActive = true
+    EnsureScentVisionPollThreadRunning()
+end

@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/defense.lua
 
-    Phase 3 implementation (coder-backend), DEVELOPER_REFERENCE.md §12.5.3
+    Phase 3 implementation, DEVELOPER_REFERENCE.md §12.5.3
     (Handler-Down Defense) / §12.3's file-plan row for this exact file
     ("HandlerDownDefense's client-side presentation ONLY -- per §12.0 item 2's
     reading, this never applies any state to or takes control of the K9
@@ -39,9 +39,8 @@
     Rather than duplicate `FindNearestCombatTarget`'s own local-scan logic
     here (which would silently IGNORE the whole point of this feature -- the
     pre-selected hostile from the server's own hint), or reach into
-    client/combat.lua to add a parameter it doesn't currently have (that
-    file is owned elsewhere and off-limits for this pass), this file fires
-    the exact same underlying server EVENT
+    client/combat.lua to add a parameter it doesn't currently have, this
+    file fires the exact same underlying server EVENT
     (`qbx_k9unit:server:requestBiteHold`/`requestTakedown`) those two
     functions themselves fire, with the identical payload shape (a single
     `targetNetId: number`). server/combat.lua's `ValidateCombatRequest` runs
@@ -51,13 +50,13 @@
     criterion is satisfied at the protocol level, which is the level that
     actually carries server authority; only the LOCAL convenience wrapper
     differs from a manually-radial-triggered attempt.
-    NON-BLOCKING RECOMMENDATION for whoever next owns client/combat.lua: an
-    optional `targetNetId` parameter on `RequestBiteHold`/`RequestTakedown`
-    (falling back to `FindNearestCombatTarget` when nil) would let a future
-    caller reuse those wrappers directly instead of re-deriving the
-    CanShowK9UI() gate and event name here -- flagged, not required; this
-    file's own gate below is a byte-for-byte copy of that check for exactly
-    this reason, not an independent reinvention.
+    NON-BLOCKING RECOMMENDATION: an optional `targetNetId` parameter on
+    `RequestBiteHold`/`RequestTakedown` (falling back to
+    `FindNearestCombatTarget` when nil) would let a future caller reuse
+    those wrappers directly instead of re-deriving the CanShowK9UI() gate
+    and event name here -- not required; this file's own gate below is a
+    byte-for-byte copy of that check for exactly this reason, not an
+    independent reinvention.
     ======================================================================
 
     ======================================================================
@@ -132,7 +131,8 @@
       is the disclosed default action (see that function's own comment) --
       `ConfirmHandlerDownDefense('takedown')` is exposed as a resource-global
       for a future radial/second-keybind entry, not wired to a keybind of
-      its own by this pass (radial.lua is out of scope/owned elsewhere).
+      its own -- client/radial.lua's own 'k9unit_defense' submenu (see
+      RADIAL CONTRACT below) calls it directly instead.
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
@@ -155,21 +155,21 @@
     - Reads `IsBiteHoldEngaged()` (client/combat.lua) behind a
       `type(...) == 'function'` runtime existence guard -- soft dependency,
       not a load-order assumption, this codebase's established convention.
-    - Reads Config.Combat.HandlerDownDefense (config.lua -- SHIPPED, landed
-      since this file was first written; see that block for the exact
-      fields, including four DEVELOPER_REFERENCE.md's own §12.2 sketch did
-      not anticipate: pollIntervalMs/retriggerCooldownMs/promptTtlMs/
-      attackerReportCooldownMs/confirmKey -- see server/defense.lua's own
-      header for pollIntervalMs/retriggerCooldownMs/attackerReportCooldownMs;
+    - Reads Config.Combat.HandlerDownDefense (config.lua; see that block
+      for the exact fields, including four DEVELOPER_REFERENCE.md's own §12.2
+      sketch did not anticipate: pollIntervalMs/retriggerCooldownMs/
+      promptTtlMs/attackerReportCooldownMs/confirmKey -- see
+      server/defense.lua's own header for
+      pollIntervalMs/retriggerCooldownMs/attackerReportCooldownMs;
       promptTtlMs/confirmKey are consumed only here).
     - No onResourceStop handler -- disclosed omission, not an oversight:
       unlike client/combat.lua (which sets PERSISTENT native flags/
-      relationships that must be restored on a resource restart mid-effect,
-      per that file's own HIGH-2 red-team/QA finding), this file applies NO
-      native side effect to any entity, ever (see §12.0 ITEM 2 ACCEPTANCE
-      CRITERIA above) -- `PendingDefensePrompt` is a plain in-memory Lua
-      table with no game-state counterpart to restore, so there is nothing
-      for a stop handler to clean up.
+      relationships that must be restored on a resource restart mid-effect
+      -- see that file's own header), this file applies NO native side
+      effect to any entity, ever (see §12.0 ITEM 2 ACCEPTANCE CRITERIA
+      above) -- `PendingDefensePrompt` is a plain in-memory Lua table with
+      no game-state counterpart to restore, so there is nothing for a stop
+      handler to clean up.
     ======================================================================
 ]]
 
@@ -252,16 +252,16 @@ end
 --- @param handlerNetId number
 --- @param suggestedTargetNetId number?
 RegisterNetEvent('qbx_k9unit:client:handlerDownDefenseTrigger', function(handlerNetId, suggestedTargetNetId)
-    -- SOURCE-ORIGIN GUARD (coder-security pass — see client/combat.lua's
-    -- own "SOURCE-ORIGIN GUARD" header block for the full sourced
-    -- writeup/confidence grading, not re-derived here). Without this, a
-    -- modified client could locally fire this event with an arbitrary
-    -- `suggestedTargetNetId` to pre-seed its own PendingDefensePrompt (and
-    -- the notification below) with zero server contact — low standalone
-    -- payoff today (ConfirmHandlerDownDefense still re-validates
-    -- everything server-side per this feature's own "manual confirm,
-    -- server re-checks" design), but closes the same "arbitrary event,
-    -- zero server contact" gap this resource's convention now expects for
+    -- SOURCE-ORIGIN GUARD -- see client/combat.lua's own "SOURCE-ORIGIN
+    -- GUARD" header block for the full sourced writeup/confidence grading,
+    -- not re-derived here. Without this, a modified client could locally
+    -- fire this event with an arbitrary `suggestedTargetNetId` to pre-seed
+    -- its own PendingDefensePrompt (and the notification below) with zero
+    -- server contact — low standalone payoff today
+    -- (ConfirmHandlerDownDefense still re-validates everything
+    -- server-side per this feature's own "manual confirm, server
+    -- re-checks" design), but closes the same "arbitrary event, zero
+    -- server contact" gap this resource's convention now expects for
     -- every client:* handler. Confidence: MEDIUM-HIGH, not certain — see
     -- client/combat.lua's header for the honest caveat.
     if source ~= 65535 then return end
@@ -273,18 +273,15 @@ RegisterNetEvent('qbx_k9unit:client:handlerDownDefenseTrigger', function(handler
         expiresAt = GetGameTimer() + Config.Combat.HandlerDownDefense.promptTtlMs,
     }
 
-    -- WRONG-INSTRUCTION FIX (QA follow-up), RECONCILED with client/radial.lua:
-    -- this notify used to say "or use the radial menu" while no radial entry
-    -- for ConfirmHandlerDownDefense existed anywhere -- FALSE at the time.
-    -- client/radial.lua (owned elsewhere, this file never edits it) has
-    -- since registered a real 'k9unit_defense' submenu ("Handler-Down
-    -- Response" -> "Bite & Hold Attacker" / "Non-Lethal Takedown Attacker")
-    -- calling this exact ConfirmHandlerDownDefense('bite'/'takedown')
-    -- contract (see the RADIAL CONTRACT block above), so the mention below
-    -- is restored as a now-true statement, not left stripped. If that
-    -- submenu is ever removed without a corresponding edit here, this line
-    -- must go back to the keybind-only wording above (git history) rather
-    -- than silently drift out of sync.
+    -- RECONCILED WITH client/radial.lua: this notify mentions the radial
+    -- menu because client/radial.lua's own 'k9unit_defense' submenu
+    -- ("Handler-Down Response" -> "Bite & Hold Attacker" / "Non-Lethal
+    -- Takedown Attacker") calls this exact ConfirmHandlerDownDefense
+    -- ('bite'/'takedown') contract (see the RADIAL CONTRACT block below).
+    -- If that submenu is ever removed, this line must be reverted to
+    -- keybind-only wording in the SAME change, not left to drift out of
+    -- sync (client/radial.lua is owned and edited separately from this
+    -- file).
     lib.notify({
         title = locale('common.notify_title'),
         description = locale('defense.handler_under_attack', Config.Combat.HandlerDownDefense.confirmKey),
@@ -295,13 +292,13 @@ end)
 
 --- ======================================================================
 --- RADIAL CONTRACT (this file is the producer; client/radial.lua -- owned
---- elsewhere, never edited by this file -- is the consumer). Documented
+--- separately, never edited by this file -- is the consumer). Documented
 --- here as the stable signature that file's own submenu ('k9unit_defense'
 --- -- "Handler-Down Response" -> "Bite & Hold Attacker" / "Non-Lethal
---- Takedown Attacker", confirmed wired as of this pass) is built against,
---- so a future change to either side has a single source of truth to check
---- against: `ConfirmHandlerDownDefense(actionType)` will not change shape
---- without updating this comment:
+--- Takedown Attacker", confirmed wired) is built against, so a future
+--- change to either side has a single source of truth to check against:
+--- `ConfirmHandlerDownDefense(actionType)` will not change shape without
+--- updating this comment:
 ---   - `actionType`: pass the string literal `'bite'` or `'takedown'`.
 ---     Any other value (including nil) silently falls back to `'bite'`
 ---     (see this function's own DEFAULT ACTION TYPE comment below) -- a
@@ -312,10 +309,10 @@ end)
 ---     already-engaged: a `lib.notify` only, never a thrown error -- safe
 ---     to call speculatively/optimistically from a radial menu at any time.
 --- The notify text above in 'qbx_k9unit:client:handlerDownDefenseTrigger'
---- now mentions the radial menu again (reconciled with the fact that the
---- entry is real, not aspirational) -- if that radial submenu is ever
---- removed, that notify text must be reverted to keybind-only wording in
---- the SAME change, not left to drift false again.
+--- mentions the radial menu because the entry above is real, not
+--- aspirational -- if that radial submenu is ever removed, that notify
+--- text must be reverted to keybind-only wording in the SAME change, not
+--- left to drift out of sync again.
 --- ======================================================================
 --- Manual confirmation step -- DEVELOPER_REFERENCE.md §12.0 item 2's own "the K9
 --- player must still manually confirm before any bite-and-hold or takedown

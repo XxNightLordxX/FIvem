@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/findalert.lua
 
-    K9_IDEAS.md §1 ("Make finds feel like a real alert, not a pop-up
+    PROJECT_HISTORY.md §1 ("Make finds feel like a real alert, not a pop-up
     message"). Client half of server/findalert.lua -- see that file's own
     header for the full hook/ownership writeup (this feature is a pure
     REACTION layer bolted onto server/search.lua's already-fired
@@ -49,7 +49,7 @@
     intended caller -- a player who just clicked "Sit" themselves):
       1. LATENCY: this reaction is supposed to feel instant ("the dog
          itself should react... automatically at the right moment",
-         K9_IDEAS.md §1) -- adding a second network round trip for a
+         PROJECT_HISTORY.md §1) -- adding a second network round trip for a
          permission check that was ALREADY satisfied server-side
          milliseconds earlier (the search/track this reaction is about
          could not have produced a real alertTier at all without

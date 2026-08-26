@@ -1,19 +1,19 @@
 --[[
     qbx_k9unit/client/proximityaudio.lua
 
-    PROXIMITY AUDIO FX (Config.Features.ProximityAudioFX, still `false`) --
-    client-side ambient K9 presence audio that scales with the LISTENING
-    player's own live distance to a nearby, recognized K9-modeled ped: the
-    dog audibly gets louder as a listener approaches it and quieter as they
-    move away. Entirely delivered via client/audio.lua's existing NUI/
-    Web-Audio GainNode bridge (PlayK9Sound/StopK9Sound/IsK9SoundActive --
-    the last of these added THIS pass, see that file's own new header
-    comment above it) -- this file adds ZERO new natives beyond ones this
-    resource already uses elsewhere for the identical purpose, ZERO new
-    server events, and does not touch client/audio.lua's SendNUIMessage
-    payload contract with html/app.js at all (its one addition,
-    IsK9SoundActive, is a pure Lua-side read of that file's own private
-    state, never a new NUI message -- see that file's own comment on it).
+    PROXIMITY AUDIO FX (Config.Features.ProximityAudioFX) -- client-side
+    ambient K9 presence audio that scales with the LISTENING player's own
+    live distance to a nearby, recognized K9-modeled ped: the dog audibly
+    gets louder as a listener approaches it and quieter as they move away.
+    Entirely delivered via client/audio.lua's existing NUI/Web-Audio
+    GainNode bridge (PlayK9Sound/StopK9Sound/IsK9SoundActive -- see that
+    file's own header comment above IsK9SoundActive) -- this file adds
+    ZERO new natives beyond ones this resource already uses elsewhere for
+    the identical purpose, ZERO new server events, and does not touch
+    client/audio.lua's SendNUIMessage payload contract with html/app.js at
+    all (its one addition, IsK9SoundActive, is a pure Lua-side read of that
+    file's own private state, never a new NUI message -- see that file's
+    own comment on it).
 
     ==========================================================================
     SCOPE -- WHAT THIS FILE IS, AND, EXPLICITLY, IS NOT:
@@ -27,24 +27,23 @@
     ecosystem-dominant metadata convention... to guess at" -- and names it a
     precondition for a later v2. That boundary is respected here by building
     NEITHER that trigger condition NOR the server-relay/tiered-growl
-    plumbing that would sit on top of it, per this pass's own explicit
-    instruction to respect it.
+    plumbing that would sit on top of it.
 
-    What THIS file ships instead is the literal, narrower ask handed to its
-    author: "K9 audio that scales with distance -- the dog sounds closer or
-    further as the listener moves." That is delivered as a self-contained,
-    purely-cosmetic, CLIENT-LOCAL effect with no "suspect"/trigger concept
-    at all -- any live, non-dead, streamed-in ped matching one of
-    Config.Peds' recognized K9 models (the SAME IsEntityModelK9() global
-    check client/wellbeing.lua's Pet/Feed K9 targeting and
-    client/medkit.lua's Treat K9 targeting already use for the identical
-    "is this plausibly a K9" question -- an already-accepted ambiguity
-    inherited here, not a new one: a wild, non-player NPC wearing the same
-    model gets the same ambient effect, exactly as it would already be
-    picked up by those existing targeting checks) gets a continuous, looped
-    ambient sound whose gain THIS client alone computes from ITS OWN live
-    distance, via client/audio.lua's already-built PlayK9Sound(..., {loop =
-    true}) machinery -- there is no new falloff math to build here at all.
+    What THIS file ships instead is the literal, narrower goal: "K9 audio
+    that scales with distance -- the dog sounds closer or further as the
+    listener moves." That is delivered as a self-contained, purely-cosmetic,
+    CLIENT-LOCAL effect with no "suspect"/trigger concept at all -- any
+    live, non-dead, streamed-in ped matching one of Config.Peds' recognized
+    K9 models (the SAME IsEntityModelK9() global check client/wellbeing.lua's
+    Pet/Feed K9 targeting and client/medkit.lua's Treat K9 targeting already
+    use for the identical "is this plausibly a K9" question -- an
+    already-accepted ambiguity inherited here, not a new one: a wild,
+    non-player NPC wearing the same model gets the same ambient effect,
+    exactly as it would already be picked up by those existing targeting
+    checks) gets a continuous, looped ambient sound whose gain THIS client
+    alone computes from ITS OWN live distance, via client/audio.lua's
+    already-built PlayK9Sound(..., {loop = true}) machinery -- there is no
+    new falloff math to build here at all.
 
     This is a legitimate, self-contained v1 that neither blocks, nor is
     blocked by, a future SuspectDistanceSource-driven layer being added on
@@ -64,14 +63,12 @@
     materially bigger, unstarted asset task. The NUI bridge is the ONLY
     delivery path in this resource that can ever produce real, audible
     output once an operator drops in a plain html/sounds/<key>.ogg file
-    (client/audio.lua's own header) -- this file was explicitly directed to
-    build on that bridge for exactly that reason, a disclosed, deliberate
-    divergence from DEVELOPER_REFERENCE.md's own "worth naming" lean, not an
-    oversight of it.
+    (client/audio.lua's own header) -- this file builds on that bridge for
+    exactly that reason, a disclosed, deliberate divergence from
+    DEVELOPER_REFERENCE.md's own "worth naming" lean, not an oversight of it.
 
     ==========================================================================
-    FALLOFF MATH -- HONEST CONFIDENCE GRADING (stated plainly, per this
-    pass's own instruction, rather than presented as a proven pattern):
+    FALLOFF MATH -- HONEST CONFIDENCE GRADING:
 
     The actual gain-vs-distance curve (linear, 1.0 at 0m down to 0.0 at
     client/audio.lua's own private AUDIO_MAX_DISTANCE constant) and its
@@ -102,18 +99,18 @@
     convention as client/audio.lua's own header, client/vision.lua's
     ThermalVision gate, client/movement.lua's AgilityBasicJump thread). This
     file returns entirely below, starting no thread at all, unless
-    Config.Features.ProximityAudioFX is true (shipped default: false). It
-    additionally never calls PlayK9Sound/StopK9Sound/IsK9SoundActive without
-    a `type(...) == 'function'` runtime existence guard immediately before
-    the call -- this resource's own documented "runtime existence guard, not
-    a load-order assumption" convention (config.lua's globals comment on
+    Config.Features.ProximityAudioFX is true. It additionally never calls
+    PlayK9Sound/StopK9Sound/IsK9SoundActive without a `type(...) ==
+    'function'` runtime existence guard immediately before the call -- this
+    resource's own documented "runtime existence guard, not a load-order
+    assumption" convention (config.lua's globals comment on
     RestoreInjury/AwardXP/GetXPTier is the precedent this follows).
     Config.Features.ProximityAudioFX being true does not, by itself,
     guarantee client/audio.lua has already executed and defined those
     globals by the time THIS file's own client_scripts position runs --
     fxmanifest.lua load order (client/audio.lua before this file) is the
-    reported, requested ordering, not a correctness guarantee this file
-    silently assumes.
+    established ordering, not a correctness guarantee this file silently
+    assumes.
 
     ==========================================================================
     "EVERYTHING MUST STOP" -- how each required stop trigger actually maps
@@ -177,13 +174,11 @@
 if not Config.Features.ProximityAudioFX then return end
 
 -- ----------------------------------------------------------------------
--- Tuning -- read defensively from Config.ProximityAudioFX (a table this
--- pass's author does not own and did not add to config.lua -- see the
--- integration notes reported alongside this file for the exact block
--- requested). Defaulting inline rather than hard-erroring if that table
--- doesn't exist yet mirrors client/main.lua's own defensive
--- `Config.AdvancedBarkRadial or {}` posture for a config table a feature
--- flag references before its own schema addition has necessarily landed.
+-- Tuning -- read defensively from Config.ProximityAudioFX. Defaulting
+-- inline rather than hard-erroring if that table doesn't exist yet
+-- mirrors client/main.lua's own defensive `Config.AdvancedBarkRadial or
+-- {}` posture for a config table a feature flag references before its own
+-- schema addition has necessarily landed.
 -- ----------------------------------------------------------------------
 local ProximityAudioFXConfig = Config.ProximityAudioFX or {}
 
@@ -191,25 +186,25 @@ local ProximityAudioFXConfig = Config.ProximityAudioFX or {}
 -- own streamed ped pool. See this file's header "WORST-CASE PER-TICK COST"
 -- for the full cost model this interval feeds into.
 --
--- CLAMP AND WARN (bug found + fixed this pass): this used to be a bare
--- `ProximityAudioFXConfig.scanIntervalMs or 2500`. In Lua, `or` only falls
--- through on `nil`/`false` -- a configured `scanIntervalMs = 0` (an operator
--- typo, or a mistaken attempt to "disable" this by zeroing it, the exact
--- footgun this resource's own cooldown fields are already on record for --
--- see tests/cooldowns_spec.lua) is a genuine number and therefore truthy in
--- Lua, so it passed straight through as 0 -- silently removing this
+-- CLAMP AND WARN: a bare `ProximityAudioFXConfig.scanIntervalMs or 2500`
+-- would be wrong here. In Lua, `or` only falls through on `nil`/`false` --
+-- a configured `scanIntervalMs = 0` (an operator typo, or a mistaken
+-- attempt to "disable" this by zeroing it, the exact footgun this
+-- resource's own cooldown fields are already on record for -- see
+-- tests/cooldowns_spec.lua) is a genuine number and therefore truthy in
+-- Lua, so it would pass straight through as 0 -- silently removing this
 -- thread's entire throttle. The discovery thread below calls this value
 -- directly as `Wait(PROXIMITY_SCAN_INTERVAL_MS)`: a 0 (or any non-positive,
 -- or NaN/non-number) value there is not "scan more often," it is a
 -- `Wait(0)` (or worse) full-per-frame GetGamePool('CPed') sweep for the
 -- life of the resource -- precisely the "no tight CreateThread/Wait(0) loop"
--- rule this file's own header otherwise correctly documents and claims
--- ("WORST-CASE PER-TICK COST... NOT per frame, NEVER Wait(0)") but did not
--- actually enforce against a bad config value. Never asserted at file scope
--- (a malformed config value must degrade, not take this whole file's
--- registration down with it, matching client/agility.lua's own
--- vaultCooldownMs clamp-and-warn precedent for the identical bug class) --
--- clamped to the shipped default and warned instead.
+-- rule this file's own header otherwise documents and claims
+-- ("WORST-CASE PER-TICK COST... NOT per frame, NEVER Wait(0)"), which this
+-- clamp exists to actually enforce against a bad config value. Never
+-- asserted at file scope (a malformed config value must degrade, not take
+-- this whole file's registration down with it, matching client/agility.lua's
+-- own vaultCooldownMs clamp-and-warn precedent for the identical bug
+-- class) -- clamped to the shipped default and warned instead.
 local PROXIMITY_SCAN_INTERVAL_MS_DEFAULT = 2500
 local PROXIMITY_SCAN_INTERVAL_MS = PROXIMITY_SCAN_INTERVAL_MS_DEFAULT
 if ProximityAudioFXConfig.scanIntervalMs ~= nil then
@@ -227,28 +222,22 @@ end
 -- AudioBufferSource + a 500ms poll thread producing no audible effect at
 -- all).
 --
--- FOUND EARLIER THIS PASS: this used to be an unenforced hand-sync
--- requirement against a private constant in another file (the comment here
--- literally said "HAND-SYNC REQUIRED if audio.lua's AUDIO_MAX_DISTANCE is
--- ever retuned below this value" and did nothing about it) -- if
+-- CLOSED IN BOTH DIRECTIONS via client/audio.lua's GetK9AudioMaxDistance()
+-- (allowed into the root .luacheckrc `globals` list for exactly this
+-- cross-file read): the clamp below reads that live value every time this
+-- file loads, so this constant can never sit inconsistent with whatever
+-- audio.lua's own AUDIO_MAX_DISTANCE actually is, in either direction,
+-- without a code change forcing a re-evaluation of both. A hand-synced
+-- duplicate constant here would be the wrong shape for this: if
 -- Config.ProximityAudioFX.triggerDistance was ever configured (or
 -- defaulted) above audio.lua's real ceiling, every ambient loop this file
 -- starts would silently sit at gain 0.0 forever, with no error and no
--- console output.
---
--- CLOSED IN BOTH DIRECTIONS, now that client/audio.lua exposes
--- GetK9AudioMaxDistance() (added this pass specifically for this, allowed
--- into the root .luacheckrc `globals` list for exactly this cross-file
--- read): the clamp below reads that live value every time this file loads,
--- so it can never sit inconsistent with whatever audio.lua's own
--- AUDIO_MAX_DISTANCE actually is, in either direction, without a code
--- change forcing a re-evaluation of both. Falls back to a hardcoded 25.0
--- (this file's own historical default, safely under audio.lua's
--- documented 30.0 as of this pass) if GetK9AudioMaxDistance does not exist
--- as a global at all -- this resource's own "runtime existence guard, not
--- a load-order assumption" convention (client/audio.lua does not define
--- this function while Config.Features.BasicBarkSounds is false, regardless
--- of what fxmanifest.lua's load order promises).
+-- console output. Falls back to a hardcoded 25.0 (safely under audio.lua's
+-- documented 30.0) if GetK9AudioMaxDistance does not exist as a global at
+-- all -- this resource's own "runtime existence guard, not a load-order
+-- assumption" convention (client/audio.lua does not define this function
+-- while Config.Features.BasicBarkSounds is false, regardless of what
+-- fxmanifest.lua's load order promises).
 local FALLBACK_TRIGGER_DISTANCE_METERS = 25.0
 local audioMaxDistance = type(GetK9AudioMaxDistance) == 'function'
     and GetK9AudioMaxDistance()
@@ -320,17 +309,17 @@ CreateThread(function()
     while true do
         Wait(PROXIMITY_SCAN_INTERVAL_MS)
 
-        -- Per-person block (client/featureblocks.lua, REQUESTED -- see
-        -- that file's header for the full contract). This is the
-        -- LISTENER's own ability to hear ambient K9 audio -- blocking it
-        -- stops every currently-tracked loop outright and skips discovery
-        -- entirely for this scan, rather than merely refusing new loops,
-        -- so a block applied while a loop is already playing is silenced
-        -- within one PROXIMITY_SCAN_INTERVAL_MS of arriving (this thread's
-        -- own established "polling detection, not instant, but real"
-        -- posture -- see client/vision.lua's maintenance thread for the
-        -- identical precedent). Muting a passive listening effect is never
-        -- a "trap" -- there is no exit path to strand anyone from.
+        -- Per-person block (client/featureblocks.lua -- see that file's
+        -- header for the full contract). This is the LISTENER's own
+        -- ability to hear ambient K9 audio -- blocking it stops every
+        -- currently-tracked loop outright and skips discovery entirely for
+        -- this scan, rather than merely refusing new loops, so a block
+        -- applied while a loop is already playing is silenced within one
+        -- PROXIMITY_SCAN_INTERVAL_MS of arriving (this thread's own
+        -- established "polling detection, not instant, but real" posture
+        -- -- see client/vision.lua's maintenance thread for the identical
+        -- precedent). Muting a passive listening effect is never a "trap"
+        -- -- there is no exit path to strand anyone from.
         if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ProximityAudioFX') then
             for ped in pairs(activeLoops) do
                 StopProximityLoop(ped)

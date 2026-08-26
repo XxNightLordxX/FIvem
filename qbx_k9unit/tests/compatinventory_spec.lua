@@ -751,7 +751,7 @@ t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper (ItemAdded): allow
 end)
 
 -- ---- qb-inventory SERVER RegisterHook wrapper (ItemDropped) -- THE FIX FOR
--- "scent tracking never fires on qb-inventory" (ISSUES.md). CONFIRMED this
+-- "scent tracking never fires on qb-inventory" (KNOWN_ISSUES.md). CONFIRMED this
 -- pass against qbcore-framework/qb-inventory's real `main` branch source:
 -- server/main.lua's `qb-inventory:server:createDrop` callback runs
 -- `TriggerHook('ItemDropped', hookData.item.type, hookData)` on every real

@@ -519,6 +519,119 @@ t.test('server GetXPTier(): CopyTier genuinely recurses -- a nested table field 
 end)
 
 -- ----------------------------------------------------------------------
+-- GetXPTier(citizenid) -- BUGFIX COVERAGE (this pass): composing
+-- server/k9profiles.lua's GetK9EffectiveMultipliers(citizenid) onto the
+-- raw tier copy, so a caller resource asking "what is this K9's speed
+-- multiplier" sees the operator's per-K9 override, exactly like
+-- server/progression.lua's BuildEffectiveTierSnapshot and
+-- server/tracking.lua's own scent-range consumer already do. Not stubbed
+-- in the base `serverEnv` above (deliberately -- see that env's own
+-- comment for why every wrapped global gets a "happy path" default): a
+-- missing GetK9EffectiveMultipliers here is the REAL, common case (an
+-- install that never touched server/k9profiles.lua), so every test in this
+-- file BEFORE this block already exercised the intended "no override
+-- available" degrade path without knowing it. Each test below sets
+-- `serverEnv.GetK9EffectiveMultipliers` explicitly and clears it back to
+-- nil afterward so later, unrelated tests in this file are not affected.
+-- ----------------------------------------------------------------------
+
+t.test('server GetXPTier(): composes a live individual override onto the raw tier copy -- the exact gap this pass closes', function()
+    serverEnv.GetXPTier = function(citizenid)
+        if citizenid == 'ABC123' then return Config.XPTiers[2] end
+        return Config.XPTiers[1]
+    end
+    serverEnv.GetK9EffectiveMultipliers = function(citizenid)
+        if citizenid == 'ABC123' then
+            return { speedMultiplier = 2.5, scentRangeMultiplier = 1.8, medkitCooldownMultiplier = 0.5 }
+        end
+        return { speedMultiplier = 1.0, scentRangeMultiplier = 1.0 }
+    end
+
+    local tier = ServerExports.GetXPTier('ABC123')
+    t.equals(tier.xp, 500, 'non-overridable fields (xp/label) still come from the raw tier, unchanged')
+    t.equals(tier.label, 'Trained K9')
+    t.equals(tier.speedMultiplier, 2.5, 'the operator override must win over the plain tier value (1.05)')
+    t.equals(tier.scentRangeMultiplier, 1.8)
+    t.equals(tier.medkitCooldownMultiplier, 0.5)
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+t.test('server GetXPTier(): a citizenid with NO live override is unaffected by a present, healthy GetK9EffectiveMultipliers (strict widening, never a narrowing)', function()
+    serverEnv.GetXPTier = function() return Config.XPTiers[2] end
+    -- Mirrors GetK9EffectiveMultipliers' own real contract: with no override
+    -- row, it returns the plain tier-derived values unchanged.
+    serverEnv.GetK9EffectiveMultipliers = function() return { speedMultiplier = 1.05, scentRangeMultiplier = 1.05 } end
+
+    local tier = ServerExports.GetXPTier('X')
+    t.equals(tier.speedMultiplier, 1.05)
+    t.equals(tier.scentRangeMultiplier, 1.05)
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+t.test('server GetXPTier(): a missing GetK9EffectiveMultipliers global degrades to the plain tier copy -- this export\'s own pre-fix behavior, never an error, never nil', function()
+    serverEnv.GetXPTier = function() return Config.XPTiers[2] end
+    serverEnv.GetK9EffectiveMultipliers = nil -- an install predating server/k9profiles.lua
+
+    local tier = ServerExports.GetXPTier('X')
+    t.equals(tier.speedMultiplier, 1.05)
+    t.equals(tier.scentRangeMultiplier, 1.05)
+end)
+
+t.test('server GetXPTier(): a throwing GetK9EffectiveMultipliers degrades to the plain tier copy (pcall exercised)', function()
+    serverEnv.GetXPTier = function() return Config.XPTiers[2] end
+    serverEnv.GetK9EffectiveMultipliers = function() error('k9profiles cache corrupted') end
+
+    local tier = ServerExports.GetXPTier('X')
+    t.equals(tier.speedMultiplier, 1.05)
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+t.test('server GetXPTier(): a non-table result from GetK9EffectiveMultipliers is ignored, degrading to the plain tier copy', function()
+    serverEnv.GetXPTier = function() return Config.XPTiers[2] end
+    serverEnv.GetK9EffectiveMultipliers = function() return 'not-a-table' end
+
+    local tier = ServerExports.GetXPTier('X')
+    t.equals(tier.speedMultiplier, 1.05)
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+t.test('server GetXPTier(): only the fields GetK9EffectiveMultipliers actually sets as numbers are overlaid -- a field it omits keeps the raw tier value, never becomes nil', function()
+    serverEnv.GetXPTier = function() return Config.XPTiers[2] end -- speedMultiplier=1.05, scentRangeMultiplier=1.05
+    serverEnv.GetK9EffectiveMultipliers = function() return { speedMultiplier = 3.0 } end -- scentRangeMultiplier omitted
+
+    local tier = ServerExports.GetXPTier('X')
+    t.equals(tier.speedMultiplier, 3.0)
+    t.equals(tier.scentRangeMultiplier, 1.05, 'a field the effective-multipliers result does not set must keep the raw tier value')
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+t.test('server GetXPTier(): the composed snapshot is still a fresh copy -- mutating it must never corrupt Config.XPTiers[n] even when an override was applied', function()
+    serverEnv.GetXPTier = function() return Config.XPTiers[2] end
+    serverEnv.GetK9EffectiveMultipliers = function() return { speedMultiplier = 3.0 } end
+
+    local tier = ServerExports.GetXPTier('X')
+    tier.speedMultiplier = -1
+    t.equals(Config.XPTiers[2].speedMultiplier, 1.05, 'the override overlay must still land on a private copy, never Config.XPTiers[n] itself')
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+t.test('server GetXPTier(): a non-string citizenid never reaches GetK9EffectiveMultipliers either, exactly like it never reaches the wrapped GetXPTier', function()
+    local called = false
+    serverEnv.GetK9EffectiveMultipliers = function() called = true; return {} end
+
+    ServerExports.GetXPTier(123)
+    t.isFalse(called, 'an invalid citizenid has no override to look up and must short-circuit before this call')
+
+    serverEnv.GetK9EffectiveMultipliers = nil
+end)
+
+-- ----------------------------------------------------------------------
 -- IsFeatureEnabled(featureKey)
 -- ----------------------------------------------------------------------
 

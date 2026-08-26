@@ -172,12 +172,12 @@ client_scripts {
     'client/tablet.lua',
     'client/vehicle.lua',
     'client/tracking.lua',
-    'client/scenttrail.lua', -- K9_IDEAS.md §2 "follow your nose" (ScentTrailHunt), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound are all reached behind type() guards.
-    'client/pursuitsprint.lua', -- K9_IDEAS.md §5 (PursuitSprint), client half. No load-order dependency.
-    'client/scentlineup.lua', -- K9_IDEAS.md §4 (ScentLineup), client half -- the invite consent dialog only. Calls no other client file's globals, so no load-order dependency at all.
-    'client/sarcalls.lua', -- K9_IDEAS.md §3 (SARCalls), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound all go through runtime existence guards. Owns the cosmetic 'found them' reveal, which is non-networked and cleaned up by the same client that made it.
+    'client/scenttrail.lua', -- PROJECT_HISTORY.md §2 "follow your nose" (ScentTrailHunt), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound are all reached behind type() guards.
+    'client/pursuitsprint.lua', -- PROJECT_HISTORY.md §5 (PursuitSprint), client half. No load-order dependency.
+    'client/scentlineup.lua', -- PROJECT_HISTORY.md §4 (ScentLineup), client half -- the invite consent dialog only. Calls no other client file's globals, so no load-order dependency at all.
+    'client/sarcalls.lua', -- PROJECT_HISTORY.md §3 (SARCalls), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound all go through runtime existence guards. Owns the cosmetic 'found them' reveal, which is non-networked and cleaned up by the same client that made it.
     'client/search.lua',
-    'client/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
+    'client/findalert.lua', -- PROJECT_HISTORY.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
     'client/vision.lua',
     'client/hud.lua',
     'client/inventory.lua', -- K9Inventory, DEVELOPER_REFERENCE.md §13.4.2
@@ -366,12 +366,12 @@ server_scripts {
     -- GetActivePartnerCitizenId, server-side only, never a client claim.
     'server/defense.lua',
     'server/tracking.lua',
-    'server/scenttrail.lua', -- K9_IDEAS.md §2 "follow your nose" (ScentTrailHunt), server half. HARD load-order dependency on server/cooldowns.lua -- NewCooldown at this file's own file-load time -- already satisfied here. Holds the hidden coordinate and never sends it to a client; only a distance goes over the wire.
-    'server/pursuitsprint.lua', -- K9_IDEAS.md §5 (PursuitSprint), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time). Also holds the only correct implementation of the four-step per-person FeatureControl resolution -- read it before writing a second one anywhere else.
-    'server/scentlineup.lua', -- K9_IDEAS.md §4 (ScentLineup), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time); NotifyPlayer/HasK9Access/HasPermission/K9Compat.Get are runtime-only. Holds the secret match and never sends it to any client until a pick is committed.
-    'server/sarcalls.lua', -- K9_IDEAS.md §3 (SARCalls), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time) and after server/certifications.lua for HasK9Access. AwardXP is behind a runtime guard, so no ordering against progression.lua. Holds the hidden target coordinate and never sends it to a client.
+    'server/scenttrail.lua', -- PROJECT_HISTORY.md §2 "follow your nose" (ScentTrailHunt), server half. HARD load-order dependency on server/cooldowns.lua -- NewCooldown at this file's own file-load time -- already satisfied here. Holds the hidden coordinate and never sends it to a client; only a distance goes over the wire.
+    'server/pursuitsprint.lua', -- PROJECT_HISTORY.md §5 (PursuitSprint), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time). Also holds the only correct implementation of the four-step per-person FeatureControl resolution -- read it before writing a second one anywhere else.
+    'server/scentlineup.lua', -- PROJECT_HISTORY.md §4 (ScentLineup), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time); NotifyPlayer/HasK9Access/HasPermission/K9Compat.Get are runtime-only. Holds the secret match and never sends it to any client until a pick is committed.
+    'server/sarcalls.lua', -- PROJECT_HISTORY.md §3 (SARCalls), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time) and after server/certifications.lua for HasK9Access. AwardXP is behind a runtime guard, so no ordering against progression.lua. Holds the hidden target coordinate and never sends it to a client.
     'server/search.lua',
-    'server/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
+    'server/findalert.lua', -- PROJECT_HISTORY.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
     'server/inventory.lua', -- K9Inventory, DEVELOPER_REFERENCE.md §13.4.2
     'server/kennel.lua',    -- R&D (DeployableKennel, DEVELOPER_REFERENCE.md#phase-5-research §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
     'server/medkit.lua',    -- K9Medkit, DEVELOPER_REFERENCE.md §13.4.4 -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption

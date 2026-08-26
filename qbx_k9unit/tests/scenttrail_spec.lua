@@ -1,7 +1,7 @@
 --[[
     tests/scenttrail_spec.lua
 
-    Covers BOTH halves of "Follow your nose" (K9_IDEAS.md §2) in one file,
+    Covers BOTH halves of "Follow your nose" (PROJECT_HISTORY.md §2) in one file,
     per this task's own file-ownership constraint (only ONE new spec file
     is permitted for this feature). Two independent sandboxes, one per
     file, following this suite's own established per-feature-file

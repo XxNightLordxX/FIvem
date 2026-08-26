@@ -2,23 +2,22 @@
     qbx_k9unit/server/bonetool.lua
 
     DEV-ONLY BONE-INDEX SWEEP TOOL — Config.Features.BoneSweepDevTool
-    (NEW flag this pass, MUST default `false` and MUST NEVER be flipped
-    `true` on a production server — see the ACCESS MODEL section below).
+    (MUST default `false` and MUST NEVER be flipped `true` on a production
+    server — see the ACCESS MODEL section below).
 
     ======================================================================
-    WHY THIS EXISTS: three separate research passes for
-    Config.Features.PropAttachments failed to find a documented bone NAME
-    for a quadruped/animal skeleton, and reading existing open-source dog
-    scripts found nobody attaching props to an animal ped at all. The
-    reframe that unblocks it: AttachEntityToEntity takes a bone INDEX, not a
-    name, and GetWorldPositionOfEntityBone-class natives are entity-type-
-    agnostic — so the right method is an in-engine visual sweep by a human
-    on a real dev server, not more documentation searching. This file (plus
+    WHY THIS EXISTS: repeated attempts to find a documented bone NAME for
+    a quadruped/animal skeleton, for Config.Features.PropAttachments,
+    failed, and reading existing open-source dog scripts found nobody
+    attaching props to an animal ped at all. The reframe that unblocks it:
+    AttachEntityToEntity takes a bone INDEX, not a name, and
+    GetWorldPositionOfEntityBone-class natives are entity-type-agnostic —
+    so the right method is an in-engine visual sweep by a human on a real
+    dev server, not more documentation searching. This file (plus
     client/bonetool.lua) is that sweep tool. It answers the SAME open
-    question for Config.Features.FetchMechanic (built concurrently by
-    another agent) — see this file's own EXPOSED SURFACE note below for
-    exactly what that feature can reuse here rather than building its own
-    copy.
+    question for Config.Features.FetchMechanic — see this file's own
+    EXPOSED SURFACE note below for exactly what that feature can reuse
+    here rather than building its own copy.
 
     THIS FILE PRODUCES NO ANSWER BY ITSELF. It lets a human connected to a
     real dev server jump to/step through numeric bone indices on their OWN
@@ -27,8 +26,8 @@
     CreateObject+AttachEntityToEntity test — see client/bonetool.lua's own
     header for the two-mode PREVIEW/TEST design), which index puts a visible
     marker prop where a vest/harness (or, for FetchMechanic, a fetched item
-    held in the mouth) should sit. See this pass's own report for the exact
-    question a human still needs to answer.
+    held in the mouth) should sit. A human operator still needs to record
+    which index looks correct once found.
 
     ======================================================================
     ACCESS MODEL — TWO INDEPENDENT LAYERS. BOTH must hold; neither alone is
@@ -37,22 +36,22 @@
     server that DOES opt in at the registration layer still requires a
     per-invocation, in-game authorization check on every single command.
 
-    LAYER 1 — REGISTRATION-TIME, OUT-OF-GAME (coder-security, this pass —
-    see SECOND, EXPLICIT OPT-IN below for the full "why a convar on top of
-    the flag" reasoning): Config.Features.BoneSweepDevTool must be `true`
-    AND the convar `qbx_k9unit_enable_bone_dev_tool` must read as `1` via
-    GetConvarInt — BOTH checked ONCE, in the onResourceStart block below,
-    before '/k9bonetool' is ever RegisterCommand'd. If either is not
-    satisfied, the command is never registered at all, matching this
-    resource's established "flag off means genuinely inert" convention —
-    extended here to "flag-on-but-not-opted-in also means genuinely inert."
+    LAYER 1 — REGISTRATION-TIME, OUT-OF-GAME (see SECOND, EXPLICIT OPT-IN
+    below for the full "why a convar on top of the flag" reasoning):
+    Config.Features.BoneSweepDevTool must be `true` AND the convar
+    `qbx_k9unit_enable_bone_dev_tool` must read as `1` via GetConvarInt —
+    BOTH checked ONCE, in the onResourceStart block below, before
+    '/k9bonetool' is ever RegisterCommand'd. If either is not satisfied,
+    the command is never registered at all, matching this resource's
+    established "flag off means genuinely inert" convention — extended
+    here to "flag-on-but-not-opted-in also means genuinely inert."
 
-    LAYER 2 — PER-INVOCATION, IN-GAME, JOB-RANK GATED (coder-security, this
-    pass — ACE -> police-job-rank conversion, at the project owner's
-    explicit direction to convert every remaining ACE-gated action in this
-    resource; this file's `IsPlayerAceAllowed(...,
-    Config.BoneSweepTool.AcePermission)` gate was the last of exactly two,
-    the other being server/admin.lua's, already converted in a prior pass):
+    LAYER 2 — PER-INVOCATION, IN-GAME, JOB-RANK GATED (an ACE ->
+    police-job-rank conversion, at the project owner's explicit direction
+    to convert every remaining ACE-gated action in this resource; this
+    file's `IsPlayerAceAllowed(..., Config.BoneSweepTool.AcePermission)`
+    gate was the last of exactly two ACE gates in this resource, the other
+    being server/admin.lua's, which was converted the same way):
     IsAuthorizedBoneSweepDevTool(source), re-checked on EVERY invocation
     inside the handler, mirroring server/admin.lua's IsAuthorizedAdmin
     shape — fail closed on every unresolvable player/job shape, never
@@ -87,15 +86,14 @@
          officer with no development/server-owner role (a person this tool
          was never FOR). Converting anyway, per direction, at the
          NARROWEST threshold this resource's existing job shape already
-         offers (isboss, no configurable grade) is this pass's attempt to
-         minimize that mismatch rather than pretend it away: a dev-server
-         operator can trivially grant their own test character boss status
-         on their own box, and `job.isboss` needs no new config key that
-         could quietly widen this later. LAYER 1's convar — not this
-         in-game threshold — is what actually keeps this tool off a
-         production server.
+         offers (isboss, no configurable grade) minimizes that mismatch
+         rather than pretending it away: a dev-server operator can
+         trivially grant their own test character boss status on their own
+         box, and `job.isboss` needs no new config key that could quietly
+         widen this later. LAYER 1's convar — not this in-game threshold —
+         is what actually keeps this tool off a production server.
 
-    OPERATIONAL CAVEAT (task requirement — also stated in config.lua's own
+    OPERATIONAL CAVEAT (also stated in config.lua's own
     Config.Features.BoneSweepDevTool comment; restated here because THIS
     file is the one that actually acts on it): both LAYER 1 checks
     (Config.Features.BoneSweepDevTool and the convar) are read ONCE, in the
@@ -124,17 +122,17 @@
     access-model judgment calls, don't decide them silently" convention.
 
     ======================================================================
-    SECOND, EXPLICIT OPT-IN (coder-security, this pass) — WHY A CONVAR ON
-    TOP OF THE FEATURE FLAG: this resource ships 40 independent
-    Config.Features.* toggles, meant to be flippable together (a server
-    owner reviewing/enabling "all features"). This is the one flag whose
-    own config.lua comment says the opposite of what a blanket "all
-    features on" pass just did to it — "NEVER enable this on a production
-    server" — and a real FXServer run confirms it: with the flag alone set
-    true, this tool registers live at startup. A boolean that reads
-    identically to 39 other, genuinely-safe-to-bulk-enable flags is not a
-    strong enough signal that enabling THIS one was a deliberate, standalone
-    decision, because on the evidence available it demonstrably was not.
+    SECOND, EXPLICIT OPT-IN — WHY A CONVAR ON TOP OF THE FEATURE FLAG: this
+    resource ships 40 independent Config.Features.* toggles, meant to be
+    flippable together (a server owner reviewing/enabling "all features").
+    This is the one flag whose own config.lua comment says the opposite of
+    what a blanket "all features on" pass just did to it — "NEVER enable
+    this on a production server" — and a real FXServer run confirms it:
+    with the flag alone set true, this tool registers live at startup. A
+    boolean that reads identically to 39 other, genuinely-safe-to-bulk-
+    enable flags is not a strong enough signal that enabling THIS one was a
+    deliberate, standalone decision, because on the evidence available it
+    demonstrably was not.
 
     `qbx_k9unit_enable_bone_dev_tool` is a second gate a bulk flag-flip
     cannot satisfy by construction: it must be set BY NAME, as its own line
@@ -158,33 +156,32 @@
     one). This is a WEAKER guard than an assert on purpose: the "fix" here
     is "the operator did not opt in," a state this resource must tolerate
     gracefully (leave the tool unregistered, resource still starts) rather
-    than a misconfiguration worth crashing resource start over — this task's
-    own brief is explicit that this must never become an assert/error.  The
-    printed warning below is the loud, actionable line that makes "the tool
-    did not register" legible in server console output instead of a silent,
-    unexplained absence — printed ONLY when Config.Features.BoneSweepDevTool
-    is true, so a default install with the flag off (most installs) prints
-    nothing extra at all.
+    than a misconfiguration worth crashing resource start over — this must
+    never become an assert/error. The printed warning below is the loud,
+    actionable line that makes "the tool did not register" legible in
+    server console output instead of a silent, unexplained absence —
+    printed ONLY when Config.Features.BoneSweepDevTool is true, so a
+    default install with the flag off (most installs) prints nothing extra
+    at all.
 
-    GETPEDBONEINDEX — CONFIRMED AGAINST PRIMARY SOURCE THIS PASS, AND THE
-    CONCLUSION ON WHETHER THIS TOOL SHOULD CONVERT THROUGH IT (task item 3
-    — full writeup in client/bonetool.lua's own header, since the actual
-    native call happens there; summarized here for anyone who only reads
-    this file): `GET_PED_BONE_INDEX(Ped ped, int boneId)`
-    (0x3F428D08BE5AAE31, read directly off a fresh clone of
-    citizenfx/natives, not carried over from an earlier pass) converts a
-    semantic `ePedBoneId` value into the raw index AttachEntityToEntity
-    wants — the exact conversion AttachEntityToEntity's own doc points at
-    ("This is different to boneID, use GET_PED_BONE_INDEX..."). That same
-    enum lists animal-only entries (SKEL_Tail_01..05, SKEL_SADDLE), which is
+    GETPEDBONEINDEX — CONFIRMED AGAINST PRIMARY SOURCE, AND THE CONCLUSION
+    ON WHETHER THIS TOOL SHOULD CONVERT THROUGH IT (full writeup in
+    client/bonetool.lua's own header, since the actual native call happens
+    there; summarized here for anyone who only reads this file):
+    `GET_PED_BONE_INDEX(Ped ped, int boneId)` (0x3F428D08BE5AAE31, read
+    directly off a fresh clone of citizenfx/natives) converts a semantic
+    `ePedBoneId` value into the raw index AttachEntityToEntity wants — the
+    exact conversion AttachEntityToEntity's own doc points at ("This is
+    different to boneID, use GET_PED_BONE_INDEX..."). That same enum lists
+    animal-only entries (SKEL_Tail_01..05, SKEL_SADDLE), which is
     corroborating evidence — not proof — that some of these ids resolve to
     something real on an `a_c_*` skeleton. CONCLUSION: yes, worth exposing
     as a FAST-PATH shortcut (the new 'known' subcommand below), but never as
     a replacement for the raw sweep, because (1) that native's own doc page
-    has an EMPTY "Return value" section — this pass could not confirm its
-    not-found convention, so 'known' reports every raw value unfiltered
-    rather than silently filtering "hits", and (2) even a real resolved
-    index isn't guaranteed to be anatomically where the human-skeleton name
+    has an EMPTY "Return value" section, so its not-found convention could
+    not be confirmed, and 'known' reports every raw value unfiltered rather
+    than silently filtering "hits", and (2) even a real resolved index
+    isn't guaranteed to be anatomically where the human-skeleton name
     suggests on a differently-rigged model — every 'known' result is still
     just a candidate for the human to 'goto' and confirm with their own
     eyes, never a trusted answer by itself.
@@ -240,13 +237,13 @@
                         visual confirmation of the actual attach call
                         (replaces any previous test object).
         stop          — stops the preview marker and removes any test object.
-        known         — CLIENT-LOCAL ONLY (task item 3's GetPedBoneIndex
-                        fast-path — see the GETPEDBONEINDEX section above):
-                        resolves a curated list of documented ePedBoneId
-                        semantic names against the caller's own live ped and
-                        reports every raw result via chat + console. Never
-                        changes the current preview index — purely a
-                        candidate shortlist to 'goto' into and confirm.
+        known         — CLIENT-LOCAL ONLY (the GetPedBoneIndex fast-path —
+                        see the GETPEDBONEINDEX section above): resolves a
+                        curated list of documented ePedBoneId semantic names
+                        against the caller's own live ped and reports every
+                        raw result via chat + console. Never changes the
+                        current preview index — purely a candidate
+                        shortlist to 'goto' into and confirm.
         help          — handled ENTIRELY here, server-side: no client
                         dispatch at all, just the full goto/next/prev/known/
                         test/stop/record-your-result workflow via
@@ -254,17 +251,16 @@
                         confirming anything client-side is even working.
 
     ======================================================================
-    EXPOSED SURFACE FOR FetchMechanic (built concurrently, per this pass's
-    own task brief): NOTHING beyond this command itself needs to be
-    exposed — the FetchMechanic agent's own dev-testing workflow is simply
-    "connect to a dev server, run '/k9bonetool goto <n>' repeatedly while
-    playing as a K9 (or whatever model FetchMechanic targets), read off the
-    index that visually looks right for a mouth/head attach point, and hard-
-    code that into their own feature's config." No shared server-side state,
-    no shared function signature, is needed for that workflow — the tool
-    IS the shared surface. The one thing this file's sibling,
-    client/bonetool.lua, DOES also expose as a resource-global (not
-    duplicated) is client/propattachment.lua's AttachPropToOwnPed /
+    EXPOSED SURFACE FOR FetchMechanic: NOTHING beyond this command itself
+    needs to be exposed — FetchMechanic's own dev-testing workflow is
+    simply "connect to a dev server, run '/k9bonetool goto <n>' repeatedly
+    while playing as a K9 (or whatever model FetchMechanic targets), read
+    off the index that visually looks right for a mouth/head attach point,
+    and hard-code that into their own feature's config." No shared
+    server-side state, no shared function signature, is needed for that
+    workflow — the tool IS the shared surface. The one thing this file's
+    sibling, client/bonetool.lua, DOES also expose as a resource-global
+    (not duplicated) is client/propattachment.lua's AttachPropToOwnPed /
     DetachAndDeleteProp pair (client/bonetool.lua calls those directly
     rather than re-implementing its own CreateObject/AttachEntityToEntity
     sequence) — FetchMechanic's own client file should call those same two
@@ -277,10 +273,9 @@
       time — must load after that file.
     - THIS FILE exposes no resource-global functions of its own.
 
-    CONFIG THIS FILE ASSUMES EXISTS — NOT owned by this file (coder-architect
-    owns config.lua/fxmanifest.lua/.luacheckrc for this task; see this
-    pass's own hand-off note for the exact blocks needed):
-      Config.Features.BoneSweepDevTool : boolean (NEW; default false; MUST
+    CONFIG THIS FILE ASSUMES EXISTS (not owned by this file; see
+    config.lua/fxmanifest.lua/.luacheckrc):
+      Config.Features.BoneSweepDevTool : boolean (default false; MUST
                                           stay false on any production server)
       Config.BoneSweepTool.TestPropModel     : string  -- only used by the 'test' subcommand; the 'goto'/'next'/'prev' preview needs no model at all (pure position query)
       Config.BoneSweepTool.MaxBoneIndex      : integer >= 0
@@ -294,13 +289,12 @@
                                           use -- rather than meaning "no
                                           cooldown")
       Config.Departments                     : table -- shared with server/admin.lua/server/certifications.lua; IsAuthorizedBoneSweepDevTool below reads Config.Departments[job.name] to decide whether the caller's job is a configured K9 department at all (job.isboss is still additionally required — see LAYER 2 above).
-      Config.BoneSweepTool.AcePermission is NO LONGER READ by this file (this
-      pass's ACE -> job-rank conversion, see LAYER 2 above) — it is DEAD
-      CONFIG as of this pass, same as Config.AdminAudit.AcePermission before
-      it; flagged to the config owner for removal, along with this file's own
-      two now-stale comments that reference it (config.lua's
-      Config.Features.BoneSweepDevTool and Config.BoneSweepTool.AcePermission
-      comments).
+      Config.BoneSweepTool.AcePermission is NO LONGER READ by this file
+      (see the ACE -> job-rank conversion in LAYER 2 above) -- it is DEAD
+      CONFIG, same as Config.AdminAudit.AcePermission. It should be removed
+      from config.lua, along with that file's own two now-stale comments
+      referencing it (its Config.Features.BoneSweepDevTool and
+      Config.BoneSweepTool.AcePermission comments).
 
       NOT A Config.* FIELD, so not listed above as one, but equally REQUIRED
       for this tool to ever register (LAYER 1 — see SECOND, EXPLICIT OPT-IN
@@ -309,14 +303,14 @@
       in server.cfg.
 ]]
 
--- SECOND, EXPLICIT OPT-IN (coder-security, this pass) — see this file's
--- header SECOND, EXPLICIT OPT-IN section for the full "why" writeup. Read
--- via GetConvarInt at onResourceStart below; `1` means opted in, anything
--- else (including never being set, which reads back as GetConvarInt's own
--- default of `0`) means not opted in. A plain local constant, not a Config
--- field, per this file's own established "tiny constant, private per file"
--- convention (see REQUEST_MODEL_TIMEOUT_MS's identical duplication note in
--- client/propattachment.lua) — client/bonetool.lua duplicates this exact
+-- SECOND, EXPLICIT OPT-IN -- see this file's header SECOND, EXPLICIT OPT-IN
+-- section for the full "why" writeup. Read via GetConvarInt at
+-- onResourceStart below; `1` means opted in, anything else (including
+-- never being set, which reads back as GetConvarInt's own default of `0`)
+-- means not opted in. A plain local constant, not a Config field, per this
+-- file's own established "tiny constant, private per file" convention
+-- (see REQUEST_MODEL_TIMEOUT_MS's identical duplication note in
+-- client/propattachment.lua) -- client/bonetool.lua duplicates this exact
 -- literal for its own registration gate rather than sharing a resource
 -- global, since the two files must each independently decide whether to
 -- register regardless of the other's load order.
@@ -328,11 +322,11 @@ local BONE_DEV_TOOL_ENABLE_CONVAR = 'qbx_k9unit_enable_bone_dev_tool'
 local VALID_SUBCOMMAND_SET = { ['goto'] = true, next = true, prev = true, test = true, stop = true, known = true, help = true }
 
 -- Full workflow reference — shown both on an invalid/missing subcommand and
--- via the explicit 'help' subcommand (task requirement: the tool must tell
--- a human how to record what they find, not just show a marker). Built
--- once via table.concat, same multi-line-notify pattern server/admin.lua's
--- own NotifyPlayer call sites already establish as safe for ox_lib's
--- notify (embedded '\n' renders as real line breaks there).
+-- via the explicit 'help' subcommand (a human must be able to see how to
+-- record what they find, not just see a marker). Built once via
+-- table.concat, same multi-line-notify pattern server/admin.lua's own
+-- NotifyPlayer call sites already establish as safe for ox_lib's notify
+-- (embedded '\n' renders as real line breaks there).
 local BONE_TOOL_USAGE = locale('bonetool.usage')
 
 --- Sends an ox_lib notification to a specific player, using this file's own
@@ -362,8 +356,8 @@ end
 --- missing job, or a job whose name is not a configured Config.Departments
 --- key. UNLIKE IsAuthorizedAdmin, there is no per-department numeric-grade
 --- branch of its own at all — only `job.isboss` OR High Command
---- (server/highcommand.lua's IsHighCommand, project-owner-directed this
---- pass — see that file's own header for the full "run any command"
+--- (server/highcommand.lua's IsHighCommand, added at the project owner's
+--- direction -- see that file's own header for the full "run any command"
 --- contract) qualifies (see header for why reusing
 --- Config.Departments[...].auditGrade here would be a real regression, not
 --- a convenience — that reasoning is UNCHANGED by the High Command bypass,
@@ -384,8 +378,8 @@ local function IsAuthorizedBoneSweepDevTool(source)
     if job.isboss == true then return true end
 
     -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
-    -- project-owner-directed this pass) -- LAYER 2 (this in-game rank check)
-    -- only -- LAYER 1 (Config.Features.BoneSweepDevTool AND the
+    -- added at the project owner's direction) -- LAYER 2 (this in-game rank
+    -- check) only -- LAYER 1 (Config.Features.BoneSweepDevTool AND the
     -- `qbx_k9unit_enable_bone_dev_tool` convar, checked once at
     -- registration, above/before this function is ever reached) is a
     -- server-OPERATOR opt-in, deliberately left untouched: an in-game
@@ -452,14 +446,14 @@ AddEventHandler('onResourceStart', function(resourceName)
         return -- feature disabled (or not yet configured) — the command is never registered at all
     end
 
-    -- LAYER 1, SECOND HALF (coder-security, this pass) — see header SECOND,
-    -- EXPLICIT OPT-IN section. Checked AFTER the feature-flag return above
-    -- on purpose: a default install with the flag off (the overwhelming
-    -- majority of installs) must print nothing extra at all, only a server
-    -- that has ALREADY opted in at the flag layer gets this warning, so the
-    -- signal stays meaningful rather than becoming console noise every
-    -- install sees. WARNING, NOT ASSERT — see header for why this must
-    -- never become a hard failure of resource start.
+    -- LAYER 1, SECOND HALF -- see header SECOND, EXPLICIT OPT-IN section.
+    -- Checked AFTER the feature-flag return above on purpose: a default
+    -- install with the flag off (the overwhelming majority of installs)
+    -- must print nothing extra at all, only a server that has ALREADY
+    -- opted in at the flag layer gets this warning, so the signal stays
+    -- meaningful rather than becoming console noise every install sees.
+    -- WARNING, NOT ASSERT — see header for why this must never become a
+    -- hard failure of resource start.
     if GetConvarInt(BONE_DEV_TOOL_ENABLE_CONVAR, 0) ~= 1 then
         print(
             ('[qbx_k9unit] WARNING: Config.Features.BoneSweepDevTool is true, but /k9bonetool was NOT ' ..
@@ -506,15 +500,15 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         local sub = args[1]
 
-        -- NO UNBOUNDED TRAP (coder-security, this pass) — 'stop' is this
-        -- tool's ONLY termination/cleanup path (removes the preview marker
-        -- AND any attached test object, see EVENT CONTRACT above) and MUST
-        -- stay reachable even for a caller whose IsAuthorizedBoneSweepDevTool
-        -- grant is revoked mid-session (a job change, a demotion, a boss
-        -- toggling someone's isboss flag off) — mirroring this resource's
-        -- own Recall design (config.lua's Config.Recall header: "a handler
-        -- whose certification is revoked mid-bite must still be able to
-        -- call their dog off. Do NOT add an access check... to this path").
+        -- NO UNBOUNDED TRAP -- 'stop' is this tool's ONLY termination/cleanup
+        -- path (removes the preview marker AND any attached test object,
+        -- see EVENT CONTRACT above) and MUST stay reachable even for a
+        -- caller whose IsAuthorizedBoneSweepDevTool grant is revoked
+        -- mid-session (a job change, a demotion, a boss toggling someone's
+        -- isboss flag off) — mirroring this resource's own Recall design
+        -- (config.lua's Config.Recall header: "a handler whose
+        -- certification is revoked mid-bite must still be able to call
+        -- their dog off. Do NOT add an access check... to this path").
         -- Deliberately checked and dispatched BEFORE the authorization gate
         -- below, not merely exempted from it after the fact, so no future
         -- edit can accidentally reorder an authorization check back in

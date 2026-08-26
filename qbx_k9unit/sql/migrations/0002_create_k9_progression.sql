@@ -3,7 +3,7 @@
 --
 -- WHO NEEDS THIS FILE: an existing installation whose `qbx_k9unit/sql/install.sql`
 -- was applied BEFORE `k9_progression` existed in it -- the exact historical
--- gap this resource's own README.md/CHANGELOG.md document: `server/progression.lua`
+-- gap this resource's own README.md document: `server/progression.lua`
 -- shipped reading/writing this table before install.sql created it, and
 -- because both call sites are pcall-wrapped, every XP award silently
 -- no-op'd at the DB layer instead of erroring (see install.sql's own
