@@ -135,6 +135,7 @@ local function newFixture(opts)
     local leashDetachCalls = {}         -- ForceDetachLeashForSource(src, reason)
     local officerLeashDetachCalls = {}  -- ForceDetachOfficerLeashForSource(src, reason)
     local partnershipBreakCalls = {}    -- ForceBreakPartnershipForCitizenId(citizenid, reason)
+    local effectEndCalls = {}           -- EndActiveEffectForHolder(src) -- server/combat.lua, called via pcall at every "must not outlive certification" call site in the production file; never previously stubbed/observed by this spec (opts.includeEffectHook, default true, mirrors opts.includePartnershipHook's own existence-guard test below)
 
     local playersBySource = {}
     local playersByCitizenId = {}
@@ -313,6 +314,18 @@ local function newFixture(opts)
             partnershipBreakCalls[#partnershipBreakCalls + 1] = { citizenid, reason }
         end
     end
+    -- EndActiveEffectForHolder is runtime-existence-guarded
+    -- (`type(...) == 'function'`, always inside a pcall) at every call site
+    -- in the production file, exactly like ForceBreakPartnershipForCitizenId
+    -- above -- included by default so tests can assert it fires; pass
+    -- includeEffectHook = false to confirm a call site's own guard
+    -- tolerates the global being entirely absent (server/combat.lua not
+    -- loaded / Config.Features.BiteAndHold off).
+    if opts.includeEffectHook ~= false then
+        overrides.EndActiveEffectForHolder = function(src)
+            effectEndCalls[#effectEndCalls + 1] = src
+        end
+    end
 
     local env = Sandbox.newEnv(overrides)
 
@@ -340,6 +353,7 @@ local function newFixture(opts)
         leashDetachCalls = leashDetachCalls,
         officerLeashDetachCalls = officerLeashDetachCalls,
         partnershipBreakCalls = partnershipBreakCalls,
+        effectEndCalls = effectEndCalls,
         registerPlayer = registerPlayer,
         disconnectPlayer = disconnectPlayer,
         setPed = setPed,
@@ -1090,6 +1104,99 @@ t.test('OnJobUpdate: a same-department GRADE change (promotion/demotion) does NO
     -- cache untouched by this handler (still active for 'police').
     f.registerPlayer(30, 'CIT30', { name = 'police', grade = { level = 5 } })
     t.isTrue(f.env.HasK9Access(30), 'the cached cert must still be intact after a mere grade change')
+end)
+
+-- ======================================================================
+-- FIX (this pass, "the worst bug this project has already fixed once" --
+-- second door): an autoAccessGrade-only holder has no cached certification
+-- row at all, so the grade-change guard above (correctly!) never revokes
+-- anything for them via a DB write -- but that also meant NOTHING tore
+-- down their leash/partnership/hold when a same-department demotion below
+-- autoAccessGrade genuinely took their K9 access away. See OnJobUpdate's
+-- own new doc comment (server/certifications.lua) for the full writeup.
+-- ======================================================================
+
+t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade, for a citizenid with NO cached cert (autoAccessGrade was their ONLY route), force-detaches the leash, ends any held effect, and breaks the partnership', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
+    } })
+    f.registerPlayer(90, 'CIT90', { name = 'police', grade = { level = 5 } })
+    f.mysql.scalar.await = function() return nil end -- never certified
+    f.env.RefreshCertificationCache('CIT90', 'police') -- populates the cache as inactive, scoped to 'police' -- this is what PlayerLoaded/the onResourceStart backfill would already have done for a real, currently-connected player
+    t.isTrue(f.env.HasK9Access(90), 'grade 5 >= autoAccessGrade 5 must grant access with no cert at all')
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    fireJobUpdate(f, 90, { name = 'police', grade = { level = 3 } }) -- demoted below the threshold, SAME department
+
+    t.isFalse(updateCalled, 'there was never an active cert row to revoke -- no DB write should be attempted for this citizenid')
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 90)
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][2], 'k9_access_lost')
+    t.equals(f.effectEndCalls[#f.effectEndCalls], 90)
+    t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][1], 'CIT90')
+    t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][2], 'k9_access_lost')
+end)
+
+t.test('OnJobUpdate: FIX -- a same-department demotion that STAYS at/above autoAccessGrade does nothing (access genuinely unchanged)', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
+    } })
+    f.registerPlayer(91, 'CIT91', { name = 'police', grade = { level = 10 } })
+    f.mysql.scalar.await = function() return nil end
+    f.env.RefreshCertificationCache('CIT91', 'police')
+
+    fireJobUpdate(f, 91, { name = 'police', grade = { level = 5 } }) -- still >= 5
+
+    t.equals(#f.leashDetachCalls, 0)
+    t.equals(#f.effectEndCalls, 0)
+    t.equals(#f.partnershipBreakCalls, 0)
+end)
+
+t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade does NOT tear anything down when the citizenid separately holds an active k9.access permission grant', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
+    } })
+    f.registerPlayer(92, 'CIT92', { name = 'police', grade = { level = 5 } })
+    f.mysql.scalar.await = function() return nil end
+    f.env.RefreshCertificationCache('CIT92', 'police')
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'CIT92' and key == 'k9.access' end
+
+    fireJobUpdate(f, 92, { name = 'police', grade = { level = 1 } }) -- demoted well below the threshold
+
+    t.equals(#f.leashDetachCalls, 0, 'the citizenid still has K9 access via the permission grant -- nothing to tear down')
+    t.equals(#f.effectEndCalls, 0)
+    t.equals(#f.partnershipBreakCalls, 0)
+end)
+
+t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade does NOT tear anything down when the citizenid is high command', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
+    } })
+    f.registerPlayer(93, 'CIT93', { name = 'police', grade = { level = 5 } })
+    f.mysql.scalar.await = function() return nil end
+    f.env.RefreshCertificationCache('CIT93', 'police')
+    f.env.IsHighCommand = function(src) return src == 93 end
+
+    fireJobUpdate(f, 93, { name = 'police', grade = { level = 1 } })
+
+    t.equals(#f.leashDetachCalls, 0)
+    t.equals(#f.effectEndCalls, 0)
+    t.equals(#f.partnershipBreakCalls, 0)
+end)
+
+t.test('OnJobUpdate: FIX -- with NO cached entry at all for this citizenid (never logged in this session), the new autoAccessGrade branch is a disclosed no-op, leaving the existing behavior unchanged rather than guessing', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
+    } })
+    f.registerPlayer(94, 'CIT94', { name = 'police', grade = { level = 5 } })
+    -- Deliberately never call RefreshCertificationCache -- `Certifications['CIT94']` stays nil.
+
+    fireJobUpdate(f, 94, { name = 'police', grade = { level = 1 } })
+
+    t.equals(#f.leashDetachCalls, 0)
+    t.equals(#f.effectEndCalls, 0)
+    t.equals(#f.partnershipBreakCalls, 0)
 end)
 
 t.test('OnJobUpdate: a REAL department change revokes the old cert, re-scopes the cache to the new job, notifies, and force-detaches the leash', function()

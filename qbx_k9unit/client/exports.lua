@@ -66,18 +66,23 @@
     server/exports.lua's exports are two independent contracts (a consumer
     resource may use only one, or use them at different points in its own
     lifecycle), each describing a different set of reads over a different
-    realm's state. This pass adds two genuinely new client-side reads
-    (`IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
+    realm's state. That 2026-08-25 pass added two genuinely new client-side
+    reads (`IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
     `GetDefenseSuggestedTargetNetId` — see FETCH ENGAGEMENT STATE /
     HANDLER-DOWN DEFENSE STATE below) with NOTHING new landing in
-    server/exports.lua this same pass (see that file's own "SIX-FEATURE
-    COVERAGE AUDIT" section for why) — so THIS file's API_VERSION bumps to
-    1.1.0 while server/exports.lua's stays at 1.0.0. A consumer that reads
-    both must not assume they are ever numerically equal; each should be
-    checked independently via its own GetAPIVersion() call, exactly as
-    server/exports.lua's own semver posture already instructs for a single
-    surface (see that file's VERSIONING paragraph — same posture, applied
-    here per-file rather than per-resource).
+    server/exports.lua that same pass (see that file's own "SIX-FEATURE
+    COVERAGE AUDIT" section for why) — bumping THIS file's API_VERSION to
+    1.1.0 while server/exports.lua's stayed at 1.0.0. A FOLLOW-UP PASS
+    (2026-08-26) found that same "SIX-FEATURE COVERAGE AUDIT" had missed a
+    real read on the PropAttachments feature (see PROP ATTACHMENT ENGAGEMENT
+    STATE below and the corrected PropAttachments paragraph above) and adds
+    `IsPropAttachmentEngaged` — one more additive export, so this file's
+    API_VERSION bumps again, to 1.2.0, per this resource's own documented
+    semver posture (an additive export bumps MINOR — see
+    server/exports.lua's VERSIONING paragraph for the shared policy
+    statement). A consumer that reads both files' versions must not assume
+    they are ever numerically equal; each should be checked independently
+    via its own GetAPIVersion() call.
 
     NOT IN THIS FILE: RequestPartnerUp/BreakPartnership/RequestLeashAttach/
     DetachLeash/RequestBiteHold/ReleaseBiteHold/RequestTakedown/RequestDrag/
@@ -106,16 +111,31 @@
     named above — see PROPATTACHMENT / PROXIMITY AUDIO note below for why
     those two features contribute no exports here at all.
 
-    PropAttachments (client/propattachment.lua) and ProximityAudioFX
-    (client/proximityaudio.lua) contribute NOTHING to this file, audited
-    this pass alongside the other four features (full reasoning in
-    server/exports.lua's "SIX-FEATURE COVERAGE AUDIT" section, which covers
-    both realms even though it lives in the server file): neither exposes
-    a resource-global READ accessor at all — client/propattachment.lua's
-    only resource-globals are `AttachPropToOwnPed`/`DetachAndDeleteProp`
+    PropAttachments (client/propattachment.lua) — CORRECTION, this pass
+    (2026-08-26): the coverage-audit paragraph above (as it read before this
+    correction) claimed this feature "exposes NO resource-global READ
+    accessor at all." That was wrong, found by re-reading
+    client/propattachment.lua directly rather than trusting the prior pass's
+    summary of it: `IsPropAttachmentEngaged()` (client/propattachment.lua) is
+    a genuine, purpose-built, zero-argument resource-global read predicate —
+    added specifically so client/appearance.lua's own K9-model-swap guard
+    could ask "does this client currently have a vest attached right now,"
+    the exact same shape/role as IsBiteHoldEngaged()/IsDragEngaged()/
+    IsFetchCarryEngaged() below, all three of which ARE exported. It was
+    missed by the prior audit, not deliberately excluded — closed below as
+    `IsPropAttachmentEngaged` (see PROP ATTACHMENT ENGAGEMENT STATE), API
+    version bumped accordingly. `AttachPropToOwnPed`/`DetachAndDeleteProp`
     (internal plumbing shared with FetchMechanic, not domain state — same
     exclusion class server/exports.lua's header already applies to
-    `ResolveNetworkEntity`/`NewCooldown`) and the excluded action above;
+    `ResolveNetworkEntity`/`NewCooldown`) and the `RequestToggleK9PropAttachment`
+    action (this file's header "NOT IN THIS FILE" list) are both still
+    correctly excluded — only the "no read accessor exists at all" claim was
+    incorrect.
+
+    ProximityAudioFX (client/proximityaudio.lua) contributes NOTHING to this
+    file, audited this pass alongside the other five features (full
+    reasoning in server/exports.lua's "SIX-FEATURE COVERAGE AUDIT" section,
+    which covers both realms even though it lives in the server file):
     client/audio.lua's `IsK9SoundActive(id)` (added alongside
     ProximityAudioFX) takes an opaque `id` minted only by `PlayK9Sound`,
     which is itself correctly not exported (an unbounded external
@@ -158,7 +178,7 @@ end
 -- VERSIONING
 -- ======================================================================
 
-local API_VERSION = { major = 1, minor = 1, patch = 0, string = '1.1.0' }
+local API_VERSION = { major = 1, minor = 2, patch = 0, string = '1.2.0' }
 
 --- @return table { major: number, minor: number, patch: number, string: string }
 exports('GetAPIVersion', function()
@@ -407,6 +427,36 @@ exports('IsFetchCarryEngaged', function()
     if type(IsFetchCarryEngaged) ~= 'function' then return false end
 
     local ok, result = pcall(IsFetchCarryEngaged)
+    if not ok then return false end
+    return result == true
+end)
+
+-- ======================================================================
+-- PROP ATTACHMENT ENGAGEMENT STATE (wraps client/propattachment.lua) —
+-- ADDED THIS PASS (2026-08-26), closing a real gap: this feature was
+-- previously audited (see this file's header, corrected PropAttachments
+-- paragraph) as having no exportable read at all. It does —
+-- `IsPropAttachmentEngaged()` is a zero-argument, resource-global read
+-- predicate ("does this client currently have a vest/prop attached to its
+-- own ped via this feature right now"), the same shape/role as
+-- IsBiteHoldEngaged/IsDragEngaged/IsFetchCarryEngaged above (an
+-- animation/ragdoll-management resource has the identical reason to check
+-- this before doing something that would visibly conflict with an attached
+-- prop on the same ped). Config.Features.PropAttachments is `true` by
+-- default; not gated separately here beyond what the wrapped global itself
+-- already does — with the feature off, client/propattachment.lua's own
+-- myVestEntity is simply never set, so IsPropAttachmentEngaged() always
+-- reads false on its own, same reasoning as every other wrapped predicate
+-- in this file. Deliberately NOT exported: RequestToggleK9PropAttachment —
+-- a self-initiated action, same exclusion class as this file's header "NOT
+-- IN THIS FILE" list.
+-- ======================================================================
+
+--- @return boolean
+exports('IsPropAttachmentEngaged', function()
+    if type(IsPropAttachmentEngaged) ~= 'function' then return false end
+
+    local ok, result = pcall(IsPropAttachmentEngaged)
     if not ok then return false end
     return result == true
 end)

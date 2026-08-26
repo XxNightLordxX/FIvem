@@ -2,7 +2,7 @@
     tests/exports_spec.lua
 
     Direct tests of BOTH public cross-resource API surfaces this resource
-    ships -- server/exports.lua (9 exports) and client/exports.lua (18
+    ships -- server/exports.lua (9 exports) and client/exports.lua (19
     exports) -- against the REAL, unmodified production files. Written
     following a security audit pass (2026-08-25) that read every export body
     in both files, found them already hardened (every argument type-checked,
@@ -547,7 +547,7 @@ t.test('server IsFeatureEnabled(): a recognized feature that is disabled returns
 end)
 
 -- ======================================================================
--- CLIENT SECTION -- client/exports.lua (18 exports)
+-- CLIENT SECTION -- client/exports.lua (19 exports)
 -- ======================================================================
 
 local capturedClientExports = {}
@@ -574,6 +574,7 @@ local clientEnv = Sandbox.newEnv({
     HasFreshDefensePrompt = function() return false end,
     GetDefenseSuggestedTargetNetId = function() return nil end,
     IsFetchCarryEngaged = function() return false end,
+    IsPropAttachmentEngaged = function() return false end,
 })
 
 Sandbox.loadInto('../client/exports.lua', clientEnv)
@@ -584,11 +585,11 @@ local CLIENT_EXPORT_NAMES = {
     'IsInK9Vehicle', 'IsPartnered', 'GetPartnerServerId', 'GetCurrentXPTier',
     'IsTracking', 'GetActiveTrackType', 'IsThermalVisionActive', 'IsNightVisionActive',
     'IsBiteHoldEngaged', 'IsDragEngaged', 'HasFreshDefensePrompt',
-    'GetDefenseSuggestedTargetNetId', 'IsFetchCarryEngaged',
+    'GetDefenseSuggestedTargetNetId', 'IsFetchCarryEngaged', 'IsPropAttachmentEngaged',
 }
 
-t.test('client/exports.lua registers exactly the 18 documented exports, no more, no fewer', function()
-    t.equals(countKeys(ClientExports), 18)
+t.test('client/exports.lua registers exactly the 19 documented exports, no more, no fewer', function()
+    t.equals(countKeys(ClientExports), 19)
     for _, name in ipairs(CLIENT_EXPORT_NAMES) do
         t.equals(type(ClientExports[name]), 'function', name .. ' must be a registered export')
     end
@@ -598,12 +599,12 @@ end)
 -- GetAPIVersion
 -- ----------------------------------------------------------------------
 
-t.test('client GetAPIVersion(): matches the documented 1.1.0 shape (deliberately NOT kept numerically in sync with the server file\'s 1.0.0 -- see that file\'s own VERSIONING correction)', function()
+t.test('client GetAPIVersion(): matches the documented 1.2.0 shape (deliberately NOT kept numerically in sync with the server file\'s 1.0.0 -- see that file\'s own VERSIONING correction)', function()
     local version = ClientExports.GetAPIVersion()
     t.equals(version.major, 1)
-    t.equals(version.minor, 1)
+    t.equals(version.minor, 2)
     t.equals(version.patch, 0)
-    t.equals(version.string, '1.1.0')
+    t.equals(version.string, '1.2.0')
 end)
 
 t.test('client GetAPIVersion(): returns a fresh table every call', function()
@@ -615,17 +616,18 @@ t.test('client GetAPIVersion(): returns a fresh table every call', function()
 end)
 
 -- ----------------------------------------------------------------------
--- The 13 zero-argument boolean exports (HasK9Access, IsOwnModelK9,
+-- The 14 zero-argument boolean exports (HasK9Access, IsOwnModelK9,
 -- CanShowK9UI, IsLeashed, IsInK9Vehicle, IsPartnered, IsTracking,
 -- IsThermalVisionActive, IsNightVisionActive, IsBiteHoldEngaged,
--- IsDragEngaged, HasFreshDefensePrompt, IsFetchCarryEngaged) all share the
--- IDENTICAL body shape, verified by direct read of every one of the 13
--- bodies in client/exports.lua, not assumed from the first one:
+-- IsDragEngaged, HasFreshDefensePrompt, IsFetchCarryEngaged,
+-- IsPropAttachmentEngaged) all share the IDENTICAL body shape, verified by
+-- direct read of every one of the 14 bodies in client/exports.lua, not
+-- assumed from the first one:
 --     if type(X) ~= 'function' then return false end
 --     local ok, result = pcall(X)
 --     if not ok then return false end
 --     return result == true
--- Driven through a table + loop rather than 13 hand-copies of the same 3
+-- Driven through a table + loop rather than 14 hand-copies of the same 3
 -- tests, exactly because the shape really is byte-identical across all of
 -- them -- a hand-copy-paste risk this loop avoids entirely.
 -- ----------------------------------------------------------------------
@@ -634,6 +636,7 @@ local CLIENT_BOOLEAN_EXPORTS = {
     'HasK9Access', 'IsOwnModelK9', 'CanShowK9UI', 'IsLeashed', 'IsInK9Vehicle',
     'IsPartnered', 'IsTracking', 'IsThermalVisionActive', 'IsNightVisionActive',
     'IsBiteHoldEngaged', 'IsDragEngaged', 'HasFreshDefensePrompt', 'IsFetchCarryEngaged',
+    'IsPropAttachmentEngaged',
 }
 
 for _, exportName in ipairs(CLIENT_BOOLEAN_EXPORTS) do
