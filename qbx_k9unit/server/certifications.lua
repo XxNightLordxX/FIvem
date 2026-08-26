@@ -2215,6 +2215,55 @@ local function GrantSpecialization(granterSrc, targetServerId, specializationKey
         return
     end
 
+    -- CERTIFICATION TIER CAPABILITIES (this pass, coordinator-assigned --
+    -- server/certtiers.lua's TierCapabilityPermits had zero real consumers
+    -- anywhere in this resource until now). This is a SECOND, INDEPENDENT
+    -- gate from the active-cert check directly above: `cached.active` and
+    -- `cached.job == jobName` only prove the target holds SOME active
+    -- certification for the right department, not that their CURRENT tier
+    -- is one an operator has actually opted into allowing specializations
+    -- for. Placed immediately after that check, never before it, so a
+    -- target who fails the active-cert check gets that (more fundamental)
+    -- reason, not this one.
+    --
+    -- Guarded with `type(...) == 'function'`, this resource's established
+    -- soft-dependency convention -- server/certtiers.lua loads AFTER this
+    -- file in fxmanifest.lua's server_scripts list, so this cannot be
+    -- assumed present by load order (same reasoning as every other
+    -- guarded cross-file call in this file). Fails OPEN (falls through to
+    -- the grant path) when the global is absent -- matching
+    -- TierCapabilityPermits' own documented fail-permissive contract, not
+    -- a separate decision made here: every existing install predates tier
+    -- capabilities entirely, and this call site failing closed on a
+    -- missing/older server/certtiers.lua would silently strip a working
+    -- specialization-grant flow for every operator who hasn't touched a
+    -- single tier capability from the tablet.
+    --
+    -- GATES GRANTING ONLY, never holding: this is the ONE call site in
+    -- this file that consults TierCapabilityPermits for specializations,
+    -- and it runs only inside the grant flow above. HasSpecialization
+    -- (this file, the read-only accessor every other feature actually
+    -- calls to check whether a citizenid currently holds a specialization)
+    -- does NOT call TierCapabilityPermits and must not be changed to --
+    -- see that function's own doc comment. Nothing in this file cascades
+    -- a tier change into stripping an already-granted specialization
+    -- either (SetCertificationTier above never touches Specializations/
+    -- the specialization DB rows at all), so a handler who already holds
+    -- a specialization and whose tier later loses this capability (an
+    -- operator un-ticks it from the tablet, or the handler is demoted)
+    -- keeps that specialization exactly as HandlerPartnership/leash/etc.
+    -- keep working after a permission source changes -- this gate only
+    -- ever blocks a NEW grant, never revokes an existing one. If a future
+    -- pass ever wants "losing the capability revokes the specialization
+    -- too", that is a deliberate new decision belonging next to
+    -- RevokeAllSpecializationsForCitizenJob, not an accidental side effect
+    -- of this check.
+    if type(TierCapabilityPermits) == 'function'
+        and not TierCapabilityPermits(targetCitizenid, jobName, 'specializations_eligible') then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_requires_tier_capability'), 'error')
+        return
+    end
+
     local lockKey = 'spec:' .. targetCitizenid .. ':' .. jobName .. ':' .. specializationKey
     if GrantInFlight[lockKey] then
         NotifyPlayer(granterSrc, locale('certifications.specialization_already_granted'), 'inform')

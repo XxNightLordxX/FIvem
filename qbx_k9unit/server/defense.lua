@@ -124,6 +124,18 @@
     (never a granted capability -- see item 2 restatement above), which
     makes being slightly more eager to fire an acceptable, disclosed
     trade-off that would NOT be acceptable for PropDragging's own gate.
+    COMPAT-LAYER ADDENDUM (this pass): when no override is configured,
+    `IsHandlerDown` now also consults the detected K9Compat ambulance
+    adapter (shared/compat/ambulance.lua) between the override check and
+    this metadata/health fallback -- see that function's own doc comment
+    for the full three-valued precedence and for why a confirmed adapter
+    `false` deliberately does NOT short-circuit the health half of the OR
+    below (only the now-redundant metadata half), unlike server/combat.lua's
+    own IsTargetDowned. Also gated, in the same pass, on
+    `Config.Departments[job.name]` membership -- see IsHandlerDown's own
+    PERFORMANCE doc comment for why this changes no real notification
+    outcome and matches server/integrations.lua's own poll-ordering
+    convention.
     ======================================================================
 
     ======================================================================
@@ -231,6 +243,13 @@
       the exact same event NAMES that file's own client-side callers use
       (see REALITY-CHECK item 2 above); there is no Lua-level dependency in
       either direction, only a shared network-protocol contract.
+    - Calls `K9Compat.Get('ambulance').IsDowned(handlerSrc)` (this pass) --
+      `K9Compat` (shared/compat/core.lua) is a shared_script, loaded before
+      EVERY server_script in fxmanifest.lua, including this file, so no
+      runtime existence guard is needed here (unlike GetActivePartnerCitizenId
+      above, which guards against a genuinely optional sibling SERVER file) --
+      this matches the load-order guarantee server/search.lua's/
+      server/medkit.lua's own bare K9Compat.Get call sites already rely on.
     - Loaded in fxmanifest.lua's server_scripts after server/cooldowns.lua
       (NewCooldown at this file's own file-load time -- hard requirement)
       and server/entities.lua (ResolveNetworkEntity, called at runtime).
@@ -398,6 +417,74 @@ end)
 --- IsTargetDowned already use, applied here even though the STAKES differ
 --- (this file's false-closed case merely skips a helpful notification,
 --- never denies or grants a real capability).
+---
+--- COMPAT-LAYER (this pass): when no override is configured, the detected
+--- K9Compat ambulance adapter (shared/compat/ambulance.lua) is consulted as
+--- a FALLBACK -- never a replacement -- for the metadata/health guess
+--- below, in the exact resolution order that file's own header PRECEDENCE
+--- section requires (override, already handled above, wins unconditionally;
+--- only if absent, the adapter's `true`/`false` are trusted; its `nil`
+--- (UNKNOWN) falls through to this file's own pre-existing guess,
+--- unchanged). `K9Compat.Get` is NEVER nil and never throws (shared/compat/
+--- core.lua's BuildSafeAdapter/BuildNoOpStub contract) -- no extra
+--- pcall/type guard needed, matching every other bare K9Compat.Get call
+--- site in this resource.
+---
+--- A CONFIRMED adapter `true` short-circuits everything below it (a real
+--- positive "is down" signal). A CONFIRMED adapter `false`, DELIBERATELY,
+--- short-circuits only the metadata half of the OR below, NOT the raw
+--- health-threshold half -- this is the one place this file's own adapter
+--- consumption differs from server/combat.lua's IsTargetDowned (which has
+--- no OR to preserve and legitimately short-circuits on both `true` and
+--- `false`). Two reasons, not one: (1) every CONFIRMED adapter body
+--- (shared/compat/ambulance.lua's qbx_medical/qb-ambulancejob candidates)
+--- only ever returns `false` after ALREADY ruling out
+--- `metadata.isdead == true or metadata.inlaststand == true` for this same
+--- src, so re-running that identical metadata check again here can never
+--- produce new information -- skipping it is a pure redundancy
+--- elimination, not a behavior change. (2) the raw health-threshold check
+--- is measuring something the adapter's `false` answer does not: a
+--- handler's ped health can already have crossed `handlerHealthThreshold`
+--- on the EXACT tick this call happens, before whichever ambulance
+--- resource this server runs has reacted and written its own
+--- isdead/inlaststand state for the same incident -- precisely the
+--- "either signal alone can miss a real 'handler needs help' moment" gap
+--- this function's own pre-existing OR combinator (see the doc comment on
+--- this fallback below) already exists to cover. Treating a confirmed
+--- `false` as reason to skip the health check too would silently reopen
+--- that exact gap for the one specific case (a real, verified ambulance
+--- adapter) this pass was supposed to make MORE trustworthy, not less --
+--- for a trigger whose own header already establishes a false positive
+--- costs nothing but an extra notification (§12.0 item 2), while a false
+--- negative costs a partner K9 a warning they were never sent. This is a
+--- deliberate divergence from the literal "short-circuit both" reading of
+--- shared/compat/ambulance.lua's contract, made here rather than in that
+--- file, precisely because that file's own header explicitly hands this
+--- exact resolution-order judgment call to whichever pass next touches
+--- server/defense.lua -- see that file's "THE FOLLOW-UP THIS FILE ENABLES
+--- BUT DOES NOT PERFORM" section.
+---
+--- PERFORMANCE (this pass, matching server/integrations.lua's PollK9Health
+--- -- see that file's own "cheapest check first" comment for the identical
+--- reasoning applied to a different poll): the maintenance thread below
+--- calls this for EVERY connected player, every `PollIntervalMs` tick, and
+--- the overwhelming majority of connected players on a real server are
+--- never in a configured department at all. Config.Departments membership
+--- is therefore checked -- using the SAME `exports.qbx_core:GetPlayer` call
+--- this function already needs for the metadata fallback, never a second
+--- one -- BEFORE the (now cross-resource) ambulance-adapter call and the
+--- raw-health native read, both skipped entirely for a department-less
+--- player. This changes no real outcome: a department-less citizenid can
+--- never hold an active HANDLER-role partnership either (server/
+--- partnership.lua's own RequestPartnerUp re-validates this exact
+--- `Config.Departments[job.name]` membership for the officer-role party
+--- before a partnership can even form -- see this file's own FILE-TO-FILE
+--- CONTRACT "Does NOT call HasK9Access" note above for why department
+--- membership, not certification, is the right check here), so
+--- TryNotifyPartnerK9 would already silently no-op for them today via its
+--- own "never partnered" check -- this only stops paying for an export
+--- call to a third-party ambulance resource and a native health read for a
+--- player this feature could never have notified about anyway.
 --- @param handlerSrc number
 --- @param handlerPed number
 --- @return boolean
@@ -412,16 +499,34 @@ local function IsHandlerDown(handlerSrc, handlerPed)
         return result == true
     end
 
+    local player = exports.qbx_core:GetPlayer(handlerSrc)
+    local job = player and player.PlayerData and player.PlayerData.job
+    if not job or not Config.Departments[job.name] then
+        -- Not (or no longer) a configured department member -- see this
+        -- function's own PERFORMANCE doc comment above for why this is
+        -- both safe (no real notification outcome changes) and the right
+        -- place to stop paying for the ambulance-adapter export call and
+        -- the raw-health native read below.
+        return false
+    end
+
+    local ambulanceDowned = K9Compat.Get('ambulance').IsDowned(handlerSrc)
+    if ambulanceDowned == true then return true end
+
     -- No override configured: best-effort metadata guess (same
     -- metadata.isdead/.inlaststand convention as server/combat.lua's own
     -- IsTargetDowned default) OR'd with the literal handlerHealthThreshold
     -- DEVELOPER_REFERENCE.md §12.2's original sketch named -- either signal alone
     -- can miss a real "handler needs help" moment on a server with neither
     -- convention wired the way the other expects; combining them costs
-    -- nothing given this is a non-authoritative trigger (see header).
-    local player = exports.qbx_core:GetPlayer(handlerSrc)
+    -- nothing given this is a non-authoritative trigger (see header). The
+    -- metadata half is skipped when the adapter already confirmed `false`
+    -- (see this function's own doc comment above for why that is provably
+    -- redundant, never a lost signal) -- ONLY the metadata half, never the
+    -- health half.
     local metadata = player and player.PlayerData and player.PlayerData.metadata
-    if type(metadata) == 'table' and (metadata.isdead == true or metadata.inlaststand == true) then
+    if ambulanceDowned ~= false and type(metadata) == 'table'
+        and (metadata.isdead == true or metadata.inlaststand == true) then
         return true
     end
 
@@ -569,6 +674,14 @@ CreateThread(function()
                 -- but no live ped resolves yet, e.g. mid-connect) -- nothing
                 -- to sample this tick.
                 if ped ~= 0 then
+                    -- PERFORMANCE (this pass): IsHandlerDown itself now
+                    -- orders its own Config.Departments membership check
+                    -- BEFORE the ambulance-adapter/raw-health cost below --
+                    -- see that function's own PERFORMANCE doc comment for
+                    -- why that ordering, not a change here, is where this
+                    -- poll's per-player cost is actually avoided (mirrors
+                    -- server/integrations.lua's PollK9Health "cheapest
+                    -- check first" comment for the identical reasoning).
                     if IsHandlerDown(src, ped) then
                         -- Called every tick this handler reads as down -- see
                         -- TryNotifyPartnerK9's own RETRY-WHILE-DOWN doc comment

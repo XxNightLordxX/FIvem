@@ -169,8 +169,15 @@ local function newDefenseFixture(opts)
     local pedBySource = {}
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
+    -- Call-counted (this pass): proves the PERFORMANCE reordering in
+    -- IsHandlerDown -- a department-less player must never reach this
+    -- native at all, see the dedicated "poll ordering" section below.
     local healthByPed = {}
-    local function GetEntityHealth(ped) return healthByPed[ped] or 200 end
+    local getEntityHealthCallCount = 0
+    local function GetEntityHealth(ped)
+        getEntityHealthCallCount = getEntityHealthCallCount + 1
+        return healthByPed[ped] or 200
+    end
 
     local coordsByPed = {}
     local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
@@ -192,6 +199,35 @@ local function newDefenseFixture(opts)
     local function DoesEntityExist(handle) return existingEntities[handle] == true end
     local function GetEntityType(handle) return entityTypes[handle] or 0 end
 
+    -- COMPAT-LAYER (this pass): IsHandlerDown now calls
+    -- `K9Compat.Get('ambulance').IsDowned(handlerSrc)` -- a minimal,
+    -- hand-rolled stand-in `K9Compat` (same established convention as
+    -- tests/combat_spec.lua's own copy this pass, and
+    -- tests/clienttablet_spec.lua's pre-existing `fakeK9Compat`), never the
+    -- real shared/compat/core.lua -- that file would ALSO register its own
+    -- onResourceStart handlers, silently inflating this file's own
+    -- eventHandlerCount('onResourceStart') assertions above. Defaults to
+    -- always returning nil (adapter UNKNOWN/not detected) for every test
+    -- that never sets opts.ambulanceIsDowned -- every pre-existing test in
+    -- this file keeps exercising IsHandlerDown's metadata/health fallback
+    -- completely unchanged, with zero opt-in required.
+    local ambulanceIsDownedCalls = {}
+    local function ambulanceIsDownedFn(src)
+        ambulanceIsDownedCalls[#ambulanceIsDownedCalls + 1] = src
+        if type(opts.ambulanceIsDowned) == 'function' then
+            return opts.ambulanceIsDowned(src)
+        end
+        return nil
+    end
+    local fakeK9Compat = {
+        Get = function(system)
+            if system == 'ambulance' then
+                return { IsDowned = ambulanceIsDownedFn }
+            end
+            return {}
+        end,
+    }
+
     local handlerDownDefenseCfg = opts.handlerDownDefenseCfg or baselineHandlerDownDefenseConfig()
     local config = {
         Features = { HandlerDownDefense = opts.featureOn ~= false },
@@ -199,6 +235,15 @@ local function newDefenseFixture(opts)
             PropDragging = { IsPlayerDownedOverride = opts.downedOverride },
             HandlerDownDefense = handlerDownDefenseCfg,
         },
+        -- PERFORMANCE (this pass): IsHandlerDown now gates its own
+        -- ambulance-adapter call and raw-health read behind
+        -- `Config.Departments[job.name]` membership -- see IsHandlerDown's
+        -- own PERFORMANCE doc comment in server/defense.lua. Defaults to a
+        -- single 'police' department so every pre-existing test in this
+        -- file (none of which ever set a job at all before this pass)
+        -- keeps resolving as a department member via setPlayer's own new
+        -- default job below -- zero opt-in required for existing coverage.
+        Departments = opts.departmentsCfg or { police = {} },
     }
 
     local envOverrides = {
@@ -225,6 +270,7 @@ local function newDefenseFixture(opts)
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         Config = config,
+        K9Compat = fakeK9Compat,
     }
     if not opts.noPartnershipModule then
         envOverrides.GetActivePartnerCitizenId = GetActivePartnerCitizenId
@@ -253,12 +299,35 @@ local function newDefenseFixture(opts)
         setNow = function(ms) fakeNow = ms end,
         now = function() return fakeNow end,
         setPlayer = function(src, shape)
+            -- PERFORMANCE (this pass): IsHandlerDown now reads `job` to
+            -- gate on Config.Departments membership -- defaults to
+            -- `{ name = 'police' }` (a real key in this fixture's own
+            -- default Config.Departments above) so every pre-existing
+            -- caller of setPlayer, none of which ever passed a job before
+            -- this pass, keeps resolving as a department member. Pass
+            -- `shape.job = false` explicitly for a department-less player
+            -- (see the dedicated "poll ordering" tests below). A plain
+            -- `cond and nil or fallback` ternary is deliberately NOT used
+            -- here -- `nil` is falsy, so that idiom always evaluates to
+            -- `fallback`, silently discarding an explicit `job = false`
+            -- request -- an explicit if/else is used instead.
+            local job
+            if shape.job == false then
+                job = nil
+            elseif shape.job then
+                job = shape.job
+            else
+                job = { name = 'police' }
+            end
             playersBySource[src] = {
                 citizenid = shape.citizenid,
+                job = job,
                 metadata = { isdead = shape.isdead == true, inlaststand = shape.inlaststand == true },
             }
         end,
         clearPlayer = function(src) playersBySource[src] = nil end,
+        ambulanceIsDownedCalls = ambulanceIsDownedCalls,
+        getEntityHealthCallCount = function() return getEntityHealthCallCount end,
         setPartner = function(citizenid, partnerCitizenid, isK9)
             partnerByCitizenid[citizenid] = { partner = partnerCitizenid, isK9 = isK9 }
         end,
@@ -341,7 +410,7 @@ local function wireHappyPath(f, opts)
     local handlerSrc = opts.handlerSrc or HANDLER_SRC
     local k9Src = opts.k9Src or K9_SRC
     f.setOnline({ handlerSrc, k9Src })
-    f.setPlayer(handlerSrc, { citizenid = 'HANDLER-CID', isdead = opts.isdead, inlaststand = opts.inlaststand })
+    f.setPlayer(handlerSrc, { citizenid = 'HANDLER-CID', isdead = opts.isdead, inlaststand = opts.inlaststand, job = opts.job })
     f.setPartner('HANDLER-CID', 'K9-CID', opts.handlerIsK9 == true)
     f.setCitizenidSource('K9-CID', k9Src)
     f.setPed(handlerSrc, 5001)
@@ -657,6 +726,110 @@ t.test('IsHandlerDown: no override configured, metadata.inlaststand alone trigge
 end)
 
 -- ========================================================================
+-- COMPAT-LAYER (this pass): IsHandlerDown's K9Compat ambulance-adapter
+-- precedence -- override (if configured) wins unconditionally over the
+-- adapter; the adapter's true is trusted directly; the adapter's nil
+-- (UNKNOWN) falls through to the pre-existing metadata/health OR,
+-- unchanged; and -- the one deliberate divergence from
+-- server/combat.lua's own IsTargetDowned -- a confirmed adapter false
+-- skips only the (now-redundant) metadata half of that OR, never the
+-- raw-health half. See IsHandlerDown's own doc comment in
+-- server/defense.lua for the full reasoning.
+-- ========================================================================
+
+t.test('IsHandlerDown precedence: an override wins UNCONDITIONALLY over the ambulance adapter -- the adapter is never even consulted', function()
+    local f = newDefenseFixture({ downedOverride = function(_src) return false end, ambulanceIsDowned = function(_src) return true end })
+    -- healthy HP + no metadata flags: override=false is the ONLY reason
+    -- this must not trigger -- proves it wins over adapter=true too.
+    wireHappyPath(f, { healthy = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 0)
+    t.equals(#f.ambulanceIsDownedCalls, 0, 'the adapter must never be called at all once an override is configured')
+end)
+
+t.test('IsHandlerDown precedence: no override, adapter confirms TRUE -- triggers even though healthy and no metadata flags', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return true end })
+    wireHappyPath(f, { healthy = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1, 'a confirmed adapter true must be trusted directly')
+end)
+
+t.test('IsHandlerDown precedence: no override, adapter confirms FALSE -- suppresses the metadata signal, but the independent raw-health signal STILL fires (deliberate divergence from IsTargetDowned)', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return false end })
+    -- Health below threshold (down via the raw-health half) AND
+    -- metadata.isdead = true (would ALSO say down via the metadata half,
+    -- if it were consulted) -- adapter=false must not suppress the
+    -- health half, which fires on its own regardless of the metadata half
+    -- being skipped as redundant.
+    wireHappyPath(f, { isdead = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1, 'health below threshold must still trigger -- an adapter false is not a license to ignore an independent, real health cliff')
+end)
+
+t.test('IsHandlerDown precedence: no override, adapter confirms FALSE, and health is ALSO healthy -- no trigger (proves the metadata half really was skipped, not merely irrelevant here)', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return false end })
+    -- Healthy HP (raw-health half would not fire on its own) but
+    -- metadata.isdead = true (the metadata half WOULD fire if consulted
+    -- -- every other test in this file with isdead=true+healthy=true
+    -- triggers) -- adapter=false must suppress exactly that metadata half.
+    wireHappyPath(f, { healthy = true, isdead = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 0, 'a confirmed adapter false must suppress the metadata half of the OR -- see server/defense.lua for why that half is provably redundant once the adapter has already answered')
+end)
+
+t.test('IsHandlerDown precedence: no override, adapter returns nil (UNKNOWN) -- falls through to the pre-existing metadata/health OR, unchanged', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return nil end })
+    wireHappyPath(f, { healthy = true, isdead = true })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1, 'nil must never be coerced to a boolean at the call site -- it must fall through to metadata, which says downed here')
+    t.isTrue(#f.ambulanceIsDownedCalls >= 1, 'the adapter must actually have been consulted for this case')
+end)
+
+-- ========================================================================
+-- PERFORMANCE (this pass): IsHandlerDown orders a cheap
+-- Config.Departments[job.name] membership check BEFORE the (cross-resource)
+-- ambulance-adapter call and the raw-health native read -- matching
+-- server/integrations.lua's own PollK9Health "cheapest check first"
+-- ordering. A department-less connected player must never reach either of
+-- those two costs, for ANY reason that would otherwise read as down.
+-- ========================================================================
+
+t.test('poll ordering: a department-less handler (no job at all) never reaches the ambulance adapter or the raw-health native, even with lethal HP and isdead=true', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return true end })
+    wireHappyPath(f, { isdead = true, job = false }) -- health defaults well below threshold too
+    local before = f.getEntityHealthCallCount()
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 0, 'a department-less player can never hold an active handler-role partnership either way -- this must never notify')
+    t.equals(#f.ambulanceIsDownedCalls, 0, 'the ambulance adapter must never be called for a department-less player')
+    t.equals(f.getEntityHealthCallCount(), before, 'GetEntityHealth must never be called for a department-less player')
+end)
+
+t.test('poll ordering: a handler whose job is NOT a key in Config.Departments (e.g. quit the department mid-session) is treated the same as no job at all', function()
+    local f = newDefenseFixture({ ambulanceIsDowned = function(_src) return true end })
+    wireHappyPath(f, { isdead = true, job = { name = 'unemployed' } })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 0)
+    t.equals(#f.ambulanceIsDownedCalls, 0)
+end)
+
+t.test('poll ordering: an override configured is checked before the department gate too -- override still wins even for a department-less player', function()
+    -- Documents the exact ordering IsHandlerDown uses: override first,
+    -- unconditionally (matches every other override precedence test in
+    -- this file), THEN the department gate for the no-override path only.
+    local f = newDefenseFixture({ downedOverride = function(_src) return true end })
+    wireHappyPath(f, { healthy = true, job = false })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1, 'an operator-supplied override must still be authoritative regardless of department membership')
+end)
+
+t.test('poll ordering: a department member still triggers exactly as before this pass (no regression from adding the gate)', function()
+    local f = newDefenseFixture()
+    wireHappyPath(f, { isdead = true, job = { name = 'police' } })
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:handlerDownDefenseTrigger'), 1)
+end)
+
+-- ========================================================================
 -- TryNotifyPartnerK9 -- who gets notified, when.
 -- ========================================================================
 
@@ -734,7 +907,16 @@ end)
 t.test('Handler player unresolvable via exports.qbx_core:GetPlayer (e.g. a race at disconnect): no crash, no notification', function()
     local f = newDefenseFixture()
     wireHappyPath(f)
-    f.clearPlayer(HANDLER_SRC) -- IsHandlerDown's raw-health fallback does not need this; TryNotifyPartnerK9 does
+    -- UPDATED (this pass): before the Config.Departments gate landed,
+    -- IsHandlerDown's raw-health fallback alone did not need a resolvable
+    -- player -- only TryNotifyPartnerK9 did. It now ALSO needs `player` to
+    -- resolve `job` for the department gate, so a cleared player now makes
+    -- IsHandlerDown itself return false (department-less) rather than
+    -- reaching the raw-health check at all -- the OBSERVABLE outcome this
+    -- test actually pins (`#f.clientEvents == 0`) is unchanged either way,
+    -- since TryNotifyPartnerK9 would already independently no-op on this
+    -- exact same missing player, but the INTERNAL reason has shifted.
+    f.clearPlayer(HANDLER_SRC)
     local ok = pcall(f.runOneTick)
     t.isTrue(ok)
     t.equals(#f.clientEvents, 0)
