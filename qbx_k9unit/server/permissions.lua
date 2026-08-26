@@ -139,20 +139,75 @@
         they next connect.
 
     ======================================================================
-    SELF-GRANT -- unconditionally blocked, no config escape hatch (unlike
-    Config.HighCommand.allowSelfGrant, which the project owner deliberately
-    made a toggle). config.lua's own Config.Permissions header does not
-    define one for this feature, and this task's own brief gives the exact
-    reasoning already settled for the XP-grant case: "a self-grant is the
-    one case with no second person in the audit trail." GrantPermission
-    below rejects outright if `targetCitizenid == granterCitizenid`, checked
-    against the GRANTER'S OWN server-resolved citizenid (exports.qbx_core:
-    GetPlayer(granterSrc).PlayerData.citizenid), never a client claim.
-    Deliberately NOT extended to RevokePermission -- a high-command officer
-    revoking a grant THEY THEMSELVES previously issued to their own
-    citizenid (the only way they could ever hold one, since self-grant is
-    blocked at the source) is removing their own power, not adding it; there
-    is no "no second person in the audit trail" concern in that direction.
+    SELF-GRANT -- unconditionally blocked FOR THE NAMED-CAPABILITY NAMESPACE
+    (k9.access/k9.certify/k9.audit/k9.givexp), no config escape hatch
+    (unlike Config.HighCommand.allowSelfGrant, which the project owner
+    deliberately made a toggle for the XP case). config.lua's own
+    Config.Permissions header does not define one for this feature, and
+    this task's own brief gives the exact reasoning already settled for the
+    XP-grant case: "a self-grant is the one case with no second person in
+    the audit trail." GrantPermission below rejects outright if
+    `targetCitizenid == granterCitizenid`, checked against the GRANTER'S OWN
+    server-resolved citizenid (exports.qbx_core:GetPlayer(granterSrc).
+    PlayerData.citizenid), never a client claim. Deliberately NOT extended
+    to RevokePermission -- a high-command officer revoking a grant THEY
+    THEMSELVES previously issued to their own citizenid (the only way they
+    could ever hold one, since self-grant is blocked at the source, for this
+    namespace) is removing their own power, not adding it; there is no "no
+    second person in the audit trail" concern in that direction.
+
+    CRITICAL DAY-ONE FIX -- THE 'feature.<Name>' NAMESPACE IS DIFFERENT,
+    AND IS EXEMPTED (config.lua's new Config.FeatureControl.
+    allowHighCommandSelfGrant, default true): a correctness audit found that
+    the blanket self-grant block above, applied unmodified to
+    'feature.<Name>' (Config.FeatureControl.RequireGrant) grants, created a
+    genuine, permanent deadlock on the single most common server topology
+    there is -- exactly one high-command officer (the owner, on day one).
+    Config.FeatureControl.RequireGrant.AdminAuditCommands ships `true` by
+    default, server/admin.lua's IsAuthorizedAdmin deliberately does NOT
+    exempt high command from that RequireGrant check (by design -- see that
+    file's own header "high command triggering ITS OWN audit access is
+    still subject to a block/RequireGrant the same as anyone else"), only
+    high command can call GrantPermission at all, and self-grant was
+    blocked outright -- so a solo high-command officer had no path, ever,
+    to grant themselves 'feature.AdminAuditCommands', making the tablet's
+    entire Audit tab permanently unreachable. VERIFIED NOT UNIQUE TO
+    AdminAuditCommands: server/combat.lua's IsCombatFeaturePermittedForCitizenId
+    and server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId
+    apply the IDENTICAL 4-step resolution, with no high-command exemption
+    at step 3 either, to the OTHER eight RequireGrant entries
+    (BiteAndHold/NonLethalTakedown/PropDragging/FindAlerts/ScentTrailHunt/
+    PursuitSprint/ScentLineup/SARCalls) -- the check there runs against
+    whichever citizenid is ACTING (the caller performing the ability), which
+    can just as easily be the solo high-command officer's own citizenid if
+    they are also the one playing a K9/handler role. This was the same
+    day-one deadlock, just less visible because it narrows one ability at a
+    time rather than an entire tablet tab. Fixing it once, here, in
+    GrantPermission -- the single choke point every one of those nine
+    features' grants already passes through -- closes it for all nine
+    without touching any of the four files (combat.lua, pursuitsprint.lua,
+    admin.lua, and whichever files own the remaining RequireGrant-gated
+    features) that implement their own copy of the same 4-step resolution.
+    NOT extended to 'block.<Name>' (self-blocking has no analogous deadlock
+    to fix -- an ungranted default-allow feature needs no self-grant to use,
+    and a self-imposed block is never something a citizenid is locked out of
+    applying) or to the four named-capability keys (a high-command officer
+    already bypasses every one of THOSE gates directly via IsHighCommand --
+    HasK9Access/IsEligibleCertifier/IsAuthorizedAdmin/'/k9givexp' all check
+    IsHighCommand(source) BEFORE ever consulting a 'k9.*' grant -- so
+    self-granting one of those four capabilities changes nothing about their
+    own access and fixes no deadlock; widening self-grant there would only
+    add risk with no corresponding bug to close). See config.lua's own
+    comment on allowHighCommandSelfGrant for why the DEFAULT differs from
+    Config.HighCommand.allowSelfGrant's default (true here vs. false there)
+    despite both being "self-grant" toggles -- the short version: XP
+    self-grant is a real, judged, minted-value decision; a feature-flag
+    self-grant is a binary switch any high-command officer already has
+    standing authority to flip for this exact citizenid, so self-service
+    reaches no state a second officer's rubber stamp would not have
+    produced identically. IsFeatureNamespacePermissionKey below is the
+    ONLY thing that reads this new config flag; every other check in this
+    file is unaffected.
 
     ======================================================================
     DB ERRORS THROW, NOT NIL -- every MySQL.*.await call below is
@@ -657,6 +712,37 @@ local function IsPlausiblePermissionKeyShape(value)
     return type(value) == 'string' and value ~= '' and #value <= 50
 end
 
+--- CRITICAL DAY-ONE FIX -- see this file's header "SELF-GRANT" section for
+--- the full writeup this implements. True only for the 'feature.<Name>'
+--- namespace -- NEVER 'block.<Name>' and NEVER one of the four named
+--- capabilities (k9.access/k9.certify/k9.audit/k9.givexp), by construction
+--- (a plain string-prefix match, not a membership/validity check -- this is
+--- called from GrantPermission's self-grant branch AFTER IsValidPermissionKey
+--- has already confirmed `permissionKey` is one of the two accepted shapes,
+--- so a prefix match alone is sufficient and cannot be spoofed into
+--- matching something that was never validated).
+--- @param permissionKey string
+--- @return boolean
+local function IsFeatureNamespacePermissionKey(permissionKey)
+    return type(permissionKey) == 'string' and permissionKey:match('^feature%.') ~= nil
+end
+
+--- CRITICAL DAY-ONE FIX -- see this file's header "SELF-GRANT" section.
+--- Reads config.lua's new Config.FeatureControl.allowHighCommandSelfGrant,
+--- defaulting to `true` (the fix) when the flag or its containing table is
+--- absent/malformed -- NEVER `x or default`, which would be indistinguishable
+--- from an explicit `false`; this checks `== false` explicitly so only a
+--- deliberate operator opt-out ever disables the fix. Called ONLY from
+--- GrantPermission's self-grant branch, and ONLY after
+--- IsFeatureNamespacePermissionKey has already confirmed the namespace --
+--- this function knows nothing about which permission key is involved.
+--- @return boolean
+local function HighCommandSelfGrantOfFeaturesAllowed()
+    local featureControl = Config.FeatureControl
+    if type(featureControl) ~= 'table' then return true end
+    return featureControl.allowHighCommandSelfGrant ~= false
+end
+
 --- Returns true if `err` (the value pcall caught around the grant INSERT)
 --- represents a MySQL/MariaDB duplicate-key error (1062) on
 --- `uq_one_active_permission_per_citizen`. Same shape-agnostic detection as
@@ -974,9 +1060,16 @@ end
 --- Grants `permissionKey` to `targetCitizenid`. Only callable by high
 --- command (re-verified here, server-side, from `granterSrc`'s OWN live
 --- job -- never trusts a client claim of authority). Self-grant is blocked
---- unconditionally. Idempotent in effect: granting an already-active
---- permission reports 'already_granted' rather than creating a second row
---- or erroring.
+--- unconditionally for the four named capabilities (k9.access/k9.certify/
+--- k9.audit/k9.givexp) and for 'block.<Name>', with no config escape hatch.
+--- Self-grant of a 'feature.<Name>' (RequireGrant/block feature-control)
+--- entry is permitted by default (config.lua's
+--- Config.FeatureControl.allowHighCommandSelfGrant, default true) -- see
+--- this file's header "SELF-GRANT" section for the day-one deadlock this
+--- exemption exists to close, and IsFeatureNamespacePermissionKey/
+--- HighCommandSelfGrantOfFeaturesAllowed above for the exact scope.
+--- Idempotent in effect: granting an already-active permission reports
+--- 'already_granted' rather than creating a second row or erroring.
 --- @param granterSrc number
 --- @param targetCitizenid string
 --- @param permissionKey string
@@ -1033,8 +1126,28 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     end
 
     if targetCitizenid == granterCitizenid then
-        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'self_grant_blocked')
-        return false, 'self_grant_blocked'
+        -- CRITICAL DAY-ONE FIX -- see header "SELF-GRANT" for the full
+        -- writeup. Exempted ONLY for 'feature.<Name>' (RequireGrant/block
+        -- feature-control grants) AND ONLY when the operator has not
+        -- explicitly opted out via Config.FeatureControl.
+        -- allowHighCommandSelfGrant = false. Every other namespace
+        -- (k9.access/k9.certify/k9.audit/k9.givexp, block.<Name>) falls
+        -- through to the unconditional block below exactly as before this
+        -- fix -- this branch WIDENS nothing for 'block.<Name>' or the four
+        -- named capabilities, and widens nothing for anyone who is not
+        -- already high command (IsHighCommand(granterSrc) was already
+        -- required to reach this line at all, checked earlier in this
+        -- function).
+        if not (IsFeatureNamespacePermissionKey(permissionKey) and HighCommandSelfGrantOfFeaturesAllowed()) then
+            LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'self_grant_blocked')
+            return false, 'self_grant_blocked'
+        end
+        -- Falls through to the normal grant path below -- still fully
+        -- logged via LogAuditInvocation like any other grant (target ==
+        -- granter is plainly visible in that line's own `detail` string),
+        -- still rate-limited, still notified. This is not a silent
+        -- exception; it is a same-actor grant that is now permitted to
+        -- proceed instead of being refused outright.
     end
 
     -- PERMISSION-KEY CATALOG RACE GUARD (owner-directed "add or remove

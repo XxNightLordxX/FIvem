@@ -997,4 +997,194 @@ t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this
     t.contains(table.concat(f.printedLines, '\n'), 'schema-collision check had not finished', 'the fallback must be logged clearly, never silent')
 end)
 
+-- ============================================================================
+-- GAP 2 CLOSURE (this pass, coder-backend): server/xptiers.lua's own
+-- PushRefreshedSnapshotsAfterEdit (the push a live tier-threshold edit uses
+-- to refresh every currently-connected, potentially-re-ranked citizenid)
+-- used to push a PLAIN CopyXPTier(afterTier) snapshot, with no composition
+-- of a citizenid's own individual override (server/k9profiles.lua) at all.
+-- That meant a live edit to a WHOLE RANK could silently REVERT an
+-- already-online K9's individual override on their own client -- worse than
+-- never composing it in the first place (a value that visibly reverts, not
+-- merely one that was never applied). Fixed via
+-- ComposeEffectiveXPTierSnapshot (this file, above) -- calls
+-- GetK9EffectiveMultipliers, never re-implements or reorders its
+-- resolution contract.
+--
+-- This section loads the REAL, unmodified server/k9profiles.lua alongside
+-- the real server/xptiers.lua (fxmanifest.lua's real order: xptiers before
+-- k9profiles) -- this file's own SHARED `boot()` above never loads
+-- server/k9profiles.lua at all, so it could never have caught this
+-- regression either way; a dedicated fixture is required to prove the fix.
+-- `GetXPTier` stays a plain STUB here, this file's own established
+-- convention (see `boot()`'s own header for why) -- GetK9EffectiveMultipliers
+-- itself is the REAL production function from server/k9profiles.lua, and its
+-- own soft dependency on GetXPTier is satisfied by this same stub, so the
+-- GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE resolution order is
+-- exercised for real even though the "XP TIER" layer underneath it is a
+-- stub, not the real server/progression.lua (out of this pass's own file
+-- ownership; tests/progression_spec.lua's own "GAP 1 CLOSURE" section
+-- already covers that file's side of the identical composition contract).
+-- Config.Database.enabled = false throughout -- both files' own K9Store
+-- calls take the proven-safe memory-mode branch (same convention as
+-- tests/k9profiles_spec.lua's own SECTION 5 and
+-- tests/progression_spec.lua's own newGap1Fixture), so no MySQL stub needs
+-- to additionally understand k9_individual_overrides' own SQL shape.
+-- ============================================================================
+
+--- @param opts table? -- { xpByCitizenid, onlineSources, xpTiers, isHighCommand }
+--- @return table fixture
+local function bootWithK9Profiles(opts)
+    opts = opts or {}
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local callbacks = {}
+    local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
+    local xpByCitizenid = opts.xpByCitizenid or {}
+    local onlineSources = opts.onlineSources or {} -- src -> citizenid
+
+    local function GetPlayersStub()
+        local out = {}
+        for src in pairs(onlineSources) do out[#out + 1] = tostring(src) end
+        return out
+    end
+
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, src)
+                local citizenid = onlineSources[src]
+                if not citizenid then return nil end
+                return { PlayerData = { citizenid = citizenid, source = src } }
+            end,
+        },
+    }
+
+    local config = {
+        XPTiers = opts.xpTiers or defaultXpTiers(),
+        Features = { HighCommand = true, XPProgression = true },
+        Database = { enabled = false },
+    }
+
+    -- Same shape as this file's own shared GetXPTierStub above -- resolves
+    -- exactly like the real ResolveTier against the live (possibly
+    -- just-edited) Config.XPTiers array.
+    local function GetXPTierStub(citizenid)
+        local xp = xpByCitizenid[citizenid] or 0
+        local resolved = config.XPTiers[1]
+        for _, tier in ipairs(config.XPTiers) do
+            if xp >= tier.xp then resolved = tier end
+        end
+        return resolved
+    end
+
+    local pushedEvents = {}
+    local function TriggerClientEventStub(eventName, targetSrc, payload)
+        pushedEvents[#pushedEvents + 1] = { eventName = eventName, targetSrc = targetSrc, payload = payload }
+    end
+
+    local isHighCommand = opts.isHighCommand or function() return true end
+
+    local fakeNow = { value = 0 }
+    local env = Sandbox.newEnv({
+        GetGameTimer           = function() return fakeNow.value end,
+        AddEventHandler        = AddEventHandlerStub,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        GetPlayers             = GetPlayersStub,
+        TriggerClientEvent     = TriggerClientEventStub,
+        print                  = printStub,
+        lib                    = lib,
+        exports                = exportsStub,
+        IsHighCommand          = isHighCommand,
+        Config                 = config,
+        GetXPTier              = GetXPTierStub,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/xptiers.lua', env)
+    Sandbox.loadInto('../server/k9profiles.lua', env)
+
+    for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    return {
+        env = env, callbacks = callbacks, printedLines = printedLines,
+        fakeNow = fakeNow, pushedEvents = pushedEvents, xpByCitizenid = xpByCitizenid,
+        onlineSources = onlineSources, config = config,
+    }
+end
+
+t.test('GAP 2 CLOSURE: editing a WHOLE RANK\'s threshold pushes a snapshot to an online, ALREADY-OVERRIDDEN citizenid that still carries their individual override -- never silently reverting it to the plain rank value', function()
+    local f = bootWithK9Profiles({
+        xpByCitizenid = { ['GAP2CIT'] = 0 },
+        onlineSources = { [50] = 'GAP2CIT' },
+    })
+
+    -- A genuine individual override, through the REAL k9ProfileUpsert
+    -- callback -- server/k9profiles.lua's own LIVE PUSH
+    -- (PushXPTierSnapshotIfOnline) is a soft dependency on
+    -- server/progression.lua, not loaded in this fixture, so it silently
+    -- no-ops here; only server/xptiers.lua's OWN push is under test below.
+    local upsert = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](100, { citizenid = 'GAP2CIT', speedMultiplier = 2.9 })
+    t.isTrue(upsert.ok, 'the override write itself must succeed')
+    for i = #f.pushedEvents, 1, -1 do f.pushedEvents[i] = nil end -- discard whatever, if anything, that call produced
+
+    f.fakeNow.value = f.fakeNow.value + 1100 -- clear XPTierActionCooldown's 1000ms floor
+
+    -- A WHOLE-RANK edit, unrelated to GAP2CIT's own individual override,
+    -- through the real xpTiersUpsert callback.
+    local tier1 = f.config.XPTiers[1]
+    local editResult = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](100, {
+        ordinal = 1, xp = 0, label = tier1.label, speedMultiplier = 1.30,
+        scentRangeMultiplier = tier1.scentRangeMultiplier,
+        medkitCooldownMultiplier = tier1.medkitCooldownMultiplier, badge = tier1.badge,
+    })
+    t.isTrue(editResult.ok)
+
+    local pushedToGap2
+    for _, evt in ipairs(f.pushedEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.targetSrc == 50 then pushedToGap2 = evt end
+    end
+    t.isNotNil(pushedToGap2, 'a whole-rank edit must still push a refreshed snapshot to this online citizenid')
+    t.equals(pushedToGap2.payload.speedMultiplier, 2.9, 'the pushed snapshot must still carry the individual override (2.9), NEVER the plain, just-edited rank value (1.30) -- reverting it here would be exactly the GAP 2 bug this pass closes')
+end)
+
+t.test('GAP 2 CLOSURE control: an online citizenid with NO individual override still receives the plain, just-edited rank value -- composition only ever overlays a REAL override, it never invents one', function()
+    local f = bootWithK9Profiles({
+        xpByCitizenid = { ['GAP2NOOVERRIDE'] = 0 },
+        onlineSources = { [51] = 'GAP2NOOVERRIDE' },
+    })
+
+    f.fakeNow.value = f.fakeNow.value + 1100
+
+    local tier1 = f.config.XPTiers[1]
+    local editResult = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](100, {
+        ordinal = 1, xp = 0, label = tier1.label, speedMultiplier = 1.45,
+        scentRangeMultiplier = tier1.scentRangeMultiplier,
+        medkitCooldownMultiplier = tier1.medkitCooldownMultiplier, badge = tier1.badge,
+    })
+    t.isTrue(editResult.ok)
+
+    local pushed
+    for _, evt in ipairs(f.pushedEvents) do
+        if evt.eventName == 'qbx_k9unit:client:xpTierChanged' and evt.targetSrc == 51 then pushed = evt end
+    end
+    t.isNotNil(pushed)
+    t.equals(pushed.payload.speedMultiplier, 1.45, 'with no override at all, the plain, just-edited rank value must reach the client unchanged')
+end)
+
 os.exit(t.summary())

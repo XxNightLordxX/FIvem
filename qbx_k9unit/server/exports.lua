@@ -1,28 +1,16 @@
 --[[
     qbx_k9unit/server/exports.lua
 
-    PUBLIC API SURFACE — coder-architect pass, 2026-08-24. See
-    DEVELOPER_REFERENCE.md Part B §1 (formerly COMPLEMENTARY_FEATURES.md, merged
-    2026-08-25; "Give this resource a real export/event
-    API — prerequisite, not optional") for why this file exists: before this
-    pass, fxmanifest.lua declared zero exports and README.md said so
-    explicitly ("integration by other resources is currently limited to
-    reading the metadata.k9certified display flag... these are internal
-    contracts, not a stable public API"). Every export below closes that gap
-    for READ access. See "NOT IN THIS FILE" near the bottom for what is
-    deliberately still missing and why — that section is as load-bearing as
-    the exports themselves for anyone reviewing this contract.
-
-    SCOPE BOUNDARY THIS FILE OPERATED UNDER AT THE TIME IT WAS WRITTEN: this
-    pass added ONLY this new file (plus its fxmanifest.lua/.luacheckrc
-    script-list entries, reported separately to whoever owned those files,
-    not edited here) — it did not modify any other existing .lua file in
-    this resource at the time. That constraint directly shaped two decisions
-    below: the "NO NEW MUTATIONS" stance (still current), and the original
-    "EVENT CONTRACT — DOCUMENTED, NOT YET WIRED" section immediately below,
-    which is **no longer accurate as a status claim** — see the correction
-    at the top of that section before assuming the six events it lists still
-    need wiring.
+    PUBLIC API SURFACE. See DEVELOPER_REFERENCE.md Part B §1 ("Give this
+    resource a real export/event API — prerequisite, not optional") for why
+    this file exists: before it was added, fxmanifest.lua declared zero
+    exports and README.md said so explicitly ("integration by other
+    resources is currently limited to reading the metadata.k9certified
+    display flag... these are internal contracts, not a stable public
+    API"). Every export below closes that gap for READ access. See "NOT IN
+    THIS FILE" near the bottom for what is deliberately still missing and
+    why — that section is as load-bearing as the exports themselves for
+    anyone reviewing this contract.
 
     ======================================================================
     DESIGN PRINCIPLES — read before adding a new export here:
@@ -92,11 +80,11 @@
     surface never changes underneath it.
 
     ======================================================================
-    Config.Features GATING — DECISION, PER EXPORT (reasoned explicitly per
-    this task's own instruction, not defaulted either way):
+    Config.Features GATING — decided explicitly per export, not defaulted
+    either way:
     - HasK9Access / IsConfiguredK9Model: NOT gated by any Config.Features
-      flag. Neither wrapped function is itself gated by a Phase-numbered
-      flag internally — HasK9Access is the core access gate DEVELOPER_REFERENCE.md §4.1
+      flag. Neither wrapped function is itself gated by a feature flag
+      internally — HasK9Access is the core access gate DEVELOPER_REFERENCE.md §4.1
       describes (independent of which specific K9 mechanics are toggled
       on), and IsConfiguredK9Model is roster truth, not a feature. An
       export diverging from its own wrapped function's real behavior would
@@ -125,48 +113,25 @@
       feature flag, so there is nothing else for it to be gated by.
     ======================================================================
 
-    EVENT CONTRACT — WIRED, NOT JUST DOCUMENTED (correction: this section
-    originally read "DOCUMENTED, NOT YET WIRED" — that was accurate when
-    this file was first written and is stale now; do not re-implement any
-    of the wiring described below, it already exists). Verified by direct
-    grep of the current tree: server/certifications.lua,
-    server/partnership.lua, server/progression.lua, server/search.lua,
-    server/sarcalls.lua, and server/integrations.lua each fire their events
-    at the exact success points described below, by their exact
-    names/payload shapes.
+    EVENT CONTRACT — a `qbx_k9unit:events:<name>` namespace, distinct from
+    the existing `qbx_k9unit:server:`/`qbx_k9unit:client:` namespaces
+    (which README.md already documents as internal and "may change") —
+    `qbx_k9unit:events:*` is the one meant to be a stable contract other
+    resources can rely on. Every one fires via plain `TriggerEvent`
+    (server-local — any other server-side resource can `AddEventHandler`
+    on these directly; never `TriggerClientEvent`, these are not for this
+    resource's own clients).
 
-    CORRECTED 2026-08-25 (same pass as the count correction below): this
-    paragraph previously said those files "each now call a shared
-    `FireOutboundEvent(...)` helper" — that was NOT true when written. It
-    was six INDEPENDENT, byte-for-byte identical `local function
-    FireOutboundEvent` copies, one per file (and only four of the six
-    firing files were even named above; server/sarcalls.lua and
-    server/integrations.lua each had their own copy too, undocumented
-    here). It is genuinely shared now: all six copies have been extracted
-    into ONE resource-global `FireOutboundEvent` in server/events.lua (see
-    that file's header for the full extraction writeup) — this correction
-    exists so a future reader does not repeat the earlier mistake of
-    trusting this claim as already-true before it actually was.
+    Fired from server/certifications.lua, server/partnership.lua,
+    server/progression.lua, server/search.lua, server/sarcalls.lua, and
+    server/integrations.lua, each at the exact success points described
+    below, through one shared resource-global `FireOutboundEvent` helper
+    defined in server/events.lua (see that file's header) — this file only
+    documents the contract and does not fire anything directly; firing
+    happens at the owning files' own success points.
 
-    This file itself still only documents the contract and does not fire
-    anything directly (it never did — firing happens at the owning files'
-    own success points, which was always the intended design, not a
-    placeholder); what changed is that those files' owners have since done
-    the wiring this section originally described as still needed.
-    DEVELOPER_REFERENCE.md Part B §1's ask (outbound events other resources can
-    react to — certification granted/revoked, a partnership formed/broken,
-    a contraband search completing, an XP tier crossing) is therefore now
-    fully delivered, not merely specified — see the FOURTEEN-event count
-    below for the current full list, not the six named in this paragraph's
-    original draft.
-
-    CORRECTED 2026-08-25, LATE PASS. The paragraph that stood here said
-    "still exactly the six calls... still no seventh", and then the very
-    next lines listed a seventh -- a self-contradiction that survived two
-    passes precisely because each one re-verified the claim it inherited
-    rather than re-deriving the number. It was wrong. The real count today
-    is FOURTEEN, measured by grepping every `qbx_k9unit:events:` string
-    literal across client/ and server/ and de-duplicating:
+    Current full list (measured by grepping every `qbx_k9unit:events:`
+    string literal across client/ and server/ and de-duplicating):
 
       certificationGranted      certificationRenewed
       certificationRevoked      certificationTierChanged
@@ -176,91 +141,77 @@
       searchCompleted           specializationGranted
       specializationRevoked     xpTierReached
 
-    The lesson worth keeping, since this is a PUBLIC contract other
-    resources are written against: do not state a count here unless you
-    just measured it, and do not re-affirm an inherited one. A stale count
-    in a stable-contract header is worse than no count, because a consumer
-    trusts it. If you add an event, add its name to the list above in the
-    same edit -- the list is the contract; the number is only a summary of
-    it.
-
-    Naming: a new `qbx_k9unit:events:<name>` namespace, distinct from the
-    existing `qbx_k9unit:server:`/`qbx_k9unit:client:` namespaces (which
-    README.md already documents as internal and "may change between
-    phases") — `qbx_k9unit:events:*` is the one meant to be a stable
-    contract going forward. Every one fires via plain `TriggerEvent`
-    (server-local — any other server-side resource can `AddEventHandler`
-    on these directly; never `TriggerClientEvent`, these are not for this
-    resource's own clients).
+    This is a PUBLIC contract other resources are written against: do not
+    state a count here unless you have just measured it, and do not simply
+    re-affirm an inherited one — a stale count in a stable-contract header
+    is worse than no count, because a consumer trusts it. If you add an
+    event, add its name to the list above in the same edit — the list is
+    the contract; a summary count of it is not.
 
     1. 'qbx_k9unit:events:certificationGranted'
        (citizenid: string, jobName: string, grantedByCitizenid: string)
        Fire from: server/certifications.lua's GrantCertification, right
        after the `RefreshCertificationCache(targetCitizenid, jobName)` call
-       that follows a successful INSERT (current line ~513) — targetCitizenid/
-       jobName/granterCitizenid are already in scope there.
+       that follows a successful INSERT — targetCitizenid/jobName/
+       granterCitizenid are already in scope there.
 
     2. 'qbx_k9unit:events:certificationRevoked'
        (citizenid: string, jobName: string, reason: 'manual'|'manual_offline'|'job_changed')
        Fire from THREE existing success points in server/certifications.lua:
-       RevokeCertification (current line ~608-611, right after `affectedRows`
-       confirms a real row flipped; reason = 'manual'),
-       RevokeCertificationOffline (its equivalent UPDATE success point;
-       reason = 'manual_offline'), and the QBCore:Server:OnJobUpdate
-       auto-revoke path (reason = 'job_changed'). Same payload shape at all
-       three — consider one small shared local helper in that file rather
-       than duplicating the TriggerEvent call three times.
+       RevokeCertification (right after `affectedRows` confirms a real row
+       flipped; reason = 'manual'), RevokeCertificationOffline (its
+       equivalent UPDATE success point; reason = 'manual_offline'), and the
+       QBCore:Server:OnJobUpdate auto-revoke path (reason = 'job_changed').
+       Same payload shape at all three — a small shared local helper in
+       that file avoids duplicating the TriggerEvent call three times.
 
     3. 'qbx_k9unit:events:partnershipEstablished'
        (k9Citizenid: string, handlerCitizenid: string)
        Fire from: server/partnership.lua's respondPartnerUp handler,
        alongside the two existing
        `TriggerClientEvent('qbx_k9unit:client:partnershipEstablished', ...)`
-       calls (current line ~909-910) — k9Citizenid/officerCitizenid are
-       already in scope there.
+       calls — k9Citizenid/officerCitizenid are already in scope there.
 
     4. 'qbx_k9unit:events:partnershipEnded'
        (k9Citizenid: string, handlerCitizenid: string, reason: string)
        Fire from: server/partnership.lua's DoBreakPartnership, right before
-       its final `return true` (current line ~956) — row.k9_citizenid/
-       row.handler_citizenid/broadcastReason are already in scope there.
-       This one function backs both the player-initiated breakPartnership
-       event AND ForceBreakPartnershipForCitizenId (the automatic teardown
-       on cert revoke), so wiring it here — not at either caller — covers
-       both paths in one place.
+       its final `return true` — row.k9_citizenid/row.handler_citizenid/
+       broadcastReason are already in scope there. This one function backs
+       both the player-initiated breakPartnership event AND
+       ForceBreakPartnershipForCitizenId (the automatic teardown on cert
+       revoke), so wiring it here — not at either caller — covers both
+       paths in one place.
 
     5. 'qbx_k9unit:events:searchCompleted'
        (searcherCitizenid: string, searcherJob: string,
         targetType: 'vehicle'|'person', result: 'found'|'clean'|'search_failed',
         totalWeight: number?, alertTier: string?)
        Fire from: server/search.lua's LogSearchAttempt, right after its
-       `pcall(MySQL.insert, ...)` call (current line ~433) — every field in
-       this payload is already a parameter of that function, and all six
-       call sites in that file already funnel through it, so wiring the
-       event there (not at each call site) covers all of them at once and
-       guarantees the event payload can never drift from what actually
-       lands in the `k9_search_log` audit row.
-       RECOMMENDED, NOT YET APPLIED (server/integrations.lua's own header,
-       2026-08-25 pass): extend this payload with the two target-identity
-       fields (`plateOrNil`, `targetCitizenidOrNil`) already in scope at
-       this exact call site — an MDT/evidence integration cannot attach a
-       `found` result to a real case record without knowing WHAT was
-       searched, only who searched it. Additive (MINOR), not applied here
-       since server/search.lua's ownership this session belongs to a
-       different agent — see server/integrations.lua's header for the full
-       writeup.
+       `pcall(MySQL.insert, ...)` call — every field in this payload is
+       already a parameter of that function, and all six call sites in
+       that file already funnel through it, so wiring the event there (not
+       at each call site) covers all of them at once and guarantees the
+       event payload can never drift from what actually lands in the
+       `k9_search_log` audit row.
+       RECOMMENDED, NOT YET APPLIED (see server/integrations.lua's own
+       header for the full writeup): extend this payload with the two
+       target-identity fields (`plateOrNil`, `targetCitizenidOrNil`)
+       already in scope at this exact call site — an MDT/evidence
+       integration cannot attach a `found` result to a real case record
+       without knowing WHAT was searched, only who searched it. Additive
+       (MINOR), not yet applied here.
 
     6. 'qbx_k9unit:events:xpTierReached'
        (citizenid: string, newTier: table, oldTier: table — both COPIES,
         same shape as this file's own GetXPTier export below, never the
         raw Config.XPTiers reference)
        Fire from: server/progression.lua's AwardXP, at the existing
-       `if newTier ~= oldTier then` branch (current line ~300), which
-       already detects the exact crossing this event exists to announce —
-       right alongside the existing `PushTierSnapshot(targetSrc, newTier)`
-       call in that same branch.
+       `if newTier ~= oldTier then` branch, which already detects the exact
+       crossing this event exists to announce — right alongside the
+       existing `PushTierSnapshot(targetSrc, newTier)` call in that same
+       branch.
 
-    7. 'qbx_k9unit:events:k9Down' (ADDED — DEVELOPER_REFERENCE.md Part A §7, "K9
+    7. 'qbx_k9unit:events:k9Down' (DEVELOPER_REFERENCE.md Part A §7, "K9
        down / injured critically" dispatch integration hook)
        (source: number, citizenid: string, jobName: string, coords: vector3,
         health: number)
@@ -271,35 +222,32 @@
        qualifying duration, and a per-source re-fire cooldown, mirroring
        server/wellbeing.lua's own PED_DEAD_HEALTH_THRESHOLD pattern) and for
        why this is a poll rather than a hook inside that file's existing
-       TickWellbeing loop (an ownership-boundary decision for this session,
-       not a structural preference). The one payload in this whole contract
-       that carries a location (`coords`), deliberately: unlike the other
-       six events, a dispatch alert's entire purpose is a map pin.
+       TickWellbeing loop. The one payload in this whole contract that
+       carries a location (`coords`), deliberately: unlike the other six
+       events, a dispatch alert's entire purpose is a map pin.
 
     Every payload above uses ONLY values the owning file already computes
     for its own internal purposes (a DB column just written, an existing
     TriggerClientEvent's own arguments, or — for #7 — a live, server-resolved
-    read taken at the moment of firing) — wiring #1 through #6 in was
-    arithmetic-free, matching DEVELOPER_REFERENCE.md Part B's own "Effort: small"
-    assessment for that item; #7 is genuinely new detection logic, scoped to
-    its own file rather than any existing one, per server/integrations.lua's
-    own header.
+    read taken at the moment of firing). Wiring #1 through #6 required no new
+    logic beyond firing at an existing success point; #7 is genuinely new
+    detection logic, scoped to its own file rather than any existing one —
+    see server/integrations.lua's own header.
     ======================================================================
 
     ======================================================================
-    SIX-FEATURE COVERAGE AUDIT (2026-08-25 coder-architect pass) — six
-    features have landed in this resource since this file was first
-    written: Recall (server/recall.lua, client/recall.lua),
-    HandlerDownDefense (server/defense.lua, client/defense.lua),
-    PropAttachments (server/propattachment.lua, client/propattachment.lua),
-    FetchMechanic (server/fetch.lua, client/fetch.lua), ProximityAudioFX
-    (client/proximityaudio.lua only — no server-side file exists for it),
-    and two more that don't map to a single feature file: partnership
-    tenure (server/tenure.lua) and the admin/audit surface
-    (server/admin.lua). Each was read in full this pass and evaluated
-    against this file's own DESIGN PRINCIPLES above (wrap an EXISTING
-    resource-global read accessor, never invent one; never add SQL; never
-    weaken the "no new mutations" stance). Result for THIS file
+    COVERAGE OF LATER-ADDED FEATURES — six features landed in this resource
+    after this file was first written: Recall (server/recall.lua,
+    client/recall.lua), HandlerDownDefense (server/defense.lua,
+    client/defense.lua), PropAttachments (server/propattachment.lua,
+    client/propattachment.lua), FetchMechanic (server/fetch.lua,
+    client/fetch.lua), ProximityAudioFX (client/proximityaudio.lua only —
+    no server-side file exists for it), and two more that don't map to a
+    single feature file: partnership tenure (server/tenure.lua) and the
+    admin/audit surface (server/admin.lua). Each was read in full and
+    evaluated against this file's own DESIGN PRINCIPLES above (wrap an
+    EXISTING resource-global read accessor, never invent one; never add
+    SQL; never weaken the "no new mutations" stance). Result for THIS file
     (server/exports.lua): **zero new exports.** Every one of the six either
     exposes no resource-global function this file could wrap at all, or its
     only resource-global surface is a self-initiated mutation already
@@ -308,18 +256,17 @@
 
     - Recall (server/recall.lua): NOTHING. The file registers exactly one
       RegisterNetEvent and defines no resource-global (non-`local`)
-      function of its own — verified by direct read, not grep alone,
-      since a false negative here would be the exact "silently stops
-      protecting" failure class this file's CopyTier comment warns about
-      elsewhere. There is no per-citizenid or per-source cached state this
-      file could read (no "is a recall on cooldown" accessor exists, nor
-      would one be safe to add: RecallCooldown is `local` to
-      server/recall.lua and adding a resource-global reader for it is that
-      file's call, not this one's, per DESIGN PRINCIPLE 4). The
-      client-initiated action (`RequestRecall()`) is evaluated in
-      client/exports.lua instead, where it is also excluded — see that
-      file's own reasoning; there is no server-exportable half of Recall
-      period.
+      function of its own — verified by direct read, not grep alone, since
+      a false negative here would be the exact "silently stops protecting"
+      failure class this file's CopyTier comment warns about elsewhere.
+      There is no per-citizenid or per-source cached state this file could
+      read (no "is a recall on cooldown" accessor exists, nor would one be
+      safe to add: RecallCooldown is `local` to server/recall.lua and
+      adding a resource-global reader for it is that file's call, not this
+      one's, per DESIGN PRINCIPLE 4). The client-initiated action
+      (`RequestRecall()`) is evaluated in client/exports.lua instead, where
+      it is also excluded — see that file's own reasoning; there is no
+      server-exportable half of Recall period.
     - HandlerDownDefense (server/defense.lua): NOTHING. Confirmed by direct
       read: this file exposes NO resource-global function — `LastHostile`,
       `AttackerReportCooldown`, and `DefenseTriggerCooldown` are all
@@ -338,30 +285,30 @@
       resource wanting to know "a handler just went down and their K9 was
       notified" would be a reasonable FUTURE addition to that stable
       namespace, but adding it means calling `FireOutboundEvent` from
-      inside server/defense.lua itself — off limits to this pass (this
-      file wraps, it does not add firing points to files it doesn't own).
-      Flagged as a genuine gap, not silently dropped.
+      inside server/defense.lua itself, which is that file's own owner's
+      call to make, not this file's. Flagged as a genuine gap, not
+      silently dropped.
     - PropAttachments (server/propattachment.lua): NOTHING. That file's own
-      header says so explicitly and this pass re-confirmed it by direct
-      read: "THIS FILE exposes NO resource-global functions... no other
-      file in this resource... needs to call into prop-attachment state
-      directly." `PropAttachmentState`/`PendingPropAttachConfirm` are both
-      `local`. There is no "is citizenid X currently wearing a prop"
-      accessor to wrap because none exists, and adding one would mean
-      writing new code inside a file this pass does not own.
+      header says so explicitly and this was re-confirmed by direct read:
+      "THIS FILE exposes NO resource-global functions... no other file in
+      this resource... needs to call into prop-attachment state directly."
+      `PropAttachmentState`/`PendingPropAttachConfirm` are both `local`.
+      There is no "is citizenid X currently wearing a prop" accessor to
+      wrap because none exists, and adding one would mean writing new code
+      inside a file this one does not own.
     - FetchMechanic (server/fetch.lua): NOTHING on the server side, by the
       identical reasoning — `FetchBalls`/`CarrierIndex`/
       `PendingFetchThrows`/`PendingFetchCarries`/`PendingFetchDrops` are
       all `local`, and every server-side function in that file is `local`
-      too (confirmed: zero `function <Name>(` — non-`local` — declarations
-      anywhere in server/fetch.lua). The one genuinely useful read this
-      feature produces — is the LOCAL K9 currently carrying a fetch ball
-      right now — is client-side (`IsFetchCarryEngaged()`,
+      too (confirmed: zero `function <Name>(` — non-`local` —
+      declarations anywhere in server/fetch.lua). The one genuinely useful
+      read this feature produces — is the LOCAL K9 currently carrying a
+      fetch ball right now — is client-side (`IsFetchCarryEngaged()`,
       client/fetch.lua), added to client/exports.lua instead.
     - ProximityAudioFX (client/proximityaudio.lua): NOTHING, and there is
-      no server-side file for this feature to begin with — it is a
-      purely client-local cosmetic ambient-audio effect (see that file's
-      own header). Not applicable to this file at all.
+      no server-side file for this feature to begin with — it is a purely
+      client-local cosmetic ambient-audio effect (see that file's own
+      header). Not applicable to this file at all.
     - Partnership tenure (server/tenure.lua): NOTHING. That file's own
       header says so explicitly ("THIS FILE owns no resource-global
       (non-`local`) function of its own"), re-confirmed by direct read.
@@ -377,35 +324,32 @@
       unbounded DB work," and a caller-invoked export is exactly the "in a
       loop" case that principle exists to prevent), or (b) adding a new
       resource-global accessor inside server/tenure.lua itself, which is
-      not this file's own file to edit this pass. Both routes are closed;
-      nothing is exported.
+      not this file's own file to edit. Both routes are closed; nothing is
+      exported.
     - Admin/audit surface (server/admin.lua): NOTHING — already covered by
       the existing "k9_search_log READ-BACK" entry in "NOT IN THIS FILE"
-      below, re-verified accurate this pass by direct read of
-      server/admin.lua: every query function in that file
-      (QueryCertificationHistory/QueryPartnershipHistory/
-      QuerySearchLogByOfficer/QuerySearchLogByPlate/QuerySearchLogByPerson/
-      QuerySearchLogRecent, etc.) is `local`, ACE-gated, and command-driven
-      — no resource-global accessor exists to wrap, and building one here
-      would mean inventing a new any-caller-resource authorization model
-      for tables this file doesn't own, exactly the objection that
-      existing entry already raises. No change needed there.
+      below, re-verified by direct read of server/admin.lua: every query
+      function in that file (QueryCertificationHistory/
+      QueryPartnershipHistory/QuerySearchLogByOfficer/QuerySearchLogByPlate/
+      QuerySearchLogByPerson/QuerySearchLogRecent, etc.) is `local`,
+      ACE-gated, and command-driven — no resource-global accessor exists to
+      wrap, and building one here would mean inventing a new any-caller-
+      resource authorization model for tables this file doesn't own,
+      exactly the objection that existing entry already raises. No change
+      needed there.
 
     NET EFFECT ON VERSIONING: because none of the six produced a wrappable
     resource-global on the SERVER side, this file's own API_VERSION stays
     at 1.0.0 — there is nothing additive to bump for. See VERSIONING above
-    and client/exports.lua's own header for why that file's version DID
-    move — to 1.1.0 in that pass, for two genuinely new reads
-    (`IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
-    `GetDefenseSuggestedTargetNetId`), and again to 1.2.0 on 2026-08-26 for
-    a third, `IsPropAttachmentEngaged`. Do not read a count off this
-    paragraph: client/exports.lua's own API_VERSION line is the authority,
-    and this cross-reference has already gone stale once by trying to
-    restate it. The two files' API_VERSION numbers
-    are independent contracts, tracked separately, and are not expected to
-    stay numerically identical going forward; see client/exports.lua's own
-    corrected VERSIONING note for the full reasoning on why "kept in sync"
-    was the wrong framing from the start.
+    and client/exports.lua's own header for why that file's version moved
+    instead, for genuinely new CLIENT-side reads (`IsFetchCarryEngaged`,
+    `HasFreshDefensePrompt` + `GetDefenseSuggestedTargetNetId`, and later
+    `IsPropAttachmentEngaged`). Do not read a count off this paragraph:
+    client/exports.lua's own API_VERSION line is the authority. The two
+    files' API_VERSION numbers are independent contracts, tracked
+    separately, and are not expected to stay numerically identical going
+    forward — see client/exports.lua's own VERSIONING note for the full
+    reasoning.
     ======================================================================
 
     NOT IN THIS FILE — deliberate, with reasons:
@@ -426,16 +370,13 @@
     - k9_search_log READ-BACK (audit/dispute-history access) as a PUBLIC
       EXPORT. Still deliberately not added here. No resource-global accessor
       this file could wrap exists — server/search.lua's own LogSearchAttempt
-      remains `local`. NOTE, since this section was first written:
-      server/admin.lua has since added its own direct, ACE-gated
-      `/k9auditsearch` SELECT against this table — so an absolute "nothing
-      in this resource ever reads it back" framing is no longer true (this
-      file's own text used that framing originally; `sql/install.sql`'s own
-      current schema comment was not found to make that same absolute claim
-      as of this correction, so check that file directly rather than
-      assuming it needs the identical fix). That does not change the
-      reasoning for this file: server/admin.lua's read
-      is a console/ACE-authorized admin command with its own access-scope
+      remains `local`. server/admin.lua has since added its own direct,
+      ACE-gated `/k9auditsearch` SELECT against this table — so an absolute
+      "nothing in this resource ever reads it back" framing is no longer
+      true (check `sql/install.sql`'s own schema comment directly rather
+      than assuming it needs the identical correction). That does not
+      change the reasoning for this file: server/admin.lua's read is a
+      console/ACE-authorized admin command with its own access-scope
       decision already made for that context, not a general-purpose,
       any-caller-resource export — building the latter would still mean
       inventing new authorization logic for a table this file doesn't own
@@ -444,10 +385,10 @@
       their own department's, only one citizenid's?) from the admin
       command's own already-settled ACE model. Recommend, unchanged: a real
       `GetSearchHistoryForCitizenid`/`GetSearchHistoryForPlate`-style
-      accessor belongs in server/search.lua itself first (coder-backend),
-      exported from here once it exists and its access scope is decided —
-      server/admin.lua's existence is useful precedent for that future pass,
-      not a substitute for it.
+      accessor belongs in server/search.lua itself first, exported from
+      here once it exists and its access scope is decided —
+      server/admin.lua's existence is useful precedent for that future
+      work, not a substitute for it.
     - RefreshCertificationCache / RefreshPartnershipCache. Both are already
       resource-global functions, but both perform a live, awaited SQL query
       as a side effect of being called, and today are only ever invoked
@@ -473,10 +414,9 @@
       server/partnership.lua, K9XP in server/progression.lua) that this
       file genuinely cannot see — true Lua file-local scope, not just a
       convention this file is choosing to respect. The only honest way to
-      build one would be a new accessor added inside each owning file,
-      which is exactly the "off limits: edit nothing else" boundary this
-      pass operates under. Hand off to coder-backend alongside the
-      event-wiring work above if a real consumer needs it.
+      build one would be a new accessor added inside each owning file. A
+      real consumer needing one should get a purpose-built accessor added
+      to the owning file first, alongside the event-wiring work above.
     ======================================================================
 ]]
 

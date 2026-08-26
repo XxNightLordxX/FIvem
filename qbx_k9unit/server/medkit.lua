@@ -157,6 +157,20 @@
       it must never be cached) when server/progression.lua hasn't defined
       the accessor, so this file works identically whether or
       not XPProgression is enabled.
+      GAP CLOSED (this pass, coder-backend, no line in THIS file needed to
+      change): server/k9profiles.lua's per-INDIVIDUAL-K9 override on
+      `medkitCooldownMultiplier` now reaches this exact call TRANSITIVELY —
+      `GetXPTierMedkitCooldownMs` (server/progression.lua, not owned by this
+      pass) was updated to consult `GetK9EffectiveMultipliers(citizenid)`
+      (GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE) instead of reading
+      `GetXPTier(citizenid).medkitCooldownMultiplier` raw, so this file's own
+      already-correct call site above picks up the composed value with no
+      change of its own required. Traced end to end, not merely inferred:
+      see tests/medkit_spec.lua's "GAP CLOSURE" section, which loads the
+      REAL server/datastore.lua + server/progression.lua +
+      server/k9profiles.lua alongside this file and proves a live
+      k9ProfileUpsert override changes what MedkitCooldown.IsOnCooldown
+      actually enforces.
     - Exposes NO resource-global functions of its own.
 
     ======================================================================
@@ -889,10 +903,40 @@ lib.callback.register('qbx_k9unit:server:useK9Medkit', function(source, targetSe
     -- checks first, mutation last" discipline, so a blocked USING player
     -- never burns the TARGET's own per-K9 treatment cooldown for a request
     -- that was always going to be refused.
+    --
+    -- REASON SPLIT (this pass, coder-backend): this branch used to ALSO
+    -- return 'no_access' -- the exact same reason string
+    -- IsMedkitUserAuthorized's own job-based rejection above already uses --
+    -- conflating two genuinely different causes into one indistinguishable
+    -- player-facing message: "your job does not permit treating K9s at
+    -- all" (the check above) versus "your job permits it, but this server
+    -- additionally requires an explicit feature.K9Medkit grant you do not
+    -- (yet) hold" (this check). Copies server/pursuitsprint.lua's own
+    -- distinct `no_access` vs. `not_granted`-shaped reason split for the
+    -- identical class of gate. A player told "you aren't authorized" for
+    -- either cause cannot tell which one to fix; a distinct reason string
+    -- lets the client eventually tell them.
+    --
+    -- `not_granted` is a NEW reason value this callback did not emit before
+    -- this pass. client/medkit.lua's own reasonLabel lookup table (that
+    -- file is out of this pass's file-ownership) does not recognize it yet
+    -- and falls back to its own already-existing, by-design "unrecognized
+    -- reason -> generic medkit_failed notify" branch for it today -- that
+    -- file's own comment already promises exactly this degrade path for
+    -- "if server/medkit.lua ever adds a new reason value": never a crash,
+    -- never a wrong-but-confident message, merely not yet as specific as it
+    -- will be once a client-side change adds this one key to that lookup
+    -- table (reported separately, not fixed here -- this pass may not edit
+    -- client/*.lua). `locale('medkit.reason_not_granted')` (locales/en.json)
+    -- is added in this SAME change so the string exists and is ready the
+    -- moment that client-side mapping lands.
     local usingPlayer = exports.qbx_core:GetPlayer(source)
     local usingCitizenid = usingPlayer and usingPlayer.PlayerData and usingPlayer.PlayerData.citizenid
-    if not usingCitizenid or not IsK9MedkitPermittedForCitizenId(usingCitizenid) then
-        return { ok = false, reason = 'no_access' }
+    if not usingCitizenid then
+        return { ok = false, reason = 'no_access' } -- cannot even resolve who is asking -- closest existing fit, not a new third cause worth inventing for an edge case that should not occur for a genuinely connected player
+    end
+    if not IsK9MedkitPermittedForCitizenId(usingCitizenid) then
+        return { ok = false, reason = 'not_granted' }
     end
 
     local requestedAt = GetGameTimer()

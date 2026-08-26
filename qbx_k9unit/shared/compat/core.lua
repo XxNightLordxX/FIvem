@@ -203,12 +203,12 @@
     - THIS FILE must load BEFORE shared/compat/inventory.lua, target.lua,
       framework.lua, dispatch.lua and ambulance.lua -- a HARD requirement,
       since each of those calls `K9Compat.RegisterAdapter(...)` at its OWN
-      file-load time, which needs `K9Compat` to already exist. Requested
-      fxmanifest.lua placement (see this pass's hand-off note / message to
-      main): `shared_scripts`, immediately after `'config.lua'` (this file
-      reads `Config.Compat`/`Config.Features` inside functions that only run
-      after at least one tick has passed, but `config.lua` must still be
-      loaded first since nothing here waits for it beyond that).
+      file-load time, which needs `K9Compat` to already exist. Required
+      fxmanifest.lua placement: `shared_scripts`, immediately after
+      `'config.lua'` (this file reads `Config.Compat`/`Config.Features`
+      inside functions that only run after at least one tick has passed,
+      but `config.lua` must still be loaded first since nothing here waits
+      for it beyond that).
     - THIS FILE must load AFTER `config.lua` (reads `Config.Compat`/
       `Config.Features`, defensively type-checked throughout since a
       malformed or missing Config.Compat must degrade to "nothing pinned,
@@ -249,14 +249,13 @@ local REALM = IsDuplicityVersion() and 'server' or 'client'
 K9Compat.RequiredMethods = {
     inventory = {
         client = { 'OpenStash', 'OpenShop', 'UseItem', 'ItemExists' },
-        -- 'ItemExists' ADDED THIS PASS (coder-architect, resource-auto-
-        -- connect sweep): server/equipmentshop.lua's and server/wellbeing.lua's
-        -- own onResourceStart item-name sanity warnings both independently
-        -- found and documented ("COMPAT-LAYER FINDING, DELIBERATELY NOT
-        -- ROUTED") the exact same gap -- this list had no server-realm
-        -- ItemExists for them to route through, so both stayed hardwired to
-        -- a direct `exports.ox_inventory:Items(...)` call. See
-        -- shared/compat/inventory.lua's own header for what every
+        -- 'ItemExists' ADDED: server/equipmentshop.lua's and
+        -- server/wellbeing.lua's own onResourceStart item-name sanity
+        -- warnings both independently found and documented ("COMPAT-LAYER
+        -- FINDING, DELIBERATELY NOT ROUTED") the exact same gap -- this
+        -- list had no server-realm ItemExists for them to route through, so
+        -- both stayed hardwired to a direct `exports.ox_inventory:Items(...)`
+        -- call. See shared/compat/inventory.lua's own header for what every
         -- registered adapter now does with this: ox_inventory answers it
         -- for real (same export the client realm already used); every
         -- other adapter that returns a non-nil server table for a

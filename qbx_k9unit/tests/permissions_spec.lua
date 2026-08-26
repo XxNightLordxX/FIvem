@@ -968,11 +968,98 @@ do
         t.contains(lastNotifyFor(hc2, src).message, 'Unable to resolve')
     end)
 
-    t.test('GrantPermission: self-grant is unconditionally blocked, no config escape hatch', function()
+    t.test('GrantPermission: self-grant of a named capability (k9.access) is unconditionally blocked, no config escape hatch', function()
         f.advanceTime(2000)
         local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'k9.access')
         t.isFalse(ok)
         t.equals(outcome, 'self_grant_blocked')
+    end)
+
+    -- REGRESSION (escalation path NOT opened): every OTHER named capability
+    -- must still be blocked for self-grant too, not just k9.access -- proves
+    -- the CRITICAL DAY-ONE FIX below is scoped to 'feature.<Name>' alone,
+    -- never widened to the rest of Config.Permissions' catalog.
+    t.test('GrantPermission: self-grant of k9.certify/k9.audit/k9.givexp is STILL unconditionally blocked (the fix does not touch the named-capability namespace)', function()
+        f.advanceTime(2000)
+        for _, key in ipairs({ 'k9.certify', 'k9.audit', 'k9.givexp' }) do
+            f.advanceTime(2000)
+            local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', key)
+            t.isFalse(ok, key .. ' self-grant must still be blocked')
+            t.equals(outcome, 'self_grant_blocked', key .. ' must still report self_grant_blocked')
+        end
+    end)
+
+    -- REGRESSION (escalation path NOT opened): 'block.<Name>' must remain
+    -- blocked for self-grant too -- the fix below exempts ONLY
+    -- 'feature.<Name>', never 'block.<Name>', even though both share the
+    -- same Config.Features-existence validation in IsValidPermissionKey.
+    t.test('GrantPermission: self-grant of block.<Name> is STILL unconditionally blocked (the fix does not touch the block namespace)', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'block.BiteAndHold')
+        t.isFalse(ok)
+        t.equals(outcome, 'self_grant_blocked')
+    end)
+
+    -- CRITICAL DAY-ONE FIX -- see server/permissions.lua's header "SELF-GRANT"
+    -- section for the full writeup. Default true (Config.FeatureControl
+    -- absent, matching this describe block's own fixture setup) means a
+    -- high-command officer can now grant a 'feature.<Name>' entry to
+    -- themselves -- the exact case that made the tablet's Audit tab
+    -- permanently unreachable on a single-high-command-officer server.
+    t.test('GrantPermission: FIX -- self-grant of a feature.<Name> entry is now ALLOWED by default (closes the single-high-command-officer Audit-tab deadlock)', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'feature.BiteAndHold')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.isTrue(f.env.HasPermission('HC-GRANTER', 'feature.BiteAndHold'))
+    end)
+
+    -- REGRESSION (escalation path NOT opened): a caller who is NOT high
+    -- command can never reach the self-grant exemption at all -- IsHighCommand
+    -- is re-checked BEFORE the self-grant branch is ever reached, exactly as
+    -- before this fix. Proves the fix widens nothing for anyone below high
+    -- command, even for the one namespace it does widen for high command.
+    t.test('GrantPermission: a non-high-command caller self-targeting feature.<Name> is still denied, never reaches the self-grant exemption', function()
+        f.advanceTime(2000)
+        f.registerPlayer(101, 'LOWRANK', { name = 'police', grade = { level = 1 } })
+        local ok, outcome = f.env.GrantPermission(101, 'LOWRANK', 'feature.BiteAndHold')
+        t.isFalse(ok)
+        t.equals(outcome, 'denied')
+        t.isFalse(f.env.HasPermission('LOWRANK', 'feature.BiteAndHold'))
+    end)
+
+    -- The escape hatch itself: an operator who explicitly wants the OLD,
+    -- stricter behavior back (a second high-command officer must always
+    -- witness a feature grant, even to another high-command officer) can set
+    -- Config.FeatureControl.allowHighCommandSelfGrant = false and get
+    -- byte-identical pre-fix behavior for the feature.<Name> namespace too.
+    t.test('GrantPermission: Config.FeatureControl.allowHighCommandSelfGrant = false restores the pre-fix block for feature.<Name> self-grants', function()
+        local f2 = newFixture({
+            isHighCommand = function(source) return source == 100 end,
+            featureControl = { allowHighCommandSelfGrant = false },
+        })
+        local hc2Src = f2.registerPlayer(100, 'HC-OPTOUT', { name = 'police', isboss = true, grade = { level = 0 } })
+        f2.advanceTime(2000)
+        local ok, outcome = f2.env.GrantPermission(hc2Src, 'HC-OPTOUT', 'feature.BiteAndHold')
+        t.isFalse(ok)
+        t.equals(outcome, 'self_grant_blocked')
+    end)
+
+    -- Explicit `false` is the ONLY thing that opts out -- confirms this is
+    -- read as `~= false`, never `x or default` (which would be
+    -- indistinguishable from "not set" here since both are boolean, but the
+    -- explicit-table-present-without-the-key case below still must default
+    -- to allowed, matching config.lua's own documented default of `true`).
+    t.test('GrantPermission: an explicit Config.FeatureControl table that OMITS allowHighCommandSelfGrant still defaults to allowed', function()
+        local f3 = newFixture({
+            isHighCommand = function(source) return source == 100 end,
+            featureControl = { RequireGrant = { BiteAndHold = true } },
+        })
+        local hc3Src = f3.registerPlayer(100, 'HC-DEFAULT', { name = 'police', isboss = true, grade = { level = 0 } })
+        f3.advanceTime(2000)
+        local ok, outcome = f3.env.GrantPermission(hc3Src, 'HC-DEFAULT', 'feature.BiteAndHold')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
     end)
 
     t.test('GrantPermission: a successful grant returns ok, notifies the online target, and HasPermission reflects it', function()
@@ -1743,13 +1830,36 @@ do
         t.equals(last.kind, 'error')
     end)
 
-    t.test('k9grantpermission: self-grant is blocked exactly like the tablet path -- no exception carved out for the command', function()
+    -- CRITICAL DAY-ONE FIX (this pass): this command is a thin wrapper over
+    -- the exact same GrantPermission this describe block's other tests
+    -- drive directly -- so the 'feature.<Name>' self-grant exemption
+    -- (Config.FeatureControl.allowHighCommandSelfGrant, default true) is
+    -- reached through THIS surface too, exactly like the tablet path, per
+    -- config.lua's own "require the exact same High Command authorization
+    -- the tablet does" contract for this command. Title/behavior UPDATED
+    -- from "self-grant is blocked exactly like the tablet path" to match --
+    -- the tablet path itself no longer blocks this case either.
+    t.test('k9grantpermission: self-grant of feature.<Name> now succeeds through the command path too, matching the tablet path exactly', function()
         f.advanceTime(2000)
         f.commands.k9grantpermission(hcSrc, { 'HC-CMD', 'feature.BiteAndHold' })
         local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Granted 'feature.BiteAndHold' to HC-CMD.")
+        t.equals(last.kind, 'success')
+        t.isTrue(f.env.HasPermission('HC-CMD', 'feature.BiteAndHold'))
+    end)
+
+    -- REGRESSION (escalation path NOT opened, THIS surface too): the
+    -- named-capability namespace must still be blocked for self-grant
+    -- through the command path, exactly as it still is through GrantPermission
+    -- directly -- the fix does not leak into this namespace via any entry
+    -- point.
+    t.test('k9grantpermission: self-grant of a named capability (k9.access) is STILL blocked through the command path', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'HC-CMD', 'k9.access' })
+        local last = lastNotifyFor(f, hcSrc)
         t.equals(last.message, 'You cannot grant a permission to yourself.')
         t.equals(last.kind, 'error')
-        t.isFalse(f.env.HasPermission('HC-CMD', 'feature.BiteAndHold'))
+        t.isFalse(f.env.HasPermission('HC-CMD', 'k9.access'))
     end)
 
     t.test('k9grantpermission: a second grant from the same officer inside the cooldown window is rate_limited, reported plainly', function()

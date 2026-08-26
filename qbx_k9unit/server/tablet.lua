@@ -629,6 +629,39 @@ local function ResolveDisplayName(citizenid)
     return citizenid
 end
 
+--- THE REAL EXISTENCE CHECK (this pass, coder-backend, at coder-ui's own
+--- request -- see html/tablet.js's "GHOST-CITIZENID GUARD" doc comment on
+--- personSummaryLooksLikeNoRecord for the exact gap this closes): does a
+--- REAL qbx_core player row exist for `citizenid` at all, online or
+--- offline? tabletRequestPersonSummary previously returned `ok = true` for
+--- ANY syntactically valid citizenid string -- a typo, or a deleted
+--- character's old id -- with no way to distinguish that from a genuine
+--- handler who simply holds zero certs/XP/partnership. html/tablet.js's own
+--- stopgap inferred "no record" from every OTHER field being empty
+--- simultaneously, documented there as a frontend-only placeholder for
+--- exactly this field.
+---
+--- DELIBERATELY THE SAME RESOLUTION PATH ResolveDisplayName ALREADY USES
+--- (online GetPlayerByCitizenId first, offline GetOfflinePlayer via pcall
+--- as the fallback) -- NOT a new or stricter source of truth. This matters
+--- for honesty, not just code reuse: if this function used a different/
+--- stricter check than ResolveDisplayName, the two could disagree (e.g.
+--- `exists = false` alongside a `name` that isn't the bare citizenid
+--- fallback, or vice versa), which would be a more confusing contract than
+--- the one being fixed. A citizenid ResolveDisplayName can put a real name
+--- to is, by construction, a citizenid this function reports as existing.
+--- @param citizenid string
+--- @return boolean
+local function ResolvePlayerExists(citizenid)
+    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if onlinePlayer and onlinePlayer.PlayerData then return true end
+
+    local ok, offlinePlayer = pcall(function() return exports.qbx_core:GetOfflinePlayer(citizenid) end)
+    if ok and type(offlinePlayer) == 'table' and offlinePlayer.PlayerData then return true end
+
+    return false
+end
+
 --- OWNER'S ASK ("ensure a name actually pops up and not the player id...
 --- etc"), THE ONE GAP FOUND IN THIS FILE: BuildCertificationsArray's own
 --- `grantedBy` field is a raw citizenid, and html/tablet.js already renders
@@ -1647,17 +1680,43 @@ lib.callback.register('qbx_k9unit:server:tabletRevertK9Ped', function(source, ta
 end)
 
 -- ======================================================================
--- CALLBACK 7 (this pass, coder-ui) -- tabletRequestMyPartnerships. The
--- Partners tab -- owner, verbatim: "both the k9 and handler should be
--- able to pull up a list of there partners and levels etc in a tab...
--- Past partnerships matter too, not just the active one." SAME
--- everyoneCanViewOwnRecord gate as CALLBACK 1 (this is "my own history,"
--- not an audit tool -- unlike server/admin.lua's high-command-only
--- '/k9auditpartner', it never accepts a targetCitizenId at all, only ever
--- reads the CALLER's own citizenid on either side of a row) and the SAME
--- shared TabletReadCooldown budget every other read here already spends
--- from (this file's own header "RATE LIMITING" -- this is the fifth
--- caller of that one shared bucket).
+-- CALLBACKS 7-9 (this pass, coder-ui) -- THE PARTNERSHIPS TAB. Owner,
+-- verbatim (two passes): "both the k9 and handler should be able to pull
+-- up a list of there partners and levels etc in a tab... Past
+-- partnerships matter too, not just the active one" -- then, refined --
+-- "a partnership tab should be shown on all tablets as a tab as it
+-- entails how many handlers a k9 has or how many k9s a handler has and
+-- high command is a handler or a k9 and should have control over it also
+-- but the partnership tab should show whos there partners." Three
+-- callbacks, one shared row-builder:
+--   tabletRequestMyPartnerships       -- CALLER's own history (CALLBACK 7)
+--   tabletRequestPartnershipsForTarget -- high-command lookup of ANY
+--     citizenid's history (CALLBACK 8) -- "high command... should have
+--     control over it also," read side.
+--   tabletForceEndPartnership          -- high-command-only teardown of a
+--     TARGET's active partnership (CALLBACK 9) -- the "control" write
+--     side, a thin wrapper over the EXISTING, already-tested
+--     ForceBreakPartnershipForCitizenId (server/partnership.lua -- the
+--     SAME function certification-revoke/department-change teardowns
+--     already call; this is not a new teardown mechanism).
+-- All three share TabletReadCooldown/TABLET_READ_COOLDOWN_MS where they
+-- read (this file's own header "RATE LIMITING" -- 7/8 are the fifth and
+-- sixth callers of that one shared bucket; 9 is a mutation, not a read,
+-- so it spends nothing from that budget, matching CALLBACK 5/6's own
+-- no-extra-cooldown precedent for a single-row DB write).
+--
+-- "ONE ACTIVE PARTNERSHIP PER CITIZENID, EITHER ROLE, AT A TIME" -- VERIFIED
+-- (qa-tester/ad71ee3115acd466d's audit, this same pass), not assumed: the
+-- two independent UNIQUE keys plus PartnershipEstablishMutex's own
+-- pre-INSERT re-check (server/partnership.lua) hold this invariant with
+-- no found race. So "how many handlers has this K9 had" is NEVER a live
+-- concurrent count (always 0 or 1 active) -- it is the HISTORICAL row
+-- count this callback already returns (k9_partnerships is append-only,
+-- old rows never deleted), exactly matching the owner's own clarified
+-- reading ("Past partnerships... is where the count comes from
+-- historically"). html/tablet.js derives that count from `#partnerships`
+-- (or the truncated notice below when it would undercount) -- this file
+-- adds no separate COUNT query for it.
 --
 -- MERGE, NOT A NEW QUERY SHAPE: K9Store.Partner_GetHistoryByK9/ByHandler
 -- (server/datastore.lua) are the SAME two accessors server/admin.lua's own
@@ -1668,7 +1727,7 @@ end)
 -- here needs no de-dup, unlike a de-normalized join would. Deliberately a
 -- small, local, one-off sort (NOT server/admin.lua's own local
 -- MergeSortedByIdDesc) -- that helper is `local` to admin.lua, not a
--- resource global, and promoting it purely to avoid four lines of
+-- resource global, and promoting it purely to avoid a few lines of
 -- duplication here was judged not worth touching that file this pass.
 --
 -- "LEVEL" IS `tenure_bonus_tier_granted` AS-IS, A PLAIN NUMBER, not a
@@ -1677,17 +1736,21 @@ end)
 -- reading Config.Partnership.TenureBonus.milestones -- reproducing that
 -- resolution here would be a second copy of the same config-reading logic
 -- to keep in sync. Instead, client/tablet.lua's own NUI callback handler
--- for 'tablet:requestMyPartnerships' composes THIS result with the
--- ALREADY-SHIPPED, ALREADY-CLIENT-TRIGGERABLE
--- 'qbx_k9unit:server:getPartnershipTenureProgress' callback (server/tenure.lua)
--- for the one active row's rich tier title/next-milestone countdown --
--- see that file's own doc comment. A past (ended) row's frozen
--- `tenure_bonus_tier_granted` is still reported here, verbatim, so a
--- caller who lost a long-tenured partnership still sees what tier it
--- reached; html/tablet.js renders it as a plain "Tier N" rather than
--- inventing a title for a row this file cannot ask tenure.lua about
--- (getPartnershipTenureProgress only ever answers for the CURRENTLY
--- active row).
+-- for 'tablet:requestMyPartnerships' (self only -- getPartnershipTenureProgress
+-- has no target argument, so CALLBACK 8's admin lookup never gets this
+-- enrichment) composes THIS result with the ALREADY-SHIPPED,
+-- ALREADY-CLIENT-TRIGGERABLE 'qbx_k9unit:server:getPartnershipTenureProgress'
+-- callback (server/tenure.lua) for the one active row's rich tier
+-- title/next-milestone countdown -- see that file's own doc comment. A
+-- past (ended) row's frozen `tenure_bonus_tier_granted` is still reported
+-- here, verbatim, so a caller who lost a long-tenured partnership still
+-- sees what tier it reached; html/tablet.js renders it as a plain "Tier
+-- N" rather than inventing a title for a row this file cannot ask
+-- tenure.lua about. NOT PRESENTED AS TAMPER-PROOF (coordinator-directed,
+-- this pass): server/partnership.lua's own PairTenureSeed anti-farm guard
+-- is disclosed as in-memory-only, reset by a resource restart -- this
+-- file adds no wording implying `tenureTierGranted` is audit-grade, and
+-- html/tablet.js is asked to do the same.
 --
 -- DURATION: `established_at_unix`/`ended_at_unix` (added to
 -- K9Store.Partner_GetHistoryByK9/ByHandler this same pass, DB-mode via
@@ -1695,12 +1758,37 @@ end)
 -- new ended_at_unix stamps) let html/tablet.js compute "how long this ran"
 -- with plain arithmetic against Date.now()/1000 for a still-active row, or
 -- the two stamps directly for an ended one -- never a date-string parse.
+--
+-- NAMES, OFFLINE-SAFE: `partnerName`/`endedByName` both go through this
+-- file's own ResolveDisplayName -- confirmed offline-safe this pass
+-- (native-api-assistant/a3c05728358946da4's contract) via
+-- exports.qbx_core:GetOfflinePlayer, which matters MORE here than
+-- anywhere else in this file: most of a citizenid's PAST partners are, by
+-- definition, usually not the person currently holding the tablet, and
+-- very often not online at all.
 -- ======================================================================
-local PARTNERSHIP_HISTORY_LIMIT = 25 -- fixed, not caller-influenced (this callback takes no query argument at all) -- generous for "everyone this citizenid has ever been partnered with," matching this file's other small fixed caps (e.g. MAX_ROSTER_QUERY_LENGTH above)
+local PARTNERSHIP_HISTORY_LIMIT = 25 -- fixed, not caller-influenced by CALLBACK 7 (which takes no query argument at all) or CALLBACK 8 (which takes only a citizenid, not a limit) -- generous for "everyone this citizenid has ever been partnered with," matching this file's other small fixed caps (e.g. MAX_ROSTER_QUERY_LENGTH above)
 
---- @param citizenid string -- THIS caller's own citizenid, never a client-supplied one
---- @return table rows -- array of raw k9_partnerships history rows (K9Store.Partner_GetHistoryByK9/ByHandler's own shape), newest `id` first, capped at PARTNERSHIP_HISTORY_LIMIT total
-local function MergePartnershipHistoryForCitizenId(citizenid)
+--- 'system:<reason>' sentinel decoding -- server/partnership.lua's own
+--- documented `ended_by` shape (either the ending party's own citizenid,
+--- or this sentinel for an automatic teardown). Passing the raw sentinel
+--- through ResolveDisplayName would harmlessly fall back to echoing it
+--- verbatim (it is not a real citizenid, so nothing resolves) -- this
+--- gives html/tablet.js a clean boolean-ish signal instead so it never has
+--- to string-match a Lua-side convention itself.
+--- @param endedBy string?
+--- @return string? systemReason -- the text after 'system:', or nil if `endedBy` is not that sentinel shape
+local function EndedBySystemReason(endedBy)
+    if type(endedBy) ~= 'string' then return nil end
+    return endedBy:match('^system:(.+)$')
+end
+
+--- Shared by CALLBACK 7 (self) and CALLBACK 8 (high-command lookup of any
+--- citizenid) -- identical shape either way, this file never gives an
+--- admin a richer/different row shape than a caller sees for themselves.
+--- @param citizenid string
+--- @return table result -- { partnerships: table[], truncated: boolean }
+local function BuildPartnershipRowsForCitizenId(citizenid)
     local asK9 = SafeStoreCall(K9Store.Partner_GetHistoryByK9, citizenid, PARTNERSHIP_HISTORY_LIMIT) or {}
     local asHandler = SafeStoreCall(K9Store.Partner_GetHistoryByHandler, citizenid, PARTNERSHIP_HISTORY_LIMIT) or {}
 
@@ -1709,10 +1797,34 @@ local function MergePartnershipHistoryForCitizenId(citizenid)
     for _, row in ipairs(asHandler) do merged[#merged + 1] = row end
     table.sort(merged, function(a, b) return (tonumber(a.id) or 0) > (tonumber(b.id) or 0) end)
 
-    if #merged > PARTNERSHIP_HISTORY_LIMIT then
+    -- "You asked for everything, here is the most recent N" -- same
+    -- disclosed-truncation discipline as tabletRequestRoster's own
+    -- `truncated` field (this file's header), never a silently-cut count.
+    local truncated = #merged > PARTNERSHIP_HISTORY_LIMIT
+    if truncated then
         for i = #merged, PARTNERSHIP_HISTORY_LIMIT + 1, -1 do merged[i] = nil end
     end
-    return merged
+
+    local rows = {}
+    for _, row in ipairs(merged) do
+        local isK9Role = row.k9_citizenid == citizenid
+        local partnerCitizenid = isK9Role and row.handler_citizenid or row.k9_citizenid
+        local systemReason = EndedBySystemReason(row.ended_by)
+        rows[#rows + 1] = {
+            id = row.id,
+            partnerCitizenid = partnerCitizenid,
+            partnerName = ResolveDisplayName(partnerCitizenid),
+            role = isK9Role and 'k9' or 'handler',
+            active = row.active == 1 or row.active == true,
+            establishedAtUnix = tonumber(row.established_at_unix),
+            endedAtUnix = tonumber(row.ended_at_unix),
+            endedBySystemReason = systemReason,
+            endedByName = (systemReason == nil and type(row.ended_by) == 'string' and row.ended_by ~= '') and ResolveDisplayName(row.ended_by) or nil,
+            tenureTierGranted = tonumber(row.tenure_bonus_tier_granted) or 0,
+        }
+    end
+
+    return { partnerships = rows, truncated = truncated }
 end
 
 lib.callback.register('qbx_k9unit:server:tabletRequestMyPartnerships', function(source)
@@ -1736,30 +1848,94 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyPartnerships', function(
 
     local featureEnabled = type(Config.Features) == 'table' and Config.Features.HandlerPartnership == true
     if not featureEnabled then
-        return { ok = true, featureEnabled = false, partnerships = {} }
+        return { ok = true, featureEnabled = false, partnerships = {}, truncated = false }
     end
 
-    local merged = MergePartnershipHistoryForCitizenId(citizenid)
-    local rows = {}
-    for _, row in ipairs(merged) do
-        local isK9Role = row.k9_citizenid == citizenid
-        local partnerCitizenid = isK9Role and row.handler_citizenid or row.k9_citizenid
-        rows[#rows + 1] = {
-            id = row.id,
-            partnerCitizenid = partnerCitizenid,
-            partnerName = ResolveDisplayName(partnerCitizenid),
-            role = isK9Role and 'k9' or 'handler',
-            active = row.active == 1 or row.active == true,
-            establishedAtUnix = tonumber(row.established_at_unix),
-            endedAtUnix = tonumber(row.ended_at_unix),
-            endedBy = row.ended_by,
-            tenureTierGranted = tonumber(row.tenure_bonus_tier_granted) or 0,
-        }
-    end
-
+    local result = BuildPartnershipRowsForCitizenId(citizenid)
     return {
         ok = true,
         featureEnabled = true,
-        partnerships = rows,
+        partnerships = result.partnerships,
+        truncated = result.truncated,
     }
+end)
+
+-- ======================================================================
+-- CALLBACK 8 -- tabletRequestPartnershipsForTarget. HIGH COMMAND ONLY --
+-- "high command... should have control over it also," read half. Console
+-- audience convention would be CallerHasConsoleAccess (isHighCommand OR
+-- k9.audit), but this is deliberately narrower, isHighCommand ONLY,
+-- matching CALLBACK 4/tabletRequestPersonFeatures's own reasoning (an
+-- ordinary k9.audit-holding officer already sees this same history via
+-- the Person screen's partnership section if they can open the console at
+-- all; the owner's own "control over it" phrasing this pass is about
+-- HIGH COMMAND specifically, not every console-capable officer).
+-- ======================================================================
+lib.callback.register('qbx_k9unit:server:tabletRequestPartnershipsForTarget', function(source, targetCitizenId)
+    if type(targetCitizenId) ~= 'string' or targetCitizenId == '' or #targetCitizenId > MAX_CITIZENID_LENGTH then
+        return { ok = false, error = 'invalid_args' }
+    end
+
+    if not (type(IsHighCommand) == 'function' and IsHighCommand(source) == true) then
+        return { ok = false, error = 'not_authorized', message = locale('highcommand.not_authorized') }
+    end
+
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
+    end
+
+    local featureEnabled = type(Config.Features) == 'table' and Config.Features.HandlerPartnership == true
+    if not featureEnabled then
+        return { ok = true, featureEnabled = false, target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId) }, partnerships = {}, truncated = false }
+    end
+
+    local result = BuildPartnershipRowsForCitizenId(targetCitizenId)
+    return {
+        ok = true,
+        featureEnabled = true,
+        target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId) },
+        partnerships = result.partnerships,
+        truncated = result.truncated,
+    }
+end)
+
+-- ======================================================================
+-- CALLBACK 9 -- tabletForceEndPartnership. HIGH COMMAND ONLY -- the
+-- "control over it" write half. Thin wrapper, exactly like CALLBACK 5/6
+-- above: adds no authorization or teardown logic of its own beyond
+-- re-verifying IsHighCommand fresh from `source` (never a client-supplied
+-- flag, THE SECURITY RULE) and delegates the actual teardown to the
+-- EXISTING, already-tested ForceBreakPartnershipForCitizenId
+-- (server/partnership.lua -- the same function certification-revoke and
+-- department-change already call for an automatic teardown; this is that
+-- SAME code path, not a second one). `reason` is a plain, non-secret
+-- string this file owns ('admin_forced_from_tablet') -- client/partnership.lua's
+-- own partnershipEnded handler already renders ANY unrecognized reason
+-- string via a generic locale('partnership.ended_with_reason', reason)
+-- template (that file's own doc comment: "a future caller... should not
+-- need to also edit this file"), so this needed no client-side change to
+-- produce a readable notification for whichever party is online.
+-- ======================================================================
+lib.callback.register('qbx_k9unit:server:tabletForceEndPartnership', function(source, targetCitizenId)
+    if type(targetCitizenId) ~= 'string' or targetCitizenId == '' or #targetCitizenId > MAX_CITIZENID_LENGTH then
+        return { ok = false, error = 'invalid_args' }
+    end
+
+    if not (type(IsHighCommand) == 'function' and IsHighCommand(source) == true) then
+        return { ok = false, error = 'not_authorized', message = locale('highcommand.not_authorized') }
+    end
+
+    if type(ForceBreakPartnershipForCitizenId) ~= 'function' then
+        return { ok = false, error = 'not_available' }
+    end
+
+    if type(GetActivePartnerCitizenId) == 'function' and select(1, GetActivePartnerCitizenId(targetCitizenId)) == nil then
+        return { ok = false, error = 'not_partnered' }
+    end
+
+    local ended = ForceBreakPartnershipForCitizenId(targetCitizenId, 'admin_forced_from_tablet')
+    if not ended then
+        return { ok = false, error = 'not_partnered' }
+    end
+    return { ok = true }
 end)

@@ -42,29 +42,27 @@
     NO LOAD-ORDER DEPENDENCY: this file calls no other client file's
     global, at load time or call time -- only bare CFX natives
     (GetPlayerFromServerId, GetPlayerName), ox_lib (`lib.alertDialog`, a
-    hard dependency per fxmanifest.lua), and `TriggerServerEvent`. Reported
-    placement to main: anywhere after client/main.lua; suggested next to
+    hard dependency per fxmanifest.lua), and `TriggerServerEvent`. It may
+    load anywhere after client/main.lua; it sits next to
     client/partnership.lua as the thematically closest existing file (same
     consent-dialog shape). Reading `Config.Features.ScentLineup` below adds
     no load-order requirement of its own: Config is a shared_script (loads
     before every client_script in fxmanifest.lua), the same "reads Config,
     calls no other file's global" shape this note already describes.
 
-    FEATURE GATE -- FIXED THIS PASS (found by a client-side sweep; not
-    present when this file was first written): every sibling file in this
-    batch (client/scenttrail.lua, client/sarcalls.lua,
-    client/pursuitsprint.lua) opens with
-    `if not Config.Features.<Name> then return end`; this file never read
-    `Config` at all, so its 'qbx_k9unit:client:scentLineupInvite' handler
-    registered UNCONDITIONALLY even when Config.Features.ScentLineup was
-    explicitly false server-side. The blast radius was always small
+    FEATURE GATE: every sibling file in this batch (client/scenttrail.lua,
+    client/sarcalls.lua, client/pursuitsprint.lua) opens with
+    `if not Config.Features.<Name> then return end`; this file needs the
+    same gate, checked FIRST, matching this resource's universal placement
+    convention. Without it, this file's
+    'qbx_k9unit:client:scentLineupInvite' handler would register
+    UNCONDITIONALLY even when Config.Features.ScentLineup is explicitly
+    false server-side. The blast radius stays small regardless
     (server/scentlineup.lua's own /k9lineup command already gates on the
     same flag before ever sending this event, and the source-origin guard
-    above still applies regardless), but this resource's rule is that a
-    disabled feature is INERT, not merely unreachable in practice -- a
-    registered handler is a handler someone can still try to reach. Fixed
-    by adding the same gate every sibling file already uses, checked FIRST,
-    matching this resource's universal placement convention.
+    above still applies), but this resource's rule is that a disabled
+    feature is INERT, not merely unreachable in practice -- a registered
+    handler is a handler someone can still try to reach.
 ]]
 
 if not Config.Features.ScentLineup then return end

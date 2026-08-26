@@ -1,86 +1,58 @@
 --[[
     qbx_k9unit/server/entities.lua
 
-    coder-architect, DEVELOPER_REFERENCE.md near-term item 2 ("Extract the
-    'resolve network entity defensively' helper — same call, now backed by
-    6 real instances instead of 2"). Pure structural extraction, NOT a
-    redesign: the SERVER-side half of that item — previously two
-    independent hand-written copies of "resolve a client-claimed netId to a
-    live entity, defensively" in server/main.lua's relayDoorScratch and
-    server/search.lua's HandleSearchTarget — is consolidated into the
-    single ResolveNetworkEntity() below, with each call site's own
-    existing entity-type/proximity checks preserved (relayDoorScratch's
-    object-only restriction and HandleSearchTarget's targetType
-    cross-check) — see each call site's own "migrated from X" comment for
-    exactly what moved here and what deliberately did not.
+    Consolidates two responsibilities shared across several files:
+    resolving a client-claimed network id to a live entity defensively, and
+    a cross-feature netId claim registry that stops one feature's confirm
+    handshake from hijacking another feature's already-claimed object.
 
-    WHY A NEW FILE, NOT FOLDED INTO server/cooldowns.lua: following that
-    file's own header rationale verbatim (scope a shared file to ONE
-    responsibility so it doesn't balloon into an everything-file as later
-    phases add more call sites) — "does this client-claimed netId actually
-    resolve to something real" is a genuinely different responsibility
-    than a cooldown/mutex timer, and the roadmap's own write-up for this
-    item explicitly leaves the file choice open ("either is consistent
-    with the shipped precedent now"). Reading that precedent as "one new
-    file per distinct responsibility," not "one new file, ever, for
-    everything," is the call made here — cooldowns.lua stays scoped to
-    timing/mutex state only, and this new primitive gets its own file
-    rather than becoming an unrelated second concern bolted onto it.
+    WHY A SEPARATE FILE FROM server/cooldowns.lua: a shared file is scoped
+    to ONE responsibility so it doesn't balloon into an everything-file --
+    "does this client-claimed netId actually resolve to something real" is
+    a genuinely different responsibility than a cooldown/mutex timer, so
+    this primitive gets its own file rather than becoming a second concern
+    bolted onto cooldowns.lua, which stays scoped to timing/mutex state only.
 
     Loaded in fxmanifest.lua's server_scripts immediately after
     server/cooldowns.lua and before server/main.lua/server/search.lua.
-    Unlike server/cooldowns.lua's constructors (called by those files at
-    their own FILE-LOAD time to build private tracker instances),
     ResolveNetworkEntity() below is only ever called at RUN time from
-    inside an event/callback handler — so this file's exact position
+    inside an event/callback handler, so this file's exact position
     relative to main.lua/search.lua isn't itself load-bearing the way
-    cooldowns.lua's is, but it's placed alongside it, before both
-    consumers, to read in the same "shared primitive first" order that
-    file already established.
+    cooldowns.lua's constructors are -- it's placed alongside cooldowns.lua,
+    before both consumers, to read in the same "shared primitive first"
+    order.
 
     ======================================================================
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes TWO resource-global (no `local`) functions:
         ResolveNetworkEntity(netId: number, expectedEntityType: number?) -> number?
-      Reused by server/main.lua's relayDoorScratch (called WITH
-      expectedEntityType = 3, restricting the resolve to objects only —
+      Used by server/main.lua's relayDoorScratch (called WITH
+      expectedEntityType = 3, restricting the resolve to objects only --
       see that call site's own comment for why that number) and
       server/search.lua's HandleSearchTarget (called WITHOUT
-      expectedEntityType — that file's own targetType-vs-GetEntityType
+      expectedEntityType -- that file's own targetType-vs-GetEntityType
       cross-check branches into further target-specific logic beyond a
       simple reject-or-continue gate, so it stays entirely AT that call
       site, deliberately not folded in here; see HandleSearchTarget's own
       comment). Both call sites' existing entity-type/proximity checks are
-      preserved exactly — this file only consolidates the common
+      preserved exactly -- this file only consolidates the common
       "resolve + existence-guard" prefix both of them already did
-      independently. As of DEVELOPER_REFERENCE.md item 2's Revision 5
-      reopening, also reused by server/kennel.lua (3 call sites) and
-      server/inventory.lua (1 call site) — see each call site's own
-      "migrated from X" comment.
+      independently. Also used by server/kennel.lua (3 call sites) and
+      server/inventory.lua (1 call site) -- see each call site's own
+      comment for exactly what moved here and what deliberately did not.
         ResolveConnectedPlayerFromPed(entity: number) -> number?
-      DEVELOPER_REFERENCE.md item 2b ("scan connected players, match by ped,
-      return the server id" — same responsibility as ResolveNetworkEntity
-      above, not a new shared-utility concern). Extracted from
-      server/search.lua's original `ResolveConnectedPlayerFromPed` (the
-      first, most-documented copy — its own "DELIBERATE IMPLEMENTATION
-      CHOICE" doc comment, reasoning about why this scans
+      Scans connected players, matches by ped, and returns the server id --
+      same responsibility as ResolveNetworkEntity above, not a separate
+      shared-utility concern. Its own "DELIBERATE IMPLEMENTATION CHOICE"
+      doc comment below (reasoning about why this scans
       GetPlayers()/GetPlayerPed() rather than the unverified
-      GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity)) combo, is
-      preserved verbatim below since it applies equally to every caller),
-      which had been hand-copied verbatim into server/inventory.lua and
-      server/combat.lua (three independent copies total, none sharing an
-      implementation, before this extraction). Reused by
-      server/search.lua's HandleSearchTarget ('person' branch),
-      server/inventory.lua's HandleOpenK9Inventory, and
-      server/combat.lua's ValidateCombatRequest (player-vs-NPC
-      resolution) — every call site's existing use is unchanged, this
-      file only consolidates the one shared implementation.
+      GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity)) combo) applies
+      equally to every caller: server/search.lua's HandleSearchTarget
+      ('person' branch), server/inventory.lua's HandleOpenK9Inventory, and
+      server/combat.lua's ValidateCombatRequest (player-vs-NPC resolution).
 
-      THIRD, coder-architect this pass — CROSS-FEATURE NETID CLAIM
-      REGISTRY, closing the RESIDUAL GAP server/kennel.lua's and
-      server/fetch.lua's own header comments each independently disclosed
-      but could not close alone (a decision spanning files neither owns by
-      itself):
+      CROSS-FEATURE NETID CLAIM REGISTRY, closing a residual gap that
+      spans files none of them could close alone:
         ClaimNetworkEntity(netId: number, feature: string, ownerId: string)
         ReleaseNetworkEntity(netId: number, feature: string, ownerId: string)
         IsNetworkEntityClaimedByOther(netId: number, feature: string, ownerId: string) -> boolean
@@ -88,10 +60,10 @@
       `ClaimedNetworkEntities`'s declaration) for the full exploit this
       closes and why a shared table was chosen here over retrofitting
       server/propattachment.lua's own NetworkGetEntityOwner-based guard
-      into the other two files. Reused by server/kennel.lua's
+      into the other two files. Used by server/kennel.lua's
       confirmKennelPlaced, server/fetch.lua's confirmFetchBallThrown/
       confirmFetchBallCarried/confirmFetchBallDropped, and
-      server/propattachment.lua's confirmPropAttached — every call site's
+      server/propattachment.lua's confirmPropAttached -- every call site's
       own comment says exactly which of the three functions it calls and
       why.
     ======================================================================
@@ -110,34 +82,33 @@
 ---     if doorEntity == 0 or not DoesEntityExist(doorEntity) then return end
 ---   followed, a few lines later (after the proximity check), by a
 ---   SEPARATE `if GetEntityType(doorEntity) ~= 3 then return end`. Both
----   checks are preserved here exactly — relayDoorScratch now passes
+---   checks are preserved here exactly -- relayDoorScratch now passes
 ---   expectedEntityType = 3, which performs the identical type-3-only
 ---   restriction as one call instead of two, still failing closed on any
 ---   mismatch. GetEntityType: 1 = ped, 2 = vehicle, 3 = object.
 --- - server/search.lua's HandleSearchTarget: was
 ---     local entity = NetworkGetEntityFromNetworkId(targetNetId)
 ---     if entity == 0 then return { ok = false, reason = 'invalid_target' } end
----   — no DoesEntityExist call. This helper's existence guard therefore
+---   -- no DoesEntityExist call. This helper's existence guard therefore
 ---   adds that check for every caller including this one: a DELIBERATE,
 ---   DISCLOSED STRENGTHENING of that call site's existence check, never a
 ---   weakening. Flagged explicitly, not silently folded in: in practice
 ---   this is not expected to change observed behavior, since
 ---   NetworkGetEntityFromNetworkId returning a nonzero handle for an
 ---   entity that fails DoesEntityExist in the very same tick is not a
----   case this native is documented or observed to produce — the
+---   case this native is documented or observed to produce -- the
 ---   existing "0 or not DoesEntityExist" pairing already treated in
 ---   relayDoorScratch's own pre-extraction code is belt-and-suspenders,
 ---   not two independently load-bearing conditions. HandleSearchTarget's
 ---   targetType cross-check (GetEntityType vs. the caller-claimed
 ---   'vehicle'/'person', which branches into further person-only
 ---   resolution logic) is NOT passed as expectedEntityType here and stays
----   entirely at that call site — see server/search.lua's own comment.
+---   entirely at that call site -- see server/search.lua's own comment.
 --- SECURITY BOUNDARY -- exactly what this function does and does not
 --- guarantee, spelled out explicitly since every caller layers its own
 --- additional checks on top of this one and needs to know where this
 --- function's own guarantee ends (audited as a security primitive, not
---- just a convenience wrapper, per DEVELOPER_REFERENCE.md item 2's own
---- "resolve a client-claimed netId defensively" framing):
+--- just a convenience wrapper):
 ---
 --- GUARANTEES (enforced, not advisory -- every one of these is a hard
 --- `return nil`, never a soft/logged pass-through):
@@ -221,34 +192,28 @@ end
 --- belongs to, or nil if it doesn't belong to any currently-connected
 --- player (an NPC, or a stale/despawned handle).
 ---
---- DEVELOPER_REFERENCE.md item 2b. Extracted from three independent,
---- byte-identical hand-written copies of this exact function:
---- server/search.lua's original (the first-written, most-documented copy,
---- whose own doc comment is preserved below verbatim), server/inventory.lua's
---- `HandleOpenK9Inventory` (a "small local copy vs. expanding another
---- file's contract" duplicate, per that file's own now-obsolete
---- FILE-TO-FILE CONTRACT note), and server/combat.lua's
---- `ValidateCombatRequest` player-vs-NPC resolution (whose own header
---- already flagged this as an extraction candidate "now that there are
---- two" — stale on arrival, since server/inventory.lua had already made it
---- three). All three now call this single function instead.
+--- Extracted from three independent, byte-identical hand-written copies of
+--- this exact function: server/search.lua's original (the first-written,
+--- most-documented copy, whose own doc comment is preserved below
+--- verbatim), server/inventory.lua's `HandleOpenK9Inventory`, and
+--- server/combat.lua's `ValidateCombatRequest` player-vs-NPC resolution.
+--- All three now call this single function instead.
 ---
---- DELIBERATE IMPLEMENTATION CHOICE, flagged for coder-security (preserved
---- from server/search.lua's original doc comment — this reasoning applies
---- equally to every caller, not just the one that first wrote it): the
---- design notes server/search.lua was built from
---- (DEVELOPER_REFERENCE.md#contraband-search §3 step 9, and that file's
---- own prior scaffold) suggested
+--- DELIBERATE IMPLEMENTATION CHOICE (preserved from server/search.lua's
+--- original doc comment -- this reasoning applies equally to every caller,
+--- not just the one that first wrote it): the design notes server/search.lua
+--- was built from (DEVELOPER_REFERENCE.md#contraband-search §3 step 9, and
+--- that file's own prior scaffold) suggested
 --- `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for this
 --- resolution. That combination was never independently re-verified as
 --- reliably callable SERVER-side (both natives are historically associated
 --- with the client-side "local player pool" concept, which the FXServer
---- process — running no game-world simulation at all — may not expose the
+--- process -- running no game-world simulation at all -- may not expose the
 --- same way). Rather than depend on an unverified native combo for a
 --- security-relevant check, this resolves the same fact (does this entity
 --- belong to a real, currently-connected player?) using only natives
 --- already proven reliable SERVER-side elsewhere in this exact codebase
---- (`GetPlayers()`/`GetPlayerPed(source)` — already used in
+--- (`GetPlayers()`/`GetPlayerPed(source)` -- already used in
 --- server/certifications.lua and server/main.lua): scan every connected
 --- player's own ped and match by entity handle. This is strictly more
 --- conservative (it can only ever match an entity that IS some connected
@@ -268,7 +233,7 @@ end
 
 --[[
     ======================================================================
-    CROSS-FEATURE NETID CLAIM REGISTRY (coder-architect, this pass).
+    CROSS-FEATURE NETID CLAIM REGISTRY.
 
     THE GAP THIS CLOSES: three independent features each run a client-claimed-
     netId confirm handshake and each already guards its OWN registry against
@@ -296,10 +261,10 @@ end
           `safeToCleanup`-style gate only re-checked the SAME registry, so it
           read as "safe" and the cross-feature victim's real object was
           deleted/instructed-to-be-deleted.
-      (b) The more severe shape found auditing this pass: the netId reaches a
-          file's own SUCCESS path outright (no rejection branch needed at
-          all) because it is genuinely unclaimed IN THAT FILE'S registry --
-          e.g. server/fetch.lua's confirmFetchBallThrown writing
+      (b) The more severe shape: the netId reaches a file's own SUCCESS path
+          outright (no rejection branch needed at all) because it is
+          genuinely unclaimed IN THAT FILE'S registry -- e.g.
+          server/fetch.lua's confirmFetchBallThrown writing
           `FetchBalls[citizenid] = { netId = <a victim's real kennel's netId>, ... }`,
           after which the attacker's own subsequent, ordinary
           requestRecallFetchBall deletes the victim's kennel. Every WRITE
@@ -326,17 +291,17 @@ end
     its own, narrower first-writer-wins race): considered, and rejected for
     server/kennel.lua and server/fetch.lua specifically. Retrofitting a
     NetworkGetEntityOwner mock into those two files' already-large,
-    already-green spec suites (45 + 88 cases at the time of this pass) would
-    mean auditing and updating the implicit "who currently network-owns this
-    handle" assumption on nearly every existing test case that registers an
-    entity -- a much larger, higher-regression-risk diff for no closer a fix.
-    The shared registry closes the exact same class of gap (a client-reported
-    netId genuinely belongs to someone else's real object) without touching
-    either file's existing entity model, and is purely additive: it cannot
-    change the outcome for any existing honest-flow test, since the new
-    condition is only ever false when a DIFFERENT feature or DIFFERENT owner
-    already legitimately holds that exact netId, which never happens for an
-    honest client naming its own, never-yet-claimed creation.
+    already-green spec suites would mean auditing and updating the implicit
+    "who currently network-owns this handle" assumption on nearly every
+    existing test case that registers an entity -- a much larger,
+    higher-regression-risk diff for no closer a fix. The shared registry
+    closes the exact same class of gap (a client-reported netId genuinely
+    belongs to someone else's real object) without touching either file's
+    existing entity model, and is purely additive: it cannot change the
+    outcome for any existing honest-flow test, since the new condition is
+    only ever false when a DIFFERENT feature or DIFFERENT owner already
+    legitimately holds that exact netId, which never happens for an honest
+    client naming its own, never-yet-claimed creation.
     server/propattachment.lua's own NetworkGetEntityOwner guard stays exactly
     as it is and already independently closes this same class of gap for
     that file (a cross-citizen/cross-feature attacker can never be the

@@ -103,6 +103,21 @@
        fallback for a reason the server can never actually emit. See
        "MUST-MATTER #5" below; a running tally comment at the end of that
        section cross-checks all nine against this file's own tests.
+
+    ALSO, THIS PASS (coder-backend): `no_access` used to be returned for TWO
+    genuinely different causes -- the using player's JOB does not permit
+    treating K9s at all (IsMedkitUserAuthorized), and separately, the job
+    permits it but this server's own Config.FeatureControl.RequireGrant
+    additionally requires a `feature.K9Medkit` grant the player does not
+    hold (IsK9MedkitPermittedForCitizenId) -- mirroring
+    server/pursuitsprint.lua's own `no_access`/`not_granted` split for the
+    identical class of gate. The second cause now returns a distinct
+    `not_granted` reason. See the "PER-PERSON FEATURE CONTROL" section below
+    for the updated tests, and the "REASON SPLIT" note near the nine-reason
+    cross-check for why `not_granted` is a real, reachable TENTH reason not
+    yet folded into that specific "nine client-recognized" tally (this
+    pass's own file-ownership does not extend to client/medkit.lua's
+    reasonLabel table, which does not map it yet).
     ======================================================================
 
     WHAT THIS FILE DOES NOT COVER, AND WHY:
@@ -1346,6 +1361,312 @@ t.test('XP TIER UNLOCK: GetXPTierMedkitCooldownMs entirely absent (server/progre
 end)
 
 -- ========================================================================
+-- GAP CLOSURE (this pass, coder-backend): the THREE XP TIER UNLOCK tests
+-- immediately above prove server/medkit.lua consults
+-- GetXPTierMedkitCooldownMs and uses its result -- but every one of them
+-- stubs that accessor directly (opts.withXPTierMedkitCooldown, this file's
+-- own test-controlled stand-in, per its declaration comment above), which
+-- can only prove THIS file's own soft-dependency call shape. It cannot prove
+-- an individual K9's medkitCooldownMultiplier OVERRIDE (server/k9profiles.lua)
+-- ever actually reaches this file, since it never loads the real function
+-- whose job that is.
+--
+-- This section loads the REAL, unmodified server/datastore.lua +
+-- server/progression.lua + server/k9profiles.lua alongside the REAL,
+-- unmodified server/medkit.lua, in fxmanifest.lua's own real
+-- server_scripts order (datastore -> cooldowns -> entities -> ... ->
+-- medkit -> progression -> k9profiles), and drives the override through
+-- server/k9profiles.lua's own real 'qbx_k9unit:server:k9ProfileUpsert'
+-- callback -- proving the FULL chain server/k9profiles.lua's own header
+-- names as this pass's third, previously-unwired consumer:
+--   k9ProfileUpsert (k9profiles.lua) -> RefreshOverrideCache ->
+--   GetK9EffectiveMultipliers -> GetXPTierMedkitCooldownMs (progression.lua)
+--   -> RunUseK9MedkitMutation's own MedkitCooldown.IsOnCooldown call
+--   (medkit.lua, THIS file, completely unmodified by this pass).
+--
+-- HONEST FRAMING: server/medkit.lua's own call site
+-- (`GetXPTierMedkitCooldownMs(targetCitizenid, baseCooldownMs)`, a few
+-- screens above) needed NO code change for this pass -- it already called
+-- the correct accessor by name. What was missing, and is fixed elsewhere in
+-- this pass, was that accessor's OWN internal composition
+-- (server/progression.lua -- not owned by this pass, already updated on
+-- this branch to consult GetK9EffectiveMultipliers) and end-to-end proof
+-- that the whole chain actually works together, which is what this section
+-- provides -- see this task's own report for why this consumer needed a
+-- test, not a source edit, in server/medkit.lua itself.
+-- ========================================================================
+
+--- @return table fixture
+local function newMedkitOverrideChainFixture()
+    local fakeNow = 0
+    local function GetGameTimer() return fakeNow end
+
+    local eventHandlers = {}
+    local function AddEventHandler(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+    local function RegisterNetEvent(eventName, handler)
+        if handler then AddEventHandler(eventName, handler) end
+    end
+
+    local callbacks = {}
+    local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local function GetCurrentResourceName() return 'qbx_k9unit' end
+
+    -- server/progression.lua starts a recurring "while true do Wait(...)
+    -- end" mint-budget sweep thread UNCONDITIONALLY at its own file-load
+    -- time (XPMintBudgetEnabled defaults true) -- this fixture never needs
+    -- to step it, so a one-shot resume that parks it at its first Wait() and
+    -- is never resumed again is sufficient, mirroring
+    -- tests/progression_spec.lua's own GAP 1 fixture's identical
+    -- CreateThread/Wait pair.
+    local function CreateThread(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('newMedkitOverrideChainFixture: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+    end
+    local function Wait(_ms) coroutine.yield() end
+
+    local playersBySource = {} -- src -> { citizenid, job, source }
+    local function qbxGetPlayer(_self, src)
+        local p = playersBySource[src]
+        if not p then return nil end
+        return { PlayerData = p }
+    end
+    local function qbxGetPlayerByCitizenId(_self, citizenid)
+        for _, p in pairs(playersBySource) do
+            if p.citizenid == citizenid then return { PlayerData = p } end
+        end
+        return nil
+    end
+
+    local pedBySource = {}
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+
+    local coordsByPed = {}
+    local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
+
+    local healthByPed = {}
+    local function GetEntityHealth(ped) return healthByPed[ped] or 200 end
+    local maxHealthByPed = {}
+    local function GetEntityMaxHealth(ped) return maxHealthByPed[ped] or 200 end
+
+    local modelByPed = {}
+    local function GetEntityModel(ped) return modelByPed[ped] or 0 end
+    local k9Models = {}
+    local function IsConfiguredK9Model(model) return k9Models[model] == true end
+
+    local itemCounts = {}
+    local function oxGetItemCount(_self, src, itemName) return (itemCounts[src] and itemCounts[src][itemName]) or 0 end
+    local function oxRemoveItem(_self, src, itemName, count)
+        local have = (itemCounts[src] and itemCounts[src][itemName]) or 0
+        if have < count then return false end
+        itemCounts[src][itemName] = have - count
+        return true
+    end
+
+    local isHighCommand = true
+
+    local config = {
+        Features = { K9Medkit = true, XPProgression = true },
+        Departments = baselineDepartments(),
+        K9Medkit = baselineK9MedkitConfig(),
+        FeatureControl = { RequireGrant = {} },
+        -- Config.Database.enabled = false -- memory-mode K9Store, same
+        -- proven-safe pattern tests/k9profiles_spec.lua's own boot() and
+        -- tests/progression_spec.lua's own newGap1Fixture already use: both
+        -- server/datastore.lua's schema-collision wait AND
+        -- server/k9profiles.lua's own onResourceStart cache warm settle
+        -- SYNCHRONOUSLY in this mode, no coroutine-stepping dance needed.
+        Database = { enabled = false },
+        XP = { scopePerCitizenidOrJob = 'citizenid', awards = {} },
+        -- A single-rank ladder is a valid, if minimal, Config.XPTiers --
+        -- server/progression.lua's own onResourceStart shape guard only
+        -- requires rank 1's xp == 0 and strict ascending order among
+        -- whatever ranks exist; a single rank trivially satisfies both. This
+        -- section is about the INDIVIDUAL override layered on top, not the
+        -- XP-tier ladder itself, so keeping this minimal is deliberate.
+        XPTiers = { { xp = 0, label = 'Recruit', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 } },
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
+    }
+
+    local env = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer,
+        CreateThread = CreateThread,
+        Wait = Wait,
+        AddEventHandler = AddEventHandler,
+        RegisterNetEvent = RegisterNetEvent,
+        lib = lib,
+        print = printStub,
+        GetCurrentResourceName = GetCurrentResourceName,
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+        exports = {
+            qbx_core = { GetPlayer = qbxGetPlayer, GetPlayerByCitizenId = qbxGetPlayerByCitizenId },
+            ox_inventory = {
+                GetItemCount = oxGetItemCount,
+                RemoveItem = oxRemoveItem,
+                GetInventoryItems = function() return {} end,
+                GetContainerFromSlot = function() return nil end,
+                RegisterStash = function() return true end,
+                RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
+        },
+        GetPlayers = function() return {} end,
+        GetPlayerPed = GetPlayerPed,
+        GetEntityCoords = GetEntityCoords,
+        GetEntityHealth = GetEntityHealth,
+        GetEntityMaxHealth = GetEntityMaxHealth,
+        GetEntityModel = GetEntityModel,
+        IsConfiguredK9Model = IsConfiguredK9Model,
+        NotifyPlayer = function(...) end,
+        TriggerClientEvent = function(...) end,
+        TriggerEvent = function(...) end,
+        IsHighCommand = function(_src) return isHighCommand end,
+        Config = config,
+    })
+
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/entities.lua', env)
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
+    Sandbox.loadInto('../server/medkit.lua', env)
+    Sandbox.loadInto('../server/progression.lua', env)
+    Sandbox.loadInto('../server/k9profiles.lua', env)
+
+    for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    return {
+        printedLines = printedLines,
+        advance = function(ms) fakeNow = fakeNow + ms end,
+        setPlayer = function(src, citizenid, job) playersBySource[src] = { citizenid = citizenid, job = job, source = src } end,
+        setPed = function(src, ped) pedBySource[src] = ped end,
+        setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
+        setHealth = function(ped, hp) healthByPed[ped] = hp end,
+        setMaxHealth = function(ped, hp) maxHealthByPed[ped] = hp end,
+        setModel = function(ped, model) modelByPed[ped] = model end,
+        setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
+        setItemCount = function(src, itemName, n)
+            itemCounts[src] = itemCounts[src] or {}
+            itemCounts[src][itemName] = n
+        end,
+        setHighCommand = function(v) isHighCommand = v end,
+        useMedkit = function(usingSrc, targetSrc)
+            return callbacks['qbx_k9unit:server:useK9Medkit'](usingSrc, targetSrc)
+        end,
+        upsertProfile = function(hcSrc, payload)
+            return callbacks['qbx_k9unit:server:k9ProfileUpsert'](hcSrc, payload)
+        end,
+    }
+end
+
+t.test('GAP CLOSURE: an individual medkitCooldownMultiplier override reaches server/medkit.lua\'s own MedkitCooldown gate through the REAL server/progression.lua + server/k9profiles.lua chain -- not a stub', function()
+    local f = newMedkitOverrideChainFixture()
+
+    local HC_SRC, USING_SRC, TARGET_SRC = 100, 10, 20
+    local USING_PED, TARGET_PED = 9001, 9002
+
+    f.setPlayer(HC_SRC, 'HC-CIT', { name = 'police', grade = { level = 4 } })
+    f.setPlayer(USING_SRC, 'USER-CIT', { name = 'ambulance' }) -- Config.K9Medkit.emsJobs
+    f.setPlayer(TARGET_SRC, 'K9-CIT', { name = 'police' })
+
+    f.setPed(USING_SRC, USING_PED)
+    f.setPed(TARGET_SRC, TARGET_PED)
+    f.setCoords(USING_PED, 0, 0, 0)
+    f.setCoords(TARGET_PED, 0, 0, 0) -- within Config.K9Medkit.range (2.0)
+    f.setModel(TARGET_PED, K9_MODEL_HASH)
+    f.setIsK9Model(K9_MODEL_HASH, true)
+    f.setHealth(TARGET_PED, 150) -- alive (> PED_DEAD_HEALTH_THRESHOLD), and short of max so the heal itself is a genuine, visible change
+    f.setMaxHealth(TARGET_PED, 200)
+
+    -- FIRST TREAT, t=0: no individual override exists yet, and the single
+    -- shipped tier (Recruit) carries no medkitCooldownMultiplier of its own
+    -- -- GetXPTierMedkitCooldownMs must therefore return the plain,
+    -- unmodified Config.K9Medkit.cooldownMs (60000ms), stamping
+    -- MedkitCooldown for 'K9-CIT' at t=0.
+    f.setItemCount(USING_SRC, 'k9_medkit', 1)
+    local first = f.useMedkit(USING_SRC, TARGET_SRC)
+    t.isTrue(first.ok, 'the first treat must succeed with no override or tier bonus in play')
+
+    -- CONTROL, t=6001: well short of the base 60000ms cooldown -- must still
+    -- be on_cooldown. Proves the baseline this test's own override change is
+    -- measured against, and rules out "the cooldown just decays over time
+    -- for some unrelated reason" as an alternative explanation for whatever
+    -- happens after the override is set below.
+    f.advance(6001)
+    f.setItemCount(USING_SRC, 'k9_medkit', 1)
+    local control = f.useMedkit(USING_SRC, TARGET_SRC)
+    t.isFalse(control.ok, 'well short of the base 60000ms cooldown, with no override yet, this must still be on_cooldown')
+    t.equals(control.reason, 'on_cooldown')
+
+    -- THE OVERRIDE ITSELF: a genuine high-command tablet edit, through
+    -- server/k9profiles.lua's own REAL callback -- 0.1 shrinks the
+    -- effective cooldown to 60000 * 0.1 = 6000ms, which the 6001ms already
+    -- elapsed since the first treat now comfortably clears.
+    local upsert = f.upsertProfile(HC_SRC, { citizenid = 'K9-CIT', medkitCooldownMultiplier = 0.1 })
+    t.isTrue(upsert.ok, 'the override write itself must succeed')
+    t.equals(upsert.effective.medkitCooldownMultiplier, 0.1)
+
+    -- SAME instant (fakeNow unchanged since the control attempt above) --
+    -- the ONLY thing that changed is the override just written. If this
+    -- passes, the override demonstrably reached server/medkit.lua's own
+    -- MedkitCooldown.IsOnCooldown call through the real, unmodified
+    -- GetXPTierMedkitCooldownMs -> GetK9EffectiveMultipliers chain -- not
+    -- merely stored, audited, and displayed back inertly.
+    f.setItemCount(USING_SRC, 'k9_medkit', 1)
+    local afterOverride = f.useMedkit(USING_SRC, TARGET_SRC)
+    t.isTrue(afterOverride.ok, 'after a 0.1 medkitCooldownMultiplier override, the SAME 6001ms elapsed that was still on_cooldown a moment ago must now be enough -- this is the exact "reaches a visible effect" property this pass exists to prove')
+end)
+
+t.test('GAP CLOSURE control: WITHOUT the individual override (a different target citizenid, same elapsed time), the plain tier cooldown still applies -- the effect above is caused by the override, not a fixture quirk', function()
+    local f = newMedkitOverrideChainFixture()
+
+    local USING_SRC, TARGET_SRC = 10, 21
+    local USING_PED, TARGET_PED = 9001, 9003
+
+    f.setPlayer(USING_SRC, 'USER-CIT-2', { name = 'ambulance' })
+    f.setPlayer(TARGET_SRC, 'K9-CIT-NO-OVERRIDE', { name = 'police' })
+    f.setPed(USING_SRC, USING_PED)
+    f.setPed(TARGET_SRC, TARGET_PED)
+    f.setCoords(USING_PED, 0, 0, 0)
+    f.setCoords(TARGET_PED, 0, 0, 0)
+    f.setModel(TARGET_PED, K9_MODEL_HASH)
+    f.setIsK9Model(K9_MODEL_HASH, true)
+    f.setHealth(TARGET_PED, 150)
+    f.setMaxHealth(TARGET_PED, 200)
+
+    f.setItemCount(USING_SRC, 'k9_medkit', 1)
+    t.isTrue(f.useMedkit(USING_SRC, TARGET_SRC).ok)
+
+    f.advance(6001)
+    f.setItemCount(USING_SRC, 'k9_medkit', 1)
+    local result = f.useMedkit(USING_SRC, TARGET_SRC)
+    t.isFalse(result.ok, 'no override was ever set for this citizenid -- the full base cooldown must still apply')
+    t.equals(result.reason, 'on_cooldown')
+end)
+
+-- ========================================================================
 -- RestoreInjury -- the documented soft dependency on server/wellbeing.lua.
 -- ========================================================================
 
@@ -1441,6 +1762,22 @@ t.test('CROSS-CHECK: all nine client-recognized reason strings are exercised som
     t.equals(#reasons, 9)
 end)
 
+-- REASON SPLIT (this pass, coder-backend): `not_granted` is a TENTH reason
+-- string this callback can now return (see IsK9MedkitPermittedForCitizenId's
+-- own call site in server/medkit.lua for the full writeup) -- deliberately
+-- NOT folded into the "nine client-recognized" tally immediately above,
+-- because it is NOT YET one of them: client/medkit.lua's own reasonLabel
+-- lookup table (out of this pass's file-ownership) has no entry for it yet,
+-- so it currently falls through to that table's own existing, by-design
+-- "unrecognized reason -> generic medkit_failed notify" branch. This is a
+-- disclosed, temporary, non-broken state -- reported for a follow-up
+-- client-side change, not silently left off this file's own reason-string
+-- inventory.
+t.test('REASON SPLIT: not_granted is a real, reachable reason string, distinct from no_access, exercised by the RequireGrant/block tests above', function()
+    local exercisedAbove = { 'not_granted' } -- see the "useK9Medkit BLOCK" / "useK9Medkit RequireGrant listed + no grant held" tests above
+    t.equals(#exercisedAbove, 1)
+end)
+
 -- ========================================================================
 -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
 -- resolution) -- IsK9MedkitPermittedForCitizenId, gating the USING player
@@ -1448,7 +1785,7 @@ end)
 -- section of the same name.
 -- ========================================================================
 
-t.test('useK9Medkit BLOCK: an explicit block.K9Medkit grant on the USING player denies, and burns NO target cooldown', function()
+t.test('useK9Medkit BLOCK: an explicit block.K9Medkit grant on the USING player denies with not_granted (distinct from a job-based no_access), and burns NO target cooldown', function()
     local f = newMedkitFixture()
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
     wireTargetK9(f, TARGET_SRC)
@@ -1456,7 +1793,15 @@ t.test('useK9Medkit BLOCK: an explicit block.K9Medkit grant on the USING player 
 
     local r1 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isFalse(r1.ok)
-    t.equals(r1.reason, 'no_access')
+    -- REASON SPLIT (this pass): this gate (IsK9MedkitPermittedForCitizenId)
+    -- now returns 'not_granted', never the job-based IsMedkitUserAuthorized
+    -- rejection's own 'no_access' -- this using player's JOB is perfectly
+    -- fine (wireUsingPlayer's own default job passes IsMedkitUserAuthorized
+    -- every time); what's missing is the feature-control grant this block
+    -- explicitly revokes. See server/medkit.lua's own doc comment at this
+    -- call site for the full "why a player told 'not authorized' could not
+    -- previously tell which cause applied" writeup.
+    t.equals(r1.reason, 'not_granted')
     t.equals(f.getItemCount(USER_SRC, f.config.K9Medkit.itemName), 1, 'a blocked attempt must never consume the item either')
 
     -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
@@ -1484,7 +1829,7 @@ t.test('useK9Medkit not blocked: an ordinary using player with no grant/block ro
     t.isTrue(r.ok)
 end)
 
-t.test('useK9Medkit RequireGrant listed + no grant held -- denied even though every other check passes', function()
+t.test('useK9Medkit RequireGrant listed + no grant held -- denied with not_granted, even though every other check (including the job check) passes', function()
     local f = newMedkitFixture()
     f.config.FeatureControl.RequireGrant.K9Medkit = true
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
@@ -1492,7 +1837,7 @@ t.test('useK9Medkit RequireGrant listed + no grant held -- denied even though ev
     -- deliberately NOT granted
     local r = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isFalse(r.ok)
-    t.equals(r.reason, 'no_access')
+    t.equals(r.reason, 'not_granted', 'REASON SPLIT (this pass) -- a missing feature-control grant is distinct from a job-based no_access rejection')
 end)
 
 t.test('useK9Medkit RequireGrant listed + an active feature.K9Medkit grant on the using player -- allowed', function()

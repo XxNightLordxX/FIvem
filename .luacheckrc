@@ -86,6 +86,12 @@ read_globals = {
     -- Both are client-only, which is correct: NUI focus and control state
     -- have no server-side meaning.
     "SetNuiFocus", "IsDisabledControlJustPressed",
+    -- IsNuiFocused -- ext/native-decls/IsNuiFocused.md returns HTTP 200,
+    -- ns CFX, apiset client, BOOL IS_NUI_FOCUSED(). Reports whether NUI
+    -- focus is currently held by ANY resource, so opening the tablet can
+    -- tell whether it is taking focus from someone else and hand it back
+    -- on close instead of releasing globally.
+    "IsNuiFocused",
     --   SetPlayerModel -- ext/native-decls/SetPlayerModel.md returns HTTP
     --   404, which as the note above establishes is NOT proof of absence:
     --   the legacy R* natives largely have no decl page. Verified instead
@@ -742,6 +748,15 @@ globals = {
     -- "global helper, private per-file state" convention as
     -- RequestLeashAttach/DetachLeash above.
     "RequestBiteHold", "ReleaseBiteHold", "IsBiteHoldEngaged", "RequestTakedown",
+    -- ReleaseTakedown/IsTakedownEngaged: CANCEL-PATH FIX (this pass,
+    -- coder-frontend — audit-flagged gap). Mirrors ReleaseBiteHold/
+    -- IsBiteHoldEngaged's own shape exactly, for server/combat.lua's new
+    -- releaseTakedown handler — see client/combat.lua's own doc comment on
+    -- ReleaseTakedown() for why this is not yet wired into
+    -- client/radial.lua/client/keybinds.lua (outside this pass's edit
+    -- scope), same "exposed for a future entry" convention as
+    -- RequestDrag/ReleaseDrag/IsDragEngaged below.
+    "ReleaseTakedown", "IsTakedownEngaged",
     -- server/partnership.lua (Phase 3, HandlerPartnership registry,
     -- PHASE3_SPEC.md §12.0 item 7/§12.3). RefreshPartnershipCache mirrors
     -- server/certifications.lua's RefreshCertificationCache reuse hook

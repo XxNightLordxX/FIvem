@@ -537,6 +537,20 @@ local ActiveDragSpeedLimit = nil
 -- client/radial.lua's own Leash item already documents.
 local MyEngagedTargetNetId = nil
 
+-- HOLDER-SIDE state (cosmetic/UX only), CANCEL-PATH FIX (this pass,
+-- coder-frontend — audit-flagged gap: bite-hold has ReleaseBiteHold, drag
+-- has ReleaseDrag, takedown had neither, so an auto-picked wrong target
+-- (FindNearestCombatTarget below) had no way back short of waiting out
+-- Config.Combat.NonLethalTakedown.ragdollDurationMs). Which target's
+-- takedownStarted this K9's own client is currently reflecting — same
+-- shape as MyEngagedTargetNetId/IsBiteHoldEngaged() immediately above.
+-- server/combat.lua's own K9ActiveEffect[src] remains the real,
+-- authoritative "am I engaged" state; ReleaseTakedown() below always sends
+-- releaseTakedown regardless of what this file currently believes, same
+-- "no consent/access gate on the way out" posture ReleaseBiteHold/
+-- ReleaseDrag already document.
+local MyEngagedTakedownTargetNetId = nil
+
 -- Precomputed model-hash -> scenario lookup for the HOLDING K9's own
 -- cosmetic stance during an active hold — see this file's header
 -- "ANIMATION/ASSET STATUS" for why this duplicates
@@ -737,6 +751,38 @@ function RequestTakedown()
     end
 
     TriggerServerEvent('qbx_k9unit:server:requestTakedown', NetworkGetNetworkIdFromEntity(target))
+end
+
+--- CANCEL-PATH FIX (this pass, coder-frontend — audit-flagged gap): before
+--- this pass, RequestTakedown() above had no matching release/cancel
+--- counterpart at all (client/radial.lua's own "Non-Lethal Takedown" item
+--- comment documented this explicitly: "a single one-shot action item...
+--- with no matching 'release'/'cancel' counterpart"), so an auto-picked
+--- wrong target (FindNearestCombatTarget always picks the NEAREST eligible
+--- ped, not necessarily the intended one) stayed ragdolled/damage-immune
+--- for the full Config.Combat.NonLethalTakedown.ragdollDurationMs with no
+--- way back. Mirrors ReleaseBiteHold immediately below/above's own shape
+--- and doc comment EXACTLY (same "always available while engaged, no
+--- consent/access gate on the way out" posture, matching
+--- server/combat.lua's new releaseTakedown handler, which likewise never
+--- re-checks HasK9Access/feature-flag on the way out, only that THIS src is
+--- the current holder).
+--- NOT YET WIRED into client/radial.lua's "Non-Lethal Takedown" item or
+--- client/keybinds.lua's k9takedown keymapping (both outside this file's
+--- edit scope this pass) — exposed here with the exact same
+--- Request*/Release*/IsEngaged naming convention as RequestBiteHold/
+--- ReleaseBiteHold/IsBiteHoldEngaged and RequestDrag/ReleaseDrag/
+--- IsDragEngaged specifically so wiring it into either file is a drop-in
+--- copy of the existing Bite & Hold/Drag toggle pattern, not a new shape to
+--- design. Flagged to the owner of those two files, not silently left
+--- unreachable.
+function ReleaseTakedown()
+    TriggerServerEvent('qbx_k9unit:server:releaseTakedown')
+end
+
+--- @return boolean
+function IsTakedownEngaged()
+    return MyEngagedTakedownTargetNetId ~= nil
 end
 
 --- Same nearest-ped-in-range convenience as FindNearestCombatTarget above,
@@ -1400,6 +1446,31 @@ if Config.Features.BiteAndHold then
 end
 
 if Config.Features.NonLethalTakedown then
+    -- HOLDER-SIDE receivers, CANCEL-PATH FIX (this pass) — server/combat.lua's
+    -- own header: "Sent ONLY to the HOLDING K9's own client" — mirrors
+    -- BiteAndHold's own biteHoldStarted/biteHoldEnded pair immediately above
+    -- exactly, just tracking MyEngagedTakedownTargetNetId instead of
+    -- MyEngagedTargetNetId. Unlike biteHoldStarted, this fires no local
+    -- cosmetic stance (NonLethalTakedown has no holder-side visual — the
+    -- ragdoll/damage-bracket applies to the TARGET, whether relayed to a
+    -- player target's own client via forceRagdoll or to this SAME client via
+    -- applyNpcTakedown for an NPC target) — its only job is giving
+    -- IsTakedownEngaged()/ReleaseTakedown() real state to work from.
+    --- @param targetNetId number
+    --- @param expiresAt number -- server GetGameTimer() timestamp; accepted per the contract, not currently consumed (see header CLOCK-DOMAIN NOTE) — this handler tracks engagement only, not a local deadline
+    RegisterNetEvent('qbx_k9unit:client:takedownStarted', function(targetNetId, expiresAt)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
+        MyEngagedTakedownTargetNetId = targetNetId
+    end)
+
+    --- @param targetNetId number
+    --- @param reason string
+    RegisterNetEvent('qbx_k9unit:client:takedownEnded', function(targetNetId, reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
+        if MyEngagedTakedownTargetNetId ~= targetNetId then return end -- stale/foreign event, e.g. a race with a brand-new takedown — never clear a DIFFERENT takedown's state
+        MyEngagedTakedownTargetNetId = nil
+    end)
+
     -- RAGDOLL-TASK TIMING CONSTANTS — reviewed this pass against the
     -- primary-source native description (runtime.fivem.net/doc/natives.json,
     -- PED namespace, hash 0xD76632D99E4966C8): SET_PED_TO_RAGDOLL_WITH_FALL's
@@ -1505,6 +1576,35 @@ if Config.Features.NonLethalTakedown then
         -- key, see this pass's report: combat.target_restraint_ended.
         lib.notify({ title = locale('common.notify_title'), description = locale('combat.target_restraint_ended'), type = 'inform' })
     end)
+
+    --- THIS PASS (focus-and-state audit finding #2) — whether THIS client
+    --- is CURRENTLY the TARGET of an active forced ragdoll (the non-lethal
+    --- takedown above), i.e. genuinely unable to act even though
+    --- IsEntityDead(PlayerPedId()) stays false throughout a non-lethal
+    --- takedown by design. Exposed as a resource-global (dropped `local` —
+    --- ActiveForcedRagdoll itself stays file-private) so
+    --- client/tablet.lua's own watch thread can force-close an open tablet
+    --- on this SAME condition it already force-closes on death for — see
+    --- that file's own header "DOWNED-BY-TAKEDOWN ALSO FORCE-CLOSES" for
+    --- the full writeup, and why this reuses the EXISTING state here
+    --- rather than that file re-deriving it a second way. Mirrors the
+    --- identical seam-opening precedent this codebase already set for
+    --- FindNearestLeashCandidate/FindNearestPartnerCandidate in
+    --- client/radial.lua (dropped `local`, allowlisted, never duplicated).
+    --- A DIFFERENT question from IsBiteHoldEngaged()/IsDragEngaged()
+    --- elsewhere in this file despite the similar shape (a bare query, no
+    --- state mutation): those two answer "am I the K9 currently
+    --- holding/dragging something"; this one answers "am I the PLAYER
+    --- currently ragdolled by a takedown". Defined only inside this
+    --- `if Config.Features.NonLethalTakedown` block (matching where
+    --- ActiveForcedRagdoll is actually ever mutated) — callers MUST guard
+    --- with `type(IsLocalPlayerForceRagdolled) == 'function'` first, same
+    --- non-optional convention as every other cross-file query into this
+    --- file.
+    --- @return boolean
+    function IsLocalPlayerForceRagdolled()
+        return ActiveForcedRagdoll ~= nil
+    end
 
     -- NPC-TARGET RELAY HANDLERS — see BiteAndHold's own group above for the
     -- full reasoning (identical shape). HIGH-1 fix applied here too:

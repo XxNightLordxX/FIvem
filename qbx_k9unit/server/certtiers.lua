@@ -1016,7 +1016,17 @@ CertTierActionCooldown.RegisterPlayerDropped()
 --- @param detail string
 --- @param changedBy string
 local function WriteTierAudit(action, tierKey, detail, changedBy)
-    K9Store.TierAudit_Append(action, tierKey, detail, changedBy or 'unknown')
+    -- AUDIT-SWALLOW FIX (this pass): TierAudit_Append's own boolean return
+    -- used to be discarded here -- every call site above already checked
+    -- its OWN primary write before ever reaching this helper, so the
+    -- action genuinely happened and this file's own `ok = true` responses
+    -- remain correct either way -- but a failed audit-trail insert must
+    -- not vanish without a trace tying it to this specific action/key.
+    -- Mirrors server/runtimecontrol.lua's own identical
+    -- "AUDIT-SWALLOW FIX (this pass)" comment/shape exactly.
+    if not K9Store.TierAudit_Append(action, tierKey, detail, changedBy or 'unknown') then
+        print(('[qbx_k9unit] certtiers.lua: audit-trail write failed for action=%s tierKey=%s (the action itself still succeeded and was persisted).'):format(tostring(action), tostring(tierKey)))
+    end
 end
 
 -- ======================================================================

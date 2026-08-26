@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/appearance.lua
 
-    coder-architect. Client half of the K9 role/ped-model decoupling — see
+    Client half of the K9 role/ped-model decoupling — see
     server/appearance.lua's header for the full design (role vs. model,
     what triggers a swap, the streaming-failure contract). This file owns
     exactly two things:
@@ -15,20 +15,18 @@
          SetPlayerModel.
 
     ======================================================================
-    PER-PED STATE ACROSS A MODEL SWAP — THE DECISION (item D of this pass):
-    REFUSE, don't force-clear. FiveM's SetPlayerModel keeps the SAME ped
-    index across the swap (already confirmed and relied on elsewhere in
-    this resource — see client/movement.lua's RecomputeK9MoveRate doc
-    comment), which is exactly the "death reuses the same ped handle"
-    hazard this resource has already been bitten by once (a K9 that died
-    in a vehicle respawned frozen/invisible/attached — a past regression
-    caught and fixed; the underlying diary this was recorded in has since
-    been consolidated away, see DEVELOPER_REFERENCE.md §16). A model swap
-    is the SAME class of hazard: any
-    resource-tracked per-ped state that assumes "this ped is a K9"
-    (leashed, mid drag as either party, mid bite-hold, mid fetch-carry,
-    inside a K9 vehicle) would silently carry over onto whatever the ped
-    becomes next.
+    PER-PED STATE ACROSS A MODEL SWAP — THE DECISION: REFUSE, don't
+    force-clear. FiveM's SetPlayerModel keeps the SAME ped index across the
+    swap (already confirmed and relied on elsewhere in this resource — see
+    client/movement.lua's RecomputeK9MoveRate doc comment), which is
+    exactly the "death reuses the same ped handle" hazard this resource has
+    already been bitten by once (a K9 that died in a vehicle respawned
+    frozen/invisible/attached — a past regression; see
+    DEVELOPER_REFERENCE.md §16 for the full account). A model swap is the
+    SAME class of hazard: any resource-tracked per-ped state that assumes
+    "this ped is a K9" (leashed, mid drag as either party, mid bite-hold,
+    mid fetch-carry, inside a K9 vehicle) would silently carry over onto
+    whatever the ped becomes next.
 
     This file does NOT own client/combat.lua, client/movement.lua,
     client/fetch.lua or client/vehicle.lua, so it cannot reach into their
@@ -51,11 +49,10 @@
     `type(fn) == 'function'` soft-dependency check, since this file has no
     hard load-order requirement on any of theirs.
 
-    CLOSED GAP (this pass): client/propattachment.lua now exposes
-    IsPropAttachmentEngaged() (same shape/convention as the five predicates
-    above), added specifically to close a previously-disclosed gap in this
-    same check — a K9 mid-PropAttachment is covered below exactly like every
-    other engagement kind.
+    client/propattachment.lua exposes IsPropAttachmentEngaged() (same
+    shape/convention as the five predicates above), so a K9 mid-
+    PropAttachment is covered below exactly like every other engagement
+    kind.
 
     ======================================================================
     STREAMING — RequestModel/HasModelLoaded polling, timed out by
@@ -69,15 +66,15 @@
     the player is exactly as they were before this request arrived.
 
     ======================================================================
-    STATEBAG VS CACHED CALLBACK — THE DECISION ("I also want everything to
-    work with any ped" pass): ten ox_target canInteract predicates across
-    client/movement.lua, client/medkit.lua, client/wellbeing.lua and
-    client/partnership.lua need "does THAT OTHER player currently hold the
-    K9 role", not just IsK9Role()'s own "do I". An architecture pass floated
-    a replicated statebag (Player(source).state:set('isK9', bool, true) set
+    STATEBAG VS CACHED CALLBACK — THE DECISION: ten ox_target canInteract
+    predicates across client/movement.lua, client/medkit.lua,
+    client/wellbeing.lua and client/partnership.lua need "does THAT OTHER
+    player currently hold the K9 role", not just IsK9Role()'s own "do I". A
+    replicated statebag (Player(source).state:set('isK9', bool, true) set
     server-side at every role-transition point — grant, revoke, ped-swap
     apply/revert/timeout, disconnect — read client-side via
-    Entity(ped).state.isK9) as the no-round-trip alternative.
+    Entity(ped).state.isK9) was considered as the no-round-trip
+    alternative.
 
     DECISION: cached callback (IsK9RoleForPlayer below), NOT a statebag.
     This resource has zero statebags today; introducing the pattern for
@@ -161,9 +158,8 @@ function IsK9Role()
 end
 
 -- Per-target cache, same TTL/shape as hasK9RoleCache above but keyed by
--- targetServerId -- a peer audit (this pass) found ten ox_target
--- canInteract predicates across files this pass does not own that need
--- "is THAT OTHER player a K9-role holder", not just the local player (see
+-- targetServerId -- ten ox_target canInteract predicates need "is THAT
+-- OTHER player a K9-role holder", not just the local player (see
 -- server/appearance.lua's isK9RoleForTarget callback doc comment for the
 -- full list/reasoning). One cache per target rather than one shared value,
 -- since a canInteract predicate can be evaluated against several different
@@ -290,10 +286,10 @@ RegisterNetEvent('qbx_k9unit:client:applyK9Ped', function(requestId, modelNameOr
         return
     end
 
-    -- RE-CHECK ENGAGEMENT (bug found + fixed this pass): LoadModelWithTimeout
-    -- above can YIELD one or more times (its own Wait(50) polling loop) while
-    -- this model streams in -- up to ModelLoadTimeoutMs() (10s by default).
-    -- The IsCurrentlyEngaged() check above only proves this ped was NOT
+    -- RE-CHECK ENGAGEMENT: LoadModelWithTimeout above can YIELD one or more
+    -- times (its own Wait(50) polling loop) while this model streams in --
+    -- up to ModelLoadTimeoutMs() (10s by default). The IsCurrentlyEngaged()
+    -- check above only proves this ped was NOT
     -- leashed/mid-drag/mid-bite-hold/mid-fetch-carry/in-a-K9-vehicle/
     -- mid-PropAttachment at the INSTANT this handler started -- it says
     -- nothing about whatever happened during however long the wait above

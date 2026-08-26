@@ -38,16 +38,15 @@
       regardless of what this local flag currently believes).
     - '/k9trainbite' -- practice bite-and-hold drill, identical shape.
 
-    RESOLVED (this pass) -- RADIAL ENTRY POINT, CLOSING A COMMAND-ONLY GAP:
-    all three commands above used to be the ONLY way to reach this feature
-    -- exactly the "reachable only by remembering an exact command" shape
-    this resource's own radial-menu convention exists to avoid for anything
-    used with any regularity. Every request is now ALSO exposed as a
-    resource-global, the same "global helper, private per-file state"
-    convention client/recall.lua's RequestRecall()/client/kennel.lua's
-    RequestDeployKennel() already establish, so client/radial.lua (this
-    session, same owner as this file) can call the identical path the
-    command below uses -- never a second, divergent request sequence:
+    RADIAL ENTRY POINT: all three commands above used to be the ONLY way to
+    reach this feature -- exactly the "reachable only by remembering an
+    exact command" shape this resource's own radial-menu convention exists
+    to avoid for anything used with any regularity. Every request is now
+    ALSO exposed as a resource-global, the same "global helper, private
+    per-file state" convention client/recall.lua's RequestRecall()/
+    client/kennel.lua's RequestDeployKennel() already establish, so
+    client/radial.lua can call the identical path the command below uses --
+    never a second, divergent request sequence:
         IsTrainingModeActive() -> boolean
             Pure, no-network read of `trainingModeActive` -- same shape as
             client/movement.lua's IsLeashed()/client/combat.lua's
@@ -56,12 +55,12 @@
             label-at-click-time branch.
         RequestSetTrainingMode(desiredOn: boolean)
             The '/k9training <on|off>' command's own body, extracted.
-            GATING, FIXED THIS PASS: turning ON now has a courtesy
-            HasK9Access() pre-check (DenyK9UIAccess() on failure) that the
-            raw TriggerServerEvent call never had before -- this file's
-            three drill/toggle requests were the only self-initiated
-            actions left in this resource with NO client-side courtesy gate
-            at all, an inconsistency with every other initiation
+            GATING: turning ON has a courtesy HasK9Access() pre-check
+            (DenyK9UIAccess() on failure) that the raw TriggerServerEvent
+            call never had before -- this file's three drill/toggle
+            requests were the only self-initiated actions left in this
+            resource with NO client-side courtesy gate at all, an
+            inconsistency with every other initiation
             (RequestBiteHold/RequestDrag/RequestDeployKennel/
             RequestStartSarCall all gate before sending). Deliberately
             HasK9Access() ALONE, not the stricter CanShowK9UI() combinator
@@ -85,25 +84,23 @@
             identical to each other, not just superficially similar.
     ======================================================================
 
-    NOT AN ox_target INTERACTION, DELIBERATELY, THIS PASS: every other
-    mechanic in this resource pairs a chat command with an ox_target option
-    on some in-world entity (a player, a vehicle, a door). Training's own
-    two drills have no real target to attach an ox_target option TO --
-    server/training.lua's own header point 1 states plainly that neither
-    callback takes a target argument at all, precisely so nothing here can
-    ever be pointed at something real. Spawning a purely cosmetic, local,
-    non-networked "practice dummy" entity to hang an ox_target option off
-    of was considered and deliberately NOT built this pass: it would need a
-    specific ped/prop model name, and this resource's own established
-    confidence discipline (see e.g. client/kennel.lua's
-    "PROP MODEL CONFIDENCE" section, phase2_notes' repeated "do not
-    fabricate a scenario/model name" standard) does not permit asserting
-    one is real without verification against a live client, which this
-    session had no way to perform. Chat commands need no such asset and
-    deliver the same practice-flow value (request -> wait -> scripted
-    result -> feedback) without it. Upgrading to a physical target dummy +
-    ox_target proximity interaction is a natural follow-up once a specific
-    model is confirmed for a given server's own asset set.
+    NOT AN ox_target INTERACTION, DELIBERATELY: every other mechanic in this
+    resource pairs a chat command with an ox_target option on some in-world
+    entity (a player, a vehicle, a door). Training's own two drills have no
+    real target to attach an ox_target option TO -- server/training.lua's
+    own header point 1 states plainly that neither callback takes a target
+    argument at all, precisely so nothing here can ever be pointed at
+    something real. Spawning a purely cosmetic, local, non-networked
+    "practice dummy" entity to hang an ox_target option off of was
+    considered and deliberately not built: it would need a specific
+    ped/prop model name, and this resource's own established confidence
+    discipline (see e.g. client/kennel.lua's "PROP MODEL CONFIDENCE"
+    section) does not permit asserting one is real without verification
+    against a live client. Chat commands need no such asset and deliver the
+    same practice-flow value (request -> wait -> scripted result ->
+    feedback) without it. Upgrading to a physical target dummy + ox_target
+    proximity interaction is a natural follow-up once a specific model is
+    confirmed for a given server's own asset set.
 ]]
 
 -- FEATURE GATE, mirroring server/training.lua's own first executable line.
@@ -121,12 +118,11 @@ if not Config.Features.TrainingMode then return end
 -- Never set directly by a command handler in this file.
 local trainingModeActive = false
 
---- RESOLVED (this pass) -- see this file's header EVENT/CALLBACK CONTRACT
---- for the full writeup. Pure, no-network read -- same shape/precedent as
---- client/movement.lua's IsLeashed()/client/combat.lua's
---- IsBiteHoldEngaged(). Exists so client/radial.lua's own toggle item can
---- decide, at click time, whether to request ON or OFF -- never itself a
---- gate on anything.
+--- See this file's header EVENT/CALLBACK CONTRACT for the full writeup.
+--- Pure, no-network read -- same shape/precedent as client/movement.lua's
+--- IsLeashed()/client/combat.lua's IsBiteHoldEngaged(). Exists so
+--- client/radial.lua's own toggle item can decide, at click time, whether
+--- to request ON or OFF -- never itself a gate on anything.
 --- @return boolean
 function IsTrainingModeActive()
     return trainingModeActive
@@ -156,11 +152,11 @@ end)
 
 --- Requests turning Training Mode on or off -- see this file's header
 --- EVENT/CALLBACK CONTRACT "RADIAL ENTRY POINT" section for the full
---- gating writeup (why ON gets a courtesy HasK9Access() pre-check this
---- pass, and why OFF still gets none at all). Exposed as a resource-global
---- so both the command below and client/radial.lua's own toggle item call
---- this exact same path -- never two divergent request sequences for the
---- same transition.
+--- gating writeup (why ON gets a courtesy HasK9Access() pre-check, and why
+--- OFF still gets none at all). Exposed as a resource-global so both the
+--- command below and client/radial.lua's own toggle item call this exact
+--- same path -- never two divergent request sequences for the same
+--- transition.
 --- @param desiredOn boolean
 function RequestSetTrainingMode(desiredOn)
     desiredOn = desiredOn == true
@@ -285,10 +281,9 @@ RegisterCommand('k9trainbite', RequestTrainingBiteDrill, false)
 -- ======================================================================
 -- PERSISTENT ON-SCREEN BANNER -- server/training.lua's header point 4
 -- ("VISIBLE STATE"). Deliberately NOT routed through client/hud.lua's own
--- NUI surface (that file is a separate, concurrently-active pass's own
--- file this session, per scratchpad/COORDINATION.md's ownership map) --
--- this uses plain, already-established-in-this-resource native text-draw
--- calls instead (client/bonetool.lua's own Draw3DText uses the identical
+-- NUI surface (a separate file with its own ownership/scope) -- this uses
+-- plain, already-established-in-this-resource native text-draw calls
+-- instead (client/bonetool.lua's own Draw3DText uses the identical
 -- BeginTextCommandDisplayText/AddTextComponentSubstringPlayerName/
 -- EndTextCommandDisplayText sequence -- HIGH confidence, not a new/
 -- unverified native group, just a different SetDrawOrigin-less 2D

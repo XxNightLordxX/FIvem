@@ -95,8 +95,18 @@
       pairing.
     - 'qbx_k9unit:client:leashDetached' (reason: string)
       [client/movement.lua] — sent to both parties whenever the pair ends
-      (manual detach by either side, disconnect, or the constrained
-      client's own safety-valve auto-detach).
+      (manual detach by either side, disconnect, the constrained client's
+      own safety-valve auto-detach, cert revocation/department change, or
+      — DEATH-DETECTION FIX, this pass, reason = 'partner_died' — either
+      party dying while remaining connected; see the dedicated
+      death-detection thread below doDetachLeash for the full writeup).
+      client/movement.lua only special-cases 'partner_disconnected' for its
+      own notify text today; every other reason (including this new one)
+      falls through to its generic locale('movement.leash_detached')
+      message — NOT fixed here (client/movement.lua is outside this pass's
+      edit scope), reported to that file's owner as a follow-up so
+      'partner_died' gets its own specific wording the same way
+      'partner_disconnected' already does.
 
     Commands: both live in server/certifications.lua.
 
@@ -136,6 +146,16 @@
       confined to {this file, client/movement.lua}. client/radial.lua only
       ever calls client/movement.lua's exposed globals (RequestLeashAttach/
       DetachLeash/IsLeashed), never these events directly.
+    - DEATH-DETECTION FIX (this pass, coder-frontend): THIS FILE now calls
+      `K9Compat.Get('ambulance').IsDowned(src)` (shared/compat/core.lua,
+      via shared/compat/ambulance.lua's registered adapters) and reads
+      `Config.Combat.PropDragging.IsPlayerDownedOverride` — the SAME
+      override/adapter pair server/defense.lua's own `IsHandlerDown`
+      already established for the identical "is this specific connected
+      player currently down" question, reused here rather than
+      reinvented. See `IsLeashPartyDead`'s own doc comment (near the
+      death-detection thread, below `ForceDetachOfficerLeashForSource`)
+      for the full precedence writeup.
     ======================================================================
     LEASH SUBSYSTEM DESIGN (per requester's confirmation, resolving
     DEVELOPER_REFERENCE.md §9 item 3b — supersedes the earlier "client-only state, no
@@ -1180,9 +1200,17 @@ end)
 
 --- Internal detach helper — clears both halves of a pairing (if one exists)
 --- and broadcasts the detach event to both parties with the given reason.
---- Shared by the player-initiated detachLeash event below and by
---- ForceDetachLeashForSource (server-triggered, e.g. cert revocation) so
---- there is exactly one place that mutates LeashPairs on detach.
+--- Shared by the player-initiated detachLeash event below,
+--- ForceDetachLeashForSource/ForceDetachOfficerLeashForSource
+--- (server-triggered, e.g. cert revocation/department change), the
+--- playerDropped disconnect cleanup, and the death-detection thread further
+--- below (DEATH-DETECTION FIX, this pass — see that thread's own doc
+--- comment for the full writeup) so there is exactly one place that mutates
+--- LeashPairs on detach. Every one of those four call sites passes this
+--- function a `src` and lets IT resolve `pairing.partner` and clear both
+--- directions — none of them ever reaches into LeashPairs directly, which
+--- is the actual discipline this comment describes, not merely a count of
+--- callers.
 --- @param src number
 --- @param reason string
 --- @return boolean detached -- false if `src` wasn't leashed to anyone (no-op)
@@ -1262,6 +1290,153 @@ function ForceDetachOfficerLeashForSource(src, reason)
     if not pairing or pairing.isK9 then return false end -- not leashed, or leashed as the K9-role party — no-op
 
     return doDetachLeash(src, reason or 'department_changed')
+end
+
+--- DEATH-DETECTION FIX (this pass, coder-frontend — audit-flagged gap:
+--- confirmed by a full read of this file during the visible-leash work
+--- (client/leashvisual.lua's own header CLEANUP section, "Either player
+--- dying" row) that LeashPairs had NO death handler touching it at all —
+--- no `wasted`/death-shaped event of any kind was ever consulted here.
+--- Every OTHER termination path this file's own header lists (manual
+--- detach, certification revocation, department change, disconnect) already
+--- funnels through doDetachLeash; death did not, so a K9 or handler who
+--- died mid-leash stayed leashed indefinitely (or until whichever OTHER
+--- termination path happened to fire — e.g. the constrained party's own
+--- distance safety-valve, client/movement.lua, once a corpse stopped being
+--- dragged along). client/leashvisual.lua's own rope/handle-prop cleanup
+--- already self-heals on death (it polls IsEntityDead() independently and
+--- clears its OWN rendering either way — see that file's header), which
+--- made the underlying gap WORSE, not better: the rope disappeared while
+--- LeashPairs, and therefore the real elastic movement restriction on
+--- client/movement.lua's constrained side, silently persisted — a mechanic
+--- with nothing on screen to show for it.
+---
+--- DETECTION METHOD — mirrors server/defense.lua's own `IsHandlerDown`
+--- precedence EXACTLY (same override, same K9Compat ambulance-adapter
+--- fallback, same metadata/health floor), not reinvented: both LeashPairs
+--- roles are ALWAYS a real connected player (never an NPC, unlike
+--- server/combat.lua's targets), so the SAME "is this specific connected
+--- player currently down" signal server/defense.lua already built for
+--- HandlerDownDefense is the right, idiomatic tool here too — a raw
+--- GetEntityHealth-only threshold (server/combat.lua's own
+--- PED_DEAD_HEALTH_THRESHOLD approach, correct THERE because an NPC target
+--- has no framework metadata to read at all) would false-positive on an
+--- ordinary firefight dip to ~90 HP that a bandage clears a moment later,
+--- which for THIS mechanic is a materially worse false positive than for
+--- combat.lua's bounded, seconds-long holds: reforming a leash requires the
+--- WHOLE consent handshake again, not just a quick re-request.
+--- `Config.Combat.PropDragging.IsPlayerDownedOverride` is REUSED here
+--- DELIBERATELY, a third time (server/combat.lua's own PropDragging is the
+--- first consumer, server/defense.lua's HandlerDownDefense is the second,
+--- both already reusing this SAME field rather than each adding a
+--- dedicated one — see server/defense.lua's own header for the "one shared
+--- per-server integration point" rationale this follows) — an operator who
+--- has already wired this once, for either existing mechanic, gets correct
+--- leash-death detection for free, with nothing new to configure.
+--- FAILS CLOSED on an override error (treated as "not down" THIS tick) —
+--- same posture as IsHandlerDown, and safe here for the identical reason:
+--- this runs on a REPEATING poll (LEASH_DEATH_CHECK_INTERVAL_MS below), not
+--- an edge-triggered one-shot, so an override that errors once is simply
+--- retried next tick, never a permanent trap.
+--- @param src number
+--- @param ped number
+--- @return boolean dead
+local function IsLeashPartyDead(src, ped)
+    local override = Config.Combat.PropDragging.IsPlayerDownedOverride
+    if type(override) == 'function' then
+        local ok, result = pcall(override, src)
+        if not ok then
+            print(('[qbx_k9unit] main.lua: Config.Combat.PropDragging.IsPlayerDownedOverride errored for source %s: %s -- treating as NOT down this tick'):format(src, tostring(result)))
+            return false
+        end
+        return result == true
+    end
+
+    local ambulanceDowned = K9Compat.Get('ambulance').IsDowned(src)
+    if ambulanceDowned == true then return true end
+
+    -- Metadata half is skipped when the adapter already confirmed `false`
+    -- (provably redundant — see server/defense.lua's own IsHandlerDown doc
+    -- comment for why, identical reasoning applies verbatim here), never
+    -- the raw-health half below.
+    local player = exports.qbx_core:GetPlayer(src)
+    local metadata = player and player.PlayerData and player.PlayerData.metadata
+    if ambulanceDowned ~= false and type(metadata) == 'table'
+        and (metadata.isdead == true or metadata.inlaststand == true) then
+        return true
+    end
+
+    -- Final floor, same threshold/reasoning as server/combat.lua's own
+    -- PED_DEAD_HEALTH_THRESHOLD (100, the CPed "already dead" convention —
+    -- see that file's own doc comment for the primary-source verification
+    -- that IsEntityDead/IsPedDeadOrDying have no FXServer server
+    -- registration at all, which is exactly why this is a raw health read
+    -- rather than either of those natives) — a LOCAL constant here, not a
+    -- shared cross-file one: this is an engine-wide ped mechanic, not
+    -- something either file's own logic depends on the other agreeing with
+    -- at runtime, and copying a small, stable literal costs nothing extra.
+    return ped ~= 0 and GetEntityHealth(ped) <= 100
+end
+
+-- LEASH_DEATH_CHECK_INTERVAL_MS: 2s. Not per-frame (this is a correctness
+-- backstop, not a real-time constraint — client/leashvisual.lua's own
+-- visual cleanup already reacts near-instantly to leashDetached once THIS
+-- thread actually fires it, so the player-visible rope disappears within
+-- one MONITOR_TICK_MS -- 1s -- of that file's own poll after this one
+-- detaches the pairing), and this table is typically tiny (one entry per
+-- two participants) so the per-tick cost of one more GetPlayerPed +
+-- IsLeashPartyDead per participant is negligible even at this cadence.
+-- FILE-LOCAL, not Config -- same "security/correctness floor, not an
+-- operator balance dial" reasoning this resource's own established
+-- convention already applies to comparable constants elsewhere (e.g.
+-- server/combat.lua's MAINTENANCE_INTERVAL_MS, also a fixed, uncofigurable
+-- 500ms for the identical "expiry/termination enforcement must never be at
+-- the mercy of an operator-tunable interval" reason).
+local LEASH_DEATH_CHECK_INTERVAL_MS = 2000
+
+-- GATED, same reasoning combat.lua's own shared maintenance thread already
+-- documents for its identical gate: LeashPairs can only ever receive an
+-- entry via respondLeashAttach, which itself routes through
+-- CheckLeashEligibility's OWN `Config.Features.LeashMechanics` gate (see
+-- that function, above) -- with the flag off, LeashPairs is PROVABLY always
+-- empty, so not running this thread is behaviorally identical to running it
+-- forever against an empty table. No pairing can ever be stranded by this
+-- gate: Config is read once at resource start in this resource's own
+-- established convention (see e.g. server/combat.lua's own sibling
+-- comments), never toggled live mid-session.
+if Config.Features.LeashMechanics then
+    CreateThread(function()
+        while true do
+            Wait(LEASH_DEATH_CHECK_INTERVAL_MS)
+
+            -- Iterating `pairs(LeashPairs)` while doDetachLeash clears
+            -- EXISTING keys from underneath this same loop is safe per the
+            -- Lua 5.4 reference manual's own explicit carve-out ("you may
+            -- however modify existing fields... set existing fields to
+            -- nil") -- the identical property server/combat.lua's own
+            -- shared maintenance thread already relies on for its
+            -- `for targetNetId, hold in pairs(ActiveHolds) do ... EndHold(...)`
+            -- loop, not a new assumption introduced here.
+            for src, pairing in pairs(LeashPairs) do
+                -- Re-check LeashPairs[src] still equals this SAME pairing
+                -- table before acting: a partner's own death, visited
+                -- EARLIER in this exact same `pairs` traversal, may have
+                -- already called doDetachLeash and cleared this src's own
+                -- entry (both directions are cleared together) — without
+                -- this guard, this iteration would go on to call
+                -- doDetachLeash a SECOND time for an already-cleared src,
+                -- which is a harmless no-op today (doDetachLeash itself
+                -- checks `if not pairing then return false end`) but is
+                -- cheaper and clearer to skip outright here.
+                if LeashPairs[src] == pairing then
+                    local ped = GetPlayerPed(src)
+                    if IsLeashPartyDead(src, ped) then
+                        doDetachLeash(src, 'partner_died')
+                    end
+                end
+            end
+        end
+    end)
 end
 
 --- Cleans up an orphaned leash pairing if one half disconnects, so the

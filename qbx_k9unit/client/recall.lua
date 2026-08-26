@@ -1,13 +1,12 @@
 --[[
     qbx_k9unit/client/recall.lua
 
-    Phase 3 implementation, the client half of server/recall.lua
-    (DEVELOPER_REFERENCE.md §12.5.1's "Recall actor" -- read that file's header in
-    full before touching this one; it is the authoritative contract for
-    everything below). Provides the handler-facing entry point for Recall
-    -- a chat command, per this pass's own scope. RESOLVED (a later pass):
-    client/radial.lua now also calls the exported `RequestRecall()` below
-    from its own "Recall" item -- the command stays as an additional,
+    Client half of server/recall.lua (DEVELOPER_REFERENCE.md §12.5.1's
+    "Recall actor" -- read that file's header in full before touching this
+    one; it is the authoritative contract for everything below). Provides
+    the handler-facing entry point for Recall -- a chat command.
+    client/radial.lua also calls the exported `RequestRecall()` below from
+    its own "Recall" item -- the command stays as an additional,
     equally-valid entry point, never replaced by it. Same "global helper,
     private per-file state" convention as client/combat.lua's
     `RequestBiteHold()`/`RequestDrag()` or client/partnership.lua's
@@ -42,11 +41,10 @@
     FILE-TO-FILE CONTRACT:
     - Exposes `RequestRecall()` as a bare global (this resource's
       established "global helper, private per-file state" convention).
-      RESOLVED: client/radial.lua's own "Recall" item now calls this exact
-      function -- this file needed no change for that to happen.
-    - Registers the `k9recall` chat command as this pass's own concrete
-      entry point, per the task's "handler command/interaction" framing --
-      command REGISTRATION is gated on `Config.Features.Recall` only (see
+      client/radial.lua's own "Recall" item calls this exact function --
+      this file needed no change for that to happen.
+    - Registers the `k9recall` chat command as its concrete entry point.
+      Command REGISTRATION is gated on `Config.Features.Recall` only (see
       the top-of-file gate below); command AVAILABILITY is deliberately NOT
       an authorization decision (see "TERMINATION MUST NEVER BE GATED"
       above): this command is registered for EVERY player regardless of K9

@@ -1035,11 +1035,22 @@ lib.callback.register('qbx_k9unit:server:xpTiersUpsert', function(source, payloa
             effect.demotedCount, table.concat(effect.demotedCitizenIds, ', '))
     end
 
-    K9Store.XPTierAudit_Append(
+    -- AUDIT-SWALLOW FIX (this pass): XPTierAudit_Append's own boolean
+    -- return used to be discarded here -- the primary write
+    -- (K9Store.XPTier_Upsert above) already succeeded and was checked
+    -- before this point, so this edit genuinely happened and this
+    -- callback's own `ok = true` response remains correct either way --
+    -- but a failed audit-trail insert must not vanish without a trace
+    -- tying it to this specific rank/ordinal. Mirrors
+    -- server/runtimecontrol.lua's own identical "AUDIT-SWALLOW FIX (this
+    -- pass)" comment/shape exactly.
+    if not K9Store.XPTierAudit_Append(
         ordinal,
         ('rank %d (%s): %s%s'):format(ordinal, tostring(payload.label), table.concat(changes, ', '), table.concat(reRankParts, '')),
         citizenid or 'unknown'
-    )
+    ) then
+        print(('[qbx_k9unit] xptiers.lua: audit-trail write failed for ordinal=%s (the edit itself still succeeded and was persisted).'):format(tostring(ordinal)))
+    end
 
     -- LOUDER TREATMENT FOR A PROMOTION THAN A DEMOTION -- decided, not
     -- merely defaulted to equal wording: a threshold edit that instantly

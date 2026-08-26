@@ -2756,21 +2756,71 @@ local function SetCertificationTier(granterSrc, targetServerId, newTier)
         return false, 'invalid_tier'
     end
 
-    local updateOk, err = pcall(K9Store.Cert_SetTier, targetCitizenid, jobName, newTier)
+    -- AFFECTED-ROWS DEFECT FIX (data-truth audit pass): `err` here doubles
+    -- as the affected-row count on a NON-thrown update (pcall's own
+    -- "true, <every return value>" contract) -- Cert_SetTier is a bare
+    -- `WHERE ... AND active = 1` UPDATE (see server/datastore.lua's own
+    -- doc comment on K9Store.Cert_SetTier), so it throws NOTHING when the
+    -- WHERE clause simply matches zero rows. This entry gate above reads
+    -- the in-memory `Certifications` cache, not a fresh row, and the
+    -- UPDATE itself yields across a coroutine boundary -- a concurrent
+    -- decertify/job-change/second tier change can land in that exact
+    -- window and make this UPDATE affect zero rows with no error at all.
+    -- Mirrors RevokeCertification's own identical `updateOk`/affected-rows
+    -- branch immediately above in this file, byte-for-byte in shape.
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Cert_SetTier, targetCitizenid, jobName, newTier)
 
     if haveTierMutex then TierEditMutex.Release(newTier) end
 
     if not updateOk then
-        print(('[qbx_k9unit] SetCertificationTier UPDATE failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(err)))
-        NotifyPlayer(granterSrc, locale('certifications.tier_change_error'), 'error')
-        return false, 'db_error'
+        print(('[qbx_k9unit] SetCertificationTier UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(targetCitizenid, jobName, tostring(affectedRowsOrErr)))
+
+        local freshRecord = QueryCertificationRecord(targetCitizenid, jobName)
+        if not (freshRecord and freshRecord.tier == newTier) then
+            -- Either confirmed the tier never actually changed (the
+            -- UPDATE genuinely never committed -- an honest failure, the
+            -- target keeps their current, correct tier) or unreadable/
+            -- no-longer-active (outcome unknown or moot) -- in BOTH
+            -- cases, never claim a tier change succeeded that this code
+            -- cannot confirm, and never run the side effects below
+            -- (outbound event, success notices) against a guess.
+            NotifyPlayer(granterSrc, locale('certifications.tier_change_error'), 'error')
+            return false, 'db_error'
+        end
+
+        -- Confirmed changed despite the client-side error (e.g. a
+        -- success acknowledgment lost after a real commit) -- fall
+        -- through to the normal success path below against this
+        -- now-confirmed truth; RefreshCertificationCache below will pick
+        -- up the correct state.
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
+        -- Zero rows matched: WHERE ... AND active = 1 found nothing --
+        -- see this branch's own header comment above for exactly why.
+        -- Zero is a real, meaningful outcome here, never swallowed by an
+        -- `or` fallback -- checked explicitly, same as
+        -- RevokeCertification's own identical branch.
+        RefreshCertificationCache(targetCitizenid, jobName)
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified_needs_cert'), 'error')
+        return false, 'target_not_actively_certified'
     end
 
     RefreshCertificationCache(targetCitizenid, jobName)
-    FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', targetCitizenid, jobName, oldTier, newTier, granterCitizenid)
 
-    NotifyPlayer(granterSrc, locale('certifications.tier_change_success_granter', newTier), 'success')
-    NotifyPlayer(targetServerId, locale('certifications.tier_change_success_target', newTier), 'success')
+    -- Read the tier back from the now-authoritative cache before telling
+    -- either party anything changed -- mirrors RenewCertification's own
+    -- "never display an assumed value" precedent -- rather than blindly
+    -- trusting the requested `newTier` (belt-and-braces alongside the
+    -- affected-rows check above, covering the reconciled-thrown-error
+    -- path where confirmation came from a separate read). Falls back to
+    -- `newTier` only if the cache is somehow unavailable immediately
+    -- after a confirmed write, never silently showing a stale value.
+    local confirmedCached = Certifications[targetCitizenid]
+    local confirmedTier = (confirmedCached and confirmedCached.active and confirmedCached.job == jobName and confirmedCached.tier) or newTier
+
+    FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', targetCitizenid, jobName, oldTier, confirmedTier, granterCitizenid)
+
+    NotifyPlayer(granterSrc, locale('certifications.tier_change_success_granter', confirmedTier), 'success')
+    NotifyPlayer(targetServerId, locale('certifications.tier_change_success_target', confirmedTier), 'success')
     return true, 'ok'
 end
 
@@ -2877,14 +2927,42 @@ local function SetCertificationTierOffline(granterSrc, citizenid, jobName, newTi
         return false, 'invalid_tier'
     end
 
-    local updateOk, err = pcall(K9Store.Cert_SetTier, citizenid, jobName, newTier)
+    -- AFFECTED-ROWS DEFECT FIX (data-truth audit pass) -- see
+    -- SetCertificationTier's own identical doc comment above (the online
+    -- twin) for the full "why this can affect zero rows with no thrown
+    -- error at all" writeup; applies here verbatim -- the entry gate's
+    -- own `record` above is a snapshot read that can go stale across this
+    -- UPDATE's own coroutine yield exactly the same way the online path's
+    -- in-memory cache read can.
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Cert_SetTier, citizenid, jobName, newTier)
 
     if haveTierMutex then TierEditMutex.Release(newTier) end
 
     if not updateOk then
-        print(('[qbx_k9unit] SetCertificationTierOffline UPDATE failed for %s/%s: %s'):format(citizenid, jobName, tostring(err)))
-        NotifyPlayer(granterSrc, locale('certifications.tier_change_error'), 'error')
-        return false, 'db_error'
+        print(('[qbx_k9unit] SetCertificationTierOffline UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(citizenid, jobName, tostring(affectedRowsOrErr)))
+
+        local freshRecord = QueryCertificationRecord(citizenid, jobName)
+        if not (freshRecord and freshRecord.tier == newTier) then
+            -- Either confirmed the tier never actually changed, or
+            -- unreadable/no-longer-active -- never claim a tier change
+            -- succeeded that this code cannot confirm. See
+            -- SetCertificationTier's own identical branch for the full
+            -- reasoning.
+            NotifyPlayer(granterSrc, locale('certifications.tier_change_error'), 'error')
+            return false, 'db_error'
+        end
+
+        -- Confirmed changed despite the client-side error -- fall
+        -- through to the normal success path below against this
+        -- now-confirmed truth.
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
+        -- Zero rows matched -- a real, meaningful outcome, never
+        -- swallowed by an `or` fallback -- checked explicitly, same as
+        -- the online path's identical branch immediately above in this
+        -- file.
+        RefreshCertificationCache(citizenid, jobName)
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified_needs_cert'), 'error')
+        return false, 'target_not_actively_certified'
     end
 
     -- Safe to call unconditionally for a genuinely offline citizenid --
@@ -2892,9 +2970,18 @@ local function SetCertificationTierOffline(granterSrc, citizenid, jobName, newTi
     -- ("RefreshCertificationCache is a plain DB-query-and-cache-write
     -- function with no live-source requirement").
     RefreshCertificationCache(citizenid, jobName)
-    FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', citizenid, jobName, oldTier, newTier, granterCitizenid)
 
-    NotifyPlayer(granterSrc, locale('certifications.tier_change_success_granter', newTier), 'success')
+    -- Read the tier back from the now-authoritative cache before telling
+    -- the granter anything changed -- see SetCertificationTier's own
+    -- identical doc comment above for the full reasoning. Falls back to
+    -- `newTier` only if the cache is somehow unavailable immediately
+    -- after a confirmed write.
+    local confirmedCached = Certifications[citizenid]
+    local confirmedTier = (confirmedCached and confirmedCached.active and confirmedCached.job == jobName and confirmedCached.tier) or newTier
+
+    FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', citizenid, jobName, oldTier, confirmedTier, granterCitizenid)
+
+    NotifyPlayer(granterSrc, locale('certifications.tier_change_success_granter', confirmedTier), 'success')
     return true, 'ok'
 end
 

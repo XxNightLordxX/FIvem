@@ -10,13 +10,10 @@
     'qbx_k9unit:server:reportTrackSourceArrival' event -- ZERO new detection
     logic anywhere in either of this feature's two files).
 
-    STRICT SESSION OWNERSHIP: this file, server/findalert.lua and
-    tests/findalert_spec.lua were the ONLY three new files this pass was
-    authorized to create. Every existing file this feature reacts to
-    (server/search.lua, client/search.lua, client/tracking.lua,
-    client/movement.lua) is owned by a different agent this session and was
-    NOT edited to build this -- see server/findalert.lua's own header for
-    the exact hook points read (not modified) to make that true.
+    This feature reacts to existing hooks in server/search.lua,
+    client/search.lua, client/tracking.lua, and client/movement.lua without
+    modifying any of them -- see server/findalert.lua's own header for the
+    exact hook points read (not modified) to make that true.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT:
@@ -71,11 +68,9 @@
     that file's own doc comment, immediately above its K9Sit() function,
     for the full verification writeup this table is copied from verbatim,
     not re-guessed) and calls ClearPedTasksImmediately/
-    TaskStartScenarioInPlace directly. Flagged for coder-architect: if a
-    future pass wants to promote that table to a shared resource-global
-    (removing this duplication), it needs a .luacheckrc `globals` entry and
-    a small client/movement.lua edit, both outside this session's
-    file-ownership scope.
+    TaskStartScenarioInPlace directly. If this table is ever promoted to a
+    shared resource-global (removing this duplication), it needs a
+    .luacheckrc `globals` entry and a small client/movement.lua edit.
 
     OWN-DEATH / OWN-VEHICLE GUARDS: neither is present on K9Sit() itself (a
     player-clicked action -- being dead or in a vehicle already makes the

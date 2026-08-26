@@ -2695,6 +2695,76 @@ t.test('SetCertificationTier: a thrown UPDATE reports tier_change_error, never a
     t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'certified', 'the cache must be untouched by a failed update')
 end)
 
+-- ----------------------------------------------------------------------
+-- REGRESSION (data-truth audit pass, finding #2): K9Store.Cert_SetTier is
+-- a bare `WHERE citizenid = ? AND job = ? AND active = 1` UPDATE (NOT
+-- itself pcall-wrapped in server/datastore.lua) -- when a concurrent
+-- decertify/job-change/second tier change lands between this function's
+-- own in-memory-cache entry gate and the UPDATE's own commit, the WHERE
+-- clause matches ZERO rows and MySQL throws NOTHING for that. The
+-- pre-existing code discarded the affected-row count entirely (only
+-- checked pcall's own true/false), so this exact case reported a bare
+-- success to both parties while nothing in the DB had changed. Mirrors
+-- RevokeCertification's own identical two-sided REGRESSION coverage
+-- immediately above in this file (zero-affected-rows, and a thrown error
+-- that actually committed).
+-- ----------------------------------------------------------------------
+
+t.test('SetCertificationTier: REGRESSION -- a zero-affected-rows UPDATE (no thrown error) reports target_not_actively_certified, never a silent success', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+    t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'certified', 'sanity')
+
+    -- A concurrent decertify/job-change landed between the entry gate's
+    -- cache read and this UPDATE's own commit -- WHERE ... active = 1
+    -- matches nothing, and no error is thrown for that.
+    f.mysql.update.await = function() return 0 end
+    -- RefreshCertificationCache's own post-write re-query now sees the
+    -- row as genuinely gone.
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    local ok = pcall(f.events['qbx_k9unit:server:setCertificationTier'], 20, 'senior')
+    t.isTrue(ok, 'must never propagate')
+
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the tier change did not land, never a bare success')
+    t.isNil(lastNotifyFor(f, 20), 'the target must NOT be told their tier changed -- it genuinely did not')
+    t.isFalse(f.env.HasK9Access(20), 'the cache must reflect the CONFIRMED true outcome (no longer certified), never keep pretending the old tier is still current')
+    t.equals(#f.outboundEvents, 0, 'no outbound certificationTierChanged event for a tier change that did not actually land')
+end)
+
+t.test('SetCertificationTier: REGRESSION -- a throwing UPDATE that ACTUALLY committed (ack lost after a real commit) is confirmed via reconciliation and reported as the genuine success it was', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.mysql.update.await = function() error('simulated ack lost after a real commit') end
+    -- The reconciliation read (QueryCertificationRecord) AND the
+    -- post-write RefreshCertificationCache both now see the NEW tier --
+    -- confirming the UPDATE actually committed despite the client-side
+    -- error.
+    f.mysql.single.await = function() return { tier = 'senior' } end
+
+    f.setSource(10)
+    local ok, err = pcall(f.events['qbx_k9unit:server:setCertificationTier'], 20, 'senior')
+    t.isTrue(ok, 'must not propagate: ' .. tostring(err))
+
+    t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'senior', 'the cache must reflect the CONFIRMED true outcome, never the failed client-side call alone')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.tier_change_success_granter', 'senior'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.tier_change_success_target', 'senior'), 'success'))
+end)
+
 t.test('/k9settier command: a non-numeric args[1] is rejected with the usage message', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
@@ -3418,6 +3488,15 @@ t.test('tabletSetCertificationTier: ONLINE success delegates to the proximity-ch
     f.mysql.scalar.await = function() return 5 end -- active base cert exists
     f.env.RefreshCertificationCache('T1', 'police') -- primes cache tier = 'certified' (DEFAULT_TIER)
 
+    -- AFFECTED-ROWS DEFECT FIX (data-truth audit pass): SetCertificationTier
+    -- now reads the tier back from the post-write cache refresh before
+    -- notifying either party (mirrors RenewCertification's own "never
+    -- display an assumed value" precedent -- see that function's own doc
+    -- comment and SetCertificationTier's own identical new comment), same
+    -- as the pre-existing "TIER TRANSITION" test's own
+    -- "post-update re-cache reflects the new tier" single.await re-mock.
+    f.mysql.single.await = function() return { tier = 'senior' } end
+
     local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
 
     t.isTrue(result.ok)
@@ -3973,6 +4052,77 @@ t.test('SetCertificationTierOffline SECURITY: an "offline" citizenid who is actu
 
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_target_online_use_online_action', 99), 'error'))
     t.isFalse(updateCalled)
+end)
+
+-- ----------------------------------------------------------------------
+-- REGRESSION (data-truth audit pass, finding #2, offline twin) -- same
+-- underlying defect as SetCertificationTier's own REGRESSION coverage
+-- above, reached through the offline entry point instead: the entry
+-- gate's own `record` snapshot (QueryCertificationRecord, a plain read)
+-- can go stale across K9Store.Cert_SetTier's own coroutine yield exactly
+-- like the online path's in-memory cache read can.
+-- ----------------------------------------------------------------------
+
+t.test('SetCertificationTierOffline: REGRESSION -- a zero-affected-rows UPDATE (no thrown error) reports target_not_actively_certified, never a silent success', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    -- T1 is NOT registered as an online player at all.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end -- QueryCertificationRecord: active row exists at the entry gate
+
+    -- A concurrent decertify/job-change landed between the entry gate's
+    -- read and this UPDATE's own commit -- WHERE ... active = 1 matches
+    -- nothing, and no error is thrown for that.
+    f.mysql.update.await = function() return 0 end
+
+    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the tier change did not land, never a bare success')
+    t.equals(#f.outboundEvents, 0, 'no outbound certificationTierChanged event for a tier change that did not actually land')
+end)
+
+t.test('SetCertificationTierOffline: REGRESSION -- a throwing UPDATE that genuinely never committed (reconciliation still sees the OLD tier) reports tier_change_error, never a guessed success', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    -- T1 is NOT registered as an online player at all.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end -- QueryCertificationRecord: active row exists at the entry gate
+
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    -- The reconciliation read (QueryCertificationRecord) still sees the
+    -- OLD tier -- the UPDATE genuinely never committed.
+
+    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_error'), 'error'))
+end)
+
+t.test('SetCertificationTierOffline: REGRESSION -- a throwing UPDATE that ACTUALLY committed (ack lost after a real commit) is confirmed via reconciliation and reported as the genuine success it was', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    -- T1 is NOT registered as an online player at all.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end -- QueryCertificationRecord: active row exists at the entry gate
+
+    f.mysql.update.await = function() error('simulated ack lost after a real commit') end
+
+    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_error'), 'error'), 'sanity: the reconciliation read still sees the OLD tier this pass, so this run must still report a genuine failure')
+
+    -- Re-run with the entry-gate read seeing the OLD tier (so the "already
+    -- set" no-op check above the UPDATE does not short-circuit this run)
+    -- but the POST-throw reconciliation read seeing the NEW tier --
+    -- confirming the UPDATE actually committed despite the client-side
+    -- error.
+    local f2 = newFixture()
+    f2.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    local singleAwaitCallCount = 0
+    f2.mysql.single.await = function()
+        singleAwaitCallCount = singleAwaitCallCount + 1
+        if singleAwaitCallCount == 1 then return { tier = 'certified', expires_at_unix = nil } end -- entry-gate read
+        return { tier = 'senior', expires_at_unix = nil } -- post-throw reconciliation read
+    end
+    f2.mysql.update.await = function() error('simulated ack lost after a real commit') end
+
+    f2.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    t.isTrue(notifiedExactly(f2, 1, Sandbox.locale('certifications.tier_change_success_granter', 'senior'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
 end)
 
 t.test('RenewCertificationOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9recertify', function()
