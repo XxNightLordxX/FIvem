@@ -606,16 +606,61 @@ AddEventHandler('onResourceStart', function(resourceName)
         '[qbx_k9unit] Config.Features.HighCommand is true but Config.Departments is missing -- ' ..
         'IsHighCommand requires it to resolve the caller\'s own department threshold.'
     )
-    for jobName, dept in pairs(Config.Departments) do
-        assert(
-            type(dept) == 'table' and (dept.highCommandGrade == nil or type(dept.highCommandGrade) == 'number'),
-            ('[qbx_k9unit] Config.Departments[%s].highCommandGrade must be nil or a number -- IsHighCommand ' ..
-             'compares job.grade.level >= dept.highCommandGrade for every non-boss officer in that department. ' ..
-             'nil correctly means "no High Command tier in this department" (IsHighCommand fails closed on it, ' ..
-             'by design) -- but any OTHER non-number value (a string, a boolean, a table) is a config typo that ' ..
-             'silently produces that SAME fail-closed "nobody qualifies" behavior with nothing logged to explain ' ..
-             'why. Caught loudly here instead, once, at start.'):format(tostring(jobName))
-        )
+    -- CLAMP-AND-WARN, DELIBERATELY NEVER THROW -- this used to be a bare
+    -- `assert` here, which meant one plausible owner typo (a quoted "6"
+    -- instead of a number 6, in ANY configured department) aborted this
+    -- ENTIRE onResourceStart handler on the spot, silently skipping
+    -- everything still to run below it for the rest of this resource's
+    -- uptime -- including RegisterCommand('k9givexp') itself, further down
+    -- in this SAME handler (see this file's header PART 2). That is the
+    -- exact "one bad config value silently deletes an unrelated feature"
+    -- incident class this codebase has already found and fixed once (see
+    -- commit "Stop one bad config value silently deleting the ambient audio
+    -- feature") -- worse here, because config.lua explicitly invites an
+    -- owner who is not a developer to tune Config.Departments per
+    -- department. Mirrors the maxXpPerGrant/grantCooldownMs clamp-and-warn
+    -- guards twenty lines below (same file, same handler) -- that pattern
+    -- was simply never applied up here.
+    --
+    -- Per-department field reset (never drops the whole department, unlike
+    -- server/certifications.lua's certifierGrade guard): nil is ALREADY the
+    -- documented safe value for this field ("no High Command tier in this
+    -- department" -- see this file's header and IsHighCommand's own doc
+    -- comment above), so a malformed highCommandGrade is corrected by
+    -- forcing it to that same safe nil, exactly like
+    -- server/certifications.lua's gentler autoAccessGrade treatment --
+    -- certifierGrade/auditGrade/label and every other field on this
+    -- department are left completely untouched. IsHighCommand itself
+    -- (line ~408) already fails closed on a non-number highCommandGrade at
+    -- read time regardless -- this guard exists to make that failure LOUD,
+    -- once, at start, instead of silent, and to stop it from being able to
+    -- take '/k9givexp' down with it.
+    if type(Config.Departments) == 'table' then
+        for jobName, dept in pairs(Config.Departments) do
+            if type(dept) ~= 'table' then
+                print(
+                    ('[qbx_k9unit] WARNING: Config.Departments[%s] is not a table (found: %s) -- IsHighCommand ' ..
+                     'cannot resolve a highCommandGrade for this department and will fail closed (deny High ' ..
+                     'Command) for every officer in it, exactly as if no High Command tier were configured. ' ..
+                     'Fix Config.Departments[%s] in config.lua to restore it.'):format(
+                        tostring(jobName), tostring(dept), tostring(jobName)
+                    )
+                )
+            elseif dept.highCommandGrade ~= nil and type(dept.highCommandGrade) ~= 'number' then
+                print(
+                    ('[qbx_k9unit] WARNING: Config.Departments[%s].highCommandGrade must be nil or a number ' ..
+                     '(found: %s) -- IsHighCommand compares job.grade.level >= dept.highCommandGrade for every ' ..
+                     'non-boss officer in that department. nil correctly means "no High Command tier in this ' ..
+                     'department" (IsHighCommand fails closed on it, by design) -- FORCING it to nil for this ' ..
+                     'session instead of aborting resource start, since nil is the exact same safe fail-closed ' ..
+                     'value IsHighCommand already falls back to for a malformed grade at read time. Every other ' ..
+                     'field on this department (certifierGrade, auditGrade, label, ...) is unaffected. Find ' ..
+                     'Config.Departments[%s].highCommandGrade in config.lua and fix it to restore the intended ' ..
+                     'High Command tier.'):format(tostring(jobName), tostring(dept.highCommandGrade), tostring(jobName))
+                )
+                dept.highCommandGrade = nil
+            end
+        end
     end
 
     assert(type(Config.HighCommand) == 'table', '[qbx_k9unit] Config.Features.HighCommand is true but Config.HighCommand is missing.')

@@ -2,12 +2,12 @@
     html/tests/tablet_audit_spec.js
 
     Covers the K9 Audit Trail viewer screen (its own tab) -- server/
-    admin.lua's five tabletAudit* callbacks (Cert/Partner/Search/Xp/Dept),
-    bridged one-to-one by client/tablet.lua's tablet:auditCert/Partner/
-    Search/Xp/Dept NUI callbacks. See tests/clienttablet_spec.lua for the
-    Lua-side half of this same contract (validation + forwarding); this
-    file covers only the JS half: gating, per-mode form fields, result
-    rendering, and error/empty states.
+    admin.lua's six tabletAudit* callbacks (Cert/Partner/Search/Xp/Dept/
+    Catalog), bridged one-to-one by client/tablet.lua's tablet:auditCert/
+    Partner/Search/Xp/Dept/Catalog NUI callbacks. See
+    tests/clienttablet_spec.lua for the Lua-side half of this same contract
+    (validation + forwarding); this file covers only the JS half: gating,
+    per-mode form fields, result rendering, and error/empty states.
 
     Server contract verified directly against server/admin.lua (not
     assumed): every tabletAudit* callback returns
@@ -19,8 +19,14 @@
     DIFFERENT PER MODE (see server/datastore.lua's own K9Store.Cert_GetHistory,
     Partner_GetHistoryByK9, Partner_GetHistoryByHandler,
     SearchLog_GetByOfficer/ByPlate/ByPerson/Recent, XP_GetSnapshotRows and
-    Cert_GetActiveRosterByJob for the authoritative column list of each,
-    reflected in html/tablet.js's own auditColumnsForMode()).
+    Cert_GetActiveRosterByJob for the authoritative column list of each of
+    the first five, reflected in html/tablet.js's own auditColumnsForMode()).
+    tabletAuditCatalog (the sixth, added in a LATER pass than the rest of
+    this file, see its own "CATALOG CHANGES MODE" section below) has no
+    single row shape of its own at all -- it depends on which of 8 real
+    `catalogName` values was requested; see server/admin.lua's own
+    CATALOG_AUDIT_SOURCES table and html/tablet.js's own
+    auditColumnsForCatalog() for the authoritative per-catalog list.
 
     GATING is asserted as a CONVENIENCE, per html/tablet.js's own THE
     SECURITY RULE -- the real gate (server/admin.lua's IsAuthorizedAdmin)
@@ -385,6 +391,129 @@ t.test('Search mode "plate": sends {mode:"plate", value, limit}', async () => {
     t.equals(sentBody.mode, 'plate');
     t.equals(sentBody.value, 'ABC 123');
     t.equals(sentBody.limit, 20);
+});
+
+// ======================================================================
+// CATALOG CHANGES MODE -- the sixth mode, bridging server/admin.lua's own
+// 'qbx_k9unit:server:tabletAuditCatalog' via tablet:auditCatalog. Unlike
+// the five modes above, this one has NO single fixed row shape -- it
+// depends on which of the 8 real catalogName values was selected (see
+// html/tablet.js's own auditColumnsForCatalog()). These tests cover the
+// mode switch/select itself, the {catalogName, limit} payload shape, and
+// two representative column shapes (the shared action/key/detail/changed-by/
+// changed-at envelope six of the eight catalogs share, and tabletThemes'
+// genuinely different one) -- not all eight, which would only be
+// re-testing auditColumnsForCatalog()'s own per-case column list rather
+// than this screen's actual behavior.
+// ======================================================================
+
+t.test('Catalog Changes mode: a catalog select with 8 options, defaulting to Certification Tiers; no citizenid/department/search fields', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Catalog Changes')[0].click();
+    await settle();
+
+    const select = findAllTag(h.getRoot(), 'select')[0];
+    t.isDefined(select, 'catalog select present');
+    t.equals(select.value, 'certTiers', 'defaults to the first entry, same convention as auditSearchMode\'s own default');
+    t.equals(findAll(select, (n) => n.tagName === 'option').length, 8, 'all 8 real catalogs offered');
+    t.isUndefined(findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345'), 'no citizenid field for this mode');
+});
+
+t.test('Catalog Changes mode: sends {catalogName, limit}, renders the shared action/key/detail/changed-by/changed-at columns for certTiers', async () => {
+    let sentBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCatalog': (body) => {
+                sentBody = body;
+                return {
+                    ok: true,
+                    label: 'Certification tier catalog audit trail',
+                    rows: [
+                        { action: 'update', tier_key: 'master', detail: 'multiplier 1.0 -> 1.2', changed_by: 'HC1', changed_by_name: 'Chief', changed_at: '2026-01-01 00:00:00' },
+                    ],
+                };
+            },
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Catalog Changes')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.isDefined(sentBody);
+    t.equals(sentBody.catalogName, 'certTiers');
+    t.equals(sentBody.limit, 20);
+    t.isTrue(findByText(h.getRoot(), 'Certification tier catalog audit trail').length >= 1, 'server label rendered verbatim');
+    t.isTrue(findByText(h.getRoot(), 'update').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'master').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'multiplier 1.0 -> 1.2').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Chief (HC1)').length >= 1, 'changed_by pairs the raw id with its resolved name, same as every other audit mode');
+});
+
+t.test('Catalog Changes mode: selecting a different catalog sends that catalogName and renders ITS OWN column shape (tabletThemes, not the action/key/detail shape)', async () => {
+    let sentBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCatalog': (body) => {
+                sentBody = body;
+                return {
+                    ok: true,
+                    label: 'Tablet theme audit trail',
+                    rows: [
+                        { primary_color: '#2563eb', accent_color: '#f59e0b', background_color: '#111827', text_color: '#f9fafb', density: 'comfortable', header_title: 'Bark Squad HQ', changed_by: 'HC1', changed_at: '2026-01-02 00:00:00' },
+                    ],
+                };
+            },
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Catalog Changes')[0].click();
+    await settle();
+
+    const select = findAllTag(h.getRoot(), 'select')[0];
+    select.value = 'tabletThemes';
+    select._dispatch('input', { target: select });
+    await settle();
+
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.equals(sentBody.catalogName, 'tabletThemes');
+    t.isTrue(findByText(h.getRoot(), 'Bark Squad HQ').length >= 1, 'theme-specific field rendered');
+    t.isTrue(findByText(h.getRoot(), 'comfortable').length >= 1);
+    t.equals(findByText(h.getRoot(), 'update').length, 0, 'no leftover certTiers-shaped column data from the previous test\'s row shape');
+});
+
+t.test('Catalog Changes mode: an empty result still shows the shared empty-state note, not a blank/broken table', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCatalog': () => ({ ok: true, rows: [], label: 'Certification tier catalog audit trail' }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Catalog Changes')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'No matching records found.').length >= 1);
 });
 
 // ======================================================================

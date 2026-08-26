@@ -466,6 +466,12 @@ end
 --- argument the function doesn't consume) — this was never a behavior
 --- bug, only an inaccurate comment/call-shape cleanup. The height value
 --- itself is still unused here, only the boolean matters.
+-- Warned ONCE for the resource-session lifetime of this client, not once
+-- per FindWaterCrossingDistance call -- this function runs from inside a
+-- `while true` tracking-render loop below, so a per-call print would spam
+-- the console every tick for as long as tracking stays active.
+local warnedInvalidWaterTrackingSampleInterval = false
+
 --- @param startCoords vector3
 --- @param endCoords vector3
 --- @return number? distanceToWater
@@ -479,7 +485,37 @@ local function FindWaterCrossingDistance(startCoords, endCoords)
     -- Config.WaterTrackingDecay.sampleIntervalMeters of 0 (or negative)
     -- would otherwise spin this while loop forever with no Wait() inside
     -- it, freezing this thread until FiveM's watchdog intervenes.
-    local step = math.max(Config.WaterTrackingDecay.sampleIntervalMeters, 0.1)
+    --
+    -- TYPE-CHECKED BEFORE math.max, not just range-clamped -- this used to
+    -- be a bare `math.max(Config.WaterTrackingDecay.sampleIntervalMeters,
+    -- 0.1)`, which guards against 0 and negative numbers but NOT against a
+    -- non-number (a quoted "2" from a hand-edited config, nil, a boolean, a
+    -- stray table): math.max errors on a non-number argument, and this
+    -- function runs from inside a `while true` client thread with no pcall
+    -- around it, so that error would silently and permanently kill this
+    -- client's ENTIRE water-crossing/trail-decay thread for the rest of
+    -- this resource session, not merely this one call. CLAMP AND WARN
+    -- instead, mirroring client/proximityaudio.lua's own
+    -- triggerDistance guard (same file-load-time-vs-per-call distinction:
+    -- that one runs once at file scope, this one runs from a live loop, but
+    -- the "a non-number reaches a math.* call and throws" failure mode is
+    -- identical) -- warned ONCE (see warnedInvalidWaterTrackingSampleInterval
+    -- above), never per call.
+    local configuredSampleInterval = Config.WaterTrackingDecay.sampleIntervalMeters
+    if type(configuredSampleInterval) ~= 'number' then
+        if not warnedInvalidWaterTrackingSampleInterval then
+            warnedInvalidWaterTrackingSampleInterval = true
+            print(
+                ('[qbx_k9unit] WARNING: Config.WaterTrackingDecay.sampleIntervalMeters must be a number (found: ' ..
+                 '%s) -- math.max would otherwise throw and permanently kill this water-crossing detection ' ..
+                 "thread for the rest of this client's session. Using the built-in fallback of 2.0m instead. " ..
+                 'Fix Config.WaterTrackingDecay.sampleIntervalMeters in config.lua to silence this warning.'
+                ):format(tostring(configuredSampleInterval))
+            )
+        end
+        configuredSampleInterval = 2.0
+    end
+    local step = math.max(configuredSampleInterval, 0.1)
     local traveled = 0.0
 
     while traveled < total do

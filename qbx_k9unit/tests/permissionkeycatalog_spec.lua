@@ -223,7 +223,17 @@ local function boot(opts)
     }
 
     local fakeNow = { value = 0 }
+    -- COULD-NOT-DETERMINE RESYNC SWEEP: server/permissions.lua calls
+    -- CreateThread(...) unconditionally at file-load time (the resync sweep
+    -- for PermissionCheckUnresolved, deliberately not feature-gated). Any
+    -- fixture loading that file needs a REAL CreateThread/Wait pair -- a
+    -- no-op stub either throws or loops forever, since the sweep body is
+    -- `while true do Wait(x) ... end`.
+    local threadRunner = Sandbox.newThreadRunner()
+
     local envOverrides = {
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
         GetGameTimer = function() return fakeNow.value end,
         AddEventHandler = AddEventHandlerStub,
         -- server/permissions.lua now unconditionally calls RegisterNetEvent
@@ -675,7 +685,17 @@ t.test('PRIVILEGE ESCALATION FIX (END TO END, real server/runtimecontrol.lua loa
     }
 
     local fakeNow = { value = 0 }
+    -- COULD-NOT-DETERMINE RESYNC SWEEP: server/permissions.lua calls
+    -- CreateThread(...) unconditionally at file-load time (the resync sweep
+    -- for PermissionCheckUnresolved, deliberately not feature-gated). Any
+    -- fixture loading that file needs a REAL CreateThread/Wait pair -- a
+    -- no-op stub either throws or loops forever, since the sweep body is
+    -- `while true do Wait(x) ... end`.
+    local threadRunner = Sandbox.newThreadRunner()
+
     local env = Sandbox.newEnv({
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
         GetGameTimer = function() return fakeNow.value end,
         AddEventHandler = AddEventHandlerStub,
         RegisterNetEvent = function(_name, _fn) end,
@@ -1053,6 +1073,14 @@ local function bootWithRacingMySQL(opts)
         -- actually suspend this catalog's handler between polls -- exactly
         -- what every test below drives explicitly via `resumeNext`.
         Wait = function(_ms) coroutine.yield() end,
+        -- server/permissions.lua's resync sweep calls CreateThread at
+        -- file-load time. This fixture drives coroutines by hand to model
+        -- FXServer's boot-order dispatch, so the sweep is PARKED rather than
+        -- run: created, never resumed. That is the honest model here -- the
+        -- sweep is irrelevant to a boot-order race test, and resuming it
+        -- would make it yield inside the Wait stub above and interleave with
+        -- the probe this test is actually about.
+        CreateThread = function(fn) coroutine.create(fn) end,
         lib = { callback = { register = function() end } },
         exports = { qbx_core = { GetPlayer = function() end, GetPlayerByCitizenId = function() end } },
         MySQL = { query = queryStub },

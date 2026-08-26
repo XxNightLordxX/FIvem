@@ -323,9 +323,19 @@ local function newMainFixture(opts)
     -- called it with, not just that it was called at all.
     local refreshCalls = {} -- array of { citizenid=, jobName= }, call order preserved
     local refreshResultByKey = {} -- "citizenid|jobName" -> boolean, default false (matches HasK9Access's own "no access" default posture)
+    -- SECOND RETURN VALUE, `stateKnown` (concurrent contract change, this
+    -- pass -- the real server/certifications.lua's RefreshCertificationCache
+    -- now returns `isActive, stateKnown`, and this file's own onResourceStart
+    -- backfill call site was updated to match -- see that handler's own
+    -- "COULD-NOT-DETERMINE GUARD" comment): this stub models a plain
+    -- boolean lookup table with no "the query itself failed" concept at
+    -- all, so it is always confidently `true` here -- every existing test
+    -- in this file already asserts on a definite true/false `isActive`
+    -- value, never on "could not determine," so defaulting `stateKnown` to
+    -- true keeps every one of them meaning exactly what it already says.
     local function RefreshCertificationCache(citizenid, jobName)
         refreshCalls[#refreshCalls + 1] = { citizenid = citizenid, jobName = jobName }
-        return refreshResultByKey[citizenid .. '|' .. tostring(jobName)] == true
+        return refreshResultByKey[citizenid .. '|' .. tostring(jobName)] == true, true
     end
 
     local threadRunner = Sandbox.newThreadRunner() -- DoorScratchByDoorCooldown.StartSweep() runs at main.lua's OWN file-load time, unconditionally (not gated on Config.Features.DoorInteraction) -- CreateThread/Wait must exist regardless of which feature this fixture is testing
@@ -413,6 +423,14 @@ local function newMainFixture(opts)
         GetEntityType = GetEntityType,
         GetPlayers = GetPlayers,
         RefreshCertificationCache = RefreshCertificationCache,
+        -- opts.schemaCheckSettled (this pass) -- lets a dedicated
+        -- boot-order-race test simulate the schema-collision probe never
+        -- settling within its wait budget (server/datastore.lua's own
+        -- K9Store.WaitForSchemaCheckToSettle). Defaults to true (settled,
+        -- unaffected) for every existing test, which never cared about
+        -- this mechanism at all before the onResourceStart backfill below
+        -- started calling it.
+        K9Store = { WaitForSchemaCheckToSettle = function() return opts.schemaCheckSettled ~= false end },
         CreateThread = CountedCreateThread,
         Wait = threadRunner.Wait,
         Config = config,

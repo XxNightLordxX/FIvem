@@ -315,6 +315,71 @@ do
 end
 
 -- ============================================================================
+-- CONFIG-ABORT REGRESSION (this pass): Config.Departments[*].highCommandGrade
+-- used to be a bare per-department `assert` inside this file's own
+-- onResourceStart handler -- and RegisterCommand('k9givexp') sits AFTER it,
+-- in that SAME handler, so one malformed department used to silently remove
+-- '/k9givexp' for the whole session. A malformed value must now warn and
+-- force that ONE department's own highCommandGrade to nil (fails closed,
+-- same as IsHighCommand's own runtime type check) rather than throw -- and,
+-- the part a bare "does not throw" test would miss, '/k9givexp' AND every
+-- OTHER configured department's own highCommandGrade must both keep working
+-- afterward, completely unaffected.
+-- ============================================================================
+
+t.test('CONFIG-ABORT REGRESSION: a malformed highCommandGrade on one department must warn and fail closed for that department only -- /k9givexp still registers, and every OTHER department is unaffected', function()
+    local h = newHarness(
+        { maxXpPerGrant = 5000, grantCooldownMs = 1500, allowSelfGrant = false },
+        {
+            -- MALFORMED: a quoted string instead of a number -- the exact
+            -- plausible owner typo this regression guards against.
+            police  = { label = 'Los Santos Police Department', highCommandGrade = '6' },
+            sheriff = { label = 'Blaine County Sheriff', highCommandGrade = 5 },
+        }
+    )
+
+    t.isNotNil(h.registeredCommands.k9givexp, '/k9givexp must still be registered despite the malformed police.highCommandGrade')
+
+    local warned = false
+    for _, line in ipairs(h.capturedPrints) do
+        if line:find('highCommandGrade', 1, true) and line:find('police', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a malformed Config.Departments.police.highCommandGrade must print a warning naming both the field and the department')
+
+    -- The malformed department's own highCommandGrade must have been forced
+    -- to nil (the same safe fail-closed value IsHighCommand's own runtime
+    -- type check already produces for a malformed grade) -- NOT left as the
+    -- stray string, and NOT guessed at any number.
+    t.isNil(h.env.Config.Departments.police.highCommandGrade, 'the malformed department\'s highCommandGrade must be forced to nil')
+
+    -- The malformed department: even an absurdly high grade must now fail
+    -- closed (no High Command tier at all for this department any more),
+    -- but job.isboss still unconditionally qualifies regardless.
+    local badDeptSrc = registerPlayer(h, 'POLICE_HIGH', { name = 'police', grade = { level = 999 } })
+    t.isFalse(h.env.IsHighCommand(badDeptSrc), 'nil highCommandGrade (forced) must fail closed for a non-boss officer')
+    local badDeptBossSrc = registerPlayer(h, 'POLICE_BOSS', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.isTrue(h.env.IsHighCommand(badDeptBossSrc), 'job.isboss must still unconditionally qualify even in the department whose highCommandGrade was corrected')
+
+    -- The OTHER, validly-configured department must be completely
+    -- unaffected -- its own numeric highCommandGrade still works exactly as
+    -- configured.
+    t.equals(h.env.Config.Departments.sheriff.highCommandGrade, 5, 'an unrelated department\'s own valid highCommandGrade must be untouched')
+    local belowSrc = registerPlayer(h, 'SHERIFF_LOW', { name = 'sheriff', grade = { level = 4 } })
+    t.isFalse(h.env.IsHighCommand(belowSrc), 'sheriff grade 4 is below its own threshold of 5')
+    local atThresholdSrc = registerPlayer(h, 'SHERIFF_HIGH', { name = 'sheriff', grade = { level = 5 } })
+    t.isTrue(h.env.IsHighCommand(atThresholdSrc), 'sheriff grade 5 meets its own threshold and must still qualify')
+
+    -- '/k9givexp' itself must actually work end to end for the unaffected
+    -- department, not merely "be registered" -- clamp-and-warn means "still
+    -- functions", not merely "does not crash at boot".
+    h.resetCaptures()
+    local target = registerPlayer(h, 'SHERIFF_TARGET', { name = 'sheriff', grade = { level = 1 } })
+    runCommand(h, atThresholdSrc, { tostring(target), '50' })
+    t.equals(#h.capturedAwardCalls, 1, '/k9givexp must still actually grant XP through the unaffected department')
+    t.equals(h.capturedAwardCalls[1].citizenid, 'SHERIFF_TARGET')
+end)
+
+-- ============================================================================
 -- Registration-time gating: the maxXpPerGrant footgun. A non-positive/nil/
 -- NaN/infinite Config.HighCommand.maxXpPerGrant must DISABLE '/k9givexp'
 -- (never registered), never be silently read as "unlimited". Each case needs

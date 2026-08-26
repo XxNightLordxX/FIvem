@@ -410,6 +410,112 @@ t.test('playerDropped: evicts the disconnecting source\'s K9XP cache entry', fun
     t.equals(GetXP('cid-dropper'), 0, 'K9XP cache entry must be evicted on disconnect, resetting to the uncached baseline')
 end)
 
+-- ----------------------------------------------------------------------
+-- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) -- mirrors
+-- tests/certifications_spec.lua's identical section for
+-- RefreshCertificationCache; proven here against LoadXPForCitizenid's own
+-- copy of the fix. LoadXPForCitizenid is `local`, unreachable directly --
+-- driven the same way a real caller does, by firing the captured
+-- 'QBCore:Server:PlayerLoaded' handler directly (mirrors the playerDropped
+-- eviction test immediately above).
+-- ----------------------------------------------------------------------
+
+t.test('COULD-NOT-DETERMINE: PlayerLoaded for a citizenid with no prior cached XP, but a throwing MySQL.scalar.await, never manufactures a confirmed 0', function()
+    -- PlayerLoaded ALSO unconditionally warms the SEPARATE HandlerXP cache
+    -- (LoadHandlerXPForCitizenid, `SELECT handler_xp ...`) via this SAME
+    -- MySQL.scalar.await -- filtered out here by SQL text so this test
+    -- forces a failure on LoadXPForCitizenid's own `SELECT xp ...` query
+    -- ONLY, never that unrelated one.
+    local realScalarAwait = MySQLStub.scalar.await
+    MySQLStub.scalar.await = function(sql, params)
+        if sql:find('SELECT xp ', 1, true) then error('connection lost') end
+        return realScalarAwait(sql, params)
+    end
+
+    playerByCitizenId['cid-cnd1'] = { PlayerData = { citizenid = 'cid-cnd1', source = 801 } }
+    for _, handler in ipairs(eventHandlers['QBCore:Server:PlayerLoaded'] or {}) do
+        handler(playerByCitizenId['cid-cnd1'])
+    end
+
+    t.equals(GetXP('cid-cnd1'), 0, 'with nothing known at all, the best-effort DISPLAY value degrades to 0 (base tier), same as an uncached citizenid')
+
+    local sawCheckFailed, sawHedged = false, false
+    for _, line in ipairs(capturedPrints) do
+        if line:find('cid-cnd1', 1, true) and line:find('XP CHECK FAILED', 1, true) then sawCheckFailed = true end
+        if line:find('cid-cnd1', 1, true) and line:find('persisted XP in the', 1, true) then sawHedged = true end
+    end
+    t.isTrue(sawCheckFailed, 'the operator message must name the citizenid and say the CHECK failed')
+    t.isTrue(sawHedged, 'the operator message must reassure that persisted XP is unaffected, never claim a confirmed 0')
+
+    -- Proves nothing false was durably written: a later successful award
+    -- must accumulate from the REAL prior total (0, since this citizenid
+    -- never actually had a k9_progression row), not from some corrupted
+    -- state left behind by the failed read.
+    MySQLStub.scalar.await = realScalarAwait
+    AwardXP('cid-cnd1', 'exact100')
+    t.equals(GetXP('cid-cnd1'), 100, 'a later successful award must apply cleanly with no lingering effect from the earlier failed read')
+end)
+
+t.test('COULD-NOT-DETERMINE: a throwing re-read for an ALREADY-CACHED citizenid KEEPS the previous XP total, never resets to 0', function()
+    playerByCitizenId['cid-cnd2'] = { PlayerData = { citizenid = 'cid-cnd2', source = 802 } }
+    -- First PlayerLoaded succeeds normally (no row yet -> 0, matching the
+    -- "no row yet = 0 XP" doc comment), then a real award establishes a
+    -- known, non-zero total this test can prove survives the outage below.
+    for _, handler in ipairs(eventHandlers['QBCore:Server:PlayerLoaded'] or {}) do
+        handler(playerByCitizenId['cid-cnd2'])
+    end
+    AwardXP('cid-cnd2', 'exact100')
+    t.equals(GetXP('cid-cnd2'), 100, 'sanity: really has 100 XP cached before the simulated outage')
+
+    -- A SECOND PlayerLoaded for the SAME, still-connected citizenid (no
+    -- intervening disconnect) re-triggers LoadXPForCitizenid -- forced to
+    -- fail here to simulate a transient blip on that specific re-read
+    -- (filtered by SQL text -- see the sibling test above for why the
+    -- separate HandlerXP read must stay unaffected).
+    local realScalarAwait = MySQLStub.scalar.await
+    MySQLStub.scalar.await = function(sql, params)
+        if sql:find('SELECT xp ', 1, true) then error('connection lost') end
+        return realScalarAwait(sql, params)
+    end
+    for _, handler in ipairs(eventHandlers['QBCore:Server:PlayerLoaded'] or {}) do
+        handler(playerByCitizenId['cid-cnd2'])
+    end
+
+    t.equals(GetXP('cid-cnd2'), 100, 'the previously-cached total must survive a transient read failure, never reset to 0')
+
+    local sawCheckFailed, sawKept = false, false
+    for _, line in ipairs(capturedPrints) do
+        if line:find('cid-cnd2', 1, true) and line:find('XP CHECK FAILED', 1, true) then sawCheckFailed = true end
+        if line:find('cid-cnd2', 1, true) and line:find('KEEPING the previous cached total', 1, true) then sawKept = true end
+    end
+    t.isTrue(sawCheckFailed, 'the operator message must name the citizenid and say the CHECK failed')
+    t.isTrue(sawKept, 'the operator message must say the previous total was kept, not that it was reset')
+
+    MySQLStub.scalar.await = realScalarAwait
+end)
+
+t.test('COULD-NOT-DETERMINE: the retry is BOUNDED, not infinite -- exactly XP_LOAD_RETRY_ATTEMPTS (3) attempts, then gives up', function()
+    playerByCitizenId['cid-cnd3'] = { PlayerData = { citizenid = 'cid-cnd3', source = 803 } }
+    local scalarCallCount = 0
+    local realScalarAwait = MySQLStub.scalar.await
+    MySQLStub.scalar.await = function(sql, params)
+        if sql:find('SELECT xp ', 1, true) then
+            scalarCallCount = scalarCallCount + 1
+            error('connection lost')
+        end
+        return realScalarAwait(sql, params)
+    end
+
+    for _, handler in ipairs(eventHandlers['QBCore:Server:PlayerLoaded'] or {}) do
+        handler(playerByCitizenId['cid-cnd3'])
+    end
+
+    t.equals(scalarCallCount, 3, 'must attempt exactly the bounded number of times -- never once (no retry) and never unboundedly')
+    t.equals(GetXP('cid-cnd3'), 0)
+
+    MySQLStub.scalar.await = realScalarAwait
+end)
+
 t.test('EIGHTH XP-FARM FIX: the shared env\'s own mint-budget sweep thread (created at server/progression.lua\'s own load time, captured by this file\'s CreateThread stub above) can be stepped without erroring', function()
     -- Distinct from the fresh, independently-constructed fixtures the
     -- dedicated EIGHTH-XP-FARM-FIX section below uses -- this is the ONE

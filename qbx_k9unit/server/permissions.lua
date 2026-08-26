@@ -792,19 +792,118 @@ local function LogAuditInvocation(granterSrc, action, detail, outcome)
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, action, detail, outcome))
 end
 
+-- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) -- mirrors
+-- server/certifications.lua's RefreshCertificationCache fix of the
+-- identical class of bug (a transient query failure recorded as a
+-- confirmed answer instead of "we don't know"), applied here to
+-- PermissionCache. See RefreshPermissionCache's own doc comment below for
+-- the full contract.
+local PERM_REFRESH_RETRY_ATTEMPTS = 3
+local PERM_REFRESH_RETRY_BACKOFF_MS = 200
+
+-- PermissionCheckUnresolved[citizenid] = true once RefreshPermissionCache
+-- exhausts its own retry budget with no confirmed answer either way.
+-- Purely a bookkeeping flag for the operator-facing message and the resync
+-- sweep below -- never read by HasPermission/GetActiveBlockedFeatureNames/
+-- any other access-relevant function, and never merged into
+-- PermissionCache itself. Local: nothing outside this file needs it.
+local PermissionCheckUnresolved = {}
+
+--- Runs `fn()` up to `attempts` times, waiting `backoffMs * attemptNumber`
+--- between tries -- identical shape and reasoning to
+--- server/certifications.lua's own PcallWithBoundedRetry, duplicated here
+--- rather than shared, matching this resource's own established "each file
+--- keeps its own tiny copy of a genuinely small, self-contained helper"
+--- convention (see e.g. that file's own IsDuplicateKeyError, already
+--- independently re-implemented in THIS file above for the same reason).
+--- @param fn function
+--- @param attempts number
+--- @param backoffMs number
+--- @return boolean ok
+--- @return any resultOrErr
+---
+--- `coroutine.isyieldable()` GUARD -- see server/certifications.lua's own
+--- identical guard on its own PcallWithBoundedRetry for the full "why":
+--- every real call site here runs inside an FXServer-managed coroutine
+--- (event handler, command handler, this file's own resync sweep), where
+--- `Wait()` is always safe -- this guard exists so the function is ALSO
+--- safe to call directly from a plain, non-coroutine Lua call (this
+--- resource's own test suite calls RefreshPermissionCache this way
+--- throughout tests/permissions_spec.lua), where `Wait()` -> `coroutine.
+--- yield()` would otherwise error outright.
+local function PcallWithBoundedRetry(fn, attempts, backoffMs)
+    local ok, result
+    for attempt = 1, attempts do
+        ok, result = pcall(fn)
+        if ok then return ok, result end
+        if attempt < attempts and coroutine.isyieldable() then
+            Wait(backoffMs * attempt)
+        end
+    end
+    return ok, result
+end
+
 --- Re-queries every ACTIVE permission row for `citizenid` and replaces its
---- cache entry wholesale. Fails CLOSED on a thrown read (an unreadable
---- citizenid's permission set is treated as empty, never as "whatever it
---- was before" or "everything") -- same posture as
---- server/certifications.lua's RefreshCertificationCache.
+--- cache entry wholesale.
+---
+--- COULD-NOT-DETERMINE (lifecycle QA pass): a bounded-retry-wrapped read
+--- failure is NOT the same fact as a confirmed "holds nothing" answer, and
+--- this function no longer conflates the two the way it used to (a
+--- single-attempt `pcall` that wrote `PermissionCache[citizenid] = {}` on
+--- ANY failure -- a timeout, a dropped connection, a busy pool -- collapsing
+--- "confirmed zero grants" and "could not check" into the identical cache
+--- state). On total failure: if a previous cache entry already exists for
+--- this citizenid (a real risk here specifically, since unlike a fresh
+--- login this function is also called again mid-session by Grant/
+--- RevokePermission's own RefreshPermissionCacheIfOnline after an already-
+--- warmed citizenid's grant/revoke), it is KEPT, unchanged -- never wiped
+--- back to empty. If no previous entry exists (the common case: this
+--- citizenid's first warm this session, at PlayerLoaded or the
+--- onResourceStart backfill, both of which start from an empty
+--- PermissionCache table), the entry is left COMPLETELY UNSET rather than
+--- written as `{}` -- HasPermission's own `set ~= nil and set[key] ==
+--- true` read already treats an absent entry exactly like an empty one for
+--- every question it is ever asked (deny, matching this resource's own
+--- "nobody may end up with MORE access than a working database would give
+--- them" invariant -- unaffected by this change), but leaving it
+--- genuinely unset (rather than a manufactured empty table) means a later
+--- successful retry, a reconnect, or the bounded resync sweep below can
+--- still establish the real grant set without that distinction having
+--- already been erased.
 --- @param citizenid string
 local function RefreshPermissionCache(citizenid)
-    local ok, rowsOrErr = pcall(K9Store.Perm_GetActiveForCitizen, citizenid)
+    local ok, rowsOrErr = PcallWithBoundedRetry(
+        function() return K9Store.Perm_GetActiveForCitizen(citizenid) end,
+        PERM_REFRESH_RETRY_ATTEMPTS, PERM_REFRESH_RETRY_BACKOFF_MS
+    )
+
     if not ok then
-        print(('[qbx_k9unit] permissions.lua RefreshPermissionCache query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
-        PermissionCache[citizenid] = {}
+        local previous = PermissionCache[citizenid]
+        PermissionCheckUnresolved[citizenid] = true
+
+        if previous ~= nil then
+            print((
+                '[qbx_k9unit] permissions.lua PERMISSION CHECK FAILED for citizenid=%s after %d attempt(s): %s ' ..
+                '-- this is NOT a confirmed "holds nothing" answer. KEEPING the previous cached grant set ' ..
+                'rather than wiping it to empty. A bounded resync sweep will keep retrying this citizenid ' ..
+                'automatically; if this message repeats for the same citizenid, check the database connection.'
+            ):format(citizenid, PERM_REFRESH_RETRY_ATTEMPTS, tostring(rowsOrErr)))
+            return
+        end
+
+        print((
+            '[qbx_k9unit] permissions.lua PERMISSION CHECK FAILED for citizenid=%s after %d attempt(s): %s -- ' ..
+            'this is an UNKNOWN answer, NOT a confirmed "holds nothing" one. No previous cached grant set ' ..
+            'exists, so nothing is being written to the cache (left UNSET, never a manufactured empty table). ' ..
+            'HasPermission will deny every permission for this citizenid until this resolves, exactly as it ' ..
+            'would for a real "no grants" answer -- but the operator should know this citizenid may in fact ' ..
+            'HOLD active grants right now and the server simply could not confirm it yet. A bounded resync ' ..
+            'sweep will keep retrying automatically.'
+        ):format(citizenid, PERM_REFRESH_RETRY_ATTEMPTS, tostring(rowsOrErr)))
         return
     end
+
+    PermissionCheckUnresolved[citizenid] = nil
     local set = {}
     for _, row in ipairs(rowsOrErr or {}) do
         set[row.permission] = true
@@ -2064,6 +2163,12 @@ AddEventHandler('playerDropped', function(_reason)
     local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
     if citizenid then
         PermissionCache[citizenid] = nil
+        -- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass): same
+        -- bounded-memory-growth reasoning, applied to the bookkeeping flag
+        -- that backs the operator message and the resync sweep. A
+        -- disconnected citizenid has no live source for that sweep to act
+        -- on anyway; their next PlayerLoaded re-attempts the read fresh.
+        PermissionCheckUnresolved[citizenid] = nil
     end
 end)
 
@@ -2167,4 +2272,75 @@ RegisterNetEvent('qbx_k9unit:server:requestFeatureBlocksSync', function()
     local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
     if not citizenid then return end
     PushFeatureBlocksToSource(src, citizenid)
+end)
+
+-- ======================================================================
+-- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass) --
+-- mirrors server/certifications.lua's own resync sweep for
+-- CertificationCheckUnresolved, applied here to PermissionCheckUnresolved.
+-- See RefreshPermissionCache's own doc comment for the full contract this
+-- closes the loop on: a citizenid left unresolved by a transient query
+-- failure (most likely during the onResourceStart backfill loop's own
+-- tight burst, or an unlucky immediately-after-grant/revoke re-read) must
+-- recover WITHOUT needing to reconnect.
+--
+-- ALWAYS RUNS, UNCONDITIONALLY -- not gated behind
+-- Config.Features.PermissionGrants: PermissionCheckUnresolved can gain
+-- entries from RefreshPermissionCache regardless of that flag's current
+-- value (RefreshPermissionCache itself has no such gate -- HasPermission is
+-- what re-checks the flag, on every read), so a thread gated on it could
+-- start already missing entries created before the flag was last flipped.
+-- Matches this resource's own established "a thread governed by something
+-- that can change at runtime starts unconditionally and re-checks that
+-- thing fresh inside the loop" convention -- see
+-- server/certifications.lua's own resync sweep and
+-- server/runtimecontrol.lua's FEATURE_TIERS entry on server/combat.lua's
+-- maintenance threads for the precedent. Cheap on an idle server either
+-- way: the overwhelmingly common case is an EMPTY PermissionCheckUnresolved
+-- table.
+-- ======================================================================
+
+local PERM_RESYNC_SWEEP_INTERVAL_MS = 30000
+
+--- One resync pass: retries RefreshPermissionCache for every citizenid
+--- currently recorded in PermissionCheckUnresolved, but ONLY for a
+--- citizenid who is CURRENTLY ONLINE -- matching RefreshPermissionCacheIfOnline's
+--- own SCOPE (an offline citizenid gets no cache entry at all by design,
+--- and their next PlayerLoaded already attempts a fresh read from a clean
+--- state). A successful retry needs no separate bookkeeping here:
+--- RefreshPermissionCache itself clears PermissionCheckUnresolved[citizenid]
+--- the instant it confirms ANY answer -- this function only needs to keep
+--- calling it, and push a fresh feature-block sync when it does, so a
+--- citizenid stuck on a stale/absent block set sees the correction
+--- immediately rather than only on their next login or grant/revoke touch.
+local function ResyncUnresolvedPermissions()
+    for citizenid in pairs(PermissionCheckUnresolved) do
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local targetSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+        if type(targetSrc) == 'number' then
+            RefreshPermissionCache(citizenid)
+            if not PermissionCheckUnresolved[citizenid] then
+                -- Confirmed this pass -- push the corrected block set now
+                -- rather than waiting for this citizenid's next
+                -- login/grant/revoke touch.
+                PushFeatureBlocksToSource(targetSrc, citizenid)
+            end
+        end
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait(PERM_RESYNC_SWEEP_INTERVAL_MS)
+
+        -- Cheap early-exit, checked fresh every tick -- see this sweep's
+        -- own header above for why this table is expected to be empty
+        -- essentially always.
+        if next(PermissionCheckUnresolved) ~= nil then
+            local ok, err = pcall(ResyncUnresolvedPermissions)
+            if not ok then
+                print(('[qbx_k9unit] permissions.lua: permission resync sweep tick error: %s'):format(tostring(err)))
+            end
+        end
+    end
 end)

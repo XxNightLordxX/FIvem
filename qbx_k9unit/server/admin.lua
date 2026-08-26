@@ -484,9 +484,21 @@ local HARD_MAX_RESULTS = 100
 -- non-positive threshold (treats it as "on cooldown forever," never as "no
 -- cooldown") — a misconfigured 0/negative value here would not open a gap,
 -- it would silently brick this entire command surface for every caller
--- including legitimate admins. Worth failing loudly on at resource start
--- rather than discovering in the field.
+-- including legitimate admins. CLAMPED UP TO at resource start (see the
+-- onResourceStart handler below) rather than asserted on — a bare assert
+-- here used to abort THIS ENTIRE HANDLER the instant it fired, silently
+-- skipping every command/callback registration still to come below it, for
+-- one operator typo. Discovering a too-low value in the field is a far
+-- smaller failure than that.
 local MIN_COMMAND_COOLDOWN_MS = 250
+
+-- Fallback used ONLY when Config.AdminAudit.CommandCooldownMs is missing or
+-- not a number at all (NaN included) — matches config.lua's own shipped
+-- default for this field. A value that IS a number but merely below
+-- MIN_COMMAND_COOLDOWN_MS is clamped UP to the floor instead of replaced by
+-- this fallback (the operator's intent to have SOME distinct cooldown is
+-- preserved; only the unsafe part is corrected).
+local DEFAULT_COMMAND_COOLDOWN_MS = 3000
 
 -- How many formatted rows are batched into a single ox_lib toast — kept
 -- small so one command's results don't render as one unreadable wall of
@@ -1307,108 +1319,146 @@ AddEventHandler('onResourceStart', function(resourceName)
         type(Config.AdminAudit) == 'table',
         '[qbx_k9unit] Config.Features.AdminAuditCommands is true but Config.AdminAudit is missing.'
     )
-    assert(
-        type(Config.AdminAudit.CommandCooldownMs) == 'number' and Config.AdminAudit.CommandCooldownMs >= MIN_COMMAND_COOLDOWN_MS,
-        ('[qbx_k9unit] Config.AdminAudit.CommandCooldownMs must be a number >= %dms.'):format(MIN_COMMAND_COOLDOWN_MS)
-    )
+
+    -- CLAMP AND WARN, DELIBERATELY NEVER THROW (was a bare `assert` before
+    -- this pass). A bare assert inside this SAME onResourceStart handler
+    -- aborts the handler the instant it fires, silently skipping every
+    -- registration still to run below it -- all five commands AND all six
+    -- callbacks this handler registers, none of which have anything to do
+    -- with this cooldown -- for the rest of this resource's uptime. A
+    -- too-low/malformed value here fails safe on its own regardless
+    -- (server/cooldowns.lua's IsOnCooldown treats a non-positive/NaN
+    -- per-call threshold as "permanently on cooldown", printing its own
+    -- separate one-time warning the first time any audit command actually
+    -- runs) -- so the old assert bought nothing but a few seconds' head
+    -- start on that same discovery, at the cost of being able to take the
+    -- whole command surface down with it.
+    do
+        local rawCooldownMs = Config.AdminAudit.CommandCooldownMs
+        local isValidNumber = type(rawCooldownMs) == 'number' and rawCooldownMs == rawCooldownMs -- NaN ~= NaN
+        if not isValidNumber then
+            print(
+                ('[qbx_k9unit] WARNING: Config.AdminAudit.CommandCooldownMs (%s) is missing or not a number -- ' ..
+                 'using the built-in fallback of %dms instead of aborting every command/callback this file ' ..
+                 'registers. Fix Config.AdminAudit.CommandCooldownMs in config.lua to silence this ' ..
+                 'warning.'):format(tostring(rawCooldownMs), DEFAULT_COMMAND_COOLDOWN_MS)
+            )
+            Config.AdminAudit.CommandCooldownMs = DEFAULT_COMMAND_COOLDOWN_MS
+        elseif rawCooldownMs < MIN_COMMAND_COOLDOWN_MS then
+            print(
+                ('[qbx_k9unit] WARNING: Config.AdminAudit.CommandCooldownMs (%s) must be >= %dms -- clamping UP ' ..
+                 'to %dms instead of aborting every command/callback this file registers. Fix ' ..
+                 'Config.AdminAudit.CommandCooldownMs in config.lua to silence this warning.'
+                ):format(tostring(rawCooldownMs), MIN_COMMAND_COOLDOWN_MS, MIN_COMMAND_COOLDOWN_MS)
+            )
+            Config.AdminAudit.CommandCooldownMs = MIN_COMMAND_COOLDOWN_MS
+        end
+    end
     -- Config.AdminAudit.AcePermission is intentionally NOT asserted here any
     -- more -- this file no longer calls IsPlayerAceAllowed at all as of this
     -- pass (see header "ACCESS MODEL"). If a shipped config still declares
     -- it, that's harmless dead data, not a startup failure.
 
-    -- NEW this pass (ACE->job-rank rewrite): IsAuthorizedAdmin compares
+    -- (ACE->job-rank rewrite, an earlier pass): IsAuthorizedAdmin compares
     -- job.grade.level against Config.Departments[job.name].auditGrade for
-    -- every non-boss caller. Asserted here, not left to fail silently at
-    -- first use, for the SAME reason server/certifications.lua asserts
-    -- dept.certifierGrade at its own load time: a missing/malformed
-    -- auditGrade on any configured department would otherwise mean every
-    -- non-boss officer in that department silently, permanently fails
-    -- every audit command (IsAuthorizedAdmin's own type-check already fails
-    -- closed at runtime -- see that function's doc comment -- but a
-    -- fail-closed RUNTIME default is not a substitute for a loud STARTUP
-    -- error once this feature has actually been opted into). Only run once
-    -- Config.Features.AdminAuditCommands is true, matching this whole
-    -- block's own "operator has opted in, deserves an immediate failure"
+    -- every non-boss caller. Only run once Config.Features.AdminAuditCommands
+    -- is true, matching this whole block's own "operator has opted in"
     -- convention -- an unrelated server that never touches this feature at
-    -- all must not be forced to add auditGrade to every department it
-    -- didn't otherwise need to configure for this file.
+    -- all is never forced to add auditGrade to every department it didn't
+    -- otherwise need to configure for this file.
     assert(type(Config.Departments) == 'table', '[qbx_k9unit] Config.Features.AdminAuditCommands is true but Config.Departments is missing -- IsAuthorizedAdmin requires it to resolve the caller\'s own department threshold.')
+
+    -- CLAMP AND WARN, DELIBERATELY NEVER THROW (was a per-department bare
+    -- `assert` before this pass -- unlike server/highcommand.lua's identical
+    -- highCommandGrade guard, this one had NO nil-allowed branch at all, so
+    -- an operator who simply never set auditGrade on a department also hit
+    -- this abort, not only a genuine typo). IsAuthorizedAdmin's own
+    -- type-check (see that function's doc comment) already fails closed at
+    -- RUNTIME on a missing/malformed auditGrade -- denies every non-boss
+    -- officer in that department -- identically for nil and for any other
+    -- non-number value, so forcing a malformed value to nil here changes
+    -- nothing about that runtime behavior; it only makes the failure LOUD,
+    -- once, at start, instead of being silently discovered per-officer, and
+    -- stops it from being able to abort every OTHER command/callback in
+    -- this same handler.
     for jobName, dept in pairs(Config.Departments) do
-        assert(
-            type(dept) == 'table' and type(dept.auditGrade) == 'number',
-            ('[qbx_k9unit] Config.Departments[%s].auditGrade must be a number -- IsAuthorizedAdmin compares job.grade.level >= dept.auditGrade for every non-boss officer in that department. A missing/malformed value here means every audit command silently (but safely, per IsAuthorizedAdmin\'s own fail-closed type check) denies every non-boss caller in that department, with nothing logged at startup to explain why.'):format(tostring(jobName))
-        )
+        if type(dept) ~= 'table' then
+            print(
+                ('[qbx_k9unit] WARNING: Config.Departments[%s] is not a table (found: %s) -- IsAuthorizedAdmin ' ..
+                 'cannot resolve an auditGrade for this department and will fail closed (deny) for every ' ..
+                 'officer in it. Fix Config.Departments[%s] in config.lua to restore it.'
+                ):format(tostring(jobName), tostring(dept), tostring(jobName))
+            )
+        elseif type(dept.auditGrade) ~= 'number' then
+            print(
+                ('[qbx_k9unit] WARNING: Config.Departments[%s].auditGrade must be a number (found: %s) -- ' ..
+                 'IsAuthorizedAdmin compares job.grade.level >= dept.auditGrade for every non-boss officer in ' ..
+                 'that department. FORCING it to nil for this session (fails closed, denying every non-boss ' ..
+                 'officer in this department -- the exact same outcome IsAuthorizedAdmin\'s own runtime type ' ..
+                 'check already produces for a malformed value) instead of aborting every command/callback ' ..
+                 'this file registers. Every other field on this department (certifierGrade, ' ..
+                 'highCommandGrade, label, ...) is unaffected. Find Config.Departments[%s].auditGrade in ' ..
+                 'config.lua and set it to a number to restore audit access for this department.'
+                ):format(tostring(jobName), tostring(dept.auditGrade), tostring(jobName))
+            )
+            dept.auditGrade = nil
+        end
     end
 
     local maxResults = Config.AdminAudit.MaxResults
     assert(type(maxResults) == 'table', '[qbx_k9unit] Config.AdminAudit.MaxResults must be a table.')
-    -- PRE-EXISTING assert loop, UNCHANGED by this pass -- Certifications/
-    -- Partnerships/SearchLog have been required keys here since before this
-    -- pass touched this file, so an operator who already has
-    -- Config.Features.AdminAuditCommands = true is already required to
-    -- carry all three.
-    for _, key in ipairs({ 'Certifications', 'Partnerships', 'SearchLog' }) do
-        local value = maxResults[key]
-        -- Integer-ness is checked here too (not just range) even though
-        -- ClampLimit below independently floors this same value before it
-        -- can ever reach a query string — belt-and-suspenders: an operator
-        -- who sets e.g. `50.5` deserves a loud, immediate startup error
-        -- naming exactly which config key is wrong, not a value that
-        -- silently gets floored to `50` and behaves as if nothing were
-        -- misconfigured.
-        assert(
-            type(value) == 'number' and value == math.floor(value) and value >= 1 and value <= HARD_MAX_RESULTS,
-            ('[qbx_k9unit] Config.AdminAudit.MaxResults.%s must be an integer in [1, %d].'):format(key, HARD_MAX_RESULTS)
-        )
-    end
 
-    -- 'CatalogAudit' (GAP 2 closure, THIS pass) is DELIBERATELY NOT added to
-    -- the assert loop above. NON-NEGOTIABLE, restated here as the reason,
-    -- not merely a style choice: an operator who already has
-    -- Config.Features.AdminAuditCommands = true and their own
-    -- Config.AdminAudit.MaxResults table from BEFORE this pass has no
-    -- reason to already carry a brand-new 'CatalogAudit' key -- a hard
-    -- assert on it would be the exact "config-abort" bug class this
-    -- resource has been bitten by before: one missing key on an unrelated
-    -- operator's config would silently kill EVERY registration in this
-    -- entire onResourceStart handler -- all five pre-existing commands AND
-    -- all six pre-existing callbacks, not merely the one new callback that
-    -- actually needs this value -- for the rest of that server's uptime,
-    -- over a config field that server's operator never asked for and may
-    -- not even know exists yet. CLAMP AND WARN instead, mirroring
-    -- server/cooldowns.lua's own ResolveConfiguredThresholdMs pattern
-    -- exactly (read, validate, print one clear warning naming the key and
-    -- the fallback used, never abort): a missing/malformed value degrades
-    -- to a safe built-in default (25, matching config.lua's own shipped
-    -- default for this same key) so `qbx_k9unit:server:tabletAuditCatalog`
-    -- still works, immediately, with no operator action required, while
-    -- every OTHER command/callback in this file is completely unaffected
-    -- either way.
+    -- CLAMP AND WARN for every Config.AdminAudit.MaxResults key, mirroring
+    -- server/cooldowns.lua's own ResolveConfiguredThresholdMs pattern (read,
+    -- validate, print one clear warning naming the key and the fallback
+    -- used, never abort). Certifications/Partnerships/SearchLog used to be a
+    -- bare per-key `assert` loop here -- the exact "config-abort" bug class
+    -- this resource has been bitten by before: one malformed key on an
+    -- unrelated operator's config would silently kill EVERY registration in
+    -- this entire onResourceStart handler, all five commands AND all six
+    -- callbacks, not merely the one query that actually needs the bad
+    -- value. 'CatalogAudit' (added in a later pass) was deliberately given
+    -- this SAME safe treatment from the start specifically to dodge that
+    -- fate -- this pass extends it to the three older keys that were still
+    -- carrying the original assert, rather than inventing a second shape.
     --
     -- `x or default` does NOT fall back when x is 0 -- checked here via an
     -- explicit `type(...) == 'number'` + range test, never via `or`, the
-    -- exact footgun server/cooldowns.lua's own header names by name.
-    -- A non-positive value is also never read as "unlimited" -- it is
-    -- caught by the SAME `>= 1` floor as every other malformed case below,
-    -- not given special "0 means no cap" meaning.
-    do
-        local catalogAuditMaxResults = maxResults.CatalogAudit
-        local catalogAuditValid = type(catalogAuditMaxResults) == 'number'
-            and catalogAuditMaxResults == math.floor(catalogAuditMaxResults)
-            and catalogAuditMaxResults >= 1
-            and catalogAuditMaxResults <= HARD_MAX_RESULTS
-        if not catalogAuditValid then
+    -- exact footgun server/cooldowns.lua's own header names by name. A
+    -- non-positive value is also never read as "unlimited" -- it is caught
+    -- by the SAME `>= 1` floor as every other malformed case, not given
+    -- special "0 means no cap" meaning.
+    -- @param key string -- the exact Config.AdminAudit.MaxResults.<key> name, used only in the printed warning
+    -- @param fallback number -- a positive, hardcoded literal used only when the configured value is invalid
+    local function ResolveMaxResultsKey(key, fallback)
+        local value = maxResults[key]
+        local valid = type(value) == 'number'
+            and value == math.floor(value)
+            and value >= 1
+            and value <= HARD_MAX_RESULTS
+        if not valid then
             print(
-                ('[qbx_k9unit] admin.lua: Config.AdminAudit.MaxResults.CatalogAudit is missing or not an integer ' ..
-                 'in [1, %d] (found: %s). Using a built-in fallback of 25 for ' ..
-                 'qbx_k9unit:server:tabletAuditCatalog\'s own default result limit instead of aborting this ' ..
-                 'file\'s entire command/callback registration over one missing field. Add ' ..
-                 'Config.AdminAudit.MaxResults.CatalogAudit = 25 (or your own preferred value, 1-%d) to ' ..
-                 'config.lua to silence this warning.'):format(HARD_MAX_RESULTS, tostring(catalogAuditMaxResults), HARD_MAX_RESULTS)
+                ('[qbx_k9unit] admin.lua: Config.AdminAudit.MaxResults.%s is missing or not an integer in ' ..
+                 '[1, %d] (found: %s). Using a built-in fallback of %d instead of aborting this file\'s entire ' ..
+                 'command/callback registration over one field. Add Config.AdminAudit.MaxResults.%s = %d (or ' ..
+                 'your own preferred value, 1-%d) to config.lua to silence this warning.'
+                ):format(key, HARD_MAX_RESULTS, tostring(value), fallback, key, fallback, HARD_MAX_RESULTS)
             )
-            maxResults.CatalogAudit = 25
+            maxResults[key] = fallback
         end
     end
+
+    -- Certifications/Partnerships/SearchLog have been required keys here
+    -- since before this pass touched this file -- 25 matches config.lua's
+    -- own shipped default for all three.
+    ResolveMaxResultsKey('Certifications', 25)
+    ResolveMaxResultsKey('Partnerships', 25)
+    ResolveMaxResultsKey('SearchLog', 25)
+
+    -- 'CatalogAudit' (GAP 2 closure, an earlier pass) backs
+    -- `qbx_k9unit:server:tabletAuditCatalog`'s own default result limit --
+    -- 25 matches config.lua's own shipped default for this key too.
+    ResolveMaxResultsKey('CatalogAudit', 25)
 
     --- '/k9auditcert [citizenid] [limit]' — see this file's header
     --- "COMMAND SURFACE" item 1.
@@ -2020,6 +2070,12 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- call, the SAME shared AuditCooldown budget, the SAME HARD_MAX_RESULTS
     --- ceiling via ClampLimit. See this section's own header immediately
     --- above for the full CATALOG_AUDIT_SOURCES trust-boundary writeup.
+    --- CONSUMED (a later pass than this callback itself): client/tablet.lua's
+    --- own `tablet:auditCatalog` NUI callback bridges this one-to-one
+    --- (VERBATIM forward, same as its five siblings), and html/tablet.js's
+    --- Audit Trail tab grew a sixth "Catalog Changes" mode that calls it --
+    --- this callback shipped ahead of both by one pass, tested but with no
+    --- caller anywhere in the shipped client; it is not any more.
     --- @param source number
     --- @param catalogName string? -- MUST be an exact key of CATALOG_AUDIT_SOURCES above
     --- @param limit number?

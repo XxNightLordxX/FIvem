@@ -19,9 +19,15 @@
 #      line. Two separate "yes, I mean it"s, not one.
 #
 # You can still use uninstall_all.sql directly by hand (edit + run) exactly
-# as documented in README.md STEP 7 -- this script is an alternative, not
-# a requirement. Either path is equally safe; this one just also backs up
-# your whole database for you automatically, and asks you to confirm twice.
+# as documented in sql/DATABASE_GUIDE.md's "Part 2 -- Turning it off / taking
+# it back out" (Level 3) -- this script is an alternative, not a requirement.
+# CORRECTED: this used to point at "README.md STEP 7", a numbered-step
+# section that no longer exists in either doc (verified by grepping both --
+# README.md's own uninstall coverage is the unnumbered "Uninstalling /
+# rolling back" section instead, which links to sql/DATABASE_GUIDE.md for the
+# full walkthrough this comment means). Either path is equally safe; this one
+# just also backs up your whole database for you automatically, and asks you
+# to confirm twice.
 #
 # USAGE:
 #     ./uninstall.sh -d your_database_name -u your_mysql_user \
@@ -146,8 +152,9 @@ echo ""
 echo "--- Step 2 of 2: running uninstall_all.sql, armed ----------------------"
 echo ""
 
-# Arm it the SAME WAY the manual instructions in README.md STEP 7 do:
-# uncomment the specific commented-out SET line inside uninstall_all.sql
+# Arm it the SAME WAY the manual instructions in sql/DATABASE_GUIDE.md's
+# "Part 2" (Level 3) do: uncomment the specific commented-out SET line inside
+# uninstall_all.sql
 # itself. This is NOT optional cosmetics -- uninstall_all.sql's own very
 # first statement resets @K9_UNINSTALL_CONFIRM to NULL every single time it
 # runs (that is its safety catch, see that file's own STEP 1 comment), so
@@ -176,7 +183,8 @@ if ! grep -qF -- "$ARM_LINE" "$SCRIPT_DIR/uninstall_all.sql"; then
     echo "       Refusing to guess. Your backup is safe at:" >&2
     echo "         $BACKUP_FILE" >&2
     echo "       Arm and run sql/rollback/uninstall_all.sql BY HAND instead" >&2
-    echo "       (see README.md STEP 7), or report this mismatch." >&2
+    echo "       (see sql/DATABASE_GUIDE.md's \"Part 2\", Level 3), or report" >&2
+    echo "       this mismatch." >&2
     exit 9
 fi
 

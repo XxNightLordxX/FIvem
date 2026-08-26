@@ -3462,12 +3462,38 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
 --- one -- see that file's own header for why). Checked here anyway, for
 --- the SAME reason this comment already checks every other grant table's
 --- USE-time path: this table's own two callers each read/write through
---- THIS table's own current backend (never a different one), so a missing
---- k9_partnership_pair_progress produces the same ordinary, honest
---- consequence the paragraph above already accepts for k9_progression/
---- k9_partnerships/k9_permissions -- a pair's earned-milestone history
---- looks fresh for the session, never a wrong AUTHORIZATION state a
---- working database would not also produce. No cascade entry needed here.
+--- THIS table's own current backend (never a different one) -- BUT this is
+--- NOT the same shape of "ordinary, honest data loss" the paragraph above
+--- accepts for k9_progression/k9_partnerships/k9_permissions, and saying so
+--- would understate it: this table's WHOLE JOB is anti-farm, and
+--- server/tenure.lua's CheckTenureMilestonesForK9 pays out REAL, permanent
+--- XP (AwardXP/AwardHandlerXP) the FIRST time a milestone tier is crossed.
+--- If this table is missing (memory mode, resets on every restart) and a
+--- pair breaks up and reforms AFTER a restart, the seed read at reform time
+--- comes back empty, so the reformed partnership's own
+--- `tenure_bonus_tier_granted` floor starts at 0 again -- letting
+--- CheckTenureMilestonesForK9 pay out the SAME milestones' XP a SECOND
+--- time. That genuinely is "easier to get than a working database allows,"
+--- the exact thing config.lua's own invariant forbids -- restated here so
+--- a future reader does not repeat the milder "just data loss" framing.
+--- NOT fixed by a MISSING_TABLE_CASCADES entry, because there is no OTHER
+--- table whose own memory-mode fallback would close this -- the exploit is
+--- intrinsic to THIS table's own absence (forcing k9_partnerships to
+--- memory mode too would not help; a pair can farm this within a single
+--- continuous session regardless of k9_partnerships' backend, the ONLY
+--- real precondition is a RESTART happening while k9_partnership_pair_progress
+--- itself is the missing one). Disclosed instead, loudly and specifically,
+--- via this table's own MISSING_TABLE_FEATURE_DESCRIPTIONS entry above --
+--- an operator reading the per-table fallback message for this ONE table
+--- sees the real consequence, not a softened one. Rare in practice (needs
+--- BOTH this specific table missing AND a genuine mid-session resource
+--- restart landing between one break and the next reform of the SAME
+--- pair), operator-fixable in minutes (run the missing migration), and
+--- consistent with this whole pass's own "proportionate, not maximal"
+--- philosophy: shutting down partnerships/milestones entirely while only
+--- this one audit-shaped table is missing would reintroduce the exact
+--- disproportionate-blast-radius problem this pass exists to fix, to
+--- prevent a narrow, disclosed, restart-gated edge case.
 local MISSING_TABLE_CASCADES = {
     k9_certifications = { 'k9_certification_specializations' },
 }

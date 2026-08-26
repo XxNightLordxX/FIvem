@@ -1288,4 +1288,73 @@ t.test('LIVE STOP: an already-received dot is left alone to fade on its own time
     t.equals(#f.drawMarkerCalls, 1, 'the already-shown dot must still fade on its own timer, exactly like a manual toggle-off')
 end)
 
+-- ----------------------------------------------------------------------
+-- CONFIG-ABORT REGRESSION (this pass): Config.WaterTrackingDecay.
+-- sampleIntervalMeters used to reach a bare `math.max(configured, 0.1)`
+-- inside FindWaterCrossingDistance, which runs UNCONDITIONALLY every
+-- compute tick whenever Config.Features.WaterTrackingDecay is on (see that
+-- call site in client/tracking.lua). math.max throws on a non-number, and
+-- this runs inside a `CreateThread` body with no pcall around it -- per Lua
+-- coroutine semantics, an errored coroutine is PERMANENTLY dead afterward:
+-- every LATER resume is silently skipped, never throwing again either --
+-- exactly the "silently gone for the rest of the session" failure mode a
+-- test that only checks "the first tick did not throw" would never catch.
+-- This fixture's own Sandbox.newThreadRunner faithfully reproduces that
+-- exact coroutine-death semantics, so this test proves BOTH halves: no
+-- throw, AND the compute thread is still genuinely alive and productive on
+-- a LATER tick, not merely skipped-because-dead.
+-- ----------------------------------------------------------------------
+
+t.test('WATER TRACKING FOOTGUN: a non-numeric Config.WaterTrackingDecay.sampleIntervalMeters warns and falls back once, instead of permanently killing the compute thread for the rest of the session', function()
+    local f = newTrackingFixture({
+        waterTrackingDecay = true,
+        waterHeightFn = function() return false end, -- no water anywhere -- isolates this test to the sampleIntervalMeters guard itself, not a real water break
+    })
+    f.env.Config.WaterTrackingDecay.breaksTrail = true
+    -- MALFORMED: a non-numeric string (the exact plausible owner typo this
+    -- guards against -- a quoted "2" from a hand-edited config would NOT
+    -- reproduce this, since Lua auto-coerces numeral strings in arithmetic
+    -- contexts; a genuinely non-numeric string does not).
+    f.env.Config.WaterTrackingDecay.sampleIntervalMeters = 'oops'
+
+    f.setPedCoords(vec3(0, 0, 0))
+    f.queueCallbackResponse({ found = true, coords = vec3(10, 0, 0), breaksAtWater = false })
+    f.env.StartScentTrack()
+
+    local ok1, err1 = pcall(f.stepOne, 1) -- compute thread's FIRST tick
+    t.isTrue(ok1, 'the compute thread must not throw on a malformed sampleIntervalMeters: ' .. tostring(err1))
+
+    local warnCount = 0
+    for _, line in ipairs(f.printLog) do
+        if line:find('sampleIntervalMeters', 1, true) then warnCount = warnCount + 1 end
+    end
+    t.isTrue(warnCount >= 1, 'a malformed sampleIntervalMeters must print a warning naming it')
+
+    f.stepOne(2) -- render thread's first pass, off the FIRST compute tick's cached trail
+    local markerSpacing = f.env.Config.Tracking.Scent.markerSpacing
+    local expectedMarkerCount1 = math.floor(10 / markerSpacing) + 1 -- distance from (0,0,0) to (10,0,0)
+    t.equals(#f.drawMarkerCalls, expectedMarkerCount1, 'the first compute tick must have produced a real, full trail off the fallback interval, not an empty/dead one')
+    local countAfterFirstRender = #f.drawMarkerCalls
+
+    -- THE PART A BARE "DID NOT THROW ONCE" TEST WOULD MISS: move the ped
+    -- BEFORE the second compute tick, so a genuinely ALIVE compute thread
+    -- recomputes a DIFFERENT (longer) trail -- an already-dead coroutine
+    -- would instead be silently skipped by the thread runner, leaving the
+    -- render thread to keep redrawing the FIRST (shorter) cached trail
+    -- forever, never erroring again either.
+    f.setPedCoords(vec3(-10, 0, 0)) -- distance to the same (10,0,0) source is now 20, not 10
+    local ok2, err2 = pcall(f.stepOne, 1) -- compute thread's SECOND tick
+    t.isTrue(ok2, 'the compute thread must not throw on its second tick either: ' .. tostring(err2))
+    f.stepOne(2) -- render thread again, off whatever the second tick produced
+
+    local expectedMarkerCount2 = math.floor(20 / markerSpacing) + 1
+    local newDrawCallsThisRender = #f.drawMarkerCalls - countAfterFirstRender
+    t.equals(newDrawCallsThisRender, expectedMarkerCount2,
+        'the compute thread must still be ALIVE and genuinely recompute a fresh, longer trail on a LATER tick -- if it had been silently killed by the earlier error, this render would instead just replay the first (shorter) cached trail again')
+
+    -- Warned ONCE for the whole session, not once per compute tick (this
+    -- guard runs on every tick, including the second one above).
+    t.equals(warnCount, 1, 'must warn ONCE, not once per compute tick')
+end)
+
 os.exit(t.summary())

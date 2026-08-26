@@ -638,7 +638,45 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
         return
     end
 
-    if not DeployCooldown.Consume(src) then
+    -- HANDLER XP TIER UNLOCK (dead-config-field pass, coder-backend):
+    -- Config.HandlerXPTiers' kennelDeployCooldownMultiplier, consulted via
+    -- GetHandlerXPTierKennelDeployCooldownMs (server/progression.lua) --
+    -- same soft-dependency shape as every other cross-file consultation in
+    -- this resource. `citizenid` is already resolved above -- DeployCooldown
+    -- is keyed by `src`, the SAME deploying handler this tier lookup is
+    -- for, so (unlike server/medkit.lua's target-vs-actor split) no second
+    -- identity needs resolving here. Re-reads Config.DeployableKennel.
+    -- deployCooldownMs fresh via ResolveConfiguredThresholdMs on every call
+    -- (never the stale value DeployCooldown's own constructor captured once
+    -- at file-load) so an operator's live edit reaches this gate the same
+    -- tick, matching ResolveMedkitBaseCooldownMs's identical precedent in
+    -- server/medkit.lua.
+    --
+    -- THIS MATTERS FOR ANY FUTURE handlerKennelDeploy AWARD WIRING, NOT
+    -- JUST FOR THIS COOLDOWN: this cooldown is now RANK-REDUCED, down to a
+    -- worst-case floor of 3000ms (5000ms base * 0.60 Master-Handler, the
+    -- shipped multiplier) -- see GetHandlerXPTierKennelDeployCooldownMs's
+    -- own doc comment (server/progression.lua, "THE NUMBERS" section) for
+    -- the full arithmetic (config.lua's own header already measured the
+    -- UNREDUCED 5000ms floor as 5,760 XP/hr gross and judged that unsafe
+    -- to award through unthrottled; this pass's reduction makes that
+    -- 9,600 XP/hr gross, 67% worse). If handlerKennelDeploy is ever wired
+    -- to fire from a successful deploy below, its own per-actor mint
+    -- cooldown MUST be sized against the rank-reduced 3000ms floor, not
+    -- the unreduced 5000ms config default, and MUST be its own separate
+    -- tracker -- never derived from DeployCooldown itself (now
+    -- handler-rank-shortened). tests/kennel_spec.lua carries a SOURCE
+    -- AUDIT test that fails if handlerKennelDeploy is ever awarded from
+    -- this file without a companion *_XP_MINT_COOLDOWN tracker also
+    -- present here.
+    local baseDeployCooldownMs = ResolveConfiguredThresholdMs(
+        Config.DeployableKennel.deployCooldownMs, 5000, 'Config.DeployableKennel.deployCooldownMs')
+    local effectiveDeployCooldownMs = baseDeployCooldownMs
+    if type(GetHandlerXPTierKennelDeployCooldownMs) == 'function' then
+        effectiveDeployCooldownMs = GetHandlerXPTierKennelDeployCooldownMs(citizenid, baseDeployCooldownMs)
+    end
+
+    if not DeployCooldown.Consume(src, effectiveDeployCooldownMs) then
         return -- silent no-op: rate-limited, matches bark/leash-request/certify-action convention
     end
 

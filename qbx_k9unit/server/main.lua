@@ -352,6 +352,31 @@ end)
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (boot-order-race
+    -- audit, this pass -- same fix already shipped for
+    -- server/certtiers.lua/server/permissionkeycatalog.lua/server/xptiers.lua/
+    -- server/k9profiles.lua, simply missed here when it landed for those
+    -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
+    -- for the exact race this closes). RefreshCertificationCache below
+    -- (server/certifications.lua) reaches K9Store.Cert_GetActiveId/
+    -- Cert_GetActiveMeta -- narrower SELECTs than the columns
+    -- k9_certifications is checked against -- so without this,
+    -- HasK9Access's own root authorization cache could be warmed straight
+    -- from a foreign table the full probe would correctly reject as a
+    -- collision, during the one window before that probe's own yielding
+    -- query has returned. On a `false` return (the probe genuinely had not
+    -- settled within the wait budget), this skips every citizenid below
+    -- rather than trust an unconfirmed database state -- their
+    -- certification cache entry simply stays unset for this backfill pass,
+    -- identical to what RefreshCertificationCache's own existing
+    -- fail-closed posture already does on any other read failure -- the
+    -- next PlayerLoaded, or a restart once the check has had time to
+    -- finish, re-syncs it as normal.
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] main: the schema-collision check had not finished within its wait budget -- skipping this restart\'s certification-cache backfill for every already-connected officer (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next PlayerLoaded (or a restart once the check has had time to finish) re-syncs it as normal.')
+        return
+    end
+
     for _, playerId in ipairs(GetPlayers()) do
         local src = tonumber(playerId)
         if src then
@@ -378,8 +403,28 @@ AddEventHandler('onResourceStart', function(resourceName)
                 -- RefreshCertificationCache's own return value (the `active`
                 -- boolean it already computed) instead of reaching into a
                 -- table this file was never able to see.
-                local isActive = RefreshCertificationCache(citizenid, Player.PlayerData.job.name)
-                Player.Functions.SetMetaData('k9certified', isActive)
+                --
+                -- COULD-NOT-DETERMINE GUARD (lifecycle QA pass): a resource
+                -- restart with several officers online fires one of these
+                -- queries per already-connected player in a tight burst --
+                -- exactly the highest-risk moment for a transient DB
+                -- failure. RefreshCertificationCache's own 2nd return value,
+                -- `stateKnown`, is false when it could not confirm an
+                -- answer for this citizenid at all (no previous cached
+                -- value to fall back on either, since this backfill loop
+                -- runs against a freshly-started resource's own empty
+                -- cache) -- in that case `isActive` is a placeholder, not a
+                -- real answer, and must NOT be written into the
+                -- player-facing k9certified mirror as if it were one. Skip
+                -- the SetMetaData call entirely rather than stomping it
+                -- with a guessed `false`; the periodic resync sweep in
+                -- server/certifications.lua will correct the real access
+                -- cache (and, on its next successful pass, this mirror too)
+                -- without requiring this officer to reconnect.
+                local isActive, stateKnown = RefreshCertificationCache(citizenid, Player.PlayerData.job.name)
+                if stateKnown then
+                    Player.Functions.SetMetaData('k9certified', isActive)
+                end
             end
         end
     end

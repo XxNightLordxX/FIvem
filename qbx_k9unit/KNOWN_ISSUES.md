@@ -70,20 +70,68 @@ Two honest options: **say so plainly** wherever this gets documented
 call sites to go through the existing adapters** — a large job, not a
 quick fix.
 
+### Three blanks in LICENSE.md that only you can fill in
+
+`LICENSE.md` §12 and §14 ship with three placeholders, deliberately left
+blank rather than guessed at: **governing law** (which country/state's
+law a dispute over this licence would be judged under), **venue** (which
+court a dispute would actually be brought in), and a **contact address**
+for licence questions and legal notices (including DMCA counter-notices).
+None of these are code changes — they're one-sitting decisions that need
+your own answer, then a lawyer's confirmation that the wording holds up:
+
+- **Governing law** — without it, a court would fall back to its own
+  jurisdiction's conflict-of-laws rules to work out which law applies,
+  which is exactly the uncertainty naming one removes. Usually: wherever
+  you (the Licensor) are based, or wherever you'd want to have to fight a
+  dispute.
+- **Venue** — a separate question from governing law: even once you know
+  *which* law applies, you still need to say *where* (which city's/
+  country's courts) a case would actually be heard. Matters practically
+  because it decides how far you — or someone infringing your licence —
+  has to travel to show up.
+- **Contact address** — where someone sends a licensing question, an
+  additional-server request, or a takedown counter-notice. Needs to be an
+  address you'll actually check, since §12 makes it the official channel
+  for legal notices.
+
+See LICENSE.md's own notice at the top and §14 for the exact placeholder
+text and more detail. Not legal advice, and not resolved by more code —
+these three lines are the entire remaining gap between this document and
+one a lawyer could sign off on.
+
+### An unconfirmed dependency-licence question, now with real facts attached
+
+This resource depends on five other FiveM resources it does not ship code
+from (`qbx_core`, `ox_lib`, `ox_target`, `oxmysql`, `ox_inventory`).
+LICENSE.md §9 now records, checked directly against each project's own
+repository (2026-08-26): `ox_lib` and `oxmysql` ship under the GNU Lesser
+General Public License v3 (LGPLv3); `ox_inventory` ships under the
+stronger, non-"Lesser" GNU General Public License v3 (GPLv3); `ox_target`
+ships under the MIT License; and `qbx_core`'s own `LICENSE` file is the
+full GPLv3 text, but headed with a copyright line crediting it to
+"es_extended — ESX framework for FiveM" (an ancestor project this
+framework forked from), not to Qbox-project itself — genuinely unclear
+whether that's an intentional licensing statement for qbx_core's current
+code or an inherited artifact nobody updated.
+
+**The facts are now established; the legal question is not, and isn't
+answered here on purpose:** does any of these copyleft terms — LGPLv3's
+weaker one, or GPLv3's stronger one — reach across FiveM's
+`fxmanifest.lua`-dependency/export boundary into this Software's own
+proprietary code? That's a real question for a lawyer familiar with both
+software licensing and how FiveM resources actually interoperate at
+runtime (shared-process Lua scripts calling each other's exports, not
+statically linked or compiled together) — not one this project is
+positioned to guess at. See LICENSE.md §9 for the full table of sources
+and citations.
+
 ---
 
 ## 2. Open bugs and limitations
 
 Things that are either genuinely broken in a narrow way, or work as
 designed but have an edge worth knowing about before you rely on them.
-
-- **The partnership tenure-bonus anti-farm fix is in-memory only.** Two K9s
-  partnering, breaking up, and re-partnering repeatedly used to farm XP.
-  That's fixed — but the fix lives in a table that resets every time the
-  resource restarts. A restart re-opens the exploit once, for any pair
-  that happens to break up and reform around that restart. Not a config
-  option; a resource-restart timing quirk. A fully restart-proof version
-  needs one more small database table, which hasn't been built.
 
 - **The tablet's "Commands" reference page can silently go out of date.**
   A test compares every real, registered command against what the page
@@ -159,6 +207,15 @@ designed but have an edge worth knowing about before you rely on them.
   stale relative to a broken partnership) was judged the worse tradeoff.
   Not something to "optimize" without re-reading why first.
 
+- **`html/images/logo.png` is a placeholder, not a real logo.** It's a
+  plain crimson circle on a near-black background — matched to the
+  shipped theme colours so nothing looks broken, but not an actual
+  Crimson Roleplay logo/crest. Replacing it is the one step needed (save
+  your own square, e.g. 512x512 or 1024x1024, image over that exact file);
+  `config.lua`'s own `Config.CommandTablet.branding` block, right next to
+  where you'd set your server name, documents the full "what image to
+  use" / "what not to use" contract already — nothing else in this
+  section needs to change to pick it up.
 - **`Config.Features.BoneSweepDevTool` looks more alarming than it is.**
   Its own comment says never to enable it on a production server, and it's
   `true` in the shipped config — but that flag alone does nothing. The
@@ -200,6 +257,17 @@ because each one taught a rule worth not re-learning.
 - **Two K9s could partner with each other**, with one silently and
   incorrectly treated as the "handler" side. Partnering now requires an
   actual K9 and an actual handler on the two ends.
+- **The partnership tenure-bonus anti-farm guard used to be in-memory
+  only.** Two K9s partnering, breaking up, and re-partnering repeatedly
+  used to farm XP; that was fixed, but the fix lived in a table that reset
+  on every resource restart, re-opening the exploit once per pair around
+  each restart. Now backed by a real database table
+  (`k9_partnership_pair_progress`, migration 0018) keyed by the exact
+  (K9, handler) pair rather than by any one partnership row, so it
+  survives both a break/reform cycle and a genuine resource restart
+  whenever the database is on — installs running with the database off
+  keep the previous, disclosed, running-uptime-only protection, since
+  there's no real database standing behind them to persist to.
 - **A config comment said a contraband screen effect applied to the
   searched person's screen.** It always applied to the searching officer's
   own screen, as feedback — the code was right, the comment wasn't.

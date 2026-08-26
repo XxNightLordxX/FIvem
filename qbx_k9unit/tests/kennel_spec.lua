@@ -290,7 +290,21 @@ local function newKennelFixture(opts)
         FeatureControl = { RequireGrant = {} },
     }
 
-    local env = Sandbox.newEnv({
+    -- HANDLER XP TIER UNLOCK (dead-config-field pass) -- server/progression.lua's
+    -- real GetHandlerXPTierKennelDeployCooldownMs is NOT loaded into this
+    -- sandbox (that function's own numeric contract belongs to
+    -- tests/progression_spec.lua or a dedicated handler-tier spec, not this
+    -- file) -- this is a small, test-controlled stand-in, mirroring
+    -- tests/medkit_spec.lua's own `withXPTierMedkitCooldown` fixture
+    -- precedent exactly, so requestDeployKennel's own soft-dependency
+    -- consultation of it (`type(...) == 'function'` guard) can be proven
+    -- from THIS file's own dispatchNetEvent path. `opts.kennelCooldownMsByCitizenid`
+    -- maps a citizenid to the exact effective cooldown this stub returns;
+    -- any other citizenid falls through to the real baseDeployCooldownMs
+    -- argument unchanged, matching the real accessor's own "unlock not yet
+    -- earned" default.
+    local handlerXPTierKennelCalls = {}
+    local envOverrides = {
         GetGameTimer = GetGameTimer,
         AddEventHandler = AddEventHandler,
         RegisterNetEvent = RegisterNetEvent,
@@ -313,7 +327,16 @@ local function newKennelFixture(opts)
         DeleteEntity = DeleteEntity,
         print = printStub,
         Config = config,
-    })
+    }
+    if opts.withHandlerXPTierKennelDeployCooldown then
+        envOverrides.GetHandlerXPTierKennelDeployCooldownMs = function(citizenid, baseCooldownMs)
+            handlerXPTierKennelCalls[#handlerXPTierKennelCalls + 1] = { citizenid = citizenid, baseCooldownMs = baseCooldownMs }
+            local override = opts.kennelCooldownMsByCitizenid and opts.kennelCooldownMsByCitizenid[citizenid]
+            return override or baseCooldownMs
+        end
+    end
+
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
@@ -326,6 +349,7 @@ local function newKennelFixture(opts)
         notifyCalls = notifyCalls,
         deletedEntities = deletedEntities,
         printedLines = printedLines,
+        handlerXPTierKennelCalls = handlerXPTierKennelCalls,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
@@ -530,6 +554,113 @@ t.test('REGRESSION: with a valid Config.DeployableKennel.deployCooldownMs, Deplo
     f.advance(2) -- now past the configured 777ms threshold
     f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
     t.isTrue(#f.clientEvents > firstCount, 'cooldown elapsed at the CONFIGURED threshold, proving the real value (not a fallback) is in effect')
+end)
+
+-- ========================================================================
+-- HANDLER XP TIER UNLOCK -- GetHandlerXPTierKennelDeployCooldownMs
+-- (server/progression.lua), the documented soft dependency that resolves
+-- Config.HandlerXPTiers' kennelDeployCooldownMultiplier reward into the
+-- actual threshold DeployCooldown.Consume is checked against. Keyed on the
+-- DEPLOYING handler's own citizenid (unlike server/medkit.lua's
+-- target-vs-actor split, DeployCooldown is already actor-keyed, so no
+-- second identity is involved). Mirrors tests/medkit_spec.lua's own
+-- identically-shaped "XP TIER UNLOCK" section -- this section only proves
+-- server/kennel.lua actually CONSULTS the accessor and USES its result;
+-- the accessor's own numeric contract (multiplier bounds, the 1ms floor)
+-- belongs to whatever spec covers server/progression.lua directly.
+-- ========================================================================
+
+t.test('HANDLER XP TIER UNLOCK: a Master-Handler-tier deployer (accessor returns a shortened cooldown) can deploy again sooner than the base Config.DeployableKennel.deployCooldownMs would allow', function()
+    local f = newKennelFixture({
+        withHandlerXPTierKennelDeployCooldown = true,
+        kennelCooldownMsByCitizenid = { ['HANDLER-MASTER'] = 3000 }, -- e.g. baseCooldownMs(5000) * 0.60 tier multiplier, pre-resolved by the (stubbed) accessor
+    })
+    f.setAccess(1, true)
+    f.setPlayer(1, 'HANDLER-MASTER')
+    f.setPed(1, 100, { x = 0, y = 0, z = 0 }, 0.0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local firstCount = #f.clientEvents
+    t.isTrue(firstCount > 0, 'first request must succeed')
+    f.dispatchNetEvent('qbx_k9unit:server:cancelKennelPlacement', 1) -- clear the pending placement so a retry is possible
+
+    -- Past the REDUCED threshold, but still well short of the base 5000ms
+    -- cooldown -- only passes if server/kennel.lua actually used the
+    -- accessor's shortened value, not the raw Config.DeployableKennel.deployCooldownMs.
+    f.advance(3001)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.isTrue(#f.clientEvents > firstCount, 'a Master-Handler-tier deployer must be able to deploy again after their OWN shortened cooldown elapses, not the base one')
+    t.equals(#f.handlerXPTierKennelCalls, 2, 'the accessor is consulted on every deploy attempt by this citizenid')
+    t.equals(f.handlerXPTierKennelCalls[1].citizenid, 'HANDLER-MASTER')
+    t.equals(f.handlerXPTierKennelCalls[1].baseCooldownMs, f.config.DeployableKennel.deployCooldownMs, 'the accessor must be given the real configured base, never a hardcoded number')
+end)
+
+t.test('HANDLER XP TIER UNLOCK: a base-tier deployer (accessor returns baseCooldownMs unchanged) still gets the full configured cooldown, not the Master-Handler reduction', function()
+    local f = newKennelFixture({ withHandlerXPTierKennelDeployCooldown = true }) -- no override for this citizenid -- the stub falls through to baseCooldownMs
+    f.setAccess(1, true)
+    f.setPlayer(1, 'HANDLER-ROOKIE')
+    f.setPed(1, 100, { x = 0, y = 0, z = 0 }, 0.0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local firstCount = #f.clientEvents
+    f.dispatchNetEvent('qbx_k9unit:server:cancelKennelPlacement', 1)
+
+    f.advance(3001) -- past the Master-Handler-tier threshold, but NOT the full base cooldown
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(#f.clientEvents, firstCount, 'a base-tier deployer must still honor the full configured cooldown')
+end)
+
+t.test('HANDLER XP TIER UNLOCK: GetHandlerXPTierKennelDeployCooldownMs entirely absent (server/progression.lua not loaded, or HandlerXPProgression off) falls back cleanly to the plain configured cooldown', function()
+    local f = newKennelFixture() -- withHandlerXPTierKennelDeployCooldown deliberately omitted -- the global is simply undefined
+    f.setAccess(1, true)
+    f.setPlayer(1, 'HANDLER-NO-ACCESSOR')
+    f.setPed(1, 100, { x = 0, y = 0, z = 0 }, 0.0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local firstCount = #f.clientEvents
+    t.isTrue(firstCount > 0)
+    f.dispatchNetEvent('qbx_k9unit:server:cancelKennelPlacement', 1)
+
+    f.advance(f.config.DeployableKennel.deployCooldownMs)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.isTrue(#f.clientEvents > firstCount, 'a missing accessor must never error, and must behave exactly like the plain configured cooldown')
+end)
+
+-- ========================================================================
+-- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass):
+-- this cooldown is now handler-rank-reduced (worst case 3000ms, down from
+-- the 5000ms default -- see GetHandlerXPTierKennelDeployCooldownMs's own
+-- doc comment, server/progression.lua). handlerKennelDeploy (8 XP,
+-- Config.HandlerXP.awards) is DELIBERATELY still unwired -- AwardHandlerXP
+-- is called from nowhere in this file. If that ever changes, whoever wires
+-- it MUST add a dedicated per-actor MINT cooldown (mirroring
+-- server/certifications.lua's CertifyXpMintCooldown fix for
+-- handlerCertifyK9), sized against the RANK-REDUCED 3000ms floor, never
+-- derived from DeployCooldown itself. This is a RED TEST, not a comment:
+-- it fails the moment handlerKennelDeploy is actually awarded from this
+-- file without a same-file *_XP_MINT_COOLDOWN tracker alongside it. Mirrors
+-- tests/recall_spec.lua's own "SOURCE AUDIT" precedent.
+-- ========================================================================
+
+t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDeploy without a dedicated per-actor *_XP_MINT_COOLDOWN tracker also present in this file', function()
+    local handle = assert(io.open('../server/kennel.lua', 'r'))
+    local text = handle:read('a')
+    handle:close()
+
+    local awardsHandlerKennelDeploy = text:find("AwardHandlerXP%s*%(.-'handlerKennelDeploy'") ~= nil
+    if not awardsHandlerKennelDeploy then
+        t.isTrue(true, 'handlerKennelDeploy is still unwired, per config.lua\'s own Config.Features.HandlerXPProgression header -- nothing more to check')
+        return
+    end
+
+    t.isTrue(text:find('XP_MINT_COOLDOWN', 1, true) ~= nil,
+        'handlerKennelDeploy is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
+        'DEDICATED per-actor mint cooldown (a second, separate tracker, never DeployCooldown itself, now ' ..
+        'handler-rank-shortened to a 3000ms worst-case floor) named with the XP_MINT_COOLDOWN convention ' ..
+        '(server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown precedent) so this test ' ..
+        'can find it, sized against that rank-reduced floor rather than the unreduced 5000ms config default, then ' ..
+        'update this test\'s own expectations to match. See server/progression.lua\'s ' ..
+        'GetHandlerXPTierKennelDeployCooldownMs header for the full writeup.')
 end)
 
 -- ----------------------------------------------------------------------

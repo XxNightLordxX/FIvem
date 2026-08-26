@@ -601,9 +601,10 @@ end
 --- @param source number
 --- @param targetServerId number
 --- @param targetCitizenid string
+--- @param usingCitizenid string?
 --- @param requestedAt number
 --- @return table result
-local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerId, targetCitizenid, requestedAt)
+local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerId, targetCitizenid, usingCitizenid, requestedAt)
     -- MANDATORY, FIRST-CLASS live proximity check — BEFORE any
     -- ox_inventory query or state mutation, unconditionally. Without this,
     -- a modified client could supply the server id of ANY connected K9
@@ -646,6 +647,34 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     local effectiveCooldownMs = baseCooldownMs
     if type(GetXPTierMedkitCooldownMs) == 'function' then
         effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, baseCooldownMs)
+    end
+
+    -- HANDLER XP TIER UNLOCK (dead-config-field pass, coder-backend):
+    -- Config.HandlerXPTiers' medkitTreatCooldownMultiplier, consulted via
+    -- GetHandlerXPTierMedkitCooldownMs (server/progression.lua) -- same
+    -- soft-dependency shape as the K9-side call immediately above, but
+    -- keyed on the USING player's own citizenid (`usingCitizenid`, the
+    -- person actually performing the treat action), never the target's --
+    -- this is the HANDLER's own rank reward, not the K9's. Chained ON TOP
+    -- of the K9-side reduction above (effectiveCooldownMs, not
+    -- baseCooldownMs, is what gets passed in) rather than replacing it, so
+    -- a high-tier handler treating a high-tier K9 gets BOTH reductions at
+    -- once. THIS MATTERS FOR ANY FUTURE handlerTreatK9 AWARD WIRING, NOT
+    -- JUST FOR THIS COOLDOWN: this cooldown is now RANK-REDUCED, down to a
+    -- combined worst-case floor of 31500ms (60000ms base * 0.75 Veteran-K9
+    -- * 0.70 Master-Handler, the shipped multipliers) -- see
+    -- GetHandlerXPTierMedkitCooldownMs's own doc comment (server/
+    -- progression.lua, "THE NUMBERS" section) for the full arithmetic. If
+    -- handlerTreatK9 is ever wired to fire from a successful heal below,
+    -- its own per-actor mint cooldown MUST be sized against that
+    -- rank-reduced floor, not the unreduced 60000ms config default, and
+    -- MUST be its own separate, actor-keyed tracker -- never derived from
+    -- MedkitCooldown itself (target-keyed, and now handler-rank-shortened).
+    -- tests/medkit_spec.lua carries a SOURCE AUDIT test that fails if
+    -- handlerTreatK9 is ever awarded from this file without a companion
+    -- *_XP_MINT_COOLDOWN tracker also present here.
+    if type(GetHandlerXPTierMedkitCooldownMs) == 'function' then
+        effectiveCooldownMs = GetHandlerXPTierMedkitCooldownMs(usingCitizenid, effectiveCooldownMs)
     end
 
     if MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs, requestedAt) then
@@ -767,7 +796,10 @@ end
 ---      file's header, CORRECTNESS PASS finding 2, for why this must not
 ---      fall through to a real laststand/EMS system's own revive flow.
 ---   5. Resolve the target's citizenid — needed for the cooldown key and
----      the RestoreInjury accessor.
+---      the RestoreInjury accessor. Also resolve the USING player's own
+---      citizenid (dead-config-field pass) — needed only for the handler's
+---      own medkitTreatCooldownMultiplier rank-reduction lookup inside
+---      RunUseK9MedkitMutation; never a rejection if it fails to resolve.
 ---   6. Acquire the per-target mutex — reject outright if already held
 ---      (another treat-K9 request for this exact K9 is in flight) —
 ---      release is GUARANTEED via the pcall below, not contingent on any
@@ -824,6 +856,22 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
         return { ok = false, reason = 'invalid_target' }
     end
 
+    -- HANDLER XP TIER UNLOCK (dead-config-field pass): the USING player's
+    -- own citizenid, needed only for GetHandlerXPTierMedkitCooldownMs's
+    -- rank-reduction lookup inside RunUseK9MedkitMutation below -- never
+    -- for authorization (IsK9MedkitPermittedForCitizenId, further up this
+    -- file's own call chain, already gates on it). Deliberately NOT a
+    -- rejection if this fails to resolve (unlike targetCitizenid above,
+    -- which the cooldown KEY itself depends on) -- a missing/unresolvable
+    -- using-side citizenid just means no handler-tier reduction applies
+    -- this call (GetHandlerXPTierMedkitCooldownMs's own defensive
+    -- `citizenid` handling degrades a nil the same way an unranked
+    -- 'Rookie Handler' does: no multiplier field, baseCooldownMs
+    -- unchanged) -- never a reason to block a heal that every earlier gate
+    -- already allowed.
+    local usingPlayer = exports.qbx_core:GetPlayer(source)
+    local usingCitizenid = usingPlayer and usingPlayer.PlayerData and usingPlayer.PlayerData.citizenid
+
     if not MedkitMutex.TryAcquire(targetCitizenid) then
         return { ok = false, reason = 'treatment_in_progress' }
     end
@@ -833,7 +881,7 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     -- returns, regardless of whether RunUseK9MedkitMutation returned
     -- normally or threw, so a future edit that adds a fallible call inside
     -- the mutation body can never leak this citizenid's mutex entry.
-    local ok, result = pcall(RunUseK9MedkitMutation, usingPed, targetPed, source, targetServerId, targetCitizenid, requestedAt)
+    local ok, result = pcall(RunUseK9MedkitMutation, usingPed, targetPed, source, targetServerId, targetCitizenid, usingCitizenid, requestedAt)
     MedkitMutex.Release(targetCitizenid)
 
     if not ok then

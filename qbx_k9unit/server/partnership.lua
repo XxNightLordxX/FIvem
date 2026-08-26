@@ -297,21 +297,27 @@
     breaking (zero consent, no cooldown -- this file's own `breakPartnership`
     below) and immediately reforming with each other, which would otherwise
     let a pair re-earn an already-earned milestone tier indefinitely. This
-    file now captures, in memory, the highest tier any exact (k9, handler)
-    pair has ever confirmed-earned at the moment either of their rows ends
-    (`PairTenureSeed`/`CaptureTenureSeedForPair`, called from
-    `DoBreakPartnership` -- the single shared teardown core for self-breaks
-    AND every forced-teardown path, including decertification and job/
-    department changes), and seeds a BRAND NEW row back to that same floor
-    the instant that exact pair re-establishes
-    (`respondPartnerUp`'s critical section, via the SAME
-    `K9Store.Partner_SetTenureTierCAS` optimistic-CAS primitive
-    server/tenure.lua's own tick already uses). See `PairTenureSeed`'s own
-    declaration comment (below, near `Partnerships`) for the full "why now,
-    why in-memory, why not TTL'd" writeup, and server/tenure.lua's own
-    closing comment block ("TENURE PROGRESSION EXTENSIONS -- FURTHER
-    PROPOSED ADDITIONS", item 3) for the fully schema-backed version this
-    in-memory guard is a real-but-partial (restart-bounded) stand-in for.
+    file now captures, via `K9Store.PairProgress_UpsertHighestTenureTier`
+    (`CaptureTenureSeedForPair`, called from `DoBreakPartnership` -- the
+    single shared teardown core for self-breaks AND every forced-teardown
+    path, including decertification and job/department changes), the
+    highest tier any exact (k9, handler) pair has ever confirmed-earned at
+    the moment either of their rows ends, into `k9_partnership_pair_progress`
+    (migration 0018) -- and seeds a BRAND NEW row back to that same floor
+    the instant that exact pair re-establishes (`respondPartnerUp`'s
+    critical section, reading it back via
+    `K9Store.PairProgress_GetHighestTenureTier` and re-applying it via the
+    SAME `K9Store.Partner_SetTenureTierCAS` optimistic-CAS primitive
+    server/tenure.lua's own tick already uses). FULLY DURABLE, not merely
+    an in-process cache: `K9Store.PairProgress_*` goes through
+    `Config.Database.enabled` exactly like every other K9Store accessor, so
+    this guard survives a genuine resource restart when the database is on
+    -- this used to be a real-but-partial (restart-bounded) in-memory-only
+    stand-in (`PairTenureSeed`, kept in this file itself); see
+    server/datastore.lua's own `k9_partnership_pair_progress` section and
+    server/tenure.lua's own closing comment block ("TENURE PROGRESSION
+    EXTENSIONS -- FURTHER PROPOSED ADDITIONS", item 3, now LANDED) for the
+    full design this table implements.
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
@@ -374,8 +380,9 @@ local Partnerships = {}
 local PendingPartnershipRequests = {}
 
 -- ======================================================================
--- ANTI-FARM GUARD EXTENSION. See CaptureTenureSeedForPair/TenurePairKey
--- below for the actual mechanism; this comment records WHY it exists,
+-- ANTI-FARM GUARD EXTENSION. See CaptureTenureSeedForPair below (and
+-- respondPartnerUp's own establish critical section, the read/consume
+-- side) for the actual mechanism; this comment records WHY it exists,
 -- since the gap it closes is not obvious from server/tenure.lua's own
 -- header alone.
 --
@@ -416,68 +423,26 @@ local PendingPartnershipRequests = {}
 -- uses to write this column), rather than inventing a second, parallel
 -- anti-farm mechanism.
 --
--- WHAT THIS SECTION DOES NOT CLAIM: this is an IN-MEMORY, per-process
--- mitigation, not a schema-backed one -- a resource restart clears
--- `PairTenureSeed` (same accepted-limitation class as this file's own
--- `Partnerships` cache and server/tenure.lua's own `TenureFullyCollected`),
--- after which the specific narrow window of "break+reform right after an
--- ops restart" could re-earn one already-earned tier once, before this
--- table repopulates from the NEXT break. A fully restart-proof version
--- needs a persisted per-(k9_citizenid, handler_citizenid) record --
--- proposed, not built, in server/tenure.lua's own closing comment block
--- (sql/*/server/datastore.lua are not edited here). This in-memory guard
--- still closes the COMMON case (a farmer cycling break/reform without a
--- lucky restart in between) for the resource's actual running uptime,
--- which is a real, meaningful improvement over having no guard at all, not
--- merely a cosmetic one.
---
--- BOUNDED MEMORY, NOT TIME-EXPIRED, AND WHY: entries are NEVER evicted on
--- a TTL or on `playerDropped` (unlike `Partnerships`/`PendingPartnershipRequests`
--- above). Both would defeat the guard's own purpose: this pair's history
--- must survive at least as long as a determined farmer might wait between
--- cycles, which -- per the GAP writeup above -- is comparable to the
--- milestone thresholds THEMSELVES (hours to days), not a UI-harassment
--- timescale a normal cooldown would use; and `playerDropped` eviction
--- would hand a farmer a trivial bypass (disconnect once, reconnect, break,
--- reform -- the exact "reconnecting" vector this guard must survive).
--- Growth is bounded IN PRACTICE, not via an eviction policy: one small,
--- fixed-size entry is added only on an actual completed BREAK event for a
--- pair that had already earned at least one milestone tier -- a real,
--- deliberate, comparatively rare player action, not a hot path -- so this
--- table's size tracks the number of DISTINCT (k9, handler) pairs that have
--- ever both partnered AND stayed partnered long enough to earn a milestone
--- AND then broken up, over this resource's entire uptime. Same
--- "unbounded-but-fine growth profile" framing server/tenure.lua's own
--- `TenureFullyCollected` cache already uses for the identical class of
--- tradeoff (that file's own comment, verbatim phrase reused deliberately
--- here).
+-- FULLY DURABLE, NOT MERELY IN-PROCESS: this guard is backed by
+-- `k9_partnership_pair_progress` (migration 0018) via
+-- `K9Store.PairProgress_GetHighestTenureTier`/
+-- `K9Store.PairProgress_UpsertHighestTenureTier` -- the same
+-- `Config.Database.enabled` branch every other K9Store accessor already
+-- goes through, so this guard survives a genuine resource restart
+-- whenever the database is on. THIS USED TO BE THE ONE DISCLOSED GAP HERE
+-- (an in-memory-only `PairTenureSeed` table, cleared on every restart --
+-- see git history for that version's own "why in-memory, why not TTL'd"
+-- writeup, now superseded): a fully restart-proof version needed a
+-- persisted per-(k9_citizenid, handler_citizenid) record, proposed in
+-- server/tenure.lua's own closing comment block ("TENURE PROGRESSION
+-- EXTENSIONS -- FURTHER PROPOSED ADDITIONS", item 3) and built exactly as
+-- specified there. `Config.Database.enabled = false` (memory mode, e.g.
+-- every test in this suite) still degrades to an equivalent in-process
+-- table (`server/datastore.lua`'s own `PairProgressRows`) for the life of
+-- that process -- the K9Store abstraction already gives every other
+-- accessor in this file that same dual-mode behavior, so this guard needs
+-- no special-casing of its own to get it.
 -- ======================================================================
-
--- PairTenureSeed[k9Citizenid .. ':' .. handlerCitizenid] = { tier = number }
--- -- the highest partnership-tenure milestone tier ever CONFIRMED granted
--- (read fresh from the DB's own `tenure_bonus_tier_granted` column, never
--- guessed) to this EXACT (k9, handler) pair, across every row that pair
--- has ever had, captured at the moment any of THAT pair's rows is torn
--- down. See CaptureTenureSeedForPair (write side, called from
--- DoBreakPartnership) and respondPartnerUp's own establish critical
--- section (read/consume side) below. `local`: nothing outside this file
--- needs it.
-local PairTenureSeed = {}
-
---- Canonical key for PairTenureSeed -- ROLE-SENSITIVE by design (k9 first,
---- handler second, never sorted/order-independent): a genuine K9 does not
---- ordinarily swap roles with the same human between partnerships (role is
---- tied to which citizenid actually holds the K9 identity, per
---- server/appearance.lua's HasK9Role), so a role-swapped "pair" is treated
---- as a DIFFERENT relationship, never carrying a seed over -- the safe
---- direction (at most a missed carry-forward in a bizarre edge case, never
---- an incorrect extra grant).
---- @param k9Citizenid string
---- @param handlerCitizenid string
---- @return string
-local function TenurePairKey(k9Citizenid, handlerCitizenid)
-    return k9Citizenid .. ':' .. handlerCitizenid
-end
 
 --- Best-effort capture of "how far this exact pair had gotten" at the
 --- moment their partnership row is torn down -- called from
@@ -487,12 +452,15 @@ end
 --- breaks, AND department-change-forced breaks alike). Read-only against
 --- K9Store.Partner_GetTenureRow (server/tenure.lua's own accessor,
 --- unmodified, already exposed) -- never mutates anything, and can NEVER
---- abort or delay the break itself: every exit path below is a silent,
---- best-effort no-op on any failure, which only ever COSTS a future
---- legitimate carry-forward, never grants an extra one -- preserving this
---- file's own "no unbounded trap" rule that a teardown path is never gated
---- on any check (see DoBreakPartnership's own call site: this function's
---- return value, if any, is never inspected/branched on).
+--- abort or delay the break itself: every exit path below is a silent
+--- (except for the logged write-failure case, matching this file's own
+--- "EVERY WRITE'S RETURN IS CHECKED" discipline in respondPartnerUp's own
+--- establish critical section below), best-effort no-op on any failure,
+--- which only ever COSTS a future legitimate carry-forward, never grants
+--- an extra one -- preserving this file's own "no unbounded trap" rule
+--- that a teardown path is never gated on any check (see
+--- DoBreakPartnership's own call site: this function's return value, if
+--- any, is never inspected/branched on).
 --- @param k9Citizenid string
 --- @param handlerCitizenid string
 local function CaptureTenureSeedForPair(k9Citizenid, handlerCitizenid)
@@ -513,10 +481,14 @@ local function CaptureTenureSeedForPair(k9Citizenid, handlerCitizenid)
     local grantedTier = tonumber(tenureRow.tenure_bonus_tier_granted) or 0
     if grantedTier <= 0 then return end -- nothing earned yet by this row -- nothing to protect
 
-    local pairKey = TenurePairKey(k9Citizenid, handlerCitizenid)
-    local existing = PairTenureSeed[pairKey]
-    if not existing or grantedTier > existing.tier then
-        PairTenureSeed[pairKey] = { tier = grantedTier }
+    -- Write-through to the durable pair-progress table -- see this
+    -- section's own header for why this table, not a column. A GREATEST()
+    -- upsert (server/datastore.lua) means this can never regress an
+    -- already-higher stored tier, so a thrown error or a lost race here
+    -- only ever costs THIS capture, never corrupts an earlier one.
+    local upsertOk, upsertErr = pcall(K9Store.PairProgress_UpsertHighestTenureTier, k9Citizenid, handlerCitizenid, grantedTier)
+    if not upsertOk then
+        print(('[qbx_k9unit] partnership: tenure anti-farm pair-progress UPSERT threw for k9=%s handler=%s (tier=%d): %s'):format(k9Citizenid, handlerCitizenid, grantedTier, tostring(upsertErr)))
     end
 end
 
@@ -1265,8 +1237,9 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
             return 'insert_failed'
         end
 
-        -- ANTI-FARM GUARD EXTENSION -- see PairTenureSeed's own header
-        -- comment (this file, above) for the full "why" writeup. If this
+        -- ANTI-FARM GUARD EXTENSION -- see this file's own "ANTI-FARM
+        -- GUARD EXTENSION" header comment above for the full "why"
+        -- writeup. If this
         -- EXACT (k9, handler) pair has previously earned any
         -- partnership-tenure milestone tier (on a NOW-ENDED row -- this is
         -- always a BRAND NEW row, id `insertResultOrErr`, whose own
@@ -1276,25 +1249,32 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- column -- extending that existing guard across a reform, not
         -- replacing it with a separate mechanism.
         --
-        -- EVERY WRITE'S RETURN IS CHECKED: `seedOk` distinguishes a thrown
-        -- error from a clean call; `seedAffectedRows` distinguishes the
-        -- CAS actually applying from a lost race / a schema not yet
-        -- migrated (0 or nil). Neither failure path aborts, retries, or
-        -- blocks establishment -- a brand-new partnership succeeding is
-        -- already the correct, independent outcome; failing to seed only
-        -- costs this specific anti-farm improvement for this one instance
-        -- (fail SAFE, never fail OPEN toward an extra grant -- the row's
-        -- own column simply stays at its true default, 0, exactly like
-        -- today's shipped behaviour), so both are logged and treated as
-        -- non-fatal.
-        local pairKey = TenurePairKey(k9Citizenid, officerCitizenid)
-        local seed = PairTenureSeed[pairKey]
-        if seed and seed.tier > 0 then
-            local seedOk, seedAffectedRows = pcall(K9Store.Partner_SetTenureTierCAS, insertResultOrErr, seed.tier, 0)
-            if not seedOk then
-                print(('[qbx_k9unit] partnership: tenure anti-farm seed CAS threw for new partnership id=%s (k9=%s handler=%s, seed tier=%d): %s'):format(tostring(insertResultOrErr), k9Citizenid, officerCitizenid, seed.tier, tostring(seedAffectedRows)))
-            elseif not seedAffectedRows or seedAffectedRows == 0 then
-                print(('[qbx_k9unit] partnership: tenure anti-farm seed CAS did not apply for new partnership id=%s (k9=%s handler=%s, seed tier=%d) -- row may not have its own tenure_bonus_tier_granted column yet (pre-migration schema), or the row changed underneath; new row keeps the default tier 0'):format(tostring(insertResultOrErr), k9Citizenid, officerCitizenid, seed.tier))
+        -- EVERY READ/WRITE'S RETURN IS CHECKED: `readOk` distinguishes a
+        -- thrown error reading the durable pair-progress table
+        -- (`K9Store.PairProgress_GetHighestTenureTier`, migration 0018)
+        -- from a clean call; `seedOk` distinguishes a thrown error from a
+        -- clean call on the seed-CAS write; `seedAffectedRows`
+        -- distinguishes the CAS actually applying from a lost race / a
+        -- schema not yet migrated (0 or nil). No failure path aborts,
+        -- retries, or blocks establishment -- a brand-new partnership
+        -- succeeding is already the correct, independent outcome; failing
+        -- to read or seed only costs this specific anti-farm improvement
+        -- for this one instance (fail SAFE, never fail OPEN toward an
+        -- extra grant -- the row's own column simply stays at its true
+        -- default, 0, exactly like today's shipped behaviour), so every
+        -- failure here is logged and treated as non-fatal.
+        local readOk, seedTierOrErr = pcall(K9Store.PairProgress_GetHighestTenureTier, k9Citizenid, officerCitizenid)
+        if not readOk then
+            print(('[qbx_k9unit] partnership: tenure anti-farm pair-progress read threw for new partnership id=%s (k9=%s handler=%s): %s'):format(tostring(insertResultOrErr), k9Citizenid, officerCitizenid, tostring(seedTierOrErr)))
+        else
+            local seedTier = tonumber(seedTierOrErr)
+            if seedTier and seedTier > 0 then
+                local seedOk, seedAffectedRows = pcall(K9Store.Partner_SetTenureTierCAS, insertResultOrErr, seedTier, 0)
+                if not seedOk then
+                    print(('[qbx_k9unit] partnership: tenure anti-farm seed CAS threw for new partnership id=%s (k9=%s handler=%s, seed tier=%d): %s'):format(tostring(insertResultOrErr), k9Citizenid, officerCitizenid, seedTier, tostring(seedAffectedRows)))
+                elseif not seedAffectedRows or seedAffectedRows == 0 then
+                    print(('[qbx_k9unit] partnership: tenure anti-farm seed CAS did not apply for new partnership id=%s (k9=%s handler=%s, seed tier=%d) -- row may not have its own tenure_bonus_tier_granted column yet (pre-migration schema), or the row changed underneath; new row keeps the default tier 0'):format(tostring(insertResultOrErr), k9Citizenid, officerCitizenid, seedTier))
+                end
             end
         end
 
@@ -1380,9 +1360,10 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
     local row = rowOrErr
     if not row then return false end -- no-op: this citizenid isn't currently partnered
 
-    -- ANTI-FARM GUARD EXTENSION -- see PairTenureSeed's own header comment
-    -- above for the full "why" writeup. Captured HERE, before the UPDATE
-    -- below flips `active` to 0, since Partner_GetTenureRow (called inside
+    -- ANTI-FARM GUARD EXTENSION -- see this file's own "ANTI-FARM GUARD
+    -- EXTENSION" header comment above for the full "why" writeup. Captured
+    -- HERE, before the UPDATE below flips `active` to 0, since
+    -- Partner_GetTenureRow (called inside
     -- CaptureTenureSeedForPair) requires the row to still be active=1 to
     -- find it at all. This is the SINGLE shared teardown core for every
     -- break path this resource has (self-initiated breakPartnership below
@@ -1689,6 +1670,32 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- deliberately turned on once; the common "flag has always been false"
     -- default-install case this fix targets cannot exhibit it.
     if not Config.Features.HandlerPartnership then return end
+
+    -- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (boot-order-race
+    -- audit, this pass -- same fix already shipped for
+    -- server/certtiers.lua/server/permissionkeycatalog.lua/server/xptiers.lua/
+    -- server/k9profiles.lua, simply missed here when it landed for those
+    -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
+    -- for the exact race this closes, and K9Store.WaitForSchemaCheckToSettle's
+    -- own doc comment for the full contract). Without this,
+    -- RefreshPartnershipCache below (K9Store.Partner_GetActiveRowByParty --
+    -- a narrower SELECT than the columns server/datastore.lua's own
+    -- EXPECTED_TABLE_COLUMNS checks k9_partnerships against) could run
+    -- against a foreign `k9_partnerships` the full probe would correctly
+    -- reject as a collision, during the one window before that probe's own
+    -- yielding query has returned -- merging a stranger's rows straight
+    -- into a live partnership cache that gates HandlerDownDefense/Recall.
+    -- On a `false` return (the probe genuinely had not settled within the
+    -- wait budget), this loop skips every citizenid below rather than trust
+    -- an unconfirmed database state -- their cache entry simply stays
+    -- unset for this backfill pass, identical to what already happens
+    -- today whenever RefreshPartnershipCache's own read fails or finds
+    -- nothing -- the next PlayerLoaded, or a restart once the check has had
+    -- time to finish, re-syncs it as normal.
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] partnership: the schema-collision check had not finished within its wait budget -- skipping this restart\'s partnership-cache backfill for every already-connected officer (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next PlayerLoaded (or a restart once the check has had time to finish) re-syncs it as normal.')
+        return
+    end
 
     for _, playerId in ipairs(GetPlayers()) do
         local src = tonumber(playerId)

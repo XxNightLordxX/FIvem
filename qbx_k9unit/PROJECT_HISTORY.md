@@ -260,10 +260,15 @@ drifts silently. That gap was real and has since been closed for
 `client/keybinds.lua`; the mechanism still depends on someone maintaining the
 list.
 
-**The partnership XP farm is "closed".** The fix is real, but it is held in
-memory only. A resource restart clears it, which re-opens the exploit once, for a
-pair that breaks up around that restart. The code says this at length; the commit
-message did not.
+**The partnership XP farm is "closed".** The fix was real, but for a long time
+was held in memory only. A resource restart cleared it, which re-opened the
+exploit once, for a pair that breaks up around that restart. The code said this
+at length; the commit message did not. **Update:** now genuinely closed —
+migration 0018's `k9_partnership_pair_progress` table persists the guard
+across a real restart whenever the database is on, closing the gap this entry
+used to disclose. Kept here anyway, unmarked as anything other than history,
+as the lesson that mattered: state a fix's real scope in the commit message
+itself, not only in a comment three files away.
 
 ## Ideas that became real features
 
@@ -345,3 +350,27 @@ separate log file — this is the one place project history lives.
   tables by name without checking they are actually ours first, which is
   the one place in this resource where a mistake destroys data instead
   of refusing. Both assigned.
+
+- **2026-08-26 (issue-closer sweep)** — Whole-project sweep for flagged
+  items never closed out. Closed: the partnership tenure-bonus anti-farm
+  guard is now genuinely restart-proof (migration 0018,
+  `k9_partnership_pair_progress` — see "Two claims that were overstated"
+  and `KNOWN_ISSUES.md`'s "Fixed" section for the full writeup); six stale
+  `phase2_notes/...` citations in `sql/install.sql` and `.luacheckrc` (dead
+  since the phase-notes merge into `DEVELOPER_REFERENCE.md`) now point at
+  the real file and anchor, with the dead sub-section numbers dropped.
+  Documented, not coded: `LICENSE.md` §9's dependency-licence identifiers
+  are now independently verified against each project's own repository
+  (`ox_lib`/`oxmysql` LGPLv3, `ox_inventory` GPLv3, `ox_target` MIT,
+  `qbx_core`'s own `LICENSE` file crediting an ESX ancestor rather than
+  Qbox-project) — the legal question of whether any of that copyleft
+  reaches this Software across FiveM's export boundary is still,
+  correctly, left for a lawyer. `LICENSE.md`'s three governing-law/venue/
+  contact-address placeholders and the logo placeholder both cross-linked
+  into `KNOWN_ISSUES.md` for visibility, not otherwise touched — both are
+  the owner's call, not a code fix. Left open, not attempted: wiring
+  `handlerTreatK9`/`handlerKennelDeploy`'s per-actor XP mint cooldowns —
+  a live concurrent pass was already mid-way through the adjacent
+  `handlerCertifyK9` farm-loop fix in the exact same `config.lua` comment
+  block and using the exact same mechanism, so this was left for that
+  pass rather than risking a duplicate or conflicting edit.

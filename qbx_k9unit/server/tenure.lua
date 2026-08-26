@@ -1156,13 +1156,19 @@ end
 
     ======================================================================
     TENURE PROGRESSION EXTENSIONS -- FURTHER PROPOSED ADDITIONS. Everything
-    ABOVE this section already landed. Everything BELOW is NEW, proposed
-    but NOT applied -- config.lua, locales/en.json, sql/*,
-    server/datastore.lua, .luacheckrc, and server/tablet.lua are not edited
-    here. What COULD be built without touching any of them (titles, the
-    progress-visibility callback, the anti-farm seed-on-reform fix) is
-    already live above/in server/partnership.lua -- this section is a
-    proposal for the files not touched here.
+    ABOVE this section already landed. Item 3 immediately below has ALSO
+    now landed (migration 0018 / server/datastore.lua's `PairProgress_*`
+    accessors / server/partnership.lua's `CaptureTenureSeedForPair` and
+    `respondPartnerUp` establish critical section) -- kept in place rather
+    than deleted so its own design writeup stays attached to the code that
+    implements it verbatim; see its own "LANDED" marker below. Items 1, 2,
+    4, 5, 6 are still NEW, proposed but NOT applied -- config.lua,
+    locales/en.json, sql/*, .luacheckrc, and server/tablet.lua are not
+    edited here for those. What COULD be built without touching any of
+    them (titles, the progress-visibility callback, the anti-farm
+    seed-on-reform fix, now fully durable per item 3) is already live
+    above/in server/partnership.lua -- this section is a proposal for the
+    files not touched here.
 
     1. MORE MILESTONES (config.lua, Config.Partnership.TenureBonus.milestones
        + Config.XP.awards) -- CODE-READY TODAY, zero further change needed
@@ -1240,14 +1246,21 @@ end
        milestone gated on a per-ROW counter -- that would reopen exactly
        the exploit already closed for the wall-clock milestones.
 
-    3. FULLY DURABLE ANTI-FARM GUARD (schema; server/partnership.lua's own
-       in-memory `PairTenureSeed` -- see that file's header -- is a REAL,
-       CORRECT mitigation for the running process's own uptime, but is
-       lost on a resource restart, same disclosed limitation class as this
-       file's own `TenureFullyCollected` cache). A fully restart-proof
-       version needs ONE new table, not a column on `k9_partnerships`
-       (a column can't survive the row itself being superseded by a new
-       one on reform -- that IS the problem):
+    3. FULLY DURABLE ANTI-FARM GUARD -- LANDED (migration 0018 /
+       sql/install.sql's own `k9_partnership_pair_progress` header /
+       server/datastore.lua's `PairProgress_GetHighestTenureTier` +
+       `PairProgress_UpsertHighestTenureTier` / server/partnership.lua's
+       `CaptureTenureSeedForPair` + `respondPartnerUp`'s establish critical
+       section). What follows is the ORIGINAL proposal, kept verbatim as
+       the design record; the shipped table matches it exactly:
+
+       server/partnership.lua's own in-memory `PairTenureSeed` used to be
+       a REAL, CORRECT mitigation for the running process's own uptime,
+       but was lost on a resource restart, same disclosed limitation class
+       as this file's own `TenureFullyCollected` cache. The fully
+       restart-proof version needed ONE new table, not a column on
+       `k9_partnerships` (a column can't survive the row itself being
+       superseded by a new one on reform -- that IS the problem):
 
            CREATE TABLE IF NOT EXISTS k9_partnership_pair_progress (
                k9_citizenid VARCHAR(50) NOT NULL,
@@ -1257,18 +1270,30 @@ end
            );
 
        Written by server/partnership.lua at the SAME two points its own
-       in-memory `PairTenureSeed` is today (an UPSERT ... ON DUPLICATE KEY
-       UPDATE GREATEST(...) at break time instead of a table write; a
-       SELECT-then-CAS-seed at establish time instead of a table read),
-       and by server/tenure.lua's own CheckTenureMilestonesForK9 the moment
-       a NEW tier is actually confirmed granted (so the row-level
-       tenure_bonus_tier_granted and this pair-level table never drift
-       apart). Once this table exists, server/partnership.lua's
-       `PairTenureSeed` in-memory table becomes a pure performance cache in
-       front of it rather than the only copy of this fact -- replace the
-       in-memory table's write path with a real UPSERT and its read path
-       with a real SELECT, at that point, rather than keeping two sources
-       of truth.
+       in-memory `PairTenureSeed` used to be (an UPSERT ... ON DUPLICATE
+       KEY UPDATE GREATEST(...) at break time instead of a table write; a
+       SELECT-then-CAS-seed at establish time instead of a table read).
+       `PairTenureSeed` itself is GONE, not merely fronted by this table --
+       server/partnership.lua's own header explains why replacing it
+       outright (rather than keeping it as a cache in front of the new
+       table, the ALTERNATIVE this proposal originally floated) was the
+       simpler, single-source-of-truth choice: K9Store.PairProgress_* already
+       gives every caller the SAME dual-mode (DB-backed when
+       `Config.Database.enabled`, in-process otherwise) behavior every
+       other K9Store accessor in this resource already has, so a second,
+       independently-maintained in-memory cache would only risk drifting
+       from it for no real performance win (this table is read/written at
+       most twice per partnership establish/break, never in a hot loop).
+       NOT done as part of this landing: writing to this table from
+       server/tenure.lua's own CheckTenureMilestonesForK9 on every
+       newly-confirmed grant (not just at break time) -- the shipped
+       version only needs the value to be correct at the moment a break
+       captures it, which `k9_partnerships.tenure_bonus_tier_granted`
+       already guarantees; a live-updated copy would only matter for a
+       future consumer that reads THIS table directly instead of via
+       GetActivePartnerCitizenId + the active row (e.g. item 6's tablet
+       integration, below) -- still a genuinely open enhancement, not a
+       correctness gap in the guard itself.
 
     4. LOCALE KEY (locales/en.json) -- exact English text needed for the
        tier-aware notification server/tenure.lua's own

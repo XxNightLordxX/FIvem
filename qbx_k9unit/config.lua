@@ -1065,9 +1065,19 @@ Config.CommandTablet = {
     -- k9_ultrasonic_whistle); see the operator runbook's checklist.
     itemName = 'k9_tablet',
 
-    -- Whether the item is consumed on use. Almost certainly false -- a
-    -- tablet is equipment, not a consumable -- but exposed because some
-    -- servers issue single-use loaner devices.
+    -- NOT AN ENFORCED SWITCH -- READ BEFORE CHANGING (dead-config-field
+    -- audit finding: this field's own comment used to read like an
+    -- ordinary toggle and never disclosed that it does nothing on its own).
+    -- Nothing in this resource reads this value at all. ox_inventory
+    -- consumes (or does not consume) k9_tablet purely per that item's OWN
+    -- `consume` field in YOUR ox_inventory items.lua, which this resource
+    -- does not own and cannot set. This field is a NOTE describing what you
+    -- should ALSO set your item's `consume` field to (0/false for a
+    -- reusable tablet, matching the "almost certainly false" default
+    -- below), not a control this resource enforces -- flipping it here
+    -- changes nothing in-game until you separately edit items.lua to
+    -- match. See client/tablet.lua's own useTabletItem handler for the
+    -- full mechanism this note describes.
     consumeItemOnUse = false,
 
     -- Max roster rows returned in one query. Clamped server-side; a
@@ -1476,25 +1486,71 @@ Config.XPTiers = {
 -- the action, can only ever shorten a wait or lengthen a distance, never
 -- grant access" posture Config.XPTiers' own medkitCooldownMultiplier
 -- already established for the K9 side (GetXPTierMedkitCooldownMs,
--- server/progression.lua). CORRECTED (verified by grepping
--- server/progression.lua before writing this note, not assumed): this
--- paragraph used to describe GetHandlerXPTierMedkitCooldownMs/
--- GetHandlerXPTierKennelDeployCooldownMs/GetHandlerXPTierLeashMaxDistance as
--- already-existing accessors with their own doc comments, and pointed to a
--- "HANDLER XP TIER UNLOCKS" section in server/progression.lua for why these
--- three were chosen over a higher /k9givexp ceiling or better equipment-shop
--- stock. None of that exists: no accessor by any of those three names is
--- defined anywhere in this resource, server/progression.lua has no section
--- by that name, and DEVELOPER_REFERENCE.md/PROJECT_HISTORY.md do not discuss
--- this rejection either -- that paragraph was written before the code (and
--- the write-up) existed and was never reconciled against what actually
--- shipped. The true, verified status (matching server/progression.lua's own
--- AwardHandlerXP doc comment) is: these three fields are DATA ONLY on
--- Config.HandlerXPTiers rows below, with NO accessor function and NO
--- consumer yet -- whoever wires the first one (server/medkit.lua,
--- server/kennel.lua, and server/main.lua respectively, by field) needs to
--- both WRITE the accessor (mirroring GetXPTierMedkitCooldownMs's shape) and
--- call it, not merely call something that is already there.
+-- server/progression.lua).
+--
+-- DEAD-CONFIG-FIELD AUDIT RESOLUTION (coder-backend, this pass; supersedes
+-- the "None of that exists" correction that used to sit in this exact spot
+-- -- that correction was accurate when written and is now itself stale,
+-- exactly the trap this resource's "note at the field, not a thousand
+-- lines away" rule exists to prevent): a full audit found these three
+-- fields genuinely unread, named the three missing accessors that would
+-- need to exist, and required each to be either wired or removed --
+-- "known and disclosed" is not an acceptable third state. Resolution,
+-- field by field:
+--   * medkitTreatCooldownMultiplier -- WIRED. GetHandlerXPTierMedkitCooldownMs
+--     (server/progression.lua) now exists and is consulted by
+--     server/medkit.lua's RunUseK9MedkitMutation, keyed on the USING
+--     player's own citizenid, chained on top of Config.XPTiers' own
+--     medkitCooldownMultiplier (the TARGET K9's tier) rather than
+--     replacing it -- a high-tier handler treating a high-tier K9 gets
+--     both reductions at once.
+--   * kennelDeployCooldownMultiplier -- WIRED. GetHandlerXPTierKennelDeployCooldownMs
+--     (server/progression.lua) now exists and is consulted by
+--     server/kennel.lua's requestDeployKennel handler, keyed on the
+--     deploying handler's own citizenid (the same identity DeployCooldown
+--     itself is already keyed by, unlike the medkit case above).
+--   * leashRangeMultiplier -- REMOVED, not wired (this pass judged wiring
+--     it more than a small, safe change -- pulled rather than left half
+--     done). Config.LeashMaxDistance is consulted as a raw, shared
+--     constant in at least four places across three files today
+--     (server/main.lua's CheckLeashEligibility attach-time proximity
+--     check; client/movement.lua's LEASH_PULL_ZONE_FACTOR/
+--     LEASH_HARD_CAP_FACTOR elastic-constraint math, which actually
+--     enforces the leash mechanically once attached; client/leashvisual.lua's
+--     rope max-length; client/radial.lua's pre-attach candidate search),
+--     with NO per-citizenid channel anywhere in that chain -- server/main.lua's
+--     own header explicitly documents reusing the raw base value at
+--     attach time as deliberate. Wiring a per-handler bonus correctly
+--     would mean threading a brand-new value through the leash
+--     consent-handshake payload AND updating the live elastic-constraint
+--     math in client/movement.lua to match (an attach that succeeds at a
+--     rank-widened range but is then immediately "pulled back" by a
+--     client unaware of that widening is the exact half-wire this
+--     resource's own rule forbids), deciding WHICH of the two leashed
+--     parties' rank should apply, and deciding whether a mid-session rank-up
+--     needs a live re-push the way Config.XPTiers' own PushTierSnapshot
+--     gives the K9 side. Real design work, not an accessor to mirror --
+--     if this is reintroduced later, do that work in full rather than
+--     bolting a multiplier onto the existing raw-constant reads.
+--
+-- FEEDBACK-LOOP SAFETY CHECKED BEFORE WIRING EITHER COOLDOWN MULTIPLIER
+-- (both shorten the cooldown on an action Config.HandlerXP.awards also
+-- prices -- handlerTreatK9 for medkit, handlerKennelDeploy for kennel
+-- deploy -- so a rank that shortens either could, in principle, make the
+-- ladder faster to climb the higher you climb it): NO LOOP EXISTS TODAY,
+-- because AwardHandlerXP is called from nowhere for either actionKey (see
+-- this file's own Config.Features.HandlerXPProgression header, "DELIBERATELY
+-- LEFT UNWIRED", for the full reasoning and arithmetic). THIS COOLDOWN
+-- REDUCTION MUST BE ACCOUNTED FOR THE DAY EITHER AWARD IS WIRED, THOUGH --
+-- see server/progression.lua's own doc comment on
+-- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs
+-- ("HANDLER XP TIER UNLOCKS" section) for the exact rank-reduced worst-case
+-- numbers (31500ms combined medkit floor, 3000ms kennel-deploy floor) and
+-- the binding requirement (a dedicated per-actor mint cooldown, sized
+-- against THOSE numbers, never derived from MedkitCooldown/DeployCooldown
+-- itself). tests/medkit_spec.lua and tests/kennel_spec.lua each carry a
+-- SOURCE AUDIT test that fails outright if either award is ever wired
+-- without that companion mint cooldown also present.
 --
 -- UNREVIEWED PLACEHOLDER NUMBERS, same status Config.XPTiers/Config.XP
 -- carry -- tune freely once a real handler-XP economy pass happens.
@@ -1506,9 +1562,23 @@ Config.XPTiers = {
 -- flagged for whoever owns that table's own tuning next).
 Config.HandlerXPTiers = {
     { xp = 0,    label = 'Rookie Handler' },
+    -- medkitTreatCooldownMultiplier -- WIRED (server/medkit.lua, via
+    -- GetHandlerXPTierMedkitCooldownMs). See this table's own header above
+    -- for the full field-by-field resolution and the feedback-loop
+    -- safety note.
     { xp = 750,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
+    -- kennelDeployCooldownMultiplier -- WIRED (server/kennel.lua, via
+    -- GetHandlerXPTierKennelDeployCooldownMs). Same header, same note.
     { xp = 2500, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.75 },
-    { xp = 6000, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60, leashRangeMultiplier = 1.25 },
+    -- Master Handler's own combined worst-case floors (both cooldowns
+    -- stack with any lower tier already earned, by design -- see "cumulative
+    -- by design" above): medkit 60000ms * 0.70 = 42000ms alone, 31500ms
+    -- combined with a Veteran-tier K9 TARGET's own 0.75 (Config.XPTiers);
+    -- kennel deploy 5000ms * 0.60 = 3000ms. These are the exact numbers
+    -- server/progression.lua's own doc comment and the SOURCE AUDIT tests
+    -- above cite -- if you retune either multiplier here, that comment and
+    -- those tests go stale and need updating too.
+    { xp = 6000, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60 },
 }
 
 -- ======================================================================
@@ -1640,13 +1710,25 @@ Config.XP = {
 -- WHAT COUNTS AS A HANDLER ACTION, and why each one is safe to pay for --
 -- chosen from what this codebase can actually observe server-side today,
 -- never an invented event:
---   * handlerCertifyK9 -- server/certifications.lua's GrantCertification,
---     at the point a NEW (not renewed/already-active) certification is
---     granted. Rare and deliberate by nature (a K9 can only be certified
---     once at a time; earning this again for the SAME target needs a
---     genuine revoke in between, an action this pass does not control the
---     cadence of) -- the highest single award here specifically because it
---     is the hardest to repeat cheaply.
+--   * handlerCertifyK9 -- server/certifications.lua's GrantCertification (and
+--     GrantCertificationOffline), at the point a NEW (not renewed/
+--     already-active) certification is granted. NOT, on its own, "rare and
+--     deliberate by nature" the way this bullet used to claim: a genuine
+--     revoke-then-regrant cycle is exactly the ordinary lifecycle this
+--     resource supports (RevokeCertification followed by GrantCertification
+--     for the same citizenid+job is not an edge case), and with
+--     Config.AllowSelfCertification true by default an eligible certifier
+--     can run that cycle against THEMSELVES with no accomplice at all --
+--     found live by an economy audit (2026-08-26) as this table's single
+--     worst farm loop, well past what handlerKennelDeploy/handlerTreatK9
+--     below were already rejected for. What actually makes this safe to pay
+--     is CertifyXpMintCooldown (server/certifications.lua) -- a dedicated
+--     per-(granter, target) MINT cooldown, 24 real hours, gating the AWARD
+--     itself (never the grant/revoke action, which always succeeds
+--     regardless) -- added by that same audit. It is still the highest
+--     single award here, but because a genuinely NEW target pays
+--     immediately while the SAME (granter, target) pair cannot pay again
+--     for a day, not because repeating it was already hard.
 --   * handlerTreatK9 -- server/medkit.lua's RunUseK9MedkitMutation, paid to
 --     the USING player (never the K9 being healed) on a genuine injury
 --     restore. Bounded today by that file's own per-TARGET MedkitCooldown
@@ -2086,7 +2168,7 @@ Config.SearchZones = {
     -- in server/search.lua. Contrast Config.Wellbeing.Mood.petCooldownMs,
     -- whose "per-(interactor, target)" claim IS accurate.
     searchCooldownMs      = 10000, -- prevents repeat-search spam against the same vehicle/person to fish for a different roll or just to harass
-    alertBroadcastRadius  = 15.0,  -- max distance from the searched target's own live coordinates for a bystander to receive the ContrabandAlerts sound/reaction broadcast. Deliberately NOT a global TriggerClientEvent(-1, ...) like relayBark -- unlike a bark, this payload identifies a specific vehicle/person just flagged for contraband, so broadcasting it map-wide would leak that fact to an accomplice anywhere on the server. server/search.lua must iterate connected players and filter by this radius before sending.
+    alertBroadcastRadius  = 15.0,  -- max distance from the searched target's own live coordinates for a bystander to receive the ContrabandAlerts sound/reaction broadcast. Deliberately NOT a global TriggerClientEvent(-1, ...) like relayBark -- unlike a bark, this payload identifies a specific vehicle/person just flagged for contraband, so broadcasting it map-wide would leak that fact to an accomplice anywhere on the server. server/search.lua must iterate connected players and filter by this radius before sending. HARD CEILING: 200.0m, enforced in code (server/search.lua's own onResourceStart guard) -- a value above that is clamped back down to 200.0 rather than honored, specifically so this can never be raised high enough to functionally become a map-wide broadcast.
 }
 
 -- ======================================================================
@@ -2466,25 +2548,28 @@ Config.Partnership = {
         -- requirement. Each actionKey must have a matching entry in
         -- Config.XP.awards above, or the award silently resolves to nothing.
         --
-        -- `handlerActionKey` (NEW, additive field, this pass) -- OPTIONAL,
-        -- and NOT YET READ by server/tenure.lua (that file is not edited by
-        -- this pass): the matching entry in Config.HandlerXP.awards above,
-        -- to be paid to `handler_citizenid` the SAME tick
-        -- CheckTenureMilestonesForK9 pays `actionKey` to `k9Citizenid`.
-        -- Exact call server/tenure.lua's owner needs to add, immediately
-        -- after that function's existing
-        -- `AwardXP(k9Citizenid, milestone.actionKey)` line inside its
-        -- `for tier = alreadyGranted + 1, targetTier do` loop:
-        --     if type(AwardHandlerXP) == 'function' and milestone.handlerActionKey then
+        -- `handlerActionKey` -- OPTIONAL. WIRED (dead-config-field audit
+        -- correction: this comment used to claim it was "NOT YET READ by
+        -- server/tenure.lua" and "inert data with no consumer" -- false,
+        -- and had been false since server/tenure.lua's own
+        -- CheckTenureMilestonesForK9 was written; re-verified by reading
+        -- that function directly before writing this note, not assumed).
+        -- server/tenure.lua's `for tier = alreadyGranted + 1, targetTier do`
+        -- loop already calls, immediately after its
+        -- `AwardXP(k9Citizenid, milestone.actionKey)` line:
+        --     if type(AwardHandlerXP) == 'function' and milestone and type(milestone.handlerActionKey) == 'string' then
         --         AwardHandlerXP(row.handler_citizenid, milestone.handlerActionKey)
         --     end
-        -- Same soft-dependency guard shape that call site already uses for
-        -- AwardXP itself. Inherits that loop's existing one-time-per-row
-        -- CAS guard and same-pair-reform seeding for free -- no new
-        -- anti-farm state needed for this half. Until server/tenure.lua
-        -- adds that call, this field is inert data with no consumer, same
-        -- "defined, not yet wired" status as Config.HandlerXPTiers' own
-        -- three effect fields.
+        -- paying the matching entry in Config.HandlerXP.awards above to
+        -- `row.handler_citizenid` the SAME tick `actionKey` is paid to
+        -- `k9Citizenid`. Same soft-dependency guard shape that call site
+        -- already uses for AwardXP itself. Inherits that loop's existing
+        -- one-time-per-row CAS guard and same-pair-reform seeding for free
+        -- -- no separate anti-farm state needed for this half. Leaving a
+        -- milestone entry's own `handlerActionKey` unset (or blank) simply
+        -- pays no handler XP for that tier -- it does not error, and it is
+        -- the only way left to opt a custom milestone OUT of paying handler
+        -- XP at all.
         milestones = {
             { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day',  handlerActionKey = 'handlerPartnershipTenure1Day'  },
             { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day',  handlerActionKey = 'handlerPartnershipTenure7Day'  },
@@ -2806,10 +2891,21 @@ Config.K9Inventory = {
     -- alternative -- it was NOT: ox_inventory's RegisterStash `owner`
     -- argument is never checked against the calling player's identity
     -- anywhere in ox_inventory's own open-inventory path (only `groups`
-    -- is), so 'ownerOnly' provided no real access control at all and is
-    -- HARD-ENFORCED OUT at resource start (assert, server/inventory.lua) --
-    -- changing this value away from 'department' will crash the resource
-    -- on startup by design.
+    -- is), so 'ownerOnly' provided no real access control at all.
+    --
+    -- CORRECTED (dead-config-field audit finding): this comment used to
+    -- claim changing this value away from 'department' "will crash the
+    -- resource on startup by design (assert, server/inventory.lua)". False
+    -- -- server/inventory.lua's ResolveConfiguredAccessScope was
+    -- deliberately changed from a hard assert to a WARN-AND-FORCE guard
+    -- (see that file's own header "RESOLVED DESIGN DECISION" section) and
+    -- explicitly "NEVER throws, NEVER aborts the caller". Setting this to
+    -- anything other than 'department' does NOT crash this resource: at
+    -- `onResourceStart` it prints one loud warning naming the bad value,
+    -- silently forces this field back to 'department' for that session,
+    -- and every K9 stash stays gated to department membership regardless.
+    -- The old wording would have led an owner to believe a misconfigured
+    -- value takes their server down; it actually self-corrects quietly.
     accessScope   = 'department',
 
     -- nil = no item whitelist enforced (ox_inventory's own slot/weight

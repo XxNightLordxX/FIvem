@@ -595,7 +595,7 @@ local FEATURE_TIERS = {
     -- step that already protects every other rawtoplevel entry above.
     CommandTablet          = { tier = 'rawtoplevel', lockoutRisk = true,
         note = 'Multiple files register their own CommandTablet-gated tablet callbacks this same way (server/permissions.lua confirmed by direct read; others may exist). Turning this off here does not close an already-registered tablet callback anywhere in this resource.',
-        lockoutWarning = 'Disabling Config.Features.CommandTablet, once a matching config.lua edit and a restart both actually happen (a runtime toggle alone can never enable or disable this feature -- see configEditRequired on the response), removes the tablet\'s command/item registration entirely for EVERYONE, including high command -- there is then no in-game screen left to turn it back on. RECOVERY: edit Config.Features.CommandTablet back to true in config.lua and restart this resource.',
+        lockoutWarningKey = 'commandtablet',
     },
 
     -- tier = 'clientonly' -- zero occurrences in any server/*.lua file (grepped before writing this list); nothing server-side to toggle.
@@ -676,12 +676,12 @@ local FEATURE_TIERS = {
     HighCommand            = {
         tier = 'live', lockoutRisk = true, sessionOnly = true,
         note = 'Genuinely live in both directions (IsHighCommand re-checks this flag on every call) -- but see lockoutWarning: this is the single highest-blast-radius flag in this resource, since every OTHER high-command bypass in this resource stops working the same instant this does.',
-        lockoutWarning = 'Disabling Config.Features.HighCommand immediately revokes IsHighCommand-based access for EVERY high-command officer on this server -- not just this tablet\'s High Command screens, but every high-command bypass across this entire resource (permission grants, XP grants, appearance swaps, and any other IsHighCommand-gated action), all at once. Nobody can use this screen to turn it back on once it is off, because this screen\'s own high-command check depends on the same flag. RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.HighCommand is set to in config.lua on disk. To make this change permanent instead, edit Config.Features.HighCommand in config.lua and restart.',
+        lockoutWarningKey = 'highcommand',
     },
     PermissionGrants       = {
         tier = 'live', lockoutRisk = true, sessionOnly = true,
         note = 'Genuinely live in both directions (HasPermission re-checks this flag on every call) -- see lockoutWarning: turning this off removes the grant-based access path for anyone who reaches this screen only via an explicit k9.runtimecontrol/k9.tablettheme grant rather than IsHighCommand.',
-        lockoutWarning = 'Disabling Config.Features.PermissionGrants immediately makes every explicitly granted permission (k9.access, k9.certify, k9.audit, k9.givexp, k9.runtimecontrol, k9.tablettheme, and any per-person RequireGrant feature grant) stop working for whoever holds it -- only rank-based access (IsHighCommand or the legacy rank gate) keeps working. Nobody can use a grant to turn this back on once it is off. RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.PermissionGrants is set to in config.lua on disk. To make this change permanent instead, edit Config.Features.PermissionGrants in config.lua and restart.',
+        lockoutWarningKey = 'permissiongrants',
     },
 
     -- This file's own two flags. Internally self-hosting (this file's own
@@ -702,12 +702,12 @@ local FEATURE_TIERS = {
     -- in the same file, the same pass.
     RuntimeFeatureControl  = {
         tier = 'live', lockoutRisk = true, sessionOnly = true,
-        lockoutWarning = 'Disabling Config.Features.RuntimeFeatureControl immediately disables every callback this screen itself depends on (feature toggles and tuning, both Set and Reset) -- nobody can use this screen to turn it back on once it is off. RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.RuntimeFeatureControl is set to in config.lua on disk.',
+        lockoutWarningKey = 'runtimefeaturecontrol',
     },
     TabletTheming          = {
         tier = 'live', lockoutRisk = true, sessionOnly = true,
         note = 'Cosmetic only (see header PART 2) -- disabling this loses the ABILITY to re-theme until a restart, never any access or functionality.',
-        lockoutWarning = 'Disabling Config.Features.TabletTheming immediately disables SetTheme/ResetTheme -- nobody can change or reset the tablet theme until this resource restarts (GetTheme, viewing the current theme, is unaffected -- this is cosmetic only, no access or functionality is lost). RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.TabletTheming is set to in config.lua on disk.',
+        lockoutWarningKey = 'tablettheming',
     },
 }
 
@@ -751,18 +751,53 @@ local function GetFeatureSessionOnly(name)
     return entry ~= nil and entry.sessionOnly == true
 end
 
+--- Fills `{placeholder}` tokens in a locale template against a plain
+--- table of values -- the SAME token syntax and substitution semantics as
+--- html/tablet.js's own formatTemplate() (a JS function this file cannot
+--- call directly; this is its Lua-side equivalent, kept byte-compatible
+--- with that function's `{key}` -> `tostring(value)` behaviour so the two
+--- stay interchangeable in spirit even though nothing here shares code
+--- with the browser). Every lockout/active-usage warning below is built
+--- through this, never a hardcoded Lua string, so its wording lives in
+--- locales/en.json like every other player(operator)-facing string in
+--- this resource, instead of bypassing the locale system entirely.
+--- @param template string
+--- @param params table<string, any>
+--- @return string
+local function FormatLocaleTemplate(template, params)
+    local out = template
+    for key, value in pairs(params) do
+        out = out:gsub('{' .. key .. '}', (tostring(value):gsub('%%', '%%%%')))
+    end
+    return out
+end
+
 --- @param name string
 --- @return string warning -- never nil for a lockoutRisk feature (every
---- entry with lockoutRisk = true carries its own lockoutWarning -- a
+--- entry with lockoutRisk = true carries its own lockoutWarningKey -- a
 --- missing one would silently hand the tablet an empty confirmation
 --- dialog for exactly the class of change this mechanism exists to make
 --- loud, so this falls back to a generic-but-still-real warning rather
---- than nil/empty if a future lockoutRisk entry is ever added without one).
+--- than nil/empty if a future lockoutRisk entry is ever added without one,
+--- or if locales/en.json is ever missing the key this resolves to).
 local function GetFeatureLockoutWarning(name)
     local entry = FEATURE_TIERS[name]
-    local warning = entry and entry.lockoutWarning
-    if type(warning) == 'string' and warning ~= '' then return warning end
-    return ('Changing Config.Features.%s carries a lockout risk this file could not resolve a specific warning for -- proceed only if you understand exactly what this flag gates and how to recover via config.lua + a restart if it goes wrong.'):format(tostring(name))
+    local key = entry and entry.lockoutWarningKey
+    if type(key) == 'string' and key ~= '' then
+        local ok, template = pcall(locale, 'tablet.runtime_lockout_warning_' .. key .. '_template')
+        if ok and type(template) == 'string' and template ~= '' then
+            return FormatLocaleTemplate(template, { name = tostring(name) })
+        end
+    end
+    local ok, genericTemplate = pcall(locale, 'tablet.runtime_lockout_warning_generic_template')
+    if ok and type(genericTemplate) == 'string' and genericTemplate ~= '' then
+        return FormatLocaleTemplate(genericTemplate, { name = tostring(name) })
+    end
+    -- Last-resort fallback, reached only if locales/en.json is missing
+    -- EVEN the generic template above -- never surfaced under normal
+    -- operation, but a lockoutRisk confirmation must never show an empty
+    -- warning no matter how badly the locale file has drifted.
+    return ('Changing Config.Features.%s carries a lockout risk, but no specific warning text is available for it -- proceed only if you understand exactly what this feature controls and how to recover (usually via config.lua and a restart) if something goes wrong.'):format(tostring(name))
 end
 
 -- ======================================================================
@@ -923,6 +958,18 @@ end
 local function GetActiveUsageWarning(name, count)
     local entry = ACTIVE_USAGE_FEATURES[name]
     local subject = (count == 1) and '1 player is' or (count .. ' players are')
+    local templateKey = (name == 'DeployableKennel')
+        and 'tablet.runtime_active_usage_warning_kennel_template'
+        or 'tablet.runtime_active_usage_warning_hold_template'
+    local ok, template = pcall(locale, templateKey)
+    if ok and type(template) == 'string' and template ~= '' then
+        return FormatLocaleTemplate(template, { subject = subject, activity = entry.activity, name = tostring(name) })
+    end
+    -- Last-resort fallback, reached only if locales/en.json is missing
+    -- one of the two templates above -- byte-identical to the wording
+    -- this function hardcoded before it started reading locales/en.json,
+    -- so a locale-file regression degrades to the same honest text rather
+    -- than an empty confirmation dialog.
     if name == 'DeployableKennel' then
         return ('%s currently %s right now. Disabling %s will NOT remove them or force an exit -- a K9 already resting can always leave normally, unaffected -- but nobody will be able to deploy, enter, or pick up a kennel until it is turned back on.'):format(subject, entry.activity, name)
     end

@@ -2084,4 +2084,143 @@ t.test('CONFIG-ABORT REGRESSION: a MISSING Config.AdminAudit.MaxResults.CatalogA
     t.equals(result.limit, 25, 'the built-in fallback (25) must be the effective default limit when CatalogAudit was never configured')
 end)
 
+-- ----------------------------------------------------------------------
+-- CONFIG-ABORT REGRESSION (this pass): Config.Departments[*].auditGrade,
+-- Config.AdminAudit.CommandCooldownMs, and Config.AdminAudit.MaxResults.*
+-- used to be bare `assert`s inside this SAME onResourceStart handler. A
+-- malformed value must now warn and fall back instead of throwing -- and,
+-- the part a bare "does not throw" test would miss, every command/callback
+-- this handler registers must still exist AND actually work afterward, off
+-- the substituted safe values.
+-- ----------------------------------------------------------------------
+
+t.test('CONFIG-ABORT REGRESSION: malformed auditGrade (one department), CommandCooldownMs, and MaxResults.Certifications must all warn and fall back, never assert -- every command/callback still registers and actually works', function()
+    local printed3 = {}
+    local function printStub3(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printed3[#printed3 + 1] = table.concat(parts, '\t')
+    end
+
+    local eventHandlers3 = {}
+    local function AddEventHandler3(eventName, handler)
+        eventHandlers3[eventName] = eventHandlers3[eventName] or {}
+        eventHandlers3[eventName][#eventHandlers3[eventName] + 1] = handler
+    end
+
+    local registeredCommands3 = {}
+    local function RegisterCommand3(name, handler, _restricted)
+        registeredCommands3[name] = handler
+    end
+
+    local callbacks3 = {}
+    local lib3 = { callback = { register = function(name, handler) callbacks3[name] = handler end } }
+
+    local playersBySource3 = {}
+
+    local Config3 = {
+        Features = { AdminAuditCommands = true },
+        AdminAudit = {
+            -- MALFORMED: a string instead of a number.
+            CommandCooldownMs = 'oops',
+            TrustConsole = false,
+            -- MALFORMED: Certifications is above HARD_MAX_RESULTS (100).
+            MaxResults = { Certifications = 999999, Partnerships = 25, SearchLog = 25, CatalogAudit = 25 },
+        },
+        Departments = {
+            police  = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4 },
+            -- MALFORMED: a quoted string instead of a number -- the exact
+            -- plausible owner typo this regression guards against.
+            sheriff = { label = 'Blaine County Sheriff', certifierGrade = 3, auditGrade = '4' },
+        },
+        FeatureControl = { RequireGrant = {} },
+    }
+
+    local env3 = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        RegisterCommand = RegisterCommand3,
+        AddEventHandler = AddEventHandler3,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        IsPlayerAceAllowed = function() return false end,
+        HasPermission = function() return false end,
+        exports = { qbx_core = { GetPlayer = function(_self, src) return playersBySource3[src] end } },
+        NotifyPlayer = function(...) end,
+        MySQL = { query = { await = function(sql, _params)
+            if Sandbox.isSchemaProbe(sql) then return Sandbox.installedSchemaRows() end
+            return {}
+        end } },
+        print = printStub3,
+        Config = Config3,
+        lib = lib3,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env3)
+    Sandbox.loadInto('../server/datastore.lua', env3)
+
+    local loadOk, loadErr = pcall(Sandbox.loadInto, '../server/admin.lua', env3)
+    t.isTrue(loadOk, 'server/admin.lua must load without throwing: ' .. tostring(loadErr))
+
+    local fireOk, fireErr = pcall(function()
+        for _, handler in ipairs(eventHandlers3['onResourceStart'] or {}) do
+            handler('qbx_k9unit')
+        end
+    end)
+    t.isTrue(fireOk, 'onResourceStart must complete without throwing on a malformed auditGrade/CommandCooldownMs/MaxResults: ' .. tostring(fireErr))
+
+    -- Every command AND callback must still be registered -- none of these
+    -- three malformed values have anything to do with most of them.
+    t.isNotNil(registeredCommands3.k9auditcert, 'k9auditcert must still register')
+    t.isNotNil(registeredCommands3.k9auditpartner, 'k9auditpartner must still register')
+    t.isNotNil(registeredCommands3.k9auditsearch, 'k9auditsearch must still register')
+    t.isNotNil(registeredCommands3.k9auditxp, 'k9auditxp must still register')
+    t.isNotNil(registeredCommands3.k9auditdept, 'k9auditdept must still register')
+    t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditCert'], 'tabletAuditCert must still register')
+    t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditPartner'], 'tabletAuditPartner must still register')
+    t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditSearch'], 'tabletAuditSearch must still register')
+    t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditXp'], 'tabletAuditXp must still register')
+    t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditDept'], 'tabletAuditDept must still register')
+    t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditCatalog'], 'tabletAuditCatalog must still register')
+
+    -- A clear, named warning for each of the three bad settings.
+    local warnedAuditGrade, warnedCooldown, warnedMaxResults = false, false, false
+    for _, line in ipairs(printed3) do
+        if line:find('auditGrade', 1, true) and line:find('sheriff', 1, true) then warnedAuditGrade = true end
+        if line:find('CommandCooldownMs', 1, true) then warnedCooldown = true end
+        if line:find('MaxResults.Certifications', 1, true) then warnedMaxResults = true end
+    end
+    t.isTrue(warnedAuditGrade, 'a malformed Config.Departments.sheriff.auditGrade must print a warning naming both the field and the department')
+    t.isTrue(warnedCooldown, 'a malformed Config.AdminAudit.CommandCooldownMs must print a warning naming it')
+    t.isTrue(warnedMaxResults, 'a malformed Config.AdminAudit.MaxResults.Certifications must print a warning naming it')
+
+    -- The substituted values must actually be in effect afterward, not
+    -- merely warned about.
+    t.isNil(Config3.Departments.sheriff.auditGrade, 'the malformed sheriff.auditGrade must be forced to nil')
+    t.equals(Config3.Departments.police.auditGrade, 4, 'the unrelated police department\'s own valid auditGrade must be untouched')
+    t.isTrue(Config3.AdminAudit.CommandCooldownMs >= 250, 'CommandCooldownMs must have been resolved to a valid, usable cooldown')
+    t.equals(Config3.AdminAudit.MaxResults.Certifications, 25, 'the malformed MaxResults.Certifications must be forced to the built-in fallback of 25')
+
+    -- k9auditcert must actually WORK end to end off the corrected values,
+    -- not merely "be registered": a sheriff BOSS still qualifies (job.isboss
+    -- bypasses auditGrade entirely, unaffected by the fix), a sheriff
+    -- NON-boss is now denied (fails closed on the corrected nil
+    -- auditGrade), and the unrelated police department keeps working
+    -- exactly as configured.
+    playersBySource3[701] = { PlayerData = { citizenid = 'SHERIFF_BOSS', job = { name = 'sheriff', isboss = true, grade = { level = 0 } } } }
+    playersBySource3[702] = { PlayerData = { citizenid = 'SHERIFF_OFFICER', job = { name = 'sheriff', grade = { level = 99 } } } }
+    playersBySource3[703] = { PlayerData = { citizenid = 'POLICE_OFFICER', job = { name = 'police', grade = { level = 4 } } } }
+
+    -- No citizenid arg -> IsValidCitizenId fails -> 'invalid_args', but ONLY
+    -- if authorization already passed; an unauthorized caller is denied
+    -- first and never reaches that check (see IsAuthorizedAdmin's own call
+    -- order at the top of this command).
+    registeredCommands3.k9auditcert(701, {})
+    t.contains(printed3[#printed3], 'invalid_args', 'a sheriff BOSS must pass authorization despite the corrected nil auditGrade')
+
+    registeredCommands3.k9auditcert(702, {})
+    t.contains(printed3[#printed3], 'denied', 'a sheriff NON-boss must now be denied -- fails closed on the corrected nil auditGrade')
+
+    registeredCommands3.k9auditcert(703, {})
+    t.contains(printed3[#printed3], 'invalid_args', 'the unrelated police department\'s own valid auditGrade=4 must still authorize its officers exactly as configured')
+end)
+
 os.exit(t.summary())

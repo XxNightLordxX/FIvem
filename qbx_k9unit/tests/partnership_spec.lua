@@ -246,6 +246,24 @@ local function newFixture(opts)
     -- onResourceStart" assertion read 2 and fail against a handler that
     -- was never partnership.lua's.
     --
+    -- SETTLE THE SCHEMA-COLLISION PROBE FIRST (boot-order-race audit, this
+    -- pass), before wiping every dependency's own onResourceStart
+    -- registration below: server/datastore.lua's own handler (just loaded
+    -- above) is what sets SCHEMA_CHECK_SETTLED -- if it is wiped WITHOUT
+    -- ever having fired, K9Store.WaitForSchemaCheckToSettle() (now called
+    -- by this file's own onResourceStart backfill loop) would never settle
+    -- for the life of this fixture, since nothing else in this sandbox
+    -- ever fires it again. Fired here, ONCE, with no MySQL.query.await
+    -- override in place yet (this file's own mysql.query is never even
+    -- defined -- see `mysql` above -- so the probe's own pcall degrades to
+    -- "could not run, proceeding as if no collision was found," exactly
+    -- like a real restricted-DB-user install; harmless and already this
+    -- probe's own documented degrade path) so every test below inherits an
+    -- already-settled, "no collision" state, matching a real resource
+    -- where the probe has long since resolved by the time any player
+    -- action reaches partnership.lua.
+    for _, fn in ipairs(eventHandlers['onResourceStart'] or {}) do fn('qbx_k9unit') end
+
     -- This deliberately runs BEFORE partnership.lua loads, so everything
     -- that file registers -- including PartnerRequestCooldown's own
     -- :RegisterPlayerDropped(), which is why the playerDropped count below

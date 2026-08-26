@@ -219,6 +219,17 @@ local function newFixture(opts)
     local deletedEntities = {} -- handle -> true
     local function DeleteEntity(handle) deletedEntities[handle] = true end
 
+    -- Captures every print() call -- used only by the CONFIG-SAFETY GUARD
+    -- section below (a clamp-and-warn fallback prints a warning naming the
+    -- bad field instead of throwing); every other test in this file simply
+    -- never inspects `printedMessages` at all.
+    local printedMessages = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedMessages[#printedMessages + 1] = table.concat(parts, '\t')
+    end
+
     local config = {
         Features = { PropAttachments = enabled },
         PropAttachments = {
@@ -256,6 +267,7 @@ local function newFixture(opts)
         NetworkGetEntityOwner = NetworkGetEntityOwner,
         DeleteEntity = DeleteEntity,
         Config = config,
+        print = printStub,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -268,6 +280,7 @@ local function newFixture(opts)
         clientEvents = clientEvents,
         notifyCalls = notifyCalls,
         deletedEntities = deletedEntities,
+        printedMessages = printedMessages,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
@@ -1281,12 +1294,72 @@ t.test('onResourceStart: ignores a start event for a different resource', functi
     t.isTrue(true, 'no error means the wrong-resource-name guard held')
 end)
 
-t.test('onResourceStart: a malformed Config.PropAttachments fails loudly (assert) once the flag is genuinely on', function()
+t.test('onResourceStart: Config.PropAttachments missing ENTIRELY still fails loudly (assert) -- a structural precondition, not a per-field typo', function()
     local f = newFixture()
-    f.config.PropAttachments.toggleCooldownMs = 0 -- the exact footgun this assert exists to catch -- see propattachment.lua's own comment
+    f.config.PropAttachments = nil
     local ok, err = pcall(f.fireResourceStart, 'qbx_k9unit')
     t.isFalse(ok)
-    t.contains(tostring(err), 'toggleCooldownMs')
+    t.contains(tostring(err), 'Config.PropAttachments is missing')
+end)
+
+-- ----------------------------------------------------------------------
+-- CONFIG-ABORT REGRESSION (this pass): every INDIVIDUAL
+-- Config.PropAttachments field used to be a bare per-field `assert` in this
+-- SAME onResourceStart handler -- a throw from ANY one of them also skipped
+-- BuildPropAttachmentModelHashes() (below the asserts, in the same
+-- handler), leaving every future confirmPropAttached model check permanently
+-- broken for the rest of this resource's uptime. A malformed value must now
+-- warn and fall back instead of throwing, and BuildPropAttachmentModelHashes
+-- must still run off the substituted safe values.
+-- ----------------------------------------------------------------------
+
+t.test('onResourceStart: a malformed toggleCooldownMs (the exact footgun the old assert caught) now warns and clamps to the built-in fallback instead of throwing', function()
+    local f = newFixture()
+    f.config.PropAttachments.toggleCooldownMs = 0 -- 0 does NOT mean "no cooldown" -- see this file's own comment
+    local ok, err = pcall(f.fireResourceStart, 'qbx_k9unit')
+    t.isTrue(ok, 'must not throw: ' .. tostring(err))
+    t.equals(f.config.PropAttachments.toggleCooldownMs, 2000, 'must be forced to the built-in fallback (config.lua\'s own shipped default)')
+
+    local warned = false
+    for _, line in ipairs(f.printedMessages) do
+        if line:find('toggleCooldownMs', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a malformed toggleCooldownMs must print a warning naming it')
+end)
+
+t.test('onResourceStart: a malformed propModel/fallbackPropModel/boneIndex/offset/rotation/pendingConfirmTtlMs/confirmDistanceTolerance all warn and fall back, and BuildPropAttachmentModelHashes still runs off the corrected values', function()
+    local f = newFixture()
+    f.config.PropAttachments.propModel = 123 -- not a string
+    f.config.PropAttachments.fallbackPropModel = ''  -- empty string, invalid
+    f.config.PropAttachments.boneIndex = -5 -- must be >= 0
+    f.config.PropAttachments.offsetX = 'oops' -- not a number
+    f.config.PropAttachments.pendingConfirmTtlMs = 0 -- must be > 0
+    f.config.PropAttachments.confirmDistanceTolerance = -1.0 -- must be > 0
+
+    local ok, err = pcall(f.fireResourceStart, 'qbx_k9unit')
+    t.isTrue(ok, 'must not throw: ' .. tostring(err))
+
+    t.equals(f.config.PropAttachments.propModel, 'prop_bodyarmour_02', 'propModel must fall back to config.lua\'s own shipped default')
+    t.equals(f.config.PropAttachments.fallbackPropModel, 'prop_tennis_ball', 'fallbackPropModel must fall back to config.lua\'s own shipped default')
+    t.equals(f.config.PropAttachments.boneIndex, 0, 'boneIndex must fall back to 0')
+    t.equals(f.config.PropAttachments.offsetX, 0.0, 'offsetX must fall back to 0.0')
+    t.equals(f.config.PropAttachments.pendingConfirmTtlMs, 15000, 'pendingConfirmTtlMs must fall back to config.lua\'s own shipped default')
+    t.equals(f.config.PropAttachments.confirmDistanceTolerance, 5.0, 'confirmDistanceTolerance must fall back to config.lua\'s own shipped default')
+
+    for _, key in ipairs({ 'propModel', 'fallbackPropModel', 'boneIndex', 'offsetX', 'pendingConfirmTtlMs', 'confirmDistanceTolerance' }) do
+        local warned = false
+        for _, line in ipairs(f.printedMessages) do
+            if line:find(key, 1, true) then warned = true end
+        end
+        t.isTrue(warned, ('a malformed %s must print a warning naming it'):format(key))
+    end
+
+    -- BuildPropAttachmentModelHashes must have run off the CORRECTED model
+    -- names -- proven end to end via a real attach handshake, not just by
+    -- reading Config back.
+    local netId = attachSuccessfully(f, 1, 'REGRESSION1', 9001, { x = 0, y = 0, z = 0 })
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:attachK9Prop'), 'attach must still work end to end off the corrected fallback model names')
+    t.isTrue(netId > 0)
 end)
 
 os.exit(t.summary())

@@ -26,6 +26,15 @@
          configured, or misconfigured" default); a valid (0, 1] multiplier
          reduces it; a malformed baseCooldownMs itself is returned
          unchanged, never erroring.
+      1b. GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs's
+          own pure numeric contract (dead-config-field pass, coder-backend)
+          -- the IDENTICAL contract as item 1 above, run against the
+          separate Config.HandlerXPTiers ladder instead, plus one
+          CROSS-LADDER INDEPENDENCE test proving a shared citizenid's K9-XP
+          standing never leaks into their handler-XP standing or vice
+          versa. See server/progression.lua's own "HANDLER XP TIER
+          UNLOCKS" doc comment (immediately after GetHandlerXPTier) for
+          the feedback-loop-safety analysis this section does not repeat.
       2. THE LOAD-BEARING PROOF this task requires: a tier unlock cannot
          override a high-command block. There is still no SINGLE shared,
          exported Config.FeatureControl block/grant resolution function to
@@ -103,7 +112,7 @@ local MySQLStub = {
 }
 
 local Config = {
-    Features = { XPProgression = true },
+    Features = { XPProgression = true, HandlerXPProgression = true },
     XP = {
         scopePerCitizenidOrJob = 'citizenid',
         awards = { smallAward = 60 },
@@ -118,6 +127,28 @@ local Config = {
         -- Deliberately non-positive -- proves a bad value on a HIGHER tier
         -- is rejected independently, never just the first bad shape found.
         { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, medkitCooldownMultiplier = 0 },
+    },
+    -- HANDLER XP TIER UNLOCKS (dead-config-field pass, coder-backend) --
+    -- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs's
+    -- own numeric contract, same shape as Config.XPTiers above, exercised
+    -- against the SAME class of edge cases on the HANDLER ladder instead of
+    -- the K9 one.
+    HandlerXPTiers = {
+        { xp = 0,    label = 'Rookie Handler' },
+        -- No kennelDeployCooldownMultiplier on this tier -- exercises the
+        -- "not configured yet" defensive default for THAT field
+        -- independently of medkitTreatCooldownMultiplier.
+        { xp = 750,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
+        { xp = 2500, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.75 },
+        { xp = 6000, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60 },
+        -- Deliberately non-positive/negative on this extra top tier --
+        -- proves a bad value on a HIGHER tier is rejected independently,
+        -- never just the first bad shape found (mirrors Config.XPTiers'
+        -- own Elite-tier test above).
+        { xp = 20000, label = 'Legendary Handler (test-only)', medkitTreatCooldownMultiplier = 0, kennelDeployCooldownMultiplier = -0.5 },
+    },
+    HandlerXP = {
+        awards = { smallHandlerAward = 60 },
     },
 }
 
@@ -157,8 +188,14 @@ end
 local AwardXP = env.AwardXP
 local GetXPTier = env.GetXPTier
 local GetXPTierMedkitCooldownMs = env.GetXPTierMedkitCooldownMs
+local AwardHandlerXP = env.AwardHandlerXP
+local GetHandlerXPTier = env.GetHandlerXPTier
+local GetHandlerXPTierMedkitCooldownMs = env.GetHandlerXPTierMedkitCooldownMs
+local GetHandlerXPTierKennelDeployCooldownMs = env.GetHandlerXPTierKennelDeployCooldownMs
 
 t.isNotNil(GetXPTierMedkitCooldownMs, 'server/progression.lua must define global GetXPTierMedkitCooldownMs')
+t.isNotNil(GetHandlerXPTierMedkitCooldownMs, 'server/progression.lua must define global GetHandlerXPTierMedkitCooldownMs')
+t.isNotNil(GetHandlerXPTierKennelDeployCooldownMs, 'server/progression.lua must define global GetHandlerXPTierKennelDeployCooldownMs')
 
 --- Awards `count` copies of 'smallAward' (60 XP) to `citizenid`, each
 --- separated by 500,000ms -- see this file's header for why that spacing
@@ -170,6 +207,20 @@ local function grindToward(citizenid, count)
     for _ = 1, count do
         fakeNow = fakeNow + 500000
         AwardXP(citizenid, 'smallAward')
+    end
+end
+
+--- Identical shape to grindToward above, but for the SEPARATE handler-XP
+--- total (AwardHandlerXP/GetHandlerXPTier) -- same 500,000ms spacing, same
+--- reasoning (this file's own header): the shared cross-mechanic mint
+--- budget is the SAME bucket AwardXP draws from, but each test below uses
+--- its own never-reused citizenid, so no cross-test interference either way.
+--- @param citizenid string
+--- @param count number
+local function grindTowardHandler(citizenid, count)
+    for _ = 1, count do
+        fakeNow = fakeNow + 500000
+        AwardHandlerXP(citizenid, 'smallHandlerAward')
     end
 end
 
@@ -298,6 +349,106 @@ t.test('COMPOSITION: reaching a tier cannot itself flip a block to an allow -- s
     local allowedFree = SimulateGatedMedkitCooldownResolution('cid-elite', false, 60000)
     t.isFalse(allowedBlocked)
     t.isTrue(allowedFree, 'the ONLY variable that changed between the two calls above is the block flag -- cid-elite is genuinely Elite-tier in this fixture in BOTH calls, proving tier alone has no power to override a block either way')
+end)
+
+-- ========================================================================
+-- HANDLER XP TIER UNLOCKS (dead-config-field pass, coder-backend) --
+-- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs's
+-- own pure numeric contract -- the mirror image of GetXPTierMedkitCooldownMs's
+-- own battery above, run against the SEPARATE handler-XP ladder
+-- (Config.HandlerXPTiers/AwardHandlerXP/GetHandlerXPTier) instead of the K9
+-- one. See server/progression.lua's own doc comment on both functions
+-- ("HANDLER XP TIER UNLOCKS" section, immediately after GetHandlerXPTier)
+-- for the full feedback-loop-safety writeup this section does not repeat.
+-- ========================================================================
+
+t.test('GetHandlerXPTierMedkitCooldownMs: an uncached (base-tier) citizenid with no medkitTreatCooldownMultiplier returns baseCooldownMs unchanged', function()
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-never-seen-before', 60000), 60000)
+end)
+
+t.test('GetHandlerXPTierKennelDeployCooldownMs: Certified Handler tier (no kennelDeployCooldownMultiplier field at all) returns baseCooldownMs unchanged -- the "unlock not yet configured" default', function()
+    grindTowardHandler('handler-certified', 13) -- 13 * 60 = 780 >= 750 (Certified), < 2500 (Senior)
+    t.equals(GetHandlerXPTier('handler-certified').label, 'Certified Handler', 'sanity check on this test\'s own arithmetic')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-certified', 5000), 5000, 'Certified Handler has no kennelDeployCooldownMultiplier configured -- must return the base value unchanged, never error or invent a number')
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs: Certified Handler tier (medkitTreatCooldownMultiplier = 0.90) reduces the cooldown', function()
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-certified', 60000), 54000, '60000 * 0.90 = 54000')
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: Senior Handler tier reduces both cooldowns', function()
+    grindTowardHandler('handler-senior', 42) -- 42 * 60 = 2520 >= 2500 (Senior), < 6000 (Master)
+    t.equals(GetHandlerXPTier('handler-senior').label, 'Senior Handler', 'sanity check on this test\'s own arithmetic')
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-senior', 60000), 48000, '60000 * 0.80 = 48000')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-senior', 5000), 3750, '5000 * 0.75 = 3750')
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: Master Handler tier -- the shipped ladder\'s own worst-case floors this pass\'s doc comments cite (31500ms combined medkit, 3000ms kennel)', function()
+    grindTowardHandler('handler-master', 101) -- 101 * 60 = 6060 >= 6000 (Master), < 20000 (Legendary)
+    t.equals(GetHandlerXPTier('handler-master').label, 'Master Handler', 'sanity check on this test\'s own arithmetic')
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 60000), 42000, '60000 * 0.70 = 42000 -- combined with a Veteran-tier K9 target\'s own 0.75 (GetXPTierMedkitCooldownMs, applied by the caller BEFORE this function per server/medkit.lua\'s real chained call site), the true worst case is 60000 * 0.75 * 0.70 = 31500')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', 5000), 3000, '5000 * 0.60 = 3000 -- the exact worst-case floor server/kennel.lua\'s own wiring comment and server/progression.lua\'s doc comment both cite')
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: a multiplier > 1 is rejected on EACH function independently -- an unlock must never LENGTHEN a cooldown', function()
+    local originalMedkit = Config.HandlerXPTiers[4].medkitTreatCooldownMultiplier
+    local originalKennel = Config.HandlerXPTiers[4].kennelDeployCooldownMultiplier
+    Config.HandlerXPTiers[4].medkitTreatCooldownMultiplier = 1.5
+    Config.HandlerXPTiers[4].kennelDeployCooldownMultiplier = 2.0
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 60000), 60000, 'a multiplier > 1 must be rejected outright, never applied')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', 5000), 5000)
+    Config.HandlerXPTiers[4].medkitTreatCooldownMultiplier = originalMedkit
+    Config.HandlerXPTiers[4].kennelDeployCooldownMultiplier = originalKennel
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs: a numeric-looking STRING multiplier is rejected -- only a real Lua number may reduce a cooldown', function()
+    local original = Config.HandlerXPTiers[4].medkitTreatCooldownMultiplier
+    Config.HandlerXPTiers[4].medkitTreatCooldownMultiplier = '0.5'
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 60000), 60000)
+    Config.HandlerXPTiers[4].medkitTreatCooldownMultiplier = original
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: a non-positive or negative multiplier (Legendary tier, this fixture\'s own test-only top row) is rejected -- returns baseCooldownMs unchanged, never 0 or negative', function()
+    grindTowardHandler('handler-legendary', 334) -- 334 * 60 = 20040 >= 20000 (Legendary)
+    t.equals(GetHandlerXPTier('handler-legendary').label, 'Legendary Handler (test-only)', 'sanity check on this test\'s own arithmetic')
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-legendary', 60000), 60000,
+        'a multiplier of 0 must NEVER be applied -- server/cooldowns.lua\'s own IsOnCooldown treats a non-positive threshold as PERMANENTLY ON, the opposite of a reward')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-legendary', 5000), 5000,
+        'a NEGATIVE multiplier must never be applied either -- the lower bound is a range check (<= 0), not a special-case for 0 alone')
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: a tiny baseCooldownMs with a valid multiplier can never floor to 0 or below -- the math.max(1, ...) floor holds at the extreme', function()
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 1), 1, 'must clamp to a minimum of 1ms, never 0')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', 1), 1, 'must clamp to a minimum of 1ms, never 0')
+end)
+
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: a malformed baseCooldownMs (non-number, NaN, <= 0) is returned unchanged, never erroring', function()
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', nil), nil)
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 'not-a-number'), 'not-a-number')
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 0), 0)
+    t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', -5), -5)
+    local nan = 0/0
+    local result = GetHandlerXPTierMedkitCooldownMs('handler-master', nan)
+    t.isTrue(result ~= result, 'NaN in, NaN out -- proves the function returned the input unchanged rather than computing on it')
+
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', nil), nil)
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', 0), 0)
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', -5), -5)
+end)
+
+t.test('CROSS-LADDER INDEPENDENCE: a citizenid\'s K9-side tier (Config.XPTiers) has no bearing on their HANDLER-side tier (Config.HandlerXPTiers), even when the two totals happen to share a citizenid string', function()
+    -- Same citizenid string grinds BOTH ladders to very different tiers --
+    -- the K9-XP total (Elite-level, 9000+) must not leak into what
+    -- GetHandlerXPTierMedkitCooldownMs sees, and vice versa. Proves
+    -- config.lua's own "two independent totals, one row" design actually
+    -- holds at the accessor level, not just in the schema.
+    grindToward('shared-cid', 151)         -- K9 side: Elite (9000+), medkitCooldownMultiplier = 0 (rejected -> unchanged)
+    grindTowardHandler('shared-cid', 13)   -- Handler side: Certified only (780 XP), medkitTreatCooldownMultiplier = 0.90
+
+    t.equals(GetXPTier('shared-cid').label, 'Elite K9')
+    t.equals(GetHandlerXPTier('shared-cid').label, 'Certified Handler')
+    t.equals(GetXPTierMedkitCooldownMs('shared-cid', 60000), 60000, 'K9 side: Elite\'s own medkitCooldownMultiplier (0) is rejected, unchanged')
+    t.equals(GetHandlerXPTierMedkitCooldownMs('shared-cid', 60000), 54000, 'Handler side: Certified\'s own 0.90 still applies normally, unaffected by the K9 side\'s Elite standing')
 end)
 
 os.exit(t.summary())

@@ -248,6 +248,17 @@ local function newFixture(opts)
     -- default true).
     local appearanceApplyCalls = {}   -- ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid, modelName?)
     local appearanceRevertCalls = {}  -- MaybeRevertK9Appearance(citizenid)
+    -- ECONOMY FIX (self-cert/decertify farm loop pass): AwardHandlerXP
+    -- (server/progression.lua) is runtime-existence-guarded at both
+    -- GrantCertification/GrantCertificationOffline call sites, same
+    -- soft-dependency shape as ApplyK9AppearanceOnGrant/
+    -- ForceBreakPartnershipForCitizenId above -- included by default so
+    -- most tests can assert on exactly which (citizenid, actionKey) pairs
+    -- were minted (and, just as importantly, which repeat mints were
+    -- SILENTLY SKIPPED by CertifyXpMintCooldown), opt out via
+    -- opts.includeHandlerXpHook = false to confirm the guard tolerates the
+    -- global being entirely absent.
+    local handlerXpAwardCalls = {} -- { citizenid, actionKey }
 
     local playersBySource = {}
     local playersByCitizenId = {}
@@ -454,6 +465,11 @@ local function newFixture(opts)
             appearanceRevertCalls[#appearanceRevertCalls + 1] = citizenid
         end
     end
+    if opts.includeHandlerXpHook ~= false then
+        overrides.AwardHandlerXP = function(citizenid, actionKey)
+            handlerXpAwardCalls[#handlerXpAwardCalls + 1] = { citizenid, actionKey }
+        end
+    end
 
     -- WORKFLOW-CLARITY PASS -- see this file's own header for the full
     -- "byte-identical to Sandbox.locale except for the explicitly pending
@@ -489,6 +505,7 @@ local function newFixture(opts)
         effectEndCalls = effectEndCalls,
         appearanceApplyCalls = appearanceApplyCalls,
         appearanceRevertCalls = appearanceRevertCalls,
+        handlerXpAwardCalls = handlerXpAwardCalls,
         registerPlayer = registerPlayer,
         disconnectPlayer = disconnectPlayer,
         setPed = setPed,
@@ -919,6 +936,185 @@ t.test('GrantCertification: proximity is skipped for self-certification (nothing
     -- message since it's sent second).
     t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'a huge proximity would have rejected this if it were checked -- self-cert must skip it entirely')
     t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_target'), 'success'))
+end)
+
+
+t.test('GrantCertification: a target not employed by any configured department is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'taxi', grade = { level = 1 } })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](2)
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_in_department_hint', 'police, sheriff'), 'error'))
+end)
+
+t.test('GrantCertification: a target beyond Config.CertifyProximityMeters is rejected (live server-side coords, not client-claimed)', function()
+    local f = newFixture({ proximityMeters = 5.0 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    f.setPed(2, 200, vec3(100, 0, 0), K9_HASH_SHEPHERD) -- 100m away, target IS K9-modeled
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](2)
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_too_far_to_certify_distance', tostring(5.0)), 'error'))
+end)
+
+t.test('GrantCertification: proximity is skipped for self-certification (nothing to measure distance to)', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setPed(1, 100, vec3(0, 0, 0), K9_HASH_SHEPHERD) -- self-cert: same ped serves as both granter and target
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    -- Self-cert means granterSrc == targetServerId, so BOTH the
+    -- granter-facing and target-facing NotifyPlayer calls land on the same
+    -- source -- use anyNotify (scans every entry), not notifiedExactly
+    -- (last entry only, which here would only ever see the target-facing
+    -- message since it's sent second).
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'a huge proximity would have rejected this if it were checked -- self-cert must skip it entirely')
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_target'), 'success'))
+end)
+
+-- ======================================================================
+-- ECONOMY FIX: self-cert/decertify farm loop (CertifyXpMintCooldown).
+--
+-- See server/certifications.lua's own CertifyXpMintCooldown declaration
+-- comment (search that file for "ECONOMY FIX", right after
+-- CERTIFY_ACTION_COOLDOWN_MS/CertifyActionCooldown) for the full writeup
+-- this section proves out end to end, against the REAL production file,
+-- not by reasoning about it: an eligible certifier (an officer at or above
+-- certifierGrade, or a boss -- Config.AllowSelfCertification true by
+-- default, and RevokeCertification's own proximity check is explicitly
+-- skipped for self-cert) could otherwise `/k9certify <self>` then
+-- `/k9decertify <self>` on repeat, minting handlerCertifyK9's 50 XP every
+-- ~3 real seconds -- 60,000 XP/hr gross, worse than either
+-- handlerKennelDeploy or handlerTreatK9, both of which this codebase
+-- already refused to wire for exactly this class of gap.
+--
+-- These tests drive GrantCertification/RevokeCertification/
+-- GrantCertificationOffline through the REAL net-event/command entry
+-- points (never the local functions directly), exactly like every other
+-- test in this file, and assert on handlerXpAwardCalls (this fixture's own
+-- AwardHandlerXP spy, newFixture's own opts.includeHandlerXpHook) -- never
+-- on reasoning about what SHOULD have happened. Every action is spaced by
+-- more than CERTIFY_ACTION_COOLDOWN_MS (1500ms, shared by grant+revoke for
+-- one granter source) via f.advanceTime, matching this file's own header
+-- convention -- a loop that never cleared that fat-finger guard would not
+-- be exercising the real exploit shape at all.
+-- ======================================================================
+
+-- Mirrors server/certifications.lua's own CERTIFY_XP_MINT_COOLDOWN_MS
+-- literal exactly (a hardcoded file-local constant there, not a Config
+-- value -- see that file's own declaration comment for why) so a future
+-- change to the production constant is impossible to silently drift out of
+-- sync with here without this file's own arithmetic below visibly failing.
+local CERTIFY_XP_MINT_COOLDOWN_MS = 24 * 60 * 60 * 1000
+
+t.test('ECONOMY FIX: repeated self-certify/decertify of the SAME target must stop paying handlerCertifyK9 after the first mint', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setPed(1, 100, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.setSource(1)
+
+    -- Cycle 1: certify self -- a genuinely NEW certification, must pay.
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    t.equals(#f.handlerXpAwardCalls, 1, 'the FIRST self-certification is a genuine new grant and must pay')
+    t.equals(f.handlerXpAwardCalls[1][1], 'G1')
+    t.equals(f.handlerXpAwardCalls[1][2], 'handlerCertifyK9')
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.events['qbx_k9unit:server:revokeHandler'](1, nil)
+
+    -- Cycles 2..5: repeat the certify/decertify loop several more times in
+    -- a row, each action spaced past CERTIFY_ACTION_COOLDOWN_MS but well
+    -- inside CertifyXpMintCooldown's 24-hour window -- the exact loop the
+    -- economy audit measured (a 3-second cycle at 50 XP -- 60,000 XP/hr
+    -- gross without this fix).
+    for _ = 1, 4 do
+        f.advanceTime(COOLDOWN_MS + 100)
+        f.events['qbx_k9unit:server:certifyHandler'](1)
+        f.advanceTime(COOLDOWN_MS + 100)
+        f.events['qbx_k9unit:server:revokeHandler'](1, nil)
+    end
+
+    t.equals(#f.handlerXpAwardCalls, 1, 'four more full certify/decertify cycles against the SAME (granter, target) pair, well inside the 24h mint-cooldown window, must mint ZERO additional handlerCertifyK9 XP -- the loop must be closed, not merely slowed')
+end)
+
+t.test('ECONOMY FIX: a legitimate first certification of a genuinely NEW person still pays normally, independent of another pair\'s mint cooldown', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setPed(1, 100, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.setSource(1)
+
+    -- Exhaust the self-cert pair's mint cooldown first (matches the loop
+    -- above), then prove a DIFFERENT, genuinely new target still pays
+    -- immediately -- proving the fix is scoped to the (granter, target)
+    -- PAIR, not a blanket per-granter throttle that would also break real,
+    -- distinct certification work.
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.events['qbx_k9unit:server:revokeHandler'](1, nil)
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.events['qbx_k9unit:server:certifyHandler'](1) -- same pair again -- must NOT pay
+    t.equals(#f.handlerXpAwardCalls, 1, 'sanity check on this test\'s own setup -- the self-pair repeat must not have paid')
+
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(2, 200, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.events['qbx_k9unit:server:certifyHandler'](2)
+
+    t.equals(#f.handlerXpAwardCalls, 2, 'a genuinely NEW (granter, target) pair must pay immediately, even while the SAME granter\'s self-pair is still on its own mint cooldown')
+    t.equals(f.handlerXpAwardCalls[2][1], 'G1')
+    t.equals(f.handlerXpAwardCalls[2][2], 'handlerCertifyK9')
+end)
+
+t.test('ECONOMY FIX: re-certifying the SAME (granter, target) pair pays again once CertifyXpMintCooldown\'s 24-hour window has fully elapsed', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setPed(1, 100, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.setSource(1)
+
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    t.equals(#f.handlerXpAwardCalls, 1)
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.events['qbx_k9unit:server:revokeHandler'](1, nil)
+
+    -- Just under 24h later: still the SAME farm-window, must not pay yet.
+    f.advanceTime(CERTIFY_XP_MINT_COOLDOWN_MS - 2000)
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    t.equals(#f.handlerXpAwardCalls, 1, 'still inside the 24h mint-cooldown window -- must not pay yet')
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.events['qbx_k9unit:server:revokeHandler'](1, nil)
+
+    -- Push fully past 24h measured from the FIRST mint's own stamp.
+    f.advanceTime(5000)
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    t.equals(#f.handlerXpAwardCalls, 2, 'a real, distinct re-certification of the same person after a full day is a plausible genuine event and must pay again -- this cooldown throttles a FARM, not every future legitimate re-grant of the same person forever')
+end)
+
+t.test('ECONOMY FIX: the SAME farm loop through /k9certifyoffline + /k9decertifyoffline is closed by the identical CertifyXpMintCooldown', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    f.commands['k9certifyoffline'].fn(1, { 'OFFLINE_T1', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 1, 'a genuinely new offline grant still pays')
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9decertifyoffline'].fn(1, { 'OFFLINE_T1', 'police' })
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certifyoffline'].fn(1, { 'OFFLINE_T1', 'police' })
+
+    t.equals(#f.handlerXpAwardCalls, 1, 'repeating the SAME (granter, target) pair through the offline grant path must not mint a second time either -- GrantCertification and GrantCertificationOffline share the SAME CertifyXpMintCooldown tracker')
+end)
+
+t.test('ECONOMY FIX: AwardHandlerXP being entirely absent (soft dependency) never breaks the grant/revoke flow itself -- CertifyXpMintCooldown.Consume is only ever reached alongside a real AwardHandlerXP call', function()
+    local f = newFixture({ includeHandlerXpHook = false })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setPed(1, 100, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.setSource(1)
+
+    f.events['qbx_k9unit:server:certifyHandler'](1)
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'the grant itself must still succeed with no AwardHandlerXP global defined at all')
 end)
 
 t.test('GrantCertification: a target whose LIVE ped model is not a configured K9 model is rejected, even if job/proximity pass (Config.K9Appearance.requireK9ModelForRole opted in)', function()
@@ -2317,7 +2513,18 @@ end)
 -- RefreshCertificationCache: fail-closed on a query error
 -- ======================================================================
 
-t.test('RefreshCertificationCache: a throwing MySQL.scalar.await fails CLOSED (active = false), never leaves a stale/unknown cache entry', function()
+-- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass): the test
+-- immediately below used to be titled "fails CLOSED (active = false),
+-- never leaves a stale/unknown cache entry" and asserted exactly the bug
+-- this pass exists to close -- a transient query failure for an already-
+-- certified officer used to be recorded as a CONFIRMED revoke, silently
+-- and durably, for the rest of that officer's session. That old assertion
+-- is now WRONG and has been REPLACED (not merely renamed) below: a
+-- previously-CONFIRMED certification must SURVIVE a transient read
+-- failure. See RefreshCertificationCache's own doc comment in
+-- server/certifications.lua for the full contract this section proves.
+
+t.test('RefreshCertificationCache: COULD-NOT-DETERMINE -- a throwing MySQL.scalar.await for an ALREADY-CERTIFIED citizenid KEEPS the previous confirmed state, never resets to uncertified', function()
     local f = newFixture()
     f.registerPlayer(90, 'CIT90', { name = 'police', grade = { level = 1 } })
     f.mysql.scalar.await = function() return 1 end
@@ -2325,9 +2532,111 @@ t.test('RefreshCertificationCache: a throwing MySQL.scalar.await fails CLOSED (a
     t.isTrue(f.env.HasK9Access(90), 'sanity: really certified before the simulated outage')
 
     f.mysql.scalar.await = function() error('connection lost') end
-    local active = f.env.RefreshCertificationCache('CIT90', 'police')
-    t.isFalse(active, 'the return value itself must report the fail-closed result')
-    t.isFalse(f.env.HasK9Access(90), 'an unreadable cert row must never be treated as an active grant')
+    local active, stateKnown, freshlyVerified = f.env.RefreshCertificationCache('CIT90', 'police')
+    t.isTrue(active, 'a transient failure must report the RETAINED previous value, never a manufactured false')
+    t.isTrue(stateKnown, 'a retained previous confirmation is still a KNOWN state, safe for a caller to act on')
+    t.isFalse(freshlyVerified, 'this exact call did not itself confirm anything -- it retained an EARLIER confirmation')
+    t.isTrue(f.env.HasK9Access(90), 'a transient read failure must never silently revoke a real, already-confirmed certification')
+
+    local sawCheckFailed, sawNotCertified = false, false
+    for _, line in ipairs(f.printLog) do
+        if line:find('CIT90', 1, true) and line:find('CERTIFICATION CHECK FAILED', 1, true) then sawCheckFailed = true end
+        if line:find('CIT90', 1, true) and line:find('not certified', 1, true) then sawNotCertified = true end
+    end
+    t.isTrue(sawCheckFailed, 'the operator message must name the citizenid and say the CHECK failed')
+    t.isFalse(sawNotCertified, 'the operator message must never claim this citizenid is "not certified" -- that is not what happened')
+end)
+
+t.test('RefreshCertificationCache: a GENUINE "not certified" answer (query succeeds, no active row) still results in not certified', function()
+    local f = newFixture()
+    f.registerPlayer(91, 'CIT91', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return nil end -- a REAL, successful query -- genuinely no active row
+
+    local active, stateKnown, freshlyVerified = f.env.RefreshCertificationCache('CIT91', 'police')
+    t.isFalse(active, 'a confirmed-absent row must still report not-active')
+    t.isTrue(stateKnown, 'a confirmed absence IS a known state -- this is not the could-not-determine case')
+    t.isTrue(freshlyVerified, 'this call itself confirmed the absence, fresh, against the DB')
+    t.isFalse(f.env.HasK9Access(91), 'a genuinely uncertified citizenid must still be denied access')
+end)
+
+t.test('RefreshCertificationCache: COULD-NOT-DETERMINE -- a failure with NO prior cached value never manufactures a false "denied" cache entry', function()
+    local f = newFixture()
+    f.registerPlayer(92, 'CIT92', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() error('connection lost') end -- first-ever check for this citizenid, and it fails
+
+    local active, stateKnown, freshlyVerified = f.env.RefreshCertificationCache('CIT92', 'police')
+    t.isFalse(active, 'with nothing known at all, the best-effort return value degrades to false')
+    t.isFalse(stateKnown, 'this is the "truly unknown" case -- callers must NOT treat this as a confirmed answer')
+    t.isFalse(freshlyVerified, 'nothing was confirmed by this call')
+    t.isFalse(f.env.HasK9Access(92), 'access must still fail closed while genuinely unresolved')
+
+    -- NOTE: unlike the "kept previous value" test above, this branch's own
+    -- real message text legitimately contains the SUBSTRING "not certified"
+    -- (inside the phrase `NOT a confirmed "not certified" one` -- the
+    -- message is explicitly explaining what it is NOT claiming), so a bare
+    -- substring search for that phrase would false-positive against the
+    -- message's own careful hedging. Assert the POSITIVE hedge instead --
+    -- that it explicitly says the truth is unknown and may still be a real
+    -- certification -- which is the actual requirement (never assert
+    -- "not certified" as a bare, confident claim).
+    local sawCheckFailed, sawHedgedUnknown = false, false
+    for _, line in ipairs(f.printLog) do
+        if line:find('CIT92', 1, true) and line:find('CERTIFICATION CHECK FAILED', 1, true) then sawCheckFailed = true end
+        if line:find('CIT92', 1, true) and line:find('may in fact BE certified', 1, true) then sawHedgedUnknown = true end
+    end
+    t.isTrue(sawCheckFailed, 'the operator message must name the citizenid and say the CHECK failed')
+    t.isTrue(sawHedgedUnknown, 'the operator message must hedge honestly -- this citizenid may in fact be certified, not a confident "not certified" claim')
+
+    -- Proves nothing false was durably written: a LATER, successful check
+    -- for the SAME citizenid must be free to establish a real "certified"
+    -- answer, unobstructed by anything the failed attempt above wrote.
+    f.mysql.scalar.await = function() return 1 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end
+    local active2, stateKnown2, freshlyVerified2 = f.env.RefreshCertificationCache('CIT92', 'police')
+    t.isTrue(active2)
+    t.isTrue(stateKnown2)
+    t.isTrue(freshlyVerified2)
+    t.isTrue(f.env.HasK9Access(92), 'a later successful check must be able to certify this citizenid with no lingering effect from the earlier failure')
+end)
+
+t.test('RefreshCertificationCache: the retry is BOUNDED, not infinite -- exactly CERT_REFRESH_RETRY_ATTEMPTS (3) attempts, then gives up', function()
+    local f = newFixture()
+    f.registerPlayer(93, 'CIT93', { name = 'police', grade = { level = 1 } })
+
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        error('connection lost')
+    end
+
+    local active, stateKnown = f.env.RefreshCertificationCache('CIT93', 'police')
+    t.equals(scalarCallCount, 3, 'must attempt exactly the bounded number of times -- never once (no retry at all) and never unboundedly')
+    t.isFalse(active)
+    t.isFalse(stateKnown)
+
+    -- Sanity: a genuinely eventual success within the retry budget (fails
+    -- twice, succeeds on the 3rd attempt) must be picked up as a real,
+    -- fresh confirmation -- the bound is on ATTEMPTS, not a hard "give up
+    -- after the first failure" in disguise.
+    scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount < 3 then error('connection lost') end
+        return 1
+    end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end
+    local active2, stateKnown2, freshlyVerified2 = f.env.RefreshCertificationCache('CIT93', 'police')
+    t.equals(scalarCallCount, 3, 'must have retried exactly up to the successful 3rd attempt, not fewer')
+    t.isTrue(active2)
+    t.isTrue(stateKnown2)
+    t.isTrue(freshlyVerified2)
+
+    -- This whole test calls RefreshCertificationCache directly, outside any
+    -- coroutine (exactly like every other direct call in this spec file) --
+    -- proves PcallWithBoundedRetry's own coroutine.isyieldable() guard
+    -- degrades to "retry immediately, no backoff" rather than erroring
+    -- ("attempt to yield from outside a coroutine") in that context.
+    t.equals(#f.waitCalls, 0, 'Wait() must never be called from a non-coroutine context -- the isyieldable guard must have skipped it')
 end)
 
 -- ======================================================================
@@ -2556,8 +2865,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- a granter who is not certifier-elig
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } }) -- below certifierGrade 4, not boss
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    f.commands['k9settier'].fn(1, { '2', 'senior' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
@@ -2569,8 +2877,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- an invalid tier name is rejected ou
     f.setPed(2, 200, vec3(0, 0, 0))
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](2, 'not-a-real-tier')
+    f.commands['k9settier'].fn(1, { '2', 'not-a-real-tier' })
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_tier'), 'error'))
     t.isFalse(updateCalled)
 end)
@@ -2578,16 +2885,14 @@ end)
 t.test('SetCertificationTier: FAIL-CLOSED -- self-action is rejected when Config.AllowSelfCertification is false', function()
     local f = newFixture({ allowSelfCert = false })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](1, 'senior')
+    f.commands['k9settier'].fn(1, { '1', 'senior' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.self_certification_disabled_hint'), 'error'))
 end)
 
 t.test('SetCertificationTier: FAIL-CLOSED -- an offline target is rejected', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    f.commands['k9settier'].fn(1, { '2', 'senior' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.tier_change_target_must_be_online_hint'), 'error'))
 end)
 
@@ -2597,8 +2902,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- a target beyond Config.CertifyProxi
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setPed(1, 1010, vec3(0, 0, 0))
     f.setPed(2, 1020, vec3(50, 0, 0))
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    f.commands['k9settier'].fn(1, { '2', 'senior' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.action_target_too_far_distance', tostring(5.0)), 'error'))
 end)
 
@@ -2608,8 +2912,7 @@ t.test('SetCertificationTier: FAIL-CLOSED -- a target with no active certificati
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } }) -- never certified
     f.setPed(1, 1010, vec3(0, 0, 0))
     f.setPed(2, 1020, vec3(0, 0, 0))
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    f.commands['k9settier'].fn(1, { '2', 'senior' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'))
 end)
 
@@ -2622,8 +2925,7 @@ t.test('SetCertificationTier: already holding the requested tier is a distinguis
     f.mysql.scalar.await = function() return 5 end
     f.mysql.single.await = function() return { tier = 'certified' } end
     f.env.RefreshCertificationCache('T1', 'police')
-    f.setSource(1)
-    f.events['qbx_k9unit:server:setCertificationTier'](2, 'certified')
+    f.commands['k9settier'].fn(1, { '2', 'certified' })
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_already_set'), 'inform'))
 end)
 
@@ -2642,8 +2944,7 @@ t.test('SetCertificationTier: TIER TRANSITION -- full success path promotes cert
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.single.await = function() return { tier = 'senior' } end -- post-update re-cache reflects the new tier
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:setCertificationTier'](20, 'senior')
+    f.commands['k9settier'].fn(10, { '20', 'senior' })
 
     t.equals(updateParams[1], 'senior')
     t.equals(updateParams[2], 'TARGET')
@@ -2670,8 +2971,7 @@ t.test('SetCertificationTier: TIER TRANSITION -- demotion certified -> trainee a
     f.env.RefreshCertificationCache('TARGET', 'police')
 
     f.mysql.single.await = function() return { tier = 'trainee' } end
-    f.setSource(10)
-    f.events['qbx_k9unit:server:setCertificationTier'](20, 'trainee')
+    f.commands['k9settier'].fn(10, { '20', 'trainee' })
 
     t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'trainee')
     t.isTrue(f.env.HasK9Access(20), 'a trainee still holds BASE K9 access -- tiering only gates higher capability, never base access')
@@ -2688,8 +2988,7 @@ t.test('SetCertificationTier: a thrown UPDATE reports tier_change_error, never a
     f.env.RefreshCertificationCache('TARGET', 'police')
 
     f.mysql.update.await = function() error('simulated connection drop') end
-    f.setSource(10)
-    local ok = pcall(f.events['qbx_k9unit:server:setCertificationTier'], 20, 'senior')
+    local ok = pcall(f.commands['k9settier'].fn, 10, { '20', 'senior' })
     t.isTrue(ok, 'must never propagate a thrown DB error')
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.tier_change_error'), 'error'))
     t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'certified', 'the cache must be untouched by a failed update')
@@ -2729,8 +3028,7 @@ t.test('SetCertificationTier: REGRESSION -- a zero-affected-rows UPDATE (no thro
     -- row as genuinely gone.
     f.mysql.scalar.await = function() return nil end
 
-    f.setSource(10)
-    local ok = pcall(f.events['qbx_k9unit:server:setCertificationTier'], 20, 'senior')
+    local ok = pcall(f.commands['k9settier'].fn, 10, { '20', 'senior' })
     t.isTrue(ok, 'must never propagate')
 
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the tier change did not land, never a bare success')
@@ -2756,8 +3054,7 @@ t.test('SetCertificationTier: REGRESSION -- a throwing UPDATE that ACTUALLY comm
     -- error.
     f.mysql.single.await = function() return { tier = 'senior' } end
 
-    f.setSource(10)
-    local ok, err = pcall(f.events['qbx_k9unit:server:setCertificationTier'], 20, 'senior')
+    local ok, err = pcall(f.commands['k9settier'].fn, 10, { '20', 'senior' })
     t.isTrue(ok, 'must not propagate: ' .. tostring(err))
 
     t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'senior', 'the cache must reflect the CONFIRMED true outcome, never the failed client-side call alone')
@@ -2780,16 +3077,14 @@ t.test('RenewCertification: FAIL-CLOSED -- disabled by default (Config.Features.
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:renewCertification'](2)
+    f.commands['k9recertify'].fn(1, { '2' })
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_feature_disabled'), 'error'))
 end)
 
 t.test('RenewCertification: FAIL-CLOSED -- a granter who is not certifier-eligible is rejected even with the feature enabled', function()
     local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
     f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:renewCertification'](2)
+    f.commands['k9recertify'].fn(1, { '2' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
@@ -2799,8 +3094,7 @@ t.test('RenewCertification: FAIL-CLOSED -- a target with no active certification
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setPed(1, 1010, vec3(0, 0, 0))
     f.setPed(2, 1020, vec3(0, 0, 0))
-    f.setSource(1)
-    f.events['qbx_k9unit:server:renewCertification'](2)
+    f.commands['k9recertify'].fn(1, { '2' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'))
 end)
 
@@ -2818,8 +3112,7 @@ t.test('RenewCertification: EXPIRY -- full success path extends expires_at via D
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- ~90 days out, post-renewal
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:renewCertification'](20)
+    f.commands['k9recertify'].fn(10, { '20' })
 
     t.equals(updateParams[1], 90)
     t.equals(updateParams[2], 'TARGET')
@@ -2848,8 +3141,7 @@ t.test('RenewCertification: a thrown UPDATE reports renew_error, never a silent 
     f.env.RefreshCertificationCache('TARGET', 'police')
 
     f.mysql.update.await = function() error('simulated connection drop') end
-    f.setSource(10)
-    local ok = pcall(f.events['qbx_k9unit:server:renewCertification'], 20)
+    local ok = pcall(f.commands['k9recertify'].fn, 10, { '20' })
     t.isTrue(ok)
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_error'), 'error'))
 end)
@@ -2892,8 +3184,7 @@ t.test('RenewCertification: REGRESSION -- a zero-affected-rows UPDATE (no thrown
     -- row as genuinely gone.
     f.mysql.scalar.await = function() return nil end
 
-    f.setSource(10)
-    local ok = pcall(f.events['qbx_k9unit:server:renewCertification'], 20)
+    local ok = pcall(f.commands['k9recertify'].fn, 10, { '20' })
     t.isTrue(ok, 'must never propagate')
 
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the renewal did not land, never a bare success')
@@ -2918,8 +3209,7 @@ t.test('RenewCertification: REGRESSION -- a throwing UPDATE that ACTUALLY commit
     -- the client-side error.
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- ~90 days out, post-renewal
 
-    f.setSource(10)
-    local ok, err = pcall(f.events['qbx_k9unit:server:renewCertification'], 20)
+    local ok, err = pcall(f.commands['k9recertify'].fn, 10, { '20' })
     t.isTrue(ok, 'must not propagate: ' .. tostring(err))
 
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.renew_success_granter_detail', '90'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
@@ -2943,8 +3233,7 @@ t.test('GrantSpecialization: FAIL-CLOSED -- an unconfigured specialization key i
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setPed(1, 100, vec3(0, 0, 0))
     f.setPed(2, 200, vec3(0, 0, 0))
-    f.setSource(1)
-    f.events['qbx_k9unit:server:grantSpecialization'](2, 'not-a-real-specialization')
+    f.commands['k9specialize'].fn(1, { '2', 'not-a-real-specialization' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.invalid_specialization_hint', 'explosives, narcotics'), 'error'))
 end)
 
@@ -2954,8 +3243,7 @@ t.test('GrantSpecialization: FAIL-CLOSED -- a target with no active base certifi
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setPed(1, 100, vec3(0, 0, 0))
     f.setPed(2, 200, vec3(0, 0, 0))
-    f.setSource(1)
-    f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
+    f.commands['k9specialize'].fn(1, { '2', 'narcotics' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.specialization_requires_active_cert_hint'), 'error'))
 end)
 
@@ -2973,8 +3261,7 @@ t.test('GrantSpecialization: SECURITY FIX -- a target whose base certification i
     local insertCalled = false
     f.mysql.insert.await = function() insertCalled = true; return 1 end
 
-    f.setSource(1)
-    f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
+    f.commands['k9specialize'].fn(1, { '2', 'narcotics' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.specialization_requires_active_cert_hint'), 'error'),
         'this precondition used to omit `not cached.expired`, unlike GetCertificationTier -- an expired-but-not-revoked row must be refused here too, not treated as still-active')
@@ -2999,8 +3286,7 @@ t.test('GrantSpecialization: full success path -- INSERT fires, cache reflects t
     f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
     f.mysql.query.await = function() return { { specialization = 'narcotics' } } end -- post-insert cache refresh
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+    f.commands['k9specialize'].fn(10, { '20', 'narcotics' })
 
     t.equals(insertParams[1], 'TARGET')
     t.equals(insertParams[2], 'police')
@@ -3030,8 +3316,7 @@ t.test('GrantSpecialization: an already-held specialization (existingId pre-chec
     local insertCalled = false
     f.mysql.insert.await = function() insertCalled = true; return 1 end
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+    f.commands['k9specialize'].fn(10, { '20', 'narcotics' })
 
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_already_granted'), 'inform'))
     t.isFalse(insertCalled)
@@ -3049,8 +3334,7 @@ t.test('GrantSpecialization: a duplicate-key error thrown by the INSERT is treat
     f.mysql.scalar.await = function() return nil end
     f.mysql.insert.await = function() error({ errno = 1062, message = 'Duplicate entry' }) end
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+    f.commands['k9specialize'].fn(10, { '20', 'narcotics' })
 
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_already_granted'), 'inform'))
 end)
@@ -3092,8 +3376,7 @@ t.test('GrantSpecialization: TIER CAPABILITY -- consulted with (targetCitizenid,
     f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
     f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+    f.commands['k9specialize'].fn(10, { '20', 'narcotics' })
 
     t.equals(capturedArgs[1], 'TARGET')
     t.equals(capturedArgs[2], 'police')
@@ -3121,8 +3404,7 @@ t.test('GrantSpecialization: TIER CAPABILITY -- the runtime existence guard genu
     f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
     f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+    f.commands['k9specialize'].fn(10, { '20', 'narcotics' })
 
     t.equals(insertParams[1], 'TARGET', 'a missing TierCapabilityPermits must fail OPEN, never block every grant on every server that predates tier capabilities')
 end)
@@ -3138,16 +3420,14 @@ t.test('RevokeSpecialization: FAIL-CLOSED -- a granter who is not certifier-elig
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } })
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:revokeSpecialization'](2, 'narcotics')
+    f.commands['k9unspecialize'].fn(1, { '2', 'narcotics' })
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_revoke_hint'), 'error'))
 end)
 
 t.test('RevokeSpecialization: an offline target is refused with a pointer to the offline command', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.setSource(1)
-    f.events['qbx_k9unit:server:revokeSpecialization'](2, 'narcotics')
+    f.commands['k9unspecialize'].fn(1, { '2', 'narcotics' })
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_target_offline_use_offline_command'), 'error'))
 end)
 
@@ -3162,8 +3442,7 @@ t.test('RevokeSpecialization: full online success path -- UPDATE fires, cache re
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.query.await = function() return {} end -- post-revoke cache refresh: no active specializations left
 
-    f.setSource(10)
-    f.events['qbx_k9unit:server:revokeSpecialization'](20, 'narcotics')
+    f.commands['k9unspecialize'].fn(10, { '20', 'narcotics' })
 
     t.equals(updateParams[1], 'REVOKER')
     t.equals(updateParams[2], 'TARGET')
@@ -3186,8 +3465,7 @@ t.test('RevokeSpecialization: a specialization not currently held is a distingui
     f.setPed(10, 1010, vec3(0, 0, 0))
     f.setPed(20, 1020, vec3(0, 0, 0))
     f.mysql.update.await = function() return 0 end
-    f.setSource(10)
-    f.events['qbx_k9unit:server:revokeSpecialization'](20, 'narcotics')
+    f.commands['k9unspecialize'].fn(10, { '20', 'narcotics' })
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_not_granted'), 'inform'))
 end)
 
@@ -3439,8 +3717,7 @@ t.test('RenewCertification: clears the warned/lapsed session flags so a genuinel
     t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_lapsed_notice'), 'error'), 'sanity: lapsed notice sent once')
 
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- renewed, far future
-    f.setSource(10)
-    f.events['qbx_k9unit:server:renewCertification'](20)
+    f.commands['k9recertify'].fn(10, { '20' })
 
     local lapsedCountAfterRenewal = 0
     for _, e in ipairs(f.notifyLog) do

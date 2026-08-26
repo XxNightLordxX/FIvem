@@ -2797,43 +2797,24 @@
     }
 
     /**
-     * English fallback text for the two 'client_enforced' badge/hint
-     * strings -- the SAME "resilience net" role DEFAULT_STRINGS plays for
-     * every S()-driven key, but kept as its OWN small pair here rather
-     * than folded into DEFAULT_STRINGS/S(): tests/tabletlocalization_spec.lua
-     * (off-limits to this pass, and itself locked from being edited by it)
-     * hardcodes DEFAULT_STRINGS at an EXACT 287 keys and the real
-     * `strings` NUI payload at EXACTLY 287 entries -- adding either new
-     * key through that normal path would push both counts to 289 and trip
-     * a locked assertion this pass has no way to update. client/tablet.lua
-     * sends the real, locale()-resolved text through two STANDALONE
-     * `tablet:open` fields instead (`blockClientEnforcedBadge`/
-     * `blockClientEnforcedHint` -- see that file's own OpenTablet() doc
-     * comment), captured below into `state.blockClientEnforcedBadge`/
-     * `state.blockClientEnforcedHint`; these two constants are what this
-     * page shows ONLY if that real text is ever missing (an older
-     * client/tablet.lua, or a locale() failure server-side) -- text kept
-     * byte-identical to locales/en.json's
-     * tablet.block_client_enforced_badge/_hint. FOLLOW-UP, reported: once
-     * tests/tabletlocalization_spec.lua's owner can update its hardcoded
-     * counts, fold these two back into the ordinary
-     * TABLET_STRING_KEYS/DEFAULT_STRINGS mechanism and retire this pair.
+     * The two 'client_enforced' badge/hint strings -- FOLDED into the
+     * ordinary DEFAULT_STRINGS/S() mechanism now that the locked key count
+     * that used to block this (tests/tabletlocalization_spec.lua hardcoded
+     * an EXACT key count) is gone -- see that spec's own "WHY THERE IS NO
+     * HARDCODED KEY COUNT ANY MORE". Previously sent as two STANDALONE
+     * `tablet:open` fields (`blockClientEnforcedBadge`/`blockClientEnforcedHint`)
+     * with their own hand-rolled fallback pair; client/tablet.lua now sends
+     * both through the ordinary `strings` payload like every other key, so
+     * these two functions are plain S() calls like any other label lookup.
+     * @returns {string}
      */
-    var CLIENT_ENFORCED_FALLBACK_BADGE = 'Enforced (client-side)';
-    var CLIENT_ENFORCED_FALLBACK_HINT = "Blocking this stops the ability on the player's own game client. Unlike a server-enforced block, a modified or cheating client can bypass it -- treat this as best-effort, not a guarantee.";
-
-    /** @returns {string} */
     function clientEnforcedBadgeText() {
-        return (typeof state.blockClientEnforcedBadge === 'string' && state.blockClientEnforcedBadge.length > 0)
-            ? state.blockClientEnforcedBadge
-            : CLIENT_ENFORCED_FALLBACK_BADGE;
+        return S('block_client_enforced_badge');
     }
 
     /** @returns {string} */
     function clientEnforcedHintText() {
-        return (typeof state.blockClientEnforcedHint === 'string' && state.blockClientEnforcedHint.length > 0)
-            ? state.blockClientEnforcedHint
-            : CLIENT_ENFORCED_FALLBACK_HINT;
+        return S('block_client_enforced_hint');
     }
 
     /**
@@ -12349,8 +12330,6 @@
         data = data || {};
         state.open = true;
         state.strings = (data.strings && typeof data.strings === 'object') ? data.strings : {};
-        state.blockClientEnforcedBadge = typeof data.blockClientEnforcedBadge === 'string' ? data.blockClientEnforcedBadge : null;
-        state.blockClientEnforcedHint = typeof data.blockClientEnforcedHint === 'string' ? data.blockClientEnforcedHint : null;
         state.capabilities = (data.capabilities && typeof data.capabilities === 'object') ? data.capabilities : {};
         // See this file's header NUI CONTRACT note on `requestedView` --
         // presentation hint only, consumed once by loadMyRecord() below

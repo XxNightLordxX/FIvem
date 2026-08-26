@@ -1747,15 +1747,16 @@ t.test('tablet:certTiersDelete: a successful delete forwards the refreshed tiers
 end)
 
 -- ----------------------------------------------------------------------
--- K9 Audit Trail viewer -- server/admin.lua's five tabletAudit* callbacks
--- (Cert/Partner/Search/Xp/Dept), bridged one-to-one by
--- tablet:auditCert/Partner/Search/Xp/Dept. Every one is forwarded
+-- K9 Audit Trail viewer -- server/admin.lua's six tabletAudit* callbacks
+-- (Cert/Partner/Search/Xp/Dept/Catalog), bridged one-to-one by
+-- tablet:auditCert/Partner/Search/Xp/Dept/Catalog. Every one is forwarded
 -- VERBATIM (no TranslateReasonResult -- server/admin.lua's own response
 -- shape already matches this contract's `{ok, error, message}` directly),
 -- so these tests cover only: shape validation (rejected before any
 -- server round trip), correct callback name/argument order, and the
--- `limit`/`value` optional-argument handling client/tablet.lua's own
--- OptionalNumericLimit/tablet:auditSearch comments describe.
+-- `limit`/`value`/`catalogName` optional/verbatim-argument handling
+-- client/tablet.lua's own OptionalNumericLimit/tablet:auditSearch/
+-- tablet:auditCatalog comments describe.
 -- ----------------------------------------------------------------------
 
 t.test('tablet:auditCert: missing/blank targetCitizenId is rejected before any server round trip', function()
@@ -1871,6 +1872,56 @@ t.test('tablet:auditSearch: recent mode forwards a real limit correctly position
     t.equals(f.callbackCallLog[1].args[1], 'recent')
     t.equals(f.callbackCallLog[1].args[2], '')
     t.equals(f.callbackCallLog[1].args[3], 25)
+end)
+
+t.test('tablet:auditCatalog: requires a non-blank catalogName, rejected before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:auditCatalog', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:auditCatalog', { catalogName = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:auditCatalog: `catalogName` is forwarded VERBATIM, unchecked against any client-side whitelist -- server/admin.lua\'s own CATALOG_AUDIT_SOURCES lookup is the real gate', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCatalog', { ok = false, error = 'invalid_args' })
+    f.callNui('tablet:auditCatalog', { catalogName = 'not-a-real-catalog' })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditCatalog')
+    t.equals(f.callbackCallLog[1].args[1], 'not-a-real-catalog')
+end)
+
+t.test('tablet:auditCatalog: forwards catalogName + limit, in that order, and returns the server response verbatim', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCatalog', {
+        ok = true,
+        rows = { { action = 'update', tier_key = 'master', detail = 'multiplier 1.0 -> 1.2', changed_by = 'HC1', changed_at = '2026-01-01 00:00:00' } },
+        label = 'Certification tier catalog audit trail',
+    })
+    local result = f.callNui('tablet:auditCatalog', { catalogName = 'certTiers', limit = 30 })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditCatalog')
+    t.equals(f.callbackCallLog[1].args[1], 'certTiers')
+    t.equals(f.callbackCallLog[1].args[2], 30)
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].tier_key, 'master')
+    t.equals(result.label, 'Certification tier catalog audit trail')
+end)
+
+t.test('tablet:auditCatalog: a non-number limit (or an absent one) is dropped to nil, never forwarded raw', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCatalog', { ok = true, rows = {}, label = '' })
+    f.callNui('tablet:auditCatalog', { catalogName = 'tabletThemes', limit = 'not-a-number' })
+    t.isNil(f.callbackCallLog[1].args[2])
+
+    f.callNui('tablet:auditCatalog', { catalogName = 'tabletThemes' })
+    t.isNil(f.callbackCallLog[2].args[2])
+end)
+
+t.test('tablet:auditCatalog: not_authorized/rate_limited from the server forward verbatim, no translation', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCatalog', { ok = false, error = 'not_authorized', message = 'You are not authorized to view this.' })
+    local result = f.callNui('tablet:auditCatalog', { catalogName = 'certTiers' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.equals(result.message, 'You are not authorized to view this.')
 end)
 
 -- ----------------------------------------------------------------------

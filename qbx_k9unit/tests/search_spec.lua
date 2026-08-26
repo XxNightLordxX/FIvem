@@ -1159,4 +1159,128 @@ t.test('PER-PERSON ContrabandAlerts: server/permissions.lua entirely absent + Re
     t.equals(f.triggerClientEventCount(), before)
 end)
 
+-- ============================================================================
+-- CONFIG-ABORT REGRESSION (this pass): Config.ContrabandAlertTiers and
+-- Config.SearchZones.alertBroadcastRadius used to be a pair of bare
+-- `assert`s inside this file's own onResourceStart handler. A malformed
+-- value must now warn and fall back instead of throwing -- and, the part a
+-- bare "does not throw" test would miss, GetContrabandAlertTier (and the
+-- searchTarget callback this file registers) must still resolve correctly
+-- afterward off the SUBSTITUTED safe value, not the malformed one. A fresh,
+-- fully independent env/Config (never the shared `env`/`Config` above).
+-- ============================================================================
+
+t.test('CONFIG-ABORT REGRESSION: a malformed Config.ContrabandAlertTiers (missing the mandatory clean baseline) and an over-ceiling alertBroadcastRadius must warn and fall back, never throw, and leave the file fully working', function()
+    local eventHandlersCfg = {}
+    local function AddEventHandlerCfg(eventName, handler)
+        eventHandlersCfg[eventName] = eventHandlersCfg[eventName] or {}
+        eventHandlersCfg[eventName][#eventHandlersCfg[eventName] + 1] = handler
+    end
+    local registeredCallbacksCfg = {}
+    local libStubCfg = { callback = { register = function(name, handler) registeredCallbacksCfg[name] = handler end } }
+    local printedCfg = {}
+    local function printStubCfg(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedCfg[#printedCfg + 1] = table.concat(parts, '\t')
+    end
+    local threadRunnerCfg = Sandbox.newThreadRunner()
+    local function CreateThreadCfg(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then error(('search_spec.lua CONFIG-ABORT REGRESSION: a CreateThread body errored: %s'):format(tostring(err))) end
+    end
+
+    local ConfigCfg = {
+        Features = {},
+        -- ABOVE the 200.0 hard ceiling.
+        SearchZones = { alertBroadcastRadius = 5000.0, searchCooldownMs = 5000 },
+        SearchContrabandItems = { 'weed_baggy' },
+        -- MALFORMED: the mandatory { minWeight = 0, alert = 'clean' }
+        -- baseline is entirely missing.
+        ContrabandAlertTiers = {
+            { minWeight = 1,   alert = 'whine' },
+            { minWeight = 250, alert = 'aggressive_bark' },
+        },
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
+    }
+
+    local envCfg = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        AddEventHandler = AddEventHandlerCfg,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        CreateThread = CreateThreadCfg,
+        Wait = threadRunnerCfg.Wait,
+        lib = libStubCfg,
+        print = printStubCfg,
+        exports = {
+            ox_inventory = {
+                GetInventoryItems = function() return {} end,
+                GetContainerFromSlot = function() return nil end,
+                GetItemCount = function() return 0 end,
+                RemoveItem = function() return false end,
+                RegisterStash = function() return true end,
+                RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
+        },
+        Config = ConfigCfg,
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', envCfg)
+    Sandbox.loadInto('../server/entities.lua', envCfg)
+    Sandbox.loadInto('../server/datastore.lua', envCfg)
+    Sandbox.loadInto('../server/events.lua', envCfg)
+    Sandbox.loadInto('../shared/compat/core.lua', envCfg)
+    Sandbox.loadInto('../shared/compat/inventory.lua', envCfg)
+
+    local loadOk, loadErr = pcall(Sandbox.loadInto, '../server/search.lua', envCfg)
+    t.isTrue(loadOk, 'server/search.lua must load without throwing: ' .. tostring(loadErr))
+
+    -- THE ACTUAL REGRESSION TEST -- must complete WITHOUT throwing. Wrapped
+    -- in pcall purely so a real regression (an assert firing again) is
+    -- reported as a clear, named test failure below rather than a raw Lua
+    -- error aborting this whole spec file's run.
+    local fireOk, fireErr = pcall(function()
+        for _, handler in ipairs(eventHandlersCfg['onResourceStart'] or {}) do
+            handler('qbx_k9unit')
+        end
+    end)
+    t.isTrue(fireOk, 'onResourceStart must complete without throwing on a malformed ContrabandAlertTiers/over-ceiling alertBroadcastRadius: ' .. tostring(fireErr))
+
+    -- The searchTarget callback (registered at file LOAD time, before
+    -- onResourceStart ever fires) must still be reachable -- proving this
+    -- file's own registration was never actually at risk from either guard.
+    t.isNotNil(registeredCallbacksCfg['qbx_k9unit:server:searchTarget'], 'searchTarget callback must still be registered')
+
+    -- GetContrabandAlertTier must now resolve off the SUBSTITUTED fallback
+    -- table, not the malformed configured one -- a totalWeight of 0 must
+    -- resolve to 'clean' even though the configured table never had that
+    -- baseline entry at all (this is the assertion a bare "did not throw"
+    -- check would miss: the corrected value must actually be in effect).
+    t.isNotNil(envCfg.GetContrabandAlertTier, 'GetContrabandAlertTier must still be defined')
+    t.equals(envCfg.GetContrabandAlertTier(0).alert, 'clean', 'a genuinely clean search must resolve to clean off the fallback tier table')
+    t.equals(envCfg.GetContrabandAlertTier(1).alert, 'whine', 'the fallback table must resolve every other tier correctly too')
+
+    -- Config.SearchZones.alertBroadcastRadius must have been clamped DOWN
+    -- to the 200.0 hard ceiling, not left at the configured 5000.0.
+    t.equals(ConfigCfg.SearchZones.alertBroadcastRadius, 200.0, 'alertBroadcastRadius must be clamped to the 200.0 ceiling')
+
+    local warnedTiers, warnedRadius = false, false
+    for _, line in ipairs(printedCfg) do
+        if line:find('ContrabandAlertTiers', 1, true) then warnedTiers = true end
+        if line:find('alertBroadcastRadius', 1, true) then warnedRadius = true end
+    end
+    t.isTrue(warnedTiers, 'a malformed Config.ContrabandAlertTiers must print a warning naming it, not fail silently either')
+    t.isTrue(warnedRadius, 'an over-ceiling alertBroadcastRadius must print a warning naming it, not fail silently either')
+end)
+
 os.exit(t.summary())

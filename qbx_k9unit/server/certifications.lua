@@ -204,6 +204,20 @@
       the cache also tracks job. Decision: store `{ active, job }` instead
       of a bare boolean; it's a strict superset of what §4.3 asked for and
       avoids a second parallel cache that could drift out of sync.
+    - COULD-NOT-DETERMINE (lifecycle QA pass): `Certifications[citizenid]`
+      being ABSENT is now a meaningfully different state from `{ active =
+      false, job = ... }` being PRESENT — the former means "no confirmed
+      answer exists yet" (a fresh login/backfill that has not been checked,
+      or a checked-and-failed read with nothing to fall back on); the
+      latter means "the database was actually asked and said no." Every
+      access-relevant reader in this file already treats both the same way
+      for the purposes of DENYING access (a `cached and cached.active`
+      pattern, unaffected by this note) — that is still correct and is not
+      what changed. What changed is that RefreshCertificationCache no
+      longer WRITES the absent case as if it were the confirmed-false one
+      on a transient query failure — see that function's own doc comment,
+      and the "COULD-NOT-DETERMINE HANDLING" section directly above it, for
+      the full retry/bookkeeping/resync-sweep mechanism this enables.
 
     ======================================================================
     CERTIFICATION DEPTH (this pass) — DEVELOPER_REFERENCE.md Part A §2 (revoke
@@ -1049,6 +1063,104 @@ function HasK9Access(source)
     return false
 end
 
+-- ======================================================================
+-- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) -- see
+-- RefreshCertificationCache's own doc comment below for the full "why".
+-- Short version: a transient query failure (timeout, dropped connection,
+-- busy pool) is not the same fact as a confirmed "not certified" answer,
+-- and treating the two as interchangeable is exactly the silent,
+-- session-long lockout this pass exists to close -- most dangerously
+-- during server/main.lua's onResourceStart backfill loop, which calls
+-- RefreshCertificationCache once per already-connected player in one tight
+-- burst (the single highest-risk moment for a transient failure a real
+-- server sees). The three pieces below close it: a small bounded retry
+-- inside the read itself, a separate bookkeeping table for "this
+-- citizenid's last attempt could not be confirmed either way" (NEVER
+-- merged into `Certifications` itself -- an unresolved determination must
+-- never be mistaken for a real cached answer by HasK9Access or anything
+-- else that reads that table), and a periodic bounded resync sweep
+-- (defined near the bottom of this file) that keeps retrying exactly those
+-- entries so a player recovers without needing to reconnect.
+-- ======================================================================
+
+-- Bounded retry budget for RefreshCertificationCache's own existence-check
+-- query (K9Store.Cert_GetActiveId) -- deliberately NOT applied to the
+-- secondary tier/expiry metadata read a few lines below, which already has
+-- its own, unrelated "degrade to the safe default, never more restrictive"
+-- fallback (see that branch's own comment) and is not what determines
+-- `active`. Short and LINEAR on purpose, never exponential: this exists to
+-- ride out a momentary connection blip or a momentarily busy pool during a
+-- tight burst of calls, not to wait out a genuinely unreachable database --
+-- an unbounded or long retry here would turn one player's transient
+-- failure into every subsequent player in the SAME onResourceStart backfill
+-- burst waiting behind it. Three attempts at a 200ms linear step costs at
+-- most 200+400 = 600ms added to ONE player's own refresh before this
+-- function gives up and moves on -- the backfill loop's own `for` continues
+-- to the next player regardless, exactly like every other iteration.
+local CERT_REFRESH_RETRY_ATTEMPTS = 3
+local CERT_REFRESH_RETRY_BACKOFF_MS = 200
+
+--- Runs `fn()` up to `attempts` times (always at least once), waiting
+--- `backoffMs * attemptNumber` between tries (never before the first,
+--- never after the last) -- a short, linear backoff, not exponential; see
+--- CERT_REFRESH_RETRY_ATTEMPTS/CERT_REFRESH_RETRY_BACKOFF_MS's own comment
+--- for why linear is the right choice at this small a scale. Mirrors a
+--- bare `pcall(fn)`'s own two-or-more-return-value contract exactly --
+--- callers check the leading boolean exactly like they would a bare pcall
+--- -- so this is a drop-in replacement at every call site in this file
+--- that used to be `pcall(f, ...)` and now needs a bounded retry instead of
+--- a single attempt.
+--- @param fn function -- takes no arguments; wrap a call with its own
+--- arguments in a closure at the call site (this file's own established
+--- convention -- see server/datastore.lua's identical reasoning on its own
+--- `pcall(function() return MySQL.query.await(...) end)` for why the
+--- closure form is used instead of `pcall(fn, ...)` -- avoids re-deriving
+--- that same footgun here for a second call site).
+--- @param attempts number
+--- @param backoffMs number
+--- @return boolean ok
+--- @return any resultOrErr
+---
+--- `coroutine.isyieldable()` GUARD: every real call site in this file runs
+--- inside an FXServer-managed coroutine (an event handler, a command
+--- handler, or this file's own CreateThread-based sweeps), where `Wait()`
+--- is always safe to call -- so in production this guard is always true
+--- and the backoff behaves exactly as documented above. It exists so this
+--- function is ALSO safe to call directly from a plain, non-coroutine Lua
+--- call (this resource's own test suite calls RefreshCertificationCache
+--- this way throughout tests/certifications_spec.lua): `Wait()` ultimately
+--- reaches `coroutine.yield()`, which Lua itself errors on when called
+--- outside any coroutine ("attempt to yield from outside a coroutine") --
+--- an error this function's own caller has no reason to expect and no
+--- pcall protecting it from. Skipping the backoff in that one case still
+--- preserves the real, load-bearing guarantee (a bounded NUMBER of
+--- attempts before giving up) -- only the WAIT between them is skipped,
+--- and only when there is no coroutine for it to suspend in the first
+--- place.
+local function PcallWithBoundedRetry(fn, attempts, backoffMs)
+    local ok, result
+    for attempt = 1, attempts do
+        ok, result = pcall(fn)
+        if ok then return ok, result end
+        if attempt < attempts and coroutine.isyieldable() then
+            Wait(backoffMs * attempt)
+        end
+    end
+    return ok, result
+end
+
+-- CertificationCheckUnresolved[citizenid] = { job = string, attempts =
+--   number, firstFailedAt = number? } -- set only when
+-- RefreshCertificationCache exhausts CERT_REFRESH_RETRY_ATTEMPTS with no
+-- confirmed answer either way for `job`; cleared the instant a LATER call
+-- (a reconnect, a grant/revoke touch, or the periodic resync sweep below)
+-- actually confirms one, real or absent. Purely a bookkeeping table for the
+-- operator-facing message and the resync sweep -- NEVER read by
+-- HasK9Access/GetCertificationTier/HasSpecialization/any other
+-- access-relevant function, and never merged into `Certifications` itself.
+-- Local: nothing outside this file needs it.
+local CertificationCheckUnresolved = {}
+
 --- Re-queries the active-cert row for (citizenid, jobName) and updates the
 --- in-memory cache. Exposed globally (no `local`) — see FILE-TO-FILE
 --- CONTRACT above for every call site.
@@ -1062,33 +1174,92 @@ end
 --- backfill loop's own comment in server/main.lua, an uncaught error here
 --- would abort processing for every subsequent player in that loop — the
 --- exact class of ship-blocking bug already found and fixed once in this
---- file for a different root cause. Wrap the read in pcall and, on
---- failure, log it and fail CLOSED (cache `active = false`) rather than
---- leaving stale/wrong cache state — matches this file's own access-gating
---- posture of never treating an unreadable cert row as an active grant.
+--- file for a different root cause. Wrap the read in a bounded retry and,
+--- on total failure, treat it as COULD-NOT-DETERMINE rather than a
+--- confirmed revoke — see "COULD-NOT-DETERMINE HANDLING" above for the
+--- full contract this now implements. HasK9Access's own posture is
+--- UNCHANGED and still correct: an unresolved citizenid still fails closed
+--- for access (matching config.lua's own "nobody may end up with MORE
+--- access than a working database would give them" invariant) — what
+--- changed is that this function no longer WRITES a confirmed-false
+--- record to get there, which is what let a transient blip permanently
+--- outlive the blip itself.
 --- @param citizenid string
 --- @param jobName string
---- @return boolean active — the freshly-cached value, so callers (e.g.
---- server/main.lua's onResourceStart backfill, which has no access to the
---- local Certifications table below) don't need their own accessor just
---- to resync a dependent value like the k9certified metadata mirror.
+--- @return boolean active — the best currently-known answer: freshly
+--- confirmed against the DB by this call, retained from a genuine PRIOR
+--- confirmation for this exact job, or `false` when nothing is known at
+--- all.
+--- @return boolean stateKnown — true when `active` reflects a real,
+--- trustworthy answer (freshly confirmed OR retained from a genuine prior
+--- confirmation for this exact job); false only when there is no known
+--- answer at all (this call could not confirm one and no matching prior
+--- confirmation existed either). Any caller that mirrors `active` into
+--- player-facing/display state (server/main.lua's onResourceStart
+--- backfill, this file's own PlayerLoaded handler) MUST check this before
+--- writing anywhere — writing an unchecked `active` on a `stateKnown ==
+--- false` result would manufacture exactly the false "not certified"
+--- signal this whole fix exists to stop producing.
+--- @return boolean freshlyVerified — true only when THIS call's own query
+--- actually succeeded just now (whether the row turned out active or not).
+--- A caller that just performed its OWN write and wants to read the cache
+--- back for a value that reflects THAT write specifically (not a retained
+--- pre-write value that happens to also satisfy `stateKnown`) must check
+--- this instead — see SetCertificationTier/SetCertificationTierOffline/
+--- RenewCertification's own `freshlyVerified`-gated cache reads for why:
+--- `stateKnown` alone would let a stale, retained pre-write cache entry
+--- masquerade as confirmation of a write that committed moments earlier
+--- but whose own immediate read-back happened to fail.
 function RefreshCertificationCache(citizenid, jobName)
-    local queryOk, activeIdOrErr = pcall(K9Store.Cert_GetActiveId, citizenid, jobName)
+    local queryOk, activeIdOrErr = PcallWithBoundedRetry(
+        function() return K9Store.Cert_GetActiveId(citizenid, jobName) end,
+        CERT_REFRESH_RETRY_ATTEMPTS, CERT_REFRESH_RETRY_BACKOFF_MS
+    )
 
     if not queryOk then
-        print(('[qbx_k9unit] RefreshCertificationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(activeIdOrErr)))
-        -- FAIL CLOSED: an unreadable cert row must never be treated as an
-        -- active grant — see doc comment above.
-        Certifications[citizenid] = { active = false, job = jobName }
-        Specializations[citizenid] = nil
-        return false
+        -- COULD-NOT-DETERMINE, not confirmed-absent -- see "COULD-NOT-
+        -- DETERMINE HANDLING" above for the full contract. Deliberately
+        -- does NOT write `{ active = false, job = jobName }` here: doing so
+        -- would be indistinguishable, to every reader of `Certifications`,
+        -- from a genuine revoke -- exactly the bug this pass exists to
+        -- close.
+        local previous = Certifications[citizenid]
+        local previousMatchesThisJob = previous ~= nil and previous.job == jobName
+
+        CertificationCheckUnresolved[citizenid] = {
+            job = jobName,
+            attempts = CERT_REFRESH_RETRY_ATTEMPTS,
+            firstFailedAt = (CertificationCheckUnresolved[citizenid] and CertificationCheckUnresolved[citizenid].firstFailedAt) or NowUnix(),
+        }
+
+        if previousMatchesThisJob then
+            print((
+                '[qbx_k9unit] CERTIFICATION CHECK FAILED for citizenid=%s job=%s after %d attempt(s): %s -- ' ..
+                'this is NOT a confirmed revoke. KEEPING the previous cached state (active=%s) rather than ' ..
+                'resetting it to uncertified. A bounded resync sweep will keep retrying this citizenid ' ..
+                'automatically; if this message repeats for the same citizenid, check the database connection.'
+            ):format(citizenid, jobName, CERT_REFRESH_RETRY_ATTEMPTS, tostring(activeIdOrErr), tostring(previous.active)))
+            return previous.active, true, false
+        end
+
+        print((
+            '[qbx_k9unit] CERTIFICATION CHECK FAILED for citizenid=%s job=%s after %d attempt(s): %s -- ' ..
+            'this is an UNKNOWN answer, NOT a confirmed "not certified" one. No previous cached state exists ' ..
+            'for this exact job, so nothing is being written to the cache (left UNSET, never a manufactured ' ..
+            '`false`). HasK9Access will deny access until this resolves, exactly as it would for a real ' ..
+            'revoke -- but the operator should know this citizenid may in fact BE certified and the server ' ..
+            'simply could not confirm it yet. A bounded resync sweep will keep retrying automatically.'
+        ):format(citizenid, jobName, CERT_REFRESH_RETRY_ATTEMPTS, tostring(activeIdOrErr)))
+        return false, false, false
     end
+
+    CertificationCheckUnresolved[citizenid] = nil
 
     local active = activeIdOrErr ~= nil
     if not active then
         Certifications[citizenid] = { active = false, job = jobName }
         Specializations[citizenid] = nil
-        return false
+        return false, true, true
     end
 
     -- CERTIFICATION DEPTH (this pass, Part A §5/§9) — tier/expiry
@@ -1147,7 +1318,7 @@ function RefreshCertificationCache(citizenid, jobName)
         expired = IsExpiredUnix(expiresAtUnix),
     }
     RefreshSpecializationCache(citizenid, jobName)
-    return true
+    return true, true, true
 end
 
 --- Re-checks a SPECIFIC (citizenid, job) row's `active` column directly
@@ -1463,6 +1634,145 @@ local CERTIFY_ACTION_COOLDOWN_MS = 1500
 -- "check, and stamp iff not on cooldown" ordering.
 local CertifyActionCooldown = NewCooldown(CERTIFY_ACTION_COOLDOWN_MS)
 CertifyActionCooldown.RegisterPlayerDropped()
+
+-- ECONOMY FIX (dedicated K9 pass, 2026-08-26 -- self-cert/decertify farm
+-- loop, red-team-flagged): CERTIFY_ACTION_COOLDOWN_MS above and this new
+-- tracker solve DIFFERENT problems, and conflating them is exactly the bug
+-- being fixed here. CERTIFY_ACTION_COOLDOWN_MS is a flat, per-GRANTER
+-- fat-finger guard on the ACTION (grant/revoke) -- it exists so a certifier
+-- cannot double-click their way into two grants/revokes in the same
+-- network tick, nothing more. It was never a MINT throttle, and the
+-- comment that used to claim otherwise here (at GrantCertification/
+-- GrantCertificationOffline's own AwardHandlerXP call sites below -- search
+-- this file for "FALSIFIED CLAIM") and in config.lua's
+-- Config.Features.HandlerXPProgression/Config.HandlerXP headers was simply
+-- wrong, by this codebase's OWN standard:
+-- Config.Features.HandlerXPProgression's header draws exactly this
+-- action-cooldown-vs-mint-cooldown distinction for handlerTreatK9
+-- (server/medkit.lua's per-TARGET MedkitCooldown throttles the action, not
+-- a per-actor mint) and handlerKennelDeploy (server/kennel.lua's
+-- DeployCooldown, same shape) -- and correctly leaves BOTH unwired until a
+-- real mint cooldown lands for each. handlerCertifyK9 got a pass it never
+-- earned: CERTIFY_ACTION_COOLDOWN_MS is the exact same "throttles the
+-- action, not a per-actor mint" shape as those two, just spelled
+-- differently (per-granter instead of per-target/per-actor), and Config.
+-- AllowSelfCertification (true by default) plus RevokeCertification's own
+-- "proximity is skipped for self-certification" branch make it trivial for
+-- an already-eligible certifier to be their OWN repeatable target:
+-- `/k9certify <self>` then `/k9decertify <self>`, on repeat, each side only
+-- 1500ms apart (CERTIFY_ACTION_COOLDOWN_MS is a SINGLE tracker shared by
+-- grant AND revoke, keyed by granterSrc, so the fastest full cycle is
+-- 2 x 1500ms = 3000ms), and RevokeCertification's own base-revoke UPDATE
+-- means the NEXT GrantCertification for that same (citizenid, job) always
+-- sees `existingId == nil` again -- a genuinely "NEW" certification, by
+-- this file's own existingId-based test, every single cycle.
+--
+-- THE ARITHMETIC THAT MAKES THIS THE WORST FARM IN THIS FILE, RE-DERIVED
+-- FROM THE REAL SHIPPED CONSTANTS (measured, not argued from reading):
+-- 50 XP (Config.HandlerXP.awards.handlerCertifyK9) every 3,000ms
+-- (2 x CERTIFY_ACTION_COOLDOWN_MS) = 60,000 XP/hr GROSS, uncapped -- more
+-- than TEN TIMES server/progression.lua's own EIGHTH-XP-FARM-FIX ceiling
+-- for round-robining all four K9-mechanic mint cooldowns together
+-- (5,700 XP/hr). The shared cross-mechanic XP mint budget (3,600 XP/hr +
+-- a one-time starter allowance, server/progression.lua's XP_MINT_BUDGET_*)
+-- DOES still bound the damage -- nobody mints unlimited XP -- but at
+-- 60,000 XP/hr gross this ONE action alone saturates that ENTIRE shared
+-- hourly budget in well under a minute, versus 13.92 minutes for
+-- handlerKennelDeploy (5,760 XP/hr gross, uncapped, itself already judged
+-- UNSAFE and left deliberately unwired for exactly that reason -- see
+-- config.lua's Config.Features.HandlerXPProgression header). Reachable by
+-- ANY certifier-grade officer (or boss) alone, no accomplice, no real K9
+-- work, in seconds.
+--
+-- FIX: a real per-actor MINT cooldown on the handlerCertifyK9 AWARD itself
+-- -- never on the grant/revoke ACTION (CERTIFY_ACTION_COOLDOWN_MS above is
+-- unchanged and still guards fat-fingering; lengthening it would only slow
+-- down legitimate admin work without closing this loop, since the loop
+-- never needed anything faster than 1500ms per side). Keyed by the
+-- (GRANTER, TARGET) citizenid PAIR, not by granter alone and not by target
+-- alone:
+--   - Per-granter alone would also throttle a certifier legitimately
+--     certifying several DIFFERENT genuine new recruits in a row -- that is
+--     real work and must keep paying every time.
+--   - Per-target alone would block two DIFFERENT certifiers from each
+--     legitimately certifying the same eventual target into two different
+--     departments (a real, if rare, cross-training scenario) -- no reason
+--     to punish the SECOND certifier for the first one's unrelated grant.
+--   - Per-(granter, target) pair is the narrowest key that actually matches
+--     the exploit shape: the SAME certifier repeatedly minting off the SAME
+--     person (most often themselves).
+--
+-- WINDOW CHOSEN -- 24 REAL HOURS, DELIBERATELY, mirroring this same
+-- codebase's own partnershipTenure1Day precedent (Config.XP.awards) for
+-- "how long before a repeat of the same relationship counts as a new,
+-- distinct event rather than a repeat of the last one": a certifier
+-- re-certifying the exact same person again within the same day is
+-- overwhelmingly a repeat/farm signal (an accidental double-grant, or
+-- exactly this loop); re-certifying them after a day is a plausible,
+-- distinct real event (they left the department and came back, an earlier
+-- revoke-for-cause was reversed, etc.) and pays again. A FIRST
+-- certification of a genuinely new person is a real milestone and always
+-- pays immediately, regardless of how recently the SAME granter paid out
+-- for a DIFFERENT target -- this cooldown never touches any other
+-- (granter, target) pair.
+--
+-- RESULTING ARITHMETIC: capped at 50 XP per (granter, target) pair per 24h
+-- = ~2.08 XP/hr from any single pair -- the self-cert loop's 60,000 XP/hr
+-- gross collapses to a number the shared 3,600 XP/hr budget does not even
+-- notice. To make handlerCertifyK9 alone matter again at scale, an
+-- attacker would need dozens of genuinely DISTINCT real targets, each an
+-- actual grant+revoke round trip against an actual other citizenid -- a
+-- fundamentally different, far more expensive and far more visible attack
+-- than a solo loop, and squarely the kind of "real, if unusual, activity"
+-- this resource's economy is built to tolerate rather than the kind of
+-- "farm loop" it exists to close.
+--
+-- NOT :RegisterPlayerDropped() -- keyed by CITIZENID, not player source
+-- (mirrors this file's own ExpiryWarned/ExpiryLapsedNotified tables and
+-- server/search.lua's CoopSearchXpMintCooldown, both citizenid-keyed and
+-- both documented as deliberately NOT using :RegisterPlayerDropped for the
+-- same reason: that hook clears by numeric `source`, which would never
+-- match a citizenid key, and clearing on disconnect would defeat the
+-- entire point of a cooldown meant to survive a relog). Bounded instead by
+-- its own independent TTL sweep so this resource's memory footprint does
+-- not grow forever across a long server lifetime -- same shape as
+-- CoopSearchXpMintCooldown's own sweep in server/search.lua.
+--
+-- ACCEPTED, DOCUMENTED CAVEAT: this tracker is in-memory only, like every
+-- other cooldown in this file (CertifyActionCooldown above included) --
+-- a resource or server RESTART resets it, and a (granter, target) pair
+-- that just paid out could pay out again immediately after one. This is a
+-- narrower gap than the loop being closed: restarting a resource requires
+-- admin action, not something a player can trigger at will the way the
+-- original loop could be run indefinitely without any admin involvement.
+-- Persisting this would need a new table/column (this file's own
+-- migration-numbering precedent, e.g. migration 0017/0018, would be the
+-- shape) -- judged out of scope for this pass, which exists to close the
+-- player-triggerable loop, not to make every anti-farm structure in this
+-- resource restart-proof. Flagged here explicitly rather than silently
+-- left unmentioned, matching this pass's own PairTenureSeed finding
+-- (server/partnership.lua) being called out the same way.
+local CERTIFY_XP_MINT_COOLDOWN_MS = 24 * 60 * 60 * 1000 -- 24 real hours
+local CertifyXpMintCooldown = NewCooldown()
+CertifyXpMintCooldown.StartSweep(CERTIFY_XP_MINT_COOLDOWN_MS, function(now, loggedAt)
+    return (now - loggedAt) > (CERTIFY_XP_MINT_COOLDOWN_MS * 2)
+end)
+
+--- Composite key for CertifyXpMintCooldown -- a flat NewCooldown() instance
+--- (not NewNestedCooldown) keyed by a single "granterCitizenid:targetCitizenid"
+--- string, matching server/main.lua's own resolved-identity-string precedent
+--- (`'vehicle:<plate>' | 'person:<citizenid>'`) rather than the two-level
+--- shape: nothing here ever needs "clear every target for this granter in
+--- one shot" (NewNestedCooldown's own :Clear semantics), and a flat
+--- NewCooldown is what exposes :StartSweep, which this tracker needs and
+--- NewNestedCooldown does not offer (see server/cooldowns.lua's own
+--- constructor comparison).
+--- @param granterCitizenid string
+--- @param targetCitizenid string
+--- @return string
+local function CertifyXpMintKey(granterCitizenid, targetCitizenid)
+    return granterCitizenid .. ':' .. targetCitizenid
+end
 
 -- SECURITY FIX (dedicated K9 pass, 2026-08-25): closes GrantCertification's
 -- check-then-act TOCTOU on ITS OWN TERMS, independent of whether
@@ -1864,20 +2174,29 @@ local function GrantCertification(granterSrc, targetServerId)
         -- the config-documented 'handlerCertifyK9' action: this INSERT only
         -- ever runs for a genuinely NEW certification (existingId's own
         -- check above already refused a re-grant onto an already-active
-        -- row), so this is exactly the "rare and deliberate by nature"
-        -- moment config.lua's own Config.HandlerXP header names as the
-        -- reason this is the single highest award in that table. Safe to
-        -- call unconditionally here (AwardHandlerXP itself re-checks
+        -- row) -- but "genuinely new INSERT" is NOT the same claim as
+        -- "rare and hard to repeat cheaply". A self-certifying (or boss)
+        -- officer can grant, then revoke, then grant the SAME target again
+        -- in seconds (Config.AllowSelfCertification + this function's own
+        -- per-granter IsCertifyActionOnCooldown alone never stopped that --
+        -- see CertifyXpMintCooldown's own declaration comment above, near
+        -- CERTIFY_ACTION_COOLDOWN_MS, for the full "FALSIFIED CLAIM"
+        -- writeup and arithmetic; the comment that used to sit here making
+        -- that exact false claim is corrected, not just patched around).
+        -- CertifyXpMintCooldown below is the real, dedicated per-
+        -- (granter, target) MINT throttle that closes it -- gates ONLY
+        -- this XP payout, never the certification grant itself, which
+        -- always succeeds regardless. Safe to call AwardHandlerXP
+        -- unconditionally here (it itself re-checks
         -- Config.Features.HandlerXPProgression as its own first line, and
         -- this file does not need to know or care whether that flag is on)
-        -- -- already covered by this same function's own per-granter
-        -- IsCertifyActionOnCooldown throttle above, so no new anti-farm
-        -- state is needed for this call site. Runtime existence guard, not
-        -- a load-order assumption (server/progression.lua loads AFTER this
-        -- file in fxmanifest.lua's server_scripts list) -- same
-        -- soft-dependency convention as ApplyK9AppearanceOnGrant's own
-        -- guard immediately below.
-        if type(AwardHandlerXP) == 'function' then
+        -- -- runtime existence guard, not a load-order assumption
+        -- (server/progression.lua loads AFTER this file in
+        -- fxmanifest.lua's server_scripts list) -- same soft-dependency
+        -- convention as ApplyK9AppearanceOnGrant's own guard immediately
+        -- below.
+        if type(AwardHandlerXP) == 'function'
+            and CertifyXpMintCooldown.Consume(CertifyXpMintKey(granterCitizenid, targetCitizenid), CERTIFY_XP_MINT_COOLDOWN_MS) then
             AwardHandlerXP(granterCitizenid, 'handlerCertifyK9')
         end
 
@@ -2050,15 +2369,21 @@ local function GrantCertificationOffline(granterSrc, citizenid, jobName)
 
         FireOutboundEvent('qbx_k9unit:events:certificationGranted', citizenid, jobName, granterCitizenid)
 
-        -- HANDLER XP -- same 'handlerCertifyK9' award, same reasoning, as
+        -- HANDLER XP -- same 'handlerCertifyK9' award, same
+        -- CertifyXpMintCooldown per-(granter, target) mint throttle, as
         -- GrantCertification's own identical call above (see that call
-        -- site's own doc comment for the full writeup): this is a second
-        -- door to the exact same "a NEW certification was just granted"
-        -- event, and a handler who happens to grant through
-        -- /k9certifyoffline instead of /k9certify must not be treated
-        -- differently. Already covered by this function's own identical
-        -- per-granter IsCertifyActionOnCooldown throttle above.
-        if type(AwardHandlerXP) == 'function' then
+        -- site's own doc comment, and CertifyXpMintCooldown's own
+        -- declaration comment near CERTIFY_ACTION_COOLDOWN_MS, for the full
+        -- writeup): this is a second door to the exact same "a NEW
+        -- certification was just granted" event, and a handler who happens
+        -- to grant through /k9certifyoffline instead of /k9certify must be
+        -- throttled identically, not treated as a separate, unthrottled
+        -- mint path. IsCertifyActionOnCooldown alone (this function's own
+        -- per-granter action cooldown) never covered this -- same
+        -- FALSIFIED CLAIM this pass corrects at GrantCertification's call
+        -- site, not repeated here.
+        if type(AwardHandlerXP) == 'function'
+            and CertifyXpMintCooldown.Consume(CertifyXpMintKey(granterCitizenid, citizenid), CERTIFY_XP_MINT_COOLDOWN_MS) then
             AwardHandlerXP(granterCitizenid, 'handlerCertifyK9')
         end
 
@@ -2838,7 +3163,7 @@ local function SetCertificationTier(granterSrc, targetServerId, newTier)
         return false, 'target_not_actively_certified'
     end
 
-    RefreshCertificationCache(targetCitizenid, jobName)
+    local _, _, freshlyVerified = RefreshCertificationCache(targetCitizenid, jobName)
 
     -- Read the tier back from the now-authoritative cache before telling
     -- either party anything changed -- mirrors RenewCertification's own
@@ -2846,9 +3171,16 @@ local function SetCertificationTier(granterSrc, targetServerId, newTier)
     -- trusting the requested `newTier` (belt-and-braces alongside the
     -- affected-rows check above, covering the reconciled-thrown-error
     -- path where confirmation came from a separate read). Falls back to
-    -- `newTier` only if the cache is somehow unavailable immediately
-    -- after a confirmed write, never silently showing a stale value.
-    local confirmedCached = Certifications[targetCitizenid]
+    -- `newTier` if the cache is somehow unavailable immediately after a
+    -- confirmed write, never silently showing a stale value -- and,
+    -- lifecycle QA pass, if the read-back above itself hit a transient
+    -- failure: `freshlyVerified` (RefreshCertificationCache's own 3rd
+    -- return value) is checked explicitly rather than just `confirmedCached
+    -- and confirmedCached.active`, because a RETAINED pre-write cache entry
+    -- would satisfy that check too -- with the OLD tier, not the one this
+    -- UPDATE (already confirmed committed above) just wrote -- and silently
+    -- display stale data as if it were a fresh confirmation.
+    local confirmedCached = freshlyVerified and Certifications[targetCitizenid]
     local confirmedTier = (confirmedCached and confirmedCached.active and confirmedCached.job == jobName and confirmedCached.tier) or newTier
 
     FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', targetCitizenid, jobName, oldTier, confirmedTier, granterCitizenid)
@@ -3003,14 +3335,14 @@ local function SetCertificationTierOffline(granterSrc, citizenid, jobName, newTi
     -- see RevokeCertificationOffline's own identical call/comment above
     -- ("RefreshCertificationCache is a plain DB-query-and-cache-write
     -- function with no live-source requirement").
-    RefreshCertificationCache(citizenid, jobName)
+    local _, _, freshlyVerified = RefreshCertificationCache(citizenid, jobName)
 
     -- Read the tier back from the now-authoritative cache before telling
     -- the granter anything changed -- see SetCertificationTier's own
-    -- identical doc comment above for the full reasoning. Falls back to
-    -- `newTier` only if the cache is somehow unavailable immediately
-    -- after a confirmed write.
-    local confirmedCached = Certifications[citizenid]
+    -- identical doc comment above for the full reasoning, including the
+    -- `freshlyVerified` guard against a retained-but-stale pre-write cache
+    -- entry masquerading as a fresh confirmation.
+    local confirmedCached = freshlyVerified and Certifications[citizenid]
     local confirmedTier = (confirmedCached and confirmedCached.active and confirmedCached.job == jobName and confirmedCached.tier) or newTier
 
     FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', citizenid, jobName, oldTier, confirmedTier, granterCitizenid)
@@ -3217,8 +3549,15 @@ local function RenewCertification(granterSrc, targetServerId)
         return false, 'target_not_actively_certified'
     end
 
-    RefreshCertificationCache(targetCitizenid, jobName)
-    local newCached = Certifications[targetCitizenid]
+    local _, _, freshlyVerified = RefreshCertificationCache(targetCitizenid, jobName)
+    -- `freshlyVerified` gate (lifecycle QA pass): a could-not-determine
+    -- outcome on THIS read-back keeps whatever cache entry already existed
+    -- from BEFORE this renewal's own UPDATE -- i.e. the OLD expiry, not the
+    -- new one this UPDATE (already confirmed committed above) just wrote.
+    -- Without this gate, `newCached and newCached.expiresAtUnix` would
+    -- happily read that stale pre-renewal value and report it as if it
+    -- were the fresh renewal outcome.
+    local newCached = freshlyVerified and Certifications[targetCitizenid]
     FireOutboundEvent('qbx_k9unit:events:certificationRenewed', targetCitizenid, jobName, newCached and newCached.expiresAtUnix, granterCitizenid)
 
     -- A successful, explicit renewal clears the one-per-session warning/
@@ -4499,15 +4838,31 @@ RegisterCommand('k9decertifyoffline', function(source, args)
 end, false)
 
 -- ======================================================================
--- CERTIFICATION DEPTH (this pass) — net events + commands for tier/
--- renewal/specialization, mirroring the exact "command and event both
--- call the same internal function" convention every action above already
--- uses.
+-- CERTIFICATION DEPTH (this pass) — commands for tier/renewal/
+-- specialization. An earlier version of this section also registered a
+-- RegisterNetEvent per action (mirroring the "command and event both call
+-- the same internal function" convention every action above still uses
+-- for certify/decertify) -- REMOVED this pass (integration sweep): a
+-- registered net event is a live, client-reachable surface regardless of
+-- whether anything legitimate calls it, and nothing did. Verified against
+-- the whole tree, including html/: no TriggerServerEvent anywhere in
+-- client/ or html/ for setCertificationTier/renewCertification/
+-- grantSpecialization/revokeSpecialization -- the only callers were
+-- tests/certifications_spec.lua invoking the handler function directly
+-- through its fake event-dispatch table. The functionality itself is not
+-- missing to players: every one of these four actions is reachable two
+-- other ways that remain -- the four RegisterCommand blocks immediately
+-- below (k9settier/k9recertify/k9specialize/k9unspecialize, unchanged),
+-- and the tablet's own complete lib.callback.register contract
+-- (tabletSetCertificationTier/tabletRenewCertification/
+-- tabletGrantSpecialization/tabletRevokeSpecialization, near the end of
+-- this file, correctly consumed by client/tablet.lua's own
+-- tablet:setCertificationTier/renewCertification/grantSpecialization/
+-- revokeSpecialization NUI bridges and html/tablet.js's runMutation()).
+-- Four endpoints nothing legitimate called were four things an attacker
+-- still could, and every one mutates certification state -- deleted
+-- rather than left as a comment describing them as unreachable-by-design.
 -- ======================================================================
-
-RegisterNetEvent('qbx_k9unit:server:setCertificationTier', function(targetServerId, newTier)
-    SetCertificationTier(source, targetServerId, newTier)
-end)
 
 RegisterCommand('k9settier', function(source, args)
     local targetServerId = tonumber(args[1])
@@ -4535,10 +4890,6 @@ RegisterCommand('k9settieroffline', function(source, args)
     SetCertificationTierOffline(source, citizenid, job, newTier)
 end, false)
 
-RegisterNetEvent('qbx_k9unit:server:renewCertification', function(targetServerId)
-    RenewCertification(source, targetServerId)
-end)
-
 RegisterCommand('k9recertify', function(source, args)
     local targetServerId = tonumber(args[1])
     if not targetServerId then
@@ -4562,10 +4913,6 @@ RegisterCommand('k9recertifyoffline', function(source, args)
     RenewCertificationOffline(source, citizenid, job)
 end, false)
 
-RegisterNetEvent('qbx_k9unit:server:grantSpecialization', function(targetServerId, specializationKey)
-    GrantSpecialization(source, targetServerId, specializationKey)
-end)
-
 RegisterCommand('k9specialize', function(source, args)
     local targetServerId = tonumber(args[1])
     if not targetServerId then
@@ -4574,10 +4921,6 @@ RegisterCommand('k9specialize', function(source, args)
     end
     GrantSpecialization(source, targetServerId, args[2])
 end, false)
-
-RegisterNetEvent('qbx_k9unit:server:revokeSpecialization', function(targetServerId, specializationKey)
-    RevokeSpecialization(source, targetServerId, specializationKey)
-end)
 
 RegisterCommand('k9unspecialize', function(source, args)
     local targetServerId = tonumber(args[1])
@@ -4659,7 +5002,7 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     local job = Player.PlayerData.job
     if not job then return end
     local citizenid = Player.PlayerData.citizenid
-    RefreshCertificationCache(citizenid, job.name)
+    local _, stateKnown = RefreshCertificationCache(citizenid, job.name)
 
     -- Regression-test fix: resync the read-only `k9certified` HUD mirror
     -- (DEVELOPER_REFERENCE.md §4.3 — never read for authorization) from whatever value
@@ -4669,20 +5012,40 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     -- GrantCertification, RevokeCertification's online branch, and
     -- OnJobUpdate's auto-revoke — this self-corrects it on every login
     -- regardless of which path (or no path) caused the drift.
-    -- RefreshCertificationCache always populates Certifications[citizenid],
-    -- so `cached` is guaranteed non-nil immediately after the call above.
+    --
+    -- COULD-NOT-DETERMINE GUARD (lifecycle QA pass): the "always populates
+    -- Certifications[citizenid]" claim this comment used to make here is no
+    -- longer true — a could-not-determine outcome (a transient DB failure
+    -- right at login, with no previous-session cache entry to fall back on,
+    -- since playerDropped already wiped it on this citizenid's last
+    -- disconnect) now deliberately leaves `Certifications[citizenid]`
+    -- UNSET rather than writing a guessed `false`. `stateKnown` (Refresh-
+    -- CertificationCache's own 2nd return value) is what actually tells
+    -- this handler whether there is a real answer to act on -- checked
+    -- explicitly below instead of assuming `cached` is always a table.
+    -- Skipping the mirror write (and the expiry check) on a could-not-
+    -- determine login is correct, not merely safe: writing `false` here
+    -- would tell this officer's own HUD "not certified" over a transient
+    -- blip, and running an expiry check against no confirmed data at all
+    -- could mis-warn/mis-announce off of nothing. The periodic resync
+    -- sweep further down this file will pick this citizenid up (they are
+    -- online, which is exactly what that sweep walks) and correct both the
+    -- real access cache and this mirror once the read actually succeeds --
+    -- no reconnect required.
     local cached = Certifications[citizenid]
-    Player.Functions.SetMetaData('k9certified', cached.active)
+    if stateKnown and cached then
+        Player.Functions.SetMetaData('k9certified', cached.active)
 
-    -- CERTIFICATION DEPTH (this pass, Part A §9): a handler logging in
-    -- already near or past their own expiry gets the same proactive
-    -- notice an already-online handler would get from the periodic
-    -- sweep — no need to wait for the next sweep pass just because they
-    -- happened to log in between two of them. Gated the same way the
-    -- sweep itself is (Player.PlayerData.source is always this login's
-    -- own live source, never a client claim).
-    if Config.Features and Config.Features.CertificationExpiry == true and cached.active then
-        CheckAndNotifyExpiry(Player.PlayerData.source, citizenid, cached)
+        -- CERTIFICATION DEPTH (this pass, Part A §9): a handler logging in
+        -- already near or past their own expiry gets the same proactive
+        -- notice an already-online handler would get from the periodic
+        -- sweep — no need to wait for the next sweep pass just because they
+        -- happened to log in between two of them. Gated the same way the
+        -- sweep itself is (Player.PlayerData.source is always this login's
+        -- own live source, never a client claim).
+        if Config.Features and Config.Features.CertificationExpiry == true and cached.active then
+            CheckAndNotifyExpiry(Player.PlayerData.source, citizenid, cached)
+        end
     end
 end)
 
@@ -4713,6 +5076,14 @@ AddEventHandler('playerDropped', function(_reason)
         Specializations[citizenid] = nil
         ExpiryWarned[citizenid] = nil
         ExpiryLapsedNotified[citizenid] = nil
+
+        -- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass): same
+        -- unbounded-growth reasoning, applied to the bookkeeping table that
+        -- backs the operator message and the resync sweep. A disconnected
+        -- citizenid has no live source for the sweep to act on anyway (it
+        -- walks GetPlayers()), so there is nothing left to resync until
+        -- their next PlayerLoaded re-attempts the read fresh.
+        CertificationCheckUnresolved[citizenid] = nil
     end
 
     -- DEVELOPER_REFERENCE.md item 1: CertifyActionCooldown already registered
@@ -4782,3 +5153,86 @@ if Config.Features and Config.Features.CertificationExpiry == true then
         end
     end)
 end
+
+-- ======================================================================
+-- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass) -- see
+-- "COULD-NOT-DETERMINE HANDLING" above RefreshCertificationCache's own
+-- declaration for the full contract this closes the loop on: a citizenid
+-- left unresolved by a transient query failure (most likely during
+-- server/main.lua's onResourceStart backfill burst, or an unlucky
+-- immediately-after-grant re-read) must recover WITHOUT needing to
+-- reconnect, per this pass's own explicit requirement. This sweep is that
+-- recovery path.
+--
+-- ALWAYS RUNS, UNCONDITIONALLY -- deliberately NOT gated behind a
+-- Config.Features flag the way the expiry-warning sweep just above is:
+-- this is not an optional feature, it is the self-heal half of this file's
+-- own core access-cache correctness contract, and every install running
+-- this resource at all needs it regardless of which optional features are
+-- turned on. Matches this resource's own established "a thread governed by
+-- something that can change at runtime starts unconditionally and
+-- re-checks that thing fresh inside the loop, rather than being gated at
+-- CreateThread registration itself" convention -- see
+-- server/runtimecontrol.lua's FEATURE_TIERS entry documenting
+-- server/combat.lua's own maintenance/position-history threads for the
+-- precedent and the exact "live-flip" bug class that gating at
+-- registration causes. CertificationCheckUnresolved can gain its first
+-- entry at ANY point while this resource is running, not just at boot, so
+-- a thread that only started conditionally at load time could miss every
+-- entry that starts existing later. Cheap on an idle server either way:
+-- the overwhelmingly common case is an EMPTY CertificationCheckUnresolved
+-- table, and `next(t) == nil` is an O(1)-ish check, not a walk.
+-- ======================================================================
+
+local CERT_RESYNC_SWEEP_INTERVAL_MS = 30000
+
+--- One resync pass: retries RefreshCertificationCache for every citizenid
+--- currently recorded in CertificationCheckUnresolved (i.e. every citizenid
+--- whose most recent attempt could not be confirmed either way), but ONLY
+--- for a citizenid who is CURRENTLY ONLINE and still in the EXACT job the
+--- unresolved entry was recorded for. A successful retry needs no separate
+--- bookkeeping here: RefreshCertificationCache itself clears
+--- CertificationCheckUnresolved[citizenid] the instant it confirms ANY
+--- answer, real or absent -- this function only needs to keep calling it.
+---
+--- WHY ONLINE-ONLY: an offline citizenid's own next 'QBCore:Server:
+--- PlayerLoaded' already attempts a fresh read from a clean state, and this
+--- sweep has no live job context to retry against for someone who is not
+--- connected right now (Certifications/CertificationCheckUnresolved are
+--- both citizenid-keyed, but the JOB an entry should be re-verified against
+--- is only knowable from a live Player.PlayerData.job -- the same reason
+--- server/main.lua's own onResourceStart backfill only ever walks
+--- GetPlayers(), never a broader offline-citizenid list).
+---
+--- WHY EXACT-JOB-ONLY: a citizenid who changed department WHILE unresolved
+--- has already had the OnJobUpdate handler fire its own direct
+--- RefreshCertificationCache call for whatever their NEW job is (confirmed
+--- or not) -- retrying the OLD, now-irrelevant job here would just
+--- manufacture a second unresolved entry for a department this citizenid
+--- has already left, chasing an answer nothing needs anymore.
+local function ResyncUnresolvedCertifications()
+    for citizenid, unresolved in pairs(CertificationCheckUnresolved) do
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local liveJob = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.job
+        if onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+            and liveJob and liveJob.name == unresolved.job then
+            RefreshCertificationCache(citizenid, unresolved.job)
+        end
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait(CERT_RESYNC_SWEEP_INTERVAL_MS)
+
+        -- Cheap early-exit, checked fresh every tick (never cached/latched)
+        -- -- see this sweep's own header above for why this table is
+        -- expected to be empty essentially always.
+        if next(CertificationCheckUnresolved) ~= nil then
+            local ok, err = pcall(ResyncUnresolvedCertifications)
+            if not ok then
+                print(('[qbx_k9unit] certification resync sweep tick error: %s'):format(tostring(err)))
+            end
+        end
+    end
+end)

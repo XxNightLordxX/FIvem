@@ -520,4 +520,66 @@ t.test("PER-PERSON: NO UNBOUNDED TRAP -- 'stop' still works instantly for a call
     t.equals(dispatched[3], 'stop')
 end)
 
+-- ======================================================================
+-- CONFIG-ABORT REGRESSION (this pass): every INDIVIDUAL Config.BoneSweepTool
+-- field used to be a bare per-field `assert` inside this SAME
+-- onResourceStart handler, and RegisterCommand('k9bonetool') sits AFTER all
+-- of them, in that same handler -- so one malformed field used to silently
+-- remove the command entirely for the whole session. A malformed value must
+-- now warn and fall back instead of throwing, and k9bonetool must still
+-- register and actually work off the substituted safe values.
+-- ======================================================================
+
+t.test('CONFIG-ABORT REGRESSION: a malformed CommandCooldownMs (the exact footgun the old assert caught) now warns and clamps to the built-in fallback instead of throwing', function()
+    local regressionCtx = buildEnv({ featureFlag = true, convarValue = 1 })
+    regressionCtx.env.Config.BoneSweepTool.CommandCooldownMs = 0 -- 0 does NOT mean "no cooldown" here -- see this file's own comment
+    local ok, err = pcall(startResource, regressionCtx)
+    t.isTrue(ok, 'onResourceStart must not throw: ' .. tostring(err))
+    t.isNotNil(regressionCtx.registeredCommands.k9bonetool, 'k9bonetool must still be registered despite the malformed CommandCooldownMs')
+    t.equals(regressionCtx.env.Config.BoneSweepTool.CommandCooldownMs, 500, 'must be forced to the built-in fallback (config.lua\'s own shipped default)')
+
+    local warned = false
+    for _, line in ipairs(regressionCtx.printedLines) do
+        if line:find('CommandCooldownMs', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a malformed CommandCooldownMs must print a warning naming it')
+end)
+
+t.test('CONFIG-ABORT REGRESSION: a malformed TestPropModel/MaxBoneIndex/TestOffsetX all warn and fall back, and k9bonetool still registers and actually dispatches off the corrected values', function()
+    local regressionCtx = buildEnv({ featureFlag = true, convarValue = 1 })
+    regressionCtx.env.Config.BoneSweepTool.TestPropModel = '' -- empty string, invalid
+    regressionCtx.env.Config.BoneSweepTool.MaxBoneIndex = -5 -- must be >= 0
+    regressionCtx.env.Config.BoneSweepTool.TestOffsetX = 'oops' -- not a number
+
+    local ok, err = pcall(startResource, regressionCtx)
+    t.isTrue(ok, 'onResourceStart must not throw: ' .. tostring(err))
+    t.isNotNil(regressionCtx.registeredCommands.k9bonetool, 'k9bonetool must still be registered despite three malformed fields')
+
+    t.equals(regressionCtx.env.Config.BoneSweepTool.TestPropModel, 'prop_tennis_ball', 'TestPropModel must fall back to config.lua\'s own shipped default')
+    t.equals(regressionCtx.env.Config.BoneSweepTool.MaxBoneIndex, 200, 'MaxBoneIndex must fall back to config.lua\'s own shipped default')
+    t.equals(regressionCtx.env.Config.BoneSweepTool.TestOffsetX, 0.0, 'TestOffsetX must fall back to 0.0')
+
+    for _, key in ipairs({ 'TestPropModel', 'MaxBoneIndex', 'TestOffsetX' }) do
+        local warned = false
+        for _, line in ipairs(regressionCtx.printedLines) do
+            if line:find(key, 1, true) then warned = true end
+        end
+        t.isTrue(warned, ('a malformed %s must print a warning naming it'):format(key))
+    end
+
+    -- k9bonetool must actually WORK end to end off the corrected values --
+    -- clamp-and-warn means "still functions", not merely "does not crash at
+    -- boot". A boss in a configured department requesting an out-of-range
+    -- index must clamp to the CORRECTED MaxBoneIndex (200), not the
+    -- malformed -5 (which would otherwise floor every requested index to
+    -- itself and break the tool for every caller).
+    regressionCtx.env.Config.Departments = { police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4 } }
+    local playersBySource = { [1] = { PlayerData = { citizenid = 'REGRESSION1', job = { name = 'police', isboss = true, grade = { level = 0 } } } } }
+    regressionCtx.env.exports.qbx_core.GetPlayer = function(_self, source) return playersBySource[source] end
+    regressionCtx.registeredCommands.k9bonetool(1, { 'goto', '999' })
+    local dispatched = lastEventNamed(regressionCtx.capturedEvents, 'qbx_k9unit:client:boneToolCommand')
+    t.isNotNil(dispatched, 'a boss must still be able to run k9bonetool off the corrected config')
+    t.equals(dispatched[4], 200, 'must clamp to the CORRECTED MaxBoneIndex (200), not the malformed -5')
+end)
+
 os.exit(t.summary())

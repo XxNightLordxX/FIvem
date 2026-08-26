@@ -1907,7 +1907,20 @@ local function newIntegrationFixture(opts)
         HighCommand = { allowSelfGrant = false },
     }
 
+    -- COULD-NOT-DETERMINE RESYNC SWEEP: server/permissions.lua (loaded into
+    -- THIS env below) calls CreateThread(...) unconditionally at file-load
+    -- time -- the resync sweep for PermissionCheckUnresolved, deliberately
+    -- not feature-gated, see that file's own declaration comment. Any
+    -- fixture loading server/permissions.lua must supply a REAL
+    -- CreateThread/Wait pair: a no-op stub either throws (CreateThread
+    -- undefined) or loops forever synchronously, because the sweep body is
+    -- `while true do Wait(x) ... end`. Same wiring tests/permissions_spec.lua
+    -- and tests/certifications_spec.lua already use for the same reason.
+    local threadRunner = Sandbox.newThreadRunner()
+
     local env = Sandbox.newEnv({
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
         Config = Config,
         MySQL = mysql,
         exports = exportsStub,

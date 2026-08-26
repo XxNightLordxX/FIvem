@@ -349,36 +349,64 @@ local AwardXPCooldown = NewNestedCooldown(500)
 --      burst) is never denied, and no citizenid can ever bank close to a
 --      whole extra cap's worth of "free" tokens the way a full start would.
 --
--- Re-verified by direct simulation with the REAL shipped award table (search
--- 25 + track 10 + bite 20 + takedown 30 + tenure 15+40+100 = 240 starter
--- tokens) AND the REAL bucket-created-at-first-use semantics (a bucket's
--- own `lastRefillAt` is set to the instant of its OWN first AwardXP call,
+-- Re-verified by direct simulation with the REAL shipped award table AND
+-- the REAL bucket-created-at-first-use semantics (a bucket's own
+-- `lastRefillAt` is set to the instant of its OWN first AwardXP call,
 -- crediting ZERO prior elapsed time -- an earlier draft of this simulation
 -- wrongly assumed a bucket already existed, accruing, from some earlier
 -- "time 0" baseline, which overstated every number below; re-simulated and
 -- cross-checked directly against tests/progression_spec.lua's own EIGHTH-
 -- XP-farm-fix section, which exercises the REAL AwardXP function end to
 -- end, not a re-implementation, before landing these final figures):
+--
+-- CORRECTED (economy audit, 2026-08-26) -- the figures immediately below
+-- this note used to read "search 25 + track 10 + bite 20 + takedown 30 +
+-- tenure 15+40+100 = 240 starter tokens" and "2.45 hours (2h 27m)" to
+-- Elite. Both had gone stale relative to the REAL, currently-shipped
+-- config.lua and were re-verified, not taken on the old comment's word:
+-- Config.XP.awards alone now sums to 280 (the 240 above predates
+-- sarCallCompleted (30) and coopSearchBonus (10), both added to
+-- Config.XP.awards after this section was first written), and the
+-- starter-token sum this file's own code below has computed since the
+-- "EXTENDED (HANDLER XP pass...)" addition ALSO adds every
+-- Config.HandlerXP.awards value (225: handlerCertifyK9 50 + handlerTreatK9
+-- 12 + handlerKennelDeploy 8 + handlerPartnershipTenure1Day 15 +
+-- handlerPartnershipTenure7Day 40 + handlerPartnershipTenure30Day 100) --
+-- 280 + 225 = 505 real starter tokens today, not 240. The CODE was never
+-- wrong (the summing loops below always drew from the live Config tables,
+-- which is exactly why nothing crashed or silently mis-behaved) -- only
+-- THIS COMMENT'S cited numbers were, because they were never revisited
+-- when either award table grew. Recomputed by the SAME direct-simulation
+-- method as the original figures (round-robining the four REAL K9-mechanic
+-- award mint cooldowns for a full simulated run, driving the REAL
+-- RefillMintBudget/AwardXP code, not a re-implementation):
 -- continuous max-rate round-robin farming across all four mechanics grants
--- 3,810 XP at T=1hr (vs. the four independent per-mechanic ceilings' own
+-- 4,075 XP at T=1hr (vs. the four independent per-mechanic ceilings' own
 -- UNCAPPED sum of 5,700 XP/hr -- this budget is still the binding
 -- constraint), and the 9,000-XP Elite tier is first reached at
--- T=8,820,000ms = 2.45 hours (2h 27m) -- comfortably over the 2-hour floor,
--- though with a smaller margin (~27 minutes) than a pure start-empty
--- design's clean 2.5h would have had.
+-- T=8,550,000ms = 2.375 hours (2h 22.5m) -- still comfortably over the
+-- 2-hour floor, with a smaller margin (~22.5 minutes) than the 240-token
+-- comment's own ~27 minutes, and smaller still than a pure start-empty
+-- design's clean 2.5h would have had. THE FLOOR STILL HOLDS, but the
+-- margin shrinks every time either award table grows without anyone
+-- re-running this simulation -- see XP_MINT_BUDGET_STARTER_TOKENS_CEILING_XP
+-- below for the hard backstop against that margin ever silently reaching
+-- zero (or reopening the rejected-attempt-1 burst above) as a consequence
+-- of nothing more than ordinary future feature growth.
 --
 -- NUMBERS CHOSEN (XP_MINT_BUDGET_CAP_XP / XP_MINT_BUDGET_WINDOW_MS below):
 -- 3,600 XP per 3,600,000ms (1 hour) -- clean, round numbers to reason about.
 -- Needed: comfortably below 4,500 XP/hr (9000 / 4500 = exactly 2.0 hours --
 -- the retuned floor requires MORE than 2 hours, so the cap must clear that
 -- with real margin, not sit on the boundary), which it does even with the
--- 240-XP starter offset above (2.45h > 2.0h). Recomputed tier times at this
--- REAL post-fix ceiling (simulated AND test-verified, not a pure-continuous
--- approximation), reported to whoever owns config.lua for that file's own
--- Config.XPTiers economy comment (not edited by this pass):
---   Trained (1,250 XP): reached at 0.30h    (18m)
---   Veteran (4,000 XP): reached at ~1.058h  (~1h 3.5m)
---   Elite   (9,000 XP): reached at 2.45h    (2h 27m -- clears the floor)
+-- REAL 505-XP starter offset above (2.375h > 2.0h). Recomputed tier times
+-- at this REAL post-fix ceiling, with the REAL 505-token starter (simulated
+-- AND test-verified, not a pure-continuous approximation), reported to
+-- whoever owns config.lua for that file's own Config.XPTiers economy
+-- comment (not edited by this pass):
+--   Trained (1,250 XP): reached at 0.233h   (14m)
+--   Veteran (4,000 XP): reached at 0.983h   (~59m)
+--   Elite   (9,000 XP): reached at 2.375h   (2h 22.5m -- clears the floor)
 --
 -- FILE-LOCAL CONSTANTS, NOT CONFIG KEYS -- same reasoning as every one of
 -- the four per-mechanic mint cooldowns' own "FILE-LOCAL CONSTANTS, NOT
@@ -392,6 +420,35 @@ local AwardXPCooldown = NewNestedCooldown(500)
 local XP_MINT_BUDGET_CAP_XP    = 3600     -- XP -- the bucket's max capacity (a citizenid can never hold more than this many unspent tokens at once, however long they go without earning)
 local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a bucket held at 0 reaches full capacity after exactly this many real ms of continuous refill
 
+-- HARD CEILING on the derived starter-token sum below (economy audit,
+-- 2026-08-26 -- the same audit that caught the stale 240/2.45h numbers
+-- corrected above). Previously the sum of Config.XP.awards +
+-- Config.HandlerXP.awards was clamped only to XP_MINT_BUDGET_CAP_XP itself
+-- (3,600) -- true today (505 is nowhere near 3,600) but that clamp does
+-- nothing to stop the sum CREEPING toward the cap as more awards are added
+-- over time, and this section's own "STARTING BALANCE" writeup above
+-- already proved what happens as the starter balance approaches the full
+-- cap: REJECTED ATTEMPT 1 (start full, tokens = XP_MINT_BUDGET_CAP_XP)
+-- simulated to ~1.5h to Elite -- BELOW the 2-hour floor. A starter sum that
+-- silently grew large enough, one added award at a time, with nobody
+-- re-running the simulation, would eventually reopen that exact rejected
+-- outcome even though no single change looked dangerous on its own -- the
+-- 240 -> 505 drift already cost ~4.5 minutes of margin (2.45h -> 2.375h)
+-- from two awards nobody re-checked this arithmetic for. This ceiling is
+-- the backstop: a fixed 25% of XP_MINT_BUDGET_CAP_XP, chosen so the sum can
+-- keep growing with future features (505 today has room to nearly
+-- double before hitting it) while GUARANTEEING -- independent of how large
+-- Config.XP.awards/Config.HandlerXP.awards ever grow -- that continuous
+-- max-rate round-robin farming still cannot reach Elite before 2.2667h
+-- (2h 16m, ~16 minutes of real margin over the 2-hour floor; re-verified by
+-- the same direct-simulation method as every other figure in this section).
+-- A future author who blows through this ceiling gets a silent CLAMP, not
+-- a silent reopening of a farm this file has already rejected once -- the
+-- clamp itself is not a substitute for re-running the simulation when a
+-- large new award lands, just a guarantee that forgetting to cannot regress
+-- past this specific floor.
+local XP_MINT_BUDGET_STARTER_TOKENS_CEILING_XP = 900 -- XP -- 25% of XP_MINT_BUDGET_CAP_XP; see this comment block for the full derivation
+
 -- STARTER TOKENS -- see the "STARTING BALANCE" writeup above for the full
 -- reasoning (start-full and start-empty were both tried and rejected first,
 -- this pass, before landing here). Sized as the SUM of every configured
@@ -401,15 +458,20 @@ local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a buck
 -- AwardXP-call-adjacent moment), computed once here from the REAL live
 -- config rather than hardcoded, so it can never silently drift out of sync
 -- if config.lua's award list changes shape later. Clamped to
--- XP_MINT_BUDGET_CAP_XP so a starting balance can never itself violate this
--- bucket's own "never more than CAP tokens at once" invariant (relevant only
--- if a future award table's sum somehow exceeded the cap -- not true of any
--- currently shipped value, but this constant is derived, not asserted, so it
--- must clamp itself rather than rely on the assert below alone). Falls back
--- to a safe, small, non-zero default (100) if Config.XP.awards is not yet a
--- usable table at this file's OWN load time -- never 0, since 0 here would
--- silently reintroduce the exact "first award always denied" regression this
--- constant exists to fix, just for the narrower case of a malformed config.
+-- XP_MINT_BUDGET_STARTER_TOKENS_CEILING_XP (NOT the full
+-- XP_MINT_BUDGET_CAP_XP -- see that ceiling constant's own declaration
+-- comment immediately above for why a much tighter clamp than "never
+-- literally exceed the bucket's own capacity" is needed) so a starting
+-- balance can never itself violate this bucket's own "never more than CAP
+-- tokens at once" invariant AND can never silently erode this section's own
+-- >2-hour design floor as future award tables grow (not true of any
+-- currently shipped value at either clamp, but this constant is derived,
+-- not asserted, so it must clamp itself rather than rely on the assert
+-- below alone). Falls back to a safe, small, non-zero default (100) if
+-- Config.XP.awards is not yet a usable table at this file's OWN load time
+-- -- never 0, since 0 here would silently reintroduce the exact "first
+-- award always denied" regression this constant exists to fix, just for
+-- the narrower case of a malformed config.
 --
 -- EXTENDED (HANDLER XP pass, coder-backend) to ALSO sum Config.HandlerXP.
 -- awards, for the identical reason: AwardHandlerXP (below) draws on this
@@ -444,7 +506,7 @@ do
         end
     end
     if sum > 0 then
-        XP_MINT_BUDGET_STARTER_TOKENS = math.min(sum, XP_MINT_BUDGET_CAP_XP)
+        XP_MINT_BUDGET_STARTER_TOKENS = math.min(sum, XP_MINT_BUDGET_STARTER_TOKENS_CEILING_XP)
     end
 end
 
@@ -695,95 +757,145 @@ AddEventHandler('onResourceStart', function(resourceName)
         'warning, misleading an operator who believes they configured job-scoped progression.'
     )
 
-    -- TIER-SHAPE GUARD (audit finding, this pass). ResolveTier/GetXPTier's
-    -- own doc comments both promise "always returns a real Config.XPTiers
-    -- entry, never nil" — but nothing ever checked that promise against the
-    -- config's actual shape; it has only ever been true because
-    -- Config.XPTiers (config.lua, still marked "placeholder numbers pending
-    -- economy-balance-agent review") happens to already be well-formed
-    -- today. ResolveTier's own walk (`for _, tier in ipairs(...) do if xp >=
-    -- tier.xp then resolvedTier = tier end end`, no `break`) has two
-    -- load-bearing assumptions this guard verifies at resource start rather
-    -- than silently trusting:
-    --   1. Config.XPTiers is non-empty AND its first entry's `xp` is
-    --      exactly 0. If either fails, `Config.XPTiers[1]` (ResolveTier's
-    --      pre-loop default) is either nil (an EMPTY table) or a non-zero
-    --      floor (some xp > 0 could then resolve to no tier if the loop
-    --      body somehow still ran zero times, and more importantly a
-    --      brand-new citizenid at 0 XP would incorrectly inherit whatever
-    --      that first entry's speedMultiplier/scentRangeMultiplier is,
-    --      rather than the neutral 1.0 baseline every other file in this
-    --      resource assumes "unknown citizenid" means).
-    --   2. Every `xp` threshold is a number, in STRICTLY ASCENDING order.
-    --      ResolveTier never `break`s early — it keeps overwriting
-    --      `resolvedTier` with EVERY entry whose `xp` the current total
-    --      already clears, in ARRAY order, not threshold order. That is
-    --      only equivalent to "the tier with the highest threshold not
-    --      exceeding xp" (the intended, documented semantics) if the array
-    --      is sorted ascending by `xp` — exactly the same caller-maintained-
-    --      order contract Config.ContrabandAlertTiers and
-    --      server/tenure.lua's own milestone walk already require and
-    --      document for the identical reason. An out-of-order or
-    --      non-numeric entry would not crash this loop, but would silently
-    --      resolve some XP totals to the WRONG tier — directly changing a
-    --      K9's real movement speed and scent range, this file's header's
-    --      own definition of a "live gameplay effect," with no error or log
-    --      line anywhere to reveal it.
-    -- Fails loudly at resource start (same posture as the assert above) —
-    -- a malformed Config.XPTiers should block startup, not quietly hand out
-    -- wrong-tier gameplay effects to every K9 for the rest of the session.
-    assert(
-        type(Config.XPTiers) == 'table' and #Config.XPTiers > 0,
-        '[qbx_k9unit] Config.XPTiers must be a non-empty array -- ResolveTier/GetXPTier ' ..
-        '(server/progression.lua) fall back to Config.XPTiers[1] as their mandatory base-tier ' ..
-        'default, which does not exist if this table is empty or malformed.'
-    )
-    assert(
-        type(Config.XPTiers[1].xp) == 'number' and Config.XPTiers[1].xp == 0,
-        '[qbx_k9unit] Config.XPTiers[1].xp must be exactly 0 -- it is this resource-wide ' ..
-        "\"unknown/uncached citizenid\" and \"brand-new K9\" baseline (every file's own " ..
-        '"unknown state defaults to least privilege" convention applied to XP), read by ' ..
-        'ResolveTier (server/progression.lua) before its ascending walk even runs.'
-    )
-    for i = 1, #Config.XPTiers do
-        local tier = Config.XPTiers[i]
-        assert(
-            type(tier) == 'table' and type(tier.xp) == 'number'
-                and type(tier.speedMultiplier) == 'number' and type(tier.scentRangeMultiplier) == 'number',
-            ('[qbx_k9unit] Config.XPTiers[%d] must be a table with numeric xp/speedMultiplier/' ..
-                'scentRangeMultiplier fields -- ResolveTier compares `xp >= tier.xp` directly ' ..
-                'against every entry with no type check of its own, and a non-numeric ' ..
-                'speedMultiplier/scentRangeMultiplier would feed straight into a live movement/' ..
-                'scent-range effect via client/progression.lua and server/tracking.lua.'):format(i)
-        )
-        if i > 1 then
-            assert(
-                tier.xp > Config.XPTiers[i - 1].xp,
-                ('[qbx_k9unit] Config.XPTiers must be strictly ascending by xp -- entry %d ' ..
-                    '(xp=%s) does not exceed entry %d (xp=%s). ResolveTier walks this array ' ..
-                    'with no `break` and no threshold-order re-sort of its own, relying entirely ' ..
-                    'on this caller-maintained ascending order (same contract ' ..
-                    'Config.ContrabandAlertTiers and server/tenure.lua\'s milestone walk already ' ..
-                    'require) to resolve the HIGHEST qualifying tier rather than an arbitrary ' ..
-                    'array-order one.'):format(i, tostring(tier.xp), i - 1, tostring(Config.XPTiers[i - 1].xp))
-            )
-        end
-    end
 end)
 
---- Resolves `xp` to the matching entry in Config.XPTiers. Identical walk
---- shape to server/search.lua's ResolveAlertTier — Config.XPTiers[1] is the
---- mandatory `xp = 0` baseline (same role Config.ContrabandAlertTiers'
---- `minWeight = 0` baseline plays there), so this never returns nil.
---- Returns the SAME table object (by reference) for every xp value that
---- falls in one tier's bracket, which AwardXP below relies on to detect a
---- tier crossing via plain `~=` comparison rather than a deep-equality
---- check.
+-- TIER-SHAPE GUARD (audit finding, an earlier pass). ResolveTier/GetXPTier's
+-- own doc comments both promise "always returns a real Config.XPTiers
+-- entry, never nil" -- but nothing ever checked that promise against the
+-- config's actual shape; it has only ever been true because Config.XPTiers
+-- (config.lua, still marked "placeholder numbers pending economy-balance-
+-- agent review") happens to already be well-formed today. ResolveTier's own
+-- walk (`for _, tier in ipairs(...) do if xp >= tier.xp then resolvedTier =
+-- tier end end`, no `break`) has two load-bearing assumptions this guard
+-- verifies rather than silently trusting:
+--   1. Config.XPTiers is non-empty AND its first entry's `xp` is exactly 0.
+--      If either fails, `Config.XPTiers[1]` (ResolveTier's pre-loop
+--      default) is either nil (an EMPTY table) or a non-zero floor (some
+--      xp > 0 could then resolve to no tier if the loop body somehow still
+--      ran zero times, and more importantly a brand-new citizenid at 0 XP
+--      would incorrectly inherit whatever that first entry's
+--      speedMultiplier/scentRangeMultiplier is, rather than the neutral 1.0
+--      baseline every other file in this resource assumes "unknown
+--      citizenid" means).
+--   2. Every `xp` threshold is a number, in STRICTLY ASCENDING order.
+--      ResolveTier never `break`s early -- it keeps overwriting
+--      `resolvedTier` with EVERY entry whose `xp` the current total already
+--      clears, in ARRAY order, not threshold order. That is only equivalent
+--      to "the tier with the highest threshold not exceeding xp" (the
+--      intended, documented semantics) if the array is sorted ascending by
+--      `xp` -- exactly the same caller-maintained-order contract
+--      Config.ContrabandAlertTiers and server/tenure.lua's own milestone
+--      walk already require and document for the identical reason. An
+--      out-of-order or non-numeric entry would not crash this loop, but
+--      would silently resolve some XP totals to the WRONG tier -- directly
+--      changing a K9's real movement speed and scent range, this file's
+--      header's own definition of a "live gameplay effect," with no error
+--      or log line anywhere to reveal it.
+--
+-- CLAMP AND WARN, DELIBERATELY NEVER THROW -- this used to be a bare
+-- `assert` (three of them, plus a per-tier loop) inside the
+-- `onResourceStart` handler directly above. Removed, not merely softened,
+-- for a sharper reason than the usual "one bad value kills every sibling
+-- registration in this handler": THIS PARTICULAR ASSERT PROTECTED NOTHING.
+-- Nothing else was ever registered below it in that handler, and — the part
+-- that actually matters — ResolveTier below reads `Config.XPTiers` (now
+-- `GetValidatedXPTiers()`) directly, on every call, completely independent
+-- of whether this onResourceStart handler ever ran to completion. Whether
+-- the assert fired or not, a malformed Config.XPTiers table would reach
+-- ResolveTier's own walk exactly the same either way — the old assert's own
+-- comment even said so ("a malformed Config.XPTiers should block startup,
+-- not quietly hand out wrong-tier gameplay effects"), but throwing here
+-- never actually stopped that from happening; it only turned a recoverable
+-- misconfiguration into a scarier, less informative stack trace for an
+-- owner config.lua itself calls "placeholder numbers pending
+-- economy-balance-agent review" -- i.e. explicitly invites tuning of. This
+-- is now the SAME lazy, memoized clamp-and-warn shape as
+-- GetValidatedHandlerXPTiers below (that function's own header used to
+-- single this guard out as the one deliberate exception to its shape --
+-- updated alongside this change) -- computed on ResolveTier's own first
+-- call, warned at most ONCE per resource lifetime, never registered against
+-- `onResourceStart` at all.
+local FALLBACK_XP_TIERS = {
+    -- Same neutral 1.0/1.0 baseline as config.lua's own real base tier
+    -- ('Recruit K9') -- a K9 stuck on this fallback forever is exactly as
+    -- safe as one correctly resolved to the real base tier: neither ever
+    -- grants a bonus beyond "no bonus at all". Never a security-relevant
+    -- fail-open (matches GetXPTier's own doc comment: "can only ever
+    -- under-grant, never over-grant").
+    { xp = 0, label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+}
+
+local ValidatedXPTiers -- memoized result of GetValidatedXPTiers below
+local XPTiersWarned = false
+
+--- Prints the "K9 XP tiers are unavailable" warning at most ONCE per
+--- resource lifetime, no matter how many times GetValidatedXPTiers below is
+--- called against a broken config.
+--- @param reason string -- what specifically is wrong with Config.XPTiers, appended to a fixed prefix
+local function WarnXPTiersOnce(reason)
+    if XPTiersWarned then return end
+    XPTiersWarned = true
+    print(
+        ('[qbx_k9unit] progression: Config.XPTiers %s -- every citizenid resolves to the single ' ..
+         'built-in base tier, \'Recruit K9\' (speedMultiplier/scentRangeMultiplier = 1.00, no bonus ' ..
+         "effect), for this session. This does NOT affect AwardXP's own ability to accumulate and " ..
+         'persist xp -- only the LADDER used to describe standing/effects is unavailable; every ' ..
+         'already-earned xp total is untouched and will resolve correctly again the moment this table ' ..
+         'is fixed. Fix Config.XPTiers in config.lua (a non-empty array, ascending by xp, first entry ' ..
+         'xp = 0, every entry a table with numeric xp/speedMultiplier/scentRangeMultiplier) to restore ' ..
+         'it.'):format(reason)
+    )
+end
+
+--- @return table tiers -- either the real, validated Config.XPTiers, or FALLBACK_XP_TIERS
+local function GetValidatedXPTiers()
+    if ValidatedXPTiers then return ValidatedXPTiers end
+
+    local tiers = Config.XPTiers
+    if type(tiers) ~= 'table' or #tiers == 0 then
+        WarnXPTiersOnce('is missing, not a table, or empty')
+        ValidatedXPTiers = FALLBACK_XP_TIERS
+        return ValidatedXPTiers
+    end
+    if type(tiers[1]) ~= 'table' or type(tiers[1].xp) ~= 'number' or tiers[1].xp ~= 0 then
+        WarnXPTiersOnce(('[1].xp must be exactly 0 (found: %s)'):format(tostring(tiers[1] and tiers[1].xp)))
+        ValidatedXPTiers = FALLBACK_XP_TIERS
+        return ValidatedXPTiers
+    end
+    for i = 1, #tiers do
+        local tier = tiers[i]
+        if type(tier) ~= 'table' or type(tier.xp) ~= 'number'
+            or type(tier.speedMultiplier) ~= 'number' or type(tier.scentRangeMultiplier) ~= 'number' then
+            WarnXPTiersOnce(('[%d] must be a table with numeric xp/speedMultiplier/scentRangeMultiplier fields'):format(i))
+            ValidatedXPTiers = FALLBACK_XP_TIERS
+            return ValidatedXPTiers
+        end
+        if i > 1 and tier.xp <= tiers[i - 1].xp then
+            WarnXPTiersOnce(('must be strictly ascending by xp -- entry %d (xp=%s) does not exceed entry %d (xp=%s)'):format(i, tostring(tier.xp), i - 1, tostring(tiers[i - 1].xp)))
+            ValidatedXPTiers = FALLBACK_XP_TIERS
+            return ValidatedXPTiers
+        end
+    end
+
+    ValidatedXPTiers = tiers
+    return ValidatedXPTiers
+end
+
+--- Resolves `xp` to the matching entry in the VALIDATED Config.XPTiers (see
+--- GetValidatedXPTiers above -- never the raw config table directly).
+--- Identical walk shape to server/search.lua's ResolveAlertTier --
+--- GetValidatedXPTiers()[1] is the mandatory `xp = 0` baseline (same role
+--- Config.ContrabandAlertTiers' `minWeight = 0` baseline plays there), so
+--- this never returns nil. Returns the SAME table object (by reference) for
+--- every xp value that falls in one tier's bracket, which AwardXP below
+--- relies on to detect a tier crossing via plain `~=` comparison rather
+--- than a deep-equality check.
 --- @param xp number
 --- @return table tier -- { xp, label, speedMultiplier, scentRangeMultiplier }
 local function ResolveTier(xp)
-    local resolvedTier = Config.XPTiers[1]
-    for _, tier in ipairs(Config.XPTiers) do
+    local tiers = GetValidatedXPTiers()
+    local resolvedTier = tiers[1]
+    for _, tier in ipairs(tiers) do
         if xp >= tier.xp then
             resolvedTier = tier
         end
@@ -858,26 +970,27 @@ end
 --- CLAMP AND WARN, DELIBERATELY NEVER THROW -- mirrors the established
 --- precedent in server/cooldowns.lua's own ResolveConfiguredThresholdMs
 --- (read that function's header for the full "why clamp-and-warn, not
---- assert" reasoning this mirrors). Deliberately NOT the same shape as the
---- analogous Config.XPTiers guard further below in this file (a hard
---- `assert` inside an `AddEventHandler('onResourceStart', ...)` block):
---- that guard is correct for Config.XPTiers specifically BECAUSE
---- XPProgression ships `true` by default and is load-bearing, so a
---- malformed table there is a genuine, always-relevant operator bug worth
---- stopping the boot over. Config.HandlerXPTiers backs a DIFFERENT flag
---- that ships `false` by default and is explicitly documented as not yet
---- safe to enable -- an owner who never touches this table, or trims it
---- out of an edited config while the feature stays off, must never see a
---- thrown error at boot for a feature they are not using. Worse, a bare
---- `assert` INSIDE an `onResourceStart` handler aborts that ENTIRE handler
---- function the instant it fires, silently skipping every line still to
---- run below the throw, for the rest of this resource's uptime -- exactly
---- the "one bad config value silently deletes an unrelated feature"
---- incident class this codebase has already found and fixed once (see
---- commit "Stop one bad config value silently deleting the ambient audio
---- feature"). Computed lazily, on ResolveHandlerTier's own first call --
---- not registered against `onResourceStart` at all, so there is no handler
---- here that could ever abort anything else.
+--- assert" reasoning this mirrors). SAME SHAPE as GetValidatedXPTiers above
+--- (Config.XPTiers' own identical guard) -- an earlier pass here argued this
+--- function was DELIBERATELY the odd one out because Config.XPTiers backs a
+--- flag that ships `true` by default and is load-bearing, so "a malformed
+--- table there is a genuine, always-relevant operator bug worth stopping
+--- the boot over." That argument did not survive a closer look: nothing was
+--- ever registered below that assert in its own onResourceStart handler,
+--- and ResolveTier read the same raw, unvalidated Config.XPTiers on every
+--- call regardless of whether the assert fired -- so the assert protected
+--- nothing, it only turned a recoverable misconfiguration into a scarier
+--- stack trace. See GetValidatedXPTiers' own header for the full account of
+--- why that guard was converted to this exact shape. A bare `assert` INSIDE
+--- an `onResourceStart` handler aborts that ENTIRE handler function the
+--- instant it fires, silently skipping every line still to run below the
+--- throw, for the rest of this resource's uptime -- exactly the "one bad
+--- config value silently deletes an unrelated feature" incident class this
+--- codebase has already found and fixed once (see commit "Stop one bad
+--- config value silently deleting the ambient audio feature"). Computed
+--- lazily, on ResolveHandlerTier's own first call -- not registered against
+--- `onResourceStart` at all, so there is no handler here that could ever
+--- abort anything else.
 --- @return table tiers -- either the real, validated Config.HandlerXPTiers, or FALLBACK_HANDLER_XP_TIERS
 local function GetValidatedHandlerXPTiers()
     if ValidatedHandlerXPTiers then return ValidatedHandlerXPTiers end
@@ -945,6 +1058,164 @@ end
 --- @return table tier
 function GetHandlerXPTier(citizenid)
     return ResolveHandlerTier(HandlerXP[citizenid] or 0)
+end
+
+-- ======================================================================
+-- HANDLER XP TIER UNLOCKS -- the two of Config.HandlerXPTiers' three effect
+-- fields actually wired to a live consumer this pass (dead-config-field
+-- audit, coder-backend). See config.lua's own Config.HandlerXPTiers header
+-- for why the third (leashRangeMultiplier) was pulled instead of wired.
+--
+-- BOTH FUNCTIONS BELOW MIRROR GetXPTierMedkitCooldownMs's OWN SHAPE
+-- EXACTLY, on purpose: same defensive-bounds contract (a multiplier that
+-- is missing, non-numeric, NaN, <= 0, or > 1 returns baseCooldownMs
+-- UNCHANGED -- this is an UNLOCK, only ever a reduction, never a way to
+-- lengthen a cooldown or hand server/cooldowns.lua a non-positive
+-- threshold, which that file's own header documents as PERMANENTLY ON),
+-- same "consulted only after an existing gate has already allowed the
+-- action, never a gate itself" posture, same 1ms floor
+-- (math.max(1, math.floor(...))). NO per-individual-K9 override
+-- composition here (unlike GetXPTierMedkitCooldownMs's own
+-- GetK9EffectiveMultipliers layer) -- see GetHandlerXPTier's own doc
+-- comment immediately above for why no such layer exists for the handler
+-- ladder.
+--
+-- FEEDBACK-LOOP SAFETY, WORKED OUT BEFORE WIRING EITHER (owner-directed;
+-- flagged because both cooldowns these unlock also gate an action that
+-- Config.HandlerXP.awards prices -- handlerTreatK9 for medkit,
+-- handlerKennelDeploy for kennel deploy -- so a rank that shortens either
+-- cooldown could, in principle, make the ladder faster to climb the
+-- higher you climb it):
+--
+--   NO LOOP EXISTS TODAY. AwardHandlerXP is called from NOWHERE for either
+--   handlerTreatK9 or handlerKennelDeploy -- config.lua's own
+--   Config.Features.HandlerXPProgression header documents this in detail
+--   (verified by grep before writing this note, not assumed) and gives the
+--   exact reason: neither server/medkit.lua's MedkitCooldown nor
+--   server/kennel.lua's DeployCooldown is a per-actor XP MINT throttle --
+--   MedkitCooldown is keyed by the TARGET K9's citizenid, not the treating
+--   handler's, and DeployCooldown throttles the DEPLOY ACTION, not a mint
+--   -- so awarding through either today, unthrottled, would be unsafe (that
+--   header's own arithmetic: handlerKennelDeploy alone would mint
+--   5,760 XP/hr uncapped gross at the default 5000ms deployCooldownMs,
+--   enough to exhaust the entire shared 3,600 XP/hr mint budget in under
+--   40 minutes solo). Both awards are therefore left UNWIRED, exactly like
+--   the pre-fix state server/certifications.lua's own CertifyXpMintCooldown
+--   comment describes for handlerCertifyK9's old self-cert/decertify loop.
+--   With neither award ever actually paid, shortening the ACTION cooldown
+--   these two functions unlock cannot shorten any XP-MINTING cadence,
+--   because there is no minting cadence riding on either cooldown yet.
+--
+--   THE NUMBERS, RE-DERIVED FROM THE REAL SHIPPED CONSTANTS SO NOBODY HAS
+--   TO GUESS THEM LATER (coordinator-directed addition -- an economy audit
+--   the same day this landed measured handlerCertifyK9, an award believed
+--   safe because it rode an existing action cooldown, reaching the hourly
+--   mint cap in 33 seconds once someone actually did the arithmetic; the
+--   fix here is to leave that arithmetic sitting right next to the risk,
+--   not in a report nobody rereads before wiring the award):
+--     * MEDKIT: Config.K9Medkit.cooldownMs ships at 60000ms. A Master
+--       Handler (medkitTreatCooldownMultiplier = 0.70) alone shortens that
+--       to 42000ms via GetHandlerXPTierMedkitCooldownMs below. STACKED with
+--       a Veteran-or-better TARGET K9's own medkitCooldownMultiplier
+--       (0.75, Config.XPTiers, GetXPTierMedkitCooldownMs) -- both apply to
+--       the SAME MedkitCooldown threshold, server/medkit.lua composes them
+--       in sequence -- the real worst-case floor is 60000 * 0.75 * 0.70 =
+--       31500ms (31.5s), not 60000ms. AT THAT FLOOR, IF handlerTreatK9
+--       (12 XP) WERE PAID ON EVERY SUCCESS: 12 XP / 31.5s = ~1,371 XP/hr
+--       PER (actor, target) PAIR -- already over a third of the whole
+--       shared 3,600 XP/hr budget from ONE pair alone, and MedkitCooldown
+--       is keyed by the TARGET's citizenid, not the actor's (this file's
+--       own Config.Features.HandlerXPProgression header, verified above),
+--       so an actor with several K9 partners/alts to round-robin across
+--       multiplies that further with NO per-target throttle standing in
+--       the way at all. A future per-actor mint cooldown for this award
+--       MUST be keyed by the ACTOR (never reuse MedkitCooldown's
+--       target-keyed shape, which cannot see a multi-target actor at all)
+--       and sized well below what 31,500ms alone would suggest.
+--     * KENNEL DEPLOY: Config.DeployableKennel.deployCooldownMs ships at
+--       5000ms -- config.lua's own header already measured this as
+--       5,760 XP/hr gross UNWIRED (8 XP every 5s), enough alone to exhaust
+--       the shared budget in under 40 minutes. A Master Handler
+--       (kennelDeployCooldownMultiplier = 0.60) shortens that floor to
+--       3000ms via GetHandlerXPTierKennelDeployCooldownMs below -- 8 XP
+--       every 3s = 9,600 XP/hr gross, PER ACTOR (DeployCooldown, unlike
+--       MedkitCooldown, is already keyed by the deploying actor's own
+--       source) -- i.e. this pass makes the already-judged-unsafe number
+--       67% WORSE. A future per-actor mint cooldown for this award must be
+--       sized against 3000ms, never the unreduced 5000ms config default.
+--
+--   BINDING REQUIREMENT FOR WHOEVER WIRES handlerTreatK9/handlerKennelDeploy
+--   NEXT: gate that award through a DEDICATED per-actor MINT cooldown,
+--   entirely separate from MedkitCooldown/DeployCooldown, sized against
+--   the RANK-REDUCED floors above (31500ms / 3000ms), not the unreduced
+--   config defaults (60000ms / 5000ms) -- mirroring server/certifications.lua's
+--   own CertifyXpMintCooldown fix for handlerCertifyK9 (keyed by the actor,
+--   its own TTL, independent of the action-throttling cooldown). Never
+--   derive mint eligibility from MedkitCooldown.IsOnCooldown/
+--   DeployCooldown.Consume directly once this pass ships -- a handler's own
+--   rank can now shorten both of those, so treating either as a mint
+--   throttle would let a higher rank both mint AND shorten its own
+--   throttle at once, reintroducing exactly the climbing-the-ladder-makes-
+--   the-ladder-faster loop this note exists to rule out. This requirement
+--   is why these two award keys stay in Config.Features.HandlerXPProgression's
+--   own "DELIBERATELY LEFT UNWIRED" list even after this pass -- wiring the
+--   COOLDOWN EFFECT is not the same change as wiring the AWARD, and this
+--   pass only does the former.
+--
+--   ENFORCED, NOT JUST DOCUMENTED: tests/medkit_spec.lua and
+--   tests/kennel_spec.lua each carry a SOURCE AUDIT test (mirroring
+--   tests/recall_spec.lua's own "SOURCE AUDIT" precedent) that fails the
+--   moment AwardHandlerXP('handlerTreatK9'/'handlerKennelDeploy') actually
+--   appears in server/medkit.lua/server/kennel.lua UNLESS that same file
+--   also names a dedicated *_XP_MINT_COOLDOWN tracker (the
+--   CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown naming convention
+--   server/certifications.lua already established) -- a red test, not a
+--   comment someone can wire past without reading.
+--
+-- NO LIVE CLIENT PUSH: unlike Config.XPTiers' speedMultiplier/
+-- scentRangeMultiplier (which visibly change a K9's own ped behavior in
+-- real time and so need PushTierSnapshot to reach an already-connected
+-- client the moment a tier is crossed), both functions below are consulted
+-- fresh, server-side only, at the exact moment their action's own gate is
+-- checked -- there is no cached or client-visible copy of "my current
+-- effective cooldown" to go stale, so no outbound event is needed here,
+-- unlike this file's own AwardHandlerXP doc comment used to speculate.
+-- ======================================================================
+
+--- @param citizenid string
+--- @param baseCooldownMs number
+--- @return number effectiveCooldownMs
+function GetHandlerXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
+    if type(baseCooldownMs) ~= 'number' or baseCooldownMs ~= baseCooldownMs or baseCooldownMs <= 0 then
+        return baseCooldownMs
+    end
+
+    local tier = GetHandlerXPTier(citizenid)
+    local multiplier = tier.medkitTreatCooldownMultiplier
+
+    if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
+        return baseCooldownMs
+    end
+
+    return math.max(1, math.floor(baseCooldownMs * multiplier))
+end
+
+--- @param citizenid string
+--- @param baseCooldownMs number
+--- @return number effectiveCooldownMs
+function GetHandlerXPTierKennelDeployCooldownMs(citizenid, baseCooldownMs)
+    if type(baseCooldownMs) ~= 'number' or baseCooldownMs ~= baseCooldownMs or baseCooldownMs <= 0 then
+        return baseCooldownMs
+    end
+
+    local tier = GetHandlerXPTier(citizenid)
+    local multiplier = tier.kennelDeployCooldownMultiplier
+
+    if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
+        return baseCooldownMs
+    end
+
+    return math.max(1, math.floor(baseCooldownMs * multiplier))
 end
 
 --- Loads a citizenid's real handler-XP total from k9_progression.handler_xp
@@ -1256,8 +1527,71 @@ function GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
     return math.max(1, math.floor(baseCooldownMs * multiplier))
 end
 
+-- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) -- mirrors
+-- server/certifications.lua's RefreshCertificationCache fix of the
+-- identical class of bug (a transient query failure recorded as a
+-- confirmed answer instead of "we don't know"), applied here to K9XP. See
+-- LoadXPForCitizenid's own doc comment below for the full contract.
+--
+-- SEVERITY, STATED EXPLICITLY (lower than the certification case, but the
+-- SAME CLASS -- fixed for the same reason, not skipped for this reason):
+-- a wrong K9XP value has NO access-control consequence -- GetXPTier/GetXP
+-- only ever drive a bounded scentRangeMultiplier/speedMultiplier cosmetic
+-- bonus, never a permission (see this file's own header FILE-TO-FILE
+-- CONTRACT). It is also already partially self-healing regardless of this
+-- fix: AwardXP persists a DELTA to the database (K9Store.XP_UpsertAdd,
+-- `xp = xp + VALUES(xp)`), never this in-memory total, so a citizenid whose
+-- session-local cache got reset to 0 by the OLD bug still had their real DB
+-- total intact and correctly incremented by every subsequent award — only
+-- THIS SESSION's displayed tier/speed bonus was ever at risk, never their
+-- persisted progress.
+local XP_LOAD_RETRY_ATTEMPTS = 3
+local XP_LOAD_RETRY_BACKOFF_MS = 200
+
+-- XPLoadUnresolved[citizenid] = true once LoadXPForCitizenid exhausts its
+-- own retry budget with no confirmed answer either way. Purely a
+-- bookkeeping flag for the operator-facing message and the resync sweep
+-- below -- never read by GetXP/GetXPTier/AwardXP, and never merged into
+-- K9XP itself. Local: nothing outside this file needs it.
+local XPLoadUnresolved = {}
+
+--- Runs `fn()` up to `attempts` times, waiting `backoffMs * attemptNumber`
+--- between tries -- identical shape and reasoning to
+--- server/certifications.lua's own PcallWithBoundedRetry, duplicated here
+--- rather than shared, matching this resource's own established "each file
+--- keeps its own tiny copy of a genuinely small, self-contained helper"
+--- convention (see e.g. that file's own IsDuplicateKeyError precedent,
+--- independently re-implemented in server/permissions.lua for the same
+--- reason).
+--- @param fn function
+--- @param attempts number
+--- @param backoffMs number
+--- @return boolean ok
+--- @return any resultOrErr
+---
+--- `coroutine.isyieldable()` GUARD -- see server/certifications.lua's own
+--- identical guard on its own PcallWithBoundedRetry for the full "why":
+--- every real call site here runs inside an FXServer-managed coroutine
+--- (event handler, this file's own resync sweep), where `Wait()` is always
+--- safe -- this guard exists so the function is ALSO safe to call directly
+--- from a plain, non-coroutine Lua call (this resource's own test suite
+--- calls LoadXPForCitizenid this way throughout
+--- tests/progression_spec.lua), where `Wait()` -> `coroutine.yield()`
+--- would otherwise error outright.
+local function PcallWithBoundedRetry(fn, attempts, backoffMs)
+    local ok, result
+    for attempt = 1, attempts do
+        ok, result = pcall(fn)
+        if ok then return ok, result end
+        if attempt < attempts and coroutine.isyieldable() then
+            Wait(backoffMs * attempt)
+        end
+    end
+    return ok, result
+end
+
 --- Loads a citizenid's real XP total from k9_progression into the K9XP
---- cache. pcall-wrapped mirroring server/certifications.lua's
+--- cache. Bounded-retry-wrapped mirroring server/certifications.lua's
 --- RefreshCertificationCache precedent — an uncaught error here must not
 --- abort the caller's own loop (PlayerLoaded fires per-player, but the
 --- resource-start backfill loop below iterates every connected player in
@@ -1267,19 +1601,62 @@ end
 --- loop header already documents finding and fixing once for
 --- certifications). Unlike certification access, a failed XP read has no
 --- security consequence either way (XP grants a bounded scent/speed bonus,
---- never a permission), so this fails to a safe 0-XP baseline rather than
---- "failing closed" in the access-control sense.
+--- never a permission) — see "SEVERITY" above.
+---
+--- COULD-NOT-DETERMINE (lifecycle QA pass): a query failure that survives
+--- CERT-style bounded retry is NOT the same fact as a confirmed "0 XP, no
+--- row yet" answer, and this function no longer conflates the two. On
+--- total failure: if a previous cached total already exists for this
+--- citizenid (i.e. an earlier call this session already confirmed one),
+--- it is KEPT, unchanged — never reset to 0. If no previous total exists
+--- (the common case: this is this citizenid's first load this session,
+--- exactly like the certification cache's own common case), K9XP[citizenid]
+--- is left COMPLETELY UNSET rather than written as `0` — the RETURN value
+--- below still degrades to a best-effort `0` for THIS call's own immediate
+--- display use (ResolveTier/PushTierSnapshot need a real number right now,
+--- and the base tier is the correct, most-conservative display default —
+--- see GetXPTier's own doc comment on "an unresolved cache entry can only
+--- ever under-grant, never over-grant"), but that guessed value is
+--- DELIBERATELY never persisted into K9XP itself, so a later successful
+--- retry, reconnect, or the bounded resync sweep below can still tell "we
+--- do not know yet" apart from "we confirmed zero" and correct the real
+--- cache without first having to un-confirm a fake confirmation.
 --- @param citizenid string
---- @return number xp -- the freshly-cached value
+--- @return number xp -- the best currently-known total for immediate
+--- display use: freshly confirmed, retained from a previous confirmation,
+--- or a best-effort `0` when nothing is known at all (that last case is
+--- NEVER written into K9XP itself — see doc comment above).
 local function LoadXPForCitizenid(citizenid)
-    local queryOk, xpOrErr = pcall(K9Store.XP_Get, citizenid)
+    local queryOk, xpOrErr = PcallWithBoundedRetry(
+        function() return K9Store.XP_Get(citizenid) end,
+        XP_LOAD_RETRY_ATTEMPTS, XP_LOAD_RETRY_BACKOFF_MS
+    )
 
     if not queryOk then
-        print(('[qbx_k9unit] progression: LoadXPForCitizenid query failed for %s: %s'):format(citizenid, tostring(xpOrErr)))
-        K9XP[citizenid] = 0
-        return 0
+        local previous = K9XP[citizenid]
+        XPLoadUnresolved[citizenid] = true
+
+        if previous ~= nil then
+            print((
+                '[qbx_k9unit] progression: XP CHECK FAILED for citizenid=%s after %d attempt(s): %s -- ' ..
+                'this is NOT a confirmed 0-XP reset. KEEPING the previous cached total (%d XP) rather than ' ..
+                'dropping this citizenid back to the base tier. A bounded resync sweep will keep retrying ' ..
+                'this citizenid automatically.'
+            ):format(citizenid, XP_LOAD_RETRY_ATTEMPTS, tostring(xpOrErr), previous))
+            return previous
+        end
+
+        print((
+            '[qbx_k9unit] progression: XP CHECK FAILED for citizenid=%s after %d attempt(s): %s -- no ' ..
+            'previous cached total exists, so nothing is being written to the cache (left UNSET, never a ' ..
+            'manufactured confirmed 0). This citizenid displays at the base tier for THIS session only, ' ..
+            'until the resync sweep or a reconnect confirms their real total -- their persisted XP in the ' ..
+            'database is unaffected either way (AwardXP writes a delta, never this cached total).'
+        ):format(citizenid, XP_LOAD_RETRY_ATTEMPTS, tostring(xpOrErr)))
+        return 0 -- best-effort DISPLAY value only -- K9XP[citizenid] is deliberately left unset, never written as 0
     end
 
+    XPLoadUnresolved[citizenid] = nil
     K9XP[citizenid] = xpOrErr or 0 -- no row yet = 0 XP / base tier, same as k9_certifications' "no active cert row" = false
     return K9XP[citizenid]
 end
@@ -1738,13 +2115,21 @@ end
 --- 'qbx_k9unit:client:xpTierChanged' because a K9-tier crossing changes a
 --- live, client-visible mechanical effect (speedMultiplier/
 --- scentRangeMultiplier/medkitCooldownMultiplier, per Config.XPTiers).
---- Config.HandlerXPTiers' own three effect fields
---- (medkitTreatCooldownMultiplier/kennelDeployCooldownMultiplier/
---- leashRangeMultiplier) are documented in config.lua as "defined, not yet
---- wired" -- no consumer reads GetHandlerXPTier for a live effect today, so
---- there is nothing for a client push to announce yet. Add one, mirroring
---- PushTierSnapshot/BuildEffectiveTierSnapshot above, in the SAME change
---- that wires the first real consumer -- not speculatively here.
+--- CORRECTED (dead-config-field pass, coder-backend): this used to say
+--- Config.HandlerXPTiers' three effect fields were all "defined, not yet
+--- wired" and speculated about adding a client push "in the same change
+--- that wires the first real consumer." Two of the three are wired now
+--- (medkitTreatCooldownMultiplier/kennelDeployCooldownMultiplier, see
+--- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs's
+--- own "HANDLER XP TIER UNLOCKS" doc comment above), and no client push was
+--- needed after all: unlike Config.XPTiers' speedMultiplier/
+--- scentRangeMultiplier (a K9's own ped behavior, visibly wrong on an
+--- already-connected client until pushed), both wired effects are
+--- consulted fresh, server-side only, at the exact moment their own
+--- action's gate is checked -- there is no cached or client-visible copy of
+--- "my current effective cooldown" that could ever go stale. The third
+--- (leashRangeMultiplier) was removed rather than wired -- see config.lua's
+--- own Config.HandlerXPTiers header for why.
 ---
 --- Persistence uses K9Store.HandlerXP_UpsertAdd's own SafeWrite (boolean)
 --- contract, DELIBERATELY UNLIKE AwardXP's own K9Store.XP_UpsertAdd call
@@ -2034,6 +2419,12 @@ AddEventHandler('playerDropped', function(_reason)
         -- Same bounded-memory-growth rationale as K9XP's own eviction
         -- immediately above, applied to its handler-facing twin.
         HandlerXP[citizenid] = nil
+        -- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass): same
+        -- bounded-memory-growth reasoning, applied to the bookkeeping flag
+        -- that backs the operator message and the resync sweep. A
+        -- disconnected citizenid has no live source for that sweep to act
+        -- on anyway; their next PlayerLoaded re-attempts the read fresh.
+        XPLoadUnresolved[citizenid] = nil
         -- Drops every actionKey entry AwardXPCooldown holds for this
         -- citizenid in one call (NewNestedCooldown's :Clear(primaryKey)
         -- shape) — see that tracker's own declaration comment for why this
@@ -2053,5 +2444,71 @@ AddEventHandler('playerDropped', function(_reason)
         -- for memory instead by its own periodic sweep thread, which only
         -- evicts an entry once it would already have refilled to full
         -- capacity anyway.
+    end
+end)
+
+-- ======================================================================
+-- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass) --
+-- mirrors server/certifications.lua's own resync sweep for
+-- CertificationCheckUnresolved, applied here to XPLoadUnresolved. See
+-- LoadXPForCitizenid's own doc comment for the full contract this closes
+-- the loop on. Lower stakes than the certification case (see that
+-- function's own "SEVERITY" note -- a cosmetic tier/speed display, never
+-- access), but the same self-heal-without-reconnect goal applies.
+--
+-- ALWAYS RUNS, UNCONDITIONALLY -- not gated behind Config.Features.
+-- XPProgression/HandlerXPProgression: LoadXPForCitizenid is already called
+-- unconditionally from PlayerLoaded (line ~1989 above) regardless of
+-- either flag, so XPLoadUnresolved can gain entries on any install
+-- regardless of which optional features are on. Matches this resource's
+-- own established "a thread governed by something that can change at
+-- runtime starts unconditionally and re-checks that thing fresh inside the
+-- loop" convention -- see server/certifications.lua's own resync sweep and
+-- server/runtimecontrol.lua's FEATURE_TIERS entry on server/combat.lua's
+-- maintenance threads for the precedent. Cheap on an idle server either
+-- way: the overwhelmingly common case is an EMPTY XPLoadUnresolved table.
+-- ======================================================================
+
+local XP_RESYNC_SWEEP_INTERVAL_MS = 30000
+
+--- One resync pass: retries LoadXPForCitizenid for every citizenid
+--- currently recorded in XPLoadUnresolved, but ONLY for a citizenid who is
+--- CURRENTLY ONLINE -- an offline citizenid's own next PlayerLoaded already
+--- attempts a fresh read from a clean state. A successful retry needs no
+--- separate bookkeeping here: LoadXPForCitizenid itself clears
+--- XPLoadUnresolved[citizenid] the instant it confirms ANY answer -- this
+--- function only needs to keep calling it, and push a fresh tier snapshot
+--- when it does (mirroring PlayerLoaded's own post-load push) so an
+--- officer who was stuck at the base tier display sees the correction
+--- immediately rather than only on their next tier crossing.
+local function ResyncUnresolvedXP()
+    for citizenid in pairs(XPLoadUnresolved) do
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local targetSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+        if type(targetSrc) == 'number' then
+            local xp = LoadXPForCitizenid(citizenid)
+            if not XPLoadUnresolved[citizenid] then
+                -- Confirmed this pass (LoadXPForCitizenid already cleared
+                -- the flag) -- push the corrected tier now rather than
+                -- waiting for this citizenid's next real tier crossing.
+                PushTierSnapshot(targetSrc, citizenid, ResolveTier(xp))
+            end
+        end
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait(XP_RESYNC_SWEEP_INTERVAL_MS)
+
+        -- Cheap early-exit, checked fresh every tick -- see this sweep's
+        -- own header above for why this table is expected to be empty
+        -- essentially always.
+        if next(XPLoadUnresolved) ~= nil then
+            local ok, err = pcall(ResyncUnresolvedXP)
+            if not ok then
+                print(('[qbx_k9unit] progression: XP resync sweep tick error: %s'):format(tostring(err)))
+            end
+        end
     end
 end)

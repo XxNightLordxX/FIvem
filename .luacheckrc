@@ -233,15 +233,21 @@ read_globals = {
     "CreateCam", "AttachCamToEntity", "SetCamFov", "GetEntityRotation",
     "SetCamRot", "SetCamActive", "RenderScriptCams", "DoesCamExist",
     "DestroyCam",
-    -- GetWaterHeightNoWaves: NOT verified to this file's usual standard, and
-    -- recorded as such rather than left looking checked. Its decl page 404s
-    -- (not proof of absence -- many real natives have none), and the fallback
-    -- runtime.fivem.net/doc/natives.json is blocked by this environment's
-    -- egress proxy, so the apiset check could not be completed. It does exist
-    -- (WATER namespace, 0x8EE6B53CE13A9794) but that mirror carries no apiset
-    -- either. Its single call site, client/tracking.lua:418, is client-side,
-    -- and its sibling GetWaterHeight is a ubiquitous client native -- so the
-    -- practical risk is low. Re-check whenever runtime.fivem.net is reachable.
+    -- GetWaterHeightNoWaves -- RE-VERIFIED 2026-08-26 (native-api-assistant
+    -- pass): runtime.fivem.net/doc/natives.json was reachable this session
+    -- (the earlier egress-proxy block noted below was environment-specific,
+    -- not permanent) and confirms WATER namespace, hash 0x8EE6B53CE13A9794,
+    -- params (float x, float y, float z, float* height) -> BOOL, no apiset
+    -- key -- the default, client-only, matching this native's one call site
+    -- (client/tracking.lua's water-crossing sampler, a client file). The
+    -- `float* height` out-param is correctly consumed as a second Lua return
+    -- value (`local found = GetWaterHeightNoWaves(x, y, z)` only captures the
+    -- first), not passed as an input argument -- same convention already
+    -- established for the sibling GetWaterHeight. Superseded finding, kept
+    -- for the historical record: its ext/native-decls page still 404s (not
+    -- proof of absence -- many real natives have none), and an earlier pass
+    -- of this environment could not reach runtime.fivem.net to fall back to,
+    -- so this entry was carried at reduced confidence until now.
     "GetWaterHeightNoWaves",
     "NetworkGetEntityFromNetworkId", "NetworkGetNetworkIdFromEntity",
     "NetworkDoesEntityExistWithNetworkId",
@@ -738,6 +744,17 @@ globals = {
     -- deferred, since it is already a real, tested, resource-global
     -- function as of this pass.
     "AwardHandlerXP", "GetHandlerXPTier",
+    -- server/progression.lua -- HANDLER XP TIER COOLDOWN EFFECTS
+    -- (Config.HandlerXPTiers' medkitTreatCooldownMultiplier/
+    -- kennelDeployCooldownMultiplier, previously defined but read by
+    -- nothing). Read from server/medkit.lua's RunUseK9MedkitMutation and
+    -- server/kennel.lua's deploy/pickup success path respectively, each
+    -- behind a `type(...) == 'function'` runtime existence guard, same
+    -- soft-dependency convention as AwardHandlerXP itself. Deliberately NOT
+    -- an XP mint eligibility check -- see this file's own declaration
+    -- comment on these two functions for why deriving mint eligibility from
+    -- either cooldown effect would reopen a rank-climbing farm loop.
+    "GetHandlerXPTierMedkitCooldownMs", "GetHandlerXPTierKennelDeployCooldownMs",
     -- client/movement.lua's PHASE4_SPEC.md §13.0 Decision 2 "move-rate
     -- composer" -- REAL, IMPLEMENTED (coder-frontend pass, real-bug fix):
     -- a qa-tester finding caught client/wellbeing.lua unconditionally

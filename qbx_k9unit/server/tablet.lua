@@ -319,13 +319,16 @@
     ======================================================================
 
     LOCALE KEYS THIS FILE NEEDS -- real keys, NOT invented inline.
-    `tablet.roster_truncated_notice` has LANDED (locales/en.json, worded
-    as "Showing the first %d entries -- narrow your search
-    to see the rest.") and is wired into tabletRequestRoster's
-    `truncatedMessage` below. Still outstanding, used only as an OPTIONAL
-    `message` alongside an `error` code the tablet can already render
-    generically without it:
-      tablet.console_not_authorized = "You don't have access to the Command Console."
+    Both have LANDED in locales/en.json: `tablet.roster_truncated_notice`
+    (worded as "Showing the first %d entries -- narrow your search to see
+    the rest.", wired into tabletRequestRoster's `truncatedMessage` below)
+    and `tablet.console_not_authorized` ("You don't have access to the
+    Command Console.", wired into every CallerHasConsoleAccess refusal
+    below). Both are resolved via this file's own SafeLocale() helper, not
+    a bare locale() call -- each is an OPTIONAL field alongside an `error`
+    code the tablet can already render generically, so a future rename or
+    removal of either key degrades to that same generic behaviour instead
+    of throwing out of the callback.
 
     FXMANIFEST.LUA PLACEMENT REQUESTED (server_scripts, not edited here):
     insert `'server/tablet.lua',` immediately after `'server/progression.lua',`
@@ -427,6 +430,22 @@ local function SafeStoreCall(fn, ...)
         return nil
     end
     return resultOrErr
+end
+
+--- Single-key pcall-wrapped locale() resolution, mirroring client/tablet.lua's
+--- own SafeLocale() helper -- both `console_not_authorized` and
+--- `roster_truncated_notice` below are OPTIONAL fields on their own response
+--- (an `error` code the tablet can already render generically, or a plain
+--- roster array with no truncation note), never the sole carrier of a
+--- required value -- so a missing/renamed locale key must degrade to that
+--- same generic behaviour instead of throwing out of a callback and
+--- refusing an otherwise-successful request.
+--- @param fullKey string @param ... any -- forwarded to locale() for %s/%d substitution
+--- @return string?
+local function SafeLocale(fullKey, ...)
+    local ok, value = pcall(locale, fullKey, ...)
+    if ok and type(value) == 'string' and value ~= '' then return value end
+    return nil
 end
 
 --- DB-authoritative: does `citizenid` hold an active row in ANY configured
@@ -1431,11 +1450,14 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
 
     local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
     if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
-        -- 'tablet.console_not_authorized' has now landed in locales/en.json,
-        -- so `message` is populated as this file's header always intended.
-        -- It stays optional per the JS contract: its absence would still be
-        -- a clean fallback, never a broken path.
-        return { ok = false, error = 'not_authorized', message = locale('tablet.console_not_authorized') }
+        -- 'tablet.console_not_authorized' has landed in locales/en.json, so
+        -- `message` is populated as this file's header always intended.
+        -- SafeLocale() rather than a bare locale() call: this field is
+        -- OPTIONAL per the JS contract (errorText() already falls back to
+        -- a generic message for a bare 'not_authorized' error code), so a
+        -- future rename/removal of this key must degrade to that same
+        -- fallback instead of throwing out of this callback.
+        return { ok = false, error = 'not_authorized', message = SafeLocale('tablet.console_not_authorized') }
     end
 
     if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
@@ -1514,14 +1536,15 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
         for i = 1, maxRows do rows[i] = filtered[i] end
     end
 
-    -- 'tablet.roster_truncated_notice' has now landed in locales/en.json, so
+    -- 'tablet.roster_truncated_notice' has landed in locales/en.json, so
     -- this sets `truncatedMessage` as this file's own header always intended.
     -- html/tablet.js's contract documents it as optional and PREFERRED over a
-    -- client-built count text when present; its absence with `truncated = true`
-    -- remains a safe fallback, so nothing breaks if the key is ever removed.
+    -- client-built count text when present; SafeLocale() (rather than a bare
+    -- locale() call) means its absence with `truncated = true` remains a
+    -- safe fallback if the key is ever renamed or removed, not a thrown error.
     local result = { ok = true, rows = rows, truncated = truncated }
     if truncated then
-        result.truncatedMessage = locale('tablet.roster_truncated_notice', #rows)
+        result.truncatedMessage = SafeLocale('tablet.roster_truncated_notice', #rows)
     end
     return result
 end)
@@ -1544,11 +1567,14 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
 
     local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
     if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
-        -- 'tablet.console_not_authorized' has now landed in locales/en.json,
-        -- so `message` is populated as this file's header always intended.
-        -- It stays optional per the JS contract: its absence would still be
-        -- a clean fallback, never a broken path.
-        return { ok = false, error = 'not_authorized', message = locale('tablet.console_not_authorized') }
+        -- 'tablet.console_not_authorized' has landed in locales/en.json, so
+        -- `message` is populated as this file's header always intended.
+        -- SafeLocale() rather than a bare locale() call: this field is
+        -- OPTIONAL per the JS contract (errorText() already falls back to
+        -- a generic message for a bare 'not_authorized' error code), so a
+        -- future rename/removal of this key must degrade to that same
+        -- fallback instead of throwing out of this callback.
+        return { ok = false, error = 'not_authorized', message = SafeLocale('tablet.console_not_authorized') }
     end
 
     if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then

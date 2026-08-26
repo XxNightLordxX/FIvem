@@ -301,10 +301,12 @@ end
 --- Builds/rebuilds PropAttachmentModelHashes from live config. Deferred
 --- into a function (rather than a bare file-load-time block like
 --- server/kennel.lua's KennelModelHashes) purely so the onResourceStart
---- config-shape assert below can run BEFORE this reads
---- Config.PropAttachments fields — see that guard's own comment for why a
---- missing/malformed Config.PropAttachments must fail loudly at start
---- rather than let this table silently build out of two nil hashes.
+--- config-safety guard below can run BEFORE this reads
+--- Config.PropAttachments.propModel/fallbackPropModel — that guard
+--- clamp-and-warns each field to a known-good string fallback (never
+--- throws) rather than letting this call GetHashKey against a
+--- missing/non-string value, so this always builds from two valid model
+--- names by the time it runs, never silently out of nil hashes.
 local function BuildPropAttachmentModelHashes()
     PropAttachmentModelHashes = {
         [GetHashKey(Config.PropAttachments.propModel)] = true,
@@ -831,11 +833,20 @@ end)
 -- convention: Config.Features.PropAttachments already exists in config.lua
 -- (still `false`), so no assert on the flag itself is needed here (a
 -- missing/false flag is a normal, supported state, not a misconfiguration).
--- Once the flag IS `true`, Config.PropAttachments must exist with the exact
--- shape this file assumes, or this resource refuses to finish starting —
--- fail loudly on a genuine misconfiguration, once the operator has actually
--- opted in, never silently on an unrelated server that hasn't touched this
--- feature at all.
+-- Once the flag IS `true`, Config.PropAttachments must exist as a table (kept
+-- as a hard assert below — a WHOLE missing table is a far more severe
+-- misconfiguration than one malformed field, and every field read below
+-- would otherwise error against a nil `cfg` anyway) — but every INDIVIDUAL
+-- field within it is now CLAMP-AND-WARNED, never asserted. This used to be
+-- nine bare per-field `assert`s in a row: a throw from ANY one of them
+-- aborted this entire handler on the spot, which ALSO meant
+-- BuildPropAttachmentModelHashes() (below) never ran, leaving
+-- PropAttachmentModelHashes built from whatever it held before (nil/empty
+-- on a first start) — every attach request would then fail its model-hash
+-- check for the rest of this resource's uptime, on top of the missing
+-- startup confirmation print, over one operator typo in a config section
+-- config.lua's own header explicitly invites tuning of (boneIndex,
+-- offsets/rotation, cooldowns).
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
@@ -843,11 +854,36 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     local cfg = Config.PropAttachments
     assert(type(cfg) == 'table', '[qbx_k9unit] Config.Features.PropAttachments is true but Config.PropAttachments is missing.')
-    assert(type(cfg.propModel) == 'string' and cfg.propModel ~= '', '[qbx_k9unit] Config.PropAttachments.propModel must be a non-empty string.')
-    assert(type(cfg.fallbackPropModel) == 'string' and cfg.fallbackPropModel ~= '', '[qbx_k9unit] Config.PropAttachments.fallbackPropModel must be a non-empty string.')
-    assert(type(cfg.boneIndex) == 'number' and cfg.boneIndex >= 0, '[qbx_k9unit] Config.PropAttachments.boneIndex must be a number >= 0.')
+
+    --- Warns ONCE (this handler only ever runs once per resource start) and
+    --- forces `cfg[key]` to `fallback` when `predicate(cfg[key])` is false.
+    --- `fallback` is always one of config.lua's own shipped defaults for
+    --- this field, matching this codebase's established clamp-and-warn
+    --- convention (server/cooldowns.lua's ResolveConfiguredThresholdMs,
+    --- server/certifications.lua's autoAccessGrade guard, etc.) rather than
+    --- guessing a "safer" number.
+    --- @param key string
+    --- @param predicate fun(value: any): boolean
+    --- @param fallback any
+    --- @param description string -- plain-English requirement, used only in the printed warning
+    local function ResolvePropAttachmentField(key, predicate, fallback, description)
+        local value = cfg[key]
+        if not predicate(value) then
+            print(
+                ('[qbx_k9unit] WARNING: Config.PropAttachments.%s %s (found: %s) -- using the built-in ' ..
+                 'fallback %s instead of aborting this file\'s entire PropAttachments registration over one ' ..
+                 'field. Fix Config.PropAttachments.%s in config.lua to silence this warning.'
+                ):format(key, description, tostring(value), tostring(fallback), key)
+            )
+            cfg[key] = fallback
+        end
+    end
+
+    ResolvePropAttachmentField('propModel', function(v) return type(v) == 'string' and v ~= '' end, 'prop_bodyarmour_02', 'must be a non-empty string')
+    ResolvePropAttachmentField('fallbackPropModel', function(v) return type(v) == 'string' and v ~= '' end, 'prop_tennis_ball', 'must be a non-empty string')
+    ResolvePropAttachmentField('boneIndex', function(v) return type(v) == 'number' and v >= 0 end, 0, 'must be a number >= 0')
     for _, key in ipairs({ 'offsetX', 'offsetY', 'offsetZ', 'rotX', 'rotY', 'rotZ' }) do
-        assert(type(cfg[key]) == 'number', ('[qbx_k9unit] Config.PropAttachments.%s must be a number.'):format(key))
+        ResolvePropAttachmentField(key, function(v) return type(v) == 'number' end, 0.0, 'must be a number')
     end
     -- `> 0`, not `>= 0`: ToggleCooldown is a NewCooldown() with no
     -- constructor default, so this value is read fresh at call time, where
@@ -856,9 +892,11 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- instead lock every player out of toggling their vest again for the
     -- rest of the resource's uptime, after their first toggle. Matches
     -- server/admin.lua and server/bonetool.lua, which both require > 0.
-    assert(type(cfg.toggleCooldownMs) == 'number' and cfg.toggleCooldownMs > 0, '[qbx_k9unit] Config.PropAttachments.toggleCooldownMs must be a number > 0 -- 0 or negative does NOT mean "no cooldown" here, it means the vest toggle fails closed (permanently blocked) after one use. See server/cooldowns.lua\'s fail-closed threshold handling.')
-    assert(type(cfg.pendingConfirmTtlMs) == 'number' and cfg.pendingConfirmTtlMs > 0, '[qbx_k9unit] Config.PropAttachments.pendingConfirmTtlMs must be a positive number.')
-    assert(type(cfg.confirmDistanceTolerance) == 'number' and cfg.confirmDistanceTolerance > 0, '[qbx_k9unit] Config.PropAttachments.confirmDistanceTolerance must be a positive number.')
+    ResolvePropAttachmentField('toggleCooldownMs', function(v) return type(v) == 'number' and v > 0 end, 2000,
+        'must be a number > 0 -- 0 or negative does NOT mean "no cooldown" here, it means the vest toggle fails ' ..
+        'closed (permanently blocked) after one use; see server/cooldowns.lua\'s fail-closed threshold handling')
+    ResolvePropAttachmentField('pendingConfirmTtlMs', function(v) return type(v) == 'number' and v > 0 end, 15000, 'must be a positive number')
+    ResolvePropAttachmentField('confirmDistanceTolerance', function(v) return type(v) == 'number' and v > 0 end, 5.0, 'must be a positive number')
 
     BuildPropAttachmentModelHashes()
 

@@ -426,6 +426,21 @@ local function newMedkitFixture(opts)
         end
     end
 
+    -- HANDLER XP TIER UNLOCK (dead-config-field pass) -- same shape as the
+    -- K9-side stand-in immediately above, for
+    -- GetHandlerXPTierMedkitCooldownMs (server/progression.lua), keyed on
+    -- the USING player's own citizenid rather than the target's.
+    -- `opts.handlerMedkitCooldownMsByCitizenid` maps the USING player's
+    -- citizenid to the exact effective cooldown this stub returns.
+    local handlerXPTierCooldownCalls = {}
+    if opts.withHandlerXPTierMedkitCooldown then
+        envOverrides.GetHandlerXPTierMedkitCooldownMs = function(citizenid, baseCooldownMs)
+            handlerXPTierCooldownCalls[#handlerXPTierCooldownCalls + 1] = { citizenid = citizenid, baseCooldownMs = baseCooldownMs }
+            local override = opts.handlerMedkitCooldownMsByCitizenid and opts.handlerMedkitCooldownMsByCitizenid[citizenid]
+            return override or baseCooldownMs
+        end
+    end
+
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -468,6 +483,7 @@ local function newMedkitFixture(opts)
         printedLines = printedLines,
         restoreInjuryCalls = restoreInjuryCalls,
         xpTierCooldownCalls = xpTierCooldownCalls,
+        handlerXPTierCooldownCalls = handlerXPTierCooldownCalls,
         createThreadCallCount = function() return createThreadCallCount end,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setNow = function(ms) fakeNow = ms end,
@@ -1358,6 +1374,102 @@ t.test('XP TIER UNLOCK: GetXPTierMedkitCooldownMs entirely absent (server/progre
     f.advance(f.config.K9Medkit.cooldownMs)
     local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isTrue(r2.ok, 'a missing accessor must never error, and must behave exactly like the plain configured cooldown')
+end)
+
+-- ========================================================================
+-- HANDLER XP TIER UNLOCK -- GetHandlerXPTierMedkitCooldownMs
+-- (server/progression.lua), the documented soft dependency that resolves
+-- Config.HandlerXPTiers' medkitTreatCooldownMultiplier reward into the
+-- actual threshold MedkitCooldown.IsOnCooldown is checked against. Keyed
+-- on the USING player's own citizenid (the handler performing the treat),
+-- never the target's -- the mirror image of the K9-side section above.
+-- Chained ON TOP of whatever the K9-side accessor already produced, so
+-- these tests fix the target at base-tier (no K9-side reduction) to
+-- isolate the handler-side effect cleanly. This section only proves
+-- server/medkit.lua actually CONSULTS the accessor and USES its result --
+-- the accessor's own numeric contract belongs to whatever spec covers
+-- server/progression.lua directly.
+-- ========================================================================
+
+t.test('HANDLER XP TIER UNLOCK: a Master-Handler USING player (accessor returns a shortened cooldown) can treat the same target again sooner than the base Config.K9Medkit.cooldownMs would allow', function()
+    local f = newMedkitFixture({
+        withHandlerXPTierMedkitCooldown = true,
+        handlerMedkitCooldownMsByCitizenid = { ['HANDLER-MASTER'] = 42000 }, -- e.g. baseCooldownMs(60000) * 0.70 tier multiplier, pre-resolved by the (stubbed) accessor
+    })
+    wireUsingPlayer(f, USER_SRC, { itemCount = 3, citizenid = 'HANDLER-MASTER' })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-BASE-TIER-2' })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+
+    -- Past the REDUCED threshold, but still well short of the base 60000ms
+    -- cooldown -- only passes if server/medkit.lua actually used the
+    -- accessor's shortened value, not the raw Config.K9Medkit.cooldownMs.
+    f.advance(42001)
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok, 'a Master-Handler USING player must be able to treat again after their OWN shortened cooldown elapses, not the base one')
+    t.equals(#f.handlerXPTierCooldownCalls, 2, 'the accessor is consulted on every treat attempt by this using player')
+    t.equals(f.handlerXPTierCooldownCalls[1].citizenid, 'HANDLER-MASTER', 'must be keyed on the USING player, never the target')
+    t.equals(f.handlerXPTierCooldownCalls[1].baseCooldownMs, f.config.K9Medkit.cooldownMs, 'chained on top of the (here, unmodified) K9-side result -- must still trace back to the real configured base')
+end)
+
+t.test('HANDLER XP TIER UNLOCK: a Rookie Handler USING player (accessor returns baseCooldownMs unchanged) still gets the full configured cooldown, not the Master-Handler reduction', function()
+    local f = newMedkitFixture({ withHandlerXPTierMedkitCooldown = true }) -- no override for this citizenid -- the stub falls through to baseCooldownMs
+    wireUsingPlayer(f, USER_SRC, { itemCount = 3, citizenid = 'HANDLER-ROOKIE' })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-BASE-TIER-3' })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+
+    f.advance(42001) -- past the Master-Handler threshold, but NOT the full base cooldown
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isFalse(result.ok, 'a rookie-handler USING player must still honor the full configured cooldown')
+    t.equals(result.reason, 'on_cooldown')
+end)
+
+t.test('HANDLER XP TIER UNLOCK: GetHandlerXPTierMedkitCooldownMs entirely absent (server/progression.lua not loaded, or HandlerXPProgression off) falls back cleanly to the plain configured cooldown', function()
+    local f = newMedkitFixture() -- withHandlerXPTierMedkitCooldown deliberately omitted -- the global is simply undefined
+    wireUsingPlayer(f, USER_SRC, { itemCount = 3 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-NO-HANDLER-ACCESSOR' })
+    local r1 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r1.ok)
+
+    f.advance(f.config.K9Medkit.cooldownMs)
+    local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r2.ok, 'a missing accessor must never error, and must behave exactly like the plain configured cooldown')
+end)
+
+-- ========================================================================
+-- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass):
+-- this cooldown is now handler-rank-reduced (combined worst case 31500ms
+-- -- see GetHandlerXPTierMedkitCooldownMs's own doc comment,
+-- server/progression.lua, "THE NUMBERS" section). handlerTreatK9 (12 XP,
+-- Config.HandlerXP.awards) is DELIBERATELY still unwired -- AwardHandlerXP
+-- is called from nowhere in this file. If that ever changes, whoever wires
+-- it MUST add a dedicated per-ACTOR MINT cooldown (mirroring
+-- server/certifications.lua's CertifyXpMintCooldown fix for
+-- handlerCertifyK9) -- never a per-target one (MedkitCooldown's own shape,
+-- which a multi-target actor can bypass entirely) -- sized against the
+-- rank-reduced 31500ms floor. This is a RED TEST, not a comment: it fails
+-- the moment handlerTreatK9 is actually awarded from this file without a
+-- same-file *_XP_MINT_COOLDOWN tracker alongside it. Mirrors
+-- tests/recall_spec.lua's own "SOURCE AUDIT" precedent.
+-- ========================================================================
+
+t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 without a dedicated per-actor *_XP_MINT_COOLDOWN tracker also present in this file', function()
+    local handle = assert(io.open('../server/medkit.lua', 'r'))
+    local text = handle:read('a')
+    handle:close()
+
+    local awardsHandlerTreatK9 = text:find("AwardHandlerXP%s*%(.-'handlerTreatK9'") ~= nil
+    if not awardsHandlerTreatK9 then
+        t.isTrue(true, 'handlerTreatK9 is still unwired, per config.lua\'s own Config.Features.HandlerXPProgression header -- nothing more to check')
+        return
+    end
+
+    t.isTrue(text:find('XP_MINT_COOLDOWN', 1, true) ~= nil,
+        'handlerTreatK9 is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
+        'DEDICATED per-ACTOR mint cooldown (a second, separate tracker, never MedkitCooldown itself, which is ' ..
+        'target-keyed and now handler-rank-shortened to a 31500ms combined worst-case floor) named with the ' ..
+        'XP_MINT_COOLDOWN convention (server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown ' ..
+        'precedent) so this test can find it, then update this test\'s own expectations to match. See ' ..
+        'server/progression.lua\'s GetHandlerXPTierMedkitCooldownMs header for the full writeup.')
 end)
 
 -- ========================================================================

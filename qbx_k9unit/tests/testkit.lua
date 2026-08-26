@@ -28,7 +28,7 @@ M.failures = {}
 --- @param name string
 --- @param fn fun()
 function M.test(name, fn)
-    local ok, err = pcall(fn)
+    local ok, err = xpcall(fn, debug.traceback)
     if ok then
         M.passed = M.passed + 1
         print(('  [PASS] %s'):format(name))

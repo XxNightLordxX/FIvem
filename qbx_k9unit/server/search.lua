@@ -203,6 +203,47 @@
 -- main.lua's onResourceStart guard remains the right home for
 -- nudgeRequiresUnlocked specifically because that flag has no owning
 -- file yet (nudge-open isn't implemented anywhere in this resource).
+-- Built-in fallback for Config.ContrabandAlertTiers -- byte-identical to
+-- config.lua's own shipped default for this table. Used ONLY when the
+-- configured table fails the validation below; kept as a single named
+-- constant (rather than inlined) so both the warning text and the
+-- substitution below stay obviously in sync.
+local FALLBACK_CONTRABAND_ALERT_TIERS = {
+    { minWeight = 0,   alert = 'clean' },
+    { minWeight = 1,   alert = 'whine' },
+    { minWeight = 250, alert = 'aggressive_bark' },
+}
+
+--- Validates the shape Finding 1 (below) documents: a mandatory
+--- `{ minWeight = 0, alert = 'clean' }` baseline at index 1, then every
+--- later entry a table with a numeric `minWeight` at or above the previous
+--- entry's -- exactly what ResolveAlertTier's own walk assumes. Never
+--- throws on a malformed non-baseline entry (e.g. a bare string in the
+--- list) -- returns `false` instead, unlike the ORIGINAL bare-assert
+--- version of this check, which would have raised an unrelated
+--- "attempt to index a nil value" from deep inside the loop for that exact
+--- shape rather than this function's own clear message.
+--- @param tiers any
+--- @return boolean valid
+--- @return string? reason -- only set when valid is false
+local function ValidateContrabandAlertTiers(tiers)
+    if type(tiers) ~= 'table' or tiers[1] == nil or type(tiers[1]) ~= 'table'
+        or tiers[1].minWeight ~= 0 or tiers[1].alert ~= 'clean' then
+        return false, "index 1 must be { minWeight = 0, alert = 'clean' } (the mandatory clean-search baseline)"
+    end
+    for i = 2, #tiers do
+        local tier = tiers[i]
+        if type(tier) ~= 'table' or type(tier.minWeight) ~= 'number' then
+            return false, ('index %d must be a table with a numeric minWeight'):format(i)
+        end
+        if tier.minWeight < tiers[i - 1].minWeight then
+            return false, ('must stay sorted ascending by minWeight (index %d, minWeight=%s, is lower than index %d\'s minWeight=%s)')
+                :format(i, tostring(tier.minWeight), i - 1, tostring(tiers[i - 1].minWeight))
+        end
+    end
+    return true
+end
+
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
@@ -216,25 +257,26 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- tier sits at index 1 -- including a non-'clean' tier -- which
     -- BroadcastContrabandAlert would then broadcast as a FALSE contraband
     -- alert about an innocent player to every bystander in range.
+    --
+    -- CLAMP AND WARN, DELIBERATELY NEVER THROW -- this used to be a pair of
+    -- bare `assert`s. ResolveAlertTier and GetContrabandAlertTier both read
+    -- `Config.ContrabandAlertTiers` fresh on every call (never a value
+    -- cached from this handler), so overwriting Config.ContrabandAlertTiers
+    -- itself with the built-in fallback here is sufficient to make every
+    -- later call see the corrected table -- not merely a boot-time check
+    -- that would otherwise protect nothing.
     local tiers = Config.ContrabandAlertTiers
-    assert(
-        type(tiers) == 'table' and tiers[1] ~= nil and tiers[1].minWeight == 0 and tiers[1].alert == 'clean',
-        "[qbx_k9unit] Config.ContrabandAlertTiers[1] must be { minWeight = 0, alert = 'clean' } -- " ..
-        'it is documented as the mandatory clean-search baseline, but ResolveAlertTier ' ..
-        '(server/search.lua) only defaults to index 1 without verifying it. A missing or ' ..
-        're-ordered baseline entry would let a genuinely clean search (totalWeight = 0) resolve ' ..
-        "to a non-'clean' tier, broadcasting a FALSE contraband alert about an innocent player."
-    )
-    for i = 2, #tiers do
-        assert(
-            tiers[i].minWeight >= tiers[i - 1].minWeight,
-            '[qbx_k9unit] Config.ContrabandAlertTiers must stay sorted ascending by minWeight ' ..
-            '(index ' .. i .. " ('" .. tostring(tiers[i].alert) .. "', minWeight=" .. tostring(tiers[i].minWeight) ..
-            ') is lower than index ' .. (i - 1) .. "'s minWeight=" .. tostring(tiers[i - 1].minWeight) .. ') -- ' ..
-            'ResolveAlertTier walks the whole list keeping the LAST tier whose minWeight is met, so an ' ..
-            "out-of-order list resolves to the wrong tier (e.g. reporting 'clean' for a real stash, or a " ..
-            'false alert about an innocent player).'
+    local tiersValid, tiersInvalidReason = ValidateContrabandAlertTiers(tiers)
+    if not tiersValid then
+        print(
+            ('[qbx_k9unit] WARNING: Config.ContrabandAlertTiers %s (found: %s). A missing/re-ordered baseline or ' ..
+             'out-of-order list would let ResolveAlertTier resolve a genuinely clean search to a non-\'clean\' ' ..
+             'tier, or a real stash to the wrong severity -- using the built-in default tier list instead of ' ..
+             'aborting this resource\'s config-safety guard over it. Fix Config.ContrabandAlertTiers in ' ..
+             'config.lua to silence this warning.'
+            ):format(tiersInvalidReason, tostring(tiers))
         )
+        Config.ContrabandAlertTiers = FALLBACK_CONTRABAND_ALERT_TIERS
     end
 
     -- Finding 2: this file's own header above quotes the security review's
@@ -252,16 +294,40 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- generous enough to cover a busy search scene (a full parking lot, a
     -- multi-vehicle pursuit stop) -- while staying unambiguously local:
     -- two orders of magnitude below a map traversal, so this radius can
-    -- never functionally become "everyone on the server hears it."
-    assert(
-        type(Config.SearchZones.alertBroadcastRadius) == 'number' and Config.SearchZones.alertBroadcastRadius <= 200.0,
-        '[qbx_k9unit] Config.SearchZones.alertBroadcastRadius must be <= 200.0 -- ' ..
-        "it is a hard safety ceiling, not a server-tunable-to-anything toggle. This resource's contraband " ..
-        'alert broadcast is deliberately distance-filtered (never a global TriggerClientEvent(-1, ...) like ' ..
-        "relayBark's) because its payload identifies a specific vehicle/person just flagged for contraband -- " ..
-        'setting this radius high enough to cover the whole map would leak that fact to an accomplice anywhere ' ..
-        'on the server, silently defeating the distance-filtered design BroadcastContrabandAlert implements.'
-    )
+    -- never functionally become "everyone on the server hears it." THIS
+    -- 200.0 CEILING IS ENFORCED HERE IN CODE ONLY -- config.lua's own
+    -- comment on this field does not mention it; see this file's own
+    -- header pointer added alongside this pass for the fix to that gap.
+    --
+    -- CLAMP AND WARN, DELIBERATELY NEVER THROW -- this used to be a bare
+    -- `assert`. BroadcastContrabandAlert reads
+    -- `Config.SearchZones.alertBroadcastRadius` fresh on every call, so
+    -- clamping the value in place here is sufficient for every later call
+    -- to see the corrected radius.
+    local rawRadius = Config.SearchZones.alertBroadcastRadius
+    if type(rawRadius) ~= 'number' or rawRadius ~= rawRadius then
+        print(
+            ('[qbx_k9unit] WARNING: Config.SearchZones.alertBroadcastRadius (%s) is missing or not a number -- ' ..
+             'using a built-in fallback of 40.0m (this resource\'s other legitimate detection distances\' own ' ..
+             'maxRange) instead of aborting this resource\'s config-safety guard over it. Fix ' ..
+             'Config.SearchZones.alertBroadcastRadius in config.lua to silence this warning.'
+            ):format(tostring(rawRadius))
+        )
+        Config.SearchZones.alertBroadcastRadius = 40.0
+    elseif rawRadius > 200.0 then
+        print(
+            ('[qbx_k9unit] WARNING: Config.SearchZones.alertBroadcastRadius (%s) exceeds the 200.0 hard safety ' ..
+             'ceiling -- it is not a server-tunable-to-anything toggle. This resource\'s contraband alert ' ..
+             "broadcast is deliberately distance-filtered (never a global TriggerClientEvent(-1, ...) like " ..
+             "relayBark's) because its payload identifies a specific vehicle/person just flagged for " ..
+             'contraband -- setting this radius above the ceiling would leak that fact to an accomplice ' ..
+             'anywhere on the server. Clamping DOWN to 200.0 instead of aborting this resource\'s ' ..
+             'config-safety guard over it. Fix Config.SearchZones.alertBroadcastRadius in config.lua to ' ..
+             'silence this warning.'
+            ):format(tostring(rawRadius))
+        )
+        Config.SearchZones.alertBroadcastRadius = 200.0
+    end
 end)
 
 -- ======================================================================

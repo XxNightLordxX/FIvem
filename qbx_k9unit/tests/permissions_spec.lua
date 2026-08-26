@@ -329,6 +329,19 @@ local function newFixture(opts)
         CommandTablet = opts.commandTabletConfig,
     }
 
+    -- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass):
+    -- server/permissions.lua now calls CreateThread(...) UNCONDITIONALLY at
+    -- its own file-load time (the resync sweep for PermissionCheckUnresolved
+    -- -- see that file's own declaration comment for why it is deliberately
+    -- NOT feature-gated). Every fixture that loads server/permissions.lua
+    -- must therefore provide a real CreateThread/Wait pair, mirroring
+    -- tests/certifications_spec.lua's own identical `Sandbox.newThreadRunner()`
+    -- wiring for the exact same reason (that file's own resync sweep, added
+    -- the same pass) -- a plain `fn()`/no-op stub would either throw
+    -- (CreateThread undefined) or infinite-loop synchronously (a bare
+    -- `while true do Wait(x) ... end` body with a Wait() that just returns).
+    local threadRunner = Sandbox.newThreadRunner()
+
     local envOverrides = {
         Config = Config,
         GetGameTimer = GetGameTimer,
@@ -343,6 +356,8 @@ local function newFixture(opts)
         TriggerClientEvent = TriggerClientEventStub,
         RegisterNetEvent = RegisterNetEventStub,
         RegisterCommand = RegisterCommandStub,
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
         -- Test-controlled soft dependencies -- see this file's header.
         IsHighCommand = opts.isHighCommand or function(_source) return false end,
         HasK9Access = opts.hasK9Access, -- deliberately nil by default (type() guard must tolerate absence)
@@ -374,11 +389,13 @@ local function newFixture(opts)
         env = env,
         state = state,
         rows = rows,
+        mysql = mysql,
         notifyLog = notifyLog,
         printLog = printLog,
         eventHandlers = eventHandlers,
         callbacks = capturedCallbacks,
         commands = capturedCommands,
+        threadRunner = threadRunner,
         leashDetachCalls = leashDetachCalls,
         effectEndCalls = effectEndCalls,
         partnershipBreakCalls = partnershipBreakCalls,
@@ -607,6 +624,14 @@ local function newIntegrationFixture()
         },
     }
 
+    -- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass): both
+    -- server/certifications.lua and server/permissions.lua now call
+    -- CreateThread(...) UNCONDITIONALLY at file-load time (their own
+    -- respective resync sweeps) -- see newFixture's own identical comment
+    -- above for the full "why". ONE shared threadRunner captures threads
+    -- from BOTH files loaded into this same env below.
+    local threadRunner = Sandbox.newThreadRunner()
+
     local env = Sandbox.newEnv({
         Config = Config,
         GetGameTimer = GetGameTimer,
@@ -623,6 +648,8 @@ local function newIntegrationFixture()
         TriggerEvent = TriggerEventStub,
         TriggerClientEvent = TriggerClientEventStub,
         lib = libStub,
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -647,6 +674,7 @@ local function newIntegrationFixture()
         commands = capturedCommands,
         registerPlayer = registerPlayer,
         advanceTime = function(ms) state.now = state.now + ms end,
+        threadRunner = threadRunner,
     }
 end
 
@@ -686,6 +714,7 @@ local function tryLoadPermissionsWithConfig(permissionsConfig)
         for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
         printLog[#printLog + 1] = table.concat(parts, '\t')
     end
+    local threadRunner = Sandbox.newThreadRunner()
     local env = Sandbox.newEnv({
         Config = permissionsConfig == false and {} or { Permissions = permissionsConfig },
         GetGameTimer = function() return 0 end,
@@ -704,6 +733,22 @@ local function tryLoadPermissionsWithConfig(permissionsConfig)
         -- above.
         RegisterCommand = function(_name, _fn, _restricted) end,
         print = printStub,
+        -- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass) --
+        -- server/permissions.lua now calls CreateThread(...) UNCONDITIONALLY
+        -- at file-load time too (see newFixture's own identical comment
+        -- above for the full "why"). This minimal env needs this stub for
+        -- the same reason it already needs AddEventHandler/RegisterNetEvent/
+        -- RegisterCommand above -- a `Sandbox.newThreadRunner()` (not a bare
+        -- no-op) is required rather than a plain `function() end`, since a
+        -- no-op CreateThread would just never run the thread body at all
+        -- (harmless for THIS narrow load-time-only fixture, which never
+        -- steps it), but a plain no-op Wait() would busy-loop the sweep's
+        -- own `while true do Wait(...) ... end` body forever the instant
+        -- CreateThread ran it synchronously -- the coroutine-based runner
+        -- avoids ever needing to reason about which of those two failure
+        -- modes a simpler stub would hit.
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
     })
     local ok = pcall(function()
         Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -1772,7 +1817,112 @@ do
 end
 
 -- ============================================================================
--- ListActivePermissionsForCitizenId / ListPermissionRoster -- authorization,
+-- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) --
+-- RefreshPermissionCache used to write `PermissionCache[citizenid] = {}` on
+-- ANY query failure -- a timeout, a dropped connection, a busy pool -- exactly
+-- like server/certifications.lua's RefreshCertificationCache used to. See
+-- tests/certifications_spec.lua's identical section for the full "why"
+-- writeup; proven here against server/permissions.lua's own copy of the
+-- fix. RefreshPermissionCache itself is `local` (unreachable directly), so
+-- these drive it the same way a real caller does -- through PlayerLoaded
+-- (firePlayerLoaded) for the "no previous value" case, and through a second
+-- GrantPermission call's own RefreshPermissionCacheIfOnline follow-up read
+-- for the "previous value exists" case.
+-- ============================================================================
+
+t.test('COULD-NOT-DETERMINE: PlayerLoaded for a citizenid with an active grant, but a throwing query.await, KEEPS them denied-but-UNRESOLVED, never a manufactured confirmed-empty cache', function()
+    local f = newFixture({ isHighCommand = function(source) return source == 600 end })
+    local hcSrc = f.registerPlayer(600, 'HC-CND1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(601, 'CND1', { name = 'police', grade = { level = 1 } })
+    f.env.GrantPermission(hcSrc, 'CND1', 'k9.access')
+    f.firePlayerDropped(601) -- evicts the cache entry, exactly like a real disconnect would (the grant row itself is untouched in the DB)
+    f.registerPlayer(601, 'CND1', { name = 'police', grade = { level = 1 } })
+
+    local realQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('SELECT permission FROM k9_permissions', 1, true) then error('connection lost') end
+        return realQueryAwait(sql, params)
+    end
+
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND1', source = 601, job = { name = 'police' } } })
+
+    t.isFalse(f.env.HasPermission('CND1', 'k9.access'), 'must fail closed while genuinely unresolved -- exactly like a real "no grants" answer would, from the access side')
+
+    local sawCheckFailed, sawHedgedUnknown = false, false
+    for _, line in ipairs(f.printLog) do
+        if line:find('CND1', 1, true) and line:find('PERMISSION CHECK FAILED', 1, true) then sawCheckFailed = true end
+        if line:find('CND1', 1, true) and line:find('HOLD active grants right now', 1, true) then sawHedgedUnknown = true end
+    end
+    t.isTrue(sawCheckFailed, 'the operator message must name the citizenid and say the CHECK failed, never that they hold nothing')
+    t.isTrue(sawHedgedUnknown, 'the operator message must hedge honestly -- this citizenid may in fact hold active grants')
+
+    -- Proves nothing false was durably written: once the query recovers,
+    -- this citizenid's real grant must still be discoverable, unobstructed.
+    f.mysql.query.await = realQueryAwait
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND1', source = 601, job = { name = 'police' } } })
+    t.isTrue(f.env.HasPermission('CND1', 'k9.access'), 'a later successful refresh must recover the real, unaffected grant')
+end)
+
+t.test('COULD-NOT-DETERMINE: a throwing re-read for an ALREADY-WARMED citizenid KEEPS the previous cached grants, never wipes them to empty', function()
+    local f = newFixture({ isHighCommand = function(source) return source == 610 end })
+    local hcSrc = f.registerPlayer(610, 'HC-CND2', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(611, 'CND2', { name = 'police', grade = { level = 1 } })
+
+    f.env.GrantPermission(hcSrc, 'CND2', 'k9.access')
+    t.isTrue(f.env.HasPermission('CND2', 'k9.access'), 'sanity: really granted, and cache warmed, before the simulated outage')
+
+    -- A SECOND grant (a different permission) for the SAME citizenid
+    -- re-triggers RefreshPermissionCacheIfOnline's own follow-up read --
+    -- forced to fail here, simulating a transient blip on that specific
+    -- re-read (the INSERT that just committed 'k9.audit' is NOT rolled
+    -- back -- only the SUBSEQUENT read-back of the whole grant set fails).
+    f.advanceTime(2000)
+    local realQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('SELECT permission FROM k9_permissions', 1, true) then error('connection lost') end
+        return realQueryAwait(sql, params)
+    end
+    f.env.GrantPermission(hcSrc, 'CND2', 'k9.audit')
+
+    t.isTrue(f.env.HasPermission('CND2', 'k9.access'), 'the previously-cached grant must survive a transient re-read failure, never reset to empty')
+
+    local sawCheckFailed, sawKept = false, false
+    for _, line in ipairs(f.printLog) do
+        if line:find('CND2', 1, true) and line:find('PERMISSION CHECK FAILED', 1, true) then sawCheckFailed = true end
+        if line:find('CND2', 1, true) and line:find('KEEPING the previous cached grant set', 1, true) then sawKept = true end
+    end
+    t.isTrue(sawCheckFailed, 'the operator message must name the citizenid and say the CHECK failed')
+    t.isTrue(sawKept, 'the operator message must say the previous grant set was kept, not that it was wiped')
+
+    -- Recovery: once the query works again, the SECOND grant ('k9.audit',
+    -- which DID commit to the DB despite the failed read-back) becomes
+    -- visible on the next successful refresh, with the first grant intact.
+    f.mysql.query.await = realQueryAwait
+    f.firePlayerDropped(611)
+    f.registerPlayer(611, 'CND2', { name = 'police', grade = { level = 1 } })
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND2', source = 611, job = { name = 'police' } } })
+    t.isTrue(f.env.HasPermission('CND2', 'k9.access'), 'the original grant is still real and recoverable')
+    t.isTrue(f.env.HasPermission('CND2', 'k9.audit'), 'the second grant, committed despite the failed read-back, is also real and recoverable')
+end)
+
+t.test('COULD-NOT-DETERMINE: the retry is BOUNDED, not infinite -- exactly PERM_REFRESH_RETRY_ATTEMPTS (3) attempts, then gives up', function()
+    local f = newFixture()
+    f.registerPlayer(620, 'CND3', { name = 'police', grade = { level = 1 } })
+
+    local queryCallCount = 0
+    local realQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('SELECT permission FROM k9_permissions', 1, true) then
+            queryCallCount = queryCallCount + 1
+            error('connection lost')
+        end
+        return realQueryAwait(sql, params)
+    end
+
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND3', source = 620, job = { name = 'police' } } })
+    t.equals(queryCallCount, 3, 'must attempt exactly the bounded number of times -- never once (no retry) and never unboundedly')
+    t.isFalse(f.env.HasPermission('CND3', 'k9.access'))
+end)
 -- validation, and correct row shape.
 -- ============================================================================
 

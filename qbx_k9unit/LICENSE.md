@@ -257,23 +257,39 @@ grant, alter, restrict, or attempt to override. The Licensee must
 independently obtain, install, and comply with each project's own licence
 in order to run it.
 
-**This document's drafting could not independently confirm, against each
-project's own current licence file, exactly which licence identifier (for
-example GPL-3.0, LGPL-3.0, or MIT) each of these five projects is presently
-distributed under.** Several are commonly described elsewhere as GPL-3.0 or
-LGPL-3.0, but that has not been verified here from a source reachable
-while preparing this document, and should not be assumed correct on that
-basis. **Before this licence is relied on for anything commercially
-significant, someone with the ability to check should read the actual
-`LICENSE` file in each of the five repositories above and confirm it.** If
-any of them turn out to require that software distributed *alongside*
-them, or that incorporates their code, also be released under compatible
-terms, that requirement is a matter for that project's own licence on its
-own copy — it does not become a term of this licence, and nothing here
-purports to satisfy or waive it. This is flagged here deliberately, left
-open rather than resolved, because guessing the wrong licence identifier
-for someone else's project would be worse than leaving it for someone who
-can check.
+**Update (verified directly against each project's own repository,
+2026-08-26):** an earlier version of this document could not confirm these
+identifiers from a source reachable while it was being prepared. They have
+since been checked directly, by reading each project's actual `LICENSE`
+file (and, where present, its `fxmanifest.lua` `license` field) at
+`github.com/overextended/<name>` and `github.com/Qbox-project/qbx_core`,
+main branch:
+
+| Dependency | Licence file says | Self-declared in `fxmanifest.lua`? |
+|---|---|---|
+| `ox_lib` | GNU Lesser General Public License, version 3 (LGPLv3) | Yes — `license 'LGPL-3.0-or-later'` |
+| `oxmysql` | GNU Lesser General Public License, version 3 (LGPLv3) | No such field found |
+| `ox_inventory` | GNU General Public License, version 3 (GPLv3) — the stronger, non-"Lesser" copyleft, distinct from `ox_lib`/`oxmysql` above | No such field found |
+| `ox_target` | MIT License (Copyright (c) 2022 Overextended) | No such field found |
+| `qbx_core` | Its `LICENSE` file's full text is the GNU General Public License, version 3 (GPLv3) — **but the file's own header line credits it to "es_extended — ESX framework for FiveM, Copyright (C) 2015-2021 Jérémie N'gadi,"** not to Qbox-project. This reads as inherited verbatim from the ESX-lineage ancestor this framework forked from, rather than a licence statement authored by Qbox-project for its own current code. No `license` field was found in `fxmanifest.lua` or `package.json` to independently confirm intent. |
+
+**These are the facts as they could be checked; what they mean for this
+Software is a legal question, not a factual one, and is not answered
+here.** In particular, whether any of these copyleft terms (LGPLv3's
+weaker one for `ox_lib`/`oxmysql`, GPLv3's stronger one for `ox_inventory`
+and, on the reading above, `qbx_core`) reaches across FiveM's
+cross-resource export/`fxmanifest.lua`-dependency boundary into this
+Software's own proprietary code is a real, open question this document
+does not attempt to resolve, and should not be assumed either way before
+a lawyer has looked at it — the qbx_core finding above (a GPLv3 file
+authored for a different, ancestor project) makes that review more
+pressing, not less, since it is not even clear the licence text present
+in that repository was written with qbx_core's own current code in mind.
+If any of these five projects' terms turn out to require that software
+distributed *alongside* them, or that incorporates their code, also be
+released under compatible terms, that requirement is a matter for that
+project's own licence on its own copy — it does not become a term of this
+licence, and nothing here purports to satisfy or waive it.
 
 ### Bundled audio (distributed with the Software)
 

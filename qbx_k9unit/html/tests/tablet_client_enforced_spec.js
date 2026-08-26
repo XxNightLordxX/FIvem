@@ -86,8 +86,10 @@ const THERMAL_VISION_FEATURE = {
 t.test('blockEnforcement "client_enforced": renders the server-sent client-enforced badge text (NOT the generic "Enforced" or "Not enforced yet" text)', async () => {
     const h = createHarness({ fetchImpl: routeFetch(personFeaturesHandlers(THERMAL_VISION_FEATURE)) });
     await openPersonScreen(h, {
-        blockClientEnforcedBadge: 'Enforced (client-side)',
-        blockClientEnforcedHint: "Blocking this stops the ability on the player's own game client. Unlike a server-enforced block, a modified or cheating client can bypass it -- treat this as best-effort, not a guarantee.",
+        strings: {
+            block_client_enforced_badge: 'Enforced (client-side)',
+            block_client_enforced_hint: "Blocking this stops the ability on the player's own game client. Unlike a server-enforced block, a modified or cheating client can bypass it -- treat this as best-effort, not a guarantee.",
+        },
     });
 
     t.equals(findByText(h.getRoot(), 'Enforced (client-side)').length, 1, 'the client-enforced badge text is rendered');
@@ -98,8 +100,10 @@ t.test('blockEnforcement "client_enforced": renders the server-sent client-enfor
 t.test('blockEnforcement "client_enforced": the badge carries the server-sent hint as its title, and Block is still offered -- the control genuinely works, just client-side only', async () => {
     const h = createHarness({ fetchImpl: routeFetch(personFeaturesHandlers(THERMAL_VISION_FEATURE)) });
     await openPersonScreen(h, {
-        blockClientEnforcedBadge: 'Enforced (client-side)',
-        blockClientEnforcedHint: 'A modified client can bypass this -- best-effort only.',
+        strings: {
+            block_client_enforced_badge: 'Enforced (client-side)',
+            block_client_enforced_hint: 'A modified client can bypass this -- best-effort only.',
+        },
     });
 
     const badge = findByText(h.getRoot(), 'Enforced (client-side)');
@@ -108,9 +112,9 @@ t.test('blockEnforcement "client_enforced": the badge carries the server-sent hi
     t.equals(findByText(featureActionsCell(h), 'Block').length, 1, 'Block is still offered -- this is a working control, unlike not_enforceable');
 });
 
-t.test('blockEnforcement "client_enforced": with NO blockClientEnforcedBadge/-Hint in the tablet:open payload (an older client/tablet.lua, or a locale() failure), the page falls back to its own hardcoded English text -- never a raw key, never blank', async () => {
+t.test('blockEnforcement "client_enforced": with NO block_client_enforced_badge/_hint in `strings` (an older locales/en.json, or a locale() failure), the page falls back to its own hardcoded English text via S() -- never a raw key, never blank', async () => {
     const h = createHarness({ fetchImpl: routeFetch(personFeaturesHandlers(THERMAL_VISION_FEATURE)) });
-    await openPersonScreen(h, {}); // no blockClientEnforcedBadge/-Hint at all
+    await openPersonScreen(h, {}); // no `strings` at all -- S() falls through to DEFAULT_STRINGS
 
     const badge = findByText(h.getRoot(), 'Enforced (client-side)');
     t.equals(badge.length, 1, 'falls back to the hardcoded English badge text');
@@ -136,7 +140,7 @@ t.test('blockEnforcement "client_enforced" is applied per-row, independently of 
     for (const key of clientOnlyKeys) {
         const feature = Object.assign({}, THERMAL_VISION_FEATURE, { key, label: key });
         const h = createHarness({ fetchImpl: routeFetch(personFeaturesHandlers(feature)) });
-        await openPersonScreen(h, { blockClientEnforcedBadge: 'Enforced (client-side)' });
+        await openPersonScreen(h, { strings: { block_client_enforced_badge: 'Enforced (client-side)' } });
         t.equals(findByText(h.getRoot(), 'Enforced (client-side)').length, 1, key + ' should render the client-enforced badge');
     }
 });
@@ -149,7 +153,7 @@ t.test('featureBlockEnforcement() allow-lists "client_enforced" alongside "enfor
             state: 'available', blockEnforcement: 'some_future_value_nobody_recognizes',
         })),
     });
-    await openPersonScreen(h, { blockClientEnforcedBadge: 'Enforced (client-side)' });
+    await openPersonScreen(h, { strings: { block_client_enforced_badge: 'Enforced (client-side)' } });
 
     t.equals(findByText(h.getRoot(), 'Not enforced yet').length, 1, 'an unrecognized value still falls back to not_yet_enforced, never client_enforced by accident');
     t.equals(findByText(h.getRoot(), 'Enforced (client-side)').length, 0);
