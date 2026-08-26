@@ -169,17 +169,27 @@
     redirection explicit ("your K9 partner was granted...") rather than
     implying their OWN citizenid changed.
 
-    SELF-GRANT (Config.HighCommand.allowSelfGrant, default false): blocked
-    if EITHER `directCitizenid` (the literal server id targeted) OR the
-    final redirected recipient equals the granter's own citizenid. Checking
-    both, not just the final recipient, closes the one loophole the
-    redirection above would otherwise open: a high-command officer who is
-    ALSO the handler-role half of an active partnership could target their
-    OWN server id, have the grant silently redirect to their K9 partner (a
+    SELF-GRANT (Config.HighCommand.allowSelfGrant, DEFAULT TRUE this pass --
+    OWNER DECISION: "High command can grant anything they want to
+    themselves -- xp promotions permissions etc", widened from the previous
+    default-false; see config.lua's own comment on this flag for the full
+    writeup and HighCommandSelfGrantAllowed below for the exact read):
+    blocked ONLY when the flag has been explicitly set to `false` AND
+    EITHER `directCitizenid` (the literal server id targeted) OR the final
+    redirected recipient equals the granter's own citizenid. Checking both,
+    not just the final recipient, closes the one loophole the redirection
+    above would otherwise open: a high-command officer who is ALSO the
+    handler-role half of an active partnership could target their OWN
+    server id, have the grant silently redirect to their K9 partner (a
     different citizenid), and see it pass an equality check against only
     the final recipient -- self-dealing one hop removed, which is exactly
     the kind of transaction config.lua's own comment on this flag says
-    should never look like it "has no second person in the audit trail".
+    should never look like it "has no second person in the audit trail" --
+    that loophole-closing logic is UNCHANGED by the default flip; only
+    which value blocks vs. permits changed. Every successful self-grant
+    (the flag's own default, now) is still audited with an explicit
+    `self_grant=true` field (see GrantHighCommandXp's own AUDIT comment) --
+    self-service is the owner's decision, not an invisible one.
 
     VALIDATION -- amount: a positive integer, finite, not NaN, at or below
     Config.HighCommand.maxXpPerGrant. THE FOOTGUN THIS CODEBASE KEEPS
@@ -224,7 +234,14 @@
     (post-redirection), the amount, and the resulting total in one line --
     this mints economy value, so it must be traceable, matching or
     exceeding the traceability server/admin.lua's purely READ-ONLY audit
-    surface already provides for a WRITE path.
+    surface already provides for a WRITE path. ALSO carries an explicit
+    `self_grant=true|false` field (this pass), computed the same way the
+    SELF-GRANT check itself is (directCitizenid or recipientCitizenid
+    equal to the granter's own citizenid) -- now that self-grant is
+    permitted by default (see SELF-GRANT above), the 'ok' line naming the
+    SAME citizenid as both granter (`whoLabel`) and recipient
+    (`target_citizenid`) is provably a self-grant from the line itself,
+    never something a reader has to notice unaided.
 
     ======================================================================
     FILE-TO-FILE CONTRACT:
@@ -269,7 +286,7 @@
       Config.Departments[job].highCommandGrade : number | nil (per department)
       Config.HighCommand.maxXpPerGrant    : number (validated at registration; see VALIDATION above)
       Config.HighCommand.grantCooldownMs  : number (passed straight to NewCooldown's per-call threshold; see COOLDOWN above)
-      Config.HighCommand.allowSelfGrant   : boolean (default false)
+      Config.HighCommand.allowSelfGrant   : boolean (default true, this pass -- read as `~= false`)
 
     LOCALE KEYS THIS FILE NEEDS (not invented inline; every locale() call
     below uses one of these eight NEW keys or one of two EXISTING `common.*`
@@ -463,6 +480,30 @@ local function IsAuthorizedForXpGrant(source)
     return false
 end
 
+--- OWNER DECISION (this pass) -- see PART 2's own "SELF-GRANT" writeup at
+--- GrantHighCommandXp's own call site below. Reads
+--- Config.HighCommand.allowSelfGrant, defaulting to `true` (config.lua's
+--- own new default, this pass) when the value is anything other than an
+--- explicit `false` -- covers both a genuinely absent key (a config table
+--- written before this field existed at all) and an explicit `false`
+--- (a deliberate operator opt-out back to the stricter, pre-owner-decision
+--- behaviour) correctly, unlike `x or default` which cannot tell "absent"
+--- apart from an explicit `false` either way but happens to only matter
+--- here because both read as boolean, not a number where `0` would break
+--- it -- checked explicitly anyway, matching this resource's own
+--- established convention (server/permissions.lua's identical
+--- HighCommandSelfGrantAllowed) for every other boolean switch of this
+--- shape. Defensive `type(...) == 'table'` guard even though
+--- Config.HighCommand is already asserted to be a table before '/k9givexp'
+--- is ever registered (this file's own onResourceStart guard) -- this
+--- function makes no assumption about when it might be called from in the
+--- future.
+--- @return boolean
+local function HighCommandSelfGrantAllowed()
+    if type(Config.HighCommand) ~= 'table' then return true end
+    return Config.HighCommand.allowSelfGrant ~= false
+end
+
 --- Shared CORE grant mechanics for both '/k9givexp' and tabletGiveXp --
 --- everything from "who actually receives the XP" onward, once
 --- authorization/cooldown/amount have ALREADY been independently checked by
@@ -504,25 +545,47 @@ local function GrantHighCommandXp(granterSrc, granterCitizenid, directCitizenid,
         end
     end
 
-    -- SELF-GRANT -- checked against BOTH the literal target and the
-    -- final (possibly redirected) recipient. See header PART 2's own
-    -- "SELF-GRANT" section for why both, not just the final recipient.
-    if Config.HighCommand.allowSelfGrant ~= true
-        and (directCitizenid == granterCitizenid or recipientCitizenid == granterCitizenid) then
-        LogAuditInvocation(granterSrc, ('target_citizenid=%s'):format(recipientCitizenid), 'self_grant_blocked')
+    -- SELF-GRANT -- OWNER DECISION (this pass): "High command can grant
+    -- anything they want to themselves -- xp promotions permissions etc",
+    -- so Config.HighCommand.allowSelfGrant now DEFAULTS TRUE (config.lua's
+    -- own comment on that field has the full writeup) -- widened from the
+    -- previous default-false, matching config.lua's
+    -- Config.FeatureControl.allowHighCommandSelfGrant (server/permissions.lua),
+    -- which this same pass widened to every permission namespace. Checked
+    -- against BOTH the literal target and the final (possibly redirected)
+    -- recipient -- see header PART 2's own "SELF-GRANT" section for why
+    -- both, not just the final recipient; that reasoning is unaffected by
+    -- the default flip. Read as `~= false`, never `x or default` (which
+    -- would be indistinguishable from an explicit `false` and would also
+    -- fail to fall back correctly for a config table written before this
+    -- field existed at all -- see HighCommandSelfGrantAllowed below), so a
+    -- deliberate operator opt-out (Config.HighCommand.allowSelfGrant =
+    -- false, restoring the stricter pre-owner-decision behaviour) is the
+    -- ONLY thing that ever blocks this.
+    local isSelfGrant = directCitizenid == granterCitizenid or recipientCitizenid == granterCitizenid
+    if not HighCommandSelfGrantAllowed() and isSelfGrant then
+        LogAuditInvocation(granterSrc, ('target_citizenid=%s self_grant=%s'):format(recipientCitizenid, tostring(isSelfGrant)), 'self_grant_blocked')
         return false, 'self_grant_blocked'
     end
 
     if type(AwardXPDirect) ~= 'function' then
-        LogAuditInvocation(granterSrc, ('target_citizenid=%s amount=%d'):format(recipientCitizenid, amount), 'xp_unavailable')
+        LogAuditInvocation(granterSrc, ('target_citizenid=%s amount=%d self_grant=%s'):format(recipientCitizenid, amount, tostring(isSelfGrant)), 'xp_unavailable')
         return false, 'xp_unavailable'
     end
 
     local newTotal = AwardXPDirect(recipientCitizenid, amount, 'high_command_grant')
 
+    -- AUDIT, MADE EXPLICIT (this pass): `self_grant=true` here -- rather
+    -- than leaving a reader to notice `whoLabel`'s own citizenid matches
+    -- `target_citizenid` by eye -- is what makes a SUCCESSFUL XP self-grant
+    -- (the exact case the OWNER DECISION above now permits by default)
+    -- unconditionally distinguishable from an ordinary grant to someone
+    -- else, in the log itself, never a manual diff. Self-service is the
+    -- owner's decision; invisible self-service is not something this file
+    -- ships quietly, even though it is now permitted by default.
     LogAuditInvocation(
         granterSrc,
-        ('target_citizenid=%s amount=%d new_total=%s'):format(recipientCitizenid, amount, tostring(newTotal)),
+        ('target_citizenid=%s amount=%d new_total=%s self_grant=%s'):format(recipientCitizenid, amount, tostring(newTotal), tostring(isSelfGrant)),
         'ok'
     )
 

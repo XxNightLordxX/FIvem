@@ -968,45 +968,72 @@ do
         t.contains(lastNotifyFor(hc2, src).message, 'Unable to resolve')
     end)
 
-    t.test('GrantPermission: self-grant of a named capability (k9.access) is unconditionally blocked, no config escape hatch', function()
+    -- INVERTED (this pass) -- OWNER DECISION: "High command can grant
+    -- anything they want to themselves -- xp promotions permissions etc."
+    -- This test used to prove self-grant of a named capability was
+    -- unconditionally blocked with no escape hatch; the project owner has
+    -- since widened Config.FeatureControl.allowHighCommandSelfGrant to
+    -- cover every permission namespace uniformly (see server/permissions.lua's
+    -- header "SELF-GRANT"), so it now proves the opposite -- not deleted,
+    -- inverted, per this task's own instruction.
+    t.test('GrantPermission: OWNER DECISION -- self-grant of a named capability (k9.access) is now ALLOWED by default, exactly like feature.<Name>', function()
         f.advanceTime(2000)
+        local before = #f.printLog
         local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'k9.access')
-        t.isFalse(ok)
-        t.equals(outcome, 'self_grant_blocked')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.isTrue(f.env.HasPermission('HC-GRANTER', 'k9.access'))
+
+        -- AUDIT: a self-grant must be provably distinguishable from an
+        -- ordinary grant in the log itself -- naming the SAME citizenid as
+        -- both granter and recipient is not enough on its own if a reader
+        -- has to notice that unaided; the explicit `self=true` field is
+        -- what makes it a stable, greppable signal instead.
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('HC-GRANTER', 1, true)
+                and line:find('self=true', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a successful self-grant must be audited with an explicit self=true marker naming the same citizenid as granter and target')
     end)
 
-    -- REGRESSION (escalation path NOT opened): every OTHER named capability
-    -- must still be blocked for self-grant too, not just k9.access -- proves
-    -- the CRITICAL DAY-ONE FIX below is scoped to 'feature.<Name>' alone,
-    -- never widened to the rest of Config.Permissions' catalog.
-    t.test('GrantPermission: self-grant of k9.certify/k9.audit/k9.givexp is STILL unconditionally blocked (the fix does not touch the named-capability namespace)', function()
-        f.advanceTime(2000)
+    -- INVERTED (this pass): every OTHER named capability is ALSO now
+    -- allowed for self-grant, not just k9.access -- proves the widening
+    -- applies to the whole Config.Permissions catalog, not one entry.
+    t.test('GrantPermission: OWNER DECISION -- self-grant of k9.certify/k9.audit/k9.givexp is ALSO now ALLOWED by default', function()
         for _, key in ipairs({ 'k9.certify', 'k9.audit', 'k9.givexp' }) do
             f.advanceTime(2000)
             local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', key)
-            t.isFalse(ok, key .. ' self-grant must still be blocked')
-            t.equals(outcome, 'self_grant_blocked', key .. ' must still report self_grant_blocked')
+            t.isTrue(ok, key .. ' self-grant must now be allowed')
+            t.equals(outcome, 'ok', key .. ' must report ok')
+            t.isTrue(f.env.HasPermission('HC-GRANTER', key))
         end
     end)
 
-    -- REGRESSION (escalation path NOT opened): 'block.<Name>' must remain
-    -- blocked for self-grant too -- the fix below exempts ONLY
-    -- 'feature.<Name>', never 'block.<Name>', even though both share the
-    -- same Config.Features-existence validation in IsValidPermissionKey.
-    t.test('GrantPermission: self-grant of block.<Name> is STILL unconditionally blocked (the fix does not touch the block namespace)', function()
+    -- INVERTED (this pass): 'block.<Name>' is ALSO now allowed for
+    -- self-grant -- the widening covers every namespace this file
+    -- validates, not only the four named capabilities.
+    t.test('GrantPermission: OWNER DECISION -- self-grant of block.<Name> is ALSO now ALLOWED by default', function()
         f.advanceTime(2000)
         local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'block.BiteAndHold')
-        t.isFalse(ok)
-        t.equals(outcome, 'self_grant_blocked')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.isTrue(f.env.HasPermission('HC-GRANTER', 'block.BiteAndHold'))
     end)
 
-    -- CRITICAL DAY-ONE FIX -- see server/permissions.lua's header "SELF-GRANT"
-    -- section for the full writeup. Default true (Config.FeatureControl
-    -- absent, matching this describe block's own fixture setup) means a
-    -- high-command officer can now grant a 'feature.<Name>' entry to
-    -- themselves -- the exact case that made the tablet's Audit tab
-    -- permanently unreachable on a single-high-command-officer server.
-    t.test('GrantPermission: FIX -- self-grant of a feature.<Name> entry is now ALLOWED by default (closes the single-high-command-officer Audit-tab deadlock)', function()
+    -- CRITICAL DAY-ONE FIX (an earlier pass, kept for regression coverage
+    -- -- see server/permissions.lua header "SELF-GRANT" for the full
+    -- writeup). Default true (Config.FeatureControl absent, matching this
+    -- describe block's own fixture setup) means a high-command officer can
+    -- grant a 'feature.<Name>' entry to themselves -- the exact case that
+    -- made the tablet's Audit tab permanently unreachable on a
+    -- single-high-command-officer server. Now just ONE instance of a
+    -- uniform rule rather than a namespace-specific carve-out -- see the
+    -- three OWNER DECISION tests above for the other namespaces.
+    t.test('GrantPermission: self-grant of a feature.<Name> entry is ALLOWED by default (closes the single-high-command-officer Audit-tab deadlock)', function()
         f.advanceTime(2000)
         local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'feature.BiteAndHold')
         t.isTrue(ok)
@@ -1014,35 +1041,48 @@ do
         t.isTrue(f.env.HasPermission('HC-GRANTER', 'feature.BiteAndHold'))
     end)
 
-    -- REGRESSION (escalation path NOT opened): a caller who is NOT high
-    -- command can never reach the self-grant exemption at all -- IsHighCommand
-    -- is re-checked BEFORE the self-grant branch is ever reached, exactly as
-    -- before this fix. Proves the fix widens nothing for anyone below high
-    -- command, even for the one namespace it does widen for high command.
-    t.test('GrantPermission: a non-high-command caller self-targeting feature.<Name> is still denied, never reaches the self-grant exemption', function()
+    -- UNWEAKENED -- THE WHOLE REMAINING BOUNDARY: a caller who is NOT high
+    -- command can never reach the self-grant exemption at all, for ANY
+    -- namespace -- IsHighCommand is re-checked BEFORE the self-grant branch
+    -- is ever reached, unaffected by how many namespaces the switch now
+    -- covers. Widening what a high-command officer may do to themselves
+    -- must never widen who counts as high command -- this is the test that
+    -- proves it, across every namespace this file validates.
+    t.test('GrantPermission: a non-high-command caller self-targeting ANY namespace is still denied, never reaches the self-grant exemption', function()
         f.advanceTime(2000)
         f.registerPlayer(101, 'LOWRANK', { name = 'police', grade = { level = 1 } })
-        local ok, outcome = f.env.GrantPermission(101, 'LOWRANK', 'feature.BiteAndHold')
-        t.isFalse(ok)
-        t.equals(outcome, 'denied')
-        t.isFalse(f.env.HasPermission('LOWRANK', 'feature.BiteAndHold'))
+        for _, key in ipairs({ 'feature.BiteAndHold', 'block.BiteAndHold', 'k9.access', 'k9.certify', 'k9.audit', 'k9.givexp' }) do
+            f.advanceTime(2000)
+            local ok, outcome = f.env.GrantPermission(101, 'LOWRANK', key)
+            t.isFalse(ok, key .. ' must still be denied for a non-high-command caller')
+            t.equals(outcome, 'denied', key .. ' must report denied, never self_grant_blocked or ok')
+            t.isFalse(f.env.HasPermission('LOWRANK', key))
+        end
     end)
 
-    -- The escape hatch itself: an operator who explicitly wants the OLD,
-    -- stricter behavior back (a second high-command officer must always
-    -- witness a feature grant, even to another high-command officer) can set
-    -- Config.FeatureControl.allowHighCommandSelfGrant = false and get
-    -- byte-identical pre-fix behavior for the feature.<Name> namespace too.
-    t.test('GrantPermission: Config.FeatureControl.allowHighCommandSelfGrant = false restores the pre-fix block for feature.<Name> self-grants', function()
+    -- THE ESCAPE HATCH, EVERY NAMESPACE AT ONCE (this pass -- widened from
+    -- the earlier, feature.<Name>-only version of this test): an operator
+    -- who explicitly wants the OLD, stricter behavior back (a second
+    -- high-command officer must always witness a self-grant, even to
+    -- another high-command officer, even for a capability IsHighCommand
+    -- already grants them directly) sets
+    -- Config.FeatureControl.allowHighCommandSelfGrant = false and gets it,
+    -- uniformly, for the four named capabilities, 'block.<Name>', AND
+    -- 'feature.<Name>' alike -- not just the one namespace an earlier pass
+    -- exempted.
+    t.test('GrantPermission: Config.FeatureControl.allowHighCommandSelfGrant = false restores the refusal for EVERY namespace, not just feature.<Name>', function()
         local f2 = newFixture({
             isHighCommand = function(source) return source == 100 end,
             featureControl = { allowHighCommandSelfGrant = false },
         })
         local hc2Src = f2.registerPlayer(100, 'HC-OPTOUT', { name = 'police', isboss = true, grade = { level = 0 } })
-        f2.advanceTime(2000)
-        local ok, outcome = f2.env.GrantPermission(hc2Src, 'HC-OPTOUT', 'feature.BiteAndHold')
-        t.isFalse(ok)
-        t.equals(outcome, 'self_grant_blocked')
+        for _, key in ipairs({ 'k9.access', 'k9.certify', 'k9.audit', 'k9.givexp', 'block.BiteAndHold', 'feature.BiteAndHold' }) do
+            f2.advanceTime(2000)
+            local ok, outcome = f2.env.GrantPermission(hc2Src, 'HC-OPTOUT', key)
+            t.isFalse(ok, key .. ' self-grant must be refused when the switch is off')
+            t.equals(outcome, 'self_grant_blocked', key .. ' must report self_grant_blocked')
+            t.isFalse(f2.env.HasPermission('HC-OPTOUT', key), key .. ' must not actually have been granted')
+        end
     end)
 
     -- Explicit `false` is the ONLY thing that opts out -- confirms this is
@@ -1060,6 +1100,108 @@ do
         local ok, outcome = f3.env.GrantPermission(hc3Src, 'HC-DEFAULT', 'feature.BiteAndHold')
         t.isTrue(ok)
         t.equals(outcome, 'ok')
+    end)
+
+    -- A CONFIG TABLE WRITTEN BEFORE THESE SWITCHES EXISTED (this pass):
+    -- Config.FeatureControl entirely ABSENT (nil), not merely
+    -- present-without-the-key like the test just above -- the shape every
+    -- real config.lua had before Config.FeatureControl was ever added at
+    -- all. Must behave per the NEW default (self-grant allowed, for every
+    -- namespace this file validates) rather than erroring or silently
+    -- reverting to some other behavior.
+    t.test('GrantPermission: a Config with NO Config.FeatureControl table at all (pre-existing config.lua) still defaults every namespace to self-grant ALLOWED, never errors', function()
+        local f4 = newFixture({
+            isHighCommand = function(source) return source == 100 end,
+            -- featureControl intentionally omitted -- newFixture's own
+            -- `FeatureControl = opts.featureControl` line leaves this nil.
+        })
+        local hc4Src = f4.registerPlayer(100, 'HC-LEGACY', { name = 'police', isboss = true, grade = { level = 0 } })
+        for _, key in ipairs({ 'k9.access', 'k9.certify', 'k9.audit', 'k9.givexp', 'block.BiteAndHold', 'feature.BiteAndHold' }) do
+            f4.advanceTime(2000)
+            local ok, outcome = f4.env.GrantPermission(hc4Src, 'HC-LEGACY', key)
+            t.isTrue(ok, key .. ' must default to allowed with no Config.FeatureControl table at all')
+            t.equals(outcome, 'ok', key .. ' must report ok, not error or self_grant_blocked')
+        end
+    end)
+
+    -- ========================================================================
+    -- AUDIT (coder-security, this pass -- "could a reader of the audit trail
+    -- actually tell a self-grant apart from an ordinary one?"): before this
+    -- pass the answer was "only by noticing the SAME citizenid appears twice
+    -- in one free-text line" -- a real gap, since self-service the operator
+    -- explicitly chose (feature.<Name>, default true) is fine, but
+    -- self-service nobody can spot afterward in a log is not. `self=%s` is
+    -- now an explicit, always-present, stable field on every post-
+    -- authorization audit line -- these tests prove it is actually there,
+    -- actually correct, and does not silently disappear for any outcome.
+    -- ========================================================================
+
+    t.test('AUDIT: a SUCCESSFUL self-grant of feature.<Name> prints an explicit self=true field on its own "-> ok" line -- not merely two matching citizenids a reader has to notice unaided', function()
+        f.advanceTime(2000)
+        local before = #f.printLog
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'HC-GRANTER', 'feature.SomeFeatureOff')
+        t.isTrue(ok, tostring(outcome))
+        t.equals(outcome, 'ok')
+
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('grantPermission', 1, true)
+                and line:find('self=true', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a successful self-grant must print a self=true audit line, not just target==granter buried in free text')
+    end)
+
+    t.test('AUDIT: an ORDINARY (non-self) grant explicitly prints self=false -- the field is always present, never omitted when it would read as "not a self-grant"', function()
+        f.advanceTime(2000)
+        -- 120, NOT 102 -- 102 is already 'TARGET-A' in this same fixture
+        -- (registered at the top of this describe block, and still relied
+        -- on by later tests via `lastNotifyFor(f, 102)`); reusing a source
+        -- id here would silently repoint playersBySource[102] and leave a
+        -- stray duplicate in onlineSources for no reason.
+        f.registerPlayer(120, 'ORDINARY-TARGET', { name = 'police', grade = { level = 1 } })
+        local before = #f.printLog
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'ORDINARY-TARGET', 'k9.certify')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('self=false', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'an ordinary grant must be explicitly labeled self=false, not merely lack a self=true tag')
+    end)
+
+    -- UPDATED (this pass): k9.access self-grant is no longer blocked by
+    -- DEFAULT (see the OWNER DECISION tests above) -- this scenario is now
+    -- only reachable with Config.FeatureControl.allowHighCommandSelfGrant
+    -- explicitly set to false, so this test uses its own fixture with that
+    -- opt-out to still exercise the self_grant_blocked path at all.
+    t.test('AUDIT: a BLOCKED self-grant (k9.access, switch off) still prints self=true on its own self_grant_blocked line -- the field is populated even on the rejection path, not only on success', function()
+        local f5 = newFixture({
+            isHighCommand = function(source) return source == 100 end,
+            featureControl = { allowHighCommandSelfGrant = false },
+        })
+        local hc5Src = f5.registerPlayer(100, 'HC-AUDIT-BLOCKED', { name = 'police', isboss = true, grade = { level = 0 } })
+        f5.advanceTime(2000)
+        local before = #f5.printLog
+        local ok, outcome = f5.env.GrantPermission(hc5Src, 'HC-AUDIT-BLOCKED', 'k9.access')
+        t.isFalse(ok)
+        t.equals(outcome, 'self_grant_blocked')
+
+        local found = false
+        for i = before + 1, #f5.printLog do
+            local line = f5.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('self=true', 1, true) and line:find('self_grant_blocked', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a blocked self-grant attempt must also be identifiable as self=true in the trail, not just as a bare denial')
     end)
 
     t.test('GrantPermission: a successful grant returns ok, notifies the online target, and HasPermission reflects it', function()
@@ -1381,9 +1523,46 @@ do
         -- row directly in the fake table, as if granted by a DIFFERENT officer
         -- earlier, then revoked by this same officer now.
         f.rows[#f.rows + 1] = { id = 99000, citizenid = 'HC-REVOKER', permission = 'k9.audit', granted_by = 'SOMEONE-ELSE', active = 1 }
+        local before = #f.printLog
         local ok, outcome = f.env.RevokePermission(hcSrc, 'HC-REVOKER', 'k9.audit')
         t.isTrue(ok)
         t.equals(outcome, 'ok')
+
+        -- AUDIT (coder-security, this pass): same "self=%s must be an
+        -- explicit, greppable field, not two matching citizenids a reader
+        -- has to notice" requirement as GrantPermission's own tests above --
+        -- a self-revoke is lower-risk than a self-grant (it only ever
+        -- narrows the officer's own access), but it deserves the exact same
+        -- visibility in the trail.
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('revokePermission', 1, true)
+                and line:find('self=true', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a self-revoke must print an explicit self=true audit line')
+    end)
+
+    t.test('AUDIT: an ORDINARY (non-self) revoke explicitly prints self=false', function()
+        f.advanceTime(2000)
+        f.registerPlayer(206, 'ORDINARY-REVOKE-TARGET', { name = 'police', grade = { level = 1 } })
+        f.env.GrantPermission(hcSrc, 'ORDINARY-REVOKE-TARGET', 'k9.certify')
+        f.advanceTime(2000)
+        local before = #f.printLog
+        local ok, outcome = f.env.RevokePermission(hcSrc, 'ORDINARY-REVOKE-TARGET', 'k9.certify')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+
+        local found = false
+        for i = before + 1, #f.printLog do
+            local line = f.printLog[i]
+            if line:find('AUDIT', 1, true) and line:find('self=false', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'an ordinary revoke must be explicitly labeled self=false')
     end)
 
     t.test('RevokePermission: a second revoke from the same officer inside the cooldown window is rate_limited (shared cooldown w/ grant)', function()
@@ -1848,18 +2027,44 @@ do
         t.isTrue(f.env.HasPermission('HC-CMD', 'feature.BiteAndHold'))
     end)
 
-    -- REGRESSION (escalation path NOT opened, THIS surface too): the
-    -- named-capability namespace must still be blocked for self-grant
-    -- through the command path, exactly as it still is through GrantPermission
-    -- directly -- the fix does not leak into this namespace via any entry
-    -- point.
-    t.test('k9grantpermission: self-grant of a named capability (k9.access) is STILL blocked through the command path', function()
+    -- INVERTED (this pass), THIS surface too: the named-capability
+    -- namespace is now ALSO allowed for self-grant through the command
+    -- path, exactly as it already is through GrantPermission directly and
+    -- through the tablet callback -- the OWNER DECISION widening reaches
+    -- every entry point that funnels through GrantPermission, by
+    -- construction (this command adds no second, parallel authorization
+    -- check of its own -- see this section's own header).
+    t.test('k9grantpermission: self-grant of a named capability (k9.access) is now ALLOWED through the command path too, matching GrantPermission directly', function()
         f.advanceTime(2000)
         f.commands.k9grantpermission(hcSrc, { 'HC-CMD', 'k9.access' })
         local last = lastNotifyFor(f, hcSrc)
+        -- command_grant_ok formats with PermissionLabelFor, so a named
+        -- capability's human-readable label appears here, not the raw key
+        -- (unlike 'feature.<Name>', which has no catalog label and falls
+        -- back to the raw key itself -- see the test just above this one).
+        t.equals(last.message, "Granted 'Use K9 abilities' to HC-CMD.")
+        t.equals(last.kind, 'success')
+        t.isTrue(f.env.HasPermission('HC-CMD', 'k9.access'))
+    end)
+
+    -- THE ESCAPE HATCH REACHES THIS SURFACE TOO: with
+    -- Config.FeatureControl.allowHighCommandSelfGrant = false, the command
+    -- path refuses a named-capability self-grant exactly like
+    -- GrantPermission does directly -- proves the switch, not the entry
+    -- point, is what decides this.
+    t.test('k9grantpermission: Config.FeatureControl.allowHighCommandSelfGrant = false restores the refusal through the command path too', function()
+        local f2 = newFixture({
+            isHighCommand = function(source) return source == 100 end,
+            featureControl = { allowHighCommandSelfGrant = false },
+            locale = localeWithPendingCommandKeys,
+        })
+        local hc2Src = f2.registerPlayer(100, 'HC-OPTOUT-CMD', { name = 'police', isboss = true, grade = { level = 0 } })
+        f2.advanceTime(2000)
+        f2.commands.k9grantpermission(hc2Src, { 'HC-OPTOUT-CMD', 'k9.access' })
+        local last = lastNotifyFor(f2, hc2Src)
         t.equals(last.message, 'You cannot grant a permission to yourself.')
         t.equals(last.kind, 'error')
-        t.isFalse(f.env.HasPermission('HC-CMD', 'k9.access'))
+        t.isFalse(f2.env.HasPermission('HC-OPTOUT-CMD', 'k9.access'))
     end)
 
     t.test('k9grantpermission: a second grant from the same officer inside the cooldown window is rate_limited, reported plainly', function()

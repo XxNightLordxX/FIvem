@@ -1,8 +1,8 @@
 --[[
     qbx_k9unit/server/propattachment.lua
 
-    Config.Features.PropAttachments (Phase 5 R&D, still `false` by default —
-    see config.lua's own "ship disabled until acceptance criteria are fully
+    Config.Features.PropAttachments (still `false` by default — see
+    config.lua's own "ship disabled until acceptance criteria are fully
     met" convention). A certified handler, while their OWN character is a
     recognized K9 model, may toggle a visible cosmetic prop (a vest/harness)
     attached to their own ped, visible to everyone. NEW FILE PAIR (this file
@@ -17,7 +17,7 @@
     anywhere in this file or config.lua's Config.PropAttachments):
     AttachEntityToEntity takes a bone INDEX, not a name — no documented bone
     NAME exists for a quadruped/animal skeleton in this codebase's own
-    research, and none of this resource's Phase 3 combat/drag code needed
+    research, and none of this resource's existing combat/drag code needed
     one either (client/combat.lua's PropDragging attach call already uses a
     bare numeric bone index, 0, against a PLAYER ped for exactly this
     reason). The correct way to find the RIGHT index for "on the K9's back"
@@ -54,32 +54,31 @@
     ======================================================================
 
     ======================================================================
-    FIRST-WRITER-WINS PROP-HIJACK RACE — FOUND AND CLOSED (coder-security,
-    race-hardening pass, exploit-tester finding #2): the GLOBAL NETID-
-    UNIQUENESS GUARD below (FindOtherPropAttachmentByNetId) only rejects a
-    netId ALREADY present in `PropAttachmentState` — i.e. only ever catches
-    a collision against an entry some EARLIER confirm already wrote. It has
-    no way to stop a SECOND, certified handler standing within
-    Config.PropAttachments.confirmDistanceTolerance of a FIRST handler who
-    is mid-handshake (server already told them to attachK9Prop; their
-    client already created+attached a REAL networked object; their own
-    confirmPropAttached has not yet reached this server) from observing
-    that real object appear nearby — ordinary OneSync entity-relevance
-    replication, independent of and frequently faster than the FIRST
-    handler's own queued TriggerServerEvent actually arriving here — and
-    racing their OWN confirmPropAttached in FIRST, reporting the FIRST
-    handler's genuine netId as their own. Model and position both pass (it
-    really is a configured prop, really within tolerance of the SECOND
-    handler, who simply chose to stand close) — proximity alone can never
-    tell "this is genuinely my own object" apart from "I am standing near
-    someone else's". Before the fix below, that bogus SECOND-handler
-    confirm landed FIRST and therefore won the GLOBAL NETID-UNIQUENESS
-    check outright (nothing had claimed the netId yet), and the FIRST
-    handler's own, entirely legitimate, later confirm was the one that then
-    hit "already tracked" and was rejected — sending THEM
-    'qbx_k9unit:client:rejectK9PropAttach', which deletes THEIR OWN real,
-    just-created object. A guard built to stop a hijack had inverted into a
-    denial-of-service against the genuine owner instead.
+    FIRST-WRITER-WINS PROP-HIJACK RACE — FOUND AND CLOSED: the GLOBAL
+    NETID-UNIQUENESS GUARD below (FindOtherPropAttachmentByNetId) only
+    rejects a netId ALREADY present in `PropAttachmentState` — i.e. only
+    ever catches a collision against an entry some EARLIER confirm already
+    wrote. It has no way to stop a SECOND, certified handler standing
+    within Config.PropAttachments.confirmDistanceTolerance of a FIRST
+    handler who is mid-handshake (server already told them to
+    attachK9Prop; their client already created+attached a REAL networked
+    object; their own confirmPropAttached has not yet reached this server)
+    from observing that real object appear nearby — ordinary OneSync
+    entity-relevance replication, independent of and frequently faster
+    than the FIRST handler's own queued TriggerServerEvent actually
+    arriving here — and racing their OWN confirmPropAttached in FIRST,
+    reporting the FIRST handler's genuine netId as their own. Model and
+    position both pass (it really is a configured prop, really within
+    tolerance of the SECOND handler, who simply chose to stand close) —
+    proximity alone can never tell "this is genuinely my own object" apart
+    from "I am standing near someone else's". Before the fix below, that
+    bogus SECOND-handler confirm landed FIRST and therefore won the GLOBAL
+    NETID-UNIQUENESS check outright (nothing had claimed the netId yet),
+    and the FIRST handler's own, entirely legitimate, later confirm was
+    the one that then hit "already tracked" and was rejected — sending
+    THEM 'qbx_k9unit:client:rejectK9PropAttach', which deletes THEIR OWN
+    real, just-created object. A guard built to stop a hijack had inverted
+    into a denial-of-service against the genuine owner instead.
     THE FIX — HandleConfirmPropAttached's NETWORK-OWNERSHIP GUARD (see that
     function's own comment for the full trace and native-verification
     notes): every confirm that has already passed the model+position checks
@@ -110,12 +109,12 @@
        Client reports the network id of the object it actually created in
        response to event 3. Re-validates everything event 1 already
        checked, PLUS the object's model (allowlist), live position
-       (tolerance against the caller's own live ped coords), AND (coder-
-       security, race-hardening pass) that the caller is the object's own
-       CURRENT OneSync network owner — see HandleConfirmPropAttached's own
-       NETWORK-OWNERSHIP GUARD comment for why position+model tolerance
-       alone cannot distinguish "this is genuinely my own object" from "I
-       am simply standing near someone else's".
+       (tolerance against the caller's own live ped coords), AND that the
+       caller is the object's own CURRENT OneSync network owner — see
+       HandleConfirmPropAttached's own NETWORK-OWNERSHIP GUARD comment for
+       why position+model tolerance alone cannot distinguish "this is
+       genuinely my own object" from "I am simply standing near someone
+       else's".
     3. 'qbx_k9unit:server:cancelPropAttachRequest' () [THIS FILE]
        Client reports its own attach attempt failed (model never loaded) —
        frees the pending slot immediately, mirrors
@@ -170,17 +169,15 @@
       and `PendingPropAttachConfirm` (citizenid -> { src, expiresAt }), both
       local to this file. Nothing outside this file reads them directly.
     - THIS FILE exposes NO resource-global functions — no other file in this
-      resource, and (per this pass's own cross-agent note) no consumer of
-      the concurrently-built FetchMechanic feature, needs to call into
-      prop-attachment state directly. What IS shared with FetchMechanic is
-      client-side (see client/propattachment.lua's own FILE-TO-FILE
+      resource, and no consumer of the FetchMechanic feature, needs to call
+      into prop-attachment state directly. What IS shared with FetchMechanic
+      is client-side (see client/propattachment.lua's own FILE-TO-FILE
       CONTRACT: AttachPropToOwnPed/DetachAndDeleteProp) and the dev-only
       bone-index tool (client/bonetool.lua + server/bonetool.lua) — neither
       of those lives in this file.
 
-    CONFIG THIS FILE ASSUMES EXISTS — NOT owned by this file (coder-architect
-    owns config.lua/fxmanifest.lua/.luacheckrc for this task; see this pass's
-    own hand-off note for the exact blocks needed). Config.Features.PropAttachments
+    CONFIG THIS FILE ASSUMES EXISTS (not owned by this file; see
+    config.lua/fxmanifest.lua/.luacheckrc). Config.Features.PropAttachments
     already exists in config.lua (still `false`) — no new feature flag is
     needed for this file. New shape required, asserted at resource start
     below exactly like server/admin.lua's own config-safety-guard convention:
@@ -216,11 +213,11 @@ local ToggleCooldown = NewCooldown()
 ToggleCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
--- audit). It is now server/notify.lua's single shared resource-global
--- implementation -- see that file's own header for the extraction writeup.
--- Every call site below is unchanged: this file never passed a custom
--- title, which is server/notify.lua's own default.
+-- independent hand-rolled copies across this resource). It is now
+-- server/notify.lua's single shared resource-global implementation -- see
+-- that file's own header for the extraction writeup. Every call site below
+-- is unchanged: this file never passed a custom title, which is
+-- server/notify.lua's own default.
 
 --- Resolves the calling source's own citizenid, or nil if it can't be
 --- resolved (disconnected mid-flight, qbx_core not ready yet, etc.). Every
@@ -243,18 +240,18 @@ end
 --- has one of these two exact models.
 local PropAttachmentModelHashes
 
---- GLOBAL NETID-UNIQUENESS GUARD (coder-security, this pass) — mirrors
---- server/fetch.lua's own FindOtherBallByNetId/GLOBAL NETID-UNIQUENESS
---- INVARIANT exactly, ported to this file's own single-table registry
---- shape. At most one `PropAttachmentState[citizenid]` entry may ever have
---- `.netId == N` for any given N at any moment. Without this, a second
---- citizen standing near a first citizen's already-tracked, real vest
---- object could report THAT netId as their own confirm — the model check
---- passes (it really is a configured prop model) and the distance check
---- passes (it really is close to the caller's own live ped, because the
---- caller placed themselves next to it) — leaving two PropAttachmentState
---- entries pointing at one physical entity, and a stale-registry desync
---- when either citizen later removes it (RemovePropAttachmentForCitizenid
+--- GLOBAL NETID-UNIQUENESS GUARD — mirrors server/fetch.lua's own
+--- FindOtherBallByNetId/GLOBAL NETID-UNIQUENESS INVARIANT exactly, ported
+--- to this file's own single-table registry shape. At most one
+--- `PropAttachmentState[citizenid]` entry may ever have `.netId == N` for
+--- any given N at any moment. Without this, a second citizen standing near
+--- a first citizen's already-tracked, real vest object could report THAT
+--- netId as their own confirm — the model check passes (it really is a
+--- configured prop model) and the distance check passes (it really is
+--- close to the caller's own live ped, because the caller placed
+--- themselves next to it) — leaving two PropAttachmentState entries
+--- pointing at one physical entity, and a stale-registry desync when
+--- either citizen later removes it (RemovePropAttachmentForCitizenid
 --- deletes the shared entity out from under the other's still-believed-
 --- valid entry). `excludeCitizenId` lets HandleConfirmPropAttached's own
 --- caller not treat its OWN prior entry (there should never be one here —
@@ -262,16 +259,16 @@ local PropAttachmentModelHashes
 --- keeps the shape identical to fetch.lua's own reusable helper rather
 --- than hand-rolling a narrower one-off).
 ---
---- RACE-HARDENING NOTE (coder-security, this pass — see this file's header
---- FIRST-WRITER-WINS PROP-HIJACK RACE section for the full writeup): this
---- scan can ONLY ever catch a collision against an entry an EARLIER confirm
---- already wrote — it has no visibility into a still-in-flight OTHER
---- citizen's pending confirm, which carries no netId at all until it
---- actually arrives. It therefore could not, by itself, stop a bogus
---- confirm that arrives BEFORE the genuine owner's own confirm — the
---- genuine owner's LATER confirm was the one left hitting this check
---- instead. HandleConfirmPropAttached's own NETWORK-OWNERSHIP GUARD (run
---- BEFORE this check) closes that gap at its root: a caller who is not the
+--- RACE-HARDENING NOTE (see this file's header FIRST-WRITER-WINS
+--- PROP-HIJACK RACE section for the full writeup): this scan can ONLY ever
+--- catch a collision against an entry an EARLIER confirm already wrote --
+--- it has no visibility into a still-in-flight OTHER citizen's pending
+--- confirm, which carries no netId at all until it actually arrives. It
+--- therefore could not, by itself, stop a bogus confirm that arrives
+--- BEFORE the genuine owner's own confirm -- the genuine owner's LATER
+--- confirm was the one left hitting this check instead.
+--- HandleConfirmPropAttached's own NETWORK-OWNERSHIP GUARD (run BEFORE
+--- this check) closes that gap at its root: a caller who is not the
 --- reported entity's current OneSync network owner is rejected before ever
 --- reaching this scan, so this scan should now be effectively unreachable
 --- in practice for any confirm using this feature's own established
@@ -327,12 +324,12 @@ local function RemovePropAttachmentForCitizenid(citizenid)
     local attachment = PropAttachmentState[citizenid]
     if not attachment then return end
     PropAttachmentState[citizenid] = nil
-    -- CROSS-FEATURE NETID CLAIM REGISTRY (coder-architect, this pass —
-    -- server/entities.lua's own header section has the full writeup):
-    -- releases this citizenid's claim on attachment.netId so the netId can
-    -- be legitimately reused/reclaimed afterward without tripping
-    -- IsNetworkEntityClaimedByOther for anyone else. A no-op if this exact
-    -- (feature, ownerId) pair never held the claim.
+    -- CROSS-FEATURE NETID CLAIM REGISTRY (see server/entities.lua's own
+    -- header section for the full writeup): releases this citizenid's
+    -- claim on attachment.netId so the netId can be legitimately
+    -- reused/reclaimed afterward without tripping IsNetworkEntityClaimedByOther
+    -- for anyone else. A no-op if this exact (feature, ownerId) pair never
+    -- held the claim.
     ReleaseNetworkEntity(attachment.netId, 'propattachment', citizenid)
 
     local entity = ResolveNetworkEntity(attachment.netId)
@@ -344,11 +341,11 @@ local function RemovePropAttachmentForCitizenid(citizenid)
 end
 
 -- ======================================================================
--- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) — everything
--- below (all four RegisterNetEvent handlers, the playerDropped/onResourceStop
--- cleanup hooks, and the onResourceStart config-safety guard) is now inside
--- this single `if`, evaluated once at this file's own load time. Config.lua
--- is a shared_scripts file, loaded in full before any server_scripts file
+-- REGISTRATION-TIME FEATURE GATE — everything below (all four
+-- RegisterNetEvent handlers, the playerDropped/onResourceStop cleanup
+-- hooks, and the onResourceStart config-safety guard) is now inside this
+-- single `if`, evaluated once at this file's own load time. Config.lua is
+-- a shared_scripts file, loaded in full before any server_scripts file
 -- runs, so Config.Features.PropAttachments already holds its real
 -- true/false value by the time this line executes — this is NOT a
 -- load-order gamble.
@@ -503,14 +500,14 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
 
     if GetGameTimer() > pending.expiresAt then
         NotifyPlayer(src, locale('propattachment.attach_timed_out'), 'error')
-        -- ORPHANED-PROP FIX (coder-backend, this pass): this branch used to
-        -- notify but never send 'qbx_k9unit:client:rejectK9PropAttach' —
-        -- unlike every one of this handler's sibling failure branches below
-        -- (model/position checks), which correctly pair their own
-        -- NotifyPlayer with this same event. The client already created a
-        -- real, attached, networked vest object before this confirm was
-        -- even sent (client/propattachment.lua's own attachK9Prop handler)
-        -- — notifying without this event left that object permanently
+        -- ORPHANED-PROP FIX: this branch used to notify but never send
+        -- 'qbx_k9unit:client:rejectK9PropAttach' — unlike every one of this
+        -- handler's sibling failure branches below (model/position
+        -- checks), which correctly pair their own NotifyPlayer with this
+        -- same event. The client already created a real, attached,
+        -- networked vest object before this confirm was even sent
+        -- (client/propattachment.lua's own attachK9Prop handler) —
+        -- notifying without this event left that object permanently
         -- untracked both server- and client-side (see that file's own
         -- STALE-VEST GUARD comment, which documents this exact gap and the
         -- narrower client-only mitigation it added without owning this
@@ -527,11 +524,11 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     -- second attachment landing during the round trip must all be caught
     -- again here, exactly like server/kennel.lua's confirmKennelPlaced.
     --
-    -- ORPHANED-PROP FIX (coder-backend, this pass): all three re-checks
-    -- below used to `return` with nothing sent back at all — not even a
-    -- NotifyPlayer — leaving the client's just-created, just-attached vest
-    -- object both untracked here and un-signalled that anything failed. See
-    -- the TTL-expiry branch's own comment above for why sending
+    -- ORPHANED-PROP FIX: all three re-checks below used to `return` with
+    -- nothing sent back at all — not even a NotifyPlayer — leaving the
+    -- client's just-created, just-attached vest object both untracked here
+    -- and un-signalled that anything failed. See the TTL-expiry branch's
+    -- own comment above for why sending
     -- 'qbx_k9unit:client:rejectK9PropAttach' here carries none of
     -- server/fetch.lua's netId-trust concerns.
     if not Config.Features.PropAttachments then
@@ -567,16 +564,16 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
 
     local ped = GetPlayerPed(src)
     if ped == 0 then
-        -- DISCONNECT-MID-FLIGHT FIX (coder-security, this pass): this branch
-        -- used to `return` completely silently — the one remaining branch in
-        -- this handler that did not, unlike every sibling failure branch
-        -- above and below it. GetPlayerPed(src) == 0 does not necessarily
-        -- mean `src` has fully disconnected — see the identical "defensive:
-        -- src disconnected between the event firing and this line" comment
-        -- on requestToggleK9PropAttachment's own ped==0 check earlier in
-        -- this file — it can also mean src's ped is momentarily unresolvable
-        -- (a respawn race) while src's own network connection is still
-        -- live. Deciding whether a rejection is even deliverable: if `src`
+        -- DISCONNECT-MID-FLIGHT FIX: this branch used to `return`
+        -- completely silently — the one remaining branch in this handler
+        -- that did not, unlike every sibling failure branch above and
+        -- below it. GetPlayerPed(src) == 0 does not necessarily mean `src`
+        -- has fully disconnected — see the identical "defensive: src
+        -- disconnected between the event firing and this line" comment on
+        -- requestToggleK9PropAttachment's own ped==0 check earlier in this
+        -- file — it can also mean src's ped is momentarily unresolvable (a
+        -- respawn race) while src's own network connection is still live.
+        -- Deciding whether a rejection is even deliverable: if `src`
         -- genuinely has disconnected, TriggerClientEvent to it is a safe,
         -- silent no-op (FiveM has nowhere to route it and does not error) —
         -- so sending it here is never wrong, and it is the only way to close
@@ -638,29 +635,28 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
         return
     end
 
-    -- NETWORK-OWNERSHIP GUARD (coder-security, race-hardening pass — closes
-    -- the FIRST-WRITER-WINS PROP-HIJACK RACE, see this file's own header
-    -- section for the full trace). Model + live-position tolerance above
-    -- can both be satisfied by a client that merely stands near someone
-    -- ELSE's real, already-networked object — neither one proves the
-    -- reported netId is the confirming caller's OWN creation. This check
-    -- asks the one question that does: is `src` the entity's CURRENT
-    -- OneSync network owner right now? A networked object created via
-    -- client/propattachment.lua's own AttachPropToOwnPed call is owned, at
-    -- creation, by the client that created it — never by a merely-nearby
-    -- OTHER client, no matter how quickly that other client reacts or how
-    -- close it stands.
+    -- NETWORK-OWNERSHIP GUARD (closes the FIRST-WRITER-WINS PROP-HIJACK
+    -- RACE — see this file's own header section for the full trace). Model
+    -- + live-position tolerance above can both be satisfied by a client
+    -- that merely stands near someone ELSE's real, already-networked
+    -- object — neither one proves the reported netId is the confirming
+    -- caller's OWN creation. This check asks the one question that does:
+    -- is `src` the entity's CURRENT OneSync network owner right now? A
+    -- networked object created via client/propattachment.lua's own
+    -- AttachPropToOwnPed call is owned, at creation, by the client that
+    -- created it — never by a merely-nearby OTHER client, no matter how
+    -- quickly that other client reacts or how close it stands.
     --
-    -- NATIVE VERIFICATION (this pass, not assumed from memory): the more
-    -- direct question this check would ideally ask — "is `entity` CURRENTLY
+    -- NATIVE VERIFICATION (not assumed from memory): the more direct
+    -- question this check would ideally ask — "is `entity` CURRENTLY
     -- attached to MY OWN ped" (GetEntityAttachedTo) — is CLIENT-ONLY per the
     -- official CFX native docs (https://docs.fivem.net/natives/?_0x48C2BED9180FE123=),
-    -- confirmed via WebSearch this pass, NOT callable here. NetworkGetEntityOwner
+    -- confirmed via WebSearch, NOT callable here. NetworkGetEntityOwner
     -- IS documented as callable SERVER-side, returning the server id of the
     -- entity's current network owner
     -- (https://docs.fivem.net/natives/?_0x55E86AF2712B36A1=). Confidence:
     -- MEDIUM-HIGH (official CFX docs), not independently re-verified
-    -- in-engine this pass — same confidence class already attached to this
+    -- in-engine — same confidence class already attached to this
     -- resource's own SOURCE-ORIGIN GUARD precedent
     -- (client/propattachment.lua's own `source ~= 65535` check).
     --
@@ -676,18 +672,18 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     -- rather than merely observing and reporting a nearby netId — could in
     -- principle still pass this check. That is a materially harder, more
     -- expensive attack than the "sniff a nearby netId and report it" race
-    -- this check closes, and is not what this pass's fix targets.
+    -- this check closes, and is not what this fix targets.
     if NetworkGetEntityOwner(entity) ~= src then
         NotifyPlayer(src, locale('propattachment.attach_failed_unconfirmed'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
 
-    -- GLOBAL NETID-UNIQUENESS GUARD (coder-security, this pass) — mirrors
-    -- server/fetch.lua's own FindOtherBallByNetId check verbatim: reject a
-    -- confirm that names a netId ALREADY claimed by a DIFFERENT citizenid's
-    -- own active PropAttachmentState entry (e.g. a second citizen standing
-    -- next to the first and reporting the first's own real, already-tracked
+    -- GLOBAL NETID-UNIQUENESS GUARD — mirrors server/fetch.lua's own
+    -- FindOtherBallByNetId check verbatim: reject a confirm that names a
+    -- netId ALREADY claimed by a DIFFERENT citizenid's own active
+    -- PropAttachmentState entry (e.g. a second citizen standing next to
+    -- the first and reporting the first's own real, already-tracked
     -- vest's netId as their own). `citizenid` is confirmed above (the
     -- already-active re-check) to have no entry of its own yet, so any hit
     -- here is necessarily a genuine cross-citizenid collision, never this
@@ -697,16 +693,16 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     -- header "WHY THIS NEVER ACCEPTS A CLIENT-CLAIMED TARGET" section
     -- argues this file does not allow.
     --
-    -- CROSS-FEATURE NETID CLAIM REGISTRY (coder-architect, this pass): this
-    -- file's NETWORK-OWNERSHIP GUARD above already independently closes the
-    -- cross-feature version of this same class of gap (a client-reported
-    -- netId naming another citizen's real, live server/kennel.lua kennel or
-    -- server/fetch.lua ball, both sharing this exact prop model per
-    -- config.lua, can never pass that guard, since its true OneSync owner is
-    -- that OTHER client, never `src`) -- so this addition is defense-in-depth
-    -- consistency with server/kennel.lua/server/fetch.lua's own equivalent
-    -- checks, not independently load-bearing here. See
-    -- server/entities.lua's own header section for the full writeup.
+    -- CROSS-FEATURE NETID CLAIM REGISTRY: this file's NETWORK-OWNERSHIP
+    -- GUARD above already independently closes the cross-feature version
+    -- of this same class of gap (a client-reported netId naming another
+    -- citizen's real, live server/kennel.lua kennel or server/fetch.lua
+    -- ball, both sharing this exact prop model per config.lua, can never
+    -- pass that guard, since its true OneSync owner is that OTHER client,
+    -- never `src`) -- so this addition is defense-in-depth consistency
+    -- with server/kennel.lua/server/fetch.lua's own equivalent checks, not
+    -- independently load-bearing here. See server/entities.lua's own
+    -- header section for the full writeup.
     if FindOtherPropAttachmentByNetId(netId, citizenid) or IsNetworkEntityClaimedByOther(netId, 'propattachment', citizenid) then
         NotifyPlayer(src, locale('propattachment.attach_failed_already_tracked'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
@@ -755,11 +751,10 @@ RegisterNetEvent('qbx_k9unit:server:reportOwnK9PropAttachDeath', function()
     RemovePropAttachmentForCitizenid(citizenid)
 end)
 
--- Handler-disconnect cleanup (task requirement: an attached prop must not
--- leak permanently into the world). Resolves citizenid for the
--- disconnecting source BEFORE the framework fully tears down the player
--- object, same established pattern as server/kennel.lua's own
--- playerDropped handler.
+-- Handler-disconnect cleanup (an attached prop must not leak permanently
+-- into the world). Resolves citizenid for the disconnecting source BEFORE
+-- the framework fully tears down the player object, same established
+-- pattern as server/kennel.lua's own playerDropped handler.
 AddEventHandler('playerDropped', function(_reason)
     local src = source
 
@@ -778,14 +773,14 @@ AddEventHandler('playerDropped', function(_reason)
     -- :RegisterPlayerDropped() above — nothing to do for it here.
 end)
 
--- Resource-stop cleanup (task requirement, same class of gap
--- client/vehicle.lua's own onResourceStop comment calls "ship-blocking" for
--- its own entity-state case): a resource restart must not leave any
--- currently-attached prop behind as a permanent, orphaned world object.
--- This pass is specifically for attachments whose ORIGINAL creating client
--- already disconnected earlier in the session — client/propattachment.lua's
--- own onResourceStop handler independently covers the (more common) case of
--- a still-connected client cleaning up its own creation.
+-- Resource-stop cleanup (same class of gap client/vehicle.lua's own
+-- onResourceStop comment calls "ship-blocking" for its own entity-state
+-- case): a resource restart must not leave any currently-attached prop
+-- behind as a permanent, orphaned world object. This handles attachments
+-- whose ORIGINAL creating client already disconnected earlier in the
+-- session — client/propattachment.lua's own onResourceStop handler
+-- independently covers the (more common) case of a still-connected client
+-- cleaning up its own creation.
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 

@@ -514,14 +514,19 @@ do
 end
 
 -- ============================================================================
--- Self-grant: Config.HighCommand.allowSelfGrant (default false).
+-- Self-grant: Config.HighCommand.allowSelfGrant (DEFAULT TRUE, this pass --
+-- OWNER DECISION: "High command can grant anything they want to themselves
+-- -- xp promotions permissions etc"). This harness explicitly passes
+-- `allowSelfGrant = false` for the first two tests below so the STRICT,
+-- opt-out behaviour stays provable and unweakened -- that switch, not the
+-- default, is what these two tests exercise.
 -- ============================================================================
 
 do
     local h = newHarness({ maxXpPerGrant = 5000, grantCooldownMs = 1500, allowSelfGrant = false })
     local granterJob = { name = 'police', isboss = true, grade = { level = 0 } }
 
-    t.test('self-grant: blocked by default when targeting your own server id', function()
+    t.test('self-grant: blocked when Config.HighCommand.allowSelfGrant is explicitly false, targeting your own server id', function()
         h.resetCaptures()
         local src = registerPlayer(h, 'SELF1', granterJob)
         runCommand(h, src, { tostring(src), '50' })
@@ -539,14 +544,81 @@ do
         t.contains(h.capturedPrints[#h.capturedPrints], 'self_grant_blocked')
     end)
 
-    t.test('self-grant: ALLOWED once Config.HighCommand.allowSelfGrant is true', function()
+    t.test('self-grant: ALLOWED once Config.HighCommand.allowSelfGrant is true, and the audit line names the SAME citizenid as granter and recipient with an explicit self_grant=true marker', function()
         h.resetCaptures()
         h.env.Config.HighCommand.allowSelfGrant = true
         local src = registerPlayer(h, 'SELF2', granterJob)
         runCommand(h, src, { tostring(src), '50' })
         t.equals(#h.capturedAwardCalls, 1)
         t.equals(h.capturedAwardCalls[1].citizenid, 'SELF2')
+
+        -- AUDIT (this pass -- OWNER DECISION requirement: self-service is
+        -- the owner's decision, not an invisible one): the audit line must
+        -- be provably a self-grant, not merely inferable by comparing the
+        -- granter (whoLabel) and target_citizenid fields by eye.
+        local found = false
+        for i = 1, #h.capturedPrints do
+            local line = h.capturedPrints[i]
+            if line:find('AUDIT', 1, true) and line:find('citizenid=SELF2', 1, true)
+                and line:find('target_citizenid=SELF2', 1, true)
+                and line:find('self_grant=true', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'a successful XP self-grant must be audited with an explicit self_grant=true marker naming the same citizenid as both granter and recipient')
+
         h.env.Config.HighCommand.allowSelfGrant = false -- restore
+    end)
+
+    t.test('AUDIT: an ORDINARY (non-self) XP grant explicitly prints self_grant=false -- the field is always present, never omitted when it would read as "not a self-grant"', function()
+        h.resetCaptures()
+        h.env.Config.HighCommand.allowSelfGrant = true
+        local src = registerPlayer(h, 'ORDINARY-GRANTER', granterJob)
+        local targetSrc = registerPlayer(h, 'ORDINARY-TARGET', { name = 'police', grade = { level = 1 } })
+        runCommand(h, src, { tostring(targetSrc), '50' })
+
+        local found = false
+        for i = 1, #h.capturedPrints do
+            local line = h.capturedPrints[i]
+            if line:find('AUDIT', 1, true) and line:find('self_grant=false', 1, true) and line:find('-> ok', 1, true) then
+                found = true
+            end
+        end
+        t.isTrue(found, 'an ordinary XP grant must be explicitly labeled self_grant=false, not merely lack a self_grant=true tag')
+
+        h.env.Config.HighCommand.allowSelfGrant = false -- restore
+    end)
+end
+
+-- ============================================================================
+-- A CONFIG TABLE WRITTEN BEFORE THIS SWITCH EXISTED (this pass): Config.
+-- HighCommand as a real table, but with the `allowSelfGrant` key entirely
+-- ABSENT -- the exact shape every real config.lua had before this field was
+-- ever added. Must behave per the NEW default (self-grant allowed) rather
+-- than erroring or silently reverting to the OLD default (blocked).
+-- ============================================================================
+
+do
+    -- Deliberately omits `allowSelfGrant` entirely -- see newHarness's own
+    -- `Config = { ..., HighCommand = highCommandConfig }` wiring: whatever
+    -- table is passed here becomes Config.HighCommand verbatim.
+    local h = newHarness({ maxXpPerGrant = 5000, grantCooldownMs = 1500 })
+    local granterJob = { name = 'police', isboss = true, grade = { level = 0 } }
+
+    t.test('self-grant: a Config.HighCommand table with NO allowSelfGrant key at all (pre-existing config.lua) still defaults to ALLOWED, never errors', function()
+        h.resetCaptures()
+        local src = registerPlayer(h, 'LEGACY-SELF', granterJob)
+        -- runCommand pcalls the handler (see this file's own header -- eight
+        -- 'highcommand.*' locale keys are still pending as of this suite,
+        -- so a later locale()-driven NotifyPlayer call may raise; that is
+        -- expected and unrelated to this test, per this file's established
+        -- convention of asserting on capturedAwardCalls/capturedPrints,
+        -- both populated BEFORE any locale()-dependent call on this path,
+        -- rather than on runCommand's own returned `ok`).
+        runCommand(h, src, { tostring(src), '50' })
+        t.equals(#h.capturedAwardCalls, 1, 'a config table missing this key entirely must still award XP, per the new default, not silently disable the command')
+        t.equals(h.capturedAwardCalls[1].citizenid, 'LEGACY-SELF')
+        t.contains(h.capturedPrints[#h.capturedPrints], '-> ok')
     end)
 end
 

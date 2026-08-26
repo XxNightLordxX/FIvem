@@ -618,14 +618,26 @@ t.test('ApplyK9PedRole: a NON-high-command source is denied outright -- no DB wr
     t.isNil(f.fakeAssignments['CITIZEN_TARGET'])
 end)
 
-t.test('ApplyK9PedRole: a target attempting to grant the role TO THEMSELVES is blocked by GrantPermission\'s own self-grant guard, even if they somehow held high command', function()
+-- OWNER'S DECISION, and the reason this test asserts the opposite of what
+-- it used to. Self-granting was once blocked outright, so a high command
+-- officer could not put the K9 role on their own character. The owner's
+-- instruction is that high command may grant themselves anything, and
+-- that high command is a handler or a K9 who also administers rather than
+-- a fourth kind of person -- so an officer turning their own character
+-- into a K9 is the feature working, not a hole in it.
+--
+-- The boundary this test still guards is the one that matters: only a
+-- high command officer reaches this path at all. The companion test below
+-- proves an ordinary player self-targeting is still refused. If that ever
+-- goes green, the widening has escaped its intended scope.
+t.test('ApplyK9PedRole: a HIGH COMMAND officer may put the K9 role on their OWN character -- self-grant is permitted by the owner\'s decision', function()
     local f = newFixture()
     f.registerPlayer(HIGH_COMMAND_SRC, 'CITIZEN_HC', { name = 'police', isboss = true, grade = { level = 10 } })
 
     local ok, outcome = f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_HC', 'a_c_husky')
-    t.isFalse(ok)
-    t.equals(outcome, 'self_grant_blocked')
-    t.equals(#f.clientEvents, 0)
+    t.isTrue(ok, 'high command self-assigning the K9 role must now succeed')
+    t.isNil(outcome == 'self_grant_blocked' and outcome or nil, 'the old self-grant refusal must no longer fire for high command')
+    t.isTrue(#f.clientEvents > 0, 'the model swap must actually be dispatched to the caller\'s own client')
 end)
 
 -- ----------------------------------------------------------------------

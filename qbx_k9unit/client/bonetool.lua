@@ -15,8 +15,8 @@
     another documentation search.
 
     ======================================================================
-    RE-CONFIRMED THIS PASS, DIRECTLY AGAINST A FRESH CLONE OF
-    citizenfx/natives (not taken on the prior research pass's word alone):
+    RE-CONFIRMED DIRECTLY AGAINST A FRESH CLONE OF citizenfx/natives (not
+    taken on the prior research pass's word alone):
       - ENTITY/AttachEntityToEntity.md, 0x6B9BBD38AB0796DF: `boneIndex`
         (3rd param) doc text verbatim — "This is different to boneID, use
         GET_PED_BONE_INDEX to get the index from the ID... entity1 will be
@@ -29,23 +29,21 @@
         `Entity entity`, ENTITY namespace — confirmed (again) entity-type
         agnostic, not PED-only.
       - PED/GetPedBoneIndex.md, 0x3F428D08BE5AAE31: see the GETPEDBONEINDEX
-        section below — this is new ground this pass, not carried over from
-        the prior research pass.
-    PRECISION NOTE (task requirement): the native imposes NO restriction on
-    which raw index is valid for which entity type — it will happily accept
-    any int and fall back to "center of entity2" if that slot is unused.
-    The reason a human-derived semantic bone (a name/id meaningful on a
-    PLAYER skeleton) is not automatically meaningful here is entirely the
-    MODEL's doing, not the native's: whether a given raw index — or a given
-    semantic boneId resolved via GetPedBoneIndex — corresponds to anything
-    recognizable on an `a_c_*` skeleton depends on how that specific asset
-    was rigged, which no native call and no documentation search can answer
-    from outside the engine. Only looking, via this tool, answers it.
+        section below — new ground, not previously covered.
+    PRECISION NOTE: the native imposes NO restriction on which raw index is
+    valid for which entity type — it will happily accept any int and fall
+    back to "center of entity2" if that slot is unused. The reason a
+    human-derived semantic bone (a name/id meaningful on a PLAYER skeleton)
+    is not automatically meaningful here is entirely the MODEL's doing, not
+    the native's: whether a given raw index — or a given semantic boneId
+    resolved via GetPedBoneIndex — corresponds to anything recognizable on
+    an `a_c_*` skeleton depends on how that specific asset was rigged,
+    which no native call and no documentation search can answer from
+    outside the engine. Only looking, via this tool, answers it.
 
-    GETPEDBONEINDEX — CONFIRMED AGAINST PRIMARY SOURCE THIS PASS, AND THE
-    CONCLUSION ON WHETHER THIS TOOL (OR THE FEATURES IT SERVES) SHOULD
-    CONVERT THROUGH IT (task item 3):
-    `int GET_PED_BONE_INDEX(Ped ped, int boneId)` — converts a semantic
+    GETPEDBONEINDEX — CONFIRMED AGAINST PRIMARY SOURCE, AND THE CONCLUSION
+    ON WHETHER THIS TOOL (OR THE FEATURES IT SERVES) SHOULD CONVERT THROUGH
+    IT: `int GET_PED_BONE_INDEX(Ped ped, int boneId)` — converts a semantic
     `ePedBoneId` value (e.g. `SKEL_Head = 0x796E`) into the raw index
     AttachEntityToEntity wants; this is the exact conversion
     AttachEntityToEntity's own doc points at. That same enum ALSO lists
@@ -58,19 +56,18 @@
     shortcut (the 'known' subcommand below) alongside the raw sweep, never
     instead of it, for two reasons this file will not paper over:
       1. GetPedBoneIndex's own primary-source doc page has an EMPTY "Return
-         value" section — this pass could not confirm what it returns for a
+         value" section — it could not be confirmed what it returns for a
          boneId absent from a given skeleton (a `-1` sentinel, or something
          else). 'known' below reports every raw value UNFILTERED and says
          so, rather than silently guessing which ones are "hits."
       2. Even a boneId that resolves to SOME real index on a dog's skeleton
          is not guaranteed to be anatomically where a human familiar with
          the human-skeleton name would expect — the lookup matches by hash
-         TAG against however THIS asset was actually rigged, which this
-         pass has no way to inspect (binary mesh/skeleton data is outside
-         what any tool here can read — see this task's own note on that
-         limitation). A 'known' hit is a CANDIDATE to visually confirm via
-         'goto', exactly like every other index this tool surfaces — never
-         a trusted answer by itself.
+         TAG against however THIS asset was actually rigged, which nothing
+         here has a way to inspect (binary mesh/skeleton data is outside
+         what any tool here can read). A 'known' hit is a CANDIDATE to
+         visually confirm via 'goto', exactly like every other index this
+         tool surfaces — never a trusted answer by itself.
 
     TWO MODES, BOTH DRIVEN BY THE SAME `currentBoneIndex`, PLUS ONE
     INFORMATIONAL SHORTCUT:
@@ -103,17 +100,16 @@
        rather than a blind 0..MaxBoneIndex crawl every time.
 
     GRACEFUL DEGRADATION: `GetWorldPositionOfEntityBone`'s behavior for an
-    out-of-range index was NOT independently confirmed this session (no live
-    client available) — the research pass's own honest assessment is
-    "expected to fail gracefully... based on the sibling native's documented
-    -1-on-miss convention," not a confirmed fact for THIS native
-    specifically. This file never asserts on the returned vector — an
-    invalid index is expected, at worst, to draw a marker at some
-    uninformative position (e.g. coincident with the ped's own root), which
-    is itself useful sweep information ("nothing distinct lives at this
-    index"), never a crash.
+    out-of-range index was NOT independently confirmed (no live client
+    available) — the research pass's own honest assessment is "expected to
+    fail gracefully... based on the sibling native's documented -1-on-miss
+    convention," not a confirmed fact for THIS native specifically. This
+    file never asserts on the returned vector — an invalid index is
+    expected, at worst, to draw a marker at some uninformative position
+    (e.g. coincident with the ped's own root), which is itself useful sweep
+    information ("nothing distinct lives at this index"), never a crash.
 
-    OPERATIONAL CAVEAT (task requirement — also stated in config.lua's own
+    OPERATIONAL CAVEAT (also stated in config.lua's own
     Config.Features.BoneSweepDevTool comment and in server/bonetool.lua's
     own ACCESS MODEL section; restated here because this file is the one
     that actually runs the draw thread and registers the event handler):
@@ -127,12 +123,12 @@
     the event handler/draw thread/cleanup hooks. Never treat "the flag/
     convar is off now" as sufficient by itself without also restarting.
 
-    SECOND, EXPLICIT OPT-IN — CONVAR (coder-security, this pass; see
-    server/bonetool.lua's own header SECOND, EXPLICIT OPT-IN section for
-    the full "why" writeup, not re-derived here): this file's own
-    registration gate now ALSO requires `GetConvarInt('qbx_k9unit_enable_bone_dev_tool',
-    0) == 1`, not just the feature flag — WHY THIS FILE NEEDS ITS OWN COPY
-    OF THAT CHECK, not merely relying on the server never sending
+    SECOND, EXPLICIT OPT-IN — CONVAR (see server/bonetool.lua's own header
+    SECOND, EXPLICIT OPT-IN section for the full "why" writeup, not
+    re-derived here): this file's own registration gate now ALSO requires
+    `GetConvarInt('qbx_k9unit_enable_bone_dev_tool', 0) == 1`, not just the
+    feature flag — WHY THIS FILE NEEDS ITS OWN COPY OF THAT CHECK, not
+    merely relying on the server never sending
     'qbx_k9unit:client:boneToolCommand' when it's unset: without it, EVERY
     client on a server that ships Config.Features.BoneSweepDevTool = true
     but has not opted in via the convar would still register this file's
@@ -180,20 +176,20 @@ local MARKER_COLOR = { r = 255, g = 40, b = 40, a = 200 }
 -- On-screen index-label draw constants — same "plain local constants, not
 -- config" reasoning as the marker constants above. FONT_CONDENSED (4) is
 -- taken from citizenfx/natives HUD/SetTextFont.md's own eTextFonts enum,
--- confirmed this pass — a plain, compact, legible face for a short numeric
--- label. LABEL_HEIGHT_OFFSET lifts the label clear of the marker sphere
+-- confirmed — a plain, compact, legible face for a short numeric label.
+-- LABEL_HEIGHT_OFFSET lifts the label clear of the marker sphere
 -- (MARKER_SCALE 0.15) so the two never visually overlap.
 local LABEL_TEXT_SCALE = 0.35
 local LABEL_TEXT_FONT = 4
 local LABEL_HEIGHT_OFFSET = 0.45
 
--- SECOND, EXPLICIT OPT-IN (coder-security, this pass) — see this file's
--- header SECOND, EXPLICIT OPT-IN section, and server/bonetool.lua's own
--- header, for the full "why" writeup. MUST be the exact same literal as
--- server/bonetool.lua's own BONE_DEV_TOOL_ENABLE_CONVAR constant — the two
--- are duplicated per-file (see that file's own comment on this constant)
--- rather than shared, but both must resolve to one REPLICATED (`setr`)
--- convar for this file to ever see the same value the server used.
+-- SECOND, EXPLICIT OPT-IN — see this file's header SECOND, EXPLICIT OPT-IN
+-- section, and server/bonetool.lua's own header, for the full "why"
+-- writeup. MUST be the exact same literal as server/bonetool.lua's own
+-- BONE_DEV_TOOL_ENABLE_CONVAR constant — the two are duplicated per-file
+-- (see that file's own comment on this constant) rather than shared, but
+-- both must resolve to one REPLICATED (`setr`) convar for this file to
+-- ever see the same value the server used.
 local BONE_DEV_TOOL_ENABLE_CONVAR = 'qbx_k9unit_enable_bone_dev_tool'
 
 -- This client's own state — all local-only, never read from another file.
@@ -212,10 +208,10 @@ end
 
 --- Sets the active preview index, starts the draw loop if not already
 --- running, and gives the human immediate feedback on what index they're
---- now looking at — INCLUDING how to record it once it looks right (task
---- requirement: the tool must tell a human what to do with what they find).
---- Multi-line description, same established pattern as server/admin.lua's
---- own `table.concat(lines, '\n')` NotifyPlayer calls — ox_lib's notify
+--- now looking at — INCLUDING how to record it once it looks right (the
+--- tool must tell a human what to do with what they find). Multi-line
+--- description, same established pattern as server/admin.lua's own
+--- `table.concat(lines, '\n')` NotifyPlayer calls — ox_lib's notify
 --- already renders embedded newlines correctly in that existing use.
 --- @param boneIndex number
 local function SetPreviewBoneIndex(boneIndex)
@@ -230,14 +226,14 @@ local function SetPreviewBoneIndex(boneIndex)
 end
 
 -- ======================================================================
--- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) — the preview
--- draw thread below, the RegisterNetEvent handler, and the onResourceStop
--- cleanup hook are now all inside this single `if`, evaluated once at this
--- file's own load time. Config.lua is a shared_scripts file, loaded in full
--- before any client_scripts file runs, so Config.Features.BoneSweepDevTool
--- already holds its real value here — not a load-order gamble. Mirrors this
--- SAME file's own client/propattachment.lua sibling gate and this
--- resource's server/bonetool.lua precedent ('/k9bonetool' is only ever
+-- REGISTRATION-TIME FEATURE GATE — the preview draw thread below, the
+-- RegisterNetEvent handler, and the onResourceStop cleanup hook are now
+-- all inside this single `if`, evaluated once at this file's own load
+-- time. Config.lua is a shared_scripts file, loaded in full before any
+-- client_scripts file runs, so Config.Features.BoneSweepDevTool already
+-- holds its real value here — not a load-order gamble. Mirrors this SAME
+-- file's own client/propattachment.lua sibling gate and this resource's
+-- server/bonetool.lua precedent ('/k9bonetool' is only ever
 -- RegisterCommand'd inside its own flag-checked onResourceStart): a
 -- dev-only sweep tool left merely "gated inside the handler" would still
 -- run a per-frame draw thread (once triggered) and a registered, reachable
@@ -252,13 +248,13 @@ if Config.Features and Config.Features.BoneSweepDevTool == true and GetConvarInt
 --- On-screen 3D text label at a world position — shows the current bone
 --- index directly next to the preview marker, so a human doesn't have to
 --- remember/scroll back through a chat notification while walking around
---- their own dog looking from different angles (task requirement: the
---- index must be readable, not just logged once). Every native below is
---- confirmed directly against a fresh clone of citizenfx/natives this
---- pass, as the CURRENT, non-deprecated names for what older FiveM scripts
---- universally call SET_TEXT_ENTRY/ADD_TEXT_COMPONENT_STRING/DRAW_TEXT —
---- that repo's own reference no longer lists those three under separate
---- entries at all, only as `aliases` on the ones actually called here
+--- their own dog looking from different angles (the index must be
+--- readable, not just logged once). Every native below is confirmed
+--- directly against a fresh clone of citizenfx/natives, as the CURRENT,
+--- non-deprecated names for what older FiveM scripts universally call
+--- SET_TEXT_ENTRY/ADD_TEXT_COMPONENT_STRING/DRAW_TEXT — that repo's own
+--- reference no longer lists those three under separate entries at all,
+--- only as `aliases` on the ones actually called here
 --- (HUD/BeginTextCommandDisplayText.md aliases `_SET_TEXT_ENTRY`,
 --- HUD/AddTextComponentSubstringPlayerName.md aliases
 --- `_ADD_TEXT_COMPONENT_STRING`, HUD/EndTextCommandDisplayText.md aliases
@@ -321,8 +317,8 @@ CreateThread(function()
                     MARKER_COLOR.r, MARKER_COLOR.g, MARKER_COLOR.b, MARKER_COLOR.a,
                     false, false, 2, false, nil, nil, false
                 )
-                -- LOCALIZATION FIX (this pass): was `labelText .. ' (TEST
-                -- PROP ATTACHED)'` -- exactly the untranslatable
+                -- LOCALIZATION FIX: was `labelText .. ' (TEST PROP
+                -- ATTACHED)'` -- exactly the untranslatable
                 -- Lua-concatenation pattern this whole migration exists to
                 -- close (see DEVELOPER_REFERENCE.md's "Format" section and its
                 -- running "expect a third instance" note). Two full-sentence
@@ -378,7 +374,7 @@ end
 -- header GETPEDBONEINDEX section for the full honesty caveats before
 -- treating any of these as more than "worth a look." Every {name, id} pair
 -- here is transcribed verbatim from citizenfx/natives' own
--- PED/GetPedBoneIndex.md ePedBoneId enum (confirmed this pass, hash
+-- PED/GetPedBoneIndex.md ePedBoneId enum (confirmed, hash
 -- 0x3F428D08BE5AAE31) — re-diff against that file directly if this list is
 -- ever extended, rather than trusting a second-hand copy. Deliberately a
 -- SHORT curated shortlist (skeleton landmarks + the two entries most
@@ -441,11 +437,10 @@ end
 --- @param subcommand string
 --- @param arg number? -- absolute index for 'goto'; a positive STEP size for 'next'/'prev' (defaults to 1 if absent/invalid); unused otherwise
 RegisterNetEvent('qbx_k9unit:client:boneToolCommand', function(subcommand, arg)
-    -- SOURCE-ORIGIN GUARD (coder-security precedent — see
-    -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup, not
-    -- re-derived here). Confidence: MEDIUM-HIGH, the official documented
-    -- pattern, not independently verified in-engine this pass.
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup, not re-derived here). Confidence: MEDIUM-HIGH, the official
+    -- documented pattern, not independently verified in-engine.
     if source ~= 65535 then return end
 
     -- FEATURE GATE — this handler must never fire real effects while the

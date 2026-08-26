@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/hud.lua
 
-    Phase 4 (coder-ui/coder-backend handoff). Config.Features.HealthStaminaHUD
+    Phase 4. Config.Features.HealthStaminaHUD
     gate (currently `false` in config.lua — this file registers NOTHING at
     all while that stays false, see the gating note below). DEVELOPER_REFERENCE.md §6.6
     first bullet: "NUI HUD displays health, stamina, hunger, and thirst for
@@ -56,14 +56,13 @@
     ======================================================================
 
     ======================================================================
-    WELLBEING / XP TIER EXTENSION — added this pass. Same message action,
-    same single combined push (`hud:updateVitals`) as above — no new
-    action name, no second message, per the same "never split, so a
-    dropped message can't desync fields" rationale the original four
-    vitals already follow. The payload's `data` object gains two new keys,
-    ALWAYS present as tables (possibly with some/all of their own keys
-    absent), sent alongside `visible`/health/stamina/hunger/thirst on
-    every push:
+    WELLBEING / XP TIER EXTENSION. Same message action, same single
+    combined push (`hud:updateVitals`) as above — no new action name, no
+    second message, per the same "never split, so a dropped message can't
+    desync fields" rationale the original four vitals already follow. The
+    payload's `data` object gains two new keys, ALWAYS present as tables
+    (possibly with some/all of their own keys absent), sent alongside
+    `visible`/health/stamina/hunger/thirst on every push:
 
         data.wellbeing = {
           fatigue    = <number 0-100>,  -- KEY ABSENT unless Config.Features.FatigueSystem
@@ -80,11 +79,11 @@
     A key's ABSENCE (not a zeroed/false/empty-string value) is how a
     disabled feature — or, for xpTier.label, a not-yet-known tier — is
     signaled. html/app.js must render that element as genuinely gone from
-    the DOM (its row hidden), never as a blank/zero placeholder, per this
-    task's own "must be absent, not blank or zeroed" requirement. This
-    mirrors the flag-gated inertness client/wellbeing.lua and
-    client/progression.lua already both apply to their OWN gating (a
-    disabled feature's section is inert, not merely quiet).
+    the DOM (its row hidden), never as a blank/zero placeholder — must be
+    absent, not blank or zeroed. This mirrors the flag-gated inertness
+    client/wellbeing.lua and client/progression.lua already both apply to
+    their OWN gating (a disabled feature's section is inert, not merely
+    quiet).
 
     DATA SOURCE — NO NEW SERVER ROUND TRIP, EITHER FOR WELLBEING OR XP:
       - Wellbeing (fatigue/mood/fearStress/injury/distracted): this file
@@ -164,8 +163,8 @@
     "...or nearby" (a handler seeing their PARTNER K9's vitals) is
     explicitly OUT OF SCOPE here per design note §6 — this file only ever
     reads/pushes the LOCAL player's own vitals, gated on the LOCAL
-    player's own CanShowK9UI(). Flagged for coder-ui/coder-architect to
-    resolve separately, not decided or half-built here.
+    player's own CanShowK9UI(). Flagged to resolve separately, not decided
+    or half-built here.
 
     FOCUS POLICY — NO SetNuiFocus, ANYWHERE, EVER, IN THIS FILE. This is a
     passive, always-visible-while-relevant overlay with zero player-driven
@@ -178,8 +177,7 @@
     STOP and re-decide the whole focus question, not to bolt SetNuiFocus
     onto this file's existing focus-free lifecycle.
 
-    STAMINA NATIVE — CONFIDENCE NOTE, RESOLVED (final native-correctness
-    sweep, this session): this file calls
+    STAMINA NATIVE — CONFIDENCE NOTE, RESOLVED: this file calls
     GetPlayerSprintStaminaRemaining(PlayerId()), which the design note §3
     correctly identifies as existing with range [0.0-100.0], but the
     NAME is misleading — the native tracks sprint EXERTION, rising toward
@@ -189,7 +187,7 @@
     displayed stamina as `100 - GetPlayerSprintStaminaRemaining(...)`. The
     ReadVitals() code below now does the same subtraction so "stamina" on
     the HUD bar means what it says (full when fresh, draining as the K9
-    tires) — see the sweep's own report for the corroborating sources.
+    tires).
 
     HUNGER/THIRST SOURCE — MEDIUM confidence per design note §3: read from
     the already-live `QBX.PlayerData.metadata` client-side cache
@@ -197,12 +195,12 @@
     exactly this, the same source `metadata.k9certified` already reuses —
     see client/main.lua's header for that precedent). The exact field
     names (`hunger`/`thirst`) and 0-100 scale are NOT independently
-    verified against a live qbx_core install this session — confirm with
-    whoever owns the qbx_core integration (coder-architect/coder-backend)
-    before this flag ships enabled. No new server event/callback is added
-    here for this — if the real field names differ, that's a QBX.PlayerData
-    schema fix, not a reason to invent a redundant network round trip for
-    data the client already caches locally.
+    verified against a live qbx_core install — confirm with whoever owns
+    the qbx_core integration before this flag ships enabled. No new server
+    event/callback is added here for this — if the real field names
+    differ, that's a QBX.PlayerData schema fix, not a reason to invent a
+    redundant network round trip for data the client already caches
+    locally.
 
     ONRESOURCESTOP — deliberately NOT added. Contrast client/vision.lua's
     onResourceStop handler, which exists because SetSeethrough/
@@ -252,8 +250,8 @@ local JSON_FORCE_OBJECT_MT = { __jsontype = 'object' }
 -- never re-reads Config.Features.* per field per tick. Independent of
 -- Config.Features.HealthStaminaHUD itself (already guaranteed true, since
 -- this whole file returned early above if it weren't) — these five flags
--- gate each wellbeing ROW independently, per this task's own "gated so
--- each element only appears when its own feature is enabled" requirement.
+-- gate each wellbeing ROW independently, gated so each element only
+-- appears when its own feature is enabled.
 local WELLBEING_ELEMENT_ENABLED = {
     fatigue = Config.Features.FatigueSystem,
     mood = Config.Features.MoodSystem,
@@ -350,10 +348,10 @@ if ANY_WELLBEING_ELEMENT_ENABLED then
 end
 
 --- Clamps a single stat value to the 0-100 range this HUD's payload
---- contract uses for all four fields (design note §3). Refactor pass
---- (dedup/consistency): the four fields below previously clamped via two
---- different idioms (a two-statement if/if pair vs. a single if/elseif) —
---- unified on this one helper so every field clamps identically.
+--- contract uses for all four fields (design note §3). The four fields
+--- below previously clamped via two different idioms (a two-statement
+--- if/if pair vs. a single if/elseif) — unified on this one helper so
+--- every field clamps identically.
 --- @param v number
 --- @return number
 local function clamp01to100(v)
@@ -384,11 +382,10 @@ local function ReadVitals()
     -- RESOLVED" for why this is inverted from the raw native's own value
     -- (the native tracks exertion, rising as the K9 tires, not stamina
     -- remaining).
-    -- qa-tester finding: default to 100.0 (full stamina) when the native
-    -- doesn't return a number, matching the same "never paints as
-    -- starving/depleted" fallback philosophy health/hunger/thirst already
-    -- follow above/below — a malformed read should never look like an
-    -- empty stamina bar.
+    -- Defaults to 100.0 (full stamina) when the native doesn't return a
+    -- number, matching the same "never paints as starving/depleted"
+    -- fallback philosophy health/hunger/thirst already follow above/below
+    -- — a malformed read should never look like an empty stamina bar.
     local staminaRemaining = GetPlayerSprintStaminaRemaining(PlayerId())
     local stamina = type(staminaRemaining) == 'number' and (100.0 - staminaRemaining) or 100.0
     stamina = clamp01to100(stamina)
@@ -414,7 +411,7 @@ end
 --- for any field whose owning Config.Features flag is off. A nil return
 --- here is what ultimately makes that field's KEY ABSENT from the
 --- SendNUIMessage payload (see PushVitals below) — the mechanism behind
---- this task's "must be absent, not blank or zeroed" requirement.
+--- this file's "must be absent, not blank or zeroed" requirement.
 --- @return number|nil fatigue, number|nil mood, number|nil fearStress, number|nil injury, boolean|nil distracted
 local function ReadWellbeingForDisplay()
     local fatigue, mood, fearStress, injury, distracted = nil, nil, nil, nil, nil
@@ -578,17 +575,17 @@ CreateThread(function()
         -- CanShowK9UI()/HasK9Access() call site in this codebase already
         -- relies on for exactly this reason (every radial item's
         -- onSelect, client/vehicle.lua's canInteract).
-        -- Per-person block (client/featureblocks.lua, REQUESTED -- see
-        -- that file's header for the full contract). Folded directly into
-        -- `canShow` -- this poll thread already re-derives `canShow` fresh
-        -- every tick (see this thread's own header comment), so a block
-        -- applied while the HUD is currently showing hides it on the very
-        -- next tick (<= HUD_POLL_TICK_MS), the same "already-active effect
+        -- Per-person block (client/featureblocks.lua -- see that file's
+        -- header for the full contract). Folded directly into `canShow`
+        -- -- this poll thread already re-derives `canShow` fresh every
+        -- tick (see this thread's own header comment), so a block applied
+        -- while the HUD is currently showing hides it on the very next
+        -- tick (<= HUD_POLL_TICK_MS), the same "already-active effect
         -- reacts live" property this resource's other continuous-display
         -- features get from their own already-existing poll loops. Hiding
         -- a passive, read-only display is never a "trap" (there is no
         -- exit path to strand anyone from) -- unlike every gated ability
-        -- elsewhere in this pass, this one needs no separate
+        -- elsewhere in this resource, this one needs no separate
         -- initiation-vs-termination split.
         local canShow = CanShowK9UI()
             and not (type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('HealthStaminaHUD'))
