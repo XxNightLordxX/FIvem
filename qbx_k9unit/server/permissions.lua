@@ -1235,10 +1235,45 @@ function HasPermission(citizenid, permissionKey)
     if type(citizenid) ~= 'string' or citizenid == '' then return false end
     if not IsValidPermissionKey(permissionKey) then return false end
 
-    if permissionKey:match('^block%.')
-        and type(K9Store) == 'table' and type(K9Store.IsDatabaseEnabled) == 'function'
-        and not K9Store.IsDatabaseEnabled('k9_permissions') then
-        return true
+    -- BLOCKS FAIL CLOSED, ON BOTH WAYS OF NOT KNOWING.
+    --
+    -- Losing a positive grant fails safe -- someone loses access they had.
+    -- Losing a NEGATIVE grant fails OPEN -- someone an admin specifically
+    -- barred gets it back, silently, while everything else looks healthy.
+    -- So for the block namespace only, "cannot tell" must mean "blocked".
+    --
+    -- There are TWO distinct ways of not knowing, and only the first used
+    -- to be covered:
+    --   1. The table is memory-only for this whole session -- database off,
+    --      per-table fallback, or a schema collision. Decided once at boot.
+    --   2. The table is genuinely database-backed and healthy, but THIS
+    --      citizenid's own read failed transiently -- a dropped connection,
+    --      a busy pool -- and nothing was ever cached for them. Someone
+    --      connecting during a brief outage lands here.
+    -- Case 2 fell through to the ordinary cache-miss path below and
+    -- returned false: a real, still-active block silently stopped applying
+    -- for the length of the outage. A regression pass reproduced it by
+    -- granting a block, disconnecting to clear the warm entry, then
+    -- reconnecting with the query throwing.
+    --
+    -- RefreshPermissionCache already tracks case 2 -- it deliberately
+    -- leaves the entry unset rather than manufacturing an empty one, and
+    -- records the citizenid in PermissionCheckUnresolved. That record is
+    -- exactly the signal needed here, and the self-heal sweep clears it as
+    -- soon as a real answer arrives, so this denial is never permanent.
+    --
+    -- Deliberately the OPPOSITE direction to the certification cache, which
+    -- preserves prior state when it cannot check. That looks inconsistent
+    -- and is not: there, the harm is losing access you earned; here, the
+    -- harm is regaining access someone took away.
+    if permissionKey:match('^block%.') and type(K9Store) == 'table' then
+        local dbAccessorAvailable = type(K9Store.IsDatabaseEnabled) == 'function'
+        if dbAccessorAvailable and not K9Store.IsDatabaseEnabled('k9_permissions') then
+            return true -- case 1: memory-only for the session
+        end
+        if PermissionCheckUnresolved[citizenid] == true and PermissionCache[citizenid] == nil then
+            return true -- case 2: this citizenid's own read never resolved
+        end
     end
 
     local set = PermissionCache[citizenid]

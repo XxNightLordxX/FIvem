@@ -1152,6 +1152,48 @@ t.test('MODE: getScentVisionPoints echoes the configured mode back on a successf
     t.equals(result.mode, 'always', 'the echoed mode must match the live server config, not a stale/default guess')
 end)
 
+-- THE LEAK THIS SECTION USED TO STEP AROUND.
+-- Two independent red-team passes reproduced the same thing: `mode` was
+-- resolved only to be echoed back for the client to decide whether to
+-- render, and nothing on the server stopped a query when it was 'off'.
+-- Any certified handler with a modified client could call this callback
+-- directly on the 1s cooldown floor and receive live position trails of
+-- every player in range -- a real-time wallhack, running precisely while
+-- the admin control meant to prevent it was switched on. Background
+-- capture keeps running in 'off' mode by design, so the data was always
+-- fresh and waiting.
+-- The old MODE test below deliberately flipped mode back to 'keybind'
+-- before querying, so this exact case shipped untested. It is tested now.
+t.test('MODE: "off" returns NO points to a direct callback call -- the off switch is enforced on the SERVER, not merely respected by a cooperating client', function()
+    local f = newScentVisionFixture({ trackingOverrides = { mode = 'off' } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+
+    -- Let the capture thread record real, in-range points for the victim.
+    -- They must exist and be fresh -- otherwise this test would pass for
+    -- the wrong reason, proving only that nothing was captured.
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 0, 'a direct call while mode is "off" must return nothing -- the client choosing not to poll is a courtesy, not a boundary, and a modified client does not extend that courtesy')
+    t.equals(result.mode, 'off', 'the echoed mode must still be honest so a cooperating client also stops rendering')
+
+    -- Control: the same fixture, same players, same captured data, with the
+    -- switch on -- proving the zero above is caused by the mode and not by
+    -- an empty capture.
+    local g = newScentVisionFixture({ trackingOverrides = { mode = 'keybind' } })
+    g.registerPlayer(1, 'K9-CID', 100)
+    g.registerPlayer(2, 'SUSPECT-CID', 200)
+    g.setPedCoords(1, 0, 0, 0)
+    g.setPedCoords(2, 5, 0, 0)
+    g.step()
+    g.step()
+    t.isTrue(#g.getScentVisionPoints(1).points > 0, 'control: with mode on, this same setup DOES return points -- so the zero above is the mode, not a fixture quirk')
+end)
+
 t.test('MODE: an unrecognised Config.Tracking.ScentVision.mode falls back to "keybind" and warns once, naming the exact setting', function()
     local f = newScentVisionFixture({ trackingOverrides = { mode = 'bogus-value' } })
     f.registerPlayer(1, 'K9-CID', 100)

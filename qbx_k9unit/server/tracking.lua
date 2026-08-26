@@ -2099,6 +2099,32 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
     end
 
     local svConfig = Config.Tracking.ScentVision or {}
+
+    -- MODE IS A SERVER-SIDE GATE, NOT A CLIENT-SIDE COURTESY.
+    --
+    -- This was a real, reproduced leak. `mode` used to be resolved further
+    -- down purely so it could be echoed back for the client to decide
+    -- whether to render, and client/tracking.lua duly stopped polling when
+    -- it read 'off'. But an operator setting mode = 'off' is switching the
+    -- feature OFF, and config.lua promises exactly that ("nobody sees this
+    -- at all, ever"). Enforcing that only on the client meant any certified
+    -- handler with a modified client could call this callback directly on
+    -- the 1s cooldown floor and receive live, colour-coded position trails
+    -- of every player in range -- a real-time wallhack, precisely while the
+    -- admin control that was supposed to prevent it was switched on.
+    -- Background capture keeps running in 'off' mode by design, so the data
+    -- was always fresh and waiting.
+    --
+    -- Checked BEFORE the query cooldown below is consumed, matching this
+    -- file's own established ordering: a refusal must never burn a
+    -- cooldown slot for a request that was never going to be answered.
+    -- This file's header already promised a trust boundary on the RANGE and
+    -- POPULATION axes; the mode axis is new and the promise now covers it
+    -- too.
+    if ResolveScentVisionMode(svConfig.mode) == 'off' then
+        return { points = {}, mode = 'off' }
+    end
+
     local now = GetGameTimer()
     local cooldownMs = ResolveConfiguredThresholdMs(svConfig.queryCooldownMs, 1000, 'Config.Tracking.ScentVision.queryCooldownMs')
     if not ScentVisionQueryCooldown.Consume(source, cooldownMs, now) then

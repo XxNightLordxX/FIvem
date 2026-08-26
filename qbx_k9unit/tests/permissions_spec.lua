@@ -2841,4 +2841,49 @@ t.test('MEMORY-MODE BLOCK ASYMMETRY: a DIFFERENT resource starting is ignored en
     -- warning fired for someone else's restart".
 end)
 
+
+-- THE SECOND WAY OF NOT KNOWING, which the first fail-closed fix missed.
+-- That fix covered "this table is memory-only for the session", decided
+-- once at boot. It did not cover "the table is healthy, but THIS person's
+-- own read just failed and nothing was ever cached for them" -- someone
+-- connecting during a brief outage. A regression pass reproduced a real,
+-- still-active block silently ceasing to apply for the length of it.
+t.test('BLOCK FAIL-CLOSED, TRANSIENT CASE: an active block still applies when this citizenid\'s own read fails on an otherwise-healthy table', function()
+    local f = newFixture({ isHighCommand = function(src) return src == 900 end })
+    local hcSrc = 900
+    f.registerPlayer(hcSrc, 'HC1', { name = 'police', grade = { level = 9 } })
+    f.registerPlayer(601, 'CND1', { name = 'police', grade = { level = 1 } })
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND1', source = 601, job = { name = 'police' } } })
+
+    f.env.GrantPermission(hcSrc, 'CND1', 'block.BiteAndHold')
+    t.isTrue(f.env.HasPermission('CND1', 'block.BiteAndHold'), 'precondition: the block is real and applies while the database is healthy')
+
+    -- Disconnect clears the warm entry; the block row itself is untouched
+    -- in the database, exactly as a real reconnect would leave it.
+    f.firePlayerDropped(601)
+    f.registerPlayer(601, 'CND1', { name = 'police', grade = { level = 1 } })
+
+    local realQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('SELECT permission FROM k9_permissions', 1, true) then error('connection lost') end
+        return realQueryAwait(sql, params)
+    end
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND1', source = 601, job = { name = 'police' } } })
+
+    t.isTrue(f.env.HasPermission('CND1', 'block.BiteAndHold'),
+        'a block whose read could not be resolved must still apply -- returning "not blocked" here hands someone back access an admin deliberately took away, silently, while every other table looks healthy')
+
+    -- The opposite namespace must NOT be dragged along: an unresolved read
+    -- may never GRANT anything. Only blocks fail closed.
+    t.isFalse(f.env.HasPermission('CND1', 'k9.access'),
+        'an unresolved read must never manufacture a positive grant -- only the block namespace inverts')
+
+    -- And the denial must not be permanent: once a real answer arrives the
+    -- normal rules resume, so the self-heal sweep genuinely recovers this.
+    f.mysql.query.await = realQueryAwait
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'CND1', source = 601, job = { name = 'police' } } })
+    t.isTrue(f.env.HasPermission('CND1', 'block.BiteAndHold'), 'after recovery the real block is read back normally')
+    t.isFalse(f.env.HasPermission('OTHER-CID', 'block.BiteAndHold'), 'someone with no block and a healthy resolved read is not blocked -- the fix must not deny everyone')
+end)
+
 os.exit(t.summary())

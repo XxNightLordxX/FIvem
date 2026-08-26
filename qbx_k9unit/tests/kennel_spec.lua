@@ -653,7 +653,20 @@ t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDep
         return
     end
 
-    t.isTrue(text:find('XP_MINT_COOLDOWN', 1, true) ~= nil,
+    -- THIS CHECK USED TO BE A BARE SUBSTRING SEARCH, AND IT COULD NEVER FIRE.
+    -- It looked for 'XP_MINT_COOLDOWN' anywhere in the file -- but the
+    -- doc-comment in server/kennel.lua that explains this very requirement
+    -- contains the words "*_XP_MINT_COOLDOWN tracker", so the search was
+    -- permanently pre-satisfied by its own documentation. A regression pass
+    -- proved it by wiring the guarded-against award and watching this test
+    -- still report PASS.
+    -- It now requires a real DECLARATION -- a cooldown tracker actually
+    -- constructed via NewCooldown() whose name follows the
+    -- CertifyXpMintCooldown precedent in server/certifications.lua. Prose
+    -- cannot satisfy that. The test directly below proves this pattern
+    -- rejects a comment and accepts a real declaration, so a future edit
+    -- cannot quietly defeat it again.
+    t.isTrue(text:find('local%%s+[%%w_]*XpMintCooldown%%s*=%%s*NewCooldown') ~= nil,
         'handlerKennelDeploy is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-actor mint cooldown (a second, separate tracker, never DeployCooldown itself, now ' ..
         'handler-rank-shortened to a 3000ms worst-case floor) named with the XP_MINT_COOLDOWN convention ' ..
@@ -2298,6 +2311,37 @@ t.test('CROSS-FEATURE: a legitimate kennel confirm is entirely unaffected by an 
     -- server/kennel.lua's own header CRITICAL SAFETY section.
     t.isNil(f.deletedEntities[handle])
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+
+-- PROOF THAT THE TRIPWIRE ABOVE CAN ACTUALLY FIRE.
+-- The previous version of that test could not, ever: it searched for a
+-- bare substring that its own subject file's documentation contained, so
+-- it reported PASS even with the guarded-against award wired in. A
+-- guardrail nobody has watched fail is not a guardrail. This test runs the
+-- exact pattern the tripwire uses against three fabricated inputs, so the
+-- pattern's discriminating power is itself checked rather than assumed.
+t.test('TRIPWIRE SELF-CHECK: the mint-cooldown pattern rejects prose and accepts only a real NewCooldown declaration', function()
+    local pattern = 'local%s+[%w_]*XpMintCooldown%s*=%s*NewCooldown'
+
+    local proseOnly = [[
+        -- Never award handlerKennelDeploy from this file without a companion
+        -- *_XP_MINT_COOLDOWN tracker also present here.
+    ]]
+    t.isNil(proseOnly:find(pattern),
+        'a doc-comment mentioning XP_MINT_COOLDOWN must NOT satisfy the tripwire -- this exact prose is what defeated the previous substring version')
+
+    local constantOnly = [[
+        local SOMETHING_XP_MINT_COOLDOWN_MS = 86400000
+    ]]
+    t.isNil(constantOnly:find(pattern),
+        'a bare _MS constant is not a tracker -- it holds a duration, it does not gate anything, so it must not satisfy the tripwire either')
+
+    local realDeclaration = [[
+        local TreatXpMintCooldown = NewCooldown()
+    ]]
+    t.isNotNil(realDeclaration:find(pattern),
+        'a genuine per-actor tracker built with NewCooldown(), following server/certifications.lua CertifyXpMintCooldown precedent, MUST satisfy the tripwire -- otherwise the guard blocks legitimate work')
 end)
 
 os.exit(t.summary())
