@@ -277,9 +277,13 @@ Work through all of these first:
   to be used from. (High command can also add/move/remove supply shop
   locations later from the tablet, without touching this file again.)
 - **Create these items in your inventory script** — none exist on a
-  fresh install, and a missing one doesn't error, it just silently
-  never works: `k9_medkit`, `k9_treat`, `k9_meat_bait`,
-  `k9_ultrasonic_whistle`, and `k9_tablet` **only if** you set
+  fresh install. A missing one doesn't error; for a player it simply
+  never works, with nothing on screen explaining why. (The supply shop
+  is the exception: it prints a console warning naming any item it was
+  asked to sell that your inventory doesn't have, so check the server
+  console after a restart.) The items: `k9_medkit`, `k9_treat`,
+  `k9_meat_bait`, `k9_ultrasonic_whistle`, and `k9_tablet` **only if**
+  you set
   `Config.CommandTablet.openMode` to `'item'` or `'both'` (default is
   `'both'`, so you need it either way unless you change that).
 - **A `water_bowl`-modeled world object**, if you want the K9 wellbeing

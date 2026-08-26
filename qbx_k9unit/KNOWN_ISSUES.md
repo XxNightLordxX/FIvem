@@ -242,6 +242,19 @@ designed but have an edge worth knowing about before you rely on them.
   to support them. Confirming any of the five would need a live install to
   test against, not more reading.
 
+- **A search-and-rescue call cannot be worked jointly by two officers at
+  all.** The broader version of the point below, and the one more likely to
+  surprise an organised unit: the whole mechanic belongs to the one officer
+  who started it. There is no shared call, no way to assign or join one,
+  and nothing that shows another officer's hunt to anyone else — every hint
+  goes only to the officer who asked for it. A second officer starting a
+  call does not help with the first one; they get their own, independent
+  hidden target somewhere else. Two officers who think they are searching
+  together are in fact running two unrelated searches. Nothing is broken —
+  it was built one-officer-at-a-time — but nothing said so either, and a
+  server running organised K9 roleplay with several people on duty is
+  exactly where it will come up.
+
 - **Search-and-rescue "found" reveal is visible only to the officer who
   found it**, not to other officers nearby. Deliberate — it avoids a class
   of ghost-entity bug — but worth knowing if you expect a whole team to

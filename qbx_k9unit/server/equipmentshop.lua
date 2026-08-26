@@ -262,20 +262,29 @@
     never assumed) so a server that has not yet added them sees a clean,
     silent no-op -- not an error, not a stub with garbage data.
 
-    FXMANIFEST.LUA PLACEMENT REQUESTED (server_scripts, not edited here):
-    insert `'server/equipmentshop.lua',` after `'server/medkit.lua',` and
-    before `'server/wellbeing.lua',` -- no load-order requirement of its own
-    (this file calls no other file's resource-global, and nothing calls
-    into this one), grouped there purely for readability alongside the
-    other Phase 4 item-consuming features it shares placeholder item names
-    with.
+    FXMANIFEST.LUA PLACEMENT: DONE. This file is registered in
+    server_scripts, and its client half in client_scripts. (This paragraph
+    used to read "PLACEMENT REQUESTED ... not edited here", which stopped
+    being true once the request was carried out and then sat here reading
+    like an outstanding task.) No load-order requirement of its own -- this
+    file calls no other file's resource-global on load, and nothing calls
+    into this one -- so it is grouped alongside the other item-consuming
+    features purely for readability.
 
-    LOCALE: none needed. This file's own console warnings are operator-
-    facing (server console), never player-facing -- matching
-    server/wellbeing.lua's own WarnIfItemMissing, which uses plain `print`,
-    not `locale()`. Every PLAYER-facing string in the actual shop UI (item
-    names, "cannot afford", etc.) is already ox_inventory's own, out of this
-    resource's scope entirely.
+    LOCALE: THIS FILE NOW OWNS SIX PLAYER-FACING KEYS, and this paragraph
+    used to claim it owned none. Its console warnings are still operator-
+    facing plain `print`, matching server/wellbeing.lua's own
+    WarnIfItemMissing -- that part was and remains true. What changed is the
+    REFUSAL messages: telling somebody why they cannot use the shop
+    (equipmentshop.feature_disabled / not_granted / blocked_from_shop /
+    requires_tier / requires_specialization / cannot_open_on_this_inventory)
+    is squarely player-facing and squarely this file's business, since only
+    this file knows which of those three quite different reasons applies.
+
+    What genuinely IS still out of scope, and always was: the strings inside
+    the actual shop UI -- item names, "you cannot afford that", "no room" --
+    which belong to whichever inventory the server runs, not to this
+    resource.
 ]]
 
 -- ======================================================================
