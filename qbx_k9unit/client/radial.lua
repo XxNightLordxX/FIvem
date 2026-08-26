@@ -1812,3 +1812,25 @@ end)
 AddEventHandler('qbx_k9unit:client:featureBlocksApplied', function()
     RegisterK9RadialMenu()
 end)
+
+-- LEASH STATE CHANGED -- the missing half of a contract client/movement.lua
+-- has been holding up on its own. That file fires a purely LOCAL
+-- 'qbx_k9unit:client:leashStateChanged' every time leashState flips, for
+-- exactly one reason: so this file re-runs RegisterK9RadialMenu() and the
+-- Attach/Detach Leash item re-evaluates IsLeashed() right then.
+--
+-- Until now no such listener existed here. Both that item's own comment and
+-- client/movement.lua's comment CLAIMED the pairing was in place, and both
+-- were wrong -- the menu was in fact only ever rebuilt by 'onResourceStart'
+-- and 'qbx_k9unit:client:featureBlocksApplied' above. The practical effect:
+-- a player who got leashed on a server booted with LeashMechanics off saw
+-- no Detach item until something unrelated happened to rebuild the menu,
+-- and had to discover the walk-away safety valve by accident instead.
+--
+-- Same "safe to call often" reasoning as the handler directly above: every
+-- registration inside RegisterK9RadialMenu() REPLACES the previous one in
+-- place rather than duplicating it, and a leash attach/detach is a rare
+-- event, not a per-tick one.
+AddEventHandler('qbx_k9unit:client:leashStateChanged', function()
+    RegisterK9RadialMenu()
+end)

@@ -333,6 +333,18 @@ local function newRadialFixture(opts)
         end
     end
 
+    --- Fires client/movement.lua's own local
+    --- `qbx_k9unit:client:leashStateChanged` re-broadcast, the same way
+    --- fireFeatureBlocksApplied above drives client/featureblocks.lua's.
+    --- That file fires this every time leashState flips, purely so this
+    --- file rebuilds the menu and the Attach/Detach Leash item
+    --- re-evaluates IsLeashed() right then.
+    local function fireLeashStateChanged()
+        for _, handler in ipairs(eventHandlers['qbx_k9unit:client:leashStateChanged'] or {}) do
+            handler()
+        end
+    end
+
     -- FindNearestLeashCandidate/FindNearestPartnerCandidate's natives.
     local myPed = 1
     local pedCoords = { [1] = vec3(0, 0, 0) }
@@ -565,6 +577,8 @@ local function newRadialFixture(opts)
         setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
         denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
         fireFeatureBlocksApplied = fireFeatureBlocksApplied,
+        fireLeashStateChanged = fireLeashStateChanged,
+        leashStateChangedHandlerCount = function() return #(eventHandlers['qbx_k9unit:client:leashStateChanged'] or {}) end,
         featureBlocksAppliedHandlerCount = function() return #(eventHandlers['qbx_k9unit:client:featureBlocksApplied'] or {}) end,
     }
 end
@@ -1703,6 +1717,37 @@ end)
 t.test('the qbx_k9unit:client:featureBlocksApplied listener is registered exactly once per fixture, alongside the existing onResourceStart dispatcher', function()
     local f = newRadialFixture()
     t.equals(f.featureBlocksAppliedHandlerCount(), 1)
+end)
+
+-- THE MISSING LISTENER. client/movement.lua has fired
+-- 'qbx_k9unit:client:leashStateChanged' on every leash state flip for some
+-- time, and BOTH that file's comment and this file's Attach/Detach Leash
+-- item claimed the pairing existed -- but no AddEventHandler for it was ever
+-- written here. The menu was in fact only rebuilt by 'onResourceStart' and
+-- 'qbx_k9unit:client:featureBlocksApplied', so a player who got leashed saw
+-- no Detach item until something unrelated happened to rebuild the menu, and
+-- had to find the walk-away safety valve by accident instead.
+--
+-- Two comments describing a mechanism that did not exist is exactly why both
+-- assertions below are written against observable behaviour -- a registered
+-- handler, and a menu that actually gets rebuilt -- rather than against
+-- either comment.
+t.test('LEASH LISTENER: this file registers a handler for client/movement.lua\'s leashStateChanged re-broadcast -- the pairing both files\' comments claimed, now real', function()
+    local f = newRadialFixture()
+    t.isTrue(f.leashStateChangedHandlerCount() >= 1, 'client/movement.lua fires this event on every leash flip purely so this file rebuilds the menu; with no handler here that event goes nowhere and the Detach item never refreshes')
+end)
+
+t.test('LEASH LISTENER: firing leashStateChanged genuinely re-runs RegisterK9RadialMenu -- a leash acquired after load makes Detach reachable with no resource restart', function()
+    local f = newRadialFixture()
+
+    -- Wipe ox_lib's own registries, exactly as its restart would, so the
+    -- only way anything can be registered again is a real rebuild.
+    f.wipeOxLibRadialState()
+    t.equals(#f.registerRadialOrder(), 0, 'precondition: nothing registered after the wipe')
+
+    f.fireLeashStateChanged()
+
+    t.isTrue(#f.registerRadialOrder() > 0, 'the event must actually re-run RegisterK9RadialMenu(), not merely be listened for -- a handler that registers nothing is the same bug with extra steps')
 end)
 
 os.exit(t.summary())
