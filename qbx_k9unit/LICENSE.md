@@ -30,7 +30,12 @@ terms of a licence already granted under an earlier version (see §13,
 
 **This is not open source.** You may run it on the server(s) covered by
 your licence. You may not give it away, sell it, sublicense it, publish
-it, or pass it on to anyone else — modified or not, renamed or not.
+it, or pass it on to anyone else — modified or not, renamed or not. You
+may not lift any part of the code and use it in something else.
+
+**If you break that, you will be pursued for it.** And if the Licensor has
+to pay lawyers to make you stop, you pay for those lawyers as well —
+that is §10, and it is meant literally.
 
 If you only read one section, read that one. Everything below says the
 same thing with the precision a licence needs, and covers questions people
