@@ -46,48 +46,62 @@
     WINNING, UNCONDITIONALLY. THIS FILE DOES NOT TOUCH THAT.
 
     server/combat.lua's `IsTargetDowned` and server/defense.lua's
-    `IsHandlerDown` are this session's own DO-NOT-EDIT list (per the task
-    that produced this file) -- and even without that restriction, this
-    file would not touch them: `Config.Compat`'s own comment (config.lua,
-    directly above the `ambulance` candidates block) makes an explicit
-    promise to an operator who already wrote an `IsPlayerDownedOverride`:
-    "That hook was the original answer to this problem and is not being
-    retired -- if you already wrote one, it keeps working exactly as
-    before." This file is built so that promise is trivially kept BY
-    CONSTRUCTION, not by convention: neither `server/combat.lua` nor
-    `server/defense.lua` calls anything in `K9Compat` today, at all -- so
-    an operator's existing override is, right now, the ONLY thing either
-    file ever consults for this question, exactly as it was before this
-    file existed. Nothing here changes that.
+    `IsHandlerDown` were this session's own DO-NOT-EDIT list at the time
+    THIS file was first written (per the task that produced it) -- and
+    even without that restriction, this file would not have touched them
+    directly: `Config.Compat`'s own comment (config.lua, directly above
+    the `ambulance` candidates block) makes an explicit promise to an
+    operator who already wrote an `IsPlayerDownedOverride`: "That hook was
+    the original answer to this problem and is not being retired -- if you
+    already wrote one, it keeps working exactly as before."
 
-    THE FOLLOW-UP THIS FILE ENABLES BUT DOES NOT PERFORM: if a future pass
-    over `server/combat.lua`/`server/defense.lua` wants to consult this
-    adapter as a FALLBACK (never a replacement) for their own best-effort
-    `metadata.isdead`/`metadata.inlaststand` default -- the one their own
-    header comments already disclose as "a CLIENT-self-reported flag ...
-    not a server-verified state machine" -- the resolution order that
-    follow-up MUST use, to keep the existing promise intact, is:
+    STALE CLAIM CORRECTED (compat-layer audit pass, 2026-08-26): this
+    section used to say "neither `server/combat.lua` nor `server/
+    defense.lua` calls anything in `K9Compat` today, at all" and described
+    the resolution order below as a FOLLOW-UP THIS FILE ENABLES BUT DOES
+    NOT PERFORM. That stopped being true once a later pass actually wired
+    both callers up -- confirmed by reading both files directly, this
+    pass, not assumed from a prior note: server/combat.lua's
+    `IsTargetDowned` (its own doc comment, "COMPAT-LAYER (this pass)") and
+    server/defense.lua's `IsHandlerDown` (its own doc comment, "COMPAT-
+    LAYER (this pass): when no override is configured...") each now call
+    `K9Compat.Get('ambulance').IsDowned(src)` as a FALLBACK -- never a
+    replacement -- for their own pre-existing best-effort
+    `metadata.isdead`/`metadata.inlaststand` default (the one their own
+    header comments already disclosed as "a CLIENT-self-reported flag ...
+    not a server-verified state machine"), in EXACTLY the resolution order
+    this section always specified:
 
         1. `Config.Combat.PropDragging.IsPlayerDownedOverride`, if it is a
-           function -- call it, exactly as today. Its answer wins,
-           unconditionally, whatever this file would have said.
-        2. ONLY if that override is `nil` (not configured at all): consult
-           `K9Compat.Get('ambulance').IsDowned(src)`. Treat its `true` as
-           "downed," its `false` as "not downed," and its `nil` (UNKNOWN)
-           by falling through to step 3 -- NEVER by treating `nil` as
-           either boolean.
+           function -- called FIRST in both files, exactly as before this
+           adapter existed. Its answer wins, unconditionally, whatever
+           this adapter would have said; neither file's new code path
+           below is even reachable unless this returns `nil` (not
+           configured at all).
+        2. Only then: both files now consult
+           `K9Compat.Get('ambulance').IsDowned(src)`. A `true` short-
+           circuits to "downed" in both callers. A `false` short-circuits
+           to "not downed" in `IsTargetDowned` (which has no OR to
+           preserve) but, DELIBERATELY, only skips the metadata HALF
+           (never the raw-health-threshold half) of `IsHandlerDown`'s own
+           OR -- see that function's own doc comment for the two reasons
+           this divergence from `IsTargetDowned` is correct, not an
+           inconsistency. Its `nil` (UNKNOWN) falls through to step 3 in
+           BOTH callers -- never treated as either boolean, in either
+           file.
         3. The existing `metadata.isdead == true or metadata.inlaststand
-           == true` best-effort guess, exactly as today, as the final
-           fallback.
+           == true` best-effort guess (OR'd with a raw health-threshold
+           check in `IsHandlerDown` specifically), exactly as before this
+           adapter existed, as the final fallback.
 
-    This ordering is documented here, in the adapter file, rather than
-    silently assumed by whoever writes that follow-up, precisely because
-    getting steps 1 and 2 swapped would silently break the "your override
-    keeps winning" promise for every operator who already relies on it.
-    This file's own registration message to the team (see this pass's
-    hand-off) flags this exact follow-up to whoever owns those two files
-    next, rather than this pass quietly assuming it will happen correctly
-    on its own.
+    Both callers use a bare `K9Compat.Get('ambulance').IsDowned(...)` call
+    with no extra `pcall`/`type` guard around it -- correct, per
+    core.lua's own NEVER-NIL, NEVER-THROWS contract, and consistent with
+    every other bare `K9Compat.Get` call site in this resource. This
+    ordering stays documented here, in the adapter file, rather than only
+    in the two consuming files, precisely because getting steps 1 and 2
+    swapped in either caller would silently break the "your override keeps
+    winning" promise for every operator who already relies on it.
 
     ======================================================================
     SECURITY: `IsDowned` NEVER GRANTS PERMISSION -- CONFIRMED, HERE'S HOW.

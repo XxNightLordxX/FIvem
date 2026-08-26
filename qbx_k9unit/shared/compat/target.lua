@@ -354,10 +354,23 @@ end
 --     `AddCircleZone(name, center, radius, options, targetoptions)`
 --     (CONFIRMED, `registration.lua`), where `targetoptions.distance`
 --     acts as a fallback/ceiling for any option missing its own
---     `.distance` -- this resource's one sphere-zone call site
---     (client/equipmentshop.lua) sets no per-option distance at all, so
---     `MaxDistance` falling back to the zone's own radius preserves the
---     intended interaction range.
+--     `.distance`. STALE CLAIM CORRECTED (compat-layer audit pass,
+--     2026-08-26): an earlier revision of this comment named
+--     client/equipmentshop.lua as "this resource's one sphere-zone call
+--     site" with no per-option distance set. That stopped being true when
+--     that file's shop-attendant ped feature was rebuilt around a real,
+--     visible ped and `AddLocalEntity` instead of a bare zone -- see this
+--     file's own header, "A REAL PED, NOT A BARE SPHERE," and
+--     client/equipmentshop.lua's own header for the history. `AddSphereZone`/
+--     `Remove` remain full, required, tested contract methods (core.lua's
+--     RequiredMethods.target.client, exercised by tests/compattarget_spec.lua)
+--     and this factory still implements them faithfully -- but as of this
+--     pass NEITHER has a real call site anywhere in this resource's own
+--     client code. `MaxDistance` falling back to the zone's own radius
+--     (rather than a smaller per-option default) is this factory's own
+--     general-purpose translation behaviour for whatever future caller
+--     needs a real zone on this backend, not something a current call
+--     site's own zero-distance options exercises.
 --   * Removal is by label (`RemoveGlobalPlayer`/`RemoveGlobalVehicle`/
 --     `RemoveGlobalObject`/`RemoveTargetModel` all take a label or label
 --     array) and by the generated zone name (`RemoveZone`), both CONFIRMED
@@ -808,10 +821,18 @@ end
 -- 2m if unset) -- there is no separate "zone radius" distinct from the
 -- per-option distance the way ox_target's addSphereZone has. Bridged by
 -- injecting `data.radius` as each translated option's `.distance` when
--- the option does not already specify its own (this resource's one
--- sphere-zone call site, client/equipmentshop.lua, sets no per-option
--- distance, so this preserves its configured 1.5m radius instead of
--- silently falling back to sleepless_interact's own 2m default).
+-- the option does not already specify its own. STALE CLAIM CORRECTED
+-- (compat-layer audit pass, 2026-08-26): an earlier revision of this
+-- comment named client/equipmentshop.lua as "this resource's one
+-- sphere-zone call site," with a fixed 1.5m radius and no per-option
+-- distance, as the reason this bridging matters in practice. That stopped
+-- being true when that file's shop-attendant ped feature was rebuilt
+-- around a real, visible ped and `AddLocalEntity` instead of a bare zone
+-- (see this file's own header, "A REAL PED, NOT A BARE SPHERE") --
+-- `AddSphereZone` currently has no real caller anywhere in this resource;
+-- this bridging behaviour is exercised only by tests/compattarget_spec.lua
+-- today, kept correct and faithful for whichever future caller needs a
+-- real sphere zone on this backend.
 -- ======================================================================
 local function SleeplessInteractFactory(realm)
     local RESOURCE = 'sleepless_interact'
