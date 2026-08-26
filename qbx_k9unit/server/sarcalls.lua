@@ -310,30 +310,85 @@ assert(type(tuning) == 'table',
     '[qbx_k9unit] Config.SARCalls must be a table when Config.Features.SARCalls is true -- this file reads ' ..
     'minRadius/maxRadius/arrivalRadius/burningDistance/hotDistance/warmDistance/pollIntervalMs/' ..
     'maxCallDurationMs/startCooldownMs from it unconditionally once the feature flag is on.')
-assert(type(tuning.minRadius) == 'number' and tuning.minRadius > 0,
-    '[qbx_k9unit] Config.SARCalls.minRadius must be a positive number -- this is the ONE value that guarantees ' ..
-    'real travel distance for every SAR call regardless of how fast requests are repeated (see this file\'s own ' ..
-    '"XP ARITHMETIC" section) -- a non-positive value would let a call spawn its hidden target on top of the requester.')
-assert(type(tuning.maxRadius) == 'number' and tuning.maxRadius >= tuning.minRadius,
-    '[qbx_k9unit] Config.SARCalls.maxRadius must be a number >= Config.SARCalls.minRadius.')
-assert(type(tuning.arrivalRadius) == 'number' and tuning.arrivalRadius > 0,
-    '[qbx_k9unit] Config.SARCalls.arrivalRadius must be a positive number -- the server-authoritative "found" distance.')
-assert(type(tuning.burningDistance) == 'number' and tuning.burningDistance > tuning.arrivalRadius,
-    '[qbx_k9unit] Config.SARCalls.burningDistance must be a number greater than Config.SARCalls.arrivalRadius -- ' ..
-    'the officer must be able to reach the "burning" hint tier before actually arriving, or the hint feed jumps ' ..
-    'straight from silence to "found" with no warning tier in between.')
-assert(type(tuning.hotDistance) == 'number' and tuning.hotDistance > tuning.burningDistance,
-    '[qbx_k9unit] Config.SARCalls.hotDistance must be a number greater than Config.SARCalls.burningDistance.')
-assert(type(tuning.warmDistance) == 'number' and tuning.warmDistance > tuning.hotDistance,
-    '[qbx_k9unit] Config.SARCalls.warmDistance must be a number greater than Config.SARCalls.hotDistance.')
-assert(type(tuning.pollIntervalMs) == 'number' and tuning.pollIntervalMs > 0,
-    '[qbx_k9unit] Config.SARCalls.pollIntervalMs must be a positive number -- passed directly to Wait() in this ' ..
-    'file\'s own tick thread below; a non-positive value would poll needlessly tightly for a feature whose hint ' ..
-    'cadence has no reason to be per-frame.')
-assert(type(tuning.maxCallDurationMs) == 'number' and tuning.maxCallDurationMs > 0,
-    '[qbx_k9unit] Config.SARCalls.maxCallDurationMs must be a positive number -- the hard, unconditional expiry ' ..
-    'every active call is measured against regardless of whether anyone completes it (see this file\'s own ' ..
-    '"NO UNBOUNDED TRAP" section). A non-positive value here would make every call expire the instant it starts.')
+
+-- ======================================================================
+-- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
+-- header ADDENDUM: "does an operator's config.lua edit alone... reach this
+-- value? If yes it must be clamped and warned about, never asserted and
+-- aborted"). The eight fields below USED TO be eight separate hard
+-- `assert`s here -- each one correctly diagnosing a real risk (a bad
+-- radius/distance could invert RollSarTarget's ring math or TierForDistance's
+-- ordering; a bad duration could busy-poll or never expire a call) but with
+-- the wrong remedy: an uncaught error thrown from THIS FILE's own top-level
+-- chunk aborts server/sarcalls.lua's load from that line onward -- silently
+-- un-registering the playerDropped handler, the tick loop, the
+-- requestSarCall callback, and the UNCONDITIONAL abandonSarCall event this
+-- file's own header calls a "NO UNBOUNDED TRAP" guarantee, over one
+-- operator typo. startCooldownMs (a few lines below) was already migrated to
+-- ResolveConfiguredThresholdMs in an earlier pass -- these eight siblings
+-- were missed only because none of them feed NewCooldown, not because the
+-- risk was any different.
+--
+-- Two of these eight are RELATIONSHIPS, not independent values -- clamping
+-- one field in a related pair/chain without checking the others could
+-- silently produce an internally-inconsistent set worse than any single bad
+-- number alone (e.g. raising an invalid minRadius up past an operator's
+-- own, individually-fine maxRadius would silently invert the ring
+-- RollSarTarget rolls inside). When a group's relationship is violated,
+-- EVERY field in that group falls back to its own shipped default TOGETHER,
+-- never a mix of kept-and-substituted values:
+--   GROUP 1: minRadius / maxRadius (maxRadius must stay >= minRadius).
+--   GROUP 2: arrivalRadius / burningDistance / hotDistance / warmDistance
+--            (TierForDistance below reads this as an ascending-distance,
+--            descending-intensity chain -- each must stay strictly greater
+--            than the one before it).
+-- pollIntervalMs and maxCallDurationMs have no relationship to any other
+-- field here, so each is resolved independently through
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua) -- both are genuine
+-- durations (Wait()/a hard elapsed-time expiry) with no legitimate
+-- non-positive meaning, an exact fit for that function's own validity rule.
+-- ======================================================================
+local function IsPositiveNumber(v)
+    return type(v) == 'number' and v == v and v > 0
+end
+
+-- GROUP 1: minRadius/maxRadius.
+if not (IsPositiveNumber(tuning.minRadius) and IsPositiveNumber(tuning.maxRadius) and tuning.maxRadius >= tuning.minRadius) then
+    print(
+        ('[qbx_k9unit] Config.SARCalls.minRadius/maxRadius must both be positive numbers with maxRadius >= ' ..
+         'minRadius (found minRadius=%s, maxRadius=%s) -- RollSarTarget\'s ring math silently inverts otherwise. ' ..
+         'Using the shipped defaults for BOTH fields together (minRadius=40.0, maxRadius=90.0) instead of ' ..
+         'clamping just one into an incoherent pair -- find Config.SARCalls.minRadius/maxRadius in config.lua ' ..
+         'and fix them together.')
+            :format(tostring(tuning.minRadius), tostring(tuning.maxRadius))
+    )
+    tuning.minRadius, tuning.maxRadius = 40.0, 90.0
+end
+
+-- GROUP 2: arrivalRadius/burningDistance/hotDistance/warmDistance.
+if not (
+    IsPositiveNumber(tuning.arrivalRadius) and IsPositiveNumber(tuning.burningDistance) and
+    IsPositiveNumber(tuning.hotDistance) and IsPositiveNumber(tuning.warmDistance) and
+    tuning.burningDistance > tuning.arrivalRadius and tuning.hotDistance > tuning.burningDistance and
+    tuning.warmDistance > tuning.hotDistance
+) then
+    print(
+        ('[qbx_k9unit] Config.SARCalls.arrivalRadius/burningDistance/hotDistance/warmDistance must all be ' ..
+         'positive numbers in strictly ascending order (arrivalRadius < burningDistance < hotDistance < ' ..
+         'warmDistance) -- found arrivalRadius=%s, burningDistance=%s, hotDistance=%s, warmDistance=%s. Using ' ..
+         'the shipped defaults for ALL FOUR fields together (arrivalRadius=6.0, burningDistance=8.0, ' ..
+         'hotDistance=20.0, warmDistance=45.0) instead of clamping just one into an incoherent chain -- find ' ..
+         'these four fields in config.lua and fix them together.')
+            :format(tostring(tuning.arrivalRadius), tostring(tuning.burningDistance), tostring(tuning.hotDistance), tostring(tuning.warmDistance))
+    )
+    tuning.arrivalRadius, tuning.burningDistance, tuning.hotDistance, tuning.warmDistance = 6.0, 8.0, 20.0, 45.0
+end
+
+-- INDEPENDENT DURATIONS.
+tuning.pollIntervalMs = ResolveConfiguredThresholdMs(
+    tuning.pollIntervalMs, 2000, 'Config.SARCalls.pollIntervalMs')
+tuning.maxCallDurationMs = ResolveConfiguredThresholdMs(
+    tuning.maxCallDurationMs, 480000, 'Config.SARCalls.maxCallDurationMs')
 
 -- startCooldownMs is deliberately NOT re-validated here -- NewCooldown's
 -- own AssertValidDefaultThreshold below already errors loudly, naming that
@@ -402,9 +457,12 @@ end
 --- toward the outer edge of the ring is a harmless, undisclosed-to-the-
 --- player cosmetic bias, not a fairness-relevant value. Unlike that
 --- function, this one does NOT re-clamp `maxR < minR` defensively at call
---- time -- this file's own CONFIG-SAFETY GUARD above already asserts
---- maxRadius >= minRadius at load time, so that condition is provably
---- unreachable here rather than merely assumed.
+--- time -- this file's own CONFIG-SAFETY GUARD above already guarantees
+--- maxRadius >= minRadius at load time (GROUP 1's clamp-and-warn: either the
+--- configured pair already satisfies this, or both fields together fall
+--- back to the shipped defaults, which do), so that condition is provably
+--- unreachable here rather than merely assumed -- no longer via a hard
+--- assert, but the guarantee itself is unchanged.
 --- @param originX number
 --- @param originY number
 --- @return number targetX, number targetY

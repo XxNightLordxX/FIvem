@@ -279,31 +279,119 @@ t.test('SERVER: Config.Features.PursuitSprint = true but Config.PursuitSprint en
     t.contains(f.loadError, 'Config.PursuitSprint is missing')
 end)
 
-t.test('SERVER: Config.PursuitSprint.speedMultiplier = 0 fails loudly at load', function()
+-- ------------------------------------------------------------------
+-- REGRESSION (2026-08-26): these three tests used to assert the OPPOSITE --
+-- that speedMultiplier/durationMs/requestRangeMeters failing their bound
+-- FAILED THE ENTIRE FILE'S LOAD via a hard `assert`, naming the offending
+-- field. They were pinning the bug, the same mechanism this file's own
+-- COOLDOWN FOOTGUN section below already documents: an uncaught error
+-- thrown from THIS FILE's own top-level chunk aborts server/pursuitsprint.lua's
+-- load from that line onward, silently un-registering
+-- 'qbx_k9unit:server:requestPursuitSprint' -- the entire feature, not just
+-- one bad number. cooldownMs (tested below) was migrated to
+-- ResolveConfiguredThresholdMs first; these three siblings sat right above
+-- it, unmigrated, only because durationMs is the only one of the three that
+-- is even a duration, and neither of the other two feeds NewCooldown at all
+-- -- not because the risk was any different.
+--
+-- Now clamp-and-warn: speedMultiplier/requestRangeMeters via this file's own
+-- bespoke ResolveConfiguredPositiveNumber (a positive-number rule, but
+-- NEITHER is a cooldown, so ResolveConfiguredThresholdMs's own cooldown-
+-- specific warning text would mislead), durationMs via
+-- ResolveConfiguredThresholdMs directly (a genuine duration, no legitimate
+-- non-positive meaning). The file loads, the event registers, and the
+-- feature keeps working on a safe built-in fallback while printing one
+-- unmissable warning naming the exact key, the value found, and what was
+-- substituted.
+-- ------------------------------------------------------------------
+
+t.test('REGRESSION: Config.PursuitSprint.speedMultiplier = 0 no longer aborts this file\'s load -- clamps to the shipped 1.4 fallback, warns loudly, and a granted request still succeeds', function()
     local f = newServerFixture({
         pursuitSprintCfg = { speedMultiplier = 0, durationMs = REAL_DURATION_MS, cooldownMs = REAL_COOLDOWN_MS, requestRangeMeters = REAL_RANGE_METERS },
-        expectLoadError = true,
     })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'speedMultiplier')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint.speedMultiplier', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find(tostring(REAL_SPEED_MULTIPLIER), 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 5, 0, 0)
+    f.registerTargetNetId(9001, 200)
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1, 'a granted request must still succeed even though speedMultiplier was misconfigured')
+    -- Config.PursuitSprint.speedMultiplier itself is resolved back into
+    -- Config so client/pursuitsprint.lua's own (separate-process, but
+    -- structurally identical) read of the same field would see the
+    -- corrected value too, were this the same Lua state.
+    t.equals(f.Config.PursuitSprint.speedMultiplier, REAL_SPEED_MULTIPLIER)
 end)
 
-t.test('SERVER: Config.PursuitSprint.durationMs missing fails loudly at load', function()
+t.test('REGRESSION: Config.PursuitSprint.durationMs = 0 no longer aborts this file\'s load -- clamps to the shipped 5000ms fallback and warns loudly', function()
     local f = newServerFixture({
-        pursuitSprintCfg = { speedMultiplier = REAL_SPEED_MULTIPLIER, cooldownMs = REAL_COOLDOWN_MS, requestRangeMeters = REAL_RANGE_METERS },
-        expectLoadError = true,
+        pursuitSprintCfg = { speedMultiplier = REAL_SPEED_MULTIPLIER, durationMs = 0, cooldownMs = REAL_COOLDOWN_MS, requestRangeMeters = REAL_RANGE_METERS },
     })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'durationMs')
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint.durationMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find(tostring(REAL_DURATION_MS), 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+    t.equals(f.Config.PursuitSprint.durationMs, REAL_DURATION_MS)
 end)
 
-t.test('SERVER: Config.PursuitSprint.requestRangeMeters = -1 fails loudly at load', function()
+t.test('REGRESSION: Config.PursuitSprint.requestRangeMeters = -1 no longer aborts this file\'s load -- clamps to the shipped 20.0 fallback, warns loudly, and the resolved range is what the request handler actually enforces', function()
     local f = newServerFixture({
         pursuitSprintCfg = { speedMultiplier = REAL_SPEED_MULTIPLIER, durationMs = REAL_DURATION_MS, cooldownMs = REAL_COOLDOWN_MS, requestRangeMeters = -1 },
-        expectLoadError = true,
     })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'requestRangeMeters')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint.requestRangeMeters', 1, true)
+            and line:find('found: -1', 1, true)
+            and line:find(tostring(REAL_RANGE_METERS), 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+
+    -- Prove it at the level the bug lives: requestRangeMeters is re-read
+    -- directly off Config at dispatch time (never captured to a local), so
+    -- the RESOLVED fallback (20.0), not the invalid configured -1, must be
+    -- what the live proximity check enforces.
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 15, 0, 0) -- within the fallback 20.0m, would be rejected under any small/negative configured value
+    f.registerTargetNetId(9001, 200)
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1, 'the fallback range (20.0) must be the one actually enforced by the live request handler')
+end)
+
+t.test('REGRESSION: valid speedMultiplier/durationMs/requestRangeMeters are all still used, not silently replaced by their fallbacks', function()
+    local f = newServerFixture({
+        pursuitSprintCfg = { speedMultiplier = 1.2, durationMs = 6000, cooldownMs = REAL_COOLDOWN_MS, requestRangeMeters = 12.5 },
+    })
+    for _, line in ipairs(f.printLog) do
+        t.isNil(line:find('speedMultiplier', 1, true), 'a valid configured speedMultiplier must pass through silently')
+        t.isNil(line:find('durationMs', 1, true), 'a valid configured durationMs must pass through silently')
+        t.isNil(line:find('requestRangeMeters', 1, true), 'a valid configured requestRangeMeters must pass through silently')
+    end
+    t.equals(f.Config.PursuitSprint.speedMultiplier, 1.2)
+    t.equals(f.Config.PursuitSprint.durationMs, 6000)
+    t.equals(f.Config.PursuitSprint.requestRangeMeters, 12.5)
 end)
 
 -- UPDATED, this pass (QA sandbox repro against server/combat.lua, same

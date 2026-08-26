@@ -209,9 +209,25 @@
 if not Config.Features.PursuitSprint then return end
 
 -- ======================================================================
--- CONFIG SHAPE ASSERTS -- fail loudly at resource start, never silently,
--- mirrors client/agility.lua's own Config.Combat.AgilityAdvanced.detectionMethod
--- assert precedent. Deliberately placed AFTER the feature-flag gate above
+-- CONFIG SHAPE -- fail loudly at resource start ONLY for a structurally
+-- wrong-shaped block (nothing sensible to clamp/substitute for "the whole
+-- table is missing"); CLAMP AND WARN for every individual number inside it
+-- (this pass -- see server/cooldowns.lua's header ADDENDUM: "does an
+-- operator's config.lua edit alone... reach this value? If yes it must be
+-- clamped and warned about, never asserted and aborted"). speedMultiplier/
+-- durationMs/requestRangeMeters below USED TO be three separate hard
+-- `assert`s here, mirroring client/agility.lua's own
+-- Config.Combat.AgilityAdvanced.detectionMethod assert precedent -- correct
+-- for THAT file's shape (a deferred onResourceStart callback, see
+-- server/cooldowns.lua's header ADDENDUM for why that shape is safe) but
+-- wrong here: an uncaught error thrown from THIS FILE's own top-level chunk
+-- aborts server/pursuitsprint.lua's load from that line onward, silently
+-- un-registering 'qbx_k9unit:server:requestPursuitSprint' -- the entire
+-- feature, not just one bad number. cooldownMs (a few lines below) was
+-- already migrated to ResolveConfiguredThresholdMs in an earlier pass (see
+-- this file's own header "COOLDOWN FOOTGUN") -- these three siblings were
+-- missed only because none of them feed NewCooldown, not because the risk
+-- was any different. Deliberately placed AFTER the feature-flag gate above
 -- (same convention agility.lua follows): a server that never turns this
 -- feature on is never affected by config.lua not yet having this block.
 -- ======================================================================
@@ -219,17 +235,53 @@ assert(type(Config.PursuitSprint) == 'table',
     "qbx_k9unit: Config.Features.PursuitSprint is true but Config.PursuitSprint is missing from config.lua. " ..
     "Add the settings table (speedMultiplier/durationMs/cooldownMs/requestRangeMeters) before enabling this feature.")
 
-assert(type(Config.PursuitSprint.speedMultiplier) == 'number' and Config.PursuitSprint.speedMultiplier > 0,
-    "qbx_k9unit: Config.PursuitSprint.speedMultiplier must be a positive number.")
+--- Same clamp-and-warn shape as server/cooldowns.lua's
+--- ResolveConfiguredThresholdMs, for the two fields below that are not
+--- themselves a cooldown/duration threshold -- IsValidThreshold's own
+--- validity rule (positive, non-NaN) is numerically the right fit for both
+--- speedMultiplier and requestRangeMeters, but that function's own printed
+--- warning text is written specifically for a cooldown ("0/negative/nil
+--- here does NOT mean 'no cooldown'... permanently block the guarded
+--- action"), which would mislead an operator reading a speedMultiplier/
+--- requestRangeMeters warning. Never errors; prints one warning naming the
+--- exact key, the bad value found, and the fallback substituted.
+--- @param value any
+--- @param fallback number
+--- @param keyName string
+--- @param requirementText string
+--- @return number
+local function ResolveConfiguredPositiveNumber(value, fallback, keyName, requirementText)
+    if type(value) == 'number' and value == value and value > 0 then
+        return value
+    end
+    print(('[qbx_k9unit] %s must be %s (found: %s). Using the built-in fallback of %s instead so this feature ' ..
+        'keeps working while the config is fixed -- find %s in config.lua and correct it.')
+            :format(keyName, requirementText, tostring(value), tostring(fallback), keyName))
+    return fallback
+end
 
-assert(type(Config.PursuitSprint.durationMs) == 'number' and Config.PursuitSprint.durationMs > 0,
-    "qbx_k9unit: Config.PursuitSprint.durationMs must be a positive number of milliseconds.")
+-- speedMultiplier and requestRangeMeters have no relationship to any other
+-- field here (unlike server/sarcalls.lua's radius/distance groups) -- each
+-- is resolved independently. Resolved values are written BACK into
+-- Config.PursuitSprint so every later read in this file (requestRangeMeters
+-- is re-read directly off Config, not captured to a local, in the request
+-- handler below) sees the same corrected value, not just this one.
+Config.PursuitSprint.speedMultiplier = ResolveConfiguredPositiveNumber(
+    Config.PursuitSprint.speedMultiplier, 1.4, 'Config.PursuitSprint.speedMultiplier', 'a positive number')
 
-assert(type(Config.PursuitSprint.requestRangeMeters) == 'number' and Config.PursuitSprint.requestRangeMeters > 0,
-    "qbx_k9unit: Config.PursuitSprint.requestRangeMeters must be a positive number of meters.")
+Config.PursuitSprint.requestRangeMeters = ResolveConfiguredPositiveNumber(
+    Config.PursuitSprint.requestRangeMeters, 20.0, 'Config.PursuitSprint.requestRangeMeters',
+    'a positive number of meters')
 
--- See this file's own header "COOLDOWN FOOTGUN" -- REPLACED this pass (QA
--- sandbox repro): this used to be its own `assert`, hard-erroring on a
+-- durationMs IS a genuine duration (client/pursuitsprint.lua's own end-timer
+-- reads it directly, no legitimate non-positive meaning) -- an exact fit for
+-- ResolveConfiguredThresholdMs's own validity rule, unlike the two fields
+-- above.
+Config.PursuitSprint.durationMs = ResolveConfiguredThresholdMs(
+    Config.PursuitSprint.durationMs, 5000, 'Config.PursuitSprint.durationMs')
+
+-- See this file's own header "COOLDOWN FOOTGUN" -- REPLACED an earlier pass
+-- (QA sandbox repro): this used to be its own `assert`, hard-erroring on a
 -- non-positive Config.PursuitSprint.cooldownMs with a field-specific
 -- message. ResolveConfiguredThresholdMs (server/cooldowns.lua) below gives
 -- the same exact-field-naming diagnostic without erroring -- see

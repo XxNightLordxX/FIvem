@@ -1077,6 +1077,48 @@ t.test('RevokeCertificationOffline: REGRESSION -- a throwing UPDATE degrades saf
 end)
 
 -- ======================================================================
+-- FIX (this pass, consistency finding): RevokeCertificationOffline already
+-- closes the TOCTOU window where the target reconnects between the
+-- online-check guard and the UPDATE landing for leash (ForceDetachLeashIfOnline)
+-- and partnership (ForceBreakPartnershipForCitizenId) -- EndActiveEffectForHolder
+-- was the one call in that same "must not outlive certification" family
+-- missing from this call site. See this function's own new doc comment
+-- (server/certifications.lua) for the full writeup.
+-- ======================================================================
+
+t.test('RevokeCertificationOffline: FIX -- ends any active bite-hold/takedown/drag if the target reconnects in the narrow window between the online-check guard and the UPDATE landing (consistency with leash/partnership at this same call site)', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    -- REVOKEE starts genuinely offline (passes the online-check guard),
+    -- then "reconnects" as a side effect of the UPDATE landing -- modeling
+    -- the exact TOCTOU window ForceDetachLeashIfOnline's own doc comment
+    -- already describes closing for leash/partnership at this call site.
+    f.mysql.update.await = function(_sql, _params)
+        f.registerPlayer(99, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+        return 1
+    end
+    f.mysql.scalar.await = function() return nil end
+
+    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 99)
+    t.equals(f.effectEndCalls[#f.effectEndCalls], 99)
+    t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][1], 'REVOKEE')
+end)
+
+t.test('RevokeCertificationOffline: a genuinely offline target (never reconnects mid-window) never calls EndActiveEffectForHolder at all -- nothing to end for an offline citizenid', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    -- REVOKEE is intentionally never registered at any point.
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+
+    t.equals(#f.effectEndCalls, 0)
+end)
+
+-- ======================================================================
 -- Automatic revoke-on-job-change (QBCore:Server:OnJobUpdate) -- no client
 -- entry point at all, per the file's own header; fired directly via the
 -- captured AddEventHandler closure with an explicit (source, job) pair.

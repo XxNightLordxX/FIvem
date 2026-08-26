@@ -474,9 +474,11 @@ t.test('FEATURE GATE: Config.Features.SARCalls = false is a genuine no-op at loa
 end)
 
 -- ------------------------------------------------------------------------
--- CONFIG-SAFETY GUARD -- each bad value must error LOUDLY at load time,
--- naming the offending field, per this file's own established convention
--- (server/integrations.lua's identical guard is the precedent).
+-- CONFIG-SAFETY GUARD -- Config.SARCalls itself missing/wrong-shaped must
+-- still error LOUDLY at load time (nothing sensible to substitute for "the
+-- whole block is missing"); every NUMBER inside it, once the block itself
+-- is a real table, is now CLAMP AND WARN, never assert-and-abort -- see
+-- the REGRESSION section below for why.
 -- ------------------------------------------------------------------------
 
 --- Attempts to load server/sarcalls.lua fresh into a throwaway env with
@@ -526,55 +528,306 @@ local function loadCapturingPrints(tuning)
     return printedLines, ok
 end
 
+--- Same idea as loadCapturingPrints, but building a FULLY FUNCTIONAL,
+--- independent sandbox (own tick thread, own captured requestSarCall
+--- callback/abandonSarCall net event, own player/ped/coords stubs) -- so a
+--- clamp-and-warn can be proven both at the REGISTRATION level ("every
+--- entry point the old assert used to strand still exists") and, for at
+--- least one field per group, at the FUNCTIONAL level ("the resolved,
+--- possibly-clamped values are what the real running feature actually
+--- enforces", not merely printed in a warning).
+--- @param tuning table
+--- @return table fixture
+local function newCapturingFixture(tuning)
+    local printedLines = {}
+    local threadCreated = false
+    local runner = Sandbox.newThreadRunner()
+    local registeredCallback, registeredNetEvent
+    local pedCoords, players = {}, {}
+    local clientEvents = {}
+    local env
+
+    -- Named distinctly from this file's own SECTION 1 module-level
+    -- GetPlayerPed/GetEntityCoords/qbxGetPlayer (declared far above, around
+    -- line 123) to avoid shadowing them -- this fixture is fully
+    -- self-contained (its own pedCoords/players tables), never reads or
+    -- writes SECTION 1's state, but a shadowed name in the same file is a
+    -- needless luacheck warning and a trap for a future reader skimming for
+    -- "which stub does this actually use".
+    local function fixtureGetPlayerPed(source) return source end -- identity, same convention as this file's own SECTION 1 fixture
+    local function fixtureGetEntityCoords(ped) return pedCoords[ped] or { x = 0, y = 0, z = 0 } end
+    local function fixtureQbxGetPlayer(_self, src)
+        local rec = players[src]
+        if not rec then return nil end
+        return { PlayerData = { citizenid = rec.citizenid, job = { name = rec.job } } }
+    end
+
+    env = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        CreateThread = function(fn) threadCreated = true; runner.CreateThread(fn) end,
+        Wait = runner.Wait,
+        AddEventHandler = function() end,
+        RegisterNetEvent = function(_name, fn) registeredNetEvent = fn end,
+        math = FakeMath,
+        lib = { callback = { register = function(_name, fn) registeredCallback = fn end } },
+        HasK9Access = function() return true end,
+        GetPlayerPed = fixtureGetPlayerPed,
+        GetEntityCoords = fixtureGetEntityCoords,
+        exports = { qbx_core = { GetPlayer = fixtureQbxGetPlayer } },
+        TriggerClientEvent = function(eventName, target, ...)
+            clientEvents[#clientEvents + 1] = { event = eventName, target = target, args = { ... } }
+        end,
+        TriggerEvent = function() end,
+        AwardXP = function() end,
+        NotifyPlayer = function() end,
+        print = function(...)
+            local parts = {}
+            for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+            printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        end,
+        Config = { Features = { SARCalls = true }, SARCalls = tuning, XP = { awards = { sarCallCompleted = 30 } } },
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, needed once requestSarCall is actually dispatched below
+    local ok = pcall(Sandbox.loadInto, '../server/sarcalls.lua', env)
+
+    return {
+        printedLines = printedLines,
+        loaded = ok,
+        threadCreated = threadCreated,
+        hasRequestCallback = registeredCallback ~= nil,
+        hasAbandonNetEvent = registeredNetEvent ~= nil,
+        requestSarCall = function(src) return registeredCallback(src) end,
+        tick = runner.step,
+        setPedCoords = function(src, x, y, z) pedCoords[src] = { x = x, y = y, z = z } end,
+        registerPlayer = function(src, citizenid, job) players[src] = { citizenid = citizenid, job = job } end,
+        lastClientEventFor = function(target)
+            for i = #clientEvents, 1, -1 do
+                if clientEvents[i].target == target then return clientEvents[i] end
+            end
+            return nil
+        end,
+    }
+end
+
 t.test('CONFIG-SAFETY GUARD: Config.SARCalls missing entirely errors, naming Config.SARCalls', function()
     local err = loadWithBadConfig(nil)
     t.isNotNil(err)
     t.contains(err, 'Config.SARCalls')
 end)
 
-t.test('CONFIG-SAFETY GUARD: a non-positive minRadius errors, naming minRadius', function()
-    local err = loadWithBadConfig({
+-- ------------------------------------------------------------------
+-- REGRESSION (2026-08-26): every test below this comment, through the
+-- pre-existing startCooldownMs REGRESSION section, used to assert the
+-- OPPOSITE for minRadius/maxRadius/arrivalRadius/burningDistance/
+-- hotDistance/warmDistance/pollIntervalMs/maxCallDurationMs -- that a bad
+-- value aborted this file's load via a hard `assert`, naming the offending
+-- field. They were pinning the bug: an uncaught error thrown from THIS
+-- FILE's own top-level chunk aborts server/sarcalls.lua's load from that
+-- line onward -- silently un-registering the playerDropped handler, the
+-- tick loop, the requestSarCall callback, and the UNCONDITIONAL
+-- abandonSarCall event this file's own header calls a "NO UNBOUNDED TRAP"
+-- guarantee, over one operator typo. startCooldownMs was migrated first
+-- (see below); these eight siblings sat right above it, unmigrated, only
+-- because none of them feed NewCooldown -- not because the risk differed.
+--
+-- minRadius/maxRadius and arrivalRadius/burningDistance/hotDistance/
+-- warmDistance are RELATIONSHIPS, not independent values (see server/
+-- sarcalls.lua's own updated CONFIG-SAFETY GUARD comment) -- an invalid
+-- group falls back to its WHOLE shipped default set together, never a mix
+-- of kept-and-substituted values that could still be incoherent.
+-- pollIntervalMs/maxCallDurationMs have no relationship to any other field
+-- and are resolved independently via ResolveConfiguredThresholdMs.
+-- ------------------------------------------------------------------
+
+t.test('REGRESSION: an invalid minRadius/maxRadius pair no longer aborts this file\'s load -- BOTH fields fall back to the shipped defaults (40.0/90.0) together, warning names both keys/values, and every registration below the old assert survives', function()
+    local f = newCapturingFixture({
         minRadius = 0, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
         warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
     })
-    t.isNotNil(err)
-    t.contains(err, 'minRadius')
+    t.isTrue(f.loaded, 'the file must still load -- an abort here kills the whole SAR-calls feature')
+    t.isTrue(f.threadCreated, 'the tick loop must still be created')
+    t.isTrue(f.hasRequestCallback, 'requestSarCall must still be registered')
+    t.isTrue(f.hasAbandonNetEvent, 'the UNCONDITIONAL abandonSarCall event must still be registered')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.SARCalls.minRadius/maxRadius', 1, true)
+            and line:find('minRadius=0', 1, true) and line:find('maxRadius=30', 1, true)
+            and line:find('40.0', 1, true) and line:find('90.0', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name both keys, the bad values found, and both fallbacks substituted -- clamping only one field into an incoherent pair is exactly what this must NOT do')
+
+    -- Prove it at the level the bug lives: dispatch a real requestSarCall
+    -- and confirm the feature is genuinely functional on the substituted
+    -- (coherent) default pair, not merely that loading survived.
+    f.registerPlayer(1, 'CIT_1', 'police')
+    f.setPedCoords(1, 0.0, 0.0, 0.0)
+    queueRandom(0.0, 0.0) -- radius fraction 0.0 -> exactly the fallback minRadius (40.0)
+    local result = f.requestSarCall(1)
+    t.isTrue(result.started, 'the feature must still be able to start a call on the substituted default pair')
+    local push = f.lastClientEventFor(1)
+    t.equals(push.event, 'qbx_k9unit:client:sarHintTierChanged', 'the immediate hint push must still fire')
 end)
 
-t.test('CONFIG-SAFETY GUARD: maxRadius < minRadius errors, naming maxRadius', function()
-    local err = loadWithBadConfig({
+t.test('REGRESSION: maxRadius < minRadius also falls back to the whole GROUP 1 default pair, never just clamping maxRadius up to minRadius (which would still be an operator-unintended number)', function()
+    local f = newCapturingFixture({
         minRadius = 30, maxRadius = 10, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
         warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
     })
-    t.isNotNil(err)
-    t.contains(err, 'maxRadius')
+    t.isTrue(f.loaded)
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('minRadius=30', 1, true) and line:find('maxRadius=10', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+    t.isTrue(f.hasRequestCallback)
 end)
 
-t.test('CONFIG-SAFETY GUARD: burningDistance <= arrivalRadius errors, naming burningDistance', function()
-    local err = loadWithBadConfig({
+t.test('REGRESSION: a VALID minRadius/maxRadius pair is still used, not silently replaced by the group fallback', function()
+    local f = newCapturingFixture({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
+    })
+    t.isTrue(f.loaded)
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('minRadius', 1, true), 'a valid configured minRadius/maxRadius pair must pass through silently -- warning on a good value trains operators to ignore the warning')
+    end
+end)
+
+t.test('REGRESSION: an invalid arrivalRadius no longer aborts this file\'s load -- ALL FOUR of GROUP 2 fall back together (6.0/8.0/20.0/45.0), warning names every key/value, and every registration survives', function()
+    local f = newCapturingFixture({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 0, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
+    })
+    t.isTrue(f.loaded)
+    t.isTrue(f.threadCreated)
+    t.isTrue(f.hasRequestCallback)
+    t.isTrue(f.hasAbandonNetEvent)
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('arrivalRadius=0', 1, true) and line:find('6.0', 1, true) and line:find('8.0', 1, true)
+            and line:find('20.0', 1, true) and line:find('45.0', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+end)
+
+t.test('REGRESSION: burningDistance <= arrivalRadius no longer aborts this file\'s load -- falls back to the whole GROUP 2 default chain together', function()
+    local f = newCapturingFixture({
         minRadius = 10, maxRadius = 30, arrivalRadius = 5, burningDistance = 5, hotDistance = 15,
         warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
     })
-    t.isNotNil(err)
-    t.contains(err, 'burningDistance')
+    t.isTrue(f.loaded)
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('burningDistance=5', 1, true) then warned = true end
+    end
+    t.isTrue(warned)
+    t.isTrue(f.hasRequestCallback)
 end)
 
-t.test('CONFIG-SAFETY GUARD: hotDistance out of order (<= burningDistance) errors, naming hotDistance', function()
-    local err = loadWithBadConfig({
+t.test('REGRESSION: hotDistance out of order (<= burningDistance) also falls back to the whole GROUP 2 default chain', function()
+    local f = newCapturingFixture({
         minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 15, hotDistance = 10,
         warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
     })
-    t.isNotNil(err)
-    t.contains(err, 'hotDistance')
+    t.isTrue(f.loaded)
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('hotDistance=10', 1, true) then warned = true end
+    end
+    t.isTrue(warned)
+    t.isTrue(f.hasRequestCallback)
 end)
 
-t.test('CONFIG-SAFETY GUARD: a non-positive pollIntervalMs errors, naming pollIntervalMs', function()
-    local err = loadWithBadConfig({
+t.test('REGRESSION: warmDistance out of order (<= hotDistance) also falls back to the whole GROUP 2 default chain', function()
+    local f = newCapturingFixture({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 10, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
+    })
+    t.isTrue(f.loaded)
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('warmDistance=10', 1, true) then warned = true end
+    end
+    t.isTrue(warned)
+    t.isTrue(f.hasRequestCallback)
+end)
+
+t.test('REGRESSION: a VALID arrivalRadius/burningDistance/hotDistance/warmDistance chain is still used, not silently replaced by the group fallback', function()
+    local f = newCapturingFixture({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
+    })
+    t.isTrue(f.loaded)
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('arrivalRadius', 1, true), 'a valid configured GROUP 2 chain must pass through silently')
+    end
+end)
+
+t.test('REGRESSION: pollIntervalMs = 0 no longer aborts this file\'s load -- clamps to the shipped 2000ms fallback, warns loudly, and the tick loop keeps genuinely running', function()
+    local f = newCapturingFixture({
         minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
         warmDistance = 25, pollIntervalMs = 0, maxCallDurationMs = 300000, startCooldownMs = 8000,
     })
-    t.isNotNil(err)
-    t.contains(err, 'pollIntervalMs')
+    t.isTrue(f.loaded, 'the file must still load -- an abort here kills the whole SAR-calls feature')
+    t.isTrue(f.threadCreated)
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.SARCalls.pollIntervalMs', 1, true) and line:find('found: 0', 1, true) and line:find('2000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+
+    -- Prove the tick loop still genuinely runs: start a call, walk to
+    -- within arrivalRadius, tick, and confirm 'found' fires end-to-end.
+    f.registerPlayer(2, 'CIT_2', 'police')
+    f.setPedCoords(2, 0.0, 0.0, 0.0)
+    queueRandom(0.0, 0.0) -- target lands at (minRadius, 0) = (10, 0)
+    f.requestSarCall(2)
+    f.setPedCoords(2, 10.0, 0.0, 0.0) -- walk exactly onto the target, well within arrivalRadius (3.0)
+    f.tick() -- prime
+    f.tick() -- one real pass
+    local ev = f.lastClientEventFor(2)
+    t.equals(ev.event, 'qbx_k9unit:client:sarCallEnded', 'the tick loop must still detect arrival and end the call after pollIntervalMs was clamped')
+    t.equals(ev.args[1], 'found')
+end)
+
+t.test('REGRESSION: maxCallDurationMs = 0 no longer aborts this file\'s load -- clamps to the shipped 480000ms fallback and warns loudly', function()
+    local f = newCapturingFixture({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 0, startCooldownMs = 8000,
+    })
+    t.isTrue(f.loaded, 'the file must still load -- an abort here kills the whole SAR-calls feature')
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.SARCalls.maxCallDurationMs', 1, true) and line:find('found: 0', 1, true) and line:find('480000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+    t.isTrue(f.hasRequestCallback)
+end)
+
+t.test('REGRESSION: a VALID pollIntervalMs/maxCallDurationMs are each still used, not silently replaced by their fallbacks', function()
+    local f = newCapturingFixture({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 8000,
+    })
+    t.isTrue(f.loaded)
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('pollIntervalMs', 1, true), 'a valid configured pollIntervalMs must pass through silently')
+        t.isNil(line:find('maxCallDurationMs', 1, true), 'a valid configured maxCallDurationMs must pass through silently')
+    end
 end)
 
 -- ------------------------------------------------------------------
