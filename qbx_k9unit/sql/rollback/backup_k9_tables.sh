@@ -51,6 +51,8 @@
 #                         mode" layer on top of whichever XP-tier profile a
 #                         citizenid otherwise resolves to), and the full
 #                         history of every override create/edit/reset made
+#     k9_personnel        every K9/Handler roster assignment and callsign,
+#                         past and present (ROSTER_SPEC.md §3/§4)
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -163,8 +165,10 @@ fi
 # time for the two equipment-shop-item tables -- flagged explicitly by
 # sql/rollback/0014_down.sql's own header ("report to the sql/** owner that
 # these two table names need adding to that script's own table list"),
-# fixed here the same way. The DRIFT GUARD immediately below is the
-# backstop for the next table a future migration adds here.
+# fixed here the same way. migration 0020 (ROSTER_SPEC.md §3/§4, the
+# K9/Handler roster assignment table) is added below from the start. The
+# DRIFT GUARD immediately below is the backstop for the next table a
+# future migration adds here.
 ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_partnership_pair_progress
             k9_progression k9_permissions
             k9_certification_specializations k9_runtime_feature_overrides
@@ -174,7 +178,8 @@ ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_partnership_pair_
             k9_permission_keys k9_permission_key_audit
             k9_equipment_shop_items k9_equipment_shop_item_audit
             k9_xp_tiers k9_xp_tier_audit
-            k9_individual_overrides k9_individual_override_audit)
+            k9_individual_overrides k9_individual_override_audit
+            k9_personnel)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do

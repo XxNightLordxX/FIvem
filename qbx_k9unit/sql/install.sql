@@ -3,14 +3,17 @@
 --
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
--- This is a hard requirement, not a recommendation. Four of the
--- twenty-five (25) tables below (k9_certifications,
--- k9_certification_specializations, k9_partnerships, k9_permissions)
+-- This is a hard requirement, not a recommendation. Five of the
+-- twenty-six (26) tables below (k9_certifications,
+-- k9_certification_specializations, k9_partnerships, k9_permissions,
+-- k9_personnel)
 -- declare an INDEXED VIRTUAL GENERATED COLUMN backing a UNIQUE KEY
 -- (`k9_certifications.active_cert_key`,
 -- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`) -- the other twenty-one
+-- `k9_permissions.active_permission_key`,
+-- `k9_personnel.active_personnel_key` and `active_callsign_key`
+-- (migration 0020, ROSTER_SPEC.md §3/§4)) -- the other twenty-one
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
@@ -1524,4 +1527,78 @@ CREATE TABLE IF NOT EXISTS `k9_partnership_pair_progress` (
   `highest_tenure_tier_granted`  TINYINT UNSIGNED  NOT NULL DEFAULT 0,
 
   PRIMARY KEY (`k9_citizenid`, `handler_citizenid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_personnel
+--
+-- Added alongside `sql/migrations/0020_create_k9_personnel.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (ROSTER_SPEC.md §3/§4). Answers the one fact neither
+-- `k9_certifications` nor `k9_dog_characters` (migration 0019, a
+-- deliberately separate, purely cosmetic pin) can: WHICH roster (K9 or
+-- Handler) a certified citizenid currently belongs to per department, and
+-- what callsign (if any) they currently hold there.
+--
+-- Modeled directly on `k9_certifications` above (append-mostly audit
+-- rows: assigning INSERTs a new row, clearing UPDATEs the existing active
+-- row to `active = 0`, never deletes) -- NOT on `k9_dog_characters`'s
+-- current-state-only shape, because a personnel record needs to preserve
+-- history across a fire-and-rehire cycle, exactly like a certification
+-- does. `role` (called `personnelRole` in code/API, to avoid colliding
+-- with this resource's existing ped-and-access "role" concept -- see
+-- migration 0020's own header) and `callsign` both live on the same
+-- active row, scoped to (citizenid, job) exactly like a certification --
+-- one active row per (citizenid, job), enforced by
+-- `uq_one_active_personnel_per_job` the same way
+-- `k9_certifications.uq_one_active_cert_per_job` enforces its own
+-- invariant. `active_callsign_key` additionally backs the COMBINED-
+-- NAMESPACE callsign uniqueness decision (ROSTER_SPEC.md §4): one
+-- department, one callsign namespace, shared by both rosters, compared
+-- case-insensitively.
+--
+-- No FK anywhere (including none to `k9_certifications` itself), matching
+-- this schema's own established "no FK, relational integrity enforced at
+-- the application layer" convention -- see migration 0020's own header for
+-- the full reasoning.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, run
+-- `sql/migrations/0020_create_k9_personnel.sql` instead (a guaranteed
+-- no-op if this file already created it).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_personnel` (
+  `id`                    INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `citizenid`             VARCHAR(50)  NOT NULL,
+  `job`                   VARCHAR(50)  NOT NULL,
+  `role`                  VARCHAR(10)  NOT NULL,
+  `callsign`              VARCHAR(12)  DEFAULT NULL,
+  `granted_by`            VARCHAR(50)  NOT NULL,
+  `granted_at`            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `cleared_by`            VARCHAR(50)  DEFAULT NULL,
+  `cleared_at`            DATETIME     DEFAULT NULL,
+  `active`                TINYINT(1)   NOT NULL DEFAULT 1,
+
+  `active_personnel_key`  VARCHAR(105)
+                            GENERATED ALWAYS AS (
+                              CASE WHEN `active` = 1
+                                   THEN CONCAT(`citizenid`, '::', `job`)
+                                   ELSE NULL
+                              END
+                            ) VIRTUAL,
+
+  `active_callsign_key`   VARCHAR(70)
+                            GENERATED ALWAYS AS (
+                              CASE WHEN `active` = 1 AND `callsign` IS NOT NULL
+                                   THEN CONCAT(`job`, '::', LOWER(`callsign`))
+                                   ELSE NULL
+                              END
+                            ) VIRTUAL,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_citizen_job_active` (`citizenid`, `job`, `active`),
+  KEY `idx_job_active` (`job`, `active`),
+  UNIQUE KEY `uq_one_active_personnel_per_job` (`active_personnel_key`),
+  UNIQUE KEY `uq_one_active_callsign_per_job` (`active_callsign_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

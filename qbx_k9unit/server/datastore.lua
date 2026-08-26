@@ -3250,6 +3250,212 @@ function K9Store.ShopItemAudit_GetRecent(limit)
 end
 
 -- ======================================================================
+-- k9_personnel (migration 0020, ROSTER_SPEC.md §3/§4) -- db-schema pass,
+-- 2026-08-26.
+--
+-- Owner's own words for the request this answers: "make it in the tablet
+-- where there is a roster where we can assign callsigns see list of hired
+-- k9s and full menu to fire promote etc", "Also a separate roster for
+-- handlers same thing". This section is the K9Store half of that answer
+-- -- server/roster.lua (the owner file) never names this table or calls
+-- MySQL.* itself, per this file's own header.
+--
+-- Modeled directly on the k9_certifications section above: append-mostly
+-- audit rows (assigning INSERTs a new row, clearing UPDATEs the existing
+-- active row to `active = 0`, never deletes), one active row per
+-- (citizenid, job), a generated-column unique key backstopping that
+-- invariant at the DB level (`Personnel_Insert` mirrors `Cert_Insert`'s
+-- own ThrowDuplicateActiveRow contract exactly), and the identical
+-- memory-mode mirror shape every other table in this file already uses.
+--
+-- SECOND invariant unique to this table (k9_certifications has no
+-- equivalent): COMBINED-NAMESPACE callsign uniqueness, case-insensitive,
+-- per department (ROSTER_SPEC.md §4) -- a K9's callsign and a handler's
+-- callsign in the SAME job share one namespace. `Personnel_SetCallsign`
+-- below throws the identical `{ errno = 1062 }`-shaped duplicate error
+-- (via `ThrowDuplicateCallsign`, a sibling of `ThrowDuplicateActiveRow`
+-- above) when a collision is found, so a caller's existing
+-- `IsDuplicateKeyError` check recognizes it without any change on its
+-- part, exactly like every other duplicate-row condition in this file.
+-- ======================================================================
+local PersonnelRows = {}
+local PersonnelNextId = 0
+
+--- @param citizenid string
+--- @param job string
+--- @return table? row
+local function PersonnelFindActiveRow(citizenid, job)
+    for _, row in ipairs(PersonnelRows) do
+        if row.active == 1 and row.citizenid == citizenid and row.job == job then
+            return row
+        end
+    end
+    return nil
+end
+
+--- Case-insensitive callsign lookup, scoped to one department, across
+--- BOTH roles combined (ROSTER_SPEC.md §4's "one namespace" decision) --
+--- excludes `excludeCitizenid`'s own row so re-saving a citizenid's own
+--- unchanged callsign is never reported as a collision against itself.
+--- @param job string
+--- @param callsignLower string -- already lower-cased by the caller
+--- @param excludeCitizenid string
+--- @return table? row -- the colliding row, or nil
+local function PersonnelFindActiveByCallsignInJob(job, callsignLower, excludeCitizenid)
+    for _, row in ipairs(PersonnelRows) do
+        if row.active == 1 and row.job == job and row.citizenid ~= excludeCitizenid
+            and type(row.callsign) == 'string' and row.callsign:lower() == callsignLower then
+            return row
+        end
+    end
+    return nil
+end
+
+--- Sibling of `ThrowDuplicateActiveRow` above, same shape, distinct
+--- wording -- both are recognized identically by every existing
+--- `IsDuplicateKeyError(err)` helper (`err.errno == 1062` first, before
+--- ever inspecting a message string), so this needs zero changes to any
+--- existing duplicate-detection logic at any call site. Kept as a
+--- separate function (rather than reusing `ThrowDuplicateActiveRow`
+--- directly) purely so the console text names the real condition
+--- (a callsign collision, not a duplicate active row) for anyone reading
+--- server logs.
+--- @param context string -- for the console line only, never parsed by a caller
+local function ThrowDuplicateCallsign(context)
+    error({ errno = 1062, message = ('ER_DUP_ENTRY: duplicate active callsign for %s (qbx_k9unit in-memory backend)'):format(context) }, 0)
+end
+
+--- Mirrors MySQL.single.await. The current roster assignment (if any) for
+--- one (citizenid, job) pair -- nil means "Unassigned" (ROSTER_SPEC.md
+--- §3/§5), not an error.
+--- @param citizenid string
+--- @param job string
+--- @return table? { id, role, callsign, granted_by, granted_at }
+function K9Store.Personnel_GetActiveRow(citizenid, job)
+    if DatabaseEnabled('k9_personnel') then
+        return MySQL.single.await(
+            'SELECT id, role, callsign, granted_by, granted_at FROM k9_personnel WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1',
+            { citizenid, job })
+    end
+    local row = PersonnelFindActiveRow(citizenid, job)
+    if not row then return nil end
+    return { id = row.id, role = row.role, callsign = row.callsign, granted_by = row.granted_by, granted_at = row.granted_at }
+end
+
+--- Mirrors the SafeQuery contract this file's own Cert_GetActiveRosterByJobUnordered
+--- uses -- every ACTIVE personnel row for ONE department, both roles
+--- combined (server/roster.lua splits them by `role` itself, and also
+--- uses this same read for the combined-namespace callsign-collision
+--- check). Always a table, empty on failure, never throws.
+--- @param job string
+--- @return table rows -- { { citizenid, role, callsign, granted_by, granted_at }, ... }
+function K9Store.Personnel_GetActiveRowsByJob(job)
+    if DatabaseEnabled('k9_personnel') then
+        local ok, rowsOrErr = pcall(MySQL.query.await,
+            'SELECT citizenid, role, callsign, granted_by, granted_at FROM k9_personnel WHERE job = ? AND active = 1', { job })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Personnel_GetActiveRowsByJob query failed for job=%s: %s'):format(tostring(job), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for _, row in ipairs(PersonnelRows) do
+        if row.job == job and row.active == 1 then
+            out[#out + 1] = { citizenid = row.citizenid, role = row.role, callsign = row.callsign, granted_by = row.granted_by, granted_at = row.granted_at }
+        end
+    end
+    return out
+end
+
+--- Mirrors MySQL.insert.await -- returns the new row's id, or THROWS (a
+--- duplicate-active-row error in memory mode, a real thrown oxmysql error
+--- in DB mode, both `{ errno = 1062 }`-shaped) exactly like
+--- `Cert_Insert` above. Always starts with a NULL callsign (ROSTER_SPEC.md
+--- §4: a fresh assignment/re-hire never resurrects an old callsign).
+--- @param citizenid string
+--- @param job string
+--- @param role string -- 'k9' | 'handler', validated by the caller (server/roster.lua)
+--- @param grantedBy string
+--- @return number id
+function K9Store.Personnel_Insert(citizenid, job, role, grantedBy)
+    if DatabaseEnabled('k9_personnel') then
+        return MySQL.insert.await('INSERT INTO k9_personnel (citizenid, job, role, granted_by) VALUES (?, ?, ?, ?)', { citizenid, job, role, grantedBy })
+    end
+    if PersonnelFindActiveRow(citizenid, job) then ThrowDuplicateActiveRow('k9_personnel ' .. citizenid .. '::' .. job) end
+    PersonnelNextId = PersonnelNextId + 1
+    PersonnelRows[#PersonnelRows + 1] = {
+        id = PersonnelNextId, citizenid = citizenid, job = job, role = role, callsign = nil,
+        granted_by = grantedBy, granted_at = FormatDateTime(NowUnix()),
+        cleared_by = nil, cleared_at = nil, active = 1,
+    }
+    return PersonnelNextId
+end
+
+--- Mirrors MySQL.update.await. Changes the active row's role AND clears
+--- its callsign in the SAME statement (ROSTER_SPEC.md §4/§6: a role
+--- change is not a new hire cycle -- it stays the same history row -- but
+--- a K9 callsign and a handler callsign mean different things, so the old
+--- one is never silently relabelled as the new kind).
+--- @return number affectedRows
+function K9Store.Personnel_UpdateRole(citizenid, job, role)
+    if DatabaseEnabled('k9_personnel') then
+        return MySQL.update.await('UPDATE k9_personnel SET role = ?, callsign = NULL WHERE citizenid = ? AND job = ? AND active = 1', { role, citizenid, job })
+    end
+    local row = PersonnelFindActiveRow(citizenid, job)
+    if not row then return 0 end
+    row.role, row.callsign = role, nil
+    return 1
+end
+
+--- Mirrors MySQL.update.await, but MAY ALSO THROW a duplicate-callsign
+--- error (`{ errno = 1062 }`, via `ThrowDuplicateCallsign` above) if
+--- `callsign` collides case-insensitively with another active row in the
+--- same department -- the DB-mode branch relies on
+--- `uq_one_active_callsign_per_job` for the identical real-server
+--- behavior. Callers (server/roster.lua) are expected to pre-check for a
+--- collision AND catch this throw, the same defense-in-depth pattern this
+--- schema already uses for `k9_certifications`' own
+--- `uq_one_active_cert_per_job`. `callsign = nil` clears it -- always
+--- allowed, never a collision.
+--- @param citizenid string
+--- @param job string
+--- @param callsign string? -- nil clears the callsign
+--- @return number affectedRows
+function K9Store.Personnel_SetCallsign(citizenid, job, callsign)
+    if DatabaseEnabled('k9_personnel') then
+        return MySQL.update.await('UPDATE k9_personnel SET callsign = ? WHERE citizenid = ? AND job = ? AND active = 1', { callsign, citizenid, job })
+    end
+    if type(callsign) == 'string' then
+        local collision = PersonnelFindActiveByCallsignInJob(job, callsign:lower(), citizenid)
+        if collision then ThrowDuplicateCallsign('k9_personnel ' .. job .. '::' .. callsign) end
+    end
+    local row = PersonnelFindActiveRow(citizenid, job)
+    if not row then return 0 end
+    row.callsign = callsign
+    return 1
+end
+
+--- Mirrors MySQL.update.await. Best-effort personnel-row cleanup for a
+--- Fire action (ROSTER_SPEC.md §6/§7) -- called AFTER the certification
+--- revoke it accompanies has already succeeded, never before (see
+--- server/roster.lua's own `ClearPersonnelRowForCitizenJob` doc comment).
+--- `clearedBy` may hold a non-citizenid 'system:...' sentinel, mirroring
+--- `Cert_RevokeActive`'s own `revoked_by` precedent.
+--- @return number affectedRows
+function K9Store.Personnel_ClearActive(citizenid, job, clearedBy)
+    if DatabaseEnabled('k9_personnel') then
+        return MySQL.update.await(
+            'UPDATE k9_personnel SET active = 0, cleared_by = ?, cleared_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
+            { clearedBy, citizenid, job })
+    end
+    local row = PersonnelFindActiveRow(citizenid, job)
+    if not row then return 0 end
+    row.active, row.cleared_by, row.cleared_at = 0, clearedBy, FormatDateTime(NowUnix())
+    return 1
+end
+
+-- ======================================================================
 -- BOOT LINE -- one console line stating which backend is live, so an
 -- operator (or QA) can confirm Config.Database.enabled took effect
 -- without reading code.
@@ -3428,6 +3634,10 @@ local EXPECTED_TABLE_COLUMNS = {
     -- in sync if either changes.
     k9_permission_keys                 = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
     k9_permission_key_audit            = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
+    -- ROSTER_SPEC.md §3/§4 (migration 0020, db-schema pass, 2026-08-26).
+    -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entry for
+    -- this table exactly -- keep both in sync if either changes.
+    k9_personnel                       = { 'citizenid', 'job', 'role', 'callsign', 'granted_by', 'granted_at', 'cleared_by', 'cleared_at', 'active' },
 }
 
 --- Short, operator-facing phrase for each table in EXPECTED_TABLE_COLUMNS
@@ -3465,6 +3675,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
     k9_equipment_shop_item_audit       = 'the shop-item audit log',
     k9_permission_keys                 = 'the permission-key catalog',
     k9_permission_key_audit            = 'the permission-key audit log',
+    k9_personnel                       = 'the K9/Handler roster assignments and callsigns -- NOTE: while this table is missing, every currently-assigned K9/handler falls back to the "Unassigned" bucket on the roster screens the moment this resource restarts (nobody\'s actual certification/permission/feature access is affected either way -- see ROSTER_SPEC.md §8)',
 }
 
 --- A table this resource treats as MISSING when the table it is listed

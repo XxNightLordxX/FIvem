@@ -498,6 +498,7 @@ local MIGRATION_FILES_THAT_CREATE_TABLES = {
     '0015_create_k9_xp_tiers.sql',
     '0016_create_k9_individual_overrides.sql',
     '0018_create_k9_partnership_pair_progress.sql',
+    '0020_create_k9_personnel.sql',
 }
 
 local FOUNDING_TABLES_WITH_NO_DEDICATED_MIGRATION = {

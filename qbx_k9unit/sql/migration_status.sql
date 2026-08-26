@@ -106,16 +106,19 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit')
     UNION ALL SELECT 'k9_partnership_pair_progress',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress')
+    UNION ALL SELECT 'k9_personnel',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel')
 ) t
 ORDER BY t.table_name;
--- NOTE: install.sql now converges with sql/migrations/0001-0018 (25 tables
+-- NOTE: install.sql now converges with sql/migrations/0001-0020 (26 tables
 -- total, including k9_progression's idx_xp, migration 0010's three
 -- certification-tier tables, migration 0011's two equipment-shop-location
 -- tables, migration 0013's two permission-key-catalog tables, migration
 -- 0014's two equipment-shop-item tables, migration 0015's two
 -- XP-rank-override tables, migration 0016's two per-individual-K9
--- override tables, and migration 0018's one partnership-tenure
--- anti-farm-guard table). If this comment and install.sql's real table
+-- override tables, migration 0018's one partnership-tenure
+-- anti-farm-guard table, and migration 0020's one K9/Handler roster
+-- assignment table (ROSTER_SPEC.md §3/§4)). If this comment and install.sql's real table
 -- count ever disagree again, install.sql is out of date; report it rather
 -- than trust this file. (This comment previously said "0001-0011 / 16
 -- tables", then "0001-0013/0015 / 20 tables" while claiming migration
@@ -487,6 +490,22 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress') AS tbl_exists
 ) t;
 
+-- 0020: CREATE TABLE (k9_personnel) -- ROSTER_SPEC.md §3/§4, the K9/Handler
+-- roster assignment + callsign table. Independent of every other table (no
+-- FK, no dependency on any other table -- see that migration's own header
+-- "ORDERING" section), so there is no "BLOCKED" case to report here, same
+-- as 0010/0011/0013/0014/0015/0016/0018 above.
+SELECT
+    t.table_name AS `0020_create_k9_personnel.sql would...`,
+    CASE WHEN t.tbl_exists = 0
+         THEN CONCAT('CREATE TABLE `', t.table_name, '` (currently absent)')
+         ELSE CONCAT('no-op -- `', t.table_name, '` already exists')
+    END AS plan
+FROM (
+    SELECT 'k9_personnel' AS table_name,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel') AS tbl_exists
+) t;
+
 
 -- ---------------------------------------------------------------------
 -- PART 3: blast-radius summary -- row counts for every table that
@@ -506,7 +525,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                       'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                       'k9_xp_tiers','k9_xp_tier_audit',
                       'k9_individual_overrides','k9_individual_override_audit',
-                      'k9_partnership_pair_progress')
+                      'k9_partnership_pair_progress','k9_personnel')
 ORDER BY TABLE_NAME;
 
 -- DRIFT CHECK -- same posture and same reasoning as preflight_check.sql's
@@ -536,6 +555,6 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit',
                           'k9_individual_overrides','k9_individual_override_audit',
-                          'k9_partnership_pair_progress');
+                          'k9_partnership_pair_progress','k9_personnel');
 
 SELECT 'DRY RUN COMPLETE -- nothing was changed by this report. Run sql/k9_setup.sh (without --dry-run) to actually apply the plan above; it backs up your whole database first, automatically, and refuses to write anything if that backup fails.' AS final_note;
