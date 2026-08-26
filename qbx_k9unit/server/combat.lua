@@ -983,18 +983,14 @@ local COMBAT_REJECT_MESSAGES = {
     -- BiteAndHold/NonLethalTakedown branch this pass -- see that call
     -- site's own comment for the full reasoning, including why this is
     -- kept a DISTINCT reason rather than collapsed into 'permission_denied'
-    -- immediately above). INTERIM value, not a permanent collapse: the real
-    -- key (proposed as 'combat.tier_capability_denied', wording sent to
-    -- main directly) is not yet in locales/en.json, and this table is a
-    -- top-level literal evaluated at this file's own load time -- a
-    -- locale() call here for a not-yet-existing key would hard-fail
-    -- loading this file for every test, not just ones exercising this
-    -- reason. Mapped to the EXISTING 'combat.reject_fallback' key
-    -- meanwhile (same interim posture 'permission_denied' above already
-    -- established) so this reason reads as deliberately handled, not
-    -- merely unmapped -- replace this line with
-    -- locale('combat.tier_capability_denied') once main lands that key.
-    tier_capability_denied = locale('combat.reject_fallback'),
+    -- immediately above). The real key landed in locales/en.json on
+    -- 2026-08-26 and this now uses it. Worth knowing why it was briefly
+    -- mapped to reject_fallback instead: this table is a top-level literal
+    -- evaluated at file-load time, and the test sandbox's locale() hard-
+    -- asserts on a missing key -- so naming a key before it exists breaks
+    -- every spec that loads this file, not just the ones exercising this
+    -- reason. If you add another reason here, land its key first.
+    tier_capability_denied = locale('combat.tier_capability_denied'),
 }
 
 --- @param reason string?

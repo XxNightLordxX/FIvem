@@ -132,6 +132,7 @@
     "offline": "Unable to resolve your own K9.",
     "on_cooldown": "You must wait before attempting that again.",
     "reject_fallback": "Unable to complete that action.",
+    "tier_capability_denied": "Your certification tier does not permit bite-and-hold or non-lethal takedown.",
     "self_target": "You cannot target yourself.",
     "takedown_already_in_progress": "A takedown attempt is already in progress.",
     "takedown_attempted": "Takedown attempted — the target may recover and flee again.",
