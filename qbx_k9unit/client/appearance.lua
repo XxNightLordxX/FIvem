@@ -311,6 +311,62 @@ RegisterNetEvent('qbx_k9unit:client:applyK9Ped', function(requestId, modelNameOr
     end
 
     SetPlayerModel(PlayerId(), modelHash)
+
+    -- THE PED IS INVISIBLE WITHOUT THIS. Reported from a live server: a
+    -- player certified with /k9certify turned into "air" -- the swap
+    -- happened, the dog model was correct, and nothing rendered at all.
+    --
+    -- SET_PLAYER_MODEL builds the new ped with NO component variation set.
+    -- A human ped mostly survives that (it falls back to a default outfit);
+    -- an animal ped does not -- every part of the dog IS a component, so a
+    -- ped with none set has nothing to draw. The player is standing right
+    -- there, collides, can be targeted, and is completely invisible to
+    -- everybody including themselves.
+    --
+    -- SET_PED_DEFAULT_COMPONENT_VARIATION applies each component's default,
+    -- which for a_c_shepherd / a_c_rottweiler / a_c_husky is simply "the
+    -- dog". Verified rather than assumed, the same way this resource
+    -- verifies every native it calls: its CFX decl page 404s (a legacy R*
+    -- native with no page written, which is never grounds to reject one),
+    -- so it was checked against the natives.json hash database instead --
+    -- namespace PED, hash 0x45EEE61580806D63, no `apiset` key, which in
+    -- that database means the default, client-only. This file is a client
+    -- file, so the realm is right. That check matters here more than most:
+    -- an unregistered native does not throw on FiveM, it returns nothing
+    -- forever with nothing logged, and this fix would have looked like it
+    -- worked while changing nothing at all.
+    --
+    -- PlayerPedId() is re-read rather than captured from before the swap.
+    -- FiveM keeps the same ped INDEX across SetPlayerModel (this file's own
+    -- header says so, and this resource relies on it elsewhere), so this is
+    -- belt and braces rather than a known bug -- but reading it fresh costs
+    -- nothing and does not depend on that guarantee holding.
+    local swappedPed = PlayerPedId()
+    if swappedPed ~= 0 then
+        SetPedDefaultComponentVariation(swappedPed)
+    end
+
+    -- AND ONCE MORE ON THE NEXT FRAME. On some builds the ped is not fully
+    -- constructed until the frame after SET_PLAYER_MODEL returns, and a
+    -- variation applied to a half-built ped is silently dropped -- the same
+    -- invisible result, intermittently, which is far harder to diagnose
+    -- than a consistent one. Re-applying a frame later costs a single
+    -- native call and makes the outcome the same on every build.
+    --
+    -- GUARDED, so this can never fire against something it should not: it
+    -- re-reads the ped and its model, and does nothing unless the ped is
+    -- still wearing the exact model this handler just applied. If anything
+    -- swapped the player again inside that one frame -- another resource, a
+    -- revoke racing a certify, a death and respawn -- this is a no-op
+    -- rather than a stomp on whatever they legitimately became.
+    CreateThread(function()
+        Wait(0)
+        local ped = PlayerPedId()
+        if ped ~= 0 and GetEntityModel(ped) == modelHash then
+            SetPedDefaultComponentVariation(ped)
+        end
+    end)
+
     SetModelAsNoLongerNeeded(modelHash)
 
     -- Local role-check cache may now be answering for the model we just

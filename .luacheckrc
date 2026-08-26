@@ -106,6 +106,24 @@ read_globals = {
     --   no-op with nothing logged, which is exactly this project's most
     --   expensive recurring bug class.
     "SetPlayerModel",
+    --   SetPedDefaultComponentVariation -- client/appearance.lua, applied
+    --   to the new ped immediately after SetPlayerModel above. WITHOUT it
+    --   the swapped ped renders as nothing at all: SET_PLAYER_MODEL builds
+    --   the ped with no component variation set, and for an animal ped
+    --   every part of the dog IS a component, so there is nothing to draw.
+    --   Reported from a live server as "it changes me to air". Verified the
+    --   same way SetPlayerModel/CreatePed above were: its decl page 404s (a
+    --   legacy R* native with no CFX page, never grounds to reject one on
+    --   its own), so checked against the natives.json hash database instead
+    --   -- namespace PED, hash 0x45EEE61580806D63, name
+    --   SET_PED_DEFAULT_COMPONENT_VARIATION, params (ped), and NO `apiset`
+    --   key, which in that database means the default, client-only.
+    --   client/appearance.lua is its only call site and is a client file,
+    --   so the realm is right. Getting the realm wrong here would have been
+    --   a silent no-op with nothing logged -- a "fix" that changed nothing
+    --   while looking correct, which is this project's most expensive
+    --   recurring bug class and precisely why this list exists.
+    "SetPedDefaultComponentVariation",
     --   CreatePed -- client/sarcalls.lua, for the cosmetic "you found them"
     --   reveal, drawn on the finder's own screen after the call has already
     --   resolved server-side. Verified the same way SetPlayerModel above
@@ -872,6 +890,24 @@ globals = {
     -- client/tablet.lua, each with the same `type(fn) == 'function'` guard
     -- its siblings above use.
     "IsDragTargetEngaged",
+    -- server/equipmentshop.lua -- READ-ONLY: how many supply shop items
+    -- currently require a given certification tier, plus their keys.
+    -- Consumed by server/certtiers.lua's delete refusal, which loads
+    -- BEFORE equipmentshop.lua (fxmanifest.lua) and so calls it through
+    -- the same `type(fn) == 'function'` guard every other cross-file
+    -- global here uses. It lives in equipmentshop.lua because only the
+    -- MERGED config+database item catalog knows the answer -- a raw
+    -- database count would include tombstoned items, and config alone
+    -- carries no tier requirements at all.
+    "CountEquipmentShopItemsRequiringTier",
+    -- client/search.lua -- READ-ONLY: is this K9 part-way through a
+    -- contraband search right now. The other half of the MUTUAL GUARD
+    -- between searching and the three combat mechanics: client/search.lua
+    -- refuses to start a search while a bite/drag/vehicle already owns the
+    -- ped, and client/combat.lua reads this to refuse the reverse. A guard
+    -- in only one direction does not prevent the conflict, it just decides
+    -- which mechanic has to be started second.
+    "IsSearchInProgress",
     -- server/combat.lua / server/kennel.lua -- READ-ONLY live headcount
     -- accessors for server/runtimecontrol.lua's own "ACTIVE-USAGE
     -- CONFIRMATION FEATURES" gate (that file's own header section): "how

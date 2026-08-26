@@ -110,8 +110,30 @@ local function newFixture(opts)
     local waitCalls = 0
     local function Wait(_ms) waitCalls = waitCalls + 1 end
 
+    -- The swapped ped, and what it currently looks like. SetPlayerModel
+    -- moves `currentPedModel`, mirroring the real native's observable
+    -- effect, so GetEntityModel below can answer honestly for the
+    -- next-frame re-apply's own guard.
+    local LOCAL_PED = 4242
+    local currentPedModel = 'HASH(a_m_m_business_01)'
+    local defaultComponentVariationCalls = {}
+
     local setPlayerModelCalls = {}
-    local function SetPlayerModel(playerId, hash) setPlayerModelCalls[#setPlayerModelCalls + 1] = { playerId = playerId, hash = hash } end
+    local function SetPlayerModel(playerId, hash)
+        setPlayerModelCalls[#setPlayerModelCalls + 1] = { playerId = playerId, hash = hash }
+        currentPedModel = hash
+    end
+    local function PlayerPedId() return LOCAL_PED end
+    local function GetEntityModel(ped) return ped == LOCAL_PED and currentPedModel or nil end
+    local function SetPedDefaultComponentVariation(ped)
+        defaultComponentVariationCalls[#defaultComponentVariationCalls + 1] = ped
+    end
+
+    -- Deferred bodies are collected rather than run, so a test decides when
+    -- the "next frame" happens (f.runPendingThreads()) and can assert on
+    -- what the world looked like before AND after it.
+    local pendingThreads = {}
+    local function CreateThread(fn) pendingThreads[#pendingThreads + 1] = fn end
 
     local function PlayerId() return 0 end -- FiveM's own local-player index; irrelevant which literal, only that it's passed through
     local function GetHashKey(name) return 'HASH(' .. name .. ')' end -- deliberately NOT a real hash algorithm -- only used to prove name-vs-number handling, never compared against a real game hash
@@ -139,6 +161,10 @@ local function newFixture(opts)
         IsModelValid = IsModelValid,
         Wait = Wait,
         SetPlayerModel = SetPlayerModel,
+        PlayerPedId = PlayerPedId,
+        GetEntityModel = GetEntityModel,
+        SetPedDefaultComponentVariation = SetPedDefaultComponentVariation,
+        CreateThread = CreateThread,
         PlayerId = PlayerId,
         GetHashKey = GetHashKey,
         Config = Config,
@@ -150,6 +176,15 @@ local function newFixture(opts)
         env = env,
         events = capturedEvents,
         serverEvents = serverEvents,
+        defaultComponentVariationCalls = defaultComponentVariationCalls,
+        runPendingThreads = function()
+            local queued = pendingThreads
+            pendingThreads = {}
+            for _, fn in ipairs(queued) do fn() end
+        end,
+        pendingThreadCount = function() return #pendingThreads end,
+        setPedModel = function(hash) currentPedModel = hash end,
+        localPed = function() return LOCAL_PED end,
         setNow = function(ms) fakeNow = ms end,
         advance = function(ms) fakeNow = fakeNow + ms end,
         queueRoleResponse = function(v) roleCallbackQueue[#roleCallbackQueue + 1] = v end,
@@ -406,6 +441,78 @@ t.test('applyK9Ped: success -- RequestModel is called with the resolved hash, Se
     t.equals(f.serverEvents[1][1], 'qbx_k9unit:server:confirmK9PedSwap')
     t.equals(f.serverEvents[1][2], 'req-42')
     t.equals(f.serverEvents[1][3], true)
+end)
+
+-- ----------------------------------------------------------------------
+-- INVISIBLE-PED FIX. Reported from a live server: certifying somebody with
+-- /k9certify "changes me to air". The swap fired, the dog model was right,
+-- and nothing rendered at all.
+--
+-- SET_PLAYER_MODEL builds the new ped with NO component variation set. A
+-- human ped mostly survives that; an animal ped does not, because every
+-- part of the dog IS a component -- so a ped with none set has nothing to
+-- draw. The player stands there, collides, can be targeted, and is
+-- invisible to everyone including themselves.
+-- ----------------------------------------------------------------------
+
+t.test('INVISIBLE-PED FIX: a successful swap applies the default component variation to the new ped -- without it the dog renders as nothing at all', function()
+    local f = newFixture()
+    f.env.source = 65535
+    f.markModelLoaded('HASH(a_c_shepherd)')
+    f.events['qbx_k9unit:client:applyK9Ped']('req-42', 'a_c_shepherd')
+
+    t.equals(#f.defaultComponentVariationCalls, 1, 'the swap is not finished until the ped has something to draw')
+    t.equals(f.defaultComponentVariationCalls[1], f.localPed())
+end)
+
+t.test('INVISIBLE-PED FIX: it is applied AGAIN on the next frame, since on some builds a ped is not fully built until the frame after the swap', function()
+    local f = newFixture()
+    f.env.source = 65535
+    f.markModelLoaded('HASH(a_c_shepherd)')
+    f.events['qbx_k9unit:client:applyK9Ped']('req-42', 'a_c_shepherd')
+
+    t.equals(f.pendingThreadCount(), 1, 'a next-frame re-apply must actually be scheduled, not just intended')
+    f.runPendingThreads()
+    t.equals(#f.defaultComponentVariationCalls, 2,
+        'a variation applied to a half-built ped is silently dropped -- an intermittent invisible dog is worse to diagnose than a consistent one')
+end)
+
+t.test('INVISIBLE-PED FIX: the next-frame re-apply is a NO-OP if something swapped the player again in the meantime -- it never stomps whatever they legitimately became', function()
+    local f = newFixture()
+    f.env.source = 65535
+    f.markModelLoaded('HASH(a_c_shepherd)')
+    f.events['qbx_k9unit:client:applyK9Ped']('req-42', 'a_c_shepherd')
+    t.equals(#f.defaultComponentVariationCalls, 1)
+
+    -- Another resource, a revoke racing the certify, or a death and
+    -- respawn -- anything that moves them off the model this handler applied.
+    f.setPedModel('HASH(a_m_m_business_01)')
+    f.runPendingThreads()
+
+    t.equals(#f.defaultComponentVariationCalls, 1, 'still just the immediate one -- the deferred pass correctly declined to act')
+end)
+
+t.test('INVISIBLE-PED FIX: an ABANDONED swap (model never streamed in) applies no variation and schedules no re-apply -- there is no new ped to dress', function()
+    local f = newFixture({ modelLoadTimeoutMs = 200 })
+    f.env.source = 65535
+    -- deliberately never markModelLoaded -- HasModelLoaded stays false
+    f.events['qbx_k9unit:client:applyK9Ped']('req-timeout', 'a_c_shepherd')
+
+    t.equals(#f.setPlayerModelCalls, 0, 'precondition: the swap really was abandoned')
+    t.equals(#f.defaultComponentVariationCalls, 0)
+    t.equals(f.pendingThreadCount(), 0)
+end)
+
+t.test('INVISIBLE-PED FIX: a swap REFUSED because the ped is engaged applies no variation either -- nothing was swapped', function()
+    local f = newFixture()
+    f.env.source = 65535
+    f.setEngaged('leashed', true)
+    f.markModelLoaded('HASH(a_c_shepherd)')
+    f.events['qbx_k9unit:client:applyK9Ped']('req-engaged', 'a_c_shepherd')
+
+    t.equals(#f.setPlayerModelCalls, 0)
+    t.equals(#f.defaultComponentVariationCalls, 0)
+    t.equals(f.pendingThreadCount(), 0)
 end)
 
 t.test('REVERT CASE: a raw NUMERIC hash (not a string name) is applied directly -- GetHashKey is never called on it, since it is already a hash', function()
