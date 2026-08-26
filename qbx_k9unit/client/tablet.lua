@@ -642,6 +642,7 @@ local TABLET_STRING_KEYS = {
     'capability_rate_limited_wait_title',
     'person_certifications_heading', 'person_xp_heading', 'xp_tier_unknown',
     'use_label', 'not_available_short', 'opening_person',
+    'person_no_record_found',
     'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',
     'role_heading', 'role_model_label', 'role_assign_label',
     'role_assign_hint', 'role_revert_label', 'role_revert_hint',

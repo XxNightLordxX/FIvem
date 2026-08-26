@@ -94,6 +94,16 @@ local function makeQueryAwait(world)
             return {}
         elseif sql:find('INSERT INTO k9_equipment_shop_items', 1, true) and sql:find('ON DUPLICATE KEY UPDATE sort_order', 1, true) then
             local itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy = table.unpack(params)
+            -- DEFECT TEST HOOK (mirrors tests/certtiers_spec.lua's own
+            -- `world.throwOnTierOrdinalWrite`, same shape, applied to
+            -- ShopItem_UpdateSortOrder instead of Tier_UpdateOrdinal):
+            -- `world.throwOnShopItemSortOrderWrite` (a set of item_key
+            -- strings), when present, makes ONLY this sort_order-shaped
+            -- call throw for a chosen key, simulating exactly the DB blip
+            -- K9Store's own SafeWrite contract degrades to `false`.
+            if world.throwOnShopItemSortOrderWrite and world.throwOnShopItemSortOrderWrite[itemKey] then
+                error('equipmentshopitems_spec test stub: simulated ShopItem_UpdateSortOrder failure for ' .. tostring(itemKey))
+            end
             local existing = world.items[itemKey]
             if existing then
                 existing.sort_order, existing.deleted, existing.updated_by = sortOrder, 0, updatedBy
@@ -797,6 +807,152 @@ t.test('Config.Features.K9EquipmentShop = false: openShop/buyItem hooks are neve
     f.fireResourceStart()
     t.isNil(f.hookCallbacks['openShop'])
     t.isNil(f.hookCallbacks['buyItem'])
+end)
+
+-- ============================================================================
+-- REORDER -- permutation validation, and DEFECT (audit-confirmed, data-truth
+-- pass): equipmentShopItemsReorder's per-key sort-order write used to
+-- discard K9Store.ShopItem_UpdateSortOrder's own `@return boolean ok` (the
+-- SafeWrite contract -- a thrown DB error degrades to `false` rather than
+-- propagating, see tests/datastore_spec.lua's own "SafeWrite contract"
+-- pin), so a mid-loop DB blip left the reorder partially applied while the
+-- caller still received a bare `ok = true` AND an audit trail claiming the
+-- full REQUESTED order, not what actually landed. Mirrors
+-- tests/certtiers_spec.lua's own SECTION 11 "DEFECT 2" test byte-for-byte,
+-- applied to server/equipmentshop.lua's own ReorderItems instead of
+-- certTiersReorder.
+-- ============================================================================
+
+--- @param world table
+--- @param opts table?
+--- @return table f -- a booted fixture with THREE known items: k9_medkit
+--- (config, sortOrder 1), k9_treat (config, sortOrder 2), k9_new_gadget
+--- (DB-only, sortOrder 3).
+local function bootThreeItemFixture(world, opts)
+    opts = opts or {}
+    world.items.k9_new_gadget = { label = 'K9 Gadget', price = 300, currency = nil, sort_order = 3, required_tier_key = nil, required_specialization = nil, deleted = 0, updated_by = 'SOMEONE' }
+    local f = newFixture({
+        featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, world = world,
+        registeredItems = { money = true, k9_medkit = true, k9_treat = true, k9_new_gadget = true },
+        isHighCommand = function() return true end,
+        isKnownCertificationTierKey = opts.isKnownCertificationTierKey,
+    })
+    f.fireResourceStart()
+    return f
+end
+
+t.test('REORDER: a full, valid permutation succeeds and reassigns sequential sort orders', function()
+    local f = bootThreeItemFixture(newWorld())
+    local result = f.callbacks['qbx_k9unit:server:equipmentShopItemsReorder'](HC_SOURCE, { 'k9_treat', 'k9_new_gadget', 'k9_medkit' })
+    t.isTrue(result.ok, tostring(result.reason))
+
+    local byKey = {}
+    for _, item in ipairs(result.items) do byKey[item.key] = item end
+    t.equals(byKey.k9_treat.sortOrder, 1)
+    t.equals(byKey.k9_new_gadget.sortOrder, 2)
+    t.equals(byKey.k9_medkit.sortOrder, 3)
+
+    t.equals(f.world.items.k9_treat.sort_order, 1, 'the write must actually land in the backing store, not just the response')
+    t.equals(f.world.items.k9_new_gadget.sort_order, 2)
+    t.equals(f.world.items.k9_medkit.sort_order, 3)
+end)
+
+t.test('REORDER: a PARTIAL reorder (missing a known key) is refused outright -- no sort order is touched', function()
+    local f = bootThreeItemFixture(newWorld())
+    local result = f.callbacks['qbx_k9unit:server:equipmentShopItemsReorder'](HC_SOURCE, { 'k9_treat', 'k9_medkit' }) -- missing k9_new_gadget
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'must_include_every_item')
+    t.equals(next(f.world.items), 'k9_new_gadget', 'no write may have happened -- the world must be untouched by a refused reorder')
+end)
+
+t.test('REORDER: a reorder listing an unknown key is refused as invalid_key_set', function()
+    local f = bootThreeItemFixture(newWorld())
+    local result = f.callbacks['qbx_k9unit:server:equipmentShopItemsReorder'](HC_SOURCE, { 'k9_treat', 'k9_medkit', 'k9_new_gadget', 'made_up' })
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_key_set')
+end)
+
+t.test('REORDER: a reorder listing the same key twice is refused (duplicate), never silently deduped', function()
+    local f = bootThreeItemFixture(newWorld())
+    local result = f.callbacks['qbx_k9unit:server:equipmentShopItemsReorder'](HC_SOURCE, { 'k9_treat', 'k9_treat', 'k9_medkit' })
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_key_set')
+end)
+
+t.test('DEFECT: equipmentShopItemsReorder reports failure, not a bare ok = true, when a sort-order write throws after a successful mutex acquire', function()
+    local world = newWorld()
+    local f = bootThreeItemFixture(world)
+
+    world.throwOnShopItemSortOrderWrite = { k9_treat = true }
+    local result = f.callbacks['qbx_k9unit:server:equipmentShopItemsReorder'](HC_SOURCE, { 'k9_treat', 'k9_new_gadget', 'k9_medkit' })
+
+    t.isFalse(result.ok, 'a genuine post-acquire DB write failure must never be reported as a bare ok = true')
+    t.equals(result.reason, 'sort_order_write_failed')
+    t.isNotNil(result.failedKeys)
+    t.equals(#result.failedKeys, 1)
+    t.equals(result.failedKeys[1], 'k9_treat', 'the response must name exactly which key failed to write')
+
+    -- k9_treat's sort order must reflect its REAL, unchanged value (2) --
+    -- the write never actually landed (its overlay row was never even
+    -- created -- the throw happens before any mutation), so it must
+    -- never be reported/left as the intended new position (1).
+    t.isNil(f.world.items.k9_treat, 'a write that throws before mutating must leave no overlay row behind at all')
+    local byKey = {}
+    for _, item in ipairs(f.callbacks['qbx_k9unit:server:equipmentShopItemsList'](HC_SOURCE).items) do byKey[item.key] = item end
+    t.equals(byKey.k9_treat.sortOrder, 2, 'the live catalog read back after the failed reorder must fall back to the real, unchanged config-default sort order')
+
+    -- The two keys whose writes DID succeed actually moved.
+    t.equals(f.world.items.k9_new_gadget.sort_order, 2)
+    t.equals(f.world.items.k9_medkit.sort_order, 3)
+
+    -- The audit trail must record the REAL after-state (k9_treat still at
+    -- 2), never the intended-but-never-landed order (k9_treat at 1) --
+    -- the same "audit reflects truth, not intent" rule this pass exists
+    -- to enforce.
+    local lastAudit = f.world.itemAudit[#f.world.itemAudit]
+    t.equals(lastAudit.action, 'item_reorder')
+    t.contains(lastAudit.detail, 'k9_treat=2', 'the audit must record the REAL unchanged sort order for the failed key, never the intended one')
+    t.notContains(lastAudit.detail:match('after=%[(.-)%]') or '', 'k9_treat=1', 'the after-state in the audit must not claim the failed write landed')
+end)
+
+t.test('DEFECT: a mid-loop sort-order write failure does not corrupt or drop the sort order of items unrelated to the failing key, across a real reload', function()
+    local world = newWorld()
+    local f = bootThreeItemFixture(world)
+
+    -- A genuine 3-way rotation (gadget->1, medkit->2, treat->3), with
+    -- k9_new_gadget's own write (original 3 -> intended 1) rigged to
+    -- fail. The other two links in the rotation (medkit 1->2, treat
+    -- 2->3) succeed. Note: this necessarily leaves k9_new_gadget (real,
+    -- unchanged 3) and k9_treat (real, successfully-applied 3) sharing
+    -- the same sort order -- a disclosed, expected consequence of a
+    -- PARTIAL rotation failure (order stability, not cross-item
+    -- uniqueness, is this pass's only enforced invariant), matching the
+    -- identical collision already accepted in
+    -- tests/certtiers_spec.lua's own "DEFECT 2" reference test (its
+    -- senior/certified pair ends up sharing ordinal 3 there for the
+    -- exact same structural reason).
+    world.throwOnShopItemSortOrderWrite = { k9_new_gadget = true }
+    local result = f.callbacks['qbx_k9unit:server:equipmentShopItemsReorder'](HC_SOURCE, { 'k9_new_gadget', 'k9_medkit', 'k9_treat' })
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'sort_order_write_failed')
+    t.equals(result.failedKeys[1], 'k9_new_gadget')
+
+    -- Reboot against the SAME world (persistence-across-restart, same
+    -- pattern as the "Config.Database = false" / two-boot checks
+    -- elsewhere in this suite) -- the two successful writes must survive,
+    -- and the failed one must still show its real, pre-reorder value,
+    -- never the value that was attempted.
+    local f2 = newFixture({
+        featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, world = world,
+        registeredItems = { money = true, k9_medkit = true, k9_treat = true, k9_new_gadget = true },
+        isHighCommand = function() return true end,
+    })
+    f2.fireResourceStart()
+    local byKey = {}
+    for _, item in ipairs(f2.callbacks['qbx_k9unit:server:equipmentShopItemsList'](HC_SOURCE).items) do byKey[item.key] = item end
+    t.equals(byKey.k9_new_gadget.sortOrder, 3, 'k9_new_gadget never actually moved -- its original sort order (3) survives the failed write, never the intended new position (1)')
+    t.equals(byKey.k9_medkit.sortOrder, 2, 'k9_medkit\'s successful write (1 -> 2) survives a reload')
+    t.equals(byKey.k9_treat.sortOrder, 3, 'k9_treat\'s successful write (2 -> 3) survives a reload')
 end)
 
 os.exit(t.summary())

@@ -1945,7 +1945,17 @@ lib.callback.register('qbx_k9unit:server:equipmentShopItemsReorder', function(so
         beforeParts[#beforeParts + 1] = ('%s=%d'):format(key, ItemByKey[key].sortOrder)
     end
 
-    local afterParts = {}
+    -- `writeFailedKeys` collects only a genuine post-acquire DB write
+    -- failure (SafeWrite contract: ShopItem_UpdateSortOrder degrades a
+    -- thrown DB error to `false` rather than propagating) -- NOT a
+    -- busy-skip, which remains the pre-existing, already-disclosed, benign
+    -- contention outcome (logged, sort order left unchanged, overall
+    -- response still `ok = true`) and is deliberately left untouched
+    -- below. A write failure is a different, more serious class -- an
+    -- actual DB error, not ordinary lock contention -- so it alone
+    -- escalates the response. Mirrors server/certtiers.lua's own
+    -- ReorderTiers exactly.
+    local afterParts, writeFailedKeys = {}, {}
     for index, key in ipairs(cleanOrder) do
         -- Per-key mutex, held only for THIS key's own write -- same
         -- reasoning as server/certtiers.lua's own ReorderTiers: a busy key
@@ -1953,12 +1963,26 @@ lib.callback.register('qbx_k9unit:server:equipmentShopItemsReorder', function(so
         -- blocking the rest of the reorder.
         if ShopItemEditMutex.TryAcquire(key) then
             local entry = ItemByKey[key]
-            K9Store.ShopItem_UpdateSortOrder(key, entry.label, entry.price, entry.currency, index, entry.requiredTierKey, entry.requiredSpecialization, citizenid or 'unknown')
+            local wrote = K9Store.ShopItem_UpdateSortOrder(key, entry.label, entry.price, entry.currency, index, entry.requiredTierKey, entry.requiredSpecialization, citizenid or 'unknown')
             ShopItemEditMutex.Release(key)
+            if wrote then
+                afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
+            else
+                -- Acquired the lock but the write itself failed (SafeWrite
+                -- contract: a thrown DB error degrades to `false`). Log it,
+                -- and record the REAL unchanged sort order (never the
+                -- intended `index`), since the write never actually
+                -- landed.
+                writeFailedKeys[#writeFailedKeys + 1] = key
+                print(('[qbx_k9unit] equipmentshop ReorderItems: item %s sort order write failed (db_error) -- its sort order was left unchanged this pass'):format(key))
+                afterParts[#afterParts + 1] = ('%s=%d'):format(key, entry.sortOrder)
+            end
         else
+            -- busy-key skip: this branch IS correctly handled, left
+            -- unchanged -- see header comment above.
             print(('[qbx_k9unit] equipmentshop ReorderItems: item %s busy (concurrent edit) -- its sort order was left unchanged this pass'):format(key))
+            afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
         end
-        afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
     end
 
     WriteShopItemAudit('item_reorder', 'ALL',
@@ -1967,6 +1991,15 @@ lib.callback.register('qbx_k9unit:server:equipmentShopItemsReorder', function(so
 
     RefreshEquipmentShopItemCatalog()
     EnsureEquipmentShopReflectsCurrentCatalog()
+
+    if #writeFailedKeys > 0 then
+        return {
+            ok = false,
+            reason = 'sort_order_write_failed',
+            failedKeys = writeFailedKeys,
+            items = ListEquipmentShopItems(),
+        }
+    end
 
     return { ok = true, items = ListEquipmentShopItems() }
 end)

@@ -1248,13 +1248,57 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- applied to THIS type's own `trackingConfig.maxRange` (not a flat
     -- floor), so tiers above base genuinely extend detection range.
     local maxRange = trackingConfig.maxRange
-    if Config.Features.XPProgression and type(GetXPTier) == 'function' then
+    if Config.Features.XPProgression then
         local trackerPlayer = exports.qbx_core:GetPlayer(source)
         local trackerCitizenid = trackerPlayer and trackerPlayer.PlayerData and trackerPlayer.PlayerData.citizenid
         if trackerCitizenid then
-            local tier = GetXPTier(trackerCitizenid)
-            if tier and type(tier.scentRangeMultiplier) == 'number' and tier.scentRangeMultiplier > 1.0 then
-                maxRange = trackingConfig.maxRange * tier.scentRangeMultiplier
+            -- INDIVIDUAL-OVERRIDE FIX (this pass, coder-backend) -- see
+            -- server/k9profiles.lua's own header, "INTEGRATION HANDOFF", for
+            -- the exact one-line gap this closes: this branch used to read
+            -- GetXPTier(trackerCitizenid).scentRangeMultiplier RAW, so a
+            -- per-K9 individual override on scentRangeMultiplier
+            -- (server/k9profiles.lua's k9ProfileUpsert) was stored, audited,
+            -- and even shown back to the operator through k9ProfileGet's own
+            -- `effective` field, but THIS FILE -- the one real server-side
+            -- consumer of scentRangeMultiplier for an actual detection-range
+            -- calculation -- never read it, so the override had literally
+            -- zero effect on live behavior. FIXED by resolving through
+            -- GetK9EffectiveMultipliers (server/k9profiles.lua), the SAME
+            -- single seam server/progression.lua's own
+            -- GetXPTierMedkitCooldownMs already calls for the sibling
+            -- medkit-cooldown field -- never GetXPTier directly when an
+            -- override might apply, per that file's own resolution-order
+            -- contract (GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE).
+            -- Not a fourth ladder and not a re-implementation of that
+            -- composition -- this is the one call into it.
+            --
+            -- Soft dependency, this resource's established `type(...) ==
+            -- 'function'` convention: server/tracking.lua loads BEFORE
+            -- server/k9profiles.lua in fxmanifest.lua's server_scripts list,
+            -- but this call happens at CALLBACK-INVOCATION time, long after
+            -- every server_scripts file has already finished loading -- no
+            -- load-order assumption either way. Falls back to a direct
+            -- GetXPTier read (the file's ORIGINAL behavior, pcall-free
+            -- because GetXPTier itself never yields/throws for a valid
+            -- citizenid) when GetK9EffectiveMultipliers is unavailable (an
+            -- install that predates server/k9profiles.lua, or one that had
+            -- it removed), so this file works identically whether or not
+            -- that file happens to be present.
+            local scentRangeMultiplier
+            if type(GetK9EffectiveMultipliers) == 'function' then
+                local ok, effective = pcall(GetK9EffectiveMultipliers, trackerCitizenid)
+                if ok and type(effective) == 'table' and type(effective.scentRangeMultiplier) == 'number' then
+                    scentRangeMultiplier = effective.scentRangeMultiplier
+                end
+            end
+            if scentRangeMultiplier == nil and type(GetXPTier) == 'function' then
+                local tier = GetXPTier(trackerCitizenid)
+                if tier and type(tier.scentRangeMultiplier) == 'number' then
+                    scentRangeMultiplier = tier.scentRangeMultiplier
+                end
+            end
+            if type(scentRangeMultiplier) == 'number' and scentRangeMultiplier > 1.0 then
+                maxRange = trackingConfig.maxRange * scentRangeMultiplier
             end
         end
     end

@@ -775,6 +775,7 @@
         use_label: 'Use',
         not_available_short: 'Unavailable',
         opening_person: 'Loading record...',
+        person_no_record_found: 'No record found for this citizen ID. Double-check the ID -- it may be a typo, or belong to a deleted character.',
 
         // ---- Open-by-citizen-ID (console screen) -- see this file's
         // header note on why the roster search box alone cannot reach a
@@ -4272,7 +4273,16 @@
         idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
             var id = (idInput.value || '').trim();
             if (id.length === 0) return;
-            openPerson(id, id);
+            // `name` starts null, deliberately -- the typed string is a
+            // citizenid, not a name, and tabletRequestPersonSummary's own
+            // `ok = true` for ANY syntactically valid citizenid (no
+            // existence check server-side; see loadPersonSummary()'s own
+            // "no record found" doc comment) means the id is not even
+            // confirmed to belong to a real person yet. openPerson()/
+            // loadPersonSummary() fill in the real (or honestly
+            // id-echoing) resolved name once the response lands; null
+            // here just means "unknown so far", never a guess.
+            openPerson(id, null);
         }));
         wrap.appendChild(idBar);
 
@@ -4332,6 +4342,43 @@
         return tr;
     }
 
+    /**
+     * GHOST-CITIZENID GUARD (this pass) -- tabletRequestPersonSummary has
+     * no existence check server-side: it returns `ok = true` for ANY
+     * syntactically valid citizenid, online or not, real or not (see
+     * server/tablet.lua's ResolveDisplayName/ResolveJobGradeInfo doc
+     * comments -- both fall back to "citizenid itself" / `nil`
+     * respectively rather than erroring when nothing resolves). That makes
+     * a typo'd or deleted-character citizenid indistinguishable, field by
+     * field, from a real citizen with genuinely nothing on record -- UNTIL
+     * this checks ALL of them together. `job` is the load-bearing field:
+     * ResolveJobGradeInfo returns non-null whenever qbx_core finds a
+     * PlayerData row AT ALL (online OR offline) -- every real character
+     * has SOME job, even 'unemployed' -- so `job === null` already means
+     * "no such player row exists". Still required to be true ALONGSIDE
+     * every other field being empty, so a real, existing handler who
+     * simply holds zero certs/XP/partnership yet is never misclassified
+     * (their `job` still resolves).
+     *
+     * THE REAL FIX IS SERVER-SIDE: this is a frontend-only stopgap.
+     * coder-backend/coder-security own the actual contract this needs --
+     * an explicit boolean the server computes from a REAL existence check
+     * (e.g. `target.exists` on tabletRequestPersonSummary's response,
+     * true only when qbx_core actually found a player row for the
+     * citizenid), never guessed here from "everything happens to be
+     * empty". Swap this heuristic out for that field the day it exists.
+     * @param {object} summary -- state.personSummary
+     * @returns {boolean}
+     */
+    function personSummaryLooksLikeNoRecord(summary) {
+        if (!summary) return false;
+        return !summary.job
+            && !summary.partnership
+            && summary.xp === null
+            && (!summary.certifications || summary.certifications.length === 0)
+            && (!summary.permissions || summary.permissions.length === 0);
+    }
+
     // ---- Person detail screen ----
 
     function buildPersonScreen() {
@@ -4360,6 +4407,11 @@
         if (state.personSummaryError && !state.personSummary) {
             wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personSummaryError) }));
             wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonSummary(state.person.citizenid); }));
+            return wrap;
+        }
+
+        if (state.personSummary && personSummaryLooksLikeNoRecord(state.personSummary)) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: S('person_no_record_found') }));
             return wrap;
         }
 
@@ -7914,7 +7966,13 @@
         idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
             var id = (idInput.value || '').trim();
             if (id.length === 0) return;
-            onSelected(id, id);
+            // See buildConsoleScreen()'s identical "open by exact citizen
+            // ID" box for why `name` starts null rather than echoing the
+            // typed id: it is a citizenid, not a confirmed name, and
+            // flowSelectPerson()/loadPersonSummary() fill in the real
+            // (or honestly id-echoing) resolved name once the response
+            // lands.
+            onSelected(id, null);
         }));
         wrap.appendChild(idBar);
 
@@ -7990,6 +8048,14 @@
         }
         if (!state.personSummary) {
             return mk('p', { text: S('loading') });
+        }
+        // See personSummaryLooksLikeNoRecord()'s own doc comment
+        // (buildPersonScreen()'s identical guard) -- same ghost-citizenid
+        // stopgap, applied here so a guided flow can't walk an operator
+        // through Onboarding/Offboarding/Problem-Player steps against a
+        // citizenid that was never real to begin with.
+        if (personSummaryLooksLikeNoRecord(state.personSummary)) {
+            return mk('p', { class: 'k9tablet-error-text', text: S('person_no_record_found') });
         }
         return null;
     }

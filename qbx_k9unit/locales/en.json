@@ -452,6 +452,7 @@
         "use_label": "Use",
         "not_available_short": "Unavailable",
         "opening_person": "Loading record...",
+        "person_no_record_found": "No record found for this citizen ID. Double-check the ID -- it may be a typo, or belong to a deleted character.",
         "open_by_id_placeholder": "Open by exact citizen ID...",
         "open_by_id_label": "Open",
         "open_by_id_empty": "Enter a citizen ID first.",

@@ -284,6 +284,52 @@ t.test('SELF-GRANT: viewing your own record, an unheld row is disabled with a re
     t.equals(unheldCheckbox.getAttribute('disabled'), 'disabled', 'GrantPermission blocks self-grant unconditionally -- this checkbox must never be enabled only to fail server-side');
 });
 
+t.test('SHARED RATE LIMIT: after one checkbox mutation fires, every capability checkbox is disabled with an honest reason until the cooldown window passes', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestPersonSummary': () => ({ ok: true, target: { citizenid: 'TARGET1', name: 'K9 Rex' }, certifications: [], xp: 500, tierLabel: 'Trained K9', permissions: ['k9.access'] }),
+            'tablet:permKeysList': () => ({ ok: true, keys: FOUR_SHIPPED_KEYS_CATALOG }),
+            'tablet:grantPermission': () => ({ ok: true }),
+        })),
+    });
+    await openPersonScreen(h);
+
+    const rows = getCapabilityRows(h);
+    const unheldRow = rows.filter((r) => capabilityLabelText(r) === 'Grant XP')[0];
+
+    capabilityCheckbox(unheldRow).checked = true;
+    capabilityCheckbox(unheldRow)._dispatch('change');
+    await new Promise((r) => setTimeout(r, 30)); // let the mocked grant resolve and the refresh re-render
+
+    const afterFirstGrant = getCapabilityRows(h);
+    const stillUnheldRow = afterFirstGrant.filter((r) => capabilityLabelText(r) === 'View the audit records')[0];
+    const stillUnheldCheckbox = capabilityCheckbox(stillUnheldRow);
+    t.equals(stillUnheldCheckbox.getAttribute('disabled'), 'disabled', 'a SECOND permission change right after the first is disabled client-side, before the server ever has a chance to say rate_limited');
+    const toggleLabel = stillUnheldCheckbox.parentNode;
+    t.contains(toggleLabel.getAttribute('title') || '', 'cooldown', 'the disabled reason is honest and specific, not silent');
+
+    // NOTE: tablet-sandbox.js caps EVERY sandboxed setTimeout at 15ms (see
+    // its own header "TEST-ONLY TIME COMPRESSION") -- this file's own
+    // requested PERMISSION_ACTION_MIN_INTERVAL_MS + 50 re-render timer is
+    // therefore already long since fired by the time this REAL (uncapped,
+    // Node-native) wait below elapses; only the real, unmocked Date.now()
+    // this file's cooldown math reads is what actually matters here.
+    // Forcing one more ordinary render (via the feature search box's own
+    // synchronous 'input' -> render() handler, nothing to do with
+    // capabilities) is what proves the disablement is correctly
+    // TIME-BOUND from real elapsed time, not merely "cleared once, by
+    // coincidence" -- the exact thing this test exists to prove.
+    await new Promise((r) => setTimeout(r, 1700)); // past PERMISSION_ACTION_MIN_INTERVAL_MS (1600ms)
+    const featureSearch = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('placeholder') === 'Search abilities...')[0];
+    t.isDefined(featureSearch, 'sanity: the unrelated feature search box is present to force a render');
+    featureSearch.typeValue('x');
+    featureSearch.typeValue('');
+
+    const afterCooldown = getCapabilityRows(h);
+    const reEnabledRow = afterCooldown.filter((r) => capabilityLabelText(r) === 'View the audit records')[0];
+    t.isNull(capabilityCheckbox(reEnabledRow).getAttribute('disabled'), 'once the real cooldown window has genuinely passed, the NEXT render re-enables every capability checkbox, never a stuck-disabled control');
+});
+
 t.test('a hostile catalog label/description reaches the DOM only via textContent, never innerHTML', async () => {
     const malicious = '<img src=x onerror="window.__xss_pwned=true">';
     const h = createHarness({

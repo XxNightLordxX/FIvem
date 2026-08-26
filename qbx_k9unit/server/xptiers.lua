@@ -777,6 +777,53 @@ local function SnapshotOnlineCitizenXpForRefresh()
     return snapshot
 end
 
+--- Composes a per-citizenid individual override (server/k9profiles.lua's
+--- GetK9EffectiveMultipliers) onto a plain CopyXPTier(tier) snapshot before
+--- it ever goes out over TriggerClientEvent -- CLOSES A REAL GAP (this pass):
+--- PushRefreshedSnapshotsAfterEdit below used to push CopyXPTier(afterTier)
+--- DIRECTLY, so a live tablet edit to a WHOLE RANK silently overwrote, on an
+--- already-online citizenid's own client, any INDIVIDUAL override that
+--- citizenid was already holding -- worse than never composing at all, since
+--- it was a value that visibly, silently REVERTED rather than one that was
+--- merely never applied, until something else (a reconnect, a real tier
+--- crossing, or server/k9profiles.lua's own next k9ProfileUpsert/
+--- k9ProfileReset call) happened to re-resolve and re-push the correct,
+--- override-composed value.
+---
+--- NEVER duplicates GetK9EffectiveMultipliers' own resolution order (GLOBAL
+--- DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE) and never reorders it -- calls
+--- it, exactly once, with the SAME soft-dependency (`type(...) ==
+--- 'function'`, pcall-wrapped) convention server/progression.lua's own
+--- BuildEffectiveTierSnapshot already establishes for the IDENTICAL
+--- composition. This file cannot call that function directly (it is `local`
+--- to server/progression.lua, and this file's own
+--- PushRefreshedSnapshotsAfterEdit is a genuinely separate channel from
+--- server/progression.lua's PushTierSnapshot -- see this file's header for
+--- that disclosure), so the CONTRACT is copied byte-for-byte instead of
+--- reinvented: the same three fields, the same guard shape, the same
+--- "absent/throwing server/k9profiles.lua degrades to a plain, uncomposed
+--- copy" fallback (byte-for-byte this function's own pre-fix behavior). A
+--- citizenid with no live individual override is completely unaffected
+--- either way -- GetK9EffectiveMultipliers itself already returns the plain
+--- tier-derived values for that case, so this is a strict widening, never a
+--- narrowing, of what any citizenid without an override ever saw pushed
+--- before this fix.
+--- @param citizenid string
+--- @param tier table
+--- @return table snapshot
+local function ComposeEffectiveXPTierSnapshot(citizenid, tier)
+    local snapshot = CopyXPTier(tier)
+    if type(citizenid) == 'string' and citizenid ~= '' and type(GetK9EffectiveMultipliers) == 'function' then
+        local ok, effective = pcall(GetK9EffectiveMultipliers, citizenid)
+        if ok and type(effective) == 'table' then
+            if type(effective.speedMultiplier) == 'number' then snapshot.speedMultiplier = effective.speedMultiplier end
+            if type(effective.scentRangeMultiplier) == 'number' then snapshot.scentRangeMultiplier = effective.scentRangeMultiplier end
+            if type(effective.medkitCooldownMultiplier) == 'number' then snapshot.medkitCooldownMultiplier = effective.medkitCooldownMultiplier end
+        end
+    end
+    return snapshot
+end
+
 --- Pushes a fresh, authoritative tier snapshot to every citizenid captured
 --- by `beforeSnapshot`, and counts + NAMES (by citizenid) everyone who just
 --- moved to a STRICTLY LOWER threshold (demoted) or a STRICTLY HIGHER one
@@ -803,7 +850,16 @@ local function PushRefreshedSnapshotsAfterEdit(beforeSnapshot)
 
     for citizenid, before in pairs(beforeSnapshot) do
         local afterTier = GetXPTier(citizenid)
-        TriggerClientEvent('qbx_k9unit:client:xpTierChanged', before.src, CopyXPTier(afterTier))
+        -- COMPOSED, not a plain CopyXPTier -- see ComposeEffectiveXPTierSnapshot's
+        -- own doc comment immediately above for the gap this closes. The
+        -- demotion/promotion comparison just below still compares
+        -- `afterTier.xp` (the plain, un-composed tier threshold) against
+        -- `before.xp` -- an individual override never touches `xp`
+        -- (server/k9profiles.lua's own file-top "SCOPE" section: only
+        -- speedMultiplier/scentRangeMultiplier/medkitCooldownMultiplier are
+        -- overridable), so re-ranking detection is completely unaffected by
+        -- this fix either way.
+        TriggerClientEvent('qbx_k9unit:client:xpTierChanged', before.src, ComposeEffectiveXPTierSnapshot(citizenid, afterTier))
         if afterTier.xp < before.xp then
             effect.demotedCount = effect.demotedCount + 1
             effect.demotedCitizenIds[#effect.demotedCitizenIds + 1] = citizenid
