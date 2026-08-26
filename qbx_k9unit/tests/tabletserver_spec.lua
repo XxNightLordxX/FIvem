@@ -385,6 +385,148 @@ t.test('tabletRequestMyRecord: effectivePermissions -- a grade ONE BELOW certifi
     end
 end)
 
+-- ============================================================================
+-- PERMISSION-KEY CATALOG AWARENESS (this pass) -- ResolveEffectivePermissions
+-- must consult server/permissionkeycatalog.lua's live ListPermissionCatalogKeys,
+-- not just the static Config.Permissions table, or a permission key created
+-- purely at runtime can be granted but never shows as held. See
+-- server/tablet.lua's own "PERMISSION-KEY CATALOG AWARENESS" header section
+-- (AdminCapabilityCandidateKeys) for the full contract these tests pin down.
+-- ============================================================================
+
+t.test('tabletRequestMyRecord: effectivePermissions -- a custom, non-default GRANTED key shows as held', function()
+    local f = newFixture({
+        listPermissionCatalogKeys = function()
+            return {
+                { key = 'k9.access', label = 'Use K9 abilities' },
+                { key = 'k9.certify', label = 'Certify and decertify others' },
+                { key = 'k9.audit', label = 'View the audit records' },
+                { key = 'k9.givexp', label = 'Grant XP' },
+                { key = 'k9.specialaudit', label = 'Special Audit', description = 'A custom, runtime-created key' },
+            }
+        end,
+    })
+    local src = f.registerPlayer(1, 'GRANTEE', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('GRANTEE', 'k9.specialaudit', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    local found = false
+    for _, key in ipairs(result.viewer.effectivePermissions) do
+        if key == 'k9.specialaudit' then found = true end
+    end
+    t.isTrue(found, 'a granted, purely-runtime permission key must appear as held -- this is the exact bug this pass closes')
+end)
+
+t.test('tabletRequestMyRecord: effectivePermissions -- a custom, non-default UNGRANTED key does NOT show as held', function()
+    local f = newFixture({
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.specialaudit', label = 'Special Audit' } }
+        end,
+    })
+    local src = f.registerPlayer(1, 'NOTGRANTED', { name = 'police', grade = { level = 1 } })
+    -- deliberately NO addPermRow for 'k9.specialaudit' -- this citizenid does
+    -- not hold it, and there is no legacy rank tier for a custom key either
+    -- (server/permissions.lua's own LegacyOrHighCommandStillQualifies has no
+    -- branch for it), so it must be a candidate WITHOUT qualifying.
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    for _, key in ipairs(result.viewer.effectivePermissions) do
+        t.isFalse(key == 'k9.specialaudit', 'an ungranted custom key must never read as held')
+    end
+end)
+
+t.test('tabletRequestMyRecord: effectivePermissions -- a TOMBSTONED-but-held custom key still appears (so it remains revocable)', function()
+    local f = newFixture({
+        -- The catalog no longer lists 'k9.specialaudit' at all -- exactly
+        -- what server/permissionkeycatalog.lua's ListPermissionCatalogKeys
+        -- returns for a tombstoned key (see that file's header "TOMBSTONE,
+        -- NOT REFERENCE-COUNTED"). Only the still-shipped defaults remain.
+        listPermissionCatalogKeys = function()
+            return {
+                { key = 'k9.access', label = 'Use K9 abilities' },
+                { key = 'k9.certify', label = 'Certify and decertify others' },
+                { key = 'k9.audit', label = 'View the audit records' },
+                { key = 'k9.givexp', label = 'Grant XP' },
+            }
+        end,
+    })
+    local src = f.registerPlayer(1, 'RETIREE', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('RETIREE', 'k9.specialaudit', 'HC', true) -- still an ACTIVE grant, despite the tombstone
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    local found = false
+    for _, key in ipairs(result.viewer.effectivePermissions) do
+        if key == 'k9.specialaudit' then found = true end
+    end
+    t.isTrue(found, 'a tombstoned key someone still actively holds must still surface, or nobody could ever revoke it from the tablet')
+end)
+
+t.test('tabletRequestMyRecord: effectivePermissions -- the four shipped keys resolve unchanged when the catalog is present', function()
+    local f = newFixture({
+        listPermissionCatalogKeys = function()
+            return {
+                { key = 'k9.access', label = 'Use K9 abilities' },
+                { key = 'k9.certify', label = 'Certify and decertify others' },
+                { key = 'k9.audit', label = 'View the audit records' },
+                { key = 'k9.givexp', label = 'Grant XP' },
+            }
+        end,
+    })
+    local src = f.registerPlayer(1, 'RANKED', { name = 'police', grade = { level = 4 } }) -- certifierGrade = 4
+    f.addPermRow('RANKED', 'k9.audit', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local foundCertify, foundAudit, foundAccess, foundGivexp = false, false, false, false
+    for _, key in ipairs(result.viewer.effectivePermissions) do
+        if key == 'k9.certify' then foundCertify = true end
+        if key == 'k9.audit' then foundAudit = true end
+        if key == 'k9.access' then foundAccess = true end
+        if key == 'k9.givexp' then foundGivexp = true end
+    end
+    t.isTrue(foundCertify, 'legacy certifierGrade rank resolution must still work with the catalog present')
+    t.isTrue(foundAudit, 'an explicit grant must still work with the catalog present')
+    t.isFalse(foundAccess, 'k9.access must not be granted just because the catalog lists it')
+    t.isFalse(foundGivexp, 'k9.givexp has no legacy tier and was never granted here')
+end)
+
+t.test('tabletRequestMyRecord: effectivePermissions -- a rank-qualified certifier still qualifies for k9.certify even if the catalog has TOMBSTONED that literal key', function()
+    -- server/permissionkeycatalog.lua's own header ("NO PROTECTED KEY") is
+    -- explicit that tombstoning 'k9.certify' only turns off the ABILITY TO
+    -- GRANT/HOLD it BY THAT ROUTE -- certifications.lua's own independent
+    -- rank-based IsEligibleCertifier check is unaffected either way. This
+    -- file's own effectivePermissions must not silently disagree by hiding
+    -- a real, independently-qualified capability the moment the catalog
+    -- entry disappears -- see LEGACY_PERMISSION_KEYS's own doc comment.
+    local f = newFixture({
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.access', label = 'x' } } -- k9.certify tombstoned/absent
+        end,
+    })
+    local src = f.registerPlayer(1, 'RANKED', { name = 'police', grade = { level = 4 } }) -- certifierGrade = 4
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local found = false
+    for _, key in ipairs(result.viewer.effectivePermissions) do
+        if key == 'k9.certify' then found = true end
+    end
+    t.isTrue(found, 'a rank-qualified certifier must not lose their real capability just because the catalog entry was tombstoned')
+end)
+
+t.test('tabletRequestMyRecord: effectivePermissions -- a THROWING catalog degrades to the four shipped keys, never an empty list', function()
+    local f = newFixture({
+        listPermissionCatalogKeys = function() error('simulated catalog failure') end,
+    })
+    local src = f.registerPlayer(1, 'RANKED', { name = 'police', grade = { level = 4 } })
+    f.addPermRow('RANKED', 'k9.audit', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    local foundCertify, foundAudit = false, false
+    for _, key in ipairs(result.viewer.effectivePermissions) do
+        if key == 'k9.certify' then foundCertify = true end
+        if key == 'k9.audit' then foundAudit = true end
+    end
+    t.isTrue(foundCertify, 'a catalog read failure must fall back to the four shipped keys, not an empty capability set')
+    t.isTrue(foundAudit, 'an explicit grant must still resolve even when the catalog throws')
+end)
+
 t.test('tabletRequestMyRecord: certifications array has ONE ROW PER CONFIGURED DEPARTMENT, including ones never held', function()
     local f = newFixture()
     local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
