@@ -978,6 +978,23 @@ local COMBAT_REJECT_MESSAGES = {
     -- of this table sees the reason was deliberately handled, not merely
     -- unmapped.
     permission_denied  = locale('combat.reject_fallback'),
+    -- CERTIFICATION TIER CAPABILITY denial (server/certtiers.lua's
+    -- TierCapabilityPermits, wired into ValidateCombatRequest's
+    -- BiteAndHold/NonLethalTakedown branch this pass -- see that call
+    -- site's own comment for the full reasoning, including why this is
+    -- kept a DISTINCT reason rather than collapsed into 'permission_denied'
+    -- immediately above). INTERIM value, not a permanent collapse: the real
+    -- key (proposed as 'combat.tier_capability_denied', wording sent to
+    -- main directly) is not yet in locales/en.json, and this table is a
+    -- top-level literal evaluated at this file's own load time -- a
+    -- locale() call here for a not-yet-existing key would hard-fail
+    -- loading this file for every test, not just ones exercising this
+    -- reason. Mapped to the EXISTING 'combat.reject_fallback' key
+    -- meanwhile (same interim posture 'permission_denied' above already
+    -- established) so this reason reads as deliberately handled, not
+    -- merely unmapped -- replace this line with
+    -- locale('combat.tier_capability_denied') once main lands that key.
+    tier_capability_denied = locale('combat.reject_fallback'),
 }
 
 --- @param reason string?
@@ -1115,6 +1132,93 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
         if not k9Citizenid or not IsCombatFeaturePermittedForCitizenId(k9Citizenid, featureKey) then
             return false, nil, nil, nil, nil, 'permission_denied'
+        end
+    end
+
+    -- CERTIFICATION TIER CAPABILITY (this pass -- server/certtiers.lua's
+    -- TierCapabilityPermits, wired here per that file's own "CAPABILITY
+    -- COMPOSITION" header section, which names THIS exact call site as one
+    -- of its two identified-but-not-yet-wired consumers). A FLOOR laid
+    -- UNDERNEATH HasK9Access and the PER-PERSON FEATURE CONTROL block
+    -- immediately above -- checked only AFTER both have already said
+    -- "allowed", and only able to NARROW that population further, never
+    -- widen it: see TierCapabilityPermits' own doc comment (and this
+    -- resource's .luacheckrc entry for it) for the fail-PERMISSIVE
+    -- contract this relies on (allow unless the capability is actively
+    -- granted by >=1 tier AND this citizenid's own resolved tier is not
+    -- among them; every unresolvable case -- no tier, no lookup function,
+    -- bad arguments -- is an allow, never a deny).
+    --
+    -- BiteAndHold/NonLethalTakedown ONLY -- deliberately NOT PropDragging,
+    -- which shares this same validator for an unrelated mechanic. Checked
+    -- against CAPABILITY_CATALOG (server/certtiers.lua): the ONE capability
+    -- key that exists for this validator's mechanics is
+    -- 'bite_hold_and_takedown', whose own label names bite-and-hold and
+    -- non-lethal takedown explicitly and nothing else -- dragging is a
+    -- separately-gated feature (its own Config.Features.PropDragging flag,
+    -- its own range/cooldown config, and a target precondition -- already
+    -- downed -- that is the OPPOSITE of what BiteAndHold/NonLethalTakedown
+    -- require) with no capability key of its own in that closed, code-owned
+    -- catalog. Folding dragging into 'bite_hold_and_takedown' here would
+    -- silently widen what an operator ticking that ONE checkbox on the
+    -- tablet actually controls, past what its own label says -- not this
+    -- pass's call to make. If a future pass wants dragging gated by tier
+    -- too, that needs its own reviewed CAPABILITY_CATALOG entry in
+    -- server/certtiers.lua, not a silent piggyback here.
+    --
+    -- 'tier_capability_denied' is a NEW, deliberately DISTINCT reason --
+    -- not collapsed into 'permission_denied' (or 'no_access') above, even
+    -- though this file's own sarcalls.lua/scenttrail.lua siblings establish
+    -- a real "don't invent a distinction the server doesn't give data for"
+    -- precedent elsewhere. That precedent does not apply here: it covers
+    -- cases where two failure causes are genuinely INDISTINGUISHABLE in
+    -- their consequence for the player (server/combat.lua's OWN
+    -- 'permission_denied' above is exactly such a case -- "blocked" and
+    -- "never granted" read identically to whoever is denied, per that
+    -- entry's own comment). A tier-capability denial is a DIFFERENT fact:
+    -- this handler already has real K9 access and no admin-set
+    -- block/missing-grant against them -- reusing 'no_access' would be
+    -- FACTUALLY WRONG (HasK9Access already passed), and collapsing into
+    -- 'permission_denied' would misreport which of two different remedies
+    -- applies (ask an admin for a feature grant, vs. ask high command to
+    -- either promote this handler's tier or grant the tier the
+    -- capability). Mirrors the sibling call site landed this same pass,
+    -- server/certifications.lua's GrantSpecialization, which minted its own
+    -- distinct 'certifications.specialization_requires_tier_capability' key
+    -- rather than reusing 'specialization_requires_active_cert' for the
+    -- identical reason.
+    --
+    -- LOCALE KEY, NOT YET LANDED: locales/en.json is off-limits to this
+    -- file's own pass. Proposed key/wording sent to main directly:
+    -- combat.tier_capability_denied = "Your certification tier does not
+    -- permit bite-and-hold or non-lethal takedown." NOT mapped into
+    -- COMBAT_REJECT_MESSAGES below yet, deliberately -- that table is a
+    -- top-level literal evaluated at THIS FILE'S OWN LOAD TIME, so a
+    -- locale() call there for a key that does not exist yet would hard-fail
+    -- loading this file for every test that loads it, not just the ones
+    -- exercising this one reason (confirmed against tests/fixtures/
+    -- sandbox.lua's own locale() implementation, which asserts on a missing
+    -- key rather than degrading). Until main lands that key,
+    -- CombatRejectMessage('tier_capability_denied') falls through to its
+    -- own existing generic fallback (locale('combat.reject_fallback'),
+    -- "Unable to complete that action.") automatically -- not factually
+    -- wrong, just less specific than intended; swap this comment's mapping
+    -- into COMBAT_REJECT_MESSAGES once the real key exists.
+    --
+    -- REQUEST-TIME ONLY: this is ValidateCombatRequest, called only from
+    -- requestBiteHold/requestTakedown's own opening checks -- never from
+    -- EndHold, EndActiveEffectForHolder, the maintenance expiry sweep, or
+    -- releaseBiteHold/releaseDrag. A handler whose tier loses this
+    -- capability mid-hold must still be able to end that hold -- see this
+    -- function's own doc comment and server/certtiers.lua's "NO UNBOUNDED
+    -- TRAP" section for why a termination path may never gate on this.
+    if featureKey == 'BiteAndHold' or featureKey == 'NonLethalTakedown' then
+        local k9Player = exports.qbx_core:GetPlayer(src)
+        local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
+        local k9JobName = k9Player and k9Player.PlayerData and k9Player.PlayerData.job and k9Player.PlayerData.job.name
+        if type(TierCapabilityPermits) == 'function' and k9Citizenid and k9JobName
+            and not TierCapabilityPermits(k9Citizenid, k9JobName, 'bite_hold_and_takedown') then
+            return false, nil, nil, nil, nil, 'tier_capability_denied'
         end
     end
 

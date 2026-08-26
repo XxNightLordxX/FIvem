@@ -210,6 +210,29 @@
       Config.Training.ToggleCooldownMs  : number  (new; built-in fallback 3000 if missing/invalid)
       Config.Training.ActionCooldownMs  : number  (new; built-in fallback 4000 if missing/invalid)
       Config.Training.ContrabandFoundChance : number in [0,1] (new; built-in fallback 0.5 if missing/invalid)
+
+    EACH Config.TrainingZones ENTRY IS VALIDATED ONCE, AT FILE-LOAD TIME
+    (ValidateTrainingZones below) -- not silently re-tolerated on every
+    single eligibility check the way an earlier version of this file did
+    (IsWithinAnyTrainingZone's own per-entry type guards were the ONLY
+    thing standing between a typo'd zone and Training Mode being
+    permanently, silently un-turn-on-able with zero diagnostic printed
+    anywhere -- exactly the "config table the server read that did not
+    exist"-shaped defect this task named explicitly, just one layer
+    deeper: a config table the server read that existed, but whose one
+    and only entry could never actually match). A missing/non-numeric
+    x/y/z is NOT clampable (there is no sane position to invent) and drops
+    THAT ONE entry, loudly, by name/index -- every other, well-formed zone
+    is unaffected. A missing/non-positive/non-numeric radius IS clampable
+    (same posture as ToggleCooldownMs/ActionCooldownMs/
+    ContrabandFoundChance above) and is clamped to ZONE_RADIUS_FALLBACK_M
+    with a loud warning instead of dropping an otherwise-good zone over
+    one bad field. A raw config with entries but ZERO surviving valid
+    zones prints the SAME "cannot be turned ON anywhere" notice as a
+    genuinely empty/missing Config.TrainingZones -- but, unlike an earlier
+    version of this file, that notice is now always accompanied by one
+    explicit, named reason per rejected entry, never a bare "0 zones" the
+    operator has to go guess at.
 ]]
 
 if not Config.Features.TrainingMode then return end
@@ -255,15 +278,41 @@ else
     print('[qbx_k9unit] training: Config.Training is missing entirely; using built-in cooldown/chance defaults. Add the Config.Training block from config.lua to configure these.')
 end
 
--- Config.TrainingZones -- see this file's header for the exact shape. A
--- missing/empty table is NOT a load-time error: Training Mode simply can
--- never be turned ON anywhere on this server (every "on" request fails
--- with a clear, non-silent notice below) until at least one zone is
--- configured -- the safe direction for a feature with no economy/security
--- stake either way.
-local TrainingZones = (type(Config.TrainingZones) == 'table') and Config.TrainingZones or {}
+-- Config.TrainingZones -- see this file's header for the exact shape and
+-- for why validation now happens ONCE, here, at load time, rather than
+-- being silently re-tolerated on every single eligibility check.
+local ZONE_RADIUS_FALLBACK_M = 20.0
+
+--- @param rawZones table -- Config.TrainingZones, already known to be a table
+--- @return table -- only the entries that validated (or were safely clamped), each shaped { label: string?, x: number, y: number, z: number, radius: number }
+local function ValidateTrainingZones(rawZones)
+    local valid = {}
+    for i, zone in ipairs(rawZones) do
+        local hasLabel = type(zone) == 'table' and type(zone.label) == 'string' and zone.label ~= ''
+        local logName = hasLabel and zone.label or ('#' .. tostring(i))
+
+        if type(zone) ~= 'table' or type(zone.x) ~= 'number' or type(zone.y) ~= 'number' or type(zone.z) ~= 'number' then
+            print(('[qbx_k9unit] training: Config.TrainingZones entry %s is missing a numeric x/y/z and cannot be used -- dropping this zone entirely. Every other configured zone is unaffected.'):format(logName))
+        else
+            local radius = zone.radius
+            if type(radius) ~= 'number' or radius <= 0 then
+                print(('[qbx_k9unit] training: Config.TrainingZones entry %s has a missing or non-positive radius; using a built-in %.1fm default instead.'):format(logName, ZONE_RADIUS_FALLBACK_M))
+                radius = ZONE_RADIUS_FALLBACK_M
+            end
+            valid[#valid + 1] = { label = hasLabel and zone.label or nil, x = zone.x, y = zone.y, z = zone.z, radius = radius }
+        end
+    end
+    return valid
+end
+
+-- A missing/empty/all-malformed table is NOT a load-time error: Training
+-- Mode simply can never be turned ON anywhere on this server (every "on"
+-- request fails with a clear, non-silent notice below) until at least one
+-- zone validates -- the safe direction for a feature with no
+-- economy/security stake either way.
+local TrainingZones = ValidateTrainingZones((type(Config.TrainingZones) == 'table') and Config.TrainingZones or {})
 if #TrainingZones == 0 then
-    print('[qbx_k9unit] training: Config.TrainingZones is missing or empty -- Training Mode cannot be turned ON anywhere on this server until at least one zone is configured.')
+    print('[qbx_k9unit] training: Config.TrainingZones has no valid zones -- Training Mode cannot be turned ON anywhere on this server until at least one zone with a numeric x/y/z validates. See any per-entry warning above for exactly which entries were rejected and why.')
 end
 
 -- TrainingMode[citizenid] = true. In-memory ONLY -- never persisted, never
@@ -285,10 +334,16 @@ ActionCooldown.RegisterPlayerDropped()
 
 --- Is `coords` (an {x,y,z}-shaped table -- a real FiveM vector3 already
 --- exposes those three fields, and so does this suite's own test stub)
---- inside at least one configured Config.TrainingZones entry? Every
---- malformed zone entry (missing/non-numeric x/y/z/radius, a
---- non-positive radius) is skipped defensively rather than throwing --
---- one bad entry must never take down every OTHER, well-formed zone.
+--- inside at least one configured Config.TrainingZones entry? Overlapping
+--- zones are handled for free -- this returns true on the FIRST match, and
+--- "is coords in the union of these circles" needs no special-casing for
+--- overlap. `TrainingZones` here is the ALREADY-VALIDATED local built by
+--- ValidateTrainingZones above (every surviving entry is guaranteed
+--- numeric x/y/z and a positive radius) -- the type guard below is
+--- deliberate belt-and-suspenders, not this function's real defense the
+--- way it was before that validation existed, mirroring this file's own
+--- established pattern of pcall-wrapping an already-pcall-safe call
+--- (EndActiveEffectForHolder above).
 --- @param coords table
 --- @return boolean
 local function IsWithinAnyTrainingZone(coords)

@@ -1123,6 +1123,47 @@ t.test('OWN-DEATH (target, ActiveDragSpeedLimit): death restores move rate to ne
     t.isTrue(#f.detachCalls >= 1)
 end)
 
+-- REGRESSION (ANY-PED SWEEP FIX, this pass) -- same shape as the
+-- applyDragSpeedLimit/endDragSpeedLimit regression above, for the shared
+-- maintenance thread's OWN-DEATH and timeout-backstop branches
+-- specifically (both were ALSO gated on bare IsOwnModelK9() before this
+-- fix, and both restore-to-neutral, same real bug class: a HasK9Access()
+-- role-holder's own composed fatigue/injury/mood would have been
+-- clobbered by a raw SetPedMoveRateOverride(ped, 1.0) instead of being
+-- correctly re-composed).
+t.test('OWN-DEATH (target, ActiveDragSpeedLimit): a HasK9Access()-true off-model target ALSO restores through the composer, not a raw override', function()
+    local f = newCombatFixture({ propDragging = true, withMoveRateComposer = true })
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.dispatchNetEvent('qbx_k9unit:client:applyDragSpeedLimit', 65535, 999)
+    f.setDead(1, true)
+    f.startMaintenanceThread()
+    t.equals(#f.moveRateCalls, 0, 'must not call SetPedMoveRateOverride directly on own-death restore')
+    t.equals(f.K9MoveRateModifiers.dragging, 1.0)
+    t.isTrue(#f.detachCalls >= 1)
+end)
+
+t.test('TIMEOUT BACKSTOP (target, ActiveDragSpeedLimit): a HasK9Access()-true off-model target restores through the composer on expiry too, not just on the explicit end event', function()
+    local f = newCombatFixture({ propDragging = true, withMoveRateComposer = true })
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.dispatchNetEvent('qbx_k9unit:client:applyDragSpeedLimit', 65535, 999)
+    t.equals(f.recomputeCallCount(), 1, 'the onset bridge call must already have gone through the composer')
+
+    f.advance(baselinePropDraggingConfig().maxDragDurationMs + 1)
+    f.startMaintenanceThread()
+
+    t.equals(#f.moveRateCalls, 0, 'the expiry backstop must also route through the composer, not a raw override')
+    -- 3, not 2: this single tick both reasserts (AssertDragSpeedLimitOnTarget,
+    -- +1 recompute) AND then observes the expired deadline and restores
+    -- (+1 recompute) -- on top of the onset bridge call (+1) already
+    -- counted above. Reassertion-before-backstop-check is this thread's
+    -- own existing, unchanged per-tick order (see "SHARED MAINTENANCE
+    -- THREAD" header) -- this test counts the real total, not a guessed one.
+    t.equals(f.recomputeCallCount(), 3)
+    t.equals(f.K9MoveRateModifiers.dragging, 1.0)
+end)
+
 -- ========================================================================
 -- onResourceStop restore -- persistent-flag natives must never survive a
 -- resource restart mid-effect.
@@ -1146,6 +1187,25 @@ t.test('onResourceStop: restores damageability, drag attachment, NPC flee/damage
     t.equals(f.canBeDamagedCalls[#f.canBeDamagedCalls].canBeDamaged, true)
     t.isTrue(#f.detachCalls >= 2, 'both the drag holder\'s target AND this client\'s own drag-speed-limited ped must be detached')
     t.equals(f.moveRateCalls[#f.moveRateCalls].rate, 1.0)
+end)
+
+-- REGRESSION (ANY-PED SWEEP FIX, this pass) -- same "restore through the
+-- composer, not a raw override" fix, for the onResourceStop cleanup path.
+-- Cleanup/termination paths are never GATED on an access check (this one
+-- isn't -- it still unconditionally restores for every caller); the fix
+-- here is only about WHICH restore mechanism a HasK9Access()-true,
+-- off-model caller gets, exactly like every other call site above.
+t.test('onResourceStop: a HasK9Access()-true off-model ActiveDragSpeedLimit target restores through the composer too', function()
+    local f = newCombatFixture({ propDragging = true, withMoveRateComposer = true })
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.dispatchNetEvent('qbx_k9unit:client:applyDragSpeedLimit', 65535, 999)
+
+    f.fireResourceStop(RESOURCE_NAME)
+
+    t.equals(#f.moveRateCalls, 0, 'must not call SetPedMoveRateOverride directly on resource-stop restore')
+    t.equals(f.K9MoveRateModifiers.dragging, 1.0)
+    t.isTrue(#f.detachCalls >= 1)
 end)
 
 -- ========================================================================
