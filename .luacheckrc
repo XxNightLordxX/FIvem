@@ -183,6 +183,29 @@ read_globals = {
     -- resource that is not started can throw rather than return nil.
     -- VERIFIED: ext/native-decls/GetResourceState.md declares apiset `shared`.
     "GetResourceState",
+    -- GET_RESOURCE_METADATA. server/selfcheck.lua's boot-time dependency
+    -- version check. VERIFIED against ext/native-decls/GetResourceMetadata.md
+    -- (ns CFX, apiset shared): `char* GET_RESOURCE_METADATA(char*
+    -- resourceName, char* metadataKey, int index)` -- a `char*`-returning
+    -- native, the same "string or nil" shape GetResourceState and
+    -- LoadResourceFile already use here, confirmed against the primary
+    -- declaration rather than assumed from the name. Not exercised against a
+    -- live FXServer (none available in this environment) -- see that file's
+    -- own header for the exact scope of what "verified" means here.
+    "GetResourceMetadata",
+    -- LOAD_RESOURCE_FILE. server/selfcheck.lua reads server/runtimecontrol.lua's
+    -- own raw text at boot to cross-check Config.Features keys against the
+    -- feature names that file's own FEATURE_TIERS table actually names --
+    -- see that file's own header for why a text scan, not a Lua `require`,
+    -- is the only way to reach a table that is a true `local` with no
+    -- resource-global or export surface at all. VERIFIED against
+    -- ext/native-decls/LoadResourceFile.md (ns CFX, apiset shared): `char*
+    -- LOAD_RESOURCE_FILE(char* resourceName, char* fileName)` -- same
+    -- `char*` "string or nil" shape as the two natives above. The doc's one
+    -- caveat ("if executed on the client, this file has to be included in
+    -- `files`") does not apply here -- every call site in this resource is
+    -- server-side only.
+    "LoadResourceFile",
     -- Server-side entity pool enumeration, used by server/wellbeing.lua's rest-
     -- source proximity check. VERIFIED against primary source: each has an
     -- ext/native-decls entry declaring `apiset: server`. Same test the native
@@ -382,6 +405,36 @@ read_globals = {
     "IsVehicleSeatFree", "SetPedIntoVehicle", "GetVehicleMaxNumberOfPassengers",
     "SetVehicleDoorOpen", "SetVehicleDoorShut", "TaskLeaveVehicle",
     "GetVehiclePedIsIn",
+    -- server/webhook.lua (Discord webhook logging, Config.Features.DiscordWebhook)
+    -- -- PerformHttpRequest is NOT itself a raw native; it is a genuine
+    -- Lua-level wrapper function defined in FiveM's own shared Lua runtime,
+    -- data/shared/citizen/scripting/lua/scheduler.lua (citizenfx/fivem,
+    -- master, fetched this session), inside the `if isDuplicityVersion then`
+    -- branch (line 318, closed by `else` at line 411) -- i.e. SERVER-ONLY,
+    -- matching this native's one call site (server/webhook.lua, a
+    -- server_scripts-only file). Same rule as promise/SetTimeout above:
+    -- verified against that primary source directly, not from memory --
+    -- see server/webhook.lua's own header REQUIREMENT 3 for the full
+    -- signature/callback-shape writeup (the callback fires with FOUR
+    -- arguments, statusCode/body/headers/errorData, not the commonly-quoted
+    -- three). The underlying raw native it calls,
+    -- PERFORM_HTTP_REQUEST_INTERNAL_EX, is independently confirmed CFX
+    -- namespace, hash 0x6B171E87, apiset: server, against
+    -- runtime.fivem.net/doc/natives_cfx.json fetched this same session.
+    "PerformHttpRequest",
+    -- json.encode/json.decode -- a genuine CitizenFX Lua-runtime global
+    -- (both realms), used by server/webhook.lua to build the JSON body its
+    -- one PerformHttpRequest call posts to Discord. Not independently
+    -- re-verified against FiveM's own C++ source this pass (unreachable
+    -- through the available channels this session), but this resource
+    -- ALREADY, unconditionally, transitively depends on json.encode being
+    -- real here: fxmanifest.lua declares ox_lib as a hard dependency and
+    -- loads its init.lua before any file of this resource's own runs, and
+    -- ox_lib's own init.lua calls json.encode directly at its own top
+    -- level with no require/guard of any kind (confirmed by direct source
+    -- search of the live overextended/ox_lib repository this session) --
+    -- so this rides an already-load-bearing assumption, not a new one.
+    "json",
 }
 
 -- Read+write: this resource's OWN cross-file globals. Every one of these is
@@ -612,6 +665,13 @@ globals = {
     -- because a divergence between two branches is a bug that only shows up
     -- on whichever one the operator happens to run.
     "K9Store",
+    -- server/selfcheck.lua -- boot-time dependency-version + Config.Features
+    -- key check, extending K9Store's own "warn loudly, never block"
+    -- discipline to two things nothing previously checked. Every function on
+    -- this table is pure (no native calls, no globals beyond its own
+    -- arguments), so tests/selfcheck_spec.lua exercises it directly with
+    -- fabricated inputs -- see that file's own header.
+    "K9SelfCheck",
     -- server/cooldowns.lua -- reads an operator-set cooldown out of Config
     -- and substitutes a safe fallback with a loud, key-naming warning when
     -- it is non-positive, instead of the previous error() at file-load time.

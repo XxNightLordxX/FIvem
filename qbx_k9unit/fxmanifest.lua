@@ -523,6 +523,7 @@ server_scripts {
     -- and IsConfiguredK9Model, called at runtime).
     'server/integrations.lua',
     'server/exports.lua',
+    'server/selfcheck.lua', -- Boot-time self-check (dependency version + Config.Features key check + one-line boot summary), extending the discipline server/datastore.lua's own schema-collision safety net already established. Loaded LAST: it only WARNS (never blocks) and its own database-state clause deliberately waits on K9Store.WaitForSchemaCheckToSettle() rather than racing it, so placement here is about reading things last, not a load-order requirement of its own -- see that file's own header.
 }
 
 lua54 'yes'
