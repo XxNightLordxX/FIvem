@@ -50,7 +50,7 @@
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
 
---- @param opts table? -- { isHighCommand, hasPermission, hasK9Access, getXP, getXPTier, applyK9PedRole, forceRevertK9Appearance, config: table (full Config override) }
+--- @param opts table? -- { isHighCommand, hasPermission, hasK9Access, getXP, getXPTier, applyK9PedRole, forceRevertK9Appearance, listPermissionCatalogKeys, config: table (full Config override) }
 --- @return table fixture
 local function newFixture(opts)
     opts = opts or {}
@@ -216,6 +216,16 @@ local function newFixture(opts)
         -- its absence and degrade to no tier/expiry/specializations data
         -- rather than erroring.
         QueryCertificationRecord = opts.queryCertificationRecord,
+        -- PERMISSION-KEY CATALOG AWARENESS (this pass) -- server/tablet.lua's
+        -- own AdminCapabilityCandidateKeys soft-depends on
+        -- server/permissionkeycatalog.lua's real, global ListPermissionCatalogKeys
+        -- via a `type(...) == 'function'` guard, exactly like every other
+        -- entry in this list. Deliberately nil by default (like HasPermission
+        -- above): every EXISTING test in this file exercises the "catalog
+        -- absent" fallback path (Config.Permissions alone), matching this
+        -- fixture's pre-existing, unchanged behavior; only the new
+        -- catalog-aware tests below pass opts.listPermissionCatalogKeys.
+        ListPermissionCatalogKeys = opts.listPermissionCatalogKeys,
         -- osTime lets a test pin "now" for expiry-boundary assertions without
         -- depending on real wall-clock time -- see NowUnixOrNil in
         -- server/tablet.lua. Omitted entirely (not even set to nil) when
