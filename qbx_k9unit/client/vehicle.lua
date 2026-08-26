@@ -1,25 +1,55 @@
 --[[
     qbx_k9unit/client/vehicle.lua
 
-    Phase 1 scaffold (coder-architect). Owns K9 vehicle entry/exit only —
-    self-administered (the K9 player interacts with the vehicle
-    themselves, nobody does it to them, per DEVELOPER_REFERENCE.md §6.1). Never touches
-    leash/ox_target-on-peds (that's client/movement.lua's job) — keep that
-    split.
+    Owns K9 vehicle entry/exit only — self-administered (the K9 player
+    interacts with the vehicle themselves, nobody does it to them, per
+    DEVELOPER_REFERENCE.md §6.1). Never touches leash/ox_target-on-peds
+    (that's client/movement.lua's job) — keep that split.
+
+    REAL SEATING, NOT AN ATTACH-BASED APPROXIMATION (this pass — owner-reported
+    real defect fix): entry used to hide/freeze/collision-disable the K9's own
+    ped and AttachEntityToEntity it to a boot/trunk offset behind the vehicle.
+    That put the dog in the wrong place (behind the car, not in it) AND made
+    it invisible, so nobody — not even the K9's own handler in the passenger
+    seat — could ever see a police dog riding along, the entire point of the
+    feature. This file now finds a genuinely free passenger seat (rear
+    preferred, never the driver's) via IS_VEHICLE_SEAT_FREE, opens that seat's
+    real door, seats the ped into it with SET_PED_INTO_VEHICLE (a real,
+    game-recognized vehicle occupant — visible, collidable, not attached to
+    anything), and shuts the door behind it. See FindBestK9Seat()/
+    SEAT_TO_DOOR_INDEX below for the exact seat/door native verification and
+    mapping rationale.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — this file does not register or trigger any
     network event/callback. Vehicle entry/exit is purely a client-local
-    cosmetic state (hide/freeze own ped, restore on exit) — no other
-    player's state is affected and nothing needs to be persisted, so
-    there's no dedicated server event for it, matching the same reasoning
-    originally applied to leash before the leash mechanic grew a real
-    consent+restriction requirement. UNLIKE leash, vehicle entry/exit is
-    still single-player-only in its effects, so that reasoning still
-    holds here — flagged for coder-security to confirm rather than
-    asserted as certainly fine, same as the original leash flag was
-    (before leash's requirements changed and proved that assumption wrong
-    there; it may or may not still hold here).
+    action on the acting player's own ped — no TriggerServerEvent/
+    TriggerClientEvent anywhere in this file, and no dedicated server event
+    exists for it, matching the same reasoning originally applied to leash
+    before the leash mechanic grew a real consent+restriction requirement.
+    UNLIKE leash, vehicle entry/exit is still single-player-INITIATED in its
+    effects, so that reasoning still holds here — flagged for coder-security
+    to confirm rather than asserted as certainly fine, same as the original
+    leash flag was (before leash's requirements changed and proved that
+    assumption wrong there; it may or may not still hold here).
+
+    NOT ACTUALLY INVISIBLE TO OTHER PLAYERS (this pass — worth stating
+    explicitly since it's a real change from before): SET_PED_INTO_VEHICLE/
+    SET_VEHICLE_DOOR_OPEN/SET_VEHICLE_DOOR_SHUT act on networked entities
+    (the acting player's own ped, and a vehicle that already exists as a
+    networked entity in the world), and seat occupancy + door state are core
+    CPed/CVehicle attributes the game engine replicates to every other client
+    automatically — the SAME sync mechanism every other player's ordinary
+    vehicle seating and door state already relies on, with no custom
+    networking code needed here, before or after this pass. This does NOT
+    change the trust model described above: a modified client already had
+    the same freedom to place/attach/hide its own ped however it liked
+    (the exact capability the old attach-based code exercised); genuinely
+    occupying a real seat instead is a different VISUAL manifestation of the
+    same pre-existing "client controls its own ped" trust boundary, not a
+    new capability. Flagged for coder-security to independently confirm
+    rather than asserted unilaterally, per this file's own established
+    practice above.
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
@@ -28,6 +58,14 @@
         EnterNearestK9Vehicle()
         ExitK9Vehicle()
         IsInK9Vehicle() -> boolean
+      IsInK9Vehicle() reports true only once the ped is genuinely,
+      game-recognized SET_PED_INTO_VEHICLE'd into a seat — NOT during the
+      brief door-open animation window between a player selecting "Enter
+      Vehicle" and actually being seated (see EnterNearestK9Vehicle()'s own
+      comment on why that window is safe for every consumer of this
+      function: client/combat.lua's mutual guard, client/movement.lua's
+      leash pull-back skip, and client/radial.lua's/client/tablet.lua's own
+      toggle logic).
     - THIS FILE calls client/main.lua's global CanShowK9UI() before acting
       on any of the above, and client/main.lua's global
       ResolveNetworkEntity(netId) inside ResolveVehicleFromState() below
@@ -36,7 +74,7 @@
 ]]
 
 -- ======================================================================
--- FILE-TOP FEATURE GATE (coder-frontend, this pass) -- this file previously
+-- FILE-TOP FEATURE GATE (coder-frontend, earlier pass) -- this file previously
 -- had NO such gate at all: EnterNearestK9Vehicle()/ExitK9Vehicle()/
 -- IsInK9Vehicle() each self-checked Config.Features.VehicleEntryExit
 -- internally, but the onResourceStart handler that registers the "Load/
@@ -48,8 +86,7 @@
 --
 -- WHY A PLAIN TOP-LEVEL RETURN IS SAFE HERE, NOT AN UNBOUNDED TRAP --
 -- worked out deliberately, not assumed, because this file's own watchdog
--- thread exists specifically to prevent a player being stranded frozen/
--- invisible/attached mid-ride:
+-- thread exists specifically to prevent a player being stranded mid-ride:
 --   1. VehicleEntryExit is `tier = 'clientonly'` in server/runtimecontrol.lua's
 --      own FEATURE_TIERS audit -- there is NO server-side registration point
 --      for this feature at all (confirmed by that file's own grep-before-
@@ -98,9 +135,22 @@ if not Config.Features.VehicleEntryExit then return end
 -- handle — see ResolveVehicleFromState() below for why (a cached raw
 -- handle can go stale over a ride of unknown length; client/movement.lua's
 -- leash pull-back thread established this exact re-resolve-every-use
--- pattern for the same reason on a ped handle).
---- @type { vehicleNetId: number } | nil
+-- pattern for the same reason on a ped handle). `seatIndex` is kept purely
+-- for diagnostics/testability — nothing in this file re-reads it after
+-- entry (the ped's actual current seat is always re-resolved live via
+-- GET_VEHICLE_PED_IS_IN where it matters, e.g. ForceLeaveVehicle() below,
+-- never trusted from this cached copy).
+--- @type { vehicleNetId: number, seatIndex: number } | nil
 local vehicleState = nil
+
+-- Set for the short window between a player selecting "Enter Vehicle" and
+-- the ped actually being seated (door-open animation delay) — see
+-- EnterNearestK9Vehicle()'s own header comment for why this window is safe
+-- for every OTHER file's IsInK9Vehicle() check to simply not know about
+-- (they only need to know "seated or not," not "mid-entry"), and exists
+-- here purely to stop a double-click/double-select from racing two
+-- concurrent entry sequences against the same ped.
+local vehicleEntryInProgress = false
 
 --- @return boolean
 function IsInK9Vehicle()
@@ -114,6 +164,98 @@ local K9VehicleHashes = {}
 for _, model in ipairs(Config.K9Vehicles) do
     K9VehicleHashes[GetHashKey(model)] = true
 end
+
+-- ======================================================================
+-- SEAT / DOOR NATIVE VERIFICATION (this pass) — every native named in this
+-- section was checked against the citizenfx/fivem native-decls repo first;
+-- every one of them 404'd there (a 404 is NOT proof of absence per this
+-- task's own standing rule), so all are instead verified against the
+-- documented fallback, https://runtime.fivem.net/doc/natives.json, which
+-- DOES carry each of them with a real hash and parameter list:
+--   IS_VEHICLE_SEAT_FREE     0x22AC59A870E6A669 (VEHICLE) -- (vehicle, seatIndex) -> BOOL
+--   SET_PED_INTO_VEHICLE     0xF75B0D629E1C063D (PED)     -- (ped, vehicle, seatIndex) -> void
+--   GET_VEHICLE_MAX_NUMBER_OF_PASSENGERS
+--                            0xA7C4F2C6E744A550 (VEHICLE) -- (vehicle) -> int
+--   SET_VEHICLE_DOOR_OPEN    0x7C65DAC73C35C862 (VEHICLE) -- (vehicle, doorIndex, loose, openInstantly) -> void
+--   SET_VEHICLE_DOOR_SHUT    0x93D9BD300D7789E5 (VEHICLE) -- (vehicle, doorIndex, closeInstantly) -> void
+--   TASK_LEAVE_VEHICLE       0xD3DBCE61A490BE02 (TASK)    -- (ped, vehicle, flags) -> void
+--   CLEAR_PED_TASKS_IMMEDIATELY
+--                            0xAAA34F8A7CB32098 (TASK)    -- (ped) -> void
+--   NETWORK_REQUEST_CONTROL_OF_ENTITY
+--                            0xB69317BF5E782347 (NETWORK) -- (entity) -> BOOL
+-- GET_VEHICLE_PED_IS_IN (0x9A9112A0FE9A4713, PED) and IS_PED_IN_ANY_VEHICLE
+-- (0x997ABD671D25CA0B, PED) both DO have a live native-decls page:
+--   https://raw.githubusercontent.com/citizenfx/fivem/master/ext/native-decls/GetVehiclePedIsIn.md
+--   https://raw.githubusercontent.com/citizenfx/fivem/master/ext/native-decls/IsPedInAnyVehicle.md
+--
+-- SEAT INDEX MAPPING (eSeatPosition, taken verbatim from
+-- IS_VEHICLE_SEAT_FREE's own natives.json description — not guessed):
+--   -1 = front, driver's side       (NEVER a candidate here — the human driver's seat)
+--    0 = front, passenger's side
+--    1 = back,  driver's side       -- REAR, preferred
+--    2 = back,  passenger's side    -- REAR, preferred
+--    3 = alt front, driver's side   (extended-cab/third-front-seat vehicles only)
+--    4 = alt front, passenger's side
+--    5 = alt back,  driver's side   -- REAR, preferred (third-row/van seating)
+--    6 = alt back,  passenger's side
+-- "Rear seats first, never the driver's seat" (owner's own words) therefore
+-- means trying 1, 2, 5, 6 before falling back to 0, 3, 4, with -1 never in
+-- this list at all. Seat indices range from -1 to
+-- GET_VEHICLE_MAX_NUMBER_OF_PASSENGERS(vehicle) - 1 (also stated verbatim in
+-- that same natives.json description) — FindBestK9Seat() below bounds-checks
+-- every candidate against that before ever calling IS_VEHICLE_SEAT_FREE on
+-- it, so a normal 4-seat cruiser (max passengers = 3, valid seats -1..2)
+-- never even queries 3/4/5/6.
+local SEAT_PREFERENCE_ORDER = { 1, 2, 5, 6, 0, 3, 4 }
+
+-- DOOR INDEX MAPPING (eDoorId, taken verbatim from SET_VEHICLE_DOOR_SHUT's
+-- own natives.json description, which documents the full enum):
+--   0 = VEH_EXT_DOOR_DSIDE_F (driver's side,    front)
+--   1 = VEH_EXT_DOOR_DSIDE_R (driver's side,    rear)
+--   2 = VEH_EXT_DOOR_PSIDE_F (passenger's side, front)
+--   3 = VEH_EXT_DOOR_PSIDE_R (passenger's side, rear)
+--   4 = bonnet, 5 = boot (not doors K9s sit behind — never used here)
+-- THIS IS DELIBERATELY *NOT* "doorIndex = seatIndex + 1" — that would be
+-- wrong for exactly the pair that matters most here: doors are grouped
+-- SIDE-then-front/rear, while seats are grouped front/rear-THEN-side, so
+-- the two numberings diverge starting at the rear pair. Worked through
+-- concretely: seat 1 is "back, driver's side" -> its door must be
+-- VEH_EXT_DOOR_DSIDE_R = door 1, NOT door 2 (a "+1" guess would have opened
+-- VEH_EXT_DOOR_PSIDE_F, the FRONT door on the WRONG side, for a K9 climbing
+-- into the back-left seat). Verified against the enum text itself, not
+-- assumed from the seat numbering's own shape.
+-- Only seats -1/0/1/2 (the four doors every standard 4-door vehicle has)
+-- have a natives.json-verified mapping. The "Alt" seats (3/4/5/6 —
+-- extended-cab/third-row vehicles only) have NO documented door index of
+-- their own: eDoorId only runs 0-5 (four side doors plus bonnet/boot), so a
+-- vehicle with more than four seats necessarily reuses one of the same four
+-- door slots for its extra row, in a way that varies per model (sliding
+-- panel-van doors, crew-cab truck doors, etc.) and has no single verified
+-- formula. The mapping below reuses each Alt seat's nearest non-Alt
+-- equivalent as a best-effort approximation for those cases ONLY — stated
+-- here plainly as UNVERIFIED for Alt seats, not asserted as correct. Every
+-- Config.K9Vehicles entry as of this pass (`police`, `police2`, `police3`,
+-- `police4`, `sheriff`, `sheriff2` per DEVELOPER_REFERENCE.md §5) is an
+-- ordinary 4-seat cruiser, so this approximation is not expected to be
+-- exercised by this resource's actual shipped config; flagged for
+-- native-api-assistant if a K9 van/SUV with a third row is ever added to
+-- that list.
+local SEAT_TO_DOOR_INDEX = {
+    [-1] = 0, [0] = 2, [1] = 1, [2] = 3,
+    [3] = 0, [4] = 2, [5] = 1, [6] = 3,
+}
+
+-- Short, hand-picked local constants (not Config-exposed): no operator
+-- config.lua edit could ever reach these, so — per server/cooldowns.lua's
+-- own documented decision test ("does an operator's config.lua edit alone
+-- reach this value?") — they stay plain literals here, not routed through
+-- a ResolveConfiguredThresholdMs-style clamp-and-warn (that machinery exists
+-- for OPERATOR-EDITABLE Config fields, and adding one here would be a
+-- schema change to a HOT, additive-only file for no config value this
+-- feature actually needs to expose).
+local VEHICLE_DOOR_OPEN_DELAY_MS = 400  -- door swings open before the K9 is seated
+local VEHICLE_DOOR_SHUT_DELAY_MS = 300  -- brief pause once seated before the door swings shut
+local EXIT_STALL_FALLBACK_MS = 4000     -- ExitK9Vehicle()'s own graceful-exit stall fallback (see below)
 
 --- @param maxDistance number
 --- @return number? vehicle
@@ -135,6 +277,27 @@ local function FindNearestK9Vehicle(maxDistance)
     return nearestVehicle
 end
 
+--- Finds the best free, non-driver seat for a K9 to ride in — rear seats
+--- preferred, front passenger as fallback, never the driver's seat, and
+--- never a seat IS_VEHICLE_SEAT_FREE reports as occupied (by a human or
+--- anything else) — see SEAT_PREFERENCE_ORDER's own header comment for the
+--- full verified seat-index rationale.
+--- @param vehicle number
+--- @return number? seatIndex
+local function FindBestK9Seat(vehicle)
+    local maxPassengers = GetVehicleMaxNumberOfPassengers(vehicle)
+    for _, seatIndex in ipairs(SEAT_PREFERENCE_ORDER) do
+        -- Seat indices range from -1 to maxPassengers - 1 (natives.json's own
+        -- documented bound for IS_VEHICLE_SEAT_FREE) — bounds-check BEFORE
+        -- querying so a normal 4-seat cruiser never asks about seats 3-6 at
+        -- all.
+        if seatIndex <= maxPassengers - 1 and IsVehicleSeatFree(vehicle, seatIndex) then
+            return seatIndex
+        end
+    end
+    return nil
+end
+
 --- Re-resolves the vehicle referenced by vehicleState back to a live
 --- entity handle via its network id, rather than trusting a raw handle
 --- cached at entry time to stay valid for the whole ride (the vehicle can
@@ -153,37 +316,65 @@ local function ResolveVehicleFromState()
     return ResolveNetworkEntity(vehicleState.vehicleNetId)
 end
 
---- Reverses the four persisted native states EnterNearestK9Vehicle()
---- applies to the player's own ped (attach, freeze, visibility, collision
---- all persist on the entity itself and never revert on their own), and
---- repositions the ped next to `vehicle` if it still exists. Shared by
---- ExitK9Vehicle() (the normal player-driven release) and the
---- onResourceStop handler below, so a resource restart mid-ride can't
---- permanently strand a player frozen/invisible/collisionless/attached
---- with no self-service recovery path (the ship-blocking bug this helper
---- exists to close).
 --- @param ped number
---- @param vehicle number|nil  -- resolved live vehicle entity, or nil if it no longer exists
-local function ReleasePedFromVehicleState(ped, vehicle)
-    DetachEntity(ped, true, false)
-    FreezeEntityPosition(ped, false)
-    SetEntityVisible(ped, true, false)
-    SetEntityCollision(ped, true, true)
+--- @return number? vehicle
+local function CurrentVehiclePedIsIn(ped)
+    local vehicle = GetVehiclePedIsIn(ped, false)
+    if vehicle ~= 0 then return vehicle end
+    return nil
+end
 
-    if vehicle and DoesEntityExist(vehicle) then
+--- Forces `ped` out of whatever vehicle it is CURRENTLY, ACTUALLY seated in
+--- — re-resolved fresh from the ped itself via GET_VEHICLE_PED_IS_IN, never
+--- trusted from vehicleState's possibly-stale cached netId, so this works
+--- correctly even if the two have diverged (e.g. the ped somehow ended up in
+--- a different vehicle than the one this file was tracking). No-ops
+--- entirely if the ped isn't in any vehicle at all — the common case now
+--- that seating is real: the player's own ordinary "exit vehicle" control
+--- already works unaided (see ExitK9Vehicle()'s own comment), and the game
+--- engine itself force-ejects any occupant when a vehicle is deleted, so
+--- there is frequently nothing left to do by the time this runs.
+---
+--- TWO PATHS, chosen by whether the ped can still run tasks at all:
+---   ALIVE: TASK_LEAVE_VEHICLE with flag 16 ("teleports outside, door kept
+---   closed" per that native's own natives.json flag documentation) — this
+---   queues a real engine-level CTask against the ped/vehicle, which is
+---   entity/engine state, NOT bound to this Lua resource's own lifetime —
+---   the exact same "keeps applying independent of this script still
+---   running" property this file's header already relied on for the old
+---   frozen/attach/visible/collision native states, so queuing it from
+---   onResourceStop (this file's own hard termination path, below) is safe:
+---   it keeps executing even if this resource finishes unloading a tick
+---   later.
+---   DEAD: TASK_LEAVE_VEHICLE does not reliably apply to a dead/ragdolled
+---   ped (no task capacity while dead) — falls back to the same blunt
+---   CLEAR_PED_TASKS_IMMEDIATELY + manual reposition this file has always
+---   used for its own-death release path, which does not depend on the
+---   ped's ability to run a task at all.
+--- @param ped number
+local function ForceLeaveVehicle(ped)
+    local vehicle = CurrentVehiclePedIsIn(ped)
+    if not vehicle then return end -- already out; see this function's own header
+
+    if DoesEntityExist(ped) and IsEntityDead(ped) then
+        ClearPedTasksImmediately(ped)
         local exitCoords = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, -3.0, 0.0)
         SetEntityCoords(ped, exitCoords.x, exitCoords.y, exitCoords.z, false, false, false, true)
         SetEntityHeading(ped, GetEntityHeading(vehicle))
+    else
+        TaskLeaveVehicle(ped, vehicle, 16)
     end
-    -- If the vehicle itself no longer exists (despawned while "loaded"),
-    -- just restore the ped in place rather than erroring — better than
-    -- leaving the player permanently frozen/invisible with no vehicle to
-    -- reference.
 end
 
 --- Finds the nearest vehicle within Config.VehicleInteractMeters whose
---- model is in Config.K9Vehicles and enters it (hides/freezes the K9's
---- own ped, per DEVELOPER_REFERENCE.md §6.1 vehicle bullet).
+--- model is in Config.K9Vehicles, finds it the best free non-driver seat
+--- (rear preferred — see FindBestK9Seat()), opens that seat's door, and
+--- seats the K9 into it for real (per DEVELOPER_REFERENCE.md §6.1 vehicle
+--- bullet's intent — "enter the vehicle" — superseding that section's
+--- literal Phase-1 "hidden/frozen" wording, which this file's own header
+--- explains is now stale; flagged for coder-architect/whoever owns
+--- DEVELOPER_REFERENCE.md to update that section, not silently left
+--- contradicting shipped behavior).
 function EnterNearestK9Vehicle()
     if not Config.Features.VehicleEntryExit then return end
 
@@ -207,26 +398,27 @@ function EnterNearestK9Vehicle()
         return
     end
 
-    if IsInK9Vehicle() then return end -- already in one
+    -- `vehicleEntryInProgress` covers the brief door-open window between a
+    -- previous call starting and this ped actually being seated -- without
+    -- it, a double-click/double-select during that window would race two
+    -- concurrent entry sequences against the same ped. Silent no-op on a
+    -- repeat call here matches this same function's own pre-existing
+    -- `if IsInK9Vehicle() then return end` convention just below.
+    if vehicleEntryInProgress or IsInK9Vehicle() then return end
 
     -- MUTUAL GUARD vs. client/combat.lua's PropDragging/BiteAndHold
-    -- (QA-reported real defect, this pass): this function attaches, freezes,
-    -- hides, and disables collision on the SAME ped (PlayerPedId()) that
-    -- combat.lua's shared maintenance thread re-attaches EVERY TICK as the
-    -- HOLDER anchor of an active drag (AttachEntityToEntity(targetPed,
-    -- PlayerPedId(), ...), see that file's "ActiveDragAsHolder" block) or
-    -- plays a one-shot cosmetic stance on for an active bite hold
-    -- (PlayBiteHoldStance). Entering a vehicle mid-drag would attach this
-    -- ped to the vehicle as a CHILD while combat.lua keeps attaching the
-    -- dragged target to this SAME ped as a PARENT every frame — a nested
-    -- attach chain nobody designed for (the dragged target becomes a rigid
-    -- child of a ped that is itself invisible/frozen/collisionless/attached
-    -- to a vehicle), and a griefing-usable one since the target has no way
-    -- to see or reach the now-hidden K9 holding it. Checked here (not just
-    -- left to RequestDrag()'s own symmetric IsInK9Vehicle() guard below)
-    -- because the two triggers are reachable in EITHER order — a K9 already
-    -- mid-drag/mid-hold selecting "Enter Vehicle" is the direction
-    -- RequestDrag()'s own guard cannot catch.
+    -- (QA-reported real defect, earlier pass): this function seats the SAME
+    -- ped (PlayerPedId()) that combat.lua's shared maintenance thread
+    -- re-attaches EVERY TICK as the HOLDER anchor of an active drag
+    -- (AttachEntityToEntity(targetPed, PlayerPedId(), ...), see that file's
+    -- "ActiveDragAsHolder" block) or plays a one-shot cosmetic stance on for
+    -- an active bite hold (PlayBiteHoldStance). Checked here (not just left
+    -- to RequestDrag()'s own symmetric IsInK9Vehicle() guard) because the
+    -- two triggers are reachable in EITHER order — a K9 already mid-drag/
+    -- mid-hold selecting "Enter Vehicle" is the direction RequestDrag()'s
+    -- own guard cannot catch. Re-checked again just before the ped is
+    -- actually seated, below, since the door-open delay gives either effect
+    -- a window to start in between.
     --
     -- Soft dependency, `type(...) == 'function'` runtime existence guard —
     -- this resource's established convention (see client/defense.lua's
@@ -252,14 +444,10 @@ function EnterNearestK9Vehicle()
     -- occupant of SOME vehicle via ordinary game controls (any ped model,
     -- including a K9 model, can be walked up to a car and seated with the
     -- vanilla "enter vehicle" control — nothing about that path goes
-    -- through this file). vehicleState only tracks OUR OWN attach, so
+    -- through this file). vehicleState only tracks OUR OWN entry, so
     -- IsInK9Vehicle() above reads false in that case and would otherwise
-    -- let this function freeze/hide/attach a ped that the game still
-    -- separately considers seated in a (possibly different) vehicle.
-    -- ReleasePedFromVehicleState()'s teleport-out on exit never calls
-    -- TASK_LEAVE_VEHICLE or clears that seat assignment, so without this
-    -- guard the ped could end up in a corrupted "phantom seated" state
-    -- after this file's own exit path finishes.
+    -- let this function try to seat a ped the game already considers
+    -- seated somewhere else.
     if IsPedInAnyVehicle(ped, false) then
         lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.already_in_vehicle'), type = 'error' })
         return
@@ -271,134 +459,244 @@ function EnterNearestK9Vehicle()
         return
     end
 
-    -- "Tucked away" treatment: frozen, invisible, no collision, AND
-    -- attached to the vehicle. DEVELOPER_REFERENCE.md §6.1 only says "hidden/frozen," but
-    -- freezing in place without attaching would leave the K9 stranded,
-    -- motionless, in world space the instant the vehicle actually drives
-    -- anywhere — defeating the entire real-world point of "loading" a K9
-    -- into a cruiser (riding along to a scene). Attaching at a rear/boot
-    -- offset is a reasonable Phase 1 approximation since the ped is
-    -- invisible anyway; exact bone precision doesn't matter here.
-    SetEntityCollision(ped, false, false)
-    FreezeEntityPosition(ped, true)
-    SetEntityVisible(ped, false, false)
-    AttachEntityToEntity(ped, vehicle, 0, 0.0, -1.5, 0.0, 0.0, 0.0, 0.0, false, false, false, false, 2, true)
+    -- "Auto-find the perfect spot" (owner's own words): rear seats first,
+    -- never the driver's seat, never a seat that's actually occupied. If
+    -- literally nothing qualifies, refuse with a clear reason instead of
+    -- silently falling back to anything else (the old trunk-attach
+    -- behavior this pass replaces).
+    local seatIndex = FindBestK9Seat(vehicle)
+    if not seatIndex then
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.no_seat_available'), type = 'error' })
+        return
+    end
 
-    -- Store the NETWORK id, not the raw `vehicle` handle above — see
-    -- ResolveVehicleFromState()'s doc comment for why the handle itself
-    -- isn't trusted to stay valid for the whole ride.
-    vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle) }
-    lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.loaded'), type = 'success' })
+    vehicleEntryInProgress = true
+
+    -- Best-effort ownership ask, fire-and-forget — client/combat.lua's own
+    -- "NETWORK OWNERSHIP OF THE TARGET PED" header (that file's extensively
+    -- verified precedent, reused here rather than re-deriving it) explains
+    -- why: SET_PED_INTO_VEHICLE/SET_VEHICLE_DOOR_OPEN/SET_VEHICLE_DOOR_SHUT
+    -- on a vehicle this client doesn't already own network control of can
+    -- silently do nothing, but NETWORK_HAS_CONTROL_OF_ENTITY's own blocking
+    -- wait idiom is deliberately NOT used here either, matching that same
+    -- file's audited conclusion — proceed regardless, disclosed as
+    -- best-effort rather than presented as solved.
+    NetworkRequestControlOfEntity(vehicle)
+
+    local doorIndex = SEAT_TO_DOOR_INDEX[seatIndex]
+    if doorIndex then
+        SetVehicleDoorOpen(vehicle, doorIndex, false, false)
+    end
+
+    -- Deferred so the door has a moment to visibly swing open before the
+    -- K9 appears seated ("a short animation-friendly delay," per this
+    -- task's own requirement) — run in a dedicated thread rather than a
+    -- bare Wait() in this function body so this doesn't depend on every
+    -- caller (ox_target onSelect, ox_lib radial onSelect, the tablet NUI
+    -- trigger) already running inside a yield-safe coroutine context.
+    CreateThread(function()
+        Wait(VEHICLE_DOOR_OPEN_DELAY_MS)
+
+        -- Re-validate everything that could have changed during the delay:
+        -- the vehicle itself, our own ped's state, the chosen seat (someone
+        -- else could have taken it in the meantime — never displace them),
+        -- and the same drag/bite-hold mutual guard checked above (either
+        -- effect could have started during this exact window). Any failure
+        -- here aborts cleanly: shuts the door back if it was opened, clears
+        -- the in-progress flag, and tells the player why, rather than
+        -- forcing the seat regardless.
+        local abortReason = nil
+        if not DoesEntityExist(vehicle) then
+            abortReason = 'vehicle.entry_interrupted'
+        elseif not DoesEntityExist(ped) or IsEntityDead(ped) then
+            abortReason = 'vehicle.entry_interrupted'
+        elseif IsPedInAnyVehicle(ped, false) then
+            abortReason = 'vehicle.entry_interrupted'
+        elseif not IsVehicleSeatFree(vehicle, seatIndex) then
+            abortReason = 'vehicle.no_seat_available'
+        elseif type(IsDragEngaged) == 'function' and IsDragEngaged() then
+            abortReason = 'vehicle.blocked_by_drag'
+        elseif type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then
+            abortReason = 'vehicle.blocked_by_bite_hold'
+        end
+
+        if abortReason then
+            if doorIndex and DoesEntityExist(vehicle) then
+                SetVehicleDoorShut(vehicle, doorIndex, false)
+            end
+            vehicleEntryInProgress = false
+            lib.notify({ title = locale('common.notify_title'), description = locale(abortReason), type = 'error' })
+            return
+        end
+
+        NetworkRequestControlOfEntity(vehicle) -- control can be lost again during the delay; re-ask once more, same fire-and-forget posture
+        SetPedIntoVehicle(ped, vehicle, seatIndex)
+
+        Wait(VEHICLE_DOOR_SHUT_DELAY_MS)
+        if doorIndex and DoesEntityExist(vehicle) then
+            SetVehicleDoorShut(vehicle, doorIndex, false)
+        end
+
+        -- Store the NETWORK id, not the raw `vehicle` handle above — see
+        -- ResolveVehicleFromState()'s doc comment for why the handle itself
+        -- isn't trusted to stay valid for the whole ride.
+        vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle), seatIndex = seatIndex }
+        vehicleEntryInProgress = false
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.loaded'), type = 'success' })
+    end)
 end
 
---- Restores the K9's ped at the vehicle's door and clears vehicleState.
+--- Releases the K9 from its vehicle seat and clears vehicleState.
 --- No-op if not currently in a vehicle. Deliberately NOT gated behind
 --- CanShowK9UI() — a K9 whose certification lapses mid-ride must always
---- be able to un-freeze/un-hide themselves; this mirrors the same
---- "never leave a player stuck" principle DEVELOPER_REFERENCE.md §9 item 3b establishes
---- as a hard requirement for leash detach, applied here by extension
---- since unfreezing your own visible ped isn't itself a security-relevant
---- capability grant. Not spelled out verbatim in DEVELOPER_REFERENCE.md — a deliberate
+--- be able to get out; this mirrors the same "never leave a player stuck"
+--- principle DEVELOPER_REFERENCE.md §9 item 3b establishes as a hard
+--- requirement for leash detach, applied here by extension since exiting
+--- your own vehicle seat isn't itself a security-relevant capability grant.
+--- Not spelled out verbatim in DEVELOPER_REFERENCE.md — a deliberate
 --- client-logic judgment call, flagged here rather than made silently.
+---
+--- vehicleState is cleared IMMEDIATELY, synchronously, before anything
+--- below runs — unlike the old attach-based model, this is now always safe
+--- to do unconditionally up front: the ped is either genuinely,
+--- game-recognized seated (in which case the graceful exit below, or the
+--- player's own ordinary "exit vehicle" control, is all that's left to
+--- finish) or already out by ordinary means (nothing left to release at
+--- all). Either way, this file's own bookkeeping should stop claiming the
+--- ride is active the instant the player asks to end it, not only once an
+--- animation finishes playing.
 function ExitK9Vehicle()
     if not IsInK9Vehicle() then return end
 
     local ped = PlayerPedId()
-    ReleasePedFromVehicleState(ped, ResolveVehicleFromState())
-
     vehicleState = nil
+
+    if not IsPedInAnyVehicle(ped, false) then
+        -- Already out — through the ped's own ordinary "exit vehicle"
+        -- control, which just works now that this is a real seat, unlike
+        -- the old attach model. Nothing left to do.
+        return
+    end
+
+    -- Graceful path: normal exit animation, door opens (flag 0 — "normal
+    -- exit and closes door," per TASK_LEAVE_VEHICLE's own natives.json flag
+    -- documentation).
+    local vehicle = CurrentVehiclePedIsIn(ped)
+    if vehicle then
+        TaskLeaveVehicle(ped, vehicle, 0)
+    end
+
+    -- Bulletproof fallback (owner's own requirement): TASK_LEAVE_VEHICLE is
+    -- an animated task, not an instant guarantee — a jammed door, a moving
+    -- vehicle, or any other stall could leave it never actually completing.
+    -- This one-shot thread (not a persistent loop — it runs at most once,
+    -- checks once every 250ms, and always terminates within
+    -- EXIT_STALL_FALLBACK_MS either by seeing the ped already out or by
+    -- forcing it) tops up with ForceLeaveVehicle()'s hard path if the
+    -- graceful one hasn't finished in time.
+    CreateThread(function()
+        local waited = 0
+        while waited < EXIT_STALL_FALLBACK_MS do
+            Wait(250)
+            waited = waited + 250
+            if not DoesEntityExist(ped) or not IsPedInAnyVehicle(ped, false) then return end
+        end
+        ForceLeaveVehicle(ped)
+    end)
+
     lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.released'), type = 'success' })
 end
 
--- Resource-restart safety net (ship-blocking QA finding): vehicleState is
--- a plain Lua local, so it resets to nil on `restart qbx_k9unit` — but the
--- native states EnterNearestK9Vehicle() applied to the ped (frozen,
--- invisible, collisionless, attached) are entity-persisted and do NOT
--- revert on their own just because the script unloads. Without this
--- handler, restarting this resource mid-ride permanently strands the
--- player: the new script instance boots with vehicleState = nil, so
--- IsInK9Vehicle() reports false and ExitK9Vehicle() immediately no-ops,
--- leaving no self-service recovery path. Reuses ReleasePedFromVehicleState
--- (the exact same cleanup ExitK9Vehicle() runs above) rather than
--- duplicating the native calls.
+-- Resource-restart safety net (ship-blocking QA finding, earlier pass;
+-- adapted this pass for real seating): vehicleState is a plain Lua local,
+-- so it resets to nil on `restart qbx_k9unit`, but a ped SET_PED_INTO_VEHICLE'd
+-- into a real seat does NOT get magically ejected just because the script
+-- that seated it unloads — the seat assignment is engine/entity state, not
+-- script state. Without this handler, restarting this resource mid-ride
+-- would leave the new script instance booting with vehicleState = nil (so
+-- IsInK9Vehicle() reports false and ExitK9Vehicle() immediately no-ops)
+-- while the ped is still actually sitting in the vehicle.
+--
+-- NEVER GATE A TERMINATION PATH: this handler does not check
+-- Config.Features.VehicleEntryExit, CanShowK9UI(), or anything else that
+-- could suppress it — only whether there's an active ride to release at
+-- all (`if not vehicleState then return end`), per this file's own
+-- top-level-gate header section's proof that a fresh instance booting with
+-- the flag off can never have vehicleState set in the first place.
+--
+-- IMPORTANT — this is a strictly SMALLER blast radius than the old
+-- attach-based version needed: because SET_PED_INTO_VEHICLE makes this a
+-- REAL seat, a player whose restart happens to land in the split-second
+-- window between vehicleEntryInProgress being set and vehicleState actually
+-- being written (see EnterNearestK9Vehicle()'s deferred thread, which this
+-- restart necessarily kills along with every other thread this resource
+-- owns) is NOT stranded either way: if SET_PED_INTO_VEHICLE hadn't run yet,
+-- they're just standing normally next to the vehicle (never frozen,
+-- attached, invisible, or collisionless at any point in this file's new
+-- design); if it had already run, they're a genuine, game-recognized
+-- vehicle occupant who can already use the ordinary "exit vehicle" control
+-- with no help from this script at all. The one cosmetic residue possible
+-- in that exact window is a door left open with nobody having climbed in —
+-- self-correcting on the next entry/exit through this file, and never a
+-- player-blocking condition.
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     if not vehicleState then return end
 
-    ReleasePedFromVehicleState(PlayerPedId(), ResolveVehicleFromState())
+    ForceLeaveVehicle(PlayerPedId())
     vehicleState = nil
 end)
 
--- Vehicle-despawn watchdog (client-logic review finding): the native
--- states EnterNearestK9Vehicle() applies to the ped are entity-persisted,
--- exactly like the resource-restart case above, but restarting THIS
--- resource is not the only way vehicleState can be left pointing at
--- nothing. This ped is only ATTACHED to the vehicle, never actually
--- SetPedIntoVehicle'd into a seat, so the game does not count it as an
--- occupant — the vehicle can still be deleted out from under a riding K9
--- by anything else running on this server (a vehicle-cleanup script, the
--- game's own unoccupied-vehicle population sweep, another player's
--- DeleteEntity, despawning after entering water and sinking, etc.) with no
--- event this file is told about. Without this, ExitK9Vehicle() still WORKS
--- afterward (ReleasePedFromVehicleState already tolerates vehicle == nil,
--- and client/radial.lua's "Enter/Exit Vehicle" item calls it with no
--- requirement to be near any entity) — but nothing tells the player their
--- ride is gone, and this file's OWN ox_target "Release From Vehicle"
--- option specifically (canInteract requires hovering a live entity that
--- equals ResolveVehicleFromState()) becomes permanently unreachable the
--- moment the vehicle stops existing, since there is no entity left to
--- hover. This thread closes that gap by self-releasing and telling the
--- player why, rather than leaving them frozen/invisible relying on
--- knowing to open the radial menu instead.
+-- Vehicle-lifecycle watchdog (client-logic review finding, earlier pass;
+-- substantially simplified this pass — see below for why the old
+-- streaming-hiccup debounce no longer applies to this file's primary
+-- detection). Two things this thread exists to catch that no event tells
+-- this file about:
+--   1. OWN-DEATH RELEASE (lifecycle QA finding, earlier pass — the softlock
+--      this branch exists to close): the standard FiveM respawn flow REUSES
+--      the same ped handle rather than allocating a new one (client/
+--      combat.lua's own repeatedly-verified finding, its MaintenanceTick()
+--      function's death branches), so a K9 that dies mid-ride needs an
+--      explicit release or it could respawn still nominally "in" the
+--      vehicle's seat with no self-service recovery (no keybind for this,
+--      and the ox_target "Release From Vehicle" option below requires
+--      hovering the vehicle, awkward at best while dead). Reuses
+--      ForceLeaveVehicle() (whose own DEAD branch is exactly built for
+--      this) rather than a separate dead-ped code path.
+--   2. VEHICLE-LOST NOTIFICATION: with real seating, the game engine itself
+--      already force-ejects any occupant when their vehicle is deleted —
+--      unlike the old attach-based ped, which had no such protection and
+--      needed this file to notice and self-release. What's left to detect
+--      here is much narrower: purely WHETHER TO TELL THE PLAYER something
+--      happened to the vehicle, not whether to release them (they're
+--      already safely out by the time this runs, either way).
 --
--- OWN-DEATH RELEASE (lifecycle QA finding, this pass — the softlock this
--- thread's death branch below exists to close): this was the only place in
--- the codebase applying a persistent native ped state with no own-death
--- handling at all, unlike client/vision.lua's
--- EnsureVisionMaintenanceThreadRunning() thread, client/screenfx.lua's
--- EnsureScreenFxThreadRunning() thread, client/propattachment.lua's
--- "OWN-DEATH AUTO-DETACH" section and client/fetch.lua's "OWN-DEATH
--- AUTO-DETACH/DROP" section, all of which force-clear on
--- IsEntityDead(PlayerPedId()) (named references, not line numbers, since
--- those drift with unrelated edits elsewhere in each file). That gap
--- mattered here specifically because client/combat.lua's own
--- repeatedly-verified finding (its MaintenanceTick() function's
--- ActiveBiteHold/ActiveDragSpeedLimit/ActiveForcedRagdoll death branches)
--- is that the standard FiveM respawn flow REUSES the same ped handle
--- rather than allocating a new one — none of collision-disabled, frozen,
--- invisible or
--- attached reset on death or respawn on their own, so a K9 who died while
--- tucked would respawn frozen/invisible/collisionless/still-attached with
--- no self-service recovery (no keybind for this, and the ox_target
--- "Release From Vehicle" option above requires hovering the vehicle, which
--- is unreachable while frozen and invisible — let alone while dead).
--- Folded into THIS existing thread rather than a new dedicated one (unlike
--- client/fetch.lua's/client/propattachment.lua's separate poll threads):
--- this thread already runs at the exact cadence needed (active only while
--- vehicleState is set, idling otherwise) for the exact same time window a
--- death-while-tucked can occur in, so a second parallel thread polling the
--- same PlayerPedId() over the same window would be pure duplication.
+-- SIMPLIFICATION FROM THE OLD VERSION, STATED HONESTLY: the previous
+-- watchdog needed a missStreak/consecutive-misses debounce because its
+-- PRIMARY detection signal was resolving the tracked vehicle by network id
+-- (ResolveNetworkEntity), which can read nil for a vehicle that's merely
+-- not currently streamed in to this client, not only for one that's
+-- actually gone — a single miss was not reliable proof of anything. This
+-- version's primary detection signal is IS_PED_IN_ANY_VEHICLE on THIS
+-- CLIENT'S OWN local ped, which is always immediately, reliably available
+-- (never subject to streaming) — so no debounce is needed for the
+-- release decision itself. The vehicle-resolve read below is used ONLY to
+-- decide which of two equally-harmless notification strings to show
+-- (cosmetic wording, not a release-gating condition) — a streaming
+-- false-negative there means, at worst, the player is told "lost the
+-- vehicle" when they actually got out some other way, never a stranding
+-- risk, so it is not worth re-adding the debounce complexity purely for
+-- notification-copy accuracy.
 --
 -- One persistent thread for the resource's whole lifetime, matching
 -- client/movement.lua's leash pull-back thread's own established
 -- idle/active dual-interval convention, rather than spawning a new thread
 -- per ride — sleeps at a long interval whenever no ride is active, so this
 -- costs nothing on the ~0.01ms resmon idle benchmark while unused.
---
--- Debounced over several consecutive misses rather than acting on a single
--- failed resolve: ResolveVehicleFromState() (via client/main.lua's
--- ResolveNetworkEntity) also reads nil for a vehicle that is merely not
--- currently streamed in to THIS client at this instant, not only for one
--- that has actually been deleted — a single miss is not reliable proof the
--- vehicle is gone for good, and a rider should never be ejected over a
--- momentary streaming hiccup.
 local VEHICLE_WATCHDOG_IDLE_MS = 2000
 local VEHICLE_WATCHDOG_ACTIVE_MS = 1000
-local VEHICLE_WATCHDOG_MISS_THRESHOLD = 3 -- consecutive misses before treating the vehicle as actually gone
 
 CreateThread(function()
-    local missStreak = 0
-
     while true do
         local sleepMs = VEHICLE_WATCHDOG_IDLE_MS
 
@@ -408,64 +706,27 @@ CreateThread(function()
 
             if DoesEntityExist(ped) and IsEntityDead(ped) then
                 -- OWN-DEATH RELEASE — see this thread's own header comment
-                -- above ("OWN-DEATH RELEASE") for the full why. Checked
-                -- BEFORE the vehicle-resolve branch below on purpose: death
-                -- must release regardless of whether the vehicle is still
-                -- present, and doing so here (rather than as a third,
-                -- independent branch) keeps this thread's per-iteration
-                -- work mutually exclusive — exactly one of "release for
-                -- death," "still fine," or "release for vehicle loss" runs
-                -- per tick, and vehicleState is nilled inside this same
-                -- iteration, so the vehicle-loss branch below can never
-                -- ALSO fire for the same tuck. If the vehicle happened to
-                -- despawn during the same death (ResolveVehicleFromState()
-                -- already nil by the time this runs), that is exactly the
-                -- nil-vehicle case ReleasePedFromVehicleState already
-                -- documents and tolerates — a single release either way,
-                -- never two: once vehicleState is nil, every other release
-                -- path (ExitK9Vehicle, onResourceStop, this thread's own
-                -- outer `if vehicleState then` guard) already no-ops on a
-                -- nil vehicleState, so there is no path left that could
-                -- run ReleasePedFromVehicleState a second time for the
-                -- same ride.
-                --
-                -- Reuses ReleasePedFromVehicleState exactly as every other
-                -- caller does — including its reposition-near-vehicle step
-                -- — rather than a death-specific variant, so the four
-                -- native states stay cleared in exactly one place. Calling
-                -- SetEntityCoords/SetEntityHeading on an already-dead ped
-                -- is harmless, and moving the corpse out from the vehicle's
-                -- attach offset to just behind it is arguably nicer than
-                -- leaving it floating mid-air relative to a (possibly still
-                -- moving, if someone else is driving) vehicle -- but this
-                -- is NOT relied on for correctness. Wherever this
-                -- resource's actual respawn/ambulance flow next places this
-                -- ped once it resurrects it is that flow's decision, same
-                -- as for a K9 that died any other way; this thread's only
-                -- job is making sure that flow inherits an unfrozen,
-                -- visible, collidable, detached ped instead of one still
-                -- wearing this file's four vehicle flags.
-                missStreak = 0
-                ReleasePedFromVehicleState(ped, ResolveVehicleFromState())
+                -- above. Checked BEFORE the "still seated?" branch below on
+                -- purpose: death must release regardless of whether the ped
+                -- is still nominally in the vehicle's seat.
+                ForceLeaveVehicle(ped)
                 vehicleState = nil
                 lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.released_on_death'), type = 'error' })
-            elseif ResolveVehicleFromState() then
-                missStreak = 0
-            else
-                missStreak = missStreak + 1
-                if missStreak >= VEHICLE_WATCHDOG_MISS_THRESHOLD then
-                    missStreak = 0
-                    -- Same cleanup ExitK9Vehicle()/onResourceStop already run —
-                    -- vehicle is nil here by construction (that's what triggered
-                    -- this branch), so ReleasePedFromVehicleState just restores
-                    -- the ped in place per its own documented nil-vehicle path.
-                    ReleasePedFromVehicleState(ped, nil)
-                    vehicleState = nil
+            elseif not IsPedInAnyVehicle(ped, false) then
+                -- No longer seated in ANY vehicle -- either the player used
+                -- their own ordinary "exit vehicle" control (works unaided
+                -- now that this is a real seat), or the vehicle was deleted
+                -- and the engine's own occupant-eject already dropped them
+                -- somewhere safe. Nothing left to release either way; only
+                -- decide whether it's worth telling them the vehicle itself
+                -- is the reason.
+                local vehicleStillThere = ResolveVehicleFromState() ~= nil
+                vehicleState = nil
+                if not vehicleStillThere then
                     lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.vehicle_lost'), type = 'error' })
                 end
             end
-        else
-            missStreak = 0
+            -- else: still genuinely seated -- nothing to do this pass.
         end
 
         Wait(sleepMs)
@@ -496,7 +757,7 @@ end)
 -- operator running a different supported target script gets both options
 -- translated automatically instead of losing them outright.
 --
--- LIFECYCLE FIX (this pass): extracted into a named function, sole call
+-- LIFECYCLE FIX (earlier pass): extracted into a named function, sole call
 -- site the AddEventHandler('onResourceStart', ...) below, so both options
 -- come back after a bare restart of whatever resource actually backs the
 -- 'target' system, not just after this resource's own restart -- every
@@ -519,7 +780,7 @@ local function RegisterVehicleOxTargetOptions()
             distance = Config.VehicleInteractMeters,
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.VehicleEntryExit then return false end
-                if IsInK9Vehicle() then return false end
+                if vehicleEntryInProgress or IsInK9Vehicle() then return false end
                 -- DISPLAY-OPTIMIZATION MIRROR of EnterNearestK9Vehicle()'s own
                 -- load-bearing mutual guard above — hides the option instead of
                 -- letting onSelect show a rejection notify for the common case.
@@ -530,6 +791,17 @@ local function RegisterVehicleOxTargetOptions()
                 if type(IsDragEngaged) == 'function' and IsDragEngaged() then return false end
                 if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then return false end
                 if not K9VehicleHashes[GetEntityModel(entity)] then return false end
+                -- DISPLAY-OPTIMIZATION MIRROR of EnterNearestK9Vehicle()'s own
+                -- FindBestK9Seat() refusal (coder-frontend's own "never show an
+                -- option that will just refuse" ask, this pass): hide the
+                -- option entirely once every non-driver seat is genuinely
+                -- occupied, rather than letting onSelect show
+                -- vehicle.no_seat_available for the common "every seat's full"
+                -- case. Not the real boundary — EnterNearestK9Vehicle() re-runs
+                -- FindBestK9Seat() itself regardless of what canInteract decided
+                -- (a seat can fill in the moment between this hover check and
+                -- the click), same posture as every other predicate here.
+                if not FindBestK9Seat(entity) then return false end
                 return CanShowK9UI()
             end,
             onSelect = function()

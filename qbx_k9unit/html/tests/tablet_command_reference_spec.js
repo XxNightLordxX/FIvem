@@ -2,11 +2,13 @@
     html/tests/tablet_command_reference_spec.js
 
     Covers the Command Reference screen (html/tablet.js's COMMAND_REFERENCE /
-    buildCommandReferenceScreen() / commandReferenceStatus()) -- the "36
-    commands, no way for a player to discover them in-game" screen, shown to
-    EVERY resolved viewer (handler or high command alike -- see buildTabs()'s
-    own comment on why the Commands tab is unconditional, same as Home/My
-    Record).
+    buildCommandReferenceScreen() / commandReferenceStatus()) -- the
+    "every command, no way for a player to discover them in-game" screen,
+    shown to EVERY resolved viewer (handler or high command alike -- see
+    buildTabs()'s own comment on why the Commands tab is unconditional,
+    same as Home/My Record). The catalog's own size is intentionally never
+    named here as a literal number (see this file's REAL_COMMAND_REFERENCE_COUNT
+    below for why).
 
     Six scenarios, matching this pass's own acceptance criteria:
       1. The screen renders -- every catalog entry appears,
@@ -32,9 +34,41 @@
 */
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const t = require('./testkit');
 const { createHarness, jsonResponse } = require('./tablet-sandbox');
 const { findByText, findAll, findByTag } = require('./tablet-dom-stub');
+
+// DERIVED, NOT HARDCODED: the real COMMAND_REFERENCE array is declared
+// `var` inside html/tablet.js's own top-level IIFE (see that file's header
+// "THE SECURITY RULE"), so it is not reachable as a property on
+// tablet-sandbox.js's vm context -- there is no live handle to read
+// `.length` off of. Rather than hardcode the catalog's current size (which
+// silently goes stale the moment a command is added or removed, exactly
+// the "someone adds command #37 and the reference silently lies" trap
+// tests/commandreferenceregistry_spec.lua's own header names), this reads
+// html/tablet.js's raw source text and counts real `command: '...'`
+// entries the SAME way tests/commandreferenceregistry_spec.lua's own
+// "no duplicate command names" test already does on the Lua side, and the
+// same raw-text-read convention tablet_branding_placement_spec.js and
+// tablet_bridge_spec.js already use elsewhere in this directory. This
+// keeps the "every catalog entry renders" assertion below tied to the
+// SAME array buildCommandReferenceScreen() reads, so a real rendering bug
+// (dropping or duplicating rows) still fails it -- it just never needs a
+// manual bump when the catalog itself legitimately grows.
+const tabletJsSourceForCommandCount = fs.readFileSync(path.join(__dirname, '..', 'tablet.js'), 'utf8');
+function countRealCommandReferenceEntries() {
+    const startPos = tabletJsSourceForCommandCount.indexOf('var COMMAND_REFERENCE = [');
+    if (startPos === -1) throw new Error('tablet_command_reference_spec: var COMMAND_REFERENCE = [ not found in html/tablet.js');
+    const endPos = tabletJsSourceForCommandCount.indexOf('\n    ];', startPos);
+    if (endPos === -1) throw new Error('tablet_command_reference_spec: closing "];" for COMMAND_REFERENCE not found in html/tablet.js');
+    const body = tabletJsSourceForCommandCount.slice(startPos, endPos);
+    const matches = body.match(/command:\s*'[a-z0-9_]+'/g);
+    if (!matches) throw new Error('tablet_command_reference_spec: matched zero command entries -- extraction pattern is stale');
+    return matches.length;
+}
+const REAL_COMMAND_REFERENCE_COUNT = countRealCommandReferenceEntries();
 
 function routeFetch(handlers) {
     return function (url, init) {
@@ -100,7 +134,7 @@ t.test('screen rendering: every catalog entry renders, one status badge each, un
     t.equals(findByText(h.getRoot(), 'Command Reference').length, 1, 'the screen heading renders');
     t.isTrue(findByText(h.getRoot(), 'Certification Management').length >= 1, 'a category heading renders');
     t.isTrue(findByText(h.getRoot(), 'Field Gear & Equipment').length >= 1, 'another category heading renders');
-    t.equals(statusBadges(h).length, 38, 'exactly 38 status badges -- one per real RegisterCommand this resource registers (see tests/commandreferenceregistry_spec.lua for the drift guard that keeps this number honest)');
+    t.equals(statusBadges(h).length, REAL_COMMAND_REFERENCE_COUNT, 'one status badge per real COMMAND_REFERENCE entry (derived from html/tablet.js itself, not a hardcoded count -- see this file\'s own header)');
     t.isTrue(findByText(h.getRoot(), '/k9auditcert <citizenid> [limit]').length === 1, 'a specific command\'s exact usage string renders verbatim');
 });
 

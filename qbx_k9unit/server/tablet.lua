@@ -620,6 +620,40 @@ local function ResolveDisplayName(citizenid)
     return citizenid
 end
 
+--- OWNER'S ASK ("ensure a name actually pops up and not the player id...
+--- etc"), THE ONE GAP FOUND IN THIS FILE: BuildCertificationsArray's own
+--- `grantedBy` field is a raw citizenid, and html/tablet.js already renders
+--- it directly as plain text (that file's own resolveCertRow-style renderer,
+--- class `k9tablet-cert-granter`) -- the exact "identifier where a human
+--- name belongs" bug this pass exists to close. Adds ONE additive sibling
+--- field, `grantedByName`, to each row BuildCertificationsArray already
+--- returned, via the SAME ResolveDisplayName this file already uses for
+--- `viewer.name`/`target.name`/roster rows -- `grantedBy` itself is left
+--- completely unchanged (still the citizenid, still the only thing any
+--- lookup/grant/revoke keys off; see this task's own "keep the identifier,
+--- a name is never an identity" rule).
+---
+--- WHY A SEPARATE POST-PROCESSING PASS, NOT FOLDED INTO
+--- BuildCertificationsArray's OWN BODY: that function is defined EARLIER in
+--- this file (above), textually before ResolveDisplayName's own `local
+--- function` declaration -- Lua's lexical scoping means a `local` declared
+--- later is invisible to a function defined earlier in the same chunk, so a
+--- direct call to ResolveDisplayName from inside BuildCertificationsArray
+--- would resolve to a nil GLOBAL at runtime (there is no forward-declared
+--- local of that name), throwing the moment any active-department row was
+--- built. Kept here instead, called from BOTH of this pass's own call sites
+--- (tabletRequestMyRecord/tabletRequestPersonSummary below), rather than
+--- reordering ~55 lines of BuildCertificationsArray's own body/doc comment
+--- purely to move it below ResolveDisplayName.
+--- @param certifications table -- BuildCertificationsArray's own return value, mutated in place
+--- @return table -- the same table, so this reads as one expression at each call site
+local function EnrichCertificationsWithGrantedByName(certifications)
+    for _, row in ipairs(certifications) do
+        row.grantedByName = row.grantedBy and ResolveDisplayName(row.grantedBy) or nil
+    end
+    return certifications
+end
+
 --- @param configured any
 --- @return number
 local function ClampedMaxRosterRows()
@@ -1168,6 +1202,77 @@ local function ResolveXpAndTierLabel(citizenid)
     return xp, tierLabel
 end
 
+--- Read-only rank/grade display for PersonSummaryResult -- owner-directed
+--- "the roster panel should show everything about a person" pass. Reads
+--- the EXACT SAME PlayerData.job shape every rank gate in this resource
+--- already trusts (server/permissions.lua's MeetsDepartmentGradeOrHighCommand,
+--- server/certifications.lua's IsEligibleCertifier, etc.) -- never a new
+--- source of truth, and never a write path: this resource has no
+--- SetJobGrade-equivalent anywhere today, so the tablet only ever DISPLAYS
+--- this, matching THE SECURITY RULE'S "never render a control the server
+--- would refuse" -- there is no promotion control here at all, honest
+--- about there being nothing behind one yet, rather than a disabled button
+--- implying a feature that does not exist.
+--- Online-preferred (exports.qbx_core:GetPlayerByCitizenId, same call
+--- ResolveDisplayName above already makes), offline-fallback
+--- (exports.qbx_core:GetOfflinePlayer, same call ResolveDisplayName's own
+--- offline branch already makes) -- so this resolves for an offline
+--- target exactly as well as an online one, matching every other read in
+--- tabletRequestPersonSummary.
+--- @param citizenid string
+--- @return table? -- { departmentLabel: string, gradeLabel: string?, gradeLevel: number?, isBoss: boolean } | nil if no resolvable job at all
+local function ResolveJobGradeInfo(citizenid)
+    local player = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if not (player and player.PlayerData) then
+        local ok, offlinePlayer = pcall(function() return exports.qbx_core:GetOfflinePlayer(citizenid) end)
+        if ok and type(offlinePlayer) == 'table' then player = offlinePlayer end
+    end
+
+    local job = player and player.PlayerData and player.PlayerData.job
+    if type(job) ~= 'table' then return nil end
+
+    local dept = type(Config.Departments) == 'table' and Config.Departments[job.name]
+    local departmentLabel = (type(dept) == 'table' and type(dept.label) == 'string' and dept.label)
+        or (type(job.label) == 'string' and job.label)
+        or job.name
+
+    local gradeLabel = (type(job.grade) == 'table' and type(job.grade.name) == 'string') and job.grade.name or nil
+    local gradeLevel = (type(job.grade) == 'table' and type(job.grade.level) == 'number') and job.grade.level or nil
+
+    return {
+        departmentLabel = departmentLabel,
+        gradeLabel = gradeLabel,
+        gradeLevel = gradeLevel,
+        isBoss = job.isboss == true,
+    }
+end
+
+--- Read-only partnership display for PersonSummaryResult. DB-AUTHORITATIVE
+--- (K9Store.Partner_GetActiveRowByParty, via this file's own SafeStoreCall)
+--- -- deliberately NOT server/partnership.lua's GetActivePartnerCitizenId,
+--- which reads an ONLINE-ONLY in-memory cache (see that function's own doc
+--- comment) and would silently report "not partnered" for an offline
+--- target that actually is -- this callback must stay correct for an
+--- offline target exactly like every other read in tabletRequestPersonSummary.
+--- @param citizenid string
+--- @return table? -- { partnerCitizenid: string, partnerName: string, role: 'k9'|'handler' } | nil (no active partnership, feature off, or unreadable)
+local function ResolvePartnershipInfo(citizenid)
+    if not (Config.Features and Config.Features.HandlerPartnership == true) then return nil end
+
+    local row = SafeStoreCall(K9Store.Partner_GetActiveRowByParty, citizenid)
+    if type(row) ~= 'table' then return nil end
+
+    local isK9 = row.k9_citizenid == citizenid
+    local partnerCitizenid = isK9 and row.handler_citizenid or row.k9_citizenid
+    if type(partnerCitizenid) ~= 'string' or partnerCitizenid == '' then return nil end
+
+    return {
+        partnerCitizenid = partnerCitizenid,
+        partnerName = ResolveDisplayName(partnerCitizenid),
+        role = isK9 and 'k9' or 'handler',
+    }
+end
+
 -- ======================================================================
 -- CALLBACK 1 -- tabletRequestMyRecord. Every certified handler/K9 gets
 -- this, not just high command (Config.FeatureControl.everyoneCanViewOwnRecord).
@@ -1210,7 +1315,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
             effectivePermissions = effectivePermissions,
             allowSelfGrant = type(Config.HighCommand) == 'table' and Config.HighCommand.allowSelfGrant == true,
         },
-        certifications = BuildCertificationsArray(citizenid),
+        certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(citizenid)),
         xp = xp,
         tierLabel = tierLabel,
         myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet),
@@ -1379,10 +1484,17 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
     return {
         ok = true,
         target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId) },
-        certifications = BuildCertificationsArray(targetCitizenId),
+        certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(targetCitizenId)),
         xp = xp,
         tierLabel = tierLabel,
         permissions = permissions,
+        -- Owner-directed "one screen shows everything about a person" pass
+        -- (roster panel: cert+tier, rank, XP+tier, partnership, permissions).
+        -- Both READ-ONLY, both nil-safe (never a guessed value) -- see
+        -- ResolveJobGradeInfo/ResolvePartnershipInfo's own doc comments
+        -- just above CALLBACK 1 for exactly what each does and does not do.
+        job = ResolveJobGradeInfo(targetCitizenId),
+        partnership = ResolvePartnershipInfo(targetCitizenId),
     }
 end)
 

@@ -560,6 +560,40 @@ t.test('tabletRequestMyRecord: certifications array has ONE ROW PER CONFIGURED D
 end)
 
 -- ============================================================================
+-- DISPLAY NAME RESOLUTION (owner's own request: "ensure a name actually
+-- pops up and not the player id... in the tablet etc") -- BuildCertificationsArray's
+-- `grantedBy` field was a raw citizenid with no name at all, and
+-- html/tablet.js already renders it directly as plain text -- see
+-- EnrichCertificationsWithGrantedByName's own doc comment in
+-- server/tablet.lua. `grantedBy` itself must never change.
+-- ============================================================================
+
+t.test('tabletRequestMyRecord: certifications array carries grantedByName resolved via ResolveDisplayName for an ONLINE granter with charinfo', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.registerPlayer(2, 'GRANTER1', { name = 'police', grade = { level = 5 } }, { firstname = 'Jane', lastname = 'Granter' })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.equals(byDept.police.grantedBy, 'GRANTER1', 'the raw citizenid must never be replaced by the name')
+    t.equals(byDept.police.grantedByName, 'Jane Granter')
+    t.isNil(byDept.sheriff.grantedBy)
+    t.isNil(byDept.sheriff.grantedByName, 'a never-held department has no grantedBy at all, so no name to resolve either')
+end)
+
+t.test('tabletRequestMyRecord: certifications array grantedByName falls back to the bare citizenid when no name resolves (never blank, never a fake name)', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    -- GRANTER2 is registered neither online nor offline -- unresolvable.
+    f.addCertRow('CIT1', 'police', 'GRANTER2', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.equals(byDept.police.grantedByName, 'GRANTER2', 'unresolvable name must fall back to the raw citizenid, never blank')
+end)
+
+-- ============================================================================
 -- CERTIFICATION DEPTH READ-SIDE (this pass) -- BuildCertificationsArray now
 -- carries tier/expiresAtUnix/expired/specializations per department, sourced
 -- from server/certifications.lua's DB-authoritative QueryCertificationRecord.
@@ -1011,6 +1045,20 @@ t.test('tabletRequestPersonSummary: an OFFLINE target resolves a real name via q
     t.equals(result.target.name, 'Rex Handler', 'GetOfflinePlayer charinfo must resolve a real name for an offline target')
 end)
 
+t.test('tabletRequestPersonSummary: certifications array carries grantedByName resolved via ResolveDisplayName, including for an OFFLINE granter', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerOfflinePlayer('GRANTER3', { firstname = 'Old', lastname = 'Sergeant' })
+    f.addCertRow('TARGET1', 'police', 'GRANTER3', true)
+
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.equals(byDept.police.grantedBy, 'GRANTER3', 'the raw citizenid must never be replaced by the name')
+    t.equals(byDept.police.grantedByName, 'Old Sergeant')
+end)
+
 t.test('tabletRequestPersonSummary: qbx_core WITHOUT a GetOfflinePlayer export still falls back to the citizenid safely (soft-guarded)', function()
     local f = newFixture({ isHighCommand = function() return true end })
     local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
@@ -1169,6 +1217,89 @@ t.test('tabletRequestPersonSummary: SECURITY -- an unauthorized caller gets noth
     t.isFalse(result.ok)
     t.equals(result.error, 'not_authorized')
     t.isNil(result.permissions, 'a denied caller must receive no permissions data at all, custom key or not')
+end)
+
+-- ============================================================================
+-- tabletRequestPersonSummary: job/rank + partnership READ-ONLY fields
+-- (owner-directed "roster panel should show everything about a person" pass
+-- -- cert+tier, rank, XP+tier, partnership, permissions, all from one
+-- screen). See ResolveJobGradeInfo/ResolvePartnershipInfo's own doc
+-- comments in server/tablet.lua for exactly what each does and does not do
+-- -- in particular, NO promotion/rank-change control exists anywhere in
+-- this resource; these fields are read-only, and html/tablet.js renders no
+-- control for them at all (never a disabled button implying a capability
+-- that is not actually there).
+-- ============================================================================
+
+t.test('tabletRequestPersonSummary: job -- resolves department label + grade name/level for an ONLINE target', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'TARGET1', { name = 'police', isboss = false, grade = { level = 4, name = 'Sergeant' } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.isNotNil(result.job)
+    t.equals(result.job.departmentLabel, 'Los Santos Police Department', 'must prefer Config.Departments[job.name].label over a raw job name')
+    t.equals(result.job.gradeLabel, 'Sergeant')
+    t.equals(result.job.gradeLevel, 4)
+    t.isFalse(result.job.isBoss)
+end)
+
+t.test('tabletRequestPersonSummary: job -- resolves via qbx_core:GetOfflinePlayer for an OFFLINE target, matching ResolveDisplayName\'s own online/offline split', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.env.exports.qbx_core.GetOfflinePlayer = function(_self, citizenid)
+        if citizenid ~= 'OFFLINE-TARGET' then return nil end
+        return { PlayerData = { citizenid = citizenid, job = { name = 'sheriff', isboss = true, grade = { level = 5, name = 'Sheriff' } } } }
+    end
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'OFFLINE-TARGET')
+    t.isTrue(result.ok)
+    t.isNotNil(result.job)
+    t.equals(result.job.departmentLabel, 'Blaine County Sheriff')
+    t.equals(result.job.gradeLabel, 'Sheriff')
+    t.equals(result.job.gradeLevel, 5)
+    t.isTrue(result.job.isBoss)
+end)
+
+t.test('tabletRequestPersonSummary: job -- nil (never guessed) when neither an online nor an offline PlayerData resolves at all', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'NEVER-SEEN')
+    t.isTrue(result.ok)
+    t.isNil(result.job)
+end)
+
+t.test('tabletRequestPersonSummary: partnership -- nil when Config.Features.HandlerPartnership is off', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.isNil(result.partnership)
+end)
+
+t.test('tabletRequestPersonSummary: partnership -- resolves the active partner + role from the real k9_partnerships store for BOTH parties, DB-authoritative not the online-only cache', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        config = {
+            Features = { CommandTablet = true, HandlerPartnership = true },
+            Departments = {}, Permissions = {}, FeatureControl = {}, CommandTablet = {},
+            Database = { enabled = false }, -- real K9Store in-memory mode, no MySQL stub needed
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.env.K9Store.Partner_Insert('K9-CIT', 'HANDLER-CIT', 'HC1')
+
+    local k9Side = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'K9-CIT')
+    t.isTrue(k9Side.ok)
+    t.isNotNil(k9Side.partnership)
+    t.equals(k9Side.partnership.partnerCitizenid, 'HANDLER-CIT')
+    t.equals(k9Side.partnership.role, 'k9')
+
+    f.fakeNow.value = f.fakeNow.value + 1000 -- past TabletReadCooldown -- these are two separate reads from the same source, not a batch
+    local handlerSide = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'HANDLER-CIT')
+    t.isTrue(handlerSide.ok)
+    t.isNotNil(handlerSide.partnership)
+    t.equals(handlerSide.partnership.partnerCitizenid, 'K9-CIT')
+    t.equals(handlerSide.partnership.role, 'handler')
 end)
 
 -- ============================================================================

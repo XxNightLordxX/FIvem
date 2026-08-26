@@ -39,7 +39,17 @@ function routeFetch(handlers) {
 }
 
 const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false };
-const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false };
+// OWNER'S DECISION, 2026-08-25 (server/tablet.lua's own
+// CallerHasConsoleAccess, mirrored client-side by canAccessConsole()):
+// console access itself requires high command or an explicit k9.audit
+// grant specifically -- a bare k9.certify no longer reaches the console
+// tab on its own. 'k9.audit' added here so this constant's own name
+// ("console only, not high command") stays true; every non-high-command
+// gate this file asserts against (Tablet Theme/Certification Tiers tabs,
+// the K9 Role section) is keyed on isHighCommand alone regardless, so
+// adding this does not change what any of those tests are actually
+// proving.
+const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false };
 
 const DEFAULT_THEME_RESPONSE = { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' };
 

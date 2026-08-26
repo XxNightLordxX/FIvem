@@ -166,11 +166,24 @@ end
 -- primitive dedups/replaces by that same name (or label, per
 -- shared/compat/target.lua's own per-adapter notes), so re-running this
 -- never duplicates the entry.
+-- THIRD-EYE CLARITY PASS (this pass, owner-directed): icon changed from
+-- fas fa-kit-medical to fas fa-user-tie, this resource's own "a separate
+-- human acts on/for a K9" icon (confirmed with the sibling agent covering
+-- the vehicle/object half of this same pass — fas fa-dog is reserved for
+-- options only shown while the LOCAL player's own body IS the K9, which is
+-- never this option's case: the using player here is whoever is treating
+-- the K9, never the K9 itself). Deliberately NOT labeled with a "Handler:"
+-- prefix the way this file's sibling movement.lua options now are: per
+-- this file's own header, the using player here is job-gated (typically an
+-- EMS role via Config.K9Medkit.emsJobs), not necessarily anyone holding an
+-- actual K9 Handler certification, so a "Handler:" prefix would assert a
+-- role the eligible user may not hold. Label reworded to plain English
+-- instead; canInteract/onSelect are UNCHANGED.
 local function RegisterMedkitOxTargetOption()
     K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:treatK9',
-            icon = 'fas fa-kit-medical',
+            icon = 'fas fa-user-tie',
             label = locale('medkit.treat_target_label'),
             distance = Config.K9Medkit.range,
             canInteract = function(entity, distance, coords, name)

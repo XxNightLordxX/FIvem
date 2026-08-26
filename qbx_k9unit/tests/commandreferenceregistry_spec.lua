@@ -91,7 +91,7 @@ local SERVER_LUA_FILES = {
 local CLIENT_LUA_FILES = {
     'agility.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua', 'defense.lua',
     'equipmentshop.lua', 'exports.lua', 'featureblocks.lua', 'fetch.lua', 'findalert.lua',
-    'hud.lua', 'inventory.lua', 'kennel.lua', 'main.lua', 'medkit.lua', 'movement.lua',
+    'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'main.lua', 'medkit.lua', 'movement.lua',
     'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
     'pursuitsprint.lua', 'radial.lua', 'recall.lua', 'sarcalls.lua', 'scentlineup.lua',
     'scenttrail.lua', 'screenfx.lua', 'search.lua', 'tablet.lua', 'tracking.lua', 'training.lua',

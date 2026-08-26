@@ -1,17 +1,23 @@
 --[[
     tests/vehiclecombatguard_spec.lua
 
-    Regression coverage for a QA-reported real defect (this pass): with all
-    of Config.Features' combat flags on (the shipped default as of this
-    spec's authoring — config.lua's Config.Features.VehicleEntryExit/
-    BiteAndHold/NonLethalTakedown/PropDragging are all `true`), a K9 could
-    grab the SAME ped (its own PlayerPedId()) via two independent,
-    mutually-unaware mechanics: client/vehicle.lua's EnterNearestK9Vehicle()
-    (freeze/hide/disable-collision/attach the ped TO a vehicle as its CHILD)
-    and client/combat.lua's PropDragging holder-side maintenance loop
-    (attach a dragged target TO that SAME ped as its PARENT, every tick) or
-    BiteAndHold holder-side stance. Neither direction had a guard. This spec
-    pins down both new guards this pass adds:
+    Regression coverage for a QA-reported real defect (originally found when
+    both files still shared the SAME ped via attach): with all of
+    Config.Features' combat flags on (the shipped default as of this spec's
+    authoring — config.lua's Config.Features.VehicleEntryExit/BiteAndHold/
+    NonLethalTakedown/PropDragging are all `true`), a K9 could grab the SAME
+    ped (its own PlayerPedId()) via two independent, mutually-unaware
+    mechanics: client/vehicle.lua's EnterNearestK9Vehicle() (at the time,
+    freeze/hide/disable-collision/attach the ped TO a vehicle as its CHILD;
+    a LATER pass replaced this with real SET_PED_INTO_VEHICLE seating — see
+    that file's own header — but the underlying guard this spec covers is
+    unaffected: entering a vehicle, attach-based or real-seat-based, still
+    puts the SAME ped's control state at odds with combat.lua's per-tick
+    holder-anchor attach, just via a different concrete mechanism) and
+    client/combat.lua's PropDragging holder-side maintenance loop (attach a
+    dragged target TO that SAME ped as its PARENT, every tick) or BiteAndHold
+    holder-side stance. Neither direction had a guard. This spec pins down
+    both new guards this pass adds:
       1. client/vehicle.lua's EnterNearestK9Vehicle() now refuses while
          client/combat.lua reports an active drag (IsDragEngaged()) or bite
          hold (IsBiteHoldEngaged()) as HOLDER.
@@ -58,9 +64,26 @@
     production files, and every such failure is expected to clear the
     moment those keys land with no code change needed here.
 
+    FIXTURE NOTE (this pass — real seating made EnterNearestK9Vehicle()'s own
+    entry sequence asynchronous, door-open delay then seat then door-shut,
+    each a CreateThread'd coroutine rather than one synchronous call): the
+    vehicle fixture's CreateThread stub CAPTURES coroutines rather than
+    running them, and exposes runLatestThreadToCompletion() to explicitly
+    drive just the freshest one to completion. This is deliberate, not
+    incidental — client/vehicle.lua's own file-load-time watchdog thread is
+    ALSO created via CreateThread (a `while true do ... end` loop with no
+    exit), so a naive "run every captured function synchronously" stub would
+    hang this whole spec the moment Sandbox.loadInto() loads that file. Every
+    test that expects a successful, unblocked entry calls
+    runLatestThreadToCompletion() right after f.env.EnterNearestK9Vehicle();
+    every test that expects a GUARD to block entry does not (no new thread is
+    ever created on that path, so there is nothing to run, and calling it
+    would incorrectly touch the watchdog coroutine instead).
+
     WHAT THIS SPEC DOES NOT COVER: the two production files' PRE-EXISTING
-    behavior (EnterNearestK9Vehicle's IsPedInAnyVehicle check, ExitK9Vehicle,
-    the vehicle-despawn/own-death watchdog thread, RequestBiteHold/
+    behavior (EnterNearestK9Vehicle's IsPedInAnyVehicle check, seat-picking/
+    door-mapping, ExitK9Vehicle, the vehicle-lifecycle/own-death watchdog
+    thread, RequestBiteHold/
     RequestTakedown/RequestDrag's own no-target-in-range path, the shared
     maintenance thread's per-tick reassertion) is untested here — this file
     is scoped tightly to the ONE new cross-file interaction this pass adds,
@@ -143,22 +166,31 @@ local function newVehicleFixture(opts)
     local function DoesEntityExist(entity) return existingEntities[entity] == true end
     local function IsEntityDead(_entity) return false end
 
-    local collisionCalls, freezeCalls, visibleCalls, attachCalls, detachCalls = {}, {}, {}, {}, {}
-    local function SetEntityCollision(entity, allowCollision, physicsOnly)
-        collisionCalls[#collisionCalls + 1] = { entity = entity, allowCollision = allowCollision, physicsOnly = physicsOnly }
+    -- REAL-SEAT FIXTURE (this pass — client/vehicle.lua no longer attaches/
+    -- hides/freezes; it finds a real free seat, opens/shuts that seat's
+    -- door, and SET_PED_INTO_VEHICLE's the ped). A standard 4-seat cruiser:
+    -- GetVehicleMaxNumberOfPassengers = 3 -> valid seats -1..2. Every
+    -- non-driver seat free by default -- this spec's own scope is the
+    -- drag/bite-hold mutual guard, not seat-picking itself (that's
+    -- tests/clientvehicle_spec.lua's job), so seat availability is not made
+    -- independently controllable here.
+    local function GetVehicleMaxNumberOfPassengers(_vehicle) return 3 end
+    local function IsVehicleSeatFree(_vehicle, seatIndex) return seatIndex ~= -1 end
+    local seatCalls, doorOpenCalls, doorShutCalls, networkControlCalls = {}, {}, {}, {}
+    local function SetPedIntoVehicle(ped, vehicle, seatIndex)
+        seatCalls[#seatCalls + 1] = { ped = ped, vehicle = vehicle, seatIndex = seatIndex }
     end
-    local function FreezeEntityPosition(entity, toggle)
-        freezeCalls[#freezeCalls + 1] = { entity = entity, toggle = toggle }
+    local function SetVehicleDoorOpen(vehicle, doorIndex, loose, openInstantly)
+        doorOpenCalls[#doorOpenCalls + 1] = { vehicle = vehicle, doorIndex = doorIndex, loose = loose, openInstantly = openInstantly }
     end
-    local function SetEntityVisible(entity, toggle, unk)
-        visibleCalls[#visibleCalls + 1] = { entity = entity, toggle = toggle, unk = unk }
+    local function SetVehicleDoorShut(vehicle, doorIndex, closeInstantly)
+        doorShutCalls[#doorShutCalls + 1] = { vehicle = vehicle, doorIndex = doorIndex, closeInstantly = closeInstantly }
     end
-    local function AttachEntityToEntity(entity, attachTo, ...)
-        attachCalls[#attachCalls + 1] = { entity = entity, attachTo = attachTo }
+    local function NetworkRequestControlOfEntity(entity)
+        networkControlCalls[#networkControlCalls + 1] = entity
+        return true
     end
-    local function DetachEntity(entity, ...)
-        detachCalls[#detachCalls + 1] = { entity = entity }
-    end
+
     local function SetEntityCoords(...) end
     local function SetEntityHeading(...) end
     local function GetEntityHeading(...) return 0.0 end
@@ -188,8 +220,23 @@ local function newVehicleFixture(opts)
         eventHandlers[eventName] = eventHandlers[eventName] or {}
         eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
     end
-    local function CreateThread(_fn) end -- never run: this spec does not exercise the despawn/own-death watchdog thread
-    local function Wait(_ms) end
+    -- CAPTURE, DON'T AUTO-RUN: client/vehicle.lua's own file-load-time
+    -- watchdog thread (a `while true do ... end` loop) is created via
+    -- CreateThread the moment Sandbox.loadInto() below executes this file --
+    -- naively running every captured function synchronously would hang this
+    -- spec forever inside that loop (Wait() below is a no-op, so nothing
+    -- would ever actually suspend it). Threads are captured as coroutines
+    -- instead, and ONLY explicitly driven ones are ever resumed --
+    -- runLatestThreadToCompletion() below drives just the most-recently
+    -- created one (EnterNearestK9Vehicle()'s own one-shot, terminating
+    -- door-open/seat/door-shut sequence, created fresh by each call this
+    -- spec makes), never the watchdog captured at load time. This spec's own
+    -- header already scopes the watchdog thread itself as untested here.
+    local capturedThreads = {}
+    local function CreateThread(fn)
+        capturedThreads[#capturedThreads + 1] = coroutine.create(fn)
+    end
+    local function Wait(_ms) coroutine.yield() end
     local RESOURCE_NAME = 'qbx_k9unit'
     local function GetCurrentResourceName() return RESOURCE_NAME end
 
@@ -248,11 +295,12 @@ local function newVehicleFixture(opts)
         GetGamePool = GetGamePool,
         DoesEntityExist = DoesEntityExist,
         IsEntityDead = IsEntityDead,
-        SetEntityCollision = SetEntityCollision,
-        FreezeEntityPosition = FreezeEntityPosition,
-        SetEntityVisible = SetEntityVisible,
-        AttachEntityToEntity = AttachEntityToEntity,
-        DetachEntity = DetachEntity,
+        GetVehicleMaxNumberOfPassengers = GetVehicleMaxNumberOfPassengers,
+        IsVehicleSeatFree = IsVehicleSeatFree,
+        SetPedIntoVehicle = SetPedIntoVehicle,
+        SetVehicleDoorOpen = SetVehicleDoorOpen,
+        SetVehicleDoorShut = SetVehicleDoorShut,
+        NetworkRequestControlOfEntity = NetworkRequestControlOfEntity,
         SetEntityCoords = SetEntityCoords,
         SetEntityHeading = SetEntityHeading,
         GetEntityHeading = GetEntityHeading,
@@ -302,11 +350,10 @@ local function newVehicleFixture(opts)
     return {
         env = env,
         notifyCalls = notifyCalls,
-        collisionCalls = collisionCalls,
-        freezeCalls = freezeCalls,
-        visibleCalls = visibleCalls,
-        attachCalls = attachCalls,
-        detachCalls = detachCalls,
+        seatCalls = seatCalls,
+        doorOpenCalls = doorOpenCalls,
+        doorShutCalls = doorShutCalls,
+        networkControlCalls = networkControlCalls,
         denyCalls = function() return denyCalls end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
         --- Fires the captured onResourceStart handler(s) (this resource's
@@ -318,6 +365,26 @@ local function newVehicleFixture(opts)
             end
         end,
         addGlobalVehicleCalls = addGlobalVehicleCalls,
+        --- Drives the MOST RECENTLY CreateThread'd coroutine to completion --
+        --- see this fixture's own CreateThread stub comment for why only the
+        --- latest one is ever touched (never the file-load-time watchdog).
+        --- Call this immediately after f.env.EnterNearestK9Vehicle() actually
+        --- created a new entry sequence (i.e. every guard above it passed) --
+        --- bounded to 50 resumes so a genuine bug (an accidental infinite
+        --- loop in the production sequence) fails loudly instead of hanging
+        --- the whole test process.
+        runLatestThreadToCompletion = function()
+            local co = capturedThreads[#capturedThreads]
+            if not co then return end
+            local iterations = 0
+            while coroutine.status(co) ~= 'dead' and iterations < 50 do
+                local ok, err = coroutine.resume(co)
+                if not ok then
+                    error(('vehicle fixture: captured thread errored: %s'):format(tostring(err)))
+                end
+                iterations = iterations + 1
+            end
+        end,
     }
 end
 
@@ -430,10 +497,10 @@ end
 t.test('vehicle: EnterNearestK9Vehicle succeeds when neither drag nor bite hold is engaged', function()
     local f = newVehicleFixture({ isDragEngaged = false, isBiteHoldEngaged = false })
     f.env.EnterNearestK9Vehicle()
-    t.equals(#f.attachCalls, 1, 'should have attached the ped to the vehicle')
-    t.equals(#f.freezeCalls, 1)
-    t.equals(#f.visibleCalls, 1)
-    t.equals(#f.collisionCalls, 1)
+    f.runLatestThreadToCompletion() -- drives the door-open/seat/door-shut sequence to completion
+    t.equals(#f.doorOpenCalls, 1, 'should have opened the chosen seat door')
+    t.equals(#f.seatCalls, 1, 'should have seated the ped for real (SET_PED_INTO_VEHICLE), not attached it')
+    t.equals(#f.doorShutCalls, 1, 'should have shut the door again once seated')
     t.isTrue(f.env.IsInK9Vehicle())
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('vehicle.loaded'))
 end)
@@ -441,10 +508,9 @@ end)
 t.test('vehicle: EnterNearestK9Vehicle refuses with a distinct notification while a drag is engaged', function()
     local f = newVehicleFixture({ isDragEngaged = true, isBiteHoldEngaged = false })
     f.env.EnterNearestK9Vehicle()
-    t.equals(#f.attachCalls, 0, 'must not attach the ped while a drag is active')
-    t.equals(#f.freezeCalls, 0)
-    t.equals(#f.visibleCalls, 0)
-    t.equals(#f.collisionCalls, 0)
+    t.equals(#f.doorOpenCalls, 0, 'must not open a door while a drag is active')
+    t.equals(#f.seatCalls, 0, 'must not seat the ped while a drag is active')
+    t.equals(#f.doorShutCalls, 0)
     t.isFalse(f.env.IsInK9Vehicle())
     t.equals(#f.notifyCalls, 1)
     t.equals(f.notifyCalls[1].description, locale('vehicle.blocked_by_drag'))
@@ -454,7 +520,8 @@ end)
 t.test('vehicle: EnterNearestK9Vehicle refuses with a distinct notification while a bite hold is engaged', function()
     local f = newVehicleFixture({ isDragEngaged = false, isBiteHoldEngaged = true })
     f.env.EnterNearestK9Vehicle()
-    t.equals(#f.attachCalls, 0, 'must not attach the ped while a bite hold is active')
+    t.equals(#f.doorOpenCalls, 0, 'must not open a door while a bite hold is active')
+    t.equals(#f.seatCalls, 0, 'must not seat the ped while a bite hold is active')
     t.isFalse(f.env.IsInK9Vehicle())
     t.equals(#f.notifyCalls, 1)
     t.equals(f.notifyCalls[1].description, locale('vehicle.blocked_by_bite_hold'))
@@ -469,7 +536,8 @@ end)
 t.test('vehicle: the guard degrades cleanly (no error, enters normally) when client/combat.lua never loaded at all', function()
     local f = newVehicleFixture({ omitCombatGlobals = true })
     f.env.EnterNearestK9Vehicle()
-    t.equals(#f.attachCalls, 1, 'IsDragEngaged/IsBiteHoldEngaged being entirely absent globals must not block entry')
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1, 'IsDragEngaged/IsBiteHoldEngaged being entirely absent globals must not block entry')
     t.isTrue(f.env.IsInK9Vehicle())
 end)
 

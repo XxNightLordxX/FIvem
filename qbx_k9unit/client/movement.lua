@@ -2101,10 +2101,22 @@ local function RegisterDoorInteractionOxTargetOptions()
             'repurposed as a real gate without a reviewed code change. See ' ..
             'phase2_notes/DEVELOPER_REFERENCE.md#door-interaction Finding 3.')
 
+        -- THIRD-EYE CLARITY PASS (this pass, owner-directed): both icons
+        -- below now use fas fa-dog, the resource-wide K9-role icon (same
+        -- convention as this file's "Attach Leash" K9-direction option and
+        -- client/vehicle.lua/client/kennel.lua/client/search.lua/
+        -- client/fetch.lua's own K9-role options, confirmed with the
+        -- sibling agent covering that half of this pass) -- NOT fas fa-paw
+        -- (scratchDoor's previous icon) or fas fa-hand-paper (nudgeDoor's
+        -- previous icon): both of these options are only ever shown while
+        -- the local player's own body IS the K9 (CanShowK9UI() below), so
+        -- they belong in the same icon bucket as every other K9-role
+        -- option in this resource, not a bespoke per-action icon. Labels
+        -- reworded to plain English; canInteract/onSelect are UNCHANGED.
         K9Compat.Get('target').AddGlobalObject({
             {
                 name = 'qbx_k9unit:scratchDoor',
-                icon = 'fas fa-paw',
+                icon = 'fas fa-dog',
                 label = locale('movement.scratch_door_target_label'),
                 distance = Config.DoorInteraction.interactDistance,
                 canInteract = function(entity, distance, coords, name)
@@ -2133,7 +2145,7 @@ local function RegisterDoorInteractionOxTargetOptions()
                 -- full safety design this option's canInteract/onSelect below
                 -- are deliberately minimal because of.
                 name = 'qbx_k9unit:nudgeDoor',
-                icon = 'fas fa-hand-paper',
+                icon = 'fas fa-dog',
                 label = locale('movement.nudge_door_target_label'),
                 distance = Config.DoorInteraction.interactDistance,
                 canInteract = function(entity, distance, coords, name)

@@ -50,13 +50,22 @@ t.test('a viewer with NO effective permissions and not high command never sees a
     t.equals(findByText(h.getRoot(), 'Command Console').length, 0, 'the tab is not merely hidden by CSS -- it is never constructed at all');
 });
 
-t.test('a viewer holding ONLY k9.certify sees the console tab and can certify/decertify, but not the capability or feature matrix', async () => {
+t.test('a viewer holding k9.certify PLUS the k9.audit grant console access requires sees the console tab and can certify/decertify, but not the capability or feature matrix', async () => {
+    // OWNER'S DECISION, 2026-08-25 (server/tablet.lua's own
+    // CallerHasConsoleAccess, mirrored client-side by canAccessConsole()):
+    // console access itself was NARROWED to high command, or an explicit
+    // k9.audit grant specifically -- a bare k9.certify (or k9.access) no
+    // longer qualifies on its own. This scenario now needs BOTH: k9.audit
+    // to reach the console tab at all, and k9.certify to exercise the
+    // Certify/Decertify controls this test is actually about -- see
+    // tablet_home_spec.js's own sibling pair of tests for the console-
+    // access gate in isolation.
     const rosterRow = { citizenid: 'TARGET1', name: 'K9 Rex', departmentLabel: 'Los Santos Police Department', certified: false, xp: 10, tierLabel: 'Recruit K9' };
     const h = createHarness({
         fetchImpl: routeFetch({
             'tablet:requestMyRecord': () => ({
                 ok: true,
-                viewer: { citizenid: 'VIEWER1', name: 'Officer Viewer', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false },
+                viewer: { citizenid: 'VIEWER1', name: 'Officer Viewer', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false },
                 certifications: [], xp: null, tierLabel: null, myFeatures: [],
             }),
             'tablet:requestRoster': () => ({ ok: true, rows: [rosterRow], truncated: false }),
@@ -72,7 +81,7 @@ t.test('a viewer holding ONLY k9.certify sees the console tab and can certify/de
 
     h.postMessage('tablet:open', {});
     await settle(h);
-    t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'console tab exists for a k9.certify holder even without isHighCommand');
+    t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'console tab exists for a k9.certify holder who ALSO holds the k9.audit grant console access requires, even without isHighCommand');
 
     findByText(h.getRoot(), 'Command Console')[0].click();
     await settle(h);
@@ -133,7 +142,12 @@ t.test('Certify/Decertify buttons flip per department based on active status, an
     let lastCertifyBody = null;
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'V', name: 'V', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            // k9.audit added alongside k9.certify -- console access itself
+            // requires it (server/tablet.lua's CallerHasConsoleAccess,
+            // mirrored by canAccessConsole()); see this file's own header
+            // comment on the 'a viewer holding k9.certify PLUS...' test
+            // above for the full write-up.
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'V', name: 'V', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
             'tablet:requestRoster': () => ({ ok: true, rows: [{ citizenid: 'TARGET1', name: 'K9 Rex', departmentLabel: 'Police', certified: false, xp: 0, tierLabel: 'Recruit K9' }], truncated: false }),
             'tablet:requestPersonSummary': () => {
                 summaryCalls++;
@@ -175,7 +189,10 @@ t.test('Decertify requires a second confirming click before firing the request',
     let decertifyCalls = 0;
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'V', name: 'V', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            // k9.audit added alongside k9.certify -- console access itself
+            // requires it; see this file's own header comment on the
+            // 'a viewer holding k9.certify PLUS...' test above.
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'V', name: 'V', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
             'tablet:requestRoster': () => ({ ok: true, rows: [{ citizenid: 'TARGET1', name: 'K9 Rex', departmentLabel: 'Police', certified: true, xp: 0, tierLabel: 'Recruit K9' }], truncated: false }),
             'tablet:requestPersonSummary': () => ({ ok: true, target: { citizenid: 'TARGET1', name: 'K9 Rex' }, certifications: [{ departmentKey: 'police', departmentLabel: 'Police', active: true, grantedBy: null }], xp: 0, tierLabel: 'Recruit K9', permissions: [] }),
             'tablet:decertify': () => { decertifyCalls++; return { ok: true }; },

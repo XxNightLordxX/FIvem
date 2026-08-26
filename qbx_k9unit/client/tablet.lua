@@ -502,6 +502,58 @@
         'tier_in_use'/'protected_tier'.
     ======================================================================
 
+    ======================================================================
+    K9 INDIVIDUAL OVERRIDES (owner-directed "god over that tablet with
+    full customization over everything related to that K9" pass,
+    server/k9profiles.lua):
+      tablet:k9ProfilesList {}                                     -> cb({ok,overrides?,error?})   [high command only]
+        `overrides`: array of every citizenid with a LIVE override --
+        { citizenid, speedMultiplier?, scentRangeMultiplier?,
+        medkitCooldownMultiplier?, note? }. A field absent from one entry
+        means that field defers to the citizenid's own XP tier.
+      tablet:k9ProfileGet {citizenid}                              -> cb({ok,citizenid?,tierLabel?,effective?,override?,error?})
+        `effective`: { speedMultiplier, scentRangeMultiplier,
+        medkitCooldownMultiplier?, overridden: {speedMultiplier,
+        scentRangeMultiplier,medkitCooldownMultiplier} (booleans) } -- the
+        REAL composed values (tier, then override on top -- see that
+        file's own header "RESOLUTION ORDER"). `override` is the raw
+        stored row (or null if this citizenid has none yet).
+      tablet:k9ProfileUpsert {citizenid,speedMultiplier?,scentRangeMultiplier?,medkitCooldownMultiplier?,note?} -> cb({ok,citizenid?,effective?,override?,warning?,error?})
+        Every field independently optional -- omitted means "leave
+        whatever this citizenid's override already had for that field
+        alone," never "clear it." `speedMultiplier`/`scentRangeMultiplier`
+        must be in (0, 3.0]; `medkitCooldownMultiplier` must be in
+        (0, 1.0] (it can only shorten the cooldown, never lengthen it
+        past the tier default); `note` is a plain, markup-free string,
+        1-120 characters. `warning` is set (and MUST be surfaced, same
+        posture as xpTiersUpsert's own) whenever the edit targets the
+        ACTING officer's own citizenid, so a high-command account tuning
+        their own dog is disclosed loudly rather than folded into an
+        identical-looking ordinary edit.
+      tablet:k9ProfileReset {citizenid}                            -> cb({ok,citizenid?,effective?,error?})
+        Clears every override field for this citizenid in one action
+        (there is no per-field reset) -- idempotent, a citizenid with no
+        override already succeeds with no error.
+        Same TranslateReasonResult bridge as every catalog above.
+        UPDATE (coder-backend, same day): server/progression.lua now
+        consults `GetK9EffectiveMultipliers(citizenid)` from both
+        GetXPTierMedkitCooldownMs (medkit cooldown) and
+        BuildEffectiveTierSnapshot/PushTierSnapshot (the
+        'qbx_k9unit:client:xpTierChanged' push client/progression.lua's
+        own K9MoveRateModifiers consumes for speed/scent range) -- verified
+        directly against that file's source, not assumed. An override
+        saved here IS a real, live gameplay change, not merely stored.
+        ONE REMAINING CAVEAT, still true: k9ProfileUpsert/k9ProfileReset
+        do NOT themselves push a fresh snapshot to an already-connected
+        target -- the new value takes effect the next time that
+        citizenid's tier is naturally re-resolved (earning XP,
+        reconnecting, or this resource's own onResourceStart backfill
+        loop), not necessarily the instant this callback returns for a
+        currently-connected K9. html/tablet.js's own screen states this
+        plainly rather than imply an instantaneous effect this callback
+        chain does not have.
+    ======================================================================
+
     FILE-TO-FILE CONTRACT: exposes OpenTablet()/CloseTablet() as resource-
     globals (both already allowlisted) -- CloseTablet() deliberately IS
     global, not file-private, so no future call site is ever tempted to
@@ -586,12 +638,23 @@ local TABLET_STRING_KEYS = {
     'state_blocked', 'state_not_certified', 'state_requires_grant_missing',
     'state_available', 'feature_column', 'status_column',
     'person_features_heading', 'person_capabilities_heading',
+    'capability_no_description', 'capability_self_grant_disabled_title',
     'person_certifications_heading', 'person_xp_heading', 'xp_tier_unknown',
     'use_label', 'not_available_short', 'opening_person',
     'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',
     'role_heading', 'role_model_label', 'role_assign_label',
     'role_assign_hint', 'role_revert_label', 'role_revert_hint',
-    'role_no_peds_configured', 'tab_theme', 'theme_heading',
+    'role_no_peds_configured',
+    -- Rank/department + partnership (person screen, read-only -- owner-
+    -- directed "roster panel shows everything about a person" pass). See
+    -- html/tablet.js's buildRankSection/buildPartnershipSection doc
+    -- comments for exactly what each does and does not do -- in
+    -- particular, no promotion control exists anywhere in this resource.
+    'person_rank_heading', 'rank_department_label', 'rank_grade_label',
+    'rank_is_boss_badge', 'rank_unavailable', 'rank_change_note',
+    'person_partnership_heading', 'partnership_none', 'partnership_partner_label',
+    'partnership_role_label', 'partnership_role_value_k9', 'partnership_role_value_handler',
+    'tab_theme', 'theme_heading',
     'theme_primary_label', 'theme_accent_label', 'theme_background_label',
     'theme_text_label', 'theme_density_label', 'theme_density_comfortable',
     'theme_density_compact', 'theme_header_title_label', 'theme_save_label',
@@ -736,6 +799,23 @@ local TABLET_STRING_KEYS = {
     'xp_tier_error_invalid_speed_multiplier', 'xp_tier_error_invalid_scent_range_multiplier',
     'xp_tier_error_invalid_medkit_cooldown_multiplier', 'xp_tier_error_invalid_badge',
     'xp_tier_error_invalid_order', 'xp_tier_error_db_error', 'xp_tier_error_invalid_payload',
+    -- K9 INDIVIDUAL OVERRIDES (owner-directed "god over that tablet with
+    -- full customization over everything related to that K9" pass,
+    -- server/k9profiles.lua) -- html/tablet.js's own
+    -- buildK9ProfilesScreen(). Sits alongside the XP Rank Editor block
+    -- immediately above (this pass composes ON TOP OF that ladder, see
+    -- server/k9profiles.lua's own header "RESOLUTION ORDER").
+    'tab_k9_profiles', 'k9_profiles_heading', 'k9_profiles_intro', 'k9_profiles_list_heading',
+    'k9_profiles_empty', 'column_note', 'k9_profile_lookup_placeholder', 'k9_profile_lookup_button',
+    'k9_profile_manage_label', 'k9_profile_field_not_overridden', 'k9_profile_tier_label_prefix', 'k9_profile_effective_speed_prefix',
+    'k9_profile_effective_scent_prefix', 'k9_profile_effective_medkit_prefix', 'k9_profile_overridden_suffix', 'k9_profile_from_tier_suffix',
+    'k9_profile_not_yet_live_hint', 'k9_profile_speed_multiplier_label', 'k9_profile_speed_multiplier_hint', 'k9_profile_scent_range_multiplier_label',
+    'k9_profile_scent_range_multiplier_hint', 'k9_profile_medkit_cooldown_multiplier_label', 'k9_profile_medkit_cooldown_multiplier_hint', 'k9_profile_note_label',
+    'k9_profile_note_hint', 'k9_profile_blank_means_no_override_placeholder', 'k9_profile_field_clear_hint', 'k9_profile_save_label',
+    'k9_profile_reset_label', 'k9_profile_close_label', 'k9_profile_error_denied', 'k9_profile_error_rate_limited',
+    'k9_profile_error_busy', 'k9_profile_error_invalid_citizenid', 'k9_profile_error_invalid_payload', 'k9_profile_error_no_fields_to_set',
+    'k9_profile_error_invalid_speed_multiplier', 'k9_profile_error_invalid_scent_range_multiplier', 'k9_profile_error_invalid_medkit_cooldown_multiplier', 'k9_profile_error_invalid_note',
+    'k9_profile_error_too_many_overrides', 'k9_profile_error_db_error',
     -- K9 SUPPLY SHOP ITEM CATALOG (owner-directed "give high command real
     -- control over the equipment shop" pass, server/equipmentshop.lua's
     -- own "EQUIPMENT SHOP ITEM CATALOG" section) -- sits alongside the
@@ -808,10 +888,21 @@ local TABLET_STRING_KEYS = {
     'tab_commands', 'cmdref_heading', 'cmdref_intro', 'cmdref_search_placeholder',
     'cmdref_empty', 'cmdref_column_command', 'cmdref_column_does', 'cmdref_column_needs',
     'cmdref_admin_badge', 'cmdref_status_insufficient_authorization',
+    -- Keybinds handoff (this pass, client/keybinds.lua's five new
+    -- RegisterCommand entries + the new `defaultKeybind` display field on
+    -- k9recall/these five) -- shown once, not per-row, see
+    -- html/tablet.js's own buildCommandReferenceRow() comment.
+    'cmdref_default_keybind_template', 'cmdref_keybind_caveat',
+    'cmdref_category_basic_commands', 'cmdref_category_combat',
     'cmdref_category_field_gear', 'cmdref_category_calling_off', 'cmdref_category_scent_games',
     'cmdref_category_search_rescue', 'cmdref_category_training', 'cmdref_category_records',
     'cmdref_category_certification', 'cmdref_category_xp', 'cmdref_category_audit',
     'cmdref_category_devtools', 'cmdref_category_permissions',
+    'cmdref_k9sit_usage', 'cmdref_k9sit_does', 'cmdref_k9sit_needs',
+    'cmdref_k9bark_usage', 'cmdref_k9bark_does', 'cmdref_k9bark_needs',
+    'cmdref_k9bitehold_usage', 'cmdref_k9bitehold_does', 'cmdref_k9bitehold_needs',
+    'cmdref_k9takedown_usage', 'cmdref_k9takedown_does', 'cmdref_k9takedown_needs',
+    'cmdref_k9dragtoggle_usage', 'cmdref_k9dragtoggle_does', 'cmdref_k9dragtoggle_needs',
     'cmdref_k9deploykennel_usage', 'cmdref_k9deploykennel_does', 'cmdref_k9deploykennel_needs',
     'cmdref_k9propattach_usage', 'cmdref_k9propattach_does', 'cmdref_k9propattach_needs',
     'cmdref_k9throwfetchball_usage', 'cmdref_k9throwfetchball_does', 'cmdref_k9throwfetchball_needs',
@@ -850,6 +941,61 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9bonetool_usage', 'cmdref_k9bonetool_does', 'cmdref_k9bonetool_needs',
     'cmdref_k9grantpermission_usage', 'cmdref_k9grantpermission_does', 'cmdref_k9grantpermission_needs',
     'cmdref_k9revokepermission_usage', 'cmdref_k9revokepermission_does', 'cmdref_k9revokepermission_needs',
+    -- GUIDED FLOWS (this pass, owner's own words: "expand the workflow
+    -- paths for all the features to make them smoother, easier to
+    -- understand") -- high command only, html/tablet.js's own
+    -- buildFlowsHubScreen()/buildFlowOnboardScreen()/buildFlowOffboardScreen()/
+    -- buildFlowProblemScreen()/buildFlowTuningScreen(). SAME disclosed-gap
+    -- posture as every other block above: these 88 keys are NOT YET
+    -- present in locales/en.json's `tablet` group as of this pass --
+    -- flagged to that file's owner (see this pass's own report for the
+    -- exact key -> English-string list). BuildTabletStrings()'s own
+    -- pcall-per-key guard means each is simply omitted from `strings`
+    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
+    -- that exact gap in the meantime.
+    'tab_flows', 'flows_heading', 'flows_intro', 'flow_onboard_card_label',
+    'flow_onboard_card_hint', 'flow_offboard_card_label', 'flow_offboard_card_hint', 'flow_problem_card_label',
+    'flow_problem_card_hint', 'flow_tuning_card_label', 'flow_tuning_card_hint', 'flow_back_to_flows_label',
+    'flow_next_label', 'flow_back_label', 'flow_skip_label', 'flow_finish_label',
+    'flow_select_person_prompt', 'flow_select_label', 'flow_change_person_label', 'flow_working_with_label',
+    'flow_onboard_heading', 'flow_onboard_step_select', 'flow_onboard_step_certify', 'flow_onboard_step_tier',
+    'flow_onboard_step_features', 'flow_onboard_step_summary', 'flow_onboard_certify_intro', 'flow_onboard_pick_department_first',
+    'flow_onboard_tier_intro', 'flow_onboard_features_intro', 'flow_onboard_summary_heading', 'flow_onboard_summary_certified_template',
+    'flow_onboard_summary_not_certified', 'flow_onboard_summary_tier_template', 'flow_onboard_summary_no_tier', 'flow_onboard_summary_specializations_template',
+    'flow_onboard_summary_features_granted_template', 'flow_onboard_summary_features_still_missing_template', 'flow_onboard_summary_features_none_required', 'flow_offboard_heading',
+    'flow_offboard_step_select', 'flow_offboard_step_decertify', 'flow_offboard_step_access', 'flow_offboard_step_appearance',
+    'flow_offboard_step_summary', 'flow_offboard_decertify_intro', 'flow_offboard_no_active_certs', 'flow_offboard_access_intro',
+    'flow_offboard_appearance_intro', 'flow_offboard_summary_heading', 'flow_offboard_summary_decertified_template', 'flow_offboard_summary_still_certified_template',
+    'flow_offboard_summary_features_revoked_template', 'flow_offboard_summary_features_remaining_template', 'flow_offboard_summary_permissions_revoked_template', 'flow_offboard_summary_permissions_remaining_template',
+    'flow_offboard_summary_reverted', 'flow_offboard_summary_not_reverted', 'flow_problem_heading', 'flow_problem_step_select',
+    'flow_problem_step_review', 'flow_problem_step_audit', 'flow_problem_step_act', 'flow_problem_step_summary',
+    'flow_problem_review_intro', 'flow_problem_audit_intro', 'flow_problem_act_intro', 'flow_problem_summary_heading',
+    'flow_problem_summary_audit_ran_template', 'flow_problem_summary_audit_not_run', 'flow_problem_summary_features_blocked_template', 'flow_problem_summary_permissions_revoked_template',
+    'flow_problem_summary_no_actions', 'flow_tuning_heading', 'flow_tuning_step_overview', 'flow_tuning_step_features',
+    'flow_tuning_step_tunables', 'flow_tuning_step_tiers', 'flow_tuning_step_xp', 'flow_tuning_step_shop',
+    'flow_tuning_overview_heading', 'flow_tuning_overview_intro', 'flow_tuning_overview_features_template', 'flow_tuning_overview_tunables_template',
+    'flow_tuning_overview_tiers_template', 'flow_tuning_overview_xp_template', 'flow_tuning_overview_shop_template', 'flow_tuning_overview_not_loaded',
+    -- MUTATION ERROR TEXT (this pass, state-handling/error-reporting
+    -- consistency sweep) -- html/tablet.js's own mutationErrorText(), the
+    -- per-`error`-code mapping runMutation() now uses instead of a single
+    -- generic 'action_failed' line for every certify/decertify/tier/
+    -- renewal/specialization/givexp/permission/feature/role-mutation
+    -- refusal. SAME disclosed-gap posture as the GUIDED FLOWS block just
+    -- above: these 35 keys are NOT YET present in locales/en.json's
+    -- `tablet` group as of this pass -- flagged to that file's owner (see
+    -- this pass's own report for the exact key -> English-string list).
+    -- BuildTabletStrings()'s own pcall-per-key guard means each is simply
+    -- omitted from `strings` until added there, and html/tablet.js's own
+    -- DEFAULT_STRINGS covers that exact gap in the meantime.
+    'action_submitted', 'mutation_error_invalid_target', 'mutation_error_invalid_department', 'mutation_error_department_mismatch',
+    'mutation_error_not_eligible', 'mutation_error_denied', 'mutation_error_rate_limited', 'mutation_error_busy',
+    'mutation_error_self_certification_disabled', 'mutation_error_self_grant_blocked', 'mutation_error_target_must_be_online', 'mutation_error_target_not_in_department',
+    'mutation_error_target_too_far', 'mutation_error_target_not_k9_model', 'mutation_error_model_check_requires_online', 'mutation_error_target_online_use_online_action',
+    'mutation_error_already_certified', 'mutation_error_target_not_actively_certified', 'mutation_error_requires_active_cert', 'mutation_error_requires_tier_capability',
+    'mutation_error_already_granted', 'mutation_error_not_granted', 'mutation_error_invalid_specialization', 'mutation_error_invalid_tier',
+    'mutation_error_tier_already_set', 'mutation_error_target_offline', 'mutation_error_target_no_department_cert', 'mutation_error_feature_disabled',
+    'mutation_error_invalid_permission', 'mutation_error_invalid_model', 'mutation_error_not_available', 'mutation_error_no_active_assignment',
+    'mutation_error_no_fallback_configured', 'mutation_error_invalid_granter', 'mutation_error_db_error', 'mutation_error_actions_disabled',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -1589,8 +1735,24 @@ RegisterNUICallback('tablet:decertify', function(data, cb)
         cb({ ok = false, error = 'invalid_args' })
         return
     end
+    -- HONEST SUCCESS, NOT A CONFIRMED ONE (state-handling/error-reporting
+    -- consistency sweep, this pass): SubmitAllowlistedCommand's own `ok`
+    -- means only "the command string was handed to ExecuteCommand," the
+    -- SAME fire-and-forget contract a player typing this in chat gets --
+    -- it is NOT a signal that '/k9decertifyoffline' itself went on to
+    -- succeed (RevokeCertificationOffline runs asynchronously afterward and
+    -- reports its own outcome only via NotifyPlayer chat/toast, never back
+    -- through this `cb`). `submitted = true` on the ok branch lets
+    -- html/tablet.js's runMutation() show an honest "submitted, refreshing
+    -- to confirm" notice instead of claiming a stronger guarantee than this
+    -- callback actually has -- the same "reports success without doing it"
+    -- bug this project keeps finding, avoided here without inventing a
+    -- second confirmation mechanism: onSettled still re-pulls this
+    -- citizenid's authoritative certification state either way, so the
+    -- truth is visible within the same round trip regardless of which
+    -- notice text this line chose.
     local ok, errorCode = SubmitAllowlistedCommand('k9decertifyoffline', { data.targetCitizenId, data.departmentKey })
-    cb({ ok = ok, error = (not ok) and errorCode or nil })
+    cb({ ok = ok, submitted = ok or nil, error = (not ok) and errorCode or nil })
 end)
 
 -- ----------------------------------------------------------------------
@@ -1971,6 +2133,61 @@ RegisterNUICallback('tablet:xpTiersUpsert', function(data, cb)
     -- the SAME translation regardless, same posture as certTiersDelete's
     -- own 'tier_in_use'/'protected_tier' above.
     cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:xpTiersUpsert', data)))
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 INDIVIDUAL OVERRIDES -- server/k9profiles.lua, high command only
+-- (CanManageK9Profiles re-checked there on every one of the four calls
+-- below; this file adds no authorization of its own). Owner's own words
+-- for this pass: high command should be "a god over that tablet with
+-- full customization over everything related to that K9." Lets high
+-- command hand-tune ONE dog's speed/scent-range/medkit-cooldown
+-- multipliers above and beyond whatever its handler's XP tier already
+-- gives it, without moving the whole tier (see that file's own header
+-- "RESOLUTION ORDER"). Same `{ ok, reason, ... }` outcome shape as every
+-- other tablet-facing catalog above -- routed through the SAME
+-- TranslateReasonResult.
+--
+-- UPDATE (coder-backend, same day as the note this replaces):
+-- server/progression.lua's GetXPTierMedkitCooldownMs and
+-- BuildEffectiveTierSnapshot/PushTierSnapshot now both consult
+-- `GetK9EffectiveMultipliers(citizenid)` -- verified directly against
+-- that file's source. An override saved here is a REAL, live gameplay
+-- change (medkit cooldown, and the speed/scent values pushed to the
+-- target's own client via 'qbx_k9unit:client:xpTierChanged'), not merely
+-- stored. It does NOT push an immediate refresh to an already-connected
+-- target on its own, though -- the new value applies the next time that
+-- citizenid's tier is naturally re-resolved (XP award, reconnect, or this
+-- resource's own onResourceStart backfill). html/tablet.js's own K9
+-- profile screen states that caveat plainly.
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:k9ProfilesList', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:k9ProfilesList')))
+end)
+
+RegisterNUICallback('tablet:k9ProfileGet', function(data, cb)
+    if type(data) ~= 'table' or type(data.citizenid) ~= 'string' or data.citizenid == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:k9ProfileGet', data.citizenid)))
+end)
+
+RegisterNUICallback('tablet:k9ProfileUpsert', function(data, cb)
+    if type(data) ~= 'table' or type(data.citizenid) ~= 'string' or data.citizenid == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:k9ProfileUpsert', data)))
+end)
+
+RegisterNUICallback('tablet:k9ProfileReset', function(data, cb)
+    if type(data) ~= 'table' or type(data.citizenid) ~= 'string' or data.citizenid == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:k9ProfileReset', data.citizenid)))
 end)
 
 -- ----------------------------------------------------------------------

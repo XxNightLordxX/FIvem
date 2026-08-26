@@ -123,7 +123,7 @@ t.test('HIGH COMMAND: clicking a High Command Tools shortcut actually navigates 
     t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:getTheme')), 'clicking the shortcut fired the SAME server round trip the real tab would');
 });
 
-t.test('CERTIFIED HANDLER (not high command, not a K9 model): role badge reads "Certified Handler", console quick action present, NO High Command Tools section', async () => {
+t.test('CERTIFIED HANDLER (not high command, not a K9 model, k9.access only): role badge reads "Certified Handler", NO console quick action, NO High Command Tools section', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'OFFICER1', name: 'Officer Rex', isHighCommand: false, effectivePermissions: ['k9.access'], allowSelfGrant: false },
@@ -135,8 +135,33 @@ t.test('CERTIFIED HANDLER (not high command, not a K9 model): role badge reads "
     t.equals(findByText(h.getRoot(), 'Certified Handler').length, 1);
     t.equals(findByText(h.getRoot(), 'High Command').length, 0, 'no High Command role badge for this viewer');
     t.equals(findByText(h.getRoot(), 'High Command Tools').length, 0, 'admin section never renders for a non-high-command viewer');
-    t.equals(findByText(h.getRoot(), 'Open Command Console').length, 1, 'k9.access alone already grants console access -- see server/tablet.lua ResolveEffectivePermissions');
+    // OWNER'S DECISION, 2026-08-25 (server/tablet.lua's own
+    // CallerHasConsoleAccess): console access was NARROWED from "any
+    // non-empty effectivePermissions" to "high command, or an explicit
+    // k9.audit grant" specifically, because a bare 'k9.access' resolves
+    // true for every ordinary certified handler -- letting rank-and-file
+    // enumerate every other citizenid's certification history/XP/who
+    // holds admin capabilities. html/tablet.js's own canAccessConsole()
+    // mirrors that server-side gate exactly (see its own doc comment) --
+    // this test used to assert the OLD, now-incorrect contract ("k9.access
+    // alone already grants console access"); see the sibling test just
+    // below for the handler who DOES still qualify (an explicit k9.audit
+    // grant, kept deliberately per that same server-side comment).
+    t.equals(findByText(h.getRoot(), 'Open Command Console').length, 0, 'a bare k9.access holder no longer gets the console quick action -- see server/tablet.lua CallerHasConsoleAccess, OWNER\'S DECISION 2026-08-25');
     t.isTrue(findByText(h.getRoot(), 'Recall your K9').length >= 1, 'an actionable, available ability shows on Home\'s own "ready to use" list, not only on My Record');
+});
+
+t.test('CERTIFIED HANDLER holding an explicit k9.audit grant (not high command): console quick action IS present -- the one non-high-command path server/tablet.lua\'s CallerHasConsoleAccess still admits', async () => {
+    const h = await openTablet({
+        ok: true,
+        viewer: { citizenid: 'OFFICER2', name: 'Officer Bell', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.audit'], allowSelfGrant: false },
+        certifications: [{ departmentKey: 'police', departmentLabel: 'Police', active: true, grantedBy: 'X', tier: 'certified', expiresAtUnix: null, expired: false, specializations: [] }],
+        xp: 100, tierLabel: 'Trained K9', myFeatures: [],
+    });
+
+    t.equals(findByText(h.getRoot(), 'Certified Handler').length, 1);
+    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 0, 'k9.audit alone is still not high command -- no admin section');
+    t.equals(findByText(h.getRoot(), 'Open Command Console').length, 1, 'an explicit k9.audit grant is the one deliberately-kept non-high-command path to console access');
 });
 
 t.test('K9 (isK9Model true, not high command): role badge reads "K9"', async () => {

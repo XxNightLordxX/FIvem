@@ -56,6 +56,16 @@ class Element {
         this._children = [];
         this.parentNode = null;
         this._listeners = {};
+        this._doc = null; // set by FakeDocument.createElement() -- needed for focus()/blur() to update document.activeElement, and for removeChild() below to blur a focused element it detaches, same as a real browser
+        this.selectionStart = null;
+        this.selectionEnd = null;
+        // A plain, unconstrained settable/gettable number -- this stub has
+        // no real layout/scroll engine (see this file's own header), so
+        // there is no "is this element actually scrollable" concept to
+        // enforce; html/tablet.js's own render() only ever reads back
+        // what IT most recently wrote here, which is enough to prove its
+        // scroll-position-preservation code runs against something real.
+        this.scrollTop = 0;
     }
 
     setAttribute(name, value) { this._attrs[name] = String(value); }
@@ -77,6 +87,17 @@ class Element {
         var idx = this._children.indexOf(child);
         if (idx !== -1) this._children.splice(idx, 1);
         child.parentNode = null;
+        // Real-DOM parity: detaching the currently-focused element (or an
+        // ancestor of it) from the tree blurs it, exactly like a real
+        // browser -- html/tablet.js's own render() relies on this actually
+        // happening (its clearChildren(rootEl) removes the ENTIRE previous
+        // screen on every call) to prove its own focus-restoration code is
+        // doing real work, not merely finding an element that a stub never
+        // actually blurred in the first place.
+        var doc = this._doc;
+        if (doc && doc.activeElement && isSameOrDescendantStub(child, doc.activeElement)) {
+            doc.activeElement = null;
+        }
         return child;
     }
 
@@ -113,6 +134,42 @@ class Element {
         this.value = v;
         this._dispatch('input', { target: this });
     }
+
+    /** Mirrors a real Element closely enough for html/tablet.js's own
+     * focus-management code (captureFocusSnapshot()/restoreFocusSnapshot()/
+     * the render()-time dialog/notice/tab focus calls) to exercise for
+     * real: marks this element `document.activeElement`. */
+    focus() {
+        if (this._doc) this._doc.activeElement = this;
+    }
+
+    /** Counterpart to focus() -- only actually clears activeElement if
+     * THIS element currently holds it (matches real DOM: blurring an
+     * already-blurred element is a no-op). */
+    blur() {
+        if (this._doc && this._doc.activeElement === this) this._doc.activeElement = null;
+    }
+
+    /** Real `<input>`/`<textarea>` elements support this; html/tablet.js's
+     * own restoreFocusSnapshot() calls it to restore the text cursor/
+     * selection across a re-render, not just which element has focus. */
+    setSelectionRange(start, end) {
+        this.selectionStart = start;
+        this.selectionEnd = end;
+    }
+}
+
+/** @param {Element} root @param {Element} node @returns {boolean} true if
+ * `node` is `root` itself or anywhere in its ancestor chain -- used only
+ * by Element.removeChild() above to decide whether a just-detached
+ * subtree contained the currently-focused element. */
+function isSameOrDescendantStub(root, node) {
+    var n = node;
+    while (n) {
+        if (n === root) return true;
+        n = n.parentNode;
+    }
+    return false;
 }
 
 Object.defineProperty(Element.prototype, 'textContent', {
@@ -139,10 +196,16 @@ class FakeDocument {
         this._all = [];
         this._listeners = {};
         this.readyState = 'complete';
+        // Mirrors real `document.activeElement` -- null when nothing is
+        // focused, exactly like a real document before anything has ever
+        // received focus. Only ever mutated by Element.focus()/.blur()/
+        // .removeChild() above.
+        this.activeElement = null;
     }
 
     createElement(tagName, attrs) {
         var el = new Element(tagName, attrs);
+        el._doc = this;
         this._all.push(el);
         if (el._attrs.id) this._byId.set(el._attrs.id, el);
         return el;

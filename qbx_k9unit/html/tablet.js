@@ -143,11 +143,17 @@
         accurate.
 
       tablet:requestRoster { query: string } -> cb(RosterResult)
-        Only meaningful for a caller with at least one of
-        effectivePermissions non-empty, or isHighCommand -- but, per THE
-        SECURITY RULE, the SERVER must independently re-verify this on
-        every call; this page hiding the "Command Console" tab for
-        everyone else is a convenience, not the access control.
+        Only meaningful for a caller server/tablet.lua's own
+        CallerHasConsoleAccess admits: isHighCommand, OR
+        effectivePermissions includes 'k9.audit' specifically -- NOT "any
+        non-empty effectivePermissions" (narrowed 2026-08-25; a bare
+        'k9.access', which resolves true for every ordinary certified
+        handler, no longer qualifies -- see that function's own doc
+        comment for the full rationale). Per THE SECURITY RULE, the
+        SERVER must independently re-verify this on every call; this page
+        hiding the "Command Console" tab for everyone else is a
+        convenience, not the access control -- see canAccessConsole()
+        below, the ONE place this page derives that convenience signal.
         `query` is the raw, untrimmed search box text (name/citizenid/
         department substring match, case-insensitive) -- arbitrary
         player-controlled string, never assume it's been sanitized here.
@@ -181,8 +187,23 @@
             tierLabel: string|null,
             // Capability keys (Config.Permissions) this TARGET currently
             // holds -- rendered as read-only chips unless viewer.isHighCommand,
-            // in which case grant/revoke controls are also shown.
+            // in which case grant/revoke checkboxes are also shown.
             permissions: string[],
+            // READ-ONLY. job.name's Config.Departments label (or job.label,
+            // or job.name -- see server/tablet.lua's ResolveJobGradeInfo)
+            // plus job.grade off the SAME PlayerData shape every rank gate
+            // in this resource already trusts. null if this citizenid has
+            // no resolvable PlayerData at all (online AND offline lookup
+            // both failed). NO PROMOTION CONTROL EXISTS FOR THIS -- this
+            // resource has no SetJobGrade-equivalent write path today, so
+            // this page only ever displays it, never a dropdown/button
+            // that would imply a capability that is not actually there.
+            job: { departmentLabel: string, gradeLabel: string|null, gradeLevel: number|null, isBoss: boolean } | null,
+            // READ-ONLY, DB-authoritative (correct for an offline target,
+            // not an online-only cache -- see ResolvePartnershipInfo's own
+            // doc comment). null if not currently partnered, the
+            // HandlerPartnership feature is off, or the read failed.
+            partnership: { partnerCitizenid: string, partnerName: string, role: 'k9'|'handler' } | null,
           }
         Failure: { ok: false, error, message? }
 
@@ -711,6 +732,8 @@
         status_column: 'Status',
         person_features_heading: 'Abilities',
         person_capabilities_heading: 'Capabilities',
+        capability_no_description: 'No description on file for this permission.',
+        capability_self_grant_disabled_title: 'You cannot grant a permission to yourself.',
         person_certifications_heading: 'Certifications',
         person_xp_heading: 'XP',
         xp_tier_unknown: 'No XP record yet.',
@@ -735,6 +758,25 @@
         role_revert_label: 'Revert to Human',
         role_revert_hint: 'Forces this person back to human immediately -- works even if they hold no certification, no access, and no grant at all.',
         role_no_peds_configured: 'No ped models are configured on this server.',
+
+        // ---- Rank/department (person screen, read-only -- see
+        // buildRankSection's own doc comment for why there is no promotion
+        // control: this resource has no job-grade write path today).
+        person_rank_heading: 'Rank',
+        rank_department_label: 'Department',
+        rank_grade_label: 'Grade',
+        rank_is_boss_badge: 'Boss',
+        rank_unavailable: 'Rank information is not available for this person right now.',
+        rank_change_note: 'Rank changes are made through your department\'s normal promotion process -- this tablet does not change job rank.',
+
+        // ---- Partnership (person screen, read-only -- see
+        // buildPartnershipSection's own doc comment).
+        person_partnership_heading: 'Partnership',
+        partnership_none: 'Not currently partnered.',
+        partnership_partner_label: 'Partner',
+        partnership_role_label: 'Role in partnership',
+        partnership_role_value_k9: 'K9',
+        partnership_role_value_handler: 'Handler',
 
         // ---- Tablet theming (its own tab, high command only to edit;
         // the resulting colours/density/title apply for every viewer).
@@ -1050,6 +1092,53 @@
         xp_tier_error_invalid_order: 'That XP threshold would put this rank out of order with the rank above or below it.',
         xp_tier_error_db_error: 'The rank could not be saved due to a database error. Try again.',
         xp_tier_error_invalid_payload: 'That request was malformed. Try again.',
+        // K9 INDIVIDUAL OVERRIDES (this pass, coder-ui, server/k9profiles.lua,
+        // owner-directed "god over that tablet with full customization over
+        // everything related to that K9" pass) -- buildK9ProfilesScreen()
+        // below. Sits alongside the xp_tier_*/tab_xp_tiers keys above, same
+        // "compose on top of the XP ladder, per-citizenid" domain.
+        tab_k9_profiles: 'K9 Overrides',
+        k9_profiles_heading: 'K9 Individual Overrides',
+        k9_profiles_intro: "Hand-tune one dog's sprint speed, scent range, and medkit cooldown beyond what its handler's XP rank already gives it, without moving the whole rank.",
+        k9_profiles_list_heading: 'Currently Overridden K9s',
+        k9_profiles_empty: 'No K9 currently has a hand-tuned override.',
+        column_note: 'Note',
+        k9_profile_lookup_placeholder: 'Enter a citizen ID...',
+        k9_profile_lookup_button: 'Look Up',
+        k9_profile_manage_label: 'Manage',
+        k9_profile_field_not_overridden: 'Not overridden',
+        k9_profile_tier_label_prefix: "This K9's XP rank: ",
+        k9_profile_effective_speed_prefix: 'Speed right now: ',
+        k9_profile_effective_scent_prefix: 'Scent range right now: ',
+        k9_profile_effective_medkit_prefix: 'Medkit cooldown multiplier right now: ',
+        k9_profile_overridden_suffix: ' (hand-tuned override)',
+        k9_profile_from_tier_suffix: " (from this K9's rank, no override)",
+        k9_profile_not_yet_live_hint: "Changes here take effect the next time this K9's rank is recalculated -- earning XP, the handler reconnecting, or a server restart -- not necessarily this instant if the K9 is already active right now.",
+        k9_profile_speed_multiplier_label: 'Sprint Speed Multiplier',
+        k9_profile_speed_multiplier_hint: "Multiplies this K9's movement and sprint speed. Range: above 0 up to 3.0 (3x speed). Default: 1.0, meaning no change from its rank.",
+        k9_profile_scent_range_multiplier_label: 'Scent Range Multiplier',
+        k9_profile_scent_range_multiplier_hint: "Multiplies how far this K9 can pick up a scent trail or search target. Range: above 0 up to 3.0. Default: 1.0, meaning no change from its rank.",
+        k9_profile_medkit_cooldown_multiplier_label: 'Medkit Cooldown Multiplier',
+        k9_profile_medkit_cooldown_multiplier_hint: 'Multiplies the wait time between medkit uses on this K9 -- a SMALLER number means a SHORTER wait. Range: above 0 up to 1.0 (1.0 = no change; this can only shorten the cooldown, never lengthen it). Default: whatever its rank already gives it.',
+        k9_profile_note_label: 'Note (optional)',
+        k9_profile_note_hint: 'A short, plain-text reason for this override, visible to any high-command officer who looks this K9 up later. Up to 120 characters, no special formatting characters.',
+        k9_profile_blank_means_no_override_placeholder: 'Leave blank to keep the current value',
+        k9_profile_field_clear_hint: 'Leaving a field blank leaves it exactly as it already was -- it does not clear it. To remove every override on this K9 at once, use Reset All Overrides below; there is no way to clear a single field on its own.',
+        k9_profile_save_label: 'Save Override',
+        k9_profile_reset_label: 'Reset All Overrides',
+        k9_profile_close_label: 'Close',
+        k9_profile_error_denied: 'You are not authorized to manage K9 overrides.',
+        k9_profile_error_rate_limited: 'Please wait a moment before trying again.',
+        k9_profile_error_busy: 'Another edit to this K9 is in progress -- try again in a moment.',
+        k9_profile_error_invalid_citizenid: 'Enter a valid citizen ID.',
+        k9_profile_error_invalid_payload: 'That request was malformed. Try again.',
+        k9_profile_error_no_fields_to_set: 'Enter at least one value to save.',
+        k9_profile_error_invalid_speed_multiplier: 'Sprint speed multiplier must be greater than 0 and no more than 3, or left blank.',
+        k9_profile_error_invalid_scent_range_multiplier: 'Scent range multiplier must be greater than 0 and no more than 3, or left blank.',
+        k9_profile_error_invalid_medkit_cooldown_multiplier: 'Medkit cooldown multiplier must be greater than 0 and no more than 1, or left blank.',
+        k9_profile_error_invalid_note: 'Enter a valid note (1-120 characters, no special symbols) or leave it blank.',
+        k9_profile_error_too_many_overrides: 'Too many K9s already have a hand-tuned override -- remove one before adding another.',
+        k9_profile_error_db_error: 'The override could not be saved due to a database error. Try again.',
         // K9 SUPPLY SHOP ITEM CATALOG (this pass, coder-ui,
         // server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM CATALOG"
         // section) -- sits alongside the shop_location_*/tab_shop_locations
@@ -1157,7 +1246,14 @@
         cmdref_column_needs: 'What It Needs',
         cmdref_admin_badge: 'Admin',
         cmdref_status_insufficient_authorization: 'Requires higher authorization',
+        // Shown once, not per-row -- see buildCommandReferenceRow()'s own
+        // comment on `defaultKeybind` for why the per-row line never
+        // repeats this (this pass, keybinds handoff, client/keybinds.lua).
+        cmdref_default_keybind_template: 'Default key: {key} — rebindable in Settings > Key Bindings > FiveM.',
+        cmdref_keybind_caveat: "A default keybind only applies to a player who has never set that key themselves. Changing a default later never moves anyone's existing binding.",
 
+        cmdref_category_basic_commands: 'Basic K9 Commands',
+        cmdref_category_combat: 'Combat & Restraint',
         cmdref_category_field_gear: 'Field Gear & Equipment',
         cmdref_category_calling_off: 'Calling Your K9 Off',
         cmdref_category_scent_games: 'Scent Games',
@@ -1169,6 +1265,22 @@
         cmdref_category_audit: 'Audit & Oversight',
         cmdref_category_devtools: 'Developer Tools',
         cmdref_category_permissions: 'Permission Management',
+
+        cmdref_k9sit_usage: '/k9sit',
+        cmdref_k9sit_does: 'Commands your K9 to sit in place.',
+        cmdref_k9sit_needs: 'K9 access.',
+        cmdref_k9bark_usage: '/k9bark',
+        cmdref_k9bark_does: 'Plays a basic bark.',
+        cmdref_k9bark_needs: 'K9 access, and Basic Bark Sounds enabled on this server.',
+        cmdref_k9bitehold_usage: '/k9bitehold',
+        cmdref_k9bitehold_does: 'Toggles Bite & Hold on the nearest eligible target, or releases it if your K9 is already holding one.',
+        cmdref_k9bitehold_needs: 'K9 access, and Bite & Hold enabled on this server.',
+        cmdref_k9takedown_usage: '/k9takedown',
+        cmdref_k9takedown_does: 'Attempts a non-lethal takedown on the nearest fleeing eligible target.',
+        cmdref_k9takedown_needs: 'K9 access, and Non-Lethal Takedown enabled on this server.',
+        cmdref_k9dragtoggle_usage: '/k9dragtoggle',
+        cmdref_k9dragtoggle_does: 'Toggles dragging the nearest downed target, or releases it if your K9 is already dragging one.',
+        cmdref_k9dragtoggle_needs: 'K9 access, and Prop Dragging enabled on this server.',
 
         cmdref_k9deploykennel_usage: '/k9deploykennel',
         cmdref_k9deploykennel_does: 'Places a portable kennel at your feet.',
@@ -1294,6 +1406,155 @@
         cmdref_k9revokepermission_usage: '/k9revokepermission <citizenid> <permissionKey>',
         cmdref_k9revokepermission_does: 'Revokes a previously-granted permission key from a citizen.',
         cmdref_k9revokepermission_needs: 'High Command only. This feature must be turned on for your server.',
+
+        // ---- GUIDED FLOWS (this pass, owner's own words: "expand the
+        // workflow paths for all the features to make them smoother,
+        // easier to understand") -- high command only. See
+        // buildFlowsHubScreen()'s own header for the full write-up. Every
+        // one of these is UI CHROME ONLY: every action a guided flow takes
+        // still calls the exact same tablet:* NUI callback, with the exact
+        // same payload, as the equivalent existing screen -- this pass adds
+        // no new callback, no new authorization path, and no new server
+        // trust boundary.
+        tab_flows: 'Guided Flows',
+        flows_heading: 'Guided Flows',
+        flows_intro: 'Walk through a complete job step by step. Every action here calls the exact same server checks as its own screen -- nothing here is a shortcut around authorization, and every step can be skipped or revisited.',
+        flow_onboard_card_label: 'Set Up a New Handler',
+        flow_onboard_card_hint: 'Certify, set a tier, grant specializations, and grant any feature access they need -- one guided pass instead of four separate mental steps.',
+        flow_offboard_card_label: 'Offboard a Handler',
+        flow_offboard_card_hint: 'Decertify, clear feature grants and capabilities, and revert their appearance.',
+        flow_problem_card_label: 'Handle a Problem Player',
+        flow_problem_card_hint: 'Review their record, check the audit trail, and act -- all for the same person, without re-entering their citizen ID.',
+        flow_tuning_card_label: 'Tune the Server',
+        flow_tuning_card_hint: 'Step through feature toggles, tunables, certification tiers, XP thresholds, and shop items, with an overview of what is currently overridden from default.',
+        flow_back_to_flows_label: '← Back to Guided Flows',
+        flow_next_label: 'Next',
+        flow_back_label: 'Back',
+        flow_skip_label: 'Skip this step',
+        flow_finish_label: 'Finish',
+        flow_select_person_prompt: 'Select a handler or K9 to continue.',
+        flow_select_label: 'Select',
+        flow_change_person_label: 'Change person',
+        flow_working_with_label: 'Working with:',
+        flow_onboard_heading: 'Set Up a New Handler',
+        flow_onboard_step_select: 'Select Person',
+        flow_onboard_step_certify: 'Certify',
+        flow_onboard_step_tier: 'Tier & Specializations',
+        flow_onboard_step_features: 'Feature Access',
+        flow_onboard_step_summary: 'Summary',
+        flow_onboard_certify_intro: 'Certify this person in a department below. Departments they already hold stay listed so you can adjust tier or specializations instead.',
+        flow_onboard_pick_department_first: 'Certify this person in a department in the previous step first, then come back here to set a tier or add specializations.',
+        flow_onboard_tier_intro: 'Set a certification tier and add any specializations this department supports.',
+        flow_onboard_features_intro: 'These abilities are switched on server-wide but need an individual grant before this person can use them. Granting none of them is fine if none apply.',
+        flow_onboard_summary_heading: 'What just happened',
+        flow_onboard_summary_certified_template: 'Certified in {department}.',
+        flow_onboard_summary_not_certified: 'Not certified in any department this pass -- nothing else in this flow took effect.',
+        flow_onboard_summary_tier_template: 'Tier: {tier}.',
+        flow_onboard_summary_no_tier: 'No tier has been set for this department yet.',
+        flow_onboard_summary_specializations_template: '{count} specialization(s) held in this department.',
+        flow_onboard_summary_features_granted_template: '{count} feature(s) granted this pass.',
+        flow_onboard_summary_features_still_missing_template: '{count} grant-required feature(s) still not granted.',
+        flow_onboard_summary_features_none_required: 'No features on this server currently require a grant.',
+        flow_offboard_heading: 'Offboard a Handler',
+        flow_offboard_step_select: 'Select Person',
+        flow_offboard_step_decertify: 'Decertify',
+        flow_offboard_step_access: 'Clear Access',
+        flow_offboard_step_appearance: 'Appearance',
+        flow_offboard_step_summary: 'Summary',
+        flow_offboard_decertify_intro: 'End this person\'s active certifications below. Ending a certification automatically ends any active partnership they have too -- no separate action is needed for that.',
+        flow_offboard_no_active_certs: 'This person holds no active certifications.',
+        flow_offboard_access_intro: 'Clear any individual feature grants and admin capabilities this person still holds.',
+        flow_offboard_appearance_intro: 'Revert this person\'s appearance back to human. This works even if they hold no certification, access, or grant at all.',
+        flow_offboard_summary_heading: 'What just happened',
+        flow_offboard_summary_decertified_template: 'Decertified from {count} department(s).',
+        flow_offboard_summary_still_certified_template: 'Still certified in {count} department(s).',
+        flow_offboard_summary_features_revoked_template: '{count} feature grant(s) cleared.',
+        flow_offboard_summary_features_remaining_template: '{count} feature grant(s) still held.',
+        flow_offboard_summary_permissions_revoked_template: '{count} admin capability grant(s) cleared.',
+        flow_offboard_summary_permissions_remaining_template: '{count} admin capability grant(s) still held.',
+        flow_offboard_summary_reverted: 'Appearance reverted to human this pass.',
+        flow_offboard_summary_not_reverted: 'Appearance was not reverted this pass.',
+        flow_problem_heading: 'Handle a Problem Player',
+        flow_problem_step_select: 'Select Person',
+        flow_problem_step_review: 'Review Record',
+        flow_problem_step_audit: 'Audit Trail',
+        flow_problem_step_act: 'Take Action',
+        flow_problem_step_summary: 'Summary',
+        flow_problem_review_intro: 'Review this person\'s certifications and XP before deciding what to check next.',
+        flow_problem_audit_intro: 'Check what this person has actually done. Their citizen ID is already filled in below.',
+        flow_problem_act_intro: 'Block a feature or revoke an admin capability directly -- no need to reopen the Command Console.',
+        flow_problem_summary_heading: 'What you did this pass',
+        flow_problem_summary_audit_ran_template: 'Ran an audit query ({mode}), {count} row(s) returned.',
+        flow_problem_summary_audit_not_run: 'No audit query was run this pass.',
+        flow_problem_summary_features_blocked_template: '{count} feature(s) newly blocked.',
+        flow_problem_summary_permissions_revoked_template: '{count} admin capability grant(s) revoked.',
+        flow_problem_summary_no_actions: 'No blocks or revocations were made this pass.',
+        flow_tuning_heading: 'Tune the Server',
+        flow_tuning_step_overview: 'Overview',
+        flow_tuning_step_features: 'Feature Toggles',
+        flow_tuning_step_tunables: 'Tunables',
+        flow_tuning_step_tiers: 'Certification Tiers',
+        flow_tuning_step_xp: 'XP Thresholds',
+        flow_tuning_step_shop: 'Shop Items',
+        flow_tuning_overview_heading: 'Current configuration at a glance',
+        flow_tuning_overview_intro: 'A live summary pulled from the same five screens below -- nothing here is tracked separately, so it can never drift from what those screens actually show.',
+        flow_tuning_overview_features_template: '{overridden} of {total} feature toggle(s) overridden from their config.lua default.',
+        flow_tuning_overview_tunables_template: '{overridden} of {total} tunable(s) overridden from their config.lua default.',
+        flow_tuning_overview_tiers_template: '{count} certification tier(s) configured.',
+        flow_tuning_overview_xp_template: '{count} XP rank(s) configured.',
+        flow_tuning_overview_shop_template: '{count} shop item(s) configured.',
+        flow_tuning_overview_not_loaded: 'Not loaded yet -- open this step to load it.',
+
+        // ---- MUTATION ERROR TEXT (this pass, state-handling/error-
+        // reporting consistency sweep) -- see mutationErrorText()'s own
+        // header for the full write-up. runMutation() is the ONE shared
+        // path every certify/decertify/tier/renewal/specialization/givexp/
+        // permission/feature/role mutation on the Person screen (and
+        // triggerFeature on My Record) goes through -- before this pass it
+        // rendered every one of the ~30 distinct refusal reasons those
+        // server callbacks can return as the SAME generic 'action_failed'
+        // line, exactly the "collapses a dozen reasons into one generic
+        // line" problem this pass exists to fix. Each key below is one
+        // server-returned `error` code, one distinct sentence, phrased to
+        // say what to do next wherever there is a next step (never just
+        // restating the code) -- never anything the ACTING viewer could not
+        // already see about their own attempt.
+        action_submitted: 'Submitted. Refreshing to confirm...',
+        mutation_error_invalid_target: 'That target could not be resolved. Refresh this screen and try again.',
+        mutation_error_invalid_department: 'That department is not configured on this server.',
+        mutation_error_department_mismatch: 'This person\'s live job no longer matches this department. Refresh their record and try again.',
+        mutation_error_not_eligible: 'You are not currently an eligible certifier for this. You need the right rank or an explicit certifier grant.',
+        mutation_error_denied: 'You are not authorized to do this. You need a High Command grant.',
+        mutation_error_rate_limited: 'You\'re doing that too quickly. Wait a few seconds and try again.',
+        mutation_error_busy: 'Someone else is editing this right now. Wait a moment and try again.',
+        mutation_error_self_certification_disabled: 'Self-certification is turned off on this server.',
+        mutation_error_self_grant_blocked: 'You cannot grant this to yourself.',
+        mutation_error_target_must_be_online: 'This target must be online for this action. Try again once they are connected.',
+        mutation_error_target_not_in_department: 'This target is not currently in a configured K9 department.',
+        mutation_error_target_too_far: 'You are too far from the target. Move closer and try again.',
+        mutation_error_target_not_k9_model: 'This target\'s current appearance is not a configured K9 model. Have them switch to a K9 ped first.',
+        mutation_error_model_check_requires_online: 'This server requires the K9 model check, which only works for an online target. Try again while they are connected.',
+        mutation_error_target_online_use_online_action: 'This target is currently online. Reopen their record and use the live action instead of the offline one.',
+        mutation_error_already_certified: 'This target already holds an active certification for this department.',
+        mutation_error_target_not_actively_certified: 'This target does not hold an active certification for this department.',
+        mutation_error_requires_active_cert: 'This target needs an active, unexpired certification for this department before a specialization can be granted.',
+        mutation_error_requires_tier_capability: 'This target\'s current certification tier does not allow specializations. Assign a tier that permits them first.',
+        mutation_error_already_granted: 'This is already granted to the target.',
+        mutation_error_not_granted: 'This target does not currently hold this.',
+        mutation_error_invalid_specialization: 'That is not a recognized specialization.',
+        mutation_error_invalid_tier: 'That is not a recognized certification tier.',
+        mutation_error_tier_already_set: 'This target is already on that tier.',
+        mutation_error_target_offline: 'The target disconnected mid-action. Refresh and try again.',
+        mutation_error_target_no_department_cert: 'This target holds no certification for a configured department.',
+        mutation_error_feature_disabled: 'This feature is turned off on this server.',
+        mutation_error_invalid_permission: 'That is not a recognized permission key.',
+        mutation_error_invalid_model: 'That is not a recognized K9 ped model.',
+        mutation_error_not_available: 'This action is not available on this server right now.',
+        mutation_error_no_active_assignment: 'This target has no active K9 appearance to revert.',
+        mutation_error_no_fallback_configured: 'No fallback human model is configured on this server. Contact an administrator before reverting this target.',
+        mutation_error_invalid_granter: 'Your own account could not be resolved. Try again, or contact an administrator.',
+        mutation_error_db_error: 'A database error occurred. Try again; if this persists, contact an administrator.',
+        mutation_error_actions_disabled: 'Tablet actions are currently turned off on this server.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -1385,6 +1646,14 @@
     //                          of what this badge says (THE SECURITY RULE).
     // ------------------------------------------------------------------
     var COMMAND_REFERENCE_CATEGORIES = [
+        // Listed FIRST, ahead of every other category (this pass, keybinds
+        // handoff): these are the everyday, split-second actions a brand
+        // new handler is most likely to look for first -- see
+        // client/keybinds.lua's own header for why these five (plus
+        // k9recall, already in Calling Your K9 Off below) are the ones
+        // that got a rebindable key at all.
+        { key: 'basic_commands', labelKey: 'cmdref_category_basic_commands' },
+        { key: 'combat', labelKey: 'cmdref_category_combat' },
         { key: 'field_gear', labelKey: 'cmdref_category_field_gear' },
         { key: 'calling_off', labelKey: 'cmdref_category_calling_off' },
         { key: 'scent_games', labelKey: 'cmdref_category_scent_games' },
@@ -1399,6 +1668,24 @@
     ];
 
     var COMMAND_REFERENCE = [
+        // ---- Basic K9 Commands -- the owner's own named "fast" examples
+        // (client/keybinds.lua). `defaultKeybind` (this pass) is a NEW,
+        // OPTIONAL field: the RegisterKeyMapping default this exact command
+        // ships with, verified directly against client/keybinds.lua/
+        // config.lua source, not assumed -- rendered by
+        // buildCommandReferenceRow() below as "Default key: X", with a
+        // load-bearing caveat (cmdref_keybind_caveat, shown once in this
+        // screen's own intro) that a default only applies to a player who
+        // has never rebound that key, and never moves an existing one. ----
+        { command: 'k9sit', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9sit_usage', doesKey: 'cmdref_k9sit_does', needsKey: 'cmdref_k9sit_needs', gate: { kind: 'access' }, defaultKeybind: 'V' },
+        { command: 'k9bark', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9bark_usage', doesKey: 'cmdref_k9bark_does', needsKey: 'cmdref_k9bark_needs', gate: { kind: 'access', featureKey: 'BasicBarkSounds' }, defaultKeybind: 'C' },
+
+        // ---- Combat & Restraint (client/keybinds.lua) -- same
+        // `defaultKeybind` provenance note as Basic K9 Commands above.
+        { command: 'k9bitehold', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9bitehold_usage', doesKey: 'cmdref_k9bitehold_does', needsKey: 'cmdref_k9bitehold_needs', gate: { kind: 'access', featureKey: 'BiteAndHold' }, defaultKeybind: 'B' },
+        { command: 'k9takedown', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9takedown_usage', doesKey: 'cmdref_k9takedown_does', needsKey: 'cmdref_k9takedown_needs', gate: { kind: 'access', featureKey: 'NonLethalTakedown' }, defaultKeybind: 'T' },
+        { command: 'k9dragtoggle', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9dragtoggle_usage', doesKey: 'cmdref_k9dragtoggle_does', needsKey: 'cmdref_k9dragtoggle_needs', gate: { kind: 'access', featureKey: 'PropDragging' }, defaultKeybind: 'Y' },
+
         // ---- Field Gear & Equipment ----
         { command: 'k9deploykennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9deploykennel_usage', doesKey: 'cmdref_k9deploykennel_does', needsKey: 'cmdref_k9deploykennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
         { command: 'k9propattach', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9propattach_usage', doesKey: 'cmdref_k9propattach_does', needsKey: 'cmdref_k9propattach_needs', gate: { kind: 'access', featureKey: 'PropAttachments' } },
@@ -1407,7 +1694,7 @@
         { command: 'k9recallfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9recallfetchball_usage', doesKey: 'cmdref_k9recallfetchball_does', needsKey: 'cmdref_k9recallfetchball_needs', gate: { kind: 'open' } },
 
         // ---- Calling Your K9 Off ----
-        { command: 'k9recall', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9recall_usage', doesKey: 'cmdref_k9recall_does', needsKey: 'cmdref_k9recall_needs', gate: { kind: 'open', featureKey: 'Recall' } },
+        { command: 'k9recall', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9recall_usage', doesKey: 'cmdref_k9recall_does', needsKey: 'cmdref_k9recall_needs', gate: { kind: 'open', featureKey: 'Recall' }, defaultKeybind: 'U' },
         { command: 'k9calmdown', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9calmdown_usage', doesKey: 'cmdref_k9calmdown_does', needsKey: 'cmdref_k9calmdown_needs', gate: { kind: 'access', featureKey: 'FearStressSystem' } },
         { command: 'k9meatbait', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9meatbait_usage', doesKey: 'cmdref_k9meatbait_does', needsKey: 'cmdref_k9meatbait_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
         { command: 'k9whistle', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9whistle_usage', doesKey: 'cmdref_k9whistle_does', needsKey: 'cmdref_k9whistle_needs', gate: { kind: 'open', featureKey: 'DistractionSystem' } },
@@ -1613,7 +1900,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' | 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' | 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         // Standalone block-enforcement badge/hint text -- see
         // clientEnforcedBadgeText()/clientEnforcedHintText()'s own doc
@@ -1778,6 +2065,34 @@
         xpTierFieldError: null, // 'xp' | 'label' | 'speedMultiplier' | 'scentRangeMultiplier' | 'medkitCooldownMultiplier' | 'badge' | null -- which of the open draft's own inputs the last xpTiersUpsert rejected (client-side pre-check OR the server's own refusal, same field either way)
         xpTierActionError: null, // { ordinal, text } -- an upsert REFUSAL rendered inline on that specific rank's own row, same "cannot, and here is why" convention as certTierActionError/permissionKeyActionError/shopLocationActionError/runtimeTunableFieldError above
 
+        // K9 INDIVIDUAL OVERRIDES -- server/k9profiles.lua (owner-directed
+        // "god over that tablet with full customization over everything
+        // related to that K9" pass). A per-citizenid, per-field override
+        // ON TOP OF whichever XP tier that citizenid's K9 already
+        // resolves to -- see that file's own header "RESOLUTION ORDER".
+        // Two independent pieces on screen: the LIST of every citizenid
+        // that currently has a live override (k9Profiles, straight from
+        // tablet:k9ProfilesList), and, separately, ONE citizenid's full
+        // detail + edit form (k9ProfileSelected/k9ProfileDraft) opened
+        // either from that list's own "Manage" button or a fresh
+        // citizenid typed into the lookup box.
+        k9Profiles: null, // [{ citizenid, speedMultiplier?, scentRangeMultiplier?, medkitCooldownMultiplier?, note? }, ...] -- every citizenid with a LIVE override, straight from the server; null until first successful load
+        k9ProfilesLoading: false,
+        k9ProfilesError: null,
+        k9ProfileLookupInput: '', // the lookup box's own raw text -- a citizenid, never validated until Look Up is pressed
+        k9ProfileSelected: null, // { citizenid, tierLabel, effective: {speedMultiplier,scentRangeMultiplier,medkitCooldownMultiplier?,overridden:{...}}, override: {...}|null } -- the ONE citizenid currently loaded, straight from tablet:k9ProfileGet
+        k9ProfileSelectedLoading: false,
+        k9ProfileSelectedError: null,
+        // Non-optional whenever the acting officer's OWN citizenid was just
+        // edited (server/k9profiles.lua's own "SELF-SERVICE VISIBILITY"
+        // section) -- rendered as its own prominent banner, same posture
+        // as xpTierWarning/certTierWarning above, never folded into the
+        // generic actionNotice.
+        k9ProfileWarning: null,
+        k9ProfileDraft: null, // { citizenid, speedMultiplier: string, scentRangeMultiplier: string, medkitCooldownMultiplier: string, note: string } -- the open citizenid's working copy; blank field = "leave this field's own current value alone" (server/k9profiles.lua's own per-field-optional contract), never coerced to a number until Save
+        k9ProfileFieldError: null, // 'speedMultiplier' | 'scentRangeMultiplier' | 'medkitCooldownMultiplier' | 'note' | null -- which of the open draft's own inputs the last k9ProfileUpsert rejected
+        k9ProfileActionError: null, // plain string -- an upsert/reset REFUSAL rendered inline on the open detail panel, same "cannot, and here is why" convention as xpTierActionError above (no per-row addressing needed: only one citizenid's detail is ever open at a time)
+
         // K9 Supply Shop ITEM CATALOG editing -- server/equipmentshop.lua's
         // own "EQUIPMENT SHOP ITEM CATALOG" section. Sits alongside the
         // Shop Locations tab above -- same "K9 Supply Shop" domain, split
@@ -1814,6 +2129,21 @@
         auditError: null, // { error, message } -- the LAST failed tabletAudit* response, cleared on the next successful query or mode switch
         auditResult: null, // { rows, label, truncated, requestedLimit, actualLimit } -- the LAST successful response; NOT reset on tab re-entry (same posture as roster/theme -- switching away and back keeps showing the last result), only on mode switch or tablet:open
         auditRequestId: 0, // STALE-RESPONSE GUARD, same request-id shape as shopLocationsRequestId/runtimeFeaturesRequestId above -- a user can switch mode or press Run Query again while an earlier query is still in flight
+
+        // GUIDED FLOWS (this pass) -- high command only, screens 'flows' |
+        // 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning'
+        // (see state.screen's own comment above and buildFlowsHubScreen()'s
+        // header for the full write-up). PRESENTATION ONLY: every one of
+        // these fields only decides what this page shows/which step it is
+        // on -- every mutation a flow step makes still goes through the
+        // exact same runMutation()/handlePersonCertAction()/fetchNui() call
+        // an existing standalone screen already uses, with the SAME
+        // payload, so THE SECURITY RULE at this file's own header is
+        // untouched by any of this.
+        flowStep: 0, // current step index within whichever flow screen is active -- ONE shared counter is enough since only one flow screen is ever shown at a time; reset to 0 by goToFlow*Screen()/flowChangePerson() below whenever a flow (re)starts or a different person is picked
+        flowBaseline: null, // snapshot of the selected person's certifications/permissions/features taken ONCE per selection (see computeFlowBaselineSnapshot()) -- the "before" half of an honest before/after summary; never itself sent anywhere, never used to gate anything
+        flowOnboardDepartment: null, // the department key chosen in the Onboarding flow's own Certify step -- lets the later Tier/Specializations step focus on that ONE department instead of re-listing every configured department
+        flowOffboardAppearanceReverted: false, // set true ONLY after a real, server-confirmed tablet:revertK9Ped success during the Offboarding flow's own Appearance step -- never assumed from the click alone, see that step's own dedicated (non-runMutation) fetch wrapper
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -2176,9 +2506,24 @@
             if (!armed) {
                 armed = true;
                 btn.textContent = S('confirm_label');
+                // VISUALLY distinct armed state, not just the label swap
+                // above -- a same-size/same-colour text change is easy to
+                // miss at a glance (exactly the "does the intermediate
+                // state look clearly different" gap this class closes),
+                // and matters MORE for a keyboard user: Enter/Space on a
+                // focused button fires natively with no mouse hover cue at
+                // all, so the button's own resting vs. armed appearance is
+                // the only signal that a SECOND press is now required.
+                // Applied as an ADDITIONAL class (never replaces `cls`) so
+                // this reads correctly whether the base button is plain
+                // (`k9tablet-btn`) or already `k9tablet-btn--danger` --
+                // see tablet.css's own `.k9tablet-btn--armed` rule, which
+                // wins the cascade over `--danger`'s background either way.
+                btn.classList.add('k9tablet-btn--armed');
                 revertTimer = setTimeout(function () {
                     armed = false;
                     btn.textContent = label;
+                    btn.classList.remove('k9tablet-btn--armed');
                 }, CONFIRM_WINDOW_MS);
                 return;
             }
@@ -2215,16 +2560,367 @@
             || (Array.isArray(state.viewer.effectivePermissions) && state.viewer.effectivePermissions.indexOf('k9.audit') !== -1)));
     }
 
+    /**
+     * Gate for the Command Console tab/screen (roster + person lookup) and
+     * the Home "Open Command Console" card -- a CONVENIENCE ONLY, per THE
+     * SECURITY RULE, same as canViewAudit() immediately above. Mirrors
+     * server/tablet.lua's own CallerHasConsoleAccess() EXACTLY: high
+     * command, or an effectivePermissions entry of 'k9.audit' specifically
+     * -- NOT "any non-empty effectivePermissions", which is what all three
+     * of this gate's call sites checked before this pass (a bare
+     * 'k9.access' resolves true for every ordinary certified handler, so
+     * every certified handler saw this tab/card, clicked it, and got
+     * refused server-side -- exactly the "button exists, does something
+     * else" trap this file's own consistency rules forbid; see
+     * CallerHasConsoleAccess's own doc comment, dated 2026-08-25, for the
+     * full narrowing rationale). Body is IDENTICAL to canViewAudit()
+     * because CallerHasConsoleAccess deliberately reuses the same
+     * 'k9.audit' capability as its own admission rule ("kept alongside
+     * high command deliberately... granted BY high command, to one named
+     * person, for exactly this purpose") -- calling straight through
+     * rather than re-deriving a fourth independent copy of the same
+     * two-line boolean across this file's three call sites.
+     * @returns {boolean}
+     */
+    function canAccessConsole() {
+        return canViewAudit();
+    }
+
+    // ------------------------------------------------------------------
+    // FOCUS + SCROLL CONTINUITY ACROSS render()'s full teardown/rebuild
+    // ------------------------------------------------------------------
+    // render() below throws away and rebuilds EVERY DOM node under
+    // rootEl on every single call (this file's own header: single source
+    // of truth, no separate "static HTML vs dynamic JS" text to keep in
+    // sync) -- which, unpatched, blurs whatever the operator had focused
+    // on every one of those calls: removing the focused element from the
+    // document, or (mkButton()'s own `disabled` attribute, set
+    // synchronously in the SAME click handler that then calls render() to
+    // prevent a double-submit) merely disabling it while it still has
+    // focus, both force a real browser to blur it back to <body> with no
+    // element focused at all. For a mouse user this is invisible; for a
+    // keyboard-only operator it means every save/delete/tab-switch/
+    // search-keystroke can silently eject them back to having nothing
+    // focused, and typing a live-filter query one keystroke at a time
+    // becomes "type one character, re-click the box, type one character,
+    // re-click the box" (buildConsoleScreen()'s roster search,
+    // buildCommandReferenceScreen()'s filter, and
+    // buildPersonFeaturesSection()'s filter all call render() from their
+    // own `input` handler for exactly this reason -- live filtering as
+    // you type). The helpers below are wired into render() itself
+    // (function-scoped just below it) so no individual screen builder
+    // needs to know any of this exists -- see that function's own
+    // comment for the priority order they are tried in.
+    //
+    // Everything here is PURELY STRUCTURAL (tag + className, walked
+    // fresh every time) -- never an assumption that any specific DOM node
+    // survives a render() call, because none ever does.
+
+    var lastRenderedOpen = false;
+    var lastRenderedScreen = null;
+
+    /** Pre-order walk of every ELEMENT descendant of `root` (never `root`
+     * itself), calling `visit(el)` for each. Plain `.children` recursion,
+     * identical against a real browser Element and against
+     * html/tests/tablet-dom-stub.js's own Element.
+     * @param {Element} root @param {(el:Element) => void} visit */
+    function walkElements(root, visit) {
+        if (!root || !root.children) return;
+        for (var i = 0; i < root.children.length; i++) {
+            var child = root.children[i];
+            visit(child);
+            walkElements(child, visit);
+        }
+    }
+
+    /** @param {Element} el @returns {string} a purely structural identity
+     * ("tagname.className") -- NOT a claim that two elements sharing one
+     * are "the same" node, only that they occupy the same structural role
+     * (e.g. "input.k9tablet-search"), which is all captureFocusSnapshot()
+     * needs for the single-instance-per-screen fields it targets (see its
+     * own ordinal tie-break for the rare screen where more than one
+     * element could ever share one). */
+    function elementSignature(el) {
+        return el.tagName + '.' + (el.className || '');
+    }
+
+    /** @param {Element} root @param {Element} target @returns {boolean}
+     * true if `target` is `root` itself or anywhere in its subtree. */
+    function isSameOrDescendant(root, target) {
+        var n = target;
+        while (n) {
+            if (n === root) return true;
+            n = n.parentNode;
+        }
+        return false;
+    }
+
+    /** @param {string} cls @returns {?Element} the first descendant of
+     * rootEl carrying `cls` in its classList, or null. */
+    function findFirstWithClass(cls) {
+        var found = null;
+        walkElements(rootEl, function (el) {
+            if (found) return;
+            if (el.classList && el.classList.contains(cls)) found = el;
+        });
+        return found;
+    }
+
+    /**
+     * Snapshots the currently-focused element, IF ANY, and IF it is one
+     * this page can meaningfully relocate after a full rebuild -- scoped
+     * to `<input>`/`<textarea>` ONLY, deliberately never `<button>` (see
+     * render()'s own "focusedTabBefore"/action-notice branches for why a
+     * button's post-mutation focus is handled as a SEPARATE, more
+     * specific case rather than through this generic signature match: too
+     * many buttons on a typical screen share one class for a bare
+     * tag+className+ordinal match to reliably land on the SAME logical
+     * button again).
+     * @returns {?{signature:string, ordinal:number, selectionStart:?number, selectionEnd:?number}}
+     */
+    function captureFocusSnapshot() {
+        var active = document.activeElement;
+        if (!active || !rootEl || !isSameOrDescendant(rootEl, active)) return null;
+        var tag = String(active.tagName || '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') return null;
+
+        var signature = elementSignature(active);
+        var ordinal = -1;
+        var seen = 0;
+        walkElements(rootEl, function (el) {
+            if (elementSignature(el) !== signature) return;
+            if (el === active) ordinal = seen;
+            seen++;
+        });
+        if (ordinal === -1) return null;
+
+        var snapshot = { signature: signature, ordinal: ordinal, selectionStart: null, selectionEnd: null };
+        if (typeof active.selectionStart === 'number') snapshot.selectionStart = active.selectionStart;
+        if (typeof active.selectionEnd === 'number') snapshot.selectionEnd = active.selectionEnd;
+        return snapshot;
+    }
+
+    /** Counterpart to captureFocusSnapshot() -- re-finds the Nth
+     * (`ordinal`) element sharing `signature` in the FRESHLY rebuilt tree
+     * and refocuses it, restoring the text cursor/selection too so an
+     * in-progress selection survives a live-filter re-render, not just
+     * the caret. A signature that no longer exists this render (the
+     * operator navigated away) is silently a no-op, same as every other
+     * "state moved on, nothing left to restore" path on this page.
+     * @param {?object} snapshot @returns {boolean} true if focus was restored */
+    function restoreFocusSnapshot(snapshot) {
+        if (!snapshot) return false;
+        var matches = [];
+        walkElements(rootEl, function (el) {
+            if (elementSignature(el) === snapshot.signature) matches.push(el);
+        });
+        var target = matches[snapshot.ordinal];
+        if (!target || typeof target.focus !== 'function') return false;
+        target.focus();
+        if (snapshot.selectionStart !== null && typeof target.setSelectionRange === 'function') {
+            try { target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd); } catch (e) { /* some input types (e.g. number) refuse a selection range -- harmless, the focus restore above already succeeded */ }
+        }
+        return true;
+    }
+
+    /** Snapshots `.k9tablet-screen`'s own scrollTop -- the ONE scrollable
+     * region every buildXScreen() appends (tablet.css's `overflow-y:auto`
+     * on that class) -- so a same-screen re-render (an edit settling, a
+     * row being deleted, a live search re-filtering the list) does not
+     * throw a long table back to the top. Never applied across an actual
+     * screen change (see render()'s own `sameScreen` check) -- landing on
+     * a genuinely different screen at ITS OWN top is correct, not a bug.
+     * @returns {?number} */
+    function captureScreenScrollTop() {
+        var screenEl = findFirstWithClass('k9tablet-screen');
+        return screenEl ? (screenEl.scrollTop || 0) : null;
+    }
+
+    /** @param {?number} scrollTop */
+    function restoreScreenScrollTop(scrollTop) {
+        if (scrollTop === null || scrollTop === undefined) return;
+        var screenEl = findFirstWithClass('k9tablet-screen');
+        if (screenEl) screenEl.scrollTop = scrollTop;
+    }
+
+    /** @param {Element} container @returns {Element[]} every ENABLED,
+     * non-destructive `.k9tablet-btn` inside `container` -- excludes the
+     * `--danger` palette class and the separate `.k9tablet-link-btn`
+     * family entirely (never merely deprioritized): see
+     * findEnterSubmitTarget()'s own header for why a destructive button
+     * must never be a candidate here at all, regardless of how unambiguous
+     * the match would otherwise be. */
+    function collectSubmitCandidates(container) {
+        var out = [];
+        walkElements(container, function (el) {
+            if (String(el.tagName).toLowerCase() !== 'button') return;
+            if (!el.classList || !el.classList.contains('k9tablet-btn')) return;
+            if (el.classList.contains('k9tablet-btn--danger')) return;
+            if (el.getAttribute('disabled')) return;
+            out.push(el);
+        });
+        return out;
+    }
+
+    /**
+     * Finds the one, unambiguous "press Enter to do the obvious thing"
+     * button for a text field the operator is currently typing in.
+     * Every screen on this page builds its own toolbar/form with NO
+     * `<form>` element and no submit handling at all -- most of it is
+     * live-filtered as-you-type, not submitted -- so today Enter visibly
+     * does nothing anywhere on this page, in a form field or otherwise;
+     * this closes that gap wherever it is safe to.
+     *
+     * Walks OUTWARD from `input`'s own parent, one container at a time,
+     * stopping and returning the single candidate the FIRST time a
+     * container's subtree holds EXACTLY one qualifying button
+     * (collectSubmitCandidates() above) -- e.g. the "Open by ID"/Give XP
+     * toolbars (the button is a direct sibling: found at the very first,
+     * narrowest container) or a cert-tier/permission-key/shop-location/
+     * shop-item/xp-tier draft form (each field lives in its own row, with
+     * the actual Save button two levels up in a shared `actions` div:
+     * found once the walk reaches that shared ancestor).
+     *
+     * SAFETY: the walk stops and returns null (no auto-submit at all) the
+     * MOMENT any container holds MORE than one candidate, and never
+     * widens past that point -- e.g. buildPersonFeaturesSection()'s
+     * search box sits directly alongside a whole list of per-row Grant/
+     * Revoke buttons, so this deliberately never resolves there. A
+     * capped number of hops guards against ever climbing out of the
+     * currently open screen even if some future screen nests unusually
+     * deep.
+     * @param {Element} input @returns {?Element}
+     */
+    function findEnterSubmitTarget(input) {
+        var node = input.parentNode;
+        var hops = 6;
+        while (node && hops-- > 0) {
+            var candidates = collectSubmitCandidates(node);
+            if (candidates.length === 1) return candidates[0];
+            if (candidates.length > 1) return null;
+            node = node.parentNode;
+        }
+        return null;
+    }
+
+    /** Enter-key handling for the panel's plain text/number inputs -- see
+     * findEnterSubmitTarget()'s own header for the full rationale/safety
+     * argument. A no-op for anything else focused (a `<select>`, a
+     * `<textarea>`, a checkbox, or nothing at all). Called from the SAME
+     * keydown listener attachEscapeHandling() below already owns, as a
+     * separate branch, rather than a second document listener -- exactly
+     * one place this page ever reads a raw keyboard event from. */
+    function handleEnterKeydown() {
+        var active = document.activeElement;
+        if (!active || !rootEl || !isSameOrDescendant(rootEl, active)) return;
+        var tag = String(active.tagName || '').toLowerCase();
+        if (tag !== 'input') return;
+        var type = (active.getAttribute('type') || 'text').toLowerCase();
+        if (type !== 'text' && type !== 'number') return;
+
+        var target = findEnterSubmitTarget(active);
+        if (target) target.click();
+    }
+
     // ------------------------------------------------------------------
     // RENDER
     // ------------------------------------------------------------------
 
     function render() {
         if (!rootEl) return;
+
+        var wasOpen = lastRenderedOpen;
+        var sameScreen = state.screen === lastRenderedScreen;
+
+        // A stale success/error banner from whatever the operator last did
+        // on a DIFFERENT screen has no business following them to a new
+        // one -- see state.actionNotice's own doc comment ("transient,
+        // cleared on next navigation/reload"), which this is the one,
+        // centralized place that promise is actually kept for EVERY
+        // navigation path (goToXScreen()/buildTabs()/openPerson()/Back all
+        // funnel through a `state.screen = '...'; render();` pair, so
+        // catching the transition HERE covers all of them without editing
+        // each call site individually).
+        if (!sameScreen) state.actionNotice = null;
+
+        var activeBefore = document.activeElement;
+        var focusedTabBefore = !!(activeBefore && isSameOrDescendant(rootEl, activeBefore)
+            && activeBefore.classList && activeBefore.classList.contains('k9tablet-tab'));
+
+        var scrollSnapshot = sameScreen ? captureScreenScrollTop() : null;
+        var focusSnapshot = captureFocusSnapshot();
+        var hasNotice = !!state.actionNotice;
+
         clearChildren(rootEl);
+        lastRenderedScreen = state.screen;
+        lastRenderedOpen = state.open;
+
         if (!state.open) return;
 
         rootEl.appendChild(buildBackdrop());
+
+        restoreScreenScrollTop(scrollSnapshot);
+
+        // Focus, in priority order -- see this section's own header above
+        // for the full rationale. Every step is a no-op (never throws)
+        // when its target does not exist this render, falling through to
+        // the next; the LAST resort still never leaves focus lost to bare
+        // document.body.
+        if (!wasOpen) {
+            // Freshly opened this render (tablet:open, or the very first
+            // render after page load) -- the standard modal-dialog
+            // pattern: move focus INTO the dialog the instant it appears,
+            // never leave it wherever it happened to be (nowhere, for this
+            // surface) beforehand. The panel itself (tabindex="-1", set in
+            // buildBackdrop()) rather than one specific control inside it,
+            // so this works identically whether a resolved viewer, the
+            // loading state, or the error/retry gate is what actually
+            // rendered.
+            var openPanel = findFirstWithClass('k9tablet-panel');
+            if (openPanel && typeof openPanel.focus === 'function') openPanel.focus();
+        } else if (restoreFocusSnapshot(focusSnapshot)) {
+            // Handled -- a live-filter text field kept its focus (and
+            // cursor/selection) across this re-render.
+        } else if (focusedTabBefore) {
+            // The operator was on the tab bar itself. The OLD button is
+            // gone (a fresh one is built every render, and selecting a tab
+            // changes its OWN className to add k9tablet-tab--active,
+            // which deliberately makes it a signature mismatch for
+            // restoreFocusSnapshot() above), but the new one is trivially
+            // findable and is exactly where a keyboard user expects focus
+            // to still be after selecting a tab -- the standard ARIA tabs
+            // behavior: focus follows selection.
+            var activeTab = findFirstWithClass('k9tablet-tab--active');
+            if (activeTab && typeof activeTab.focus === 'function') activeTab.focus();
+        } else if (hasNotice) {
+            // A mutation just started or settled on THIS SAME screen
+            // (runMutation()'s own immediate "Working..." notice, then its
+            // final result), very likely having just disabled/removed the
+            // very control the operator activated -- mkButton()'s own
+            // `disabled` attribute blurs its element the instant it is
+            // set, natively, before render() even runs. Land on the
+            // notice that just told them what happened (buildActionNotice()
+            // gives it role="status"/aria-live, so this also gets
+            // announced to a screen reader) rather than losing focus to
+            // nothing. Deliberately NOT gated on the notice being "new"
+            // this exact render -- onSettled()'s own follow-up reload
+            // (loadMyRecord()/loadPersonSummary()/...) fires at least one
+            // MORE render() after the notice text last changed, while it
+            // is still the most recent, still-accurate thing on screen;
+            // gating on freshness let that second, purely incidental
+            // render silently steal focus back to the bare panel a moment
+            // after this branch had already (correctly) placed it here.
+            var noticeEl = findFirstWithClass('k9tablet-notice');
+            if (noticeEl && typeof noticeEl.focus === 'function') noticeEl.focus();
+        } else {
+            // Nothing more specific applied (a Cancel button closing a
+            // draft with no server round trip is the common case here) --
+            // still never leave focus lost to bare document.body: the
+            // dialog panel is always a safe, always-present landing spot a
+            // keyboard user can immediately Tab onward from.
+            var fallbackPanel = findFirstWithClass('k9tablet-panel');
+            if (fallbackPanel && typeof fallbackPanel.focus === 'function') fallbackPanel.focus();
+        }
     }
 
     function buildBackdrop() {
@@ -2236,7 +2932,12 @@
         // page's state.
         var density = (state.theme && state.theme.density) || DEFAULT_THEME.density;
         var panelClass = 'k9tablet-panel' + (density === 'compact' ? ' k9tablet-density-compact' : '');
-        var panel = mk('div', { class: panelClass, attrs: { role: 'dialog', 'aria-modal': 'true' } });
+        // tabindex="-1" -- programmatically focusable (never in the Tab
+        // order itself) so render()'s own focus-management code always
+        // has a safe, always-present landing spot to fall back to: see
+        // that function's own header for why every one of its rebuilds
+        // otherwise risks losing focus to bare document.body.
+        var panel = mk('div', { class: panelClass, attrs: { role: 'dialog', 'aria-modal': 'true', tabindex: '-1' } });
         panel.appendChild(buildHeader());
 
         if (state.actionNotice) {
@@ -2249,7 +2950,13 @@
             return backdrop;
         }
 
-        var canManageRoster = state.viewer.isHighCommand || (state.viewer.effectivePermissions && state.viewer.effectivePermissions.length > 0);
+        // canAccessConsole() -- SAME rule server/tablet.lua's own
+        // CallerHasConsoleAccess() enforces (isHighCommand OR
+        // effectivePermissions includes 'k9.audit'), NOT "any non-empty
+        // effectivePermissions" (fixed this pass -- see canAccessConsole()'s
+        // own doc comment for why the old, broader expression was a bug:
+        // it let every ordinary certified handler see a Console tab/card
+        // that the server would then refuse).
         // ALWAYS rendered now (this pass) -- previously gated on
         // canManageRoster, which meant a viewer with zero effective
         // permissions (in practice: someone certified nowhere at all, not
@@ -2257,20 +2964,20 @@
         // every certified handler/K9 -- see server/tablet.lua's
         // ResolveEffectivePermissions) saw NO navigation at all, not even
         // a way back to 'my_record'. buildTabs() itself now gates its own
-        // Command Console entry on this SAME canManageRoster expression
-        // (see that function) so this widening never exposes a tab that
-        // would silently dead-end into the wrong screen -- the Home tab
-        // (and, for a resolved viewer, My Record) are the only two every
-        // viewer is guaranteed to see.
+        // Command Console entry on this SAME canAccessConsole() gate (see
+        // that function) so this widening never exposes a tab that would
+        // silently dead-end into the wrong screen -- the Home tab (and,
+        // for a resolved viewer, My Record) are the only two every viewer
+        // is guaranteed to see.
         panel.appendChild(buildTabs());
 
         if (state.screen === 'home') {
             panel.appendChild(buildHomeScreen());
         } else if (state.screen === 'commands') {
             panel.appendChild(buildCommandReferenceScreen());
-        } else if (state.screen === 'console' && canManageRoster) {
+        } else if (state.screen === 'console' && canAccessConsole()) {
             panel.appendChild(buildConsoleScreen());
-        } else if (state.screen === 'person' && canManageRoster) {
+        } else if (state.screen === 'person' && canAccessConsole()) {
             panel.appendChild(buildPersonScreen());
         } else if (state.screen === 'theme' && state.viewer.isHighCommand) {
             panel.appendChild(buildThemeScreen());
@@ -2286,6 +2993,18 @@
             panel.appendChild(buildRuntimeControlScreen());
         } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand) {
             panel.appendChild(buildXpTiersScreen());
+        } else if (state.screen === 'k9_profiles' && state.viewer.isHighCommand) {
+            panel.appendChild(buildK9ProfilesScreen());
+        } else if (state.screen === 'flows' && state.viewer.isHighCommand) {
+            panel.appendChild(buildFlowsHubScreen());
+        } else if (state.screen === 'flow_onboard' && state.viewer.isHighCommand) {
+            panel.appendChild(buildFlowOnboardScreen());
+        } else if (state.screen === 'flow_offboard' && state.viewer.isHighCommand) {
+            panel.appendChild(buildFlowOffboardScreen());
+        } else if (state.screen === 'flow_problem' && state.viewer.isHighCommand) {
+            panel.appendChild(buildFlowProblemScreen());
+        } else if (state.screen === 'flow_tuning' && state.viewer.isHighCommand) {
+            panel.appendChild(buildFlowTuningScreen());
         } else if (state.screen === 'audit' && canViewAudit()) {
             panel.appendChild(buildAuditScreen());
         } else {
@@ -2407,7 +3126,19 @@
     }
 
     function buildActionNotice() {
-        var notice = mk('div', { class: 'k9tablet-notice k9tablet-notice--' + (state.actionNotice.kind === 'error' ? 'error' : 'ok'), text: state.actionNotice.text });
+        var isError = state.actionNotice.kind === 'error';
+        // role/aria-live announce this to a screen reader the instant it
+        // appears, and tabindex="-1" makes it a valid render()-time focus
+        // target (see that function's own "noticeIsFresh" branch) -- a
+        // keyboard user whose Save/Delete/Grant button was just disabled
+        // out from under them (mkButton()'s own double-submit guard blurs
+        // it natively) lands HERE, on the very message telling them what
+        // happened, instead of losing focus to nothing.
+        var notice = mk('div', {
+            class: 'k9tablet-notice k9tablet-notice--' + (isError ? 'error' : 'ok'),
+            text: state.actionNotice.text,
+            attrs: { role: isError ? 'alert' : 'status', 'aria-live': isError ? 'assertive' : 'polite', tabindex: '-1' },
+        });
         return notice;
     }
 
@@ -2448,9 +3179,23 @@
         // for every resolved viewer, and Home is the one screen every
         // single one of them, including a brand-new uncertified arrival,
         // can always usefully land on.
+        // STALE-STATE FIX (this pass): every OTHER data-driven tab below
+        // (My Record, Console, Theme, Cert Tiers, ...) re-fetches its own
+        // data on every click, specifically so navigating away and back
+        // never shows a stale copy -- Home used to be the one exception,
+        // switching screens with no reload at all, even though it renders
+        // the SAME state.myRecord/state.viewer this same tab bar's own My
+        // Record tab reloads on every click. A high-command viewer who
+        // certifies/renews/grants XP to THEIR OWN citizenid from the Person
+        // screen (a real, config-permitted self-action -- see
+        // refreshPersonAndSelf()'s own doc comment below), then returns
+        // here without ever visiting My Record directly, used to keep
+        // seeing the identity card/XP/ready-abilities exactly as they were
+        // at tablet:open. Now consistent with every other tab.
         var homeTab = mkButton(S('tab_home'), 'k9tablet-tab' + (state.screen === 'home' ? ' k9tablet-tab--active' : ''), function () {
             state.screen = 'home';
             render();
+            loadMyRecord();
         });
         tabs.appendChild(homeTab);
 
@@ -2480,16 +3225,19 @@
         // Command Console -- ONLY meaningful for a viewer who actually has
         // console access. Previously appended unconditionally (safe only
         // because buildBackdrop() used to skip calling buildTabs() at all
-        // for a canManageRoster === false viewer) -- now guarded HERE
+        // for a canAccessConsole() === false viewer) -- now guarded HERE
         // explicitly, since this pass widens buildBackdrop() to always
         // render this tab bar (so the new Home tab above is reachable by
         // everyone); without this guard a viewer with no console access
         // would see a Console tab that silently dead-ends into My Record
         // instead (buildBackdrop()'s own 'console' branch already requires
-        // canManageRoster) -- exactly the "button exists, does something
-        // else" trap this codebase's own consistency rules forbid.
-        var canManageRoster = state.viewer.isHighCommand || (state.viewer.effectivePermissions && state.viewer.effectivePermissions.length > 0);
-        if (canManageRoster) {
+        // canAccessConsole()) -- exactly the "button exists, does something
+        // else" trap this codebase's own consistency rules forbid. Uses
+        // canAccessConsole() (isHighCommand OR effectivePermissions
+        // includes 'k9.audit' specifically) rather than "any non-empty
+        // effectivePermissions" -- see that function's own doc comment for
+        // why the broader check was a bug fixed this pass.
+        if (canAccessConsole()) {
             var consoleTab = mkButton(S('tab_console'), 'k9tablet-tab' + (state.screen === 'console' || state.screen === 'person' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'console';
                 render();
@@ -2505,6 +3253,20 @@
         // command viewer still sees the current theme applied; they just
         // never see a way to change it.
         if (state.viewer.isHighCommand) {
+            // GUIDED FLOWS (this pass) -- see buildFlowsHubScreen()'s own
+            // header. Placed FIRST in this block, before every individual
+            // admin screen's own tab below, since a guided flow is the
+            // RECOMMENDED path for the four jobs it covers -- every
+            // existing screen/tab in this block remains exactly as
+            // reachable as before; this only adds a second, sequenced way
+            // in. Shown "active" for its hub AND for any of its four
+            // in-progress flow screens, so the tab bar still reflects
+            // where the operator actually is mid-flow.
+            var flowsTab = mkButton(S('tab_flows'), 'k9tablet-tab' + ((state.screen === 'flows' || state.screen === 'flow_onboard' || state.screen === 'flow_offboard' || state.screen === 'flow_problem' || state.screen === 'flow_tuning') ? ' k9tablet-tab--active' : ''), function () {
+                goToFlowsScreen();
+            });
+            tabs.appendChild(flowsTab);
+
             var themeTab = mkButton(S('tab_theme'), 'k9tablet-tab' + (state.screen === 'theme' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'theme';
                 render();
@@ -2627,6 +3389,19 @@
                 loadXpTiers();
             });
             tabs.appendChild(xpTiersTab);
+
+            // K9 Individual Overrides -- SAME high-command gate as every tab
+            // in this block (a UX convenience only: CanManageK9Profiles is
+            // re-verified server-side on every one of the four callbacks
+            // this screen calls regardless of whether this tab was ever
+            // shown -- see server/k9profiles.lua's own header
+            // "AUTHORIZATION / CONCURRENCY"). Fresh entry clears any
+            // leftover lookup/draft/refusal/warning from a previous visit,
+            // same reset discipline as every other tab switch on this page.
+            var k9ProfilesTab = mkButton(S('tab_k9_profiles'), 'k9tablet-tab' + (state.screen === 'k9_profiles' ? ' k9tablet-tab--active' : ''), function () {
+                goToK9ProfilesScreen();
+            });
+            tabs.appendChild(k9ProfilesTab);
         }
 
         // K9 Audit Trail viewer -- DELIBERATELY its own gate, NOT nested in
@@ -2793,9 +3568,17 @@
         render();
     }
 
-    /** @returns {boolean} -- SAME expression as buildBackdrop()/buildTabs() own local canManageRoster; a small, deliberate, per-function duplicate of a two-line boolean, matching this resource's own established convention for this exact situation (see e.g. server/tablet.lua's MeetsDepartmentRank doc comment) rather than a shared helper that would require touching either of those two functions' own call sites. */
+    /**
+     * @returns {boolean} -- gates the Home "Open Command Console" card.
+     * FIXED this pass: previously its own local copy of "isHighCommand OR
+     * any non-empty effectivePermissions" (a bug -- see canAccessConsole()'s
+     * own doc comment), duplicated independently across this function and
+     * buildBackdrop()/buildTabs(). Now a thin wrapper over canAccessConsole()
+     * (the ONE place this file derives that signal) instead of a fourth
+     * independent copy of the same rule.
+     */
     function homeCanManageRoster() {
-        return !!(state.viewer && (state.viewer.isHighCommand || (state.viewer.effectivePermissions && state.viewer.effectivePermissions.length > 0)));
+        return canAccessConsole();
     }
 
     /** @returns {{active:number, total:number}} */
@@ -2972,6 +3755,10 @@
         section.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_high_command_hint') }));
 
         var grid = mk('div', { class: 'k9tablet-home-tools' });
+        // GUIDED FLOWS (this pass) -- see buildFlowsHubScreen()'s own
+        // header. Listed FIRST, ahead of every individual screen below,
+        // as the RECOMMENDED path for the four jobs it covers.
+        grid.appendChild(buildHomeToolLink(S('tab_flows'), goToFlowsScreen));
         grid.appendChild(buildHomeToolLink(S('tab_theme'), goToThemeScreen));
         grid.appendChild(buildHomeToolLink(S('tab_cert_tiers'), goToCertTiersScreen));
         grid.appendChild(buildHomeToolLink(S('tab_permission_keys'), goToPermissionKeysScreen));
@@ -2979,6 +3766,7 @@
         grid.appendChild(buildHomeToolLink(S('tab_shop_items'), goToShopItemsScreen));
         grid.appendChild(buildHomeToolLink(S('tab_runtime_control'), goToRuntimeControlScreen));
         grid.appendChild(buildHomeToolLink(S('tab_xp_tiers'), goToXpTiersScreen));
+        grid.appendChild(buildHomeToolLink(S('tab_k9_profiles'), goToK9ProfilesScreen));
         if (canViewAudit()) {
             grid.appendChild(buildHomeToolLink(S('tab_audit'), goToAuditScreen));
         }
@@ -3040,6 +3828,12 @@
 
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('cmdref_heading') }));
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_intro') }));
+        // Shown ONCE here rather than repeated on every row that carries a
+        // `defaultKeybind` (this pass, keybinds handoff) -- load-bearing:
+        // without it, a player who rebound one of these keys long ago and
+        // then sees a later config change to its listed default would
+        // reasonably (and wrongly) expect their own binding to have moved.
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_keybind_caveat') }));
 
         var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('cmdref_search_placeholder') } });
         search.value = state.commandReferenceQuery;
@@ -3098,7 +3892,7 @@
         return wrap;
     }
 
-    /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object}} entry */
+    /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object, defaultKeybind?:string}} entry */
     function buildCommandReferenceRow(entry) {
         var tr = mk('tr');
 
@@ -3115,6 +3909,20 @@
             // go earn authorization for, not just that they personally
             // can't run them today.
             commandTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('cmdref_admin_badge') + ')' }));
+        }
+        // Default keybind (this pass, keybinds handoff) -- OPTIONAL, only
+        // the six commands client/keybinds.lua actually registers a
+        // RegisterKeyMapping default for carry this field at all. A
+        // separate block-level line under the command's own usage text,
+        // never appended inline onto it, so it reads as its own fact
+        // rather than part of the command syntax. The "only applies if
+        // never rebound" caveat is NOT repeated per-row here -- see
+        // cmdref_keybind_caveat, shown once in this screen's own intro.
+        if (typeof entry.defaultKeybind === 'string' && entry.defaultKeybind.length > 0) {
+            commandTd.appendChild(mk('div', {
+                class: 'k9tablet-muted',
+                text: formatTemplate(S('cmdref_default_keybind_template'), { key: entry.defaultKeybind }),
+            }));
         }
         tr.appendChild(commandTd);
 
@@ -3510,11 +4318,17 @@
             wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_certifications_heading') }));
             wrap.appendChild(buildCertificationList(state.personSummary.certifications, canCertify ? handlePersonCertAction : null));
 
+            wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_rank_heading') }));
+            wrap.appendChild(buildRankSection(state.personSummary.job));
+
             wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_xp_heading') }));
             wrap.appendChild(mk('p', { class: 'k9tablet-xp-line', text: xpLine(state.personSummary.xp, state.personSummary.tierLabel) }));
             if (canGiveXp) {
                 wrap.appendChild(buildGiveXpControl());
             }
+
+            wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_partnership_heading') }));
+            wrap.appendChild(buildPartnershipSection(state.personSummary.partnership));
 
             if (state.viewer.isHighCommand) {
                 wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_capabilities_heading') }));
@@ -3528,6 +4342,54 @@
             }
         }
 
+        return wrap;
+    }
+
+    /**
+     * READ-ONLY rank/department display -- server/tablet.lua's
+     * ResolveJobGradeInfo. NO PROMOTION CONTROL RENDERED HERE, deliberately:
+     * this resource has no write path for job grade at all today (no
+     * SetJobGrade-equivalent anywhere in qbx_k9unit, and no per-department
+     * "real ranks list" this page could even populate a dropdown from --
+     * Config.Departments only carries numeric certifierGrade/auditGrade/
+     * highCommandGrade THRESHOLDS, not named ranks). Per THE SECURITY RULE
+     * at the top of this file, a disabled dropdown would still be a lie if
+     * there is no server capability behind it at all -- so this renders
+     * plain text plus an explicit note, never a fake control.
+     * @param {{departmentLabel:string,gradeLabel:string|null,gradeLevel:number|null,isBoss:boolean}|null} job
+     */
+    function buildRankSection(job) {
+        var wrap = mk('div', { class: 'k9tablet-rank-section' });
+        if (!job) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('rank_unavailable') }));
+            return wrap;
+        }
+        wrap.appendChild(mk('p', { class: 'k9tablet-rank-line', text: S('rank_department_label') + ': ' + job.departmentLabel }));
+        var gradeText = (typeof job.gradeLabel === 'string' && job.gradeLabel.length > 0)
+            ? job.gradeLabel + (typeof job.gradeLevel === 'number' ? ' (' + job.gradeLevel + ')' : '')
+            : (typeof job.gradeLevel === 'number' ? String(job.gradeLevel) : S('not_available_short'));
+        wrap.appendChild(mk('p', { class: 'k9tablet-rank-line', text: S('rank_grade_label') + ': ' + gradeText + (job.isBoss ? ' (' + S('rank_is_boss_badge') + ')' : '') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('rank_change_note') }));
+        return wrap;
+    }
+
+    /**
+     * READ-ONLY partnership display -- server/tablet.lua's
+     * ResolvePartnershipInfo (DB-authoritative, correct for an offline
+     * target). No controls here -- breaking/forming a partnership is a
+     * player-initiated, proximity-gated in-world action (server/partnership.lua),
+     * not something this console screen offers on someone else's behalf.
+     * @param {{partnerCitizenid:string,partnerName:string,role:'k9'|'handler'}|null} partnership
+     */
+    function buildPartnershipSection(partnership) {
+        var wrap = mk('div', { class: 'k9tablet-partnership-section' });
+        if (!partnership) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnership_none') }));
+            return wrap;
+        }
+        wrap.appendChild(mk('p', { class: 'k9tablet-partnership-line', text: S('partnership_partner_label') + ': ' + partnership.partnerName }));
+        var roleText = partnership.role === 'k9' ? S('partnership_role_value_k9') : S('partnership_role_value_handler');
+        wrap.appendChild(mk('p', { class: 'k9tablet-partnership-line', text: S('partnership_role_label') + ': ' + roleText }));
         return wrap;
     }
 
@@ -3567,7 +4429,7 @@
                 var modelName = select.value;
                 if (!modelName) return;
                 runMutation('tablet:assignK9Role', { targetCitizenId: citizenid, modelName: modelName }, function () {
-                    loadPersonSummary(citizenid);
+                    refreshPersonAndSelf(citizenid);
                 });
             }, { disabled: state.pendingAction }));
             wrap.appendChild(row);
@@ -3576,7 +4438,7 @@
 
         wrap.appendChild(mkConfirmButton(S('role_revert_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
             runMutation('tablet:revertK9Ped', { targetCitizenId: citizenid }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         }, { disabled: state.pendingAction }));
         wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('role_revert_hint') }));
@@ -3593,27 +4455,27 @@
         var citizenid = state.person.citizenid;
         if (kind === 'certify') {
             runMutation('tablet:certify', { targetCitizenId: citizenid, departmentKey: departmentKey }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         } else if (kind === 'decertify') {
             runMutation('tablet:decertify', { targetCitizenId: citizenid, departmentKey: departmentKey }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         } else if (kind === 'setTier') {
             runMutation('tablet:setCertificationTier', { targetCitizenId: citizenid, departmentKey: departmentKey, tier: extra }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         } else if (kind === 'renew') {
             runMutation('tablet:renewCertification', { targetCitizenId: citizenid, departmentKey: departmentKey }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         } else if (kind === 'grantSpecialization') {
             runMutation('tablet:grantSpecialization', { targetCitizenId: citizenid, departmentKey: departmentKey, specialization: extra }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         } else if (kind === 'revokeSpecialization') {
             runMutation('tablet:revokeSpecialization', { targetCitizenId: citizenid, departmentKey: departmentKey, specialization: extra }, function () {
-                loadPersonSummary(citizenid);
+                refreshPersonAndSelf(citizenid);
             });
         }
     }
@@ -3637,7 +4499,7 @@
             var amount = Number(input.value);
             if (!isFinite(amount) || amount <= 0) return;
             runMutation('tablet:givexp', { targetCitizenId: state.person.citizenid, amount: amount }, function () {
-                loadPersonSummary(state.person.citizenid);
+                refreshPersonAndSelf(state.person.citizenid);
             });
         }, { disabled: state.pendingAction || disallowSelf, title: disallowSelf ? S('self_grant_disabled_title') : undefined }));
 
@@ -3740,38 +4602,89 @@
         var rows = resolveCapabilityRows(heldKeys);
         var wrap = mk('div', { class: 'k9tablet-capability-list' });
         var citizenid = state.person.citizenid;
+        var selfTarget = citizenid === state.viewer.citizenid;
 
         for (var i = 0; i < rows.length; i++) {
-            var rowData = rows[i];
-
-            var row = mk('div', { class: 'k9tablet-capability-row' });
-            var labelWrap = mk('span', { class: 'k9tablet-capability-label', text: rowData.label, title: rowData.description });
-            if (rowData.retired) {
-                labelWrap.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('permission_key_retired_badge') + ')' }));
-            }
-            row.appendChild(labelWrap);
-            row.appendChild(mk('span', { class: 'k9tablet-capability-state', text: rowData.held ? S('certified_yes') : S('certified_no') }));
-
-            if (rowData.held) {
-                row.appendChild(mkConfirmButton(S('revoke_label'), 'k9tablet-btn k9tablet-btn--danger', function (k) {
-                    return function () {
-                        runMutation('tablet:revokePermission', { targetCitizenId: citizenid, permission: k }, function () {
-                            loadPersonSummary(citizenid);
-                        });
-                    };
-                }(rowData.key), { disabled: state.pendingAction }));
-            } else if (rowData.grantable) {
-                row.appendChild(mkButton(S('grant_label'), 'k9tablet-btn', function (k) {
-                    return function () {
-                        runMutation('tablet:grantPermission', { targetCitizenId: citizenid, permission: k }, function () {
-                            loadPersonSummary(citizenid);
-                        });
-                    };
-                }(rowData.key), { disabled: state.pendingAction }));
-            }
-            wrap.appendChild(row);
+            wrap.appendChild(buildCapabilityRow(rows[i], citizenid, selfTarget));
         }
         return wrap;
+    }
+
+    /**
+     * One permission row -- a REAL checkbox (owner: "checkboxes that
+     * actually do something... ticking or unticking a permission grants or
+     * revokes it"), with a VISIBLE plain-English description line under the
+     * label -- never a tooltip-only one, per THE HONESTY REQUIREMENT this
+     * task exists to satisfy ("a raw key like k9.audit with a checkbox is
+     * not enough"). `rowData.description` already carries the real catalog
+     * text (server/permissionkeycatalog.lua, merged with the four shipped
+     * capabilities' own DEFAULT_CAPABILITIES copy -- see
+     * resolveCapabilityRows() above); this never invents a second source of
+     * truth for it.
+     *
+     * Ticking calls tablet:grantPermission, unticking calls
+     * tablet:revokePermission -- both re-verified server-side regardless of
+     * this row's own disabled state (THE SECURITY RULE at the top of this
+     * file).
+     *
+     * DISABLED WITH A REASON, never an enabled control the server will
+     * refuse: server/permissions.lua's GrantPermission blocks self-grant
+     * UNCONDITIONALLY (no config flag gates it, unlike XP's own
+     * allowSelfGrant) -- so an UNHELD row is disabled outright when this
+     * person IS the viewer, with a title explaining why, rather than
+     * rendering a checkbox that would always come back 'self_grant_blocked'.
+     * Revoke carries no such restriction server-side, so a HELD row stays
+     * enabled even on the viewer's own record.
+     *
+     * NEVER OPTIMISTIC: `checkbox.checked` is set from `rowData.held` (the
+     * last CONFIRMED server state) every render, never flipped locally
+     * ahead of the mutation resolving -- runMutation()'s own onSettled
+     * always re-pulls the authoritative record via refreshPersonAndSelf(),
+     * so a failed grant/revoke simply re-renders back to its real state
+     * with the failure reason surfaced through state.actionNotice
+     * (mutationErrorText) -- never a tick left sitting there implying a
+     * success that did not happen.
+     * @param {{key:string,label:string,description:string,held:boolean,retired:boolean,grantable:boolean}} rowData
+     * @param {string} citizenid
+     * @param {boolean} selfTarget
+     */
+    function buildCapabilityRow(rowData, citizenid, selfTarget) {
+        var row = mk('div', { class: 'k9tablet-capability-row' });
+
+        var textWrap = mk('div', { class: 'k9tablet-capability-text' });
+        var labelLine = mk('div', { class: 'k9tablet-capability-label', text: rowData.label });
+        if (rowData.retired) {
+            labelLine.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('permission_key_retired_badge') + ')' }));
+        }
+        textWrap.appendChild(labelLine);
+        textWrap.appendChild(mk('div', {
+            class: 'k9tablet-capability-description',
+            text: (rowData.description && rowData.description.length > 0) ? rowData.description : S('capability_no_description'),
+        }));
+        row.appendChild(textWrap);
+
+        var disallowSelfGrant = selfTarget && !rowData.held;
+        var checkboxDisabled = state.pendingAction || (!rowData.held && !rowData.grantable) || disallowSelfGrant;
+
+        var toggle = mk('label', { class: 'k9tablet-capability-toggle', title: disallowSelfGrant ? S('capability_self_grant_disabled_title') : undefined });
+        var checkbox = mk('input', { class: 'k9tablet-capability-checkbox', attrs: { type: 'checkbox' } });
+        checkbox.checked = rowData.held === true;
+        if (checkboxDisabled) checkbox.setAttribute('disabled', 'disabled');
+        checkbox.addEventListener('change', function () {
+            if (checkbox.checked) {
+                runMutation('tablet:grantPermission', { targetCitizenId: citizenid, permission: rowData.key }, function () {
+                    refreshPersonAndSelf(citizenid);
+                });
+            } else {
+                runMutation('tablet:revokePermission', { targetCitizenId: citizenid, permission: rowData.key }, function () {
+                    refreshPersonAndSelf(citizenid);
+                });
+            }
+        });
+        toggle.appendChild(checkbox);
+        row.appendChild(toggle);
+
+        return row;
     }
 
     function buildPersonFeaturesSection() {
@@ -3899,13 +4812,13 @@
             if (feature.blocked) {
                 actionsTd.appendChild(mkButton(S('unblock_label'), 'k9tablet-btn', function () {
                     runMutation('tablet:unblockFeature', { targetCitizenId: citizenid, feature: key }, function () {
-                        loadPersonFeatures(citizenid);
+                        refreshPersonFeaturesAndSelf(citizenid);
                     });
                 }, { disabled: state.pendingAction }));
             } else {
                 actionsTd.appendChild(mkConfirmButton(S('block_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
                     runMutation('tablet:blockFeature', { targetCitizenId: citizenid, feature: key }, function () {
-                        loadPersonFeatures(citizenid);
+                        refreshPersonFeaturesAndSelf(citizenid);
                     });
                 }, { disabled: state.pendingAction }));
             }
@@ -3916,13 +4829,13 @@
             if (feature.granted) {
                 actionsTd.appendChild(mkConfirmButton(S('revoke_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
                     runMutation('tablet:revokeFeature', { targetCitizenId: citizenid, feature: key }, function () {
-                        loadPersonFeatures(citizenid);
+                        refreshPersonFeaturesAndSelf(citizenid);
                     });
                 }, { disabled: state.pendingAction }));
             } else {
                 actionsTd.appendChild(mkButton(S('grant_label'), 'k9tablet-btn', function () {
                     runMutation('tablet:grantFeature', { targetCitizenId: citizenid, feature: key }, function () {
-                        loadPersonFeatures(citizenid);
+                        refreshPersonFeaturesAndSelf(citizenid);
                     });
                 }, { disabled: state.pendingAction }));
             }
@@ -6104,6 +7017,1490 @@
     }
 
     // ------------------------------------------------------------------
+    // K9 INDIVIDUAL OVERRIDES -- server/k9profiles.lua, high command only
+    // (owner-directed "god over that tablet with full customization over
+    // everything related to that K9" pass). Renders the LIVE list of every
+    // citizenid with a hand-tuned override (state.k9Profiles, populated by
+    // loadK9ProfilesList() below), plus a single citizenid's full detail +
+    // edit form (state.k9ProfileSelected/state.k9ProfileDraft) opened
+    // either from that list's own "Manage" button or a freshly typed
+    // citizenid in the lookup box. server/k9profiles.lua's own
+    // CanManageK9Profiles is the real authorization gate, re-checked on
+    // every one of the four callbacks this screen calls -- see THE
+    // SECURITY RULE.
+    //
+    // HONESTY NOTE (verified directly against server/progression.lua's own
+    // source, not assumed): GetXPTierMedkitCooldownMs and
+    // BuildEffectiveTierSnapshot/PushTierSnapshot there both now consult
+    // GetK9EffectiveMultipliers(citizenid), so an override saved here IS a
+    // real, live change to that K9's medkit cooldown and (via the
+    // 'qbx_k9unit:client:xpTierChanged' push) its speed/scent range. It
+    // does NOT push an immediate refresh to an already-connected K9 on its
+    // own, though -- the new value applies the next time that citizenid's
+    // tier is naturally re-resolved (earning XP, reconnecting, or a
+    // server restart). k9_profiles_intro/k9_profile_not_yet_live_hint
+    // below state that caveat plainly; this screen must never claim a
+    // stronger, more-instant effect than that.
+    // ------------------------------------------------------------------
+
+    /** Mirrors server/k9profiles.lua's own MAX_SPEED_SCENT_MULTIPLIER
+     * exactly -- a UX convenience only (THE SECURITY RULE): kept in exact
+     * lockstep with that file's own constant so this page's own pre-check
+     * can never be looser OR tighter than what the server will actually
+     * accept, but the server's own re-check is what actually matters
+     * regardless of what this page allows through. */
+    var K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER = 3.0;
+
+    /** Mirrors server/k9profiles.lua's own MAX_MEDKIT_COOLDOWN_MULTIPLIER
+     * exactly -- same posture as K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER
+     * above. Deliberately capped at 1.0, NOT the same range as
+     * speed/scent: this multiplier can only SHORTEN the medkit cooldown
+     * below its tier default, never lengthen it past 1.0. */
+    var K9_PROFILE_MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0;
+
+    /** Mirrors server/k9profiles.lua's own MAX_NOTE_LENGTH exactly. */
+    var K9_PROFILE_MAX_NOTE_LENGTH = 120;
+
+    function goToK9ProfilesScreen() {
+        state.screen = 'k9_profiles';
+        state.k9ProfileSelected = null;
+        state.k9ProfileSelectedError = null;
+        state.k9ProfileDraft = null;
+        state.k9ProfileFieldError = null;
+        state.k9ProfileActionError = null;
+        state.k9ProfileWarning = null;
+        render();
+        loadK9ProfilesList();
+    }
+
+    function loadK9ProfilesList() {
+        state.k9ProfilesLoading = true;
+        state.k9ProfilesError = null;
+        render();
+        fetchNui('tablet:k9ProfilesList', {}).then(function (result) {
+            state.k9ProfilesLoading = false;
+            if (!result || result.ok !== true) {
+                state.k9ProfilesError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.k9Profiles = Array.isArray(result.overrides) ? result.overrides : [];
+            render();
+        });
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function k9ProfileErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('k9_profile_error_denied');
+            case 'rate_limited': return S('k9_profile_error_rate_limited');
+            case 'busy': return S('k9_profile_error_busy');
+            case 'invalid_citizenid': return S('k9_profile_error_invalid_citizenid');
+            case 'invalid_payload': return S('k9_profile_error_invalid_payload');
+            case 'no_fields_to_set': return S('k9_profile_error_no_fields_to_set');
+            case 'invalid_speed_multiplier': return S('k9_profile_error_invalid_speed_multiplier');
+            case 'invalid_scent_range_multiplier': return S('k9_profile_error_invalid_scent_range_multiplier');
+            case 'invalid_medkit_cooldown_multiplier': return S('k9_profile_error_invalid_medkit_cooldown_multiplier');
+            case 'invalid_note': return S('k9_profile_error_invalid_note');
+            case 'too_many_overrides': return S('k9_profile_error_too_many_overrides');
+            case 'db_error': return S('k9_profile_error_db_error');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {string} citizenid */
+    function loadK9Profile(citizenid) {
+        if (typeof citizenid !== 'string' || citizenid.trim().length === 0) return;
+        citizenid = citizenid.trim();
+        state.k9ProfileSelectedLoading = true;
+        state.k9ProfileSelectedError = null;
+        state.k9ProfileSelected = null;
+        state.k9ProfileDraft = null;
+        state.k9ProfileFieldError = null;
+        state.k9ProfileActionError = null;
+        render();
+        fetchNui('tablet:k9ProfileGet', { citizenid: citizenid }).then(function (result) {
+            state.k9ProfileSelectedLoading = false;
+            if (!result || result.ok !== true) {
+                state.k9ProfileSelectedError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.k9ProfileSelected = result;
+            openK9ProfileDraft(result);
+            render();
+        });
+    }
+
+    /** Opens a working copy pre-filled from the citizenid's OWN STORED
+     * override only (never the composed `effective` values) -- a blank
+     * field here genuinely means "no override for this field, defers to
+     * this K9's XP tier", matching server/k9profiles.lua's own per-field-
+     * optional contract exactly. A COPY, never the live object, so
+     * cancelling never mutates state.k9ProfileSelected.
+     * @param {object} profile -- tablet:k9ProfileGet's own result */
+    function openK9ProfileDraft(profile) {
+        var override = profile.override || {};
+        state.k9ProfileDraft = {
+            citizenid: profile.citizenid,
+            speedMultiplier: (typeof override.speedMultiplier === 'number') ? String(override.speedMultiplier) : '',
+            scentRangeMultiplier: (typeof override.scentRangeMultiplier === 'number') ? String(override.scentRangeMultiplier) : '',
+            medkitCooldownMultiplier: (typeof override.medkitCooldownMultiplier === 'number') ? String(override.medkitCooldownMultiplier) : '',
+            note: (typeof override.note === 'string') ? override.note : '',
+        };
+        state.k9ProfileFieldError = null;
+        state.k9ProfileActionError = null;
+    }
+
+    function clearK9ProfileSelection() {
+        state.k9ProfileSelected = null;
+        state.k9ProfileSelectedError = null;
+        state.k9ProfileDraft = null;
+        state.k9ProfileFieldError = null;
+        state.k9ProfileActionError = null;
+        render();
+    }
+
+    /** Mirrors server/k9profiles.lua's own IsValidNote exactly -- a UX
+     * convenience only (THE SECURITY RULE), same "duplicated, not shared"
+     * precedent isSafeShortStringForXpTier's own comment already
+     * establishes for the identical situation in a different domain.
+     * @param {*} value @returns {boolean} */
+    function isSafeNoteForK9Profile(value) {
+        if (typeof value !== 'string') return false;
+        var len = value.length;
+        if (len === 0 || len > K9_PROFILE_MAX_NOTE_LENGTH) return false;
+        if (/[<>&"'`\r\n\t]/.test(value)) return false;
+        for (var i = 0; i < len; i++) {
+            var code = value.charCodeAt(i);
+            if (code < 0x20 || code === 0x7F) return false;
+        }
+        return true;
+    }
+
+    /** @param {string} field @param {string} text */
+    function failK9ProfileDraft(field, text) {
+        state.k9ProfileFieldError = field;
+        state.k9ProfileActionError = text;
+        state.actionNotice = { kind: 'error', text: text };
+        render();
+    }
+
+    /**
+     * Saves the open citizenid's draft. Every numeric field's blank/typed
+     * distinction mirrors server/k9profiles.lua's own per-field-optional
+     * contract EXACTLY: a field left blank is OMITTED from the payload
+     * (leaves whatever that citizenid's override already held for that
+     * field untouched -- it is NEVER sent as "clear this"), and a typed
+     * value is validated against the SAME bounds server/k9profiles.lua's
+     * own IsValidMultiplier enforces before ever reaching the network --
+     * a UX convenience only (THE SECURITY RULE): the server independently
+     * re-validates every field against the CURRENT LIVE row before writing
+     * anything, so a modified client sending an out-of-range value is
+     * refused there regardless of what this function does or does not
+     * catch first.
+     */
+    function saveK9ProfileDraft() {
+        if (state.pendingAction || !state.k9ProfileDraft) return;
+        var draft = state.k9ProfileDraft;
+        var payload = { citizenid: draft.citizenid };
+        var hasAnyField = false;
+
+        var speedRaw = (typeof draft.speedMultiplier === 'string') ? draft.speedMultiplier.trim() : '';
+        if (speedRaw.length > 0) {
+            var speedNum = Number(speedRaw);
+            if (!isFinite(speedNum) || speedNum <= 0 || speedNum > K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER) {
+                failK9ProfileDraft('speedMultiplier', S('k9_profile_error_invalid_speed_multiplier'));
+                return;
+            }
+            payload.speedMultiplier = speedNum;
+            hasAnyField = true;
+        }
+
+        var scentRaw = (typeof draft.scentRangeMultiplier === 'string') ? draft.scentRangeMultiplier.trim() : '';
+        if (scentRaw.length > 0) {
+            var scentNum = Number(scentRaw);
+            if (!isFinite(scentNum) || scentNum <= 0 || scentNum > K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER) {
+                failK9ProfileDraft('scentRangeMultiplier', S('k9_profile_error_invalid_scent_range_multiplier'));
+                return;
+            }
+            payload.scentRangeMultiplier = scentNum;
+            hasAnyField = true;
+        }
+
+        var medkitRaw = (typeof draft.medkitCooldownMultiplier === 'string') ? draft.medkitCooldownMultiplier.trim() : '';
+        if (medkitRaw.length > 0) {
+            var medkitNum = Number(medkitRaw);
+            if (!isFinite(medkitNum) || medkitNum <= 0 || medkitNum > K9_PROFILE_MAX_MEDKIT_COOLDOWN_MULTIPLIER) {
+                failK9ProfileDraft('medkitCooldownMultiplier', S('k9_profile_error_invalid_medkit_cooldown_multiplier'));
+                return;
+            }
+            payload.medkitCooldownMultiplier = medkitNum;
+            hasAnyField = true;
+        }
+
+        var noteRaw = (typeof draft.note === 'string') ? draft.note.trim() : '';
+        if (noteRaw.length > 0) {
+            if (!isSafeNoteForK9Profile(noteRaw)) {
+                failK9ProfileDraft('note', S('k9_profile_error_invalid_note'));
+                return;
+            }
+            payload.note = noteRaw;
+            hasAnyField = true;
+        }
+
+        if (!hasAnyField) {
+            failK9ProfileDraft(null, S('k9_profile_error_no_fields_to_set'));
+            return;
+        }
+
+        state.pendingAction = true;
+        state.k9ProfileFieldError = null;
+        state.k9ProfileActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:k9ProfileUpsert', payload).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.k9ProfileSelected = result;
+                openK9ProfileDraft(result);
+                state.k9ProfileWarning = (typeof result.warning === 'string' && result.warning.length > 0) ? result.warning : null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+                loadK9ProfilesList();
+            } else {
+                var text = k9ProfileErrorText(result);
+                var field = null;
+                switch (result && result.error) {
+                    case 'invalid_speed_multiplier': field = 'speedMultiplier'; break;
+                    case 'invalid_scent_range_multiplier': field = 'scentRangeMultiplier'; break;
+                    case 'invalid_medkit_cooldown_multiplier': field = 'medkitCooldownMultiplier'; break;
+                    case 'invalid_note': field = 'note'; break;
+                }
+                state.k9ProfileFieldError = field;
+                state.k9ProfileActionError = text;
+                state.actionNotice = { kind: 'error', text: text };
+            }
+            render();
+        });
+    }
+
+    /** Clears EVERY override field for the open citizenid in one action --
+     * there is no per-field reset, only whole-row (see
+     * server/k9profiles.lua's own k9ProfileReset). Confirmed via
+     * mkConfirmButton, same "two clicks, not window.confirm()" posture as
+     * every other destructive action on this page. */
+    function resetK9Profile() {
+        if (state.pendingAction || !state.k9ProfileDraft) return;
+        var citizenid = state.k9ProfileDraft.citizenid;
+        state.pendingAction = true;
+        state.k9ProfileActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:k9ProfileReset', { citizenid: citizenid }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                loadK9Profile(citizenid);
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+                loadK9ProfilesList();
+            } else {
+                var text = k9ProfileErrorText(result);
+                state.k9ProfileActionError = text;
+                state.actionNotice = { kind: 'error', text: text };
+            }
+            render();
+        });
+    }
+
+    function buildK9ProfilesScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('k9_profiles_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profiles_intro') }));
+
+        if (state.k9ProfileWarning) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.k9ProfileWarning }));
+        }
+
+        // Lookup box -- opens ANY citizenid's detail directly, whether or
+        // not it already has a live override (mirrors the Console screen's
+        // own "Open by exact citizen ID" box, same reasoning: a brand-new
+        // override must be reachable for a citizenid that has never had
+        // one yet, not only for one already in the list below).
+        var lookupBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
+        var lookupInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('k9_profile_lookup_placeholder') } });
+        lookupInput.value = state.k9ProfileLookupInput;
+        lookupInput.addEventListener('input', function (e) { state.k9ProfileLookupInput = e.target.value; });
+        lookupBar.appendChild(lookupInput);
+        lookupBar.appendChild(mkButton(S('k9_profile_lookup_button'), 'k9tablet-btn', function () {
+            loadK9Profile(lookupInput.value);
+        }, { disabled: state.pendingAction }));
+        wrap.appendChild(lookupBar);
+
+        if (state.k9ProfileSelectedLoading) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+        } else if (state.k9ProfileSelectedError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: k9ProfileErrorText(state.k9ProfileSelectedError) }));
+        } else if (state.k9ProfileSelected) {
+            wrap.appendChild(buildK9ProfileDetail());
+        }
+
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('k9_profiles_list_heading') }));
+
+        if (state.k9ProfilesLoading && !state.k9Profiles) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.k9ProfilesError && !state.k9Profiles) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: k9ProfileErrorText(state.k9ProfilesError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadK9ProfilesList));
+            return wrap;
+        }
+        if (!state.k9Profiles) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildK9ProfilesTable());
+        return wrap;
+    }
+
+    function buildK9ProfilesTable() {
+        if (state.k9Profiles.length === 0) {
+            return mk('p', { class: 'k9tablet-muted', text: S('k9_profiles_empty') });
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_citizenid'), S('column_speed_multiplier'), S('column_scent_range_multiplier'),
+            S('column_medkit_cooldown_multiplier'), S('column_note'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < state.k9Profiles.length; i++) {
+            tbody.appendChild(buildK9ProfileRow(state.k9Profiles[i]));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /** @param {{citizenid:string,speedMultiplier?:number,scentRangeMultiplier?:number,medkitCooldownMultiplier?:number,note?:string}} row */
+    function buildK9ProfileRow(row) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: row.citizenid }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.speedMultiplier === 'number') ? String(row.speedMultiplier) : S('k9_profile_field_not_overridden') }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.scentRangeMultiplier === 'number') ? String(row.scentRangeMultiplier) : S('k9_profile_field_not_overridden') }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.medkitCooldownMultiplier === 'number') ? String(row.medkitCooldownMultiplier) : S('k9_profile_field_not_overridden') }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.note === 'string' && row.note.length > 0) ? row.note : '' }));
+        var actionsTd = mk('td');
+        actionsTd.appendChild(mkButton(S('k9_profile_manage_label'), 'k9tablet-btn', function () {
+            state.k9ProfileLookupInput = row.citizenid;
+            loadK9Profile(row.citizenid);
+        }, { disabled: state.pendingAction }));
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** Detail + edit panel for the ONE currently-open citizenid
+     * (state.k9ProfileSelected/state.k9ProfileDraft). Every field states,
+     * per this pass's own "make every customization screen legible"
+     * requirement: a plain-English name, one sentence on what it actually
+     * changes in the game, its allowed range, and its default -- never a
+     * bare key with a number box. */
+    function buildK9ProfileDetail() {
+        var profile = state.k9ProfileSelected;
+        var draft = state.k9ProfileDraft;
+        var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
+
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: profile.citizenid }));
+        if (typeof profile.tierLabel === 'string' && profile.tierLabel.length > 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_tier_label_prefix') + profile.tierLabel }));
+        }
+
+        var effective = profile.effective || {};
+        var overridden = effective.overridden || {};
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_speed_prefix') + String(effective.speedMultiplier) + (overridden.speedMultiplier ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_scent_prefix') + String(effective.scentRangeMultiplier) + (overridden.scentRangeMultiplier ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_medkit_prefix') + ((typeof effective.medkitCooldownMultiplier === 'number') ? String(effective.medkitCooldownMultiplier) : S('k9_profile_field_not_overridden')) + (overridden.medkitCooldownMultiplier ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
+
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_not_yet_live_hint') }));
+
+        // Speed
+        var speedRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'speedMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
+        speedRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_speed_multiplier_label') }));
+        speedRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_speed_multiplier_hint') }));
+        var speedInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', max: '3', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
+        speedInput.value = draft.speedMultiplier;
+        speedInput.addEventListener('input', function (e) { draft.speedMultiplier = e.target.value; });
+        speedRow.appendChild(speedInput);
+        wrap.appendChild(speedRow);
+
+        // Scent
+        var scentRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'scentRangeMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
+        scentRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_scent_range_multiplier_label') }));
+        scentRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_scent_range_multiplier_hint') }));
+        var scentInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', max: '3', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
+        scentInput.value = draft.scentRangeMultiplier;
+        scentInput.addEventListener('input', function (e) { draft.scentRangeMultiplier = e.target.value; });
+        scentRow.appendChild(scentInput);
+        wrap.appendChild(scentRow);
+
+        // Medkit cooldown
+        var medkitRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'medkitCooldownMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
+        medkitRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_medkit_cooldown_multiplier_label') }));
+        medkitRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_medkit_cooldown_multiplier_hint') }));
+        var medkitInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', max: '1', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
+        medkitInput.value = draft.medkitCooldownMultiplier;
+        medkitInput.addEventListener('input', function (e) { draft.medkitCooldownMultiplier = e.target.value; });
+        medkitRow.appendChild(medkitInput);
+        wrap.appendChild(medkitRow);
+
+        // Note
+        var noteRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'note' ? ' k9tablet-theme-field--invalid' : '') });
+        noteRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_note_label') }));
+        noteRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_note_hint') }));
+        var noteInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', maxlength: String(K9_PROFILE_MAX_NOTE_LENGTH), placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
+        noteInput.value = draft.note;
+        noteInput.addEventListener('input', function (e) { draft.note = e.target.value; });
+        noteRow.appendChild(noteInput);
+        wrap.appendChild(noteRow);
+
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_field_clear_hint') }));
+
+        if (state.k9ProfileActionError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: state.k9ProfileActionError }));
+        }
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('k9_profile_save_label'), 'k9tablet-btn', saveK9ProfileDraft, { disabled: state.pendingAction }));
+        var hasLiveOverride = !!(profile.override && (typeof profile.override.speedMultiplier === 'number' || typeof profile.override.scentRangeMultiplier === 'number' || typeof profile.override.medkitCooldownMultiplier === 'number' || (typeof profile.override.note === 'string' && profile.override.note.length > 0)));
+        if (hasLiveOverride) {
+            actions.appendChild(mkConfirmButton(S('k9_profile_reset_label'), 'k9tablet-btn k9tablet-btn--danger', resetK9Profile, { disabled: state.pendingAction }));
+        }
+        actions.appendChild(mkButton(S('k9_profile_close_label'), 'k9tablet-link-btn', clearK9ProfileSelection));
+        wrap.appendChild(actions);
+
+        return wrap;
+    }
+
+    // ------------------------------------------------------------------
+    // GUIDED FLOWS (this pass) -- high command only. Owner's own words:
+    // "expand the workflow paths for all the features to make them
+    // smoother, easier to understand." THE PROBLEM THIS SECTION SOLVES,
+    // established against the actual code (not assumed) before writing
+    // any of this: certifying/tier-setting/specializing/feature-granting a
+    // new handler, decertifying/clearing access/reverting appearance for
+    // one leaving, reviewing a problem player's record alongside their
+    // audit trail, and tuning five separate config screens all ALREADY
+    // exist as individual, correctly-authorized screens -- nothing here
+    // was actually MISSING. What was missing is SEQUENCE: nothing walks an
+    // operator through the right order for a whole job, nothing tells them
+    // what they still have not done (nine RequireGrant features are inert
+    // without an explicit grant, and the existing Person screen never says
+    // so), and the Audit Trail and Person screens are two disconnected
+    // tabs an operator has to carry a citizenid between by memory.
+    //
+    // THIS IS PRESENTATION ONLY, LAID OVER THE EXISTING SCREENS, NOT A
+    // REPLACEMENT FOR THEM -- every screen this section reuses (buildCert
+    // ificationList/buildCertificationDetail/buildCapabilityList/build
+    // PersonFeaturesSection/buildAuditModeSwitch+buildAuditForm+build
+    // AuditResults/buildRuntimeFeaturesSection/buildRuntimeTunablesSection/
+    // buildCertTiersScreen/buildXpTiersScreen/buildShopItemsScreen) is
+    // called HERE, UNMODIFIED, exactly as the standalone Console/Person/
+    // Audit/Theme/Cert Tiers/Runtime Control/XP Tiers/Shop Items tabs
+    // already call it -- every action a flow step takes is the SAME
+    // handlePersonCertAction()/runMutation()/fetchNui() call, with the
+    // SAME payload, hitting the SAME server callback, under the SAME
+    // server-side re-check, as pressing the equivalent button on the
+    // equivalent standalone screen. See THE SECURITY RULE at this file's
+    // own header: nothing below decides anything a modified client
+    // couldn't already do by calling that same NUI callback directly; it
+    // only sequences, gap-checks, and summarizes what the server has
+    // already confirmed.
+    //
+    // NEVER OPTIMISTIC: every "what just happened" summary below is
+    // computed by RE-READING state.personSummary/state.personFeatures/
+    // state.auditResult -- the SAME, already-loaded, server-confirmed data
+    // every other screen on this page reads -- never by assuming a click
+    // that returned `ok:true` did what it claimed, and never by tracking a
+    // separate "did this succeed" flag for anything the existing data
+    // already answers. The ONE narrow exception (state.flowOffboardAppear
+    // anceReverted) is set ONLY inside that one action's own success
+    // branch, after the server's own response said `ok:true` -- see that
+    // step's own comment.
+    //
+    // EVERY STEP IS SKIPPABLE AND REVERSIBLE (this pass's own explicit
+    // instruction: "a guided flow that traps someone is worse than none").
+    // buildFlowStepNav() below makes every step directly clickable at any
+    // time, in either direction; buildFlowNavRow()'s Next/Skip button is
+    // always present except on the final step, and never blocks on
+    // whether the step's own action was taken. Nothing here uses
+    // window.confirm()/alert() -- see CONFIRM_WINDOW_MS's own comment for
+    // why this page never does.
+    //
+    // MID-FLOW FAILURE IS NEVER SWALLOWED: every mutation call below is
+    // the SAME runMutation()/handlePersonCertAction() helper the
+    // standalone screens use, which already sets state.actionNotice to an
+    // honest error (never a generic "something happened") on any
+    // `ok !== true` response -- buildBackdrop() renders that notice at the
+    // TOP OF THE PANEL for every screen, including every one of these, so
+    // a failure inside a guided flow is exactly as visible as one on any
+    // standalone screen. A flow's own SUMMARY step then separately reports
+    // the REAL end state (certified or not, tier set or not, N of M
+    // features actually granted) rather than a blanket "done" -- so a
+    // partial failure two steps back is caught at the summary even if the
+    // operator missed the notice in the moment.
+    //
+    // UNAUTHORIZED VIEWERS NEVER SEE THIS AT ALL: the hub tab (buildTabs()),
+    // the Home shortcut (buildHomeHighCommandTools()), AND buildBackdrop()'s
+    // own screen dispatch are ALL independently gated on
+    // state.viewer.isHighCommand, matching every other admin-only screen on
+    // this page -- a non-high-command viewer sees no tab, no Home link, and
+    // (even if `state.screen` were forced to one of these five values some
+    // other way) falls through to buildMyRecordScreen() like any other
+    // unauthorized screen request.
+    //
+    // WHAT STAYS A STANDALONE SCREEN, DELIBERATELY: Theme, Permission Keys,
+    // and Shop Locations are not part of any guided flow -- they are
+    // one-shot, whole-server settings with no natural "job" or sequence of
+    // their own (see this pass's own report for the full reasoning), and
+    // remain exactly as reachable as before via their own tabs/Home links.
+    // ------------------------------------------------------------------
+
+    /**
+     * Snapshot of the CURRENTLY SELECTED person's certifications/
+     * permissions/features, read from whatever state.personSummary/
+     * state.personFeatures ALREADY hold at the moment this is called --
+     * never a separate fetch, never sent anywhere. This is the "before"
+     * half of an honest before/after comparison: a flow's summary step
+     * compares the LATEST (post-action) personSummary/personFeatures
+     * against this snapshot, so the summary is only ever built from two
+     * points of REAL, server-confirmed data, never from tracking whether
+     * an individual click's response claimed success.
+     * @returns {{certByDept: Object<string,{active:boolean,tier:?string,specializations:string[]}>, permissions: Object<string,boolean>, featureGranted: Object<string,boolean>, featureBlocked: Object<string,boolean>}}
+     */
+    function computeFlowBaselineSnapshot() {
+        var certByDept = {};
+        var certs = (state.personSummary && state.personSummary.certifications) || [];
+        for (var i = 0; i < certs.length; i++) {
+            var c = certs[i];
+            if (!c || typeof c.departmentKey !== 'string') continue;
+            certByDept[c.departmentKey] = {
+                active: c.active === true,
+                tier: c.active === true && typeof c.tier === 'string' ? c.tier : null,
+                specializations: (c.active === true && Array.isArray(c.specializations)) ? c.specializations.slice() : [],
+            };
+        }
+
+        var permissions = {};
+        var perms = (state.personSummary && state.personSummary.permissions) || [];
+        for (var j = 0; j < perms.length; j++) {
+            if (typeof perms[j] === 'string') permissions[perms[j]] = true;
+        }
+
+        var featureGranted = {};
+        var featureBlocked = {};
+        var features = (state.personFeatures && state.personFeatures.features) || [];
+        for (var k = 0; k < features.length; k++) {
+            var f = features[k];
+            if (!f || typeof f.key !== 'string') continue;
+            featureGranted[f.key] = f.granted === true;
+            featureBlocked[f.key] = f.blocked === true;
+        }
+
+        return { certByDept: certByDept, permissions: permissions, featureGranted: featureGranted, featureBlocked: featureBlocked };
+    }
+
+    /** Captures state.flowBaseline exactly once per person selection --
+     * see computeFlowBaselineSnapshot()'s own doc comment. Safe to call on
+     * every render of every flow step: a no-op once a baseline already
+     * exists, and a no-op until BOTH state.personSummary AND (for a
+     * high-command viewer, who is the only one who ever reaches a feature/
+     * capability-touching flow step at all) state.personFeatures have
+     * actually loaded -- flowSelectPerson() fires both loads in PARALLEL,
+     * so snapshotting the moment only the faster of the two resolves would
+     * silently capture an EMPTY feature-grant baseline (every "was this
+     * granted before this flow touched it" comparison would then read
+     * false, undercounting a real revoke/grant in the summary) -- never
+     * snapshots a stale/still-loading record as if it were real data. */
+    function ensureFlowBaseline() {
+        if (state.flowBaseline || !state.person || !state.personSummary) return;
+        if (state.viewer && state.viewer.isHighCommand && !state.personFeatures) return;
+        state.flowBaseline = computeFlowBaselineSnapshot();
+    }
+
+    /** Resets every piece of per-run guided-flow state -- called whenever
+     * a flow (re)starts from the hub, so no leftover step/baseline/
+     * department choice from a previous run ever bleeds into a new one. */
+    function resetFlowRunState() {
+        state.flowStep = 0;
+        state.flowBaseline = null;
+        state.flowOnboardDepartment = null;
+        state.flowOffboardAppearanceReverted = false;
+    }
+
+    function goToFlowsScreen() {
+        state.screen = 'flows';
+        resetFlowRunState();
+        state.person = null;
+        state.personSummary = null;
+        state.personFeatures = null;
+        render();
+    }
+
+    /**
+     * Selects a person for whichever guided flow is active -- the DATA
+     * half of openPerson() (loadPersonSummary/loadPersonFeatures/
+     * loadPermissionKeys/loadCertTiers, same calls, same conditions),
+     * deliberately WITHOUT openPerson()'s own `state.screen = 'person'`
+     * line, since a guided flow must stay on its OWN screen rather than
+     * navigating to the standalone Person screen. See "carry context
+     * between steps" in this pass's own instructions: everything past
+     * this call reads state.person directly, exactly like the standalone
+     * Person screen's own buildRoleControl()/buildGiveXpControl()/etc.
+     * already do, so the citizenid picked here is never re-entered.
+     * @param {string} citizenid @param {string} name
+     */
+    function flowSelectPerson(citizenid, name) {
+        state.person = { citizenid: citizenid, name: name };
+        state.personSummary = null;
+        state.personFeatures = null;
+        state.personFeatureQuery = '';
+        state.flowBaseline = null;
+        render();
+        loadPersonSummary(citizenid);
+        if (state.viewer && state.viewer.isHighCommand) {
+            loadPersonFeatures(citizenid);
+            loadPermissionKeys();
+        }
+        loadCertTiers();
+    }
+
+    /** "Change person" -- reversible per this pass's own instruction:
+     * returns to step 0 of whichever flow is active without leaving the
+     * flow entirely. */
+    function flowChangePerson() {
+        state.person = null;
+        state.personSummary = null;
+        state.personFeatures = null;
+        state.flowStep = 0;
+        state.flowBaseline = null;
+        state.flowOnboardDepartment = null;
+        state.flowOffboardAppearanceReverted = false;
+        render();
+    }
+
+    function goToFlowOnboardScreen() {
+        state.screen = 'flow_onboard';
+        resetFlowRunState();
+        state.person = null;
+        state.personSummary = null;
+        state.personFeatures = null;
+        render();
+        loadRoster(state.rosterQuery);
+    }
+
+    function goToFlowOffboardScreen() {
+        state.screen = 'flow_offboard';
+        resetFlowRunState();
+        state.person = null;
+        state.personSummary = null;
+        state.personFeatures = null;
+        render();
+        loadRoster(state.rosterQuery);
+    }
+
+    function goToFlowProblemScreen() {
+        state.screen = 'flow_problem';
+        resetFlowRunState();
+        state.person = null;
+        state.personSummary = null;
+        state.personFeatures = null;
+        render();
+        loadRoster(state.rosterQuery);
+    }
+
+    function goToFlowTuningScreen() {
+        state.screen = 'flow_tuning';
+        resetFlowRunState();
+        render();
+        loadRuntimeFeatures();
+        loadRuntimeTunables();
+        loadCertTiers();
+        loadXpTiers();
+        loadEquipmentShopItems();
+    }
+
+    /**
+     * Row of step buttons -- reuses .k9tablet-tab/.k9tablet-tab--active
+     * VERBATIM, the SAME "nested tab bar" convention buildAuditModeSwitch()
+     * already established on this page (see tablet.css's own comment on
+     * that screen) -- no new colour, no new custom property, for these
+     * buttons. Every step is ALWAYS clickable, in either direction: per
+     * this pass's own "make every step skippable and reversible"
+     * instruction, nothing here is an unsaved draft that jumping away
+     * would lose -- every mutation on this page only ever takes effect
+     * after the server confirms it (see THE SECURITY RULE).
+     * @param {string[]} labels @param {number} current @param {(index:number)=>void} onJump
+     */
+    function buildFlowStepNav(labels, current, onJump) {
+        var nav = mk('div', { class: 'k9tablet-tabs k9tablet-flow-steps' });
+        for (var i = 0; i < labels.length; i++) {
+            (function (index) {
+                var cls = 'k9tablet-tab' + (index === current ? ' k9tablet-tab--active' : '');
+                nav.appendChild(mkButton((index + 1) + '. ' + labels[index], cls, function () { onJump(index); }));
+            }(i));
+        }
+        return nav;
+    }
+
+    /**
+     * Bottom-of-step navigation. `hasAction` only changes the LABEL (Skip
+     * vs. Next) to be honest about whether this particular step offered
+     * something to do -- both buttons do the exact same thing (advance),
+     * because every step in every guided flow here is optional by design.
+     * @param {{onBack?:(()=>void)|null, onNext?:(()=>void)|null, hasAction?:boolean, isLast?:boolean, onFinish?:()=>void}} opts
+     */
+    function buildFlowNavRow(opts) {
+        opts = opts || {};
+        var row = mk('div', { class: 'k9tablet-flow-nav' });
+        if (opts.onBack) {
+            row.appendChild(mkButton(S('flow_back_label'), 'k9tablet-link-btn', opts.onBack));
+        }
+        if (opts.isLast) {
+            if (opts.onFinish) row.appendChild(mkButton(S('flow_finish_label'), 'k9tablet-btn', opts.onFinish));
+        } else if (opts.onNext) {
+            row.appendChild(mkButton(opts.hasAction ? S('flow_skip_label') : S('flow_next_label'), opts.hasAction ? 'k9tablet-link-btn' : 'k9tablet-btn', opts.onNext));
+        }
+        return row;
+    }
+
+    /** The selected-person context bar shown on every step after Select --
+     * "carry context between steps": the citizenid/name picked in step one
+     * is shown, unchanged, on every later step, with a single link back to
+     * pick someone else instead of leaving the flow for a whole new
+     * screen. */
+    function buildFlowPersonContext() {
+        var wrap = mk('div', { class: 'k9tablet-flow-person-context' });
+        wrap.appendChild(mk('span', { class: 'k9tablet-muted', text: S('flow_working_with_label') + ' ' }));
+        wrap.appendChild(mk('span', { class: 'k9tablet-person-name', text: state.person.name }));
+        wrap.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + state.person.citizenid + ')' }));
+        wrap.appendChild(mkButton(S('flow_change_person_label'), 'k9tablet-link-btn', flowChangePerson));
+        return wrap;
+    }
+
+    /**
+     * Person picker shared by the Onboarding/Offboarding/Problem-Player
+     * flows' own Select step -- reuses the EXACT SAME two entry points the
+     * standalone Command Console already offers (state.roster via
+     * loadRoster()'s existing debounce, and the "open by exact citizen ID"
+     * box for a decertified/never-certified target the roster's own
+     * active-certification-only filter would otherwise never surface --
+     * see buildConsoleScreen()'s own header note on why that second box
+     * exists at all), so a guided flow can reach exactly who the standalone
+     * Console can, no more and no less.
+     * @param {(citizenid:string, name:string) => void} onSelected
+     */
+    function buildFlowPersonPicker(onSelected) {
+        var wrap = mk('div', { class: 'k9tablet-flow-picker' });
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_select_person_prompt') }));
+
+        var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
+        var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('open_by_id_placeholder') } });
+        idBar.appendChild(idInput);
+        idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
+            var id = (idInput.value || '').trim();
+            if (id.length === 0) return;
+            onSelected(id, id);
+        }));
+        wrap.appendChild(idBar);
+
+        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
+        search.value = state.rosterQuery;
+        search.addEventListener('input', function (e) {
+            var q = e.target.value;
+            state.rosterQuery = q;
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(function () { loadRoster(q); }, SEARCH_DEBOUNCE_MS);
+        });
+        wrap.appendChild(search);
+
+        if (state.rosterLoading && !state.roster) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.rosterError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.rosterError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadRoster(state.rosterQuery); }));
+            return wrap;
+        }
+        if (!state.roster || state.roster.rows.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('empty_roster') }));
+            return wrap;
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_name'), S('column_citizenid'), S('column_department'), S('column_certified'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+        var tbody = mk('tbody');
+        for (var i = 0; i < state.roster.rows.length; i++) {
+            var row = state.roster.rows[i];
+            var tr = mk('tr');
+            tr.appendChild(mk('td', { text: row.name }));
+            tr.appendChild(mk('td', { text: row.citizenid }));
+            tr.appendChild(mk('td', { text: row.departmentLabel }));
+            tr.appendChild(mk('td', { class: row.certified ? 'k9tablet-cert-status--yes' : 'k9tablet-cert-status--no', text: row.certified ? S('certified_yes') : S('certified_no') }));
+            var actionsTd = mk('td');
+            actionsTd.appendChild(mkButton(S('flow_select_label'), 'k9tablet-btn', (function (r) {
+                return function () { onSelected(r.citizenid, r.name); };
+            }(row))));
+            tr.appendChild(actionsTd);
+            tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        return wrap;
+    }
+
+    /** Standard "still loading / failed to load / not loaded yet" guard,
+     * shared by every flow step below that needs state.personSummary --
+     * SAME three-way shape buildPersonScreen() itself already uses, kept
+     * as a small shared helper here purely because five different steps
+     * across three flows need the identical guard, never a change to
+     * buildPersonScreen() itself. @returns {HTMLElement|null} an element
+     * to show INSTEAD of the step's real content, or null when
+     * state.personSummary is ready to read. */
+    function buildFlowPersonSummaryGuard() {
+        if (state.personSummaryLoading && !state.personSummary) {
+            return mk('p', { text: S('loading') });
+        }
+        if (state.personSummaryError && !state.personSummary) {
+            var wrap = mk('div', {});
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personSummaryError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonSummary(state.person.citizenid); }));
+            return wrap;
+        }
+        if (!state.personSummary) {
+            return mk('p', { text: S('loading') });
+        }
+        return null;
+    }
+
+    /** Capabilities + feature grants/blocks for the currently selected
+     * person -- shared by the Offboarding flow's own Clear Access step and
+     * the Problem-Player flow's own Take Action step (the SAME two admin
+     * controls the standalone Person screen already shows together for a
+     * high-command viewer, see buildPersonScreen()), so "revoke a
+     * permission" and "block a feature" never need two different pieces
+     * of UI depending on which flow got the operator there. */
+    function buildFlowPersonAccessControls() {
+        var wrap = mk('div', {});
+        if (!state.viewer.isHighCommand) return wrap;
+
+        wrap.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_capabilities_heading') }));
+        wrap.appendChild(buildCapabilityList(state.personSummary.permissions));
+
+        wrap.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_features_heading') }));
+        if (state.personFeaturesLoading && !state.personFeatures) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+        } else if (state.personFeaturesError && !state.personFeatures) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personFeaturesError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonFeatures(state.person.citizenid); }));
+        } else if (state.personFeatures) {
+            wrap.appendChild(buildPersonFeaturesSection());
+        } else {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+        }
+        return wrap;
+    }
+
+    function buildFlowsHubScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen k9tablet-flows-hub' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flows_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flows_intro') }));
+
+        var grid = mk('div', { class: 'k9tablet-home-actions' });
+        grid.appendChild(buildHomeActionCard(S('flow_onboard_card_label'), S('flow_onboard_card_hint'), goToFlowOnboardScreen));
+        grid.appendChild(buildHomeActionCard(S('flow_offboard_card_label'), S('flow_offboard_card_hint'), goToFlowOffboardScreen));
+        grid.appendChild(buildHomeActionCard(S('flow_problem_card_label'), S('flow_problem_card_hint'), goToFlowProblemScreen));
+        grid.appendChild(buildHomeActionCard(S('flow_tuning_card_label'), S('flow_tuning_card_hint'), goToFlowTuningScreen));
+        wrap.appendChild(grid);
+
+        return wrap;
+    }
+
+    // ---- Onboarding: Select -> Certify -> Tier & Specializations -> Feature Access -> Summary ----
+
+    var FLOW_ONBOARD_STEP_KEYS = ['flow_onboard_step_select', 'flow_onboard_step_certify', 'flow_onboard_step_tier', 'flow_onboard_step_features', 'flow_onboard_step_summary'];
+
+    function flowOnboardStepLabels() {
+        var out = [];
+        for (var i = 0; i < FLOW_ONBOARD_STEP_KEYS.length; i++) out.push(S(FLOW_ONBOARD_STEP_KEYS[i]));
+        return out;
+    }
+
+    function goFlowOnboardStep(index) {
+        state.flowStep = index;
+        render();
+    }
+
+    /** Wraps handlePersonCertAction() (UNCHANGED, same call) to additionally
+     * remember WHICH department a fresh 'certify' click targeted, so the
+     * next step can focus on that one department instead of re-listing
+     * every configured one. Every other kind passes straight through. */
+    function flowOnboardCertAction(kind, departmentKey, extra) {
+        if (kind === 'certify') {
+            state.flowOnboardDepartment = departmentKey;
+        }
+        handlePersonCertAction(kind, departmentKey, extra);
+    }
+
+    /** @returns {object|null} the active certification entry the Tier &
+     * Specializations / Summary steps should focus on: the department
+     * explicitly certified earlier THIS flow, or -- when nobody has
+     * clicked Certify yet -- the SOLE currently-active certification, if
+     * this person already held exactly one before the flow started (a
+     * handler who is being revisited only to add a tier/grant they were
+     * missing). Never guesses among more than one. */
+    function findFlowOnboardDepartmentEntry() {
+        var certs = (state.personSummary && state.personSummary.certifications) || [];
+        var key = state.flowOnboardDepartment;
+        if (!key) {
+            var activeOnes = [];
+            for (var j = 0; j < certs.length; j++) {
+                if (certs[j] && certs[j].active) activeOnes.push(certs[j]);
+            }
+            return activeOnes.length === 1 ? activeOnes[0] : null;
+        }
+        for (var i = 0; i < certs.length; i++) {
+            if (certs[i] && certs[i].departmentKey === key && certs[i].active) return certs[i];
+        }
+        return null;
+    }
+
+    /** THE HONESTY REQUIREMENT this whole section exists to satisfy --
+     * see this block's own header. Never claims "done"; reports the REAL,
+     * currently-loaded certification/tier/specialization/feature-grant
+     * state for this person, gap and all. */
+    function buildFlowOnboardSummary() {
+        var wrap = mk('div', {});
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_onboard_summary_heading') }));
+
+        var dept = findFlowOnboardDepartmentEntry();
+        if (!dept) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: S('flow_onboard_summary_not_certified') }));
+            return wrap;
+        }
+
+        wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: formatTemplate(S('flow_onboard_summary_certified_template'), { department: dept.departmentLabel }) }));
+
+        if (dept.tier) {
+            wrap.appendChild(mk('p', { text: formatTemplate(S('flow_onboard_summary_tier_template'), { tier: tierDisplayLabel(dept.tier) }) }));
+        } else {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: S('flow_onboard_summary_no_tier') }));
+        }
+
+        var specCount = Array.isArray(dept.specializations) ? dept.specializations.length : 0;
+        wrap.appendChild(mk('p', { text: formatTemplate(S('flow_onboard_summary_specializations_template'), { count: specCount }) }));
+
+        var features = (state.personFeatures && state.personFeatures.features) || [];
+        var requireGrantFeatures = features.filter(function (f) { return f && f.requiresGrant === true && f.globallyEnabled !== false; });
+        if (requireGrantFeatures.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_summary_features_none_required') }));
+        } else {
+            var grantedNow = 0;
+            var grantedAtBaseline = 0;
+            var baselineGranted = (state.flowBaseline && state.flowBaseline.featureGranted) || {};
+            for (var i = 0; i < requireGrantFeatures.length; i++) {
+                if (requireGrantFeatures[i].granted) grantedNow++;
+                if (baselineGranted[requireGrantFeatures[i].key]) grantedAtBaseline++;
+            }
+            var grantedThisPass = grantedNow - grantedAtBaseline > 0 ? grantedNow - grantedAtBaseline : 0;
+            var stillMissing = requireGrantFeatures.length - grantedNow;
+            if (grantedThisPass > 0) {
+                wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: formatTemplate(S('flow_onboard_summary_features_granted_template'), { count: grantedThisPass }) }));
+            }
+            if (stillMissing > 0) {
+                wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_onboard_summary_features_still_missing_template'), { count: stillMissing }) }));
+            }
+        }
+
+        return wrap;
+    }
+
+    function buildFlowOnboardScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_onboard_heading') }));
+        wrap.appendChild(buildFlowStepNav(flowOnboardStepLabels(), state.flowStep, goFlowOnboardStep));
+
+        var body = mk('div', { class: 'k9tablet-flow-step-body' });
+
+        if (state.flowStep === 0 || !state.person) {
+            body.appendChild(buildFlowPersonPicker(function (citizenid, name) {
+                flowSelectPerson(citizenid, name);
+                goFlowOnboardStep(1);
+            }));
+            wrap.appendChild(body);
+            return wrap;
+        }
+
+        wrap.appendChild(buildFlowPersonContext());
+
+        var guard = buildFlowPersonSummaryGuard();
+        if (guard) {
+            body.appendChild(guard);
+            wrap.appendChild(body);
+            return wrap;
+        }
+
+        ensureFlowBaseline();
+        var canCertify = state.viewer.effectivePermissions.indexOf('k9.certify') !== -1;
+
+        if (state.flowStep === 1) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_certify_intro') }));
+            body.appendChild(buildCertificationList(state.personSummary.certifications, canCertify ? flowOnboardCertAction : null));
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(0); }, onNext: function () { goFlowOnboardStep(2); }, hasAction: true }));
+        } else if (state.flowStep === 2) {
+            var dept = findFlowOnboardDepartmentEntry();
+            if (!dept) {
+                body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_onboard_pick_department_first') }));
+            } else {
+                body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_tier_intro') }));
+                body.appendChild(buildCertificationDetail(dept, canCertify ? flowOnboardCertAction : null));
+            }
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(1); }, onNext: function () { goFlowOnboardStep(3); }, hasAction: !!dept }));
+        } else if (state.flowStep === 3) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_onboard_features_intro') }));
+            if (state.personFeaturesLoading && !state.personFeatures) {
+                body.appendChild(mk('p', { text: S('loading') }));
+            } else if (state.personFeaturesError && !state.personFeatures) {
+                body.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.personFeaturesError) }));
+                body.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadPersonFeatures(state.person.citizenid); }));
+            } else if (state.personFeatures) {
+                body.appendChild(buildPersonFeaturesSection());
+            } else {
+                body.appendChild(mk('p', { text: S('loading') }));
+            }
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(2); }, onNext: function () { goFlowOnboardStep(4); }, hasAction: true }));
+        } else if (state.flowStep === 4) {
+            body.appendChild(buildFlowOnboardSummary());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOnboardStep(3); }, isLast: true, onFinish: goToFlowsScreen }));
+        }
+
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    // ---- Offboarding: Select -> Decertify -> Clear Access -> Appearance -> Summary ----
+
+    var FLOW_OFFBOARD_STEP_KEYS = ['flow_offboard_step_select', 'flow_offboard_step_decertify', 'flow_offboard_step_access', 'flow_offboard_step_appearance', 'flow_offboard_step_summary'];
+
+    function flowOffboardStepLabels() {
+        var out = [];
+        for (var i = 0; i < FLOW_OFFBOARD_STEP_KEYS.length; i++) out.push(S(FLOW_OFFBOARD_STEP_KEYS[i]));
+        return out;
+    }
+
+    function goFlowOffboardStep(index) {
+        state.flowStep = index;
+        render();
+    }
+
+    /** Fires tablet:revertK9Ped -- the SAME callback/payload
+     * buildRoleControl()'s own Revert to Human button already sends, not a
+     * new one. A dedicated (rather than runMutation()-based) wrapper ONLY
+     * because this ONE step also needs to know, from the server's own
+     * `ok:true`, whether to set state.flowOffboardAppearanceReverted for
+     * an honest summary -- runMutation()'s shared onSettled callback never
+     * receives that result, and changing its signature would touch every
+     * other call site on this page for one flow's own summary line. */
+    function flowOffboardRevertAppearance() {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:revertK9Ped', { targetCitizenId: state.person.citizenid }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.actionNotice = { kind: 'ok', text: (typeof result.message === 'string' && result.message) || S('action_succeeded') };
+                state.flowOffboardAppearanceReverted = true;
+            } else {
+                // Same per-code mapping runMutation() uses (mutationErrorText,
+                // covers this exact callback's own 'no_active_assignment'/
+                // 'no_fallback_configured'/'denied'/'rate_limited'/'db_error'
+                // outcomes) rather than the generic action_failed line this
+                // used before -- see that function's own doc comment.
+                state.actionNotice = { kind: 'error', text: mutationErrorText(result) };
+            }
+            loadPersonSummary(state.person.citizenid);
+        });
+    }
+
+    function buildFlowOffboardSummary() {
+        var wrap = mk('div', {});
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_offboard_summary_heading') }));
+
+        var baseline = state.flowBaseline || { certByDept: {}, permissions: {}, featureGranted: {} };
+        var certs = (state.personSummary && state.personSummary.certifications) || [];
+        var decertifiedCount = 0;
+        var stillCertifiedCount = 0;
+        for (var i = 0; i < certs.length; i++) {
+            var c = certs[i];
+            if (!c || typeof c.departmentKey !== 'string') continue;
+            var wasActive = !!(baseline.certByDept[c.departmentKey] && baseline.certByDept[c.departmentKey].active);
+            if (wasActive && !c.active) decertifiedCount++;
+            if (c.active) stillCertifiedCount++;
+        }
+        wrap.appendChild(mk('p', { class: decertifiedCount > 0 ? 'k9tablet-feature-state k9tablet-feature-state--available' : 'k9tablet-muted', text: formatTemplate(S('flow_offboard_summary_decertified_template'), { count: decertifiedCount }) }));
+        if (stillCertifiedCount > 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_offboard_summary_still_certified_template'), { count: stillCertifiedCount }) }));
+        }
+
+        var features = (state.personFeatures && state.personFeatures.features) || [];
+        var revokedFeatures = 0;
+        var remainingFeatures = 0;
+        for (var j = 0; j < features.length; j++) {
+            var f = features[j];
+            if (!f || typeof f.key !== 'string') continue;
+            var wasGranted = !!baseline.featureGranted[f.key];
+            if (wasGranted && !f.granted) revokedFeatures++;
+            if (f.granted) remainingFeatures++;
+        }
+        wrap.appendChild(mk('p', { text: formatTemplate(S('flow_offboard_summary_features_revoked_template'), { count: revokedFeatures }) }));
+        if (remainingFeatures > 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_offboard_summary_features_remaining_template'), { count: remainingFeatures }) }));
+        }
+
+        var perms = (state.personSummary && state.personSummary.permissions) || [];
+        var permsSet = {};
+        for (var k = 0; k < perms.length; k++) { if (typeof perms[k] === 'string') permsSet[perms[k]] = true; }
+        var revokedPerms = 0;
+        var remainingPerms = 0;
+        for (var permKey in baseline.permissions) {
+            if (Object.prototype.hasOwnProperty.call(baseline.permissions, permKey) && !permsSet[permKey]) revokedPerms++;
+        }
+        for (var pk in permsSet) { if (Object.prototype.hasOwnProperty.call(permsSet, pk)) remainingPerms++; }
+        wrap.appendChild(mk('p', { text: formatTemplate(S('flow_offboard_summary_permissions_revoked_template'), { count: revokedPerms }) }));
+        if (remainingPerms > 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: formatTemplate(S('flow_offboard_summary_permissions_remaining_template'), { count: remainingPerms }) }));
+        }
+
+        if (state.flowOffboardAppearanceReverted) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: S('flow_offboard_summary_reverted') }));
+        } else {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_offboard_summary_not_reverted') }));
+        }
+
+        return wrap;
+    }
+
+    function buildFlowOffboardScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_offboard_heading') }));
+        wrap.appendChild(buildFlowStepNav(flowOffboardStepLabels(), state.flowStep, goFlowOffboardStep));
+
+        var body = mk('div', { class: 'k9tablet-flow-step-body' });
+
+        if (state.flowStep === 0 || !state.person) {
+            body.appendChild(buildFlowPersonPicker(function (citizenid, name) {
+                flowSelectPerson(citizenid, name);
+                goFlowOffboardStep(1);
+            }));
+            wrap.appendChild(body);
+            return wrap;
+        }
+
+        wrap.appendChild(buildFlowPersonContext());
+
+        var guard = buildFlowPersonSummaryGuard();
+        if (guard) {
+            body.appendChild(guard);
+            wrap.appendChild(body);
+            return wrap;
+        }
+
+        ensureFlowBaseline();
+        var canCertify = state.viewer.effectivePermissions.indexOf('k9.certify') !== -1;
+
+        if (state.flowStep === 1) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_offboard_decertify_intro') }));
+            var activeCerts = (state.personSummary.certifications || []).filter(function (c) { return c && c.active; });
+            if (activeCerts.length === 0) {
+                body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_offboard_no_active_certs') }));
+            } else {
+                body.appendChild(buildCertificationList(activeCerts, canCertify ? handlePersonCertAction : null));
+            }
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(0); }, onNext: function () { goFlowOffboardStep(2); }, hasAction: activeCerts.length > 0 }));
+        } else if (state.flowStep === 2) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_offboard_access_intro') }));
+            body.appendChild(buildFlowPersonAccessControls());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(1); }, onNext: function () { goFlowOffboardStep(3); }, hasAction: true }));
+        } else if (state.flowStep === 3) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_offboard_appearance_intro') }));
+            body.appendChild(mkConfirmButton(S('role_revert_label'), 'k9tablet-btn k9tablet-btn--danger', flowOffboardRevertAppearance, { disabled: state.pendingAction }));
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(2); }, onNext: function () { goFlowOffboardStep(4); }, hasAction: true }));
+        } else if (state.flowStep === 4) {
+            body.appendChild(buildFlowOffboardSummary());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowOffboardStep(3); }, isLast: true, onFinish: goToFlowsScreen }));
+        }
+
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    // ---- Problem Player: Select -> Review Record -> Audit Trail -> Take Action -> Summary ----
+
+    var FLOW_PROBLEM_STEP_KEYS = ['flow_problem_step_select', 'flow_problem_step_review', 'flow_problem_step_audit', 'flow_problem_step_act', 'flow_problem_step_summary'];
+    var FLOW_PROBLEM_AUDIT_STEP = 2;
+
+    function flowProblemStepLabels() {
+        var out = [];
+        for (var i = 0; i < FLOW_PROBLEM_STEP_KEYS.length; i++) out.push(S(FLOW_PROBLEM_STEP_KEYS[i]));
+        return out;
+    }
+
+    /**
+     * "Carry context between steps" -- the citizenid picked in Select is
+     * carried straight into the Audit Trail form (state.auditMode/
+     * state.auditCitizenId, the SAME fields the standalone Audit tab
+     * reads/writes) so the operator never retypes it. Guarded on the
+     * citizenid actually DIFFERING from what is already there -- not
+     * "every time this step is entered" -- so revisiting this step (Back,
+     * then a step button) never silently overwrites a mode/value/result
+     * the operator has since changed by hand, matching this page's own
+     * established "typed field values are left alone on a tab
+     * re-visit" convention (see buildAuditModeSwitch()'s own comment).
+     * @param {number} index
+     */
+    function goFlowProblemStep(index) {
+        if (index === FLOW_PROBLEM_AUDIT_STEP && state.person && state.auditCitizenId !== state.person.citizenid) {
+            state.auditMode = 'cert';
+            state.auditCitizenId = state.person.citizenid;
+            state.auditResult = null;
+            state.auditError = null;
+        }
+        state.flowStep = index;
+        render();
+    }
+
+    function buildFlowProblemSummary() {
+        var wrap = mk('div', {});
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_problem_summary_heading') }));
+
+        if (state.auditResult && Array.isArray(state.auditResult.rows)) {
+            wrap.appendChild(mk('p', { text: formatTemplate(S('flow_problem_summary_audit_ran_template'), { mode: auditModeLabel(state.auditMode), count: state.auditResult.rows.length }) }));
+        } else {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_problem_summary_audit_not_run') }));
+        }
+
+        var baseline = state.flowBaseline || { featureBlocked: {}, permissions: {} };
+        var features = (state.personFeatures && state.personFeatures.features) || [];
+        var newlyBlocked = 0;
+        for (var i = 0; i < features.length; i++) {
+            var f = features[i];
+            if (!f || typeof f.key !== 'string') continue;
+            if (f.blocked && !baseline.featureBlocked[f.key]) newlyBlocked++;
+        }
+
+        var perms = (state.personSummary && state.personSummary.permissions) || [];
+        var permsSet = {};
+        for (var j = 0; j < perms.length; j++) { if (typeof perms[j] === 'string') permsSet[perms[j]] = true; }
+        var revokedPerms = 0;
+        for (var permKey in baseline.permissions) {
+            if (Object.prototype.hasOwnProperty.call(baseline.permissions, permKey) && !permsSet[permKey]) revokedPerms++;
+        }
+
+        if (newlyBlocked === 0 && revokedPerms === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_problem_summary_no_actions') }));
+        } else {
+            if (newlyBlocked > 0) {
+                wrap.appendChild(mk('p', { class: 'k9tablet-feature-state k9tablet-feature-state--blocked', text: formatTemplate(S('flow_problem_summary_features_blocked_template'), { count: newlyBlocked }) }));
+            }
+            if (revokedPerms > 0) {
+                wrap.appendChild(mk('p', { text: formatTemplate(S('flow_problem_summary_permissions_revoked_template'), { count: revokedPerms }) }));
+            }
+        }
+
+        return wrap;
+    }
+
+    function buildFlowProblemScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_problem_heading') }));
+        wrap.appendChild(buildFlowStepNav(flowProblemStepLabels(), state.flowStep, goFlowProblemStep));
+
+        var body = mk('div', { class: 'k9tablet-flow-step-body' });
+
+        if (state.flowStep === 0 || !state.person) {
+            body.appendChild(buildFlowPersonPicker(function (citizenid, name) {
+                flowSelectPerson(citizenid, name);
+                goFlowProblemStep(1);
+            }));
+            wrap.appendChild(body);
+            return wrap;
+        }
+
+        wrap.appendChild(buildFlowPersonContext());
+
+        var guard = buildFlowPersonSummaryGuard();
+        if (guard) {
+            body.appendChild(guard);
+            wrap.appendChild(body);
+            return wrap;
+        }
+
+        ensureFlowBaseline();
+
+        if (state.flowStep === 1) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_problem_review_intro') }));
+            body.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_certifications_heading') }));
+            body.appendChild(buildCertificationList(state.personSummary.certifications, null));
+            body.appendChild(mk('h4', { class: 'k9tablet-section-heading', text: S('person_xp_heading') }));
+            body.appendChild(mk('p', { class: 'k9tablet-xp-line', text: xpLine(state.personSummary.xp, state.personSummary.tierLabel) }));
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(0); }, onNext: function () { goFlowProblemStep(2); }, hasAction: false }));
+        } else if (state.flowStep === FLOW_PROBLEM_AUDIT_STEP) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_problem_audit_intro') }));
+            if (!state.auditEnabled) {
+                body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_disabled_note') }));
+            }
+            body.appendChild(buildAuditModeSwitch());
+            body.appendChild(buildAuditForm());
+            body.appendChild(buildAuditResults());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(1); }, onNext: function () { goFlowProblemStep(3); }, hasAction: true }));
+        } else if (state.flowStep === 3) {
+            body.appendChild(mk('p', { class: 'k9tablet-hint', text: S('flow_problem_act_intro') }));
+            body.appendChild(buildFlowPersonAccessControls());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(FLOW_PROBLEM_AUDIT_STEP); }, onNext: function () { goFlowProblemStep(4); }, hasAction: true }));
+        } else if (state.flowStep === 4) {
+            body.appendChild(buildFlowProblemSummary());
+            body.appendChild(buildFlowNavRow({ onBack: function () { goFlowProblemStep(3); }, isLast: true, onFinish: goToFlowsScreen }));
+        }
+
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    // ---- Tuning: Overview -> Feature Toggles -> Tunables -> Certification Tiers -> XP Thresholds -> Shop Items ----
+    //
+    // UNLIKE the three person-centric flows above, this one is a TOUR, not
+    // a chain of dependent actions -- there is no "person" to carry, and
+    // no single completion state, only five independent settings screens
+    // an operator visits in sequence. Every step embeds the REAL,
+    // UNMODIFIED existing screen/section builder (buildRuntimeFeatures
+    // Section/buildRuntimeTunablesSection/buildCertTiersScreen/
+    // buildXpTiersScreen/buildShopItemsScreen) -- so every edit made from
+    // inside this flow is the identical call, with the identical
+    // authorization, as making it from that screen's own standalone tab.
+    // The Overview step answers "here is what I have changed" HONESTLY,
+    // by reading fields the SERVER already reports (`overridden` on every
+    // runtime feature/tunable -- server/runtimecontrol.lua's own PART 1/1B)
+    // rather than by tracking edits client-side, which could drift from
+    // what the server actually holds the moment two operators or two
+    // tabs touch the same value.
+
+    var FLOW_TUNING_STEP_KEYS = ['flow_tuning_step_overview', 'flow_tuning_step_features', 'flow_tuning_step_tunables', 'flow_tuning_step_tiers', 'flow_tuning_step_xp', 'flow_tuning_step_shop'];
+
+    function flowTuningStepLabels() {
+        var out = [];
+        for (var i = 0; i < FLOW_TUNING_STEP_KEYS.length; i++) out.push(S(FLOW_TUNING_STEP_KEYS[i]));
+        return out;
+    }
+
+    function goFlowTuningStep(index) {
+        state.flowStep = index;
+        render();
+    }
+
+    /** @param {Array|null} list @param {string} templateKey @returns {HTMLElement} one line reporting `{overridden} of {total}`, or the honest "not loaded yet" line when `list` is still null. */
+    function buildFlowTuningOverriddenLine(list, templateKey) {
+        if (!Array.isArray(list)) {
+            return mk('p', { class: 'k9tablet-muted', text: S('flow_tuning_overview_not_loaded') });
+        }
+        var overridden = 0;
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] && list[i].overridden) overridden++;
+        }
+        return mk('p', { text: formatTemplate(S(templateKey), { overridden: overridden, total: list.length }) });
+    }
+
+    /** @param {Array|null} list @param {string} templateKey @returns {HTMLElement} one line reporting `{count}` configured, or the honest "not loaded yet" line when `list` is still null. */
+    function buildFlowTuningCountLine(list, templateKey) {
+        if (!Array.isArray(list)) {
+            return mk('p', { class: 'k9tablet-muted', text: S('flow_tuning_overview_not_loaded') });
+        }
+        return mk('p', { text: formatTemplate(S(templateKey), { count: list.length }) });
+    }
+
+    function buildFlowTuningOverview() {
+        var wrap = mk('div', {});
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('flow_tuning_overview_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_tuning_overview_intro') }));
+
+        wrap.appendChild(buildFlowTuningOverriddenLine(state.runtimeFeatures, 'flow_tuning_overview_features_template'));
+        wrap.appendChild(buildFlowTuningOverriddenLine(state.runtimeTunables, 'flow_tuning_overview_tunables_template'));
+        wrap.appendChild(buildFlowTuningCountLine(state.certTiers, 'flow_tuning_overview_tiers_template'));
+        wrap.appendChild(buildFlowTuningCountLine(state.xpTiers, 'flow_tuning_overview_xp_template'));
+        wrap.appendChild(buildFlowTuningCountLine(state.shopItems, 'flow_tuning_overview_shop_template'));
+
+        return wrap;
+    }
+
+    function buildFlowTuningScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mkButton(S('flow_back_to_flows_label'), 'k9tablet-link-btn', goToFlowsScreen));
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('flow_tuning_heading') }));
+        wrap.appendChild(buildFlowStepNav(flowTuningStepLabels(), state.flowStep, goFlowTuningStep));
+
+        var body = mk('div', { class: 'k9tablet-flow-step-body' });
+
+        if (state.flowStep === 1) {
+            body.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('runtime_features_heading') }));
+            if (!state.runtimeControlEnabled) body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('runtime_control_disabled_note') }));
+            body.appendChild(buildRuntimeFeaturesSection());
+        } else if (state.flowStep === 2) {
+            body.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('runtime_tunables_heading') }));
+            if (!state.runtimeControlEnabled) body.appendChild(mk('p', { class: 'k9tablet-muted', text: S('runtime_control_disabled_note') }));
+            body.appendChild(buildRuntimeTunablesSection());
+        } else if (state.flowStep === 3) {
+            body.appendChild(buildCertTiersScreen());
+        } else if (state.flowStep === 4) {
+            body.appendChild(buildXpTiersScreen());
+        } else if (state.flowStep === 5) {
+            body.appendChild(buildShopItemsScreen());
+        } else {
+            body.appendChild(buildFlowTuningOverview());
+        }
+
+        body.appendChild(buildFlowNavRow({
+            onBack: state.flowStep > 0 ? (function (step) { return function () { goFlowTuningStep(step - 1); }; }(state.flowStep)) : null,
+            onNext: state.flowStep < 5 ? (function (step) { return function () { goFlowTuningStep(step + 1); }; }(state.flowStep)) : null,
+            hasAction: false,
+            isLast: state.flowStep === 5,
+            onFinish: goToFlowsScreen,
+        }));
+
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    // ------------------------------------------------------------------
     // DATA LOADERS
     // ------------------------------------------------------------------
 
@@ -6269,6 +8666,11 @@
                 xp: typeof result.xp === 'number' ? result.xp : null,
                 tierLabel: typeof result.tierLabel === 'string' ? result.tierLabel : null,
                 permissions: result.permissions || [],
+                // READ-ONLY rank/partnership (owner-directed "roster panel
+                // shows everything about a person" pass) -- both null-safe,
+                // never guessed when the server itself sent nothing usable.
+                job: (result.job && typeof result.job === 'object') ? result.job : null,
+                partnership: (result.partnership && typeof result.partnership === 'object') ? result.partnership : null,
             };
             if (result.target && typeof result.target.name === 'string' && state.person) {
                 state.person.name = result.target.name;
@@ -6298,6 +8700,51 @@
             state.personFeatures = { features: result.features || [] };
             render();
         });
+    }
+
+    /**
+     * STALE-STATE FIX (this pass) -- every Person-screen mutation
+     * (certify/decertify/setTier/renew/grantSpecialization/
+     * revokeSpecialization/givexp/grantPermission/revokePermission/
+     * assignK9Role/revertK9Ped) used to refresh ONLY state.personSummary
+     * via onSettled's own bare `loadPersonSummary(citizenid)` call --
+     * correct for an ordinary target, but self-certification
+     * (Config.AllowSelfCertification) and self-XP-grant
+     * (Config.HighCommand.allowSelfGrant) are both REAL, config-permitted
+     * flows an operator can trigger by opening THEIR OWN citizenid on the
+     * Person screen (the Console's own "open by exact citizen ID" box
+     * places no restriction on whose id is typed there). state.myRecord/
+     * state.viewer (read by the Home AND My Record screens) describe the
+     * EXACT SAME underlying certifications/XP/permissions/features for
+     * that one citizenid, fetched over a SEPARATE round trip
+     * (tablet:requestMyRecord vs. tablet:requestPersonSummary) -- so a
+     * self-action used to leave Home/My Record showing a stale copy until
+     * the viewer happened to click one of those two tabs directly
+     * (My Record already reloads on every click; Home now does too, see
+     * buildTabs()'s own homeTab handler). Every Person-screen mutation
+     * below now calls this instead of `loadPersonSummary` directly so a
+     * self-action refreshes its own identity screens automatically, in the
+     * same tick, without waiting on that tab click. A no-op extra fetch for
+     * the (overwhelmingly common) case of acting on someone else -- never
+     * skipped or short-circuited, since that would itself be a "did this
+     * actually re-check" trap.
+     * @param {string} citizenid
+     */
+    function refreshPersonAndSelf(citizenid) {
+        loadPersonSummary(citizenid);
+        if (state.viewer && citizenid === state.viewer.citizenid) loadMyRecord();
+    }
+
+    /** SAME fix, applied to the Abilities table's own grant/revoke/block/
+     * unblock actions (buildPersonFeatureRow) -- see refreshPersonAndSelf()
+     * immediately above for the full write-up; state.myRecord.myFeatures is
+     * the identical underlying data My Record's/Home's own "My Abilities"/
+     * "Ready Abilities" sections read.
+     * @param {string} citizenid
+     */
+    function refreshPersonFeaturesAndSelf(citizenid) {
+        loadPersonFeatures(citizenid);
+        if (state.viewer && citizenid === state.viewer.citizenid) loadMyRecord();
     }
 
     /**
@@ -6746,6 +9193,94 @@
     }
 
     /**
+     * ONE PER-CODE MESSAGE, NOT ONE GENERIC LINE (state-handling/error-
+     * reporting consistency sweep, this pass) -- runMutation() below is the
+     * SINGLE shared path every certify/decertify/setCertificationTier/
+     * renewCertification/grantSpecialization/revokeSpecialization/givexp/
+     * grantPermission/revokePermission/grantFeature/revokeFeature/
+     * blockFeature/unblockFeature/assignK9Role/revertK9Ped/triggerFeature
+     * mutation on the Person (and My Record) screen goes through. Before
+     * this pass it rendered EVERY ONE of the ~30 distinct `error` codes
+     * those server callbacks/*ForTablet wrappers can return (confirmed by
+     * reading server/certifications.lua's GrantCertificationForTablet/
+     * SetCertificationTierForTablet/RenewCertificationForTablet/
+     * GrantSpecializationForTablet/RevokeSpecializationForTablet, server/
+     * permissions.lua's GrantPermission/RevokePermission, server/
+     * highcommand.lua's tabletGiveXp, and server/tablet.lua's
+     * tabletAssignK9Role/tabletRevertK9Ped doc comments directly) as the
+     * SAME generic S('action_failed') line -- exactly the "collapses a
+     * dozen reasons into one generic line" failure mode this pass exists to
+     * fix: an operator whose certify attempt was refused for being too far
+     * away saw byte-identical text to one refused for the target already
+     * holding an active certification, or the target's live job having
+     * changed since the roster was last fetched.
+     *
+     * `result.message` (an already server-localized, more specific string
+     * some of these callbacks attach -- e.g. tabletGiveXp's denied/
+     * invalid_amount/self_grant_blocked/xp_unavailable, or
+     * ReasonToJsResult's own 'still has access via rank'/'target offline'
+     * revoke notes) is ALWAYS preferred first when present; this switch is
+     * the fallback for every callback that returns a bare `error` code with
+     * no accompanying message. Every sentence below says what to do next
+     * wherever there is a next step (move closer, wait, use the other
+     * action, contact an administrator) rather than only naming what went
+     * wrong -- and reveals nothing the ACTING viewer could not already see
+     * about their own attempt (THE SECURITY RULE: this is UX only, never a
+     * new information disclosure -- every one of these codes describes a
+     * precondition of the viewer's OWN just-submitted action, not another
+     * player's private data).
+     * @param {object|undefined} result
+     * @returns {string}
+     */
+    function mutationErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'invalid_args':
+            case 'invalid_target': return S('mutation_error_invalid_target');
+            case 'invalid_department': return S('mutation_error_invalid_department');
+            case 'department_mismatch': return S('mutation_error_department_mismatch');
+            case 'not_eligible': return S('mutation_error_not_eligible');
+            case 'denied': return S('mutation_error_denied');
+            case 'rate_limited':
+            case 'on_cooldown': return S('mutation_error_rate_limited');
+            case 'busy': return S('mutation_error_busy');
+            case 'self_certification_disabled': return S('mutation_error_self_certification_disabled');
+            case 'self_grant_blocked': return S('mutation_error_self_grant_blocked');
+            case 'target_must_be_online': return S('mutation_error_target_must_be_online');
+            case 'target_not_in_department': return S('mutation_error_target_not_in_department');
+            case 'target_too_far': return S('mutation_error_target_too_far');
+            case 'target_not_k9_model': return S('mutation_error_target_not_k9_model');
+            case 'model_check_requires_online': return S('mutation_error_model_check_requires_online');
+            case 'target_online_use_online_action': return S('mutation_error_target_online_use_online_action');
+            case 'already_certified': return S('mutation_error_already_certified');
+            case 'target_not_actively_certified': return S('mutation_error_target_not_actively_certified');
+            case 'requires_active_cert': return S('mutation_error_requires_active_cert');
+            case 'requires_tier_capability': return S('mutation_error_requires_tier_capability');
+            case 'already_granted': return S('mutation_error_already_granted');
+            case 'not_granted': return S('mutation_error_not_granted');
+            case 'invalid_specialization': return S('mutation_error_invalid_specialization');
+            case 'invalid_tier': return S('mutation_error_invalid_tier');
+            case 'tier_already_set': return S('mutation_error_tier_already_set');
+            case 'target_offline': return S('mutation_error_target_offline');
+            case 'target_no_department_cert': return S('mutation_error_target_no_department_cert');
+            case 'feature_disabled': return S('mutation_error_feature_disabled');
+            case 'invalid_permission': return S('mutation_error_invalid_permission');
+            case 'invalid_model': return S('mutation_error_invalid_model');
+            case 'not_available': return S('mutation_error_not_available');
+            case 'no_active_assignment': return S('mutation_error_no_active_assignment');
+            case 'no_fallback_configured': return S('mutation_error_no_fallback_configured');
+            case 'invalid_granter': return S('mutation_error_invalid_granter');
+            case 'db_error': return S('mutation_error_db_error');
+            case 'actions_disabled': return S('mutation_error_actions_disabled');
+            case 'not_authorized': return S('error_not_authorized');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /**
      * Generic mutation runner -- every grant/revoke/certify/decertify/
      * givexp/block/unblock action shares this shape. Disables further
      * actions while in flight (state.pendingAction), shows a transient
@@ -6753,6 +9288,18 @@
      * ok/fail) so callers can refresh whatever data the mutation might have
      * changed -- this page NEVER optimistically mutates its own local copy
      * of server state; every action re-pulls the authoritative version.
+     * A successful `result.submitted === true` (currently only
+     * tablet:decertify's own fire-and-forget command bridge -- see
+     * client/tablet.lua's SubmitAllowlistedCommand doc comment) renders a
+     * distinct "submitted, refreshing to confirm" notice rather than
+     * S('action_succeeded') -- `ok:true` there means only "the command was
+     * handed off," not "the decertify actually happened," and this page
+     * must never claim a stronger guarantee than the one it actually has
+     * (the same "reports success without doing it" bug this project keeps
+     * finding, avoided here honestly rather than by weakening the notice
+     * entirely: `onSettled` still re-pulls the authoritative record either
+     * way, so the truth is visible within the same round trip regardless of
+     * which notice text was shown).
      * @param {string} nuiName
      * @param {object} payload
      * @param {() => void} onSettled
@@ -6766,9 +9313,11 @@
         fetchNui(nuiName, payload).then(function (result) {
             state.pendingAction = false;
             if (result && result.ok === true) {
-                state.actionNotice = { kind: 'ok', text: (typeof result.message === 'string' && result.message) || S('action_succeeded') };
+                var successText = (typeof result.message === 'string' && result.message.length > 0) ? result.message
+                    : (result.submitted === true ? S('action_submitted') : S('action_succeeded'));
+                state.actionNotice = { kind: 'ok', text: successText };
             } else {
-                state.actionNotice = { kind: 'error', text: (result && typeof result.message === 'string' && result.message) || S('action_failed') };
+                state.actionNotice = { kind: 'error', text: mutationErrorText(result) };
             }
             onSettled();
         });
@@ -6833,7 +9382,14 @@
                 applyThemeToDocument(state.theme);
                 state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
             } else {
-                state.actionNotice = { kind: 'error', text: S('action_failed') };
+                // Was a blanket S('action_failed') regardless of
+                // result.error -- server/runtimecontrol.lua's own
+                // tablet:resetTheme can refuse with 'denied' (not high
+                // command -- unreachable through this button, but not
+                // through a modified client) or 'feature_disabled'
+                // (Config.Features.TabletTheming off), both already
+                // mapped by mutationErrorText().
+                state.actionNotice = { kind: 'error', text: mutationErrorText(result) };
             }
             render();
         });
@@ -7751,6 +10307,18 @@
             if (!state.open) return;
             if (e && (e.key === 'Escape' || e.key === 'Esc' || e.keyCode === 27)) {
                 requestClose();
+                return;
+            }
+            // Enter-to-submit for the panel's own text/number inputs --
+            // see findEnterSubmitTarget()'s own header (defined with this
+            // page's other FOCUS + SCROLL CONTINUITY helpers, above
+            // render()) for the full rationale and, more importantly, the
+            // safety argument for why this can never fire a destructive
+            // action. Kept as a second branch on this SAME listener
+            // (rather than a second document-level one) so there is
+            // exactly one place this page ever reads a raw keydown from.
+            if (e && e.key === 'Enter') {
+                handleEnterKeydown();
             }
         });
     }

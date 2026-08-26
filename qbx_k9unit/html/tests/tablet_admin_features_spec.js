@@ -50,7 +50,11 @@ async function openPersonScreen(h) {
     await settle(h, 3);
 }
 
-t.test('high command sees the Capabilities section with grant/revoke controls matching held permissions', async () => {
+function capabilityCheckboxes(h) {
+    return findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-capability-checkbox'));
+}
+
+t.test('high command sees the Capabilities section with checkboxes matching held permissions', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({
             'tablet:requestPersonFeatures': () => ({ ok: true, target: { citizenid: 'TARGET1', name: 'K9 Rex' }, features: [] }),
@@ -59,12 +63,14 @@ t.test('high command sees the Capabilities section with grant/revoke controls ma
     await openPersonScreen(h);
 
     t.equals(findByText(h.getRoot(), 'Capabilities').length, 1);
-    // k9.access is held -> Revoke; the other three are not held -> Grant.
-    t.equals(findByText(h.getRoot(), 'Revoke').length, 1, 'exactly one held capability (k9.access) offers Revoke');
-    t.equals(findByText(h.getRoot(), 'Grant').length, 3, 'the three un-held capabilities each offer Grant');
+    // k9.access is held -> checked; the other three are not held -> unchecked.
+    const boxes = capabilityCheckboxes(h);
+    t.equals(boxes.length, 4);
+    t.equals(boxes.filter((b) => b.checked === true).length, 1, 'exactly one held capability (k9.access) is checked');
+    t.equals(boxes.filter((b) => b.checked !== true).length, 3, 'the three un-held capabilities are unchecked');
 });
 
-t.test('granting a capability fires tablet:grantPermission with the right key and target, then refreshes', async () => {
+t.test('ticking a capability checkbox fires tablet:grantPermission with the right key and target, then refreshes', async () => {
     let grantBody = null;
     let summaryCalls = 0;
     const h = createHarness({
@@ -77,7 +83,9 @@ t.test('granting a capability fires tablet:grantPermission with the right key an
     await openPersonScreen(h);
     t.equals(summaryCalls, 1);
 
-    findByText(h.getRoot(), 'Grant')[0].click();
+    const unheldCheckbox = capabilityCheckboxes(h).filter((b) => b.checked !== true)[0];
+    unheldCheckbox.checked = true;
+    unheldCheckbox._dispatch('change');
     await new Promise((r) => setTimeout(r, 30));
 
     t.equals(grantBody.targetCitizenId, 'TARGET1');

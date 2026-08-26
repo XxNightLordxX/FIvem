@@ -300,7 +300,11 @@ local AdminConfig = {
     AdminAudit = {
         CommandCooldownMs = 300,
         TrustConsole = false,
-        MaxResults = { Certifications = 50, Partnerships = 50, SearchLog = 50 },
+        -- CatalogAudit (GAP 2 closure) -- server/admin.lua's own
+        -- onResourceStart now asserts this key exists exactly like the
+        -- three that were already here, so a fixture missing it would fail
+        -- EVERY test in this file at boot, not just the new ones.
+        MaxResults = { Certifications = 50, Partnerships = 50, SearchLog = 50, CatalogAudit = 50 },
     },
     -- server/admin.lua asserts Config.Departments is present whenever
     -- AdminAuditCommands is on: since 2026-08-25 IsAuthorizedAdmin resolves
@@ -337,6 +341,15 @@ local adminEnv = Sandbox.newEnv({
 
 Sandbox.loadInto('../server/cooldowns.lua', adminEnv)
 Sandbox.loadInto('../server/notify.lua', adminEnv)
+-- server/datastore.lua -- DISPLAY NAME RESOLUTION / GAP 2 closure pass:
+-- server/admin.lua's own onResourceStart now builds CATALOG_AUDIT_SOURCES
+-- (a table literal that indexes K9Store.*Audit_GetRecent EAGERLY, at
+-- registration time, not lazily inside a query function the way every
+-- other K9Store reference in this file already was) -- so K9Store must
+-- already be a real global by the time onResourceStart fires below, same
+-- load-order requirement tests/admin_spec.lua's own env already satisfies
+-- for the identical reason.
+Sandbox.loadInto('../server/datastore.lua', adminEnv)
 Sandbox.loadInto('../server/admin.lua', adminEnv)
 
 for _, handler in ipairs(adminEventHandlers['onResourceStart'] or {}) do

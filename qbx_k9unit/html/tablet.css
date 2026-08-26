@@ -174,6 +174,18 @@ body {
     font-weight: 600;
     color: var(--k9tablet-accent, #f59e0b);
     white-space: nowrap;
+    /* An operator-supplied serverName (config.lua's own
+       Config.CommandTablet.branding) has no length limit enforced
+       anywhere -- without a cap here, `.k9tablet-branding`'s own
+       flex-shrink:0 (it must never distort/shrink the logo) lets an
+       unusually long name claim as much of the header row as it wants,
+       at `.k9tablet-title`'s expense (which DOES shrink, down to nothing)
+       and, in the worst case, the header's own close button's. Capped +
+       ellipsis, same discipline `.k9tablet-title` above already uses for
+       the exact same reason. */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
 }
 
 /*
@@ -293,6 +305,18 @@ body {
 .k9tablet-screen {
     flex: 1 1 auto;
     overflow-y: auto;
+    /* Explicit, not relied on as a side effect of overflow-y alone (the
+       CSS spec DOES compute overflow-x to `auto` here even without this
+       line the moment overflow-y is non-`visible`, but spelling it out
+       is what actually documents the intent): a wide table (many
+       columns, or a genuinely long unbroken value in one cell -- see
+       .k9tablet-table's own overflow-wrap rule below for the OTHER half
+       of this fix) scrolls INSIDE this one screen container, never the
+       whole `.k9tablet-panel` (which stays `overflow: hidden` and a
+       fixed size regardless -- see that rule above), so a long roster or
+       a wide runtime-control table can never push this dialog's own
+       edges, close button, or tab bar off screen. */
+    overflow-x: auto;
     padding: 16px 18px;
 }
 
@@ -369,6 +393,31 @@ body {
     background: #703636;
 }
 
+/* mkConfirmButton()'s own two-click "are you sure" armed state -- an
+   ADDITIONAL class alongside `.k9tablet-btn`/`.k9tablet-btn--danger`
+   (never a replacement), so this must visibly win over EITHER base look
+   -- placed after `.k9tablet-btn--danger` above so equal-specificity
+   source order resolves in its favour. Same "faint tint + accent
+   border/text, theme-neutral" recipe as `.k9tablet-warning-note` above,
+   reused here rather than a new colour meaning invented for this one
+   state: this is a WARNING ("you are about to confirm this"), same
+   semantic the accent colour already carries everywhere else on this
+   page. A same-size label swap alone (S('confirm_label')) is easy to
+   miss at a glance, especially for a keyboard user tabbing/pressing
+   Enter with no mouse-hover cue at all -- this makes the intermediate
+   state unmistakably different from both the resting and the danger
+   look, not just differently worded. */
+.k9tablet-btn--armed {
+    background: rgba(245, 158, 11, 0.22);
+    border-color: var(--k9tablet-accent, #f59e0b);
+    color: var(--k9tablet-accent, #f59e0b);
+    font-weight: 700;
+}
+
+.k9tablet-btn--armed:hover {
+    background: rgba(245, 158, 11, 0.32);
+}
+
 .k9tablet-link-btn {
     background: transparent;
     border: none;
@@ -395,6 +444,16 @@ body {
     text-align: left;
     padding: 8px 10px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    /* A single long, unbroken token (a citizenid, a pasted URL-shaped
+       shop-item key, an operator-typed label with no spaces) would
+       otherwise force its OWN column arbitrarily wide rather than
+       wrapping, dragging the whole table wider than the panel with it
+       -- wraps inside the cell instead, so .k9tablet-screen's own
+       overflow-x:auto above is only ever needed for a table that is
+       genuinely too wide overall (many columns), not for one anomalous
+       value in an otherwise normal-width column. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .k9tablet-table th {
@@ -403,6 +462,17 @@ body {
     text-transform: uppercase;
     font-size: 11px;
     letter-spacing: 0.04em;
+}
+
+/* Zebra striping -- a dense table (roster, permission keys, shop items,
+   runtime tunables, audit results) with a dozen+ same-height rows and no
+   grouping is hard to track across columns at a glance; this is the
+   smallest possible aid (a low-opacity white overlay, so it blends
+   correctly whether the operator's own --k9tablet-bg is dark or light --
+   never a new hardcoded solid colour) -- see .k9tablet-warning-note's own
+   comment above for the same "faint tint is theme-neutral" reasoning. */
+.k9tablet-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .k9tablet-cert-status--yes {
@@ -518,9 +588,53 @@ body {
 }
 
 .k9tablet-cert-dept,
-.k9tablet-feature-label,
-.k9tablet-capability-label {
+.k9tablet-feature-label {
     flex: 1 1 auto;
+}
+
+/*
+    PERMISSION CHECKBOX ROW (owner-directed "roster panel: checkboxes that
+    actually do something, with a plain-English line per permission") --
+    html/tablet.js's buildCapabilityRow(). Replaces the old single-line
+    label + Grant/Revoke button pair: the label/description text wrapper
+    grows to fill the row, the checkbox stays a fixed size at the end.
+*/
+.k9tablet-capability-row {
+    align-items: flex-start;
+}
+
+.k9tablet-capability-text {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.k9tablet-capability-label {
+    font-weight: 500;
+}
+
+.k9tablet-capability-description {
+    font-size: 11px;
+    color: #9aa0ab;
+}
+
+.k9tablet-capability-toggle {
+    display: flex;
+    align-items: center;
+    padding-top: 2px;
+    cursor: pointer;
+}
+
+.k9tablet-capability-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
+
+.k9tablet-capability-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
 }
 
 .k9tablet-cert-granter {
@@ -620,6 +734,12 @@ body {
 
 .k9tablet-xp-line {
     font-size: 14px;
+}
+
+.k9tablet-rank-line,
+.k9tablet-partnership-line {
+    margin: 2px 0;
+    font-size: 13px;
 }
 
 .k9tablet-person-name {
@@ -999,4 +1119,44 @@ body {
 
 .k9tablet-home-tool-link {
     font-size: 12px;
+}
+
+/*
+    GUIDED FLOWS (this pass) -- html/tablet.js's own buildFlowStepNav()/
+    buildFlowNavRow()/buildFlowPersonContext()/buildFlowPersonPicker()/
+    buildFlowsHubScreen(). SAME "reuse, don't reinvent" posture as Runtime
+    Control/Audit Trail above: the hub screen's four cards are literally
+    .k9tablet-home-actions/.k9tablet-home-action-card (buildHomeActionCard(),
+    unchanged), the step nav is .k9tablet-tab/.k9tablet-tab--active
+    (unchanged), and every button is a plain .k9tablet-btn/.k9tablet-link-btn.
+    These few rules are LAYOUT ONLY -- no new colour, no new custom
+    property -- just spacing for the wrapper elements those reused pieces
+    sit inside.
+*/
+.k9tablet-flow-steps {
+    margin-bottom: 12px;
+}
+
+.k9tablet-flow-nav {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.k9tablet-flow-person-context {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.k9tablet-flow-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.k9tablet-flow-step-body {
+    margin-top: 8px;
 }
