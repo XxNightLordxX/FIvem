@@ -141,15 +141,6 @@ designed but have an edge worth knowing about before you rely on them.
   silently: the command will work in-game but never show up on the
   tablet, and nothing will fail to warn you.
 
-- **`RenewCertification` doesn't check whether its own database update
-  actually changed anything.** It checks whether the write *threw an
-  error*, but not whether it matched a row. If a certification is revoked
-  or changed in the moment between an officer starting a renewal and the
-  database write completing, the renewal can report success and notify
-  both people even though nothing was actually renewed. Same shape as a
-  bug already fixed elsewhere in the certification code (`SetCertificationTier`)
-  — this one hasn't been fixed yet.
-
 - **High command can now grant almost anything to themselves, by owner
   decision, not a bug.** A high-command officer can self-grant a
   feature-control permission, a `block.<Name>` entry, one of the four
@@ -163,13 +154,6 @@ designed but have an edge worth knowing about before you rely on them.
   as both granter and recipient, not disguised as an ordinary grant) — set
   either switch to `false` if you'd rather require a second high-command
   officer's action, including for a lone owner's own account.
-
-- **A K9/handler partnership's status can lag after a reconnect.** If a
-  player reconnects, or the resource restarts, while they're genuinely
-  still partnered, their own client can briefly report "not partnered"
-  until a fresh Partner Up/consent event reaches it. The server's own
-  record is correct the whole time; only the client-side read can be
-  behind.
 
 - **A dragged player can always let go by force.** Prop Dragging's attach
   is real (it's re-applied every tick specifically so this can't be
@@ -299,3 +283,32 @@ because each one taught a rule worth not re-learning.
   to themselves," above, for how far that now extends). If you
   deliberately want a second officer's sign-off before anyone gets that
   access, there's a config switch to turn this back off.
+- **`RenewCertification` used to report a renewal succeeded even when its
+  own UPDATE matched zero rows.** It checked whether the write *threw an
+  error*, never whether it actually matched a row — a certification
+  revoked or changed in the moment between an officer starting a renewal
+  and the write completing could report success and notify both people
+  even though nothing was actually renewed. Same shape as the
+  `SetCertificationTier` fix above it in this file, mirrored here and in
+  its offline counterpart (`RenewCertificationOffline`): both now check
+  the affected-row count, and reconcile a *thrown* write against a fresh
+  DB read (comparing the new expiry against the pre-write one, since a
+  renewal extends a value rather than setting a fixed target) before ever
+  reporting an outcome — never a guessed success, and never a false
+  failure when the write actually landed.
+- **A K9/handler partnership's client-side status used to lag after a
+  reconnect with no way for a caller to force a fresh answer.** The
+  server's own record was always correct; a reconnecting client's local
+  cache could read "not partnered" for a genuinely still-partnered player
+  until a fresh Partner Up/consent event happened to arrive. Closed by a
+  server-authoritative `qbx_k9unit:server:getPartnershipState` callback
+  and a client-side `RefreshPartnershipStateFromServer()` wrapper around
+  it — every consequential decision point (the radial menu's Partner
+  Up/Break Partnership choice, starting a partner camera feed) now
+  re-verifies against the server before acting, instead of trusting the
+  local cache cold. The cheap, synchronous `IsPartnered()`/
+  `GetPartnerServerId()` reads themselves are unchanged by design (no
+  round trip on every call) and remain a display-only convenience for
+  callers that already tolerate a bounded, server-corrected "already
+  partnered"/"not partnered" rejection either way — not a caller that
+  needs a live answer, which must call the refresh function first.

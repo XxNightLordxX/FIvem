@@ -1746,13 +1746,18 @@ Config.XP = {
 --     mint cooldown, and why this feature ships off until one exists.
 --   * handlerPartnershipTenure{1,7,30}Day -- paid to `handler_citizenid`
 --     by the SAME milestone-crossing check server/tenure.lua already runs
---     for the K9 side (Config.Partnership.TenureBonus.milestones' own new
+--     for the K9 side (Config.Partnership.TenureBonus.milestones' own
 --     `handlerActionKey` field below) -- inherits that mechanism's
 --     existing one-time-per-partnership-row CAS guard and same-pair-reform
---     seeding for free, no new anti-farm needed. NOT YET WIRED --
---     server/tenure.lua is not edited by this pass; see that file's own
---     `handlerActionKey` field comment (Config.Partnership.TenureBonus.
---     milestones, below) for the exact call this needs.
+--     seeding for free, no new anti-farm needed. WIRED (issue-closer sweep,
+--     2026-08-26): this bullet used to say "NOT YET WIRED -- server/tenure.lua
+--     is not edited by this pass" -- stale, since corrected at that field's
+--     own declaration comment (Config.Partnership.TenureBonus.milestones,
+--     below, search for "dead-config-field audit correction"). Verified
+--     directly in server/tenure.lua's CheckTenureMilestonesForK9: its
+--     milestone-crossing loop calls `AwardHandlerXP(row.handler_citizenid,
+--     milestone.handlerActionKey)` right after paying the K9 side, so all
+--     three of these keys are live today, not merely planned.
 --   * "present for a successful search/track" is DELIBERATELY NOT
 --     duplicated here -- server/search.lua's existing coopSearchBonus
 --     (Config.XP.awards above) already pays a present, Trained+ partner
