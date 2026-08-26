@@ -2777,4 +2777,685 @@ t.test('RenewCertification: clears the warned/lapsed session flags so a genuinel
     t.equals(lapsedCountAfterSecondLapse, lapsedCountAfterRenewal + 1, 'a renewal must clear the one-per-session lapsed flag so a genuinely NEW lapse can be announced again')
 end)
 
+-- ======================================================================
+-- K9 COMMAND TABLET -- TIER / RENEWAL / SPECIALIZATION / OFFLINE CERTIFY
+-- (this pass). SetCertificationTierForTablet/RenewCertificationForTablet/
+-- GrantSpecializationForTablet/RevokeSpecializationForTablet, plus
+-- GrantCertificationForTablet's own newly-added offline branch, and their
+-- five lib.callback.register entries -- registered only when
+-- Config.Features.CommandTablet == true. Reached here the SAME way
+-- tabletserver_spec.lua reaches tabletRequestMyRecord/etc: through
+-- f.callbacks[name](source, ...), which returns the REAL {ok, error?}
+-- table a tablet click would receive. This is also the ONLY way this spec
+-- can observe the new (ok, outcome) RETURN CONTRACT this pass adds to
+-- SetCertificationTier/RenewCertification/GrantSpecialization/
+-- RevokeSpecialization(Offline)/GrantCertification(Offline) themselves --
+-- those remain `local`, reached everywhere else in this file only through
+-- the net-event/command dispatch tables, which discard whatever they
+-- return, exactly as before this pass (see each retrofit's own "purely
+-- additive" doc comment). The ONLINE branch of every *ForTablet wrapper
+-- calls straight through to the exact same online function unchanged, so
+-- pinning an ONLINE success/failure here through the wrapper IS pinning
+-- that underlying function's own return value.
+--
+-- LOCALE KEYS: this pass introduced seven new certifications.* keys
+-- (usage_settieroffline/usage_recertifyoffline/usage_certifyoffline, the
+-- two "target is actually online, use the online command instead"
+-- security-guard messages, and certify_offline_requires_online_model_check)
+-- that did not exist in locales/en.json when this pass's server-side code
+-- was first written -- all seven have since LANDED there (confirmed
+-- against the real, unmodified locales/en.json this spec reads, per this
+-- file's own header: locale() is never stubbed here), so every notify
+-- text below is asserted for real, exactly like every other locale call
+-- in this file -- no gap left disclosed.
+-- ======================================================================
+
+--- @param opts table? -- same shape as newFixture's own opts, with Config.Features.CommandTablet forced to true
+local function tabletFixture(opts)
+    opts = opts or {}
+    opts.features = opts.features or {}
+    opts.features.CommandTablet = true
+    return newFixture(opts)
+end
+
+--- @param f table -- a tabletFixture() result
+--- @param action string -- e.g. 'tabletSetCertificationTier'
+--- @param outcome string -- e.g. 'ok', 'not_eligible'
+local function auditedWith(f, action, outcome)
+    for _, line in ipairs(f.printLog) do
+        -- Substring match on action(...)-> outcome would be too loose
+        -- (the real line embeds real args between the parens) -- match
+        -- the action name and the exact trailing "-> outcome" separately
+        -- instead.
+        if line:find('AUDIT:', 1, true) and line:find(action .. '(', 1, true) and line:find('-> ' .. outcome, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
+t.test('tabletSetCertificationTier: SECURITY -- a caller with no rank/grant/high-command is refused, no DB write attempted, and the refusal is audited', function()
+    local f = tabletFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 0 } })
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](1, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_eligible')
+    t.isFalse(updateCalled)
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+    t.isTrue(auditedWith(f, 'tabletSetCertificationTier', 'not_eligible'), 'a DENIED tablet invocation must be audited too, not only a successful one')
+end)
+
+t.test('tabletSetCertificationTier: DESIGN -- a plain certifier-grade rank officer (NOT high command) is allowed, matching every other tablet certification action (IsEligibleCertifier, not IsHighCommand, is the real gate)', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', grade = { level = 4 } }) -- meets certifierGrade=4, not isboss
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    t.isNil(f.env.IsHighCommand, 'sanity: server/highcommand.lua is not loaded in this fixture at all')
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isTrue(result.ok, 'IsEligibleCertifier (certifierGrade rank), not IsHighCommand, is the real authorization gate for every tablet action in this file')
+    t.isTrue(auditedWith(f, 'tabletSetCertificationTier', 'ok'))
+end)
+
+t.test('tabletSetCertificationTier: ONLINE success delegates to the proximity-checked SetCertificationTier unchanged', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- active base cert exists
+    f.env.RefreshCertificationCache('T1', 'police') -- primes cache tier = 'certified' (DEFAULT_TIER)
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isTrue(result.ok)
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.tier_change_success_target', 'senior'), 'success'))
+end)
+
+t.test('tabletSetCertificationTier: ONLINE proximity is still enforced, exactly like a live /k9settier -- a distant target is refused', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(999, 999, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_too_far')
+end)
+
+t.test('tabletSetCertificationTier: RETURN CONTRACT -- already holding the requested tier propagates outcome=\'tier_already_set\' through the tablet wrapper unchanged', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police') -- tier defaults to 'certified'
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'certified')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'tier_already_set')
+end)
+
+t.test('tabletSetCertificationTier: OFFLINE success -- a disconnected target still gets re-tiered, no proximity possible or required, and is audited', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    -- T1 is NOT registered as an online player at all.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end -- QueryCertificationRecord: active row exists
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isTrue(result.ok)
+    t.equals(updateParams[1], 'senior')
+    t.equals(updateParams[2], 'T1')
+    t.equals(updateParams[3], 'police')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.tier_change_success_granter', 'senior'), 'success'), 'granter is notified even though the target is offline')
+    t.isTrue(auditedWith(f, 'tabletSetCertificationTier', 'ok'))
+end)
+
+t.test('tabletSetCertificationTier: OFFLINE -- no active certification row for that department is refused, never written', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return nil end -- QueryCertificationRecord: no active row
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_not_actively_certified')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletSetCertificationTier: an unknown tier key is refused (online path), never reaches the UPDATE', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'made_up_tier')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_tier')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletSetCertificationTier: an unknown tier key is ALSO refused offline, never reaches the UPDATE', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'made_up_tier')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_tier')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletSetCertificationTier: TIER CATALOG RACE -- a tier deleted between the initial check and TierEditMutex acquisition is refused, never written (online path)', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    f.env.TierEditMutex = {
+        TryAcquire = function() return true end,
+        Release = function() end,
+    }
+    local knownCallCount = 0
+    f.env.IsKnownCertificationTierKey = function(_key)
+        knownCallCount = knownCallCount + 1
+        -- 1st call: SetCertificationTier's own initial validity check
+        -- (before acquiring the lock) -- 'senior' is genuinely known.
+        -- 2nd call: the RE-CHECK after acquiring TierEditMutex -- simulates
+        -- a concurrent DeleteTier landing in the gap between the two,
+        -- exactly the race server/certtiers.lua's own "HAZARD 4" names.
+        return knownCallCount == 1
+    end
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_tier')
+    t.isFalse(updateCalled, 'a tier deleted mid-flight must never be written')
+end)
+
+t.test('tabletSetCertificationTier: TIER CATALOG RACE -- the identical race is caught offline too, never written', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end
+
+    f.env.TierEditMutex = {
+        TryAcquire = function() return true end,
+        Release = function() end,
+    }
+    local knownCallCount = 0
+    f.env.IsKnownCertificationTierKey = function(_key)
+        knownCallCount = knownCallCount + 1
+        return knownCallCount == 1
+    end
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_tier')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletSetCertificationTier: a held TierEditMutex key reports busy, never writes (online path)', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    f.env.TierEditMutex = {
+        TryAcquire = function() return false end,
+        Release = function() end,
+    }
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'busy')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletSetCertificationTier: a stale department view (target changed job since) is refused as department_mismatch, never silently retargeted', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'sheriff', grade = { level = 1 } }) -- now sheriff; tablet still thinks police
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'department_mismatch')
+end)
+
+t.test('tabletSetCertificationTier: shape validation -- an empty tier is invalid_target before any lookup, no notify sent at all', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'police', '')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_target')
+    t.equals(#f.notifyLog, 0, 'a bare shape check must never call NotifyPlayer -- the tablet UI renders its own error')
+end)
+
+t.test('tabletSetCertificationTier: an unconfigured department key is invalid_department before any lookup', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local result = f.callbacks['qbx_k9unit:server:tabletSetCertificationTier'](10, 'T1', 'not_a_real_department', 'senior')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_department')
+end)
+
+t.test('tabletRenewCertification: OFFLINE success extends expiry with no proximity possible or required', function()
+    local f = tabletFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 } end
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](10, 'T1', 'police')
+
+    t.isTrue(result.ok)
+    t.equals(updateParams[1], 90)
+    t.equals(updateParams[2], 'T1')
+    t.equals(updateParams[3], 'police')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_success_granter'), 'success'))
+end)
+
+t.test('tabletRenewCertification: ONLINE success is unaffected', function()
+    local f = tabletFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](10, 'T1', 'police')
+
+    t.isTrue(result.ok)
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.renew_success_target'), 'success'))
+end)
+
+t.test('tabletRenewCertification: feature disabled is refused the SAME way online or offline', function()
+    local f = tabletFixture() -- Config.Features.CertificationExpiry absent
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'feature_disabled')
+end)
+
+t.test('tabletRenewCertification: OFFLINE -- no active certification row is refused, never written', function()
+    local f = tabletFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return nil end
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_not_actively_certified')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletGrantSpecialization: NO OFFLINE PATH -- a disconnected target fails closed with target_must_be_online, by design (see GrantSpecializationForTablet\'s own doc comment on why, unlike tier/renew/revoke)', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    -- T1 not registered online at all.
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletGrantSpecialization'](10, 'T1', 'police', 'narcotics')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_must_be_online')
+    t.isFalse(insertCalled)
+    t.equals(#f.notifyLog, 0, 'the bare online-resolution check must never call NotifyPlayer')
+end)
+
+t.test('tabletGrantSpecialization: ONLINE success is unchanged and audited', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- active base cert
+    f.env.RefreshCertificationCache('T1', 'police')
+    f.mysql.scalar.await = function() return nil end -- pre-check: no existing active specialization row
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletGrantSpecialization'](10, 'T1', 'police', 'narcotics')
+
+    t.isTrue(result.ok)
+    t.isTrue(f.env.HasSpecialization('T1', 'police', 'narcotics'))
+    t.isTrue(auditedWith(f, 'tabletGrantSpecialization', 'ok'))
+end)
+
+t.test('tabletGrantSpecialization: an unconfigured specialization key is refused, never reaches the INSERT', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletGrantSpecialization'](10, 'T1', 'police', 'not_a_real_specialization')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_specialization')
+    t.isFalse(insertCalled)
+end)
+
+t.test('tabletRevokeSpecialization: SECURITY -- a caller with no rank/grant/high-command is refused, never writes', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', grade = { level = 0 } })
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRevokeSpecialization'](10, 'T1', 'police', 'narcotics')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_eligible')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletRevokeSpecialization: OFFLINE success -- mirrors RevokeSpecializationOffline unchanged', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    -- T1 not registered online.
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRevokeSpecialization'](10, 'T1', 'police', 'narcotics')
+
+    t.isTrue(result.ok)
+    -- K9Store.Spec_RevokeOne's own param order is (revokedBy, citizenid,
+    -- job, specialization) -- revokedBy is the GRANTER's own citizenid.
+    t.equals(updateParams[1], 'G1')
+    t.equals(updateParams[2], 'T1')
+    t.equals(updateParams[3], 'police')
+    t.equals(updateParams[4], 'narcotics')
+end)
+
+t.test('tabletRevokeSpecialization: ONLINE success delegates to the proximity-checked RevokeSpecialization unchanged', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRevokeSpecialization'](10, 'T1', 'police', 'narcotics')
+
+    t.isTrue(result.ok)
+    t.equals(updateParams[2], 'T1')
+end)
+
+t.test('tabletRevokeSpecialization: ONLINE proximity is still enforced -- a distant target is refused', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(999, 999, 0))
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRevokeSpecialization'](10, 'T1', 'police', 'narcotics')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_too_far')
+end)
+
+-- ======================================================================
+-- COORDINATOR-DIRECTED FOLLOW-UP -- the certify/decertify offline
+-- asymmetry, closed. GrantCertificationForTablet used to fail closed with
+-- 'target_must_be_online' for EVERY disconnected target, unconditionally
+-- (see this file's own header block above GrantCertificationForTablet,
+-- kept for the historical reasoning); it now falls through to
+-- GrantCertificationOffline UNLESS Config.K9Appearance.requireK9ModelForRole
+-- is explicitly true (the ONE case an offline grant still cannot safely
+-- proceed -- see that function's own doc comment).
+-- ======================================================================
+
+t.test('tabletCertify: OFFLINE grant now succeeds when Config.K9Appearance.requireK9ModelForRole is off (the shipped default) -- closes the certify/decertify asymmetry', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    -- T1 not registered online -- GrantCertificationForTablet must fall
+    -- through to GrantCertificationOffline instead of failing closed.
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletCertify'](10, 'T1', 'police')
+
+    t.isTrue(result.ok)
+    t.equals(insertParams[1], 'T1')
+    t.equals(insertParams[2], 'police')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.grant_success_granter'), 'success'))
+end)
+
+t.test('tabletCertify: OFFLINE grant is REFUSED when Config.K9Appearance.requireK9ModelForRole is explicitly true -- never silently skips a check the operator turned on', function()
+    local f = tabletFixture({ k9Appearance = { requireK9ModelForRole = true } })
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletCertify'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'model_check_requires_online')
+    t.isFalse(insertCalled)
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.certify_offline_requires_online_model_check'), 'error'))
+end)
+
+t.test('tabletCertify: ONLINE grant is COMPLETELY UNAFFECTED by this pass -- still enforces the model check when Config.K9Appearance.requireK9ModelForRole is true', function()
+    local f = tabletFixture({ k9Appearance = { requireK9ModelForRole = true } })
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0), NON_K9_HASH)
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletCertify'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_not_k9_model')
+    t.isFalse(insertCalled)
+end)
+
+t.test('tabletCertify: ONLINE grant STILL succeeds against a real K9 model, unaffected by this pass, when requireK9ModelForRole is true', function()
+    local f = tabletFixture({ k9Appearance = { requireK9ModelForRole = true } })
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletCertify'](10, 'T1', 'police')
+
+    t.isTrue(result.ok)
+    t.isTrue(insertCalled)
+end)
+
+t.test('tabletCertify: OFFLINE -- an already-certified target is a distinguishable no-op, not a duplicate row', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.mysql.scalar.await = function() return 5 end -- existing active row
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletCertify'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'already_certified')
+    t.isFalse(insertCalled)
+end)
+
+t.test('/k9certifyoffline command: an unconfigured department is rejected, never reaches the INSERT', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.commands['k9certifyoffline'].fn(1, { 'T1', 'not_a_real_department' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_department', 'not_a_real_department'), 'error'))
+    t.isFalse(insertCalled)
+end)
+
+t.test('/k9settieroffline command: a non-certifier is rejected before any lookup', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 0 } })
+
+    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+end)
+
+t.test('/k9recertifyoffline command: disabled-by-default expiry feature is rejected before any citizenid/job validation', function()
+    local f = newFixture() -- Config.Features.CertificationExpiry absent
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_feature_disabled'), 'error'))
+end)
+
+t.test('/k9settieroffline command: a missing job argument shows the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    f.commands['k9settieroffline'].fn(1, { 'T1' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_settieroffline'), 'error'))
+end)
+
+t.test('/k9recertifyoffline command: a missing job argument shows the usage message (feature enabled, so the usage check itself is reached)', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    f.commands['k9recertifyoffline'].fn(1, { 'T1' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_recertifyoffline'), 'error'))
+end)
+
+t.test('/k9certifyoffline command: a missing job argument shows the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    f.commands['k9certifyoffline'].fn(1, { 'T1' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certifyoffline'), 'error'))
+end)
+
+t.test('SetCertificationTierOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9settier -- closes the identical proximity-check bypass RevokeCertificationOffline already guards against', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(99, 'T1', { name = 'police', grade = { level = 1 } }) -- T1 IS currently connected
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_target_online_use_online_action', 99), 'error'))
+    t.isFalse(updateCalled)
+end)
+
+t.test('RenewCertificationOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9recertify', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(99, 'T1', { name = 'police', grade = { level = 1 } })
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_target_online_use_online_action', 99), 'error'))
+    t.isFalse(updateCalled)
+end)
+
+t.test('GrantCertificationOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9certify -- the SAME proximity-check-bypass guard as decertify/tier/renew', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(99, 'T1', { name = 'police', grade = { level = 1 } })
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.commands['k9certifyoffline'].fn(1, { 'T1', 'police' })
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_online_use_certify_command', 99), 'error'))
+    t.isFalse(insertCalled)
+end)
+
 os.exit(t.summary())

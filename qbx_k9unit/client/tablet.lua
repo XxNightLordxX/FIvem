@@ -202,6 +202,27 @@
         here is why" -- a referenced or protected tier), not failures in
         the "something went wrong" sense; `referenceCount` (delete only)
         names how many k9_certifications rows still reference the tier.
+      tablet:permKeysList {}                                      -> cb({ok,keys?,error?})        [high command -- server/permissionkeycatalog.lua]
+      tablet:permKeysUpsert {key,label,description?}              -> cb({ok,keys?,error?})         [high command]
+      tablet:permKeysDelete {key}                                 -> cb({ok,keys?,error?,activeGrantCount?}) [high command]
+        Same TranslateReasonResult bridge as the cert-tier trio above --
+        server/permissionkeycatalog.lua's own header states its response
+        shape mirrors server/certtiers.lua's own convention exactly. `keys`
+        (every list/mutation response) is the FULL, current, DYNAMIC
+        catalog -- html/tablet.js must never hardcode the four admin
+        capability names, see ListPermissionCatalogKeys's own doc comment.
+        `reserved_namespace` (create/rename) and `unknown_key` (delete) are
+        REFUSALS ("cannot, and here is why" -- the key collides with the
+        feature./block. per-person-feature-control namespace, or does not
+        exist), not failures in the "something went wrong" sense.
+        `activeGrantCount` (delete only, may be nil on a degraded read)
+        names how many k9_permissions rows currently hold the deleted key
+        -- INFORMATIONAL ONLY, unlike certTiersDelete's `referenceCount`:
+        this delete is NEVER refused because of it (see that file's own
+        header "TOMBSTONE, NOT REFERENCE-COUNTED" for why a permission key
+        has no equivalent hazard to server/certtiers.lua's own
+        'tier_in_use' refusal). There is no reorder counterpart -- a
+        permission key carries no ordinal.
       tablet:equipmentShopGetLocations {}                         -> cb({ok,locations?,error?})   [high command -- server/equipmentshop.lua]
       tablet:equipmentShopAddLocation {label?,model?,scenario?}   -> cb({ok,locationKey?,locations?,error?})
         COORDINATES ARE NEVER SENT BY html/tablet.js -- a CEF browser page
@@ -386,6 +407,32 @@
     "no unbounded trap" rule this codebase applies to every release path.
     ======================================================================
 
+    ======================================================================
+    XP-RANK EDITOR (owner-directed "set experience level for each rank up"
+    pass, server/xptiers.lua):
+      tablet:xpTiersList {}                                       -> cb({ok,tiers?,error?})   [high command -- server/xptiers.lua]
+      tablet:xpTiersUpsert {ordinal,xp,label,speedMultiplier,scentRangeMultiplier,medkitCooldownMultiplier?,badge?} -> cb({ok,tiers?,warning?,error?})
+        Same TranslateReasonResult bridge as the theme/cert-tier/permission-
+        key callbacks above -- server/xptiers.lua's own header states its
+        response shape mirrors server/certtiers.lua's own convention
+        exactly. `tiers` (both calls) is the FULL, current, live ladder
+        (four entries as shipped -- this pass edits existing ranks only,
+        never adds/removes/reorders one, see that file's own header
+        "SCOPE DECISION"); each entry's `xpLocked` flag (true for rank 1
+        only) tells this page which one field to render read-only. A
+        successful edit's `warning` (non-optional whenever at least one
+        currently-connected K9 was just re-ranked LOWER by this exact edit)
+        MUST be surfaced prominently, identical posture to certTiersReorder's
+        own warning above -- see server/xptiers.lua's own header "THE
+        ALREADY-PROMOTED PLAYER" for why this can happen from a single
+        threshold edit (no reorder concept exists for this ladder at all).
+        `base_tier_xp_fixed` (rank 1 only) is a REFUSAL ("cannot, and here
+        is why" -- rank 1 must always be exactly 0 XP), not a generic
+        failure -- html/tablet.js's own error-text mapping should give it
+        distinct copy, the same way certTierErrorText() already does for
+        'tier_in_use'/'protected_tier'.
+    ======================================================================
+
     FILE-TO-FILE CONTRACT: exposes OpenTablet()/CloseTablet() as resource-
     globals (both already allowlisted) -- CloseTablet() deliberately IS
     global, not file-private, so no future call site is ever tempted to
@@ -484,6 +531,21 @@ local TABLET_STRING_KEYS = {
     'cert_tier_error_tier_in_use', 'cert_tier_error_must_include_every_tier',
     'cert_tier_error_invalid_key_set', 'cert_tier_error_db_error',
     'cert_tier_error_invalid_payload',
+    -- Permission-key catalog editing (high command only, sits alongside the
+    -- cert-tier screen above) -- see this file's own header NUI CONTRACT
+    -- section on the three tablet:permKeys* callbacks.
+    'tab_permission_keys', 'permission_keys_heading', 'permission_keys_add_label',
+    'permission_key_key_label', 'permission_key_key_placeholder',
+    'permission_key_label_label', 'permission_key_description_label',
+    'permission_key_description_placeholder', 'permission_key_save_label',
+    'permission_key_cancel_label', 'permission_key_edit_label',
+    'permission_key_delete_label', 'permission_key_default_badge',
+    'column_description', 'permission_key_error_denied',
+    'permission_key_error_rate_limited', 'permission_key_error_invalid_key',
+    'permission_key_error_invalid_label', 'permission_key_error_invalid_description',
+    'permission_key_error_reserved_namespace', 'permission_key_error_busy',
+    'permission_key_error_too_many_keys', 'permission_key_error_unknown_key',
+    'permission_key_error_db_error', 'permission_key_error_invalid_payload',
     -- K9 Supply Shop location management (high command only) -- see this
     -- file's own header NUI CONTRACT section on the four
     -- tablet:equipmentShop*Location(s) callbacks.
@@ -1515,6 +1577,72 @@ RegisterNUICallback('tablet:certTiersDelete', function(data, cb)
     -- renders 'tier_in_use' with its own explanatory copy instead of a
     -- generic failure message -- see that function for the full list).
     cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:certTiersDelete', data.key)))
+end)
+
+-- ----------------------------------------------------------------------
+-- PERMISSION-KEY CATALOG EDITING -- server/permissionkeycatalog.lua, high
+-- command only (CanManagePermissionKeys re-checked there on every call;
+-- this file adds no authorization of its own). Owner's own words for this
+-- pass: "...even add or remove permissions" -- the second half of the same
+-- ask server/certtiers.lua's own tier-editing screen above already
+-- answers for certification ROLES. Sits alongside that screen in
+-- html/tablet.js, not in a new unrelated place. Same "CALLBACKS" shape as
+-- certTiers* above: permKeysUpsert takes the WHOLE {key,label,description?}
+-- table as one argument, permKeysDelete takes a bare key string. There is
+-- no reorder counterpart -- a permission key carries no ordinal (see
+-- server/permissionkeycatalog.lua's own header "WHY NO ORDINAL").
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:permKeysList', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:permKeysList')))
+end)
+
+RegisterNUICallback('tablet:permKeysUpsert', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:permKeysUpsert', data)))
+end)
+
+RegisterNUICallback('tablet:permKeysDelete', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    -- 'reserved_namespace'/'unknown_key' are REFUSALS ("cannot, and here is
+    -- why"), not failures -- forwarded through the SAME translation
+    -- regardless, same posture as certTiersDelete's own 'tier_in_use'/
+    -- 'protected_tier' immediately above.
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:permKeysDelete', data.key)))
+end)
+
+-- ----------------------------------------------------------------------
+-- XP-RANK EDITOR -- server/xptiers.lua, high command only
+-- (CanManageXPTiers re-checked there on every call; this file adds no
+-- authorization of its own). Owner's own words for this pass: "...set
+-- experience level for each rank up etc." -- the OTHER half of the same
+-- quote server/permissionkeycatalog.lua's own screen above answers for
+-- permission keys. Same "CALLBACKS" shape as certTiers*/permKeys* above:
+-- xpTiersUpsert takes the WHOLE payload table as one argument. There is no
+-- delete/create/reorder counterpart -- see server/xptiers.lua's own header
+-- "SCOPE DECISION" for why this pass edits existing ranks only.
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:xpTiersList', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:xpTiersList')))
+end)
+
+RegisterNUICallback('tablet:xpTiersUpsert', function(data, cb)
+    if type(data) ~= 'table' or type(data.ordinal) ~= 'number' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    -- 'base_tier_xp_fixed' is a REFUSAL ("cannot, and here is why" -- rank
+    -- 1 must always be exactly 0 XP), not a failure -- forwarded through
+    -- the SAME translation regardless, same posture as certTiersDelete's
+    -- own 'tier_in_use'/'protected_tier' above.
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:xpTiersUpsert', data)))
 end)
 
 -- ----------------------------------------------------------------------

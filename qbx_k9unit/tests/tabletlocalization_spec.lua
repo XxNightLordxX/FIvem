@@ -118,9 +118,9 @@ end
 -- The key set itself: html/tablet.js's DEFAULT_STRINGS <-> locales/en.json
 -- ----------------------------------------------------------------------
 
-t.test('html/tablet.js DEFAULT_STRINGS has exactly 262 keys (the real, counted total -- not an approximation)', function()
+t.test('html/tablet.js DEFAULT_STRINGS has exactly 287 keys (the real, counted total -- not an approximation)', function()
     local _, count = ExtractDefaultStringsKeys()
-    t.equals(count, 262)
+    t.equals(count, 287)
 end)
 
 t.test('every DEFAULT_STRINGS key resolves via locale() against locales/en.json\'s `tablet` group', function()
@@ -159,20 +159,20 @@ t.test('OpenTablet(): `strings` carries every DEFAULT_STRINGS key, each equal to
     local strings = f.sendNuiMessageCalls[1].data.strings
 
     local keys = ExtractDefaultStringsKeys()
-    t.equals(#keys, 262)
+    t.equals(#keys, 287)
     for _, key in ipairs(keys) do
         t.equals(strings[key], locale('tablet.' .. key), 'strings.' .. key .. ' must equal locale(\'tablet.' .. key .. '\')')
     end
 end)
 
-t.test('OpenTablet(): `strings` carries no MORE than 262 keys (no accidental extra/renamed entry going stale)', function()
+t.test('OpenTablet(): `strings` carries no MORE than 287 keys (no accidental extra/renamed entry going stale)', function()
     local f = newFixture()
     f.env.OpenTablet()
     local strings = f.sendNuiMessageCalls[1].data.strings
 
     local sentCount = 0
     for _ in pairs(strings) do sentCount = sentCount + 1 end
-    t.equals(sentCount, 262)
+    t.equals(sentCount, 287)
 end)
 
 os.exit(t.summary())

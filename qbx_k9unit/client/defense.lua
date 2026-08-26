@@ -175,6 +175,52 @@
 
 if not Config.Features.HandlerDownDefense then return end
 
+-- ======================================================================
+-- CONFIG-SAFETY GUARD -- promptTtlMs
+--
+-- Every OTHER numeric field in Config.Combat.HandlerDownDefense goes
+-- through server/defense.lua's ResolveConfiguredThresholdMs
+-- (pollIntervalMs, retriggerCooldownMs, attackerReportCooldownMs). This
+-- one did not, because it is genuinely client-only -- server/defense.lua
+-- and this file each document that promptTtlMs is "consumed only here",
+-- which meant each side assumed the other was not responsible for it and
+-- neither validated it.
+--
+-- A non-positive value here is a SILENT, WHOLE-FEATURE failure. Line ~227
+-- sets `expiresAt = GetGameTimer() + promptTtlMs`, so a 0 or negative
+-- makes the prompt already expired the instant it is created:
+-- ClearExpiredPrompt drops it immediately, HasFreshDefensePrompt reads
+-- false forever, and every attempt to respond -- keybind or radial --
+-- fails with "no active alert" for the whole session, with nothing
+-- printed anywhere to explain it.
+--
+-- Zero is a plausible mistake to make rather than a far-fetched one:
+-- this same resource documents 0 as a legitimate "disabled" idiom for a
+-- similarly-shaped sibling field (server/integrations.lua's
+-- minDurationMs), so an operator could reasonably expect it to mean
+-- "no timeout" here. It means the opposite.
+--
+-- Clamped client-side, matching client/agility.lua's vaultCooldownMs
+-- guard exactly rather than the server-only resolver. The `v == v` term
+-- rejects NaN, which compares false against everything including itself.
+-- ======================================================================
+do
+    local defenseCfg = Config.Combat and Config.Combat.HandlerDownDefense
+    if type(defenseCfg) == 'table' then
+        local ttl = defenseCfg.promptTtlMs
+        if not (type(ttl) == 'number' and ttl == ttl and ttl > 0) then
+            print(
+                ('[qbx_k9unit] Config.Combat.HandlerDownDefense.promptTtlMs must be a positive number of ' ..
+                 'milliseconds (found: %s). A non-positive value would silently make every handler-down ' ..
+                 'alert expire the instant it appears, so the K9 could never respond to one. Using the ' ..
+                 'built-in fallback of 10000 instead so this feature keeps working while the config is ' ..
+                 'fixed.'):format(tostring(ttl))
+            )
+            defenseCfg.promptTtlMs = 10000
+        end
+    end
+end
+
 --- Local-only, ephemeral cache of the most recent still-fresh trigger --
 --- @type { handlerNetId: number, suggestedTargetNetId: number?, expiresAt: number }|nil
 local PendingDefensePrompt = nil

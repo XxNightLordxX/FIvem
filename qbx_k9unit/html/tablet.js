@@ -900,6 +900,36 @@
         no_specializations: 'No specializations held.',
         expires_label: 'Expires',
         expired_badge: 'Expired',
+        // PERMISSION-KEY CATALOG (owner-directed "add or remove permissions"
+        // pass, server/permissionkeycatalog.lua) -- see
+        // client/tablet.lua's own TABLET_STRING_KEYS comment: NOT YET in
+        // locales/en.json (report filed with this pass), same disclosed-gap
+        // posture as the tier_label..expired_badge block above.
+        tab_permission_keys: 'Permission Keys',
+        permission_keys_heading: 'Permission Key Catalog',
+        permission_keys_add_label: 'Add Permission Key',
+        permission_key_key_label: 'Key',
+        permission_key_key_placeholder: 'e.g. k9.custom_ability',
+        permission_key_label_label: 'Label',
+        permission_key_description_label: 'Description (optional)',
+        permission_key_description_placeholder: 'What this permission lets someone do',
+        permission_key_save_label: 'Save',
+        permission_key_cancel_label: 'Cancel',
+        permission_key_edit_label: 'Edit',
+        permission_key_delete_label: 'Delete',
+        permission_key_default_badge: 'Default',
+        column_description: 'Description',
+        permission_key_error_denied: 'You are not authorized to manage the permission-key catalog.',
+        permission_key_error_rate_limited: 'Please wait a moment before trying again.',
+        permission_key_error_invalid_key: 'Key must be 2-40 lowercase letters, numbers, underscores and dots (e.g. k9.custom_ability).',
+        permission_key_error_invalid_label: 'Label must be 1-60 characters with no special markup.',
+        permission_key_error_invalid_description: 'Description must be 300 characters or fewer, with no special markup.',
+        permission_key_error_reserved_namespace: 'That key name is reserved for per-feature grants and blocks and cannot be used here.',
+        permission_key_error_busy: 'Another edit to this key is in progress -- try again in a moment.',
+        permission_key_error_too_many_keys: 'The permission-key catalog is full.',
+        permission_key_error_unknown_key: 'That permission key does not exist.',
+        permission_key_error_db_error: 'A database error occurred. Please try again.',
+        permission_key_error_invalid_payload: 'The request was malformed.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -1008,6 +1038,21 @@
         certTierDraft: null, // { key, label, capabilities: {capKey:true}, isNew } -- the add/edit form's own working copy; null = form closed
         certTierFieldError: null, // 'key' | 'label' | 'capabilities' | null -- which of the draft form's own inputs the server's last certTiersUpsert rejected
         certTierActionError: null, // { key, text } -- a delete REFUSAL (tier_in_use/protected_tier) rendered inline on that specific row, not just the generic top-of-panel notice
+
+        // Permission-key catalog editing -- server/permissionkeycatalog.lua
+        // (owner-directed "...even add or remove permissions" pass). Sits
+        // alongside the cert-tier screen above, same "never hardcoded,
+        // never preloaded" posture: `permissionKeys` is null until the
+        // first successful tablet:permKeysList. No ordinal/capabilities
+        // concept exists for a permission key (see that file's own header
+        // "WHY NO ORDINAL"), so this state is deliberately simpler than
+        // certTier* above -- no warning banner, no reorder.
+        permissionKeys: null, // [{ key, label, description, isConfigDefault }, ...], alphabetical (server-sorted)
+        permissionKeysLoading: false,
+        permissionKeysError: null,
+        permissionKeyDraft: null, // { key, label, description, isNew } -- the add/edit form's own working copy; null = form closed
+        permissionKeyFieldError: null, // 'key' | 'label' | 'description' | null -- which of the draft form's own inputs the server's last permKeysUpsert rejected
+        permissionKeyActionError: null, // { key, text } -- a delete REFUSAL (reserved_namespace/unknown_key) rendered inline on that specific row, same shape as certTierActionError
 
         // K9 Supply Shop location management -- server/equipmentshop.lua.
         // Owner's own words: "make the shop a dog ped and i can change the
@@ -1455,6 +1500,8 @@
             panel.appendChild(buildThemeScreen());
         } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
             panel.appendChild(buildCertTiersScreen());
+        } else if (state.screen === 'permission_keys' && state.viewer.isHighCommand) {
+            panel.appendChild(buildPermissionKeysScreen());
         } else if (state.screen === 'shop_locations' && state.viewer.isHighCommand) {
             panel.appendChild(buildShopLocationsScreen());
         } else if (state.screen === 'runtime_control' && state.viewer.isHighCommand) {
@@ -1606,6 +1653,26 @@
                 loadCertTiers();
             });
             tabs.appendChild(certTiersTab);
+
+            // Permission-key catalog editing -- owner-directed "...even add
+            // or remove permissions" pass, server/permissionkeycatalog.lua.
+            // SAME high-command gate as every tab in this block (a UX
+            // convenience only: CanManagePermissionKeys is re-verified
+            // server-side on every one of the three callbacks regardless of
+            // whether this tab was ever shown). Sits immediately alongside
+            // the cert-tier tab above, not in a new unrelated place, per
+            // this pass's own explicit instruction. Fresh entry clears any
+            // leftover draft/refusal, same reset discipline as every other
+            // tab switch on this page.
+            var permissionKeysTab = mkButton(S('tab_permission_keys'), 'k9tablet-tab' + (state.screen === 'permission_keys' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'permission_keys';
+                state.permissionKeyDraft = null;
+                state.permissionKeyFieldError = null;
+                state.permissionKeyActionError = null;
+                render();
+                loadPermissionKeys();
+            });
+            tabs.appendChild(permissionKeysTab);
 
             // K9 Supply Shop location management -- SAME high-command gate
             // (server/equipmentshop.lua's own CanManageShopLocations is the
@@ -2646,6 +2713,150 @@
         row.appendChild(checkbox);
         row.appendChild(mk('span', { text: certTierCapabilityLabel(capabilityKey) }));
         return row;
+    }
+
+    // ---- Permission-key catalog screen (high command only) ----
+    // Owner-directed "...even add or remove permissions" pass,
+    // server/permissionkeycatalog.lua. Sits alongside the cert-tier screen
+    // immediately above -- same structure (table + inline row actions +
+    // add/edit form below), deliberately simpler: no ordinal/move-up-down,
+    // no capabilities checkboxes (a permission key carries neither -- see
+    // that file's own header "WHY NO ORDINAL").
+
+    /**
+     * Renders the LIVE catalogue from state.permissionKeys (populated by
+     * loadPermissionKeys() -- see that function's own comment on why this
+     * is never a hardcoded list: the four admin capability names
+     * (k9.access/k9.certify/k9.audit/k9.givexp) are NOT hardcoded here
+     * either, since high command can rename or retire any of them at
+     * runtime), a per-row Edit/Delete set of controls, and (when a draft is
+     * open) the add/edit form below the table.
+     * server/permissionkeycatalog.lua's own CanManagePermissionKeys is the
+     * real authorization gate, re-checked on every one of the three
+     * callbacks this screen calls -- see THE SECURITY RULE.
+     */
+    function buildPermissionKeysScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('permission_keys_heading') }));
+
+        if (state.permissionKeysLoading && !state.permissionKeys) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.permissionKeysError && !state.permissionKeys) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.permissionKeysError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadPermissionKeys));
+            return wrap;
+        }
+        if (!state.permissionKeys) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildPermissionKeysTable());
+
+        if (state.permissionKeyDraft) {
+            wrap.appendChild(buildPermissionKeyDraftForm());
+        } else {
+            wrap.appendChild(mkButton(S('permission_keys_add_label'), 'k9tablet-btn', openNewPermissionKeyDraft, { disabled: state.pendingAction }));
+        }
+
+        return wrap;
+    }
+
+    function buildPermissionKeysTable() {
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_key'), S('column_label'), S('column_description'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < state.permissionKeys.length; i++) {
+            tbody.appendChild(buildPermissionKeyRow(state.permissionKeys[i]));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /** @param {object} entry */
+    function buildPermissionKeyRow(entry) {
+        var tr = mk('tr');
+        var keyTd = mk('td', { text: entry.key });
+        if (entry.isConfigDefault === true) {
+            keyTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('permission_key_default_badge') + ')' }));
+        }
+        tr.appendChild(keyTd);
+        tr.appendChild(mk('td', { text: entry.label }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof entry.description === 'string' && entry.description.length > 0) ? entry.description : '' }));
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        actionsTd.appendChild(mkButton(S('permission_key_edit_label'), 'k9tablet-btn', function () {
+            openPermissionKeyEditDraft(entry);
+        }, { disabled: state.pendingAction }));
+        actionsTd.appendChild(mkConfirmButton(S('permission_key_delete_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+            deletePermissionKey(entry.key);
+        }, { disabled: state.pendingAction }));
+
+        // A delete REFUSAL (reserved_namespace/unknown_key) renders INLINE
+        // on THIS specific row -- "cannot, and here is why" -- same
+        // convention as certTierActionError above.
+        if (state.permissionKeyActionError && state.permissionKeyActionError.key === entry.key) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.permissionKeyActionError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** Add/edit form -- see openNewPermissionKeyDraft()/
+     * openPermissionKeyEditDraft() for how state.permissionKeyDraft is
+     * populated. `key` is editable only for a BRAND NEW key --
+     * server/permissionkeycatalog.lua's own permKeysUpsert has no "rename"
+     * concept (submitting a DIFFERENT key while editing would create a
+     * second, separate entry, not rename this one), same reasoning as the
+     * cert-tier form's own key input above. */
+    function buildPermissionKeyDraftForm() {
+        var draft = state.permissionKeyDraft;
+        var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
+
+        var keyRow = mk('div', { class: 'k9tablet-theme-field' + (state.permissionKeyFieldError === 'key' ? ' k9tablet-theme-field--invalid' : '') });
+        keyRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('permission_key_key_label') }));
+        var keyInput = mk('input', { class: 'k9tablet-cert-tier-key-input', attrs: { type: 'text', placeholder: S('permission_key_key_placeholder'), maxlength: '40' } });
+        keyInput.value = draft.key;
+        if (draft.isNew) {
+            keyInput.addEventListener('input', function (e) { draft.key = e.target.value; });
+        } else {
+            keyInput.setAttribute('disabled', 'disabled');
+        }
+        keyRow.appendChild(keyInput);
+        wrap.appendChild(keyRow);
+
+        var labelRow = mk('div', { class: 'k9tablet-theme-field' + (state.permissionKeyFieldError === 'label' ? ' k9tablet-theme-field--invalid' : '') });
+        labelRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('permission_key_label_label') }));
+        var labelInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', maxlength: '60' } });
+        labelInput.value = draft.label;
+        labelInput.addEventListener('input', function (e) { draft.label = e.target.value; });
+        labelRow.appendChild(labelInput);
+        wrap.appendChild(labelRow);
+
+        var descriptionRow = mk('div', { class: 'k9tablet-theme-field' + (state.permissionKeyFieldError === 'description' ? ' k9tablet-theme-field--invalid' : '') });
+        descriptionRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('permission_key_description_label') }));
+        var descriptionInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', placeholder: S('permission_key_description_placeholder'), maxlength: '300' } });
+        descriptionInput.value = draft.description || '';
+        descriptionInput.addEventListener('input', function (e) { draft.description = e.target.value; });
+        descriptionRow.appendChild(descriptionInput);
+        wrap.appendChild(descriptionRow);
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('permission_key_save_label'), 'k9tablet-btn', savePermissionKeyDraft, { disabled: state.pendingAction }));
+        actions.appendChild(mkButton(S('permission_key_cancel_label'), 'k9tablet-link-btn', closePermissionKeyDraft));
+        wrap.appendChild(actions);
+
+        return wrap;
     }
 
     // ---- K9 Supply Shop location management screen (high command only) ----
@@ -3847,6 +4058,33 @@
             }
             state.certTiers = Array.isArray(result.tiers) ? result.tiers : [];
             state.certTierCapabilityCatalog = (result.capabilityCatalog && typeof result.capabilityCatalog === 'object') ? result.capabilityCatalog : {};
+            render();
+        });
+    }
+
+    /** Fetched fresh every time the Permission Keys tab is opened (see
+     * buildTabs()) -- NEVER a hardcoded list, same posture as
+     * loadCertTiers() just above: the four admin capability names are
+     * Config.Permissions defaults merged with database overrides (database
+     * wins, per server/permissionkeycatalog.lua's own header), and high
+     * command can add/relabel/retire keys at runtime -- a list captured
+     * once here would already be stale the moment anyone does. High
+     * command only (server/permissionkeycatalog.lua's own
+     * CanManagePermissionKeys re-verifies this on every one of the three
+     * callbacks regardless of whether this ever loads). */
+    function loadPermissionKeys() {
+        state.permissionKeysLoading = true;
+        state.permissionKeysError = null;
+        render();
+
+        fetchNui('tablet:permKeysList', {}).then(function (result) {
+            state.permissionKeysLoading = false;
+            if (!result || result.ok !== true) {
+                state.permissionKeysError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.permissionKeys = Array.isArray(result.keys) ? result.keys : [];
             render();
         });
     }
