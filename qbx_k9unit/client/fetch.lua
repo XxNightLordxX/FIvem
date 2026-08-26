@@ -58,10 +58,7 @@
         ReleaseFetchBall()      -- always available while carrying, no gate
         RequestRecallFetchBall() -- thrower's own early-interrupt
         IsFetchCarryEngaged() -> boolean
-      STALE-NOTE CORRECTION: this comment previously said these four
-      functions were deliberately left unwired from client/radial.lua to
-      avoid a merge conflict with a concurrent pass. That has since landed —
-      client/radial.lua now does call all four (behind its own
+      client/radial.lua now calls all four of these (behind its own
       `type(fn) == 'function'` runtime existence guard, since none of them
       exist when Config.Features.FetchMechanic is false and this whole file
       returns early below). RegisterCommand entries below
@@ -214,13 +211,13 @@ end, false)
 --- exactly (spawnX, spawnY, spawnZ) and apply the given one-shot throw
 --- impulse.
 RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, spawnZ, forceX, forceY, forceZ)
-    -- SOURCE-ORIGIN GUARD (coder-security precedent — see
-    -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup, not
-    -- re-derived here). 65535 is FiveM's documented client-side sentinel
-    -- for "this event genuinely came from the server" (citizenfx/fivem-docs,
-    -- "Secure your events"). Confidence: MEDIUM-HIGH, the official
-    -- documented pattern, not independently verified in-engine this pass.
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup, not re-derived here). 65535 is FiveM's documented
+    -- client-side sentinel for "this event genuinely came from the
+    -- server" (citizenfx/fivem-docs, "Secure your events"). Confidence:
+    -- MEDIUM-HIGH, the official documented pattern, not independently
+    -- verified in-engine.
     if source ~= 65535 then return end
 
     if type(spawnX) ~= 'number' or type(spawnY) ~= 'number' or type(spawnZ) ~= 'number'
@@ -509,19 +506,19 @@ end, false)
 -- running a different supported target script gets both options
 -- translated automatically instead of losing them outright.
 --
--- LIFECYCLE FIX (this pass): pulled into a named function so it can be
--- re-run any time the resource actually backing the 'target' system
--- (re)starts, not just once at this file's own load time. Every supported
--- target script keeps its own addModel/addGlobalPlayer-equivalent
--- registries in plain file-local Lua tables inside its OWN client chunk,
--- cleared only by that resource's own `onClientResourceStop` handler when
--- the CALLING resource (this one) stops — a bare restart of that resource
--- while this resource keeps running reloads that chunk with empty tables
--- and nothing else asks anyone to re-register, silently and permanently
--- losing both options for the rest of this resource's uptime. See the
--- `AddEventHandler` immediately below for the two triggers this now
--- dispatches on, mirroring server/tracking.lua's RegisterScentInventoryHook
--- fix for the identical bug class against ox_inventory.
+-- LIFECYCLE FIX: pulled into a named function so it can be re-run any time
+-- the resource actually backing the 'target' system (re)starts, not just
+-- once at this file's own load time. Every supported target script keeps
+-- its own addModel/addGlobalPlayer-equivalent registries in plain
+-- file-local Lua tables inside its OWN client chunk, cleared only by that
+-- resource's own `onClientResourceStop` handler when the CALLING resource
+-- (this one) stops — a bare restart of that resource while this resource
+-- keeps running reloads that chunk with empty tables and nothing else asks
+-- anyone to re-register, silently and permanently losing both options for
+-- the rest of this resource's uptime. See the `AddEventHandler` immediately
+-- below for the two triggers this now dispatches on, mirroring
+-- server/tracking.lua's RegisterScentInventoryHook fix for the identical
+-- bug class against ox_inventory.
 --
 -- DUPLICATE-VS-REPLACE: every option below always has `name` set, and
 -- every adapter's own registration primitive dedups/replaces by that same
@@ -542,19 +539,18 @@ local function RegisterFetchOxTargetOptions()
     }, {
         {
             name = 'qbx_k9unit:pickupFetchBall',
-            -- ROLE ICON (this pass, "3rd eye" UX coordination -- resource-
-            -- wide settled scheme: fa-dog = K9-role/CanShowK9UI()-gated,
-            -- fa-user-tie = a separate human acting on/for a K9, fa-handshake
-            -- = partnership, fa-id-badge = high command/credentialing).
-            -- This option is OBJECT-scope (AddModel on the ball prop) and
-            -- only ever shown while the local player's own ped IS the K9
-            -- (CanShowK9UI() below), so it gets the same fa-dog every other
-            -- K9-role ox_target option in this resource now uses -- not the
-            -- old fa-baseball, which named the OBJECT rather than the ACTOR
-            -- and was the only ox_target icon in this resource keyed off the
-            -- target's model instead of who can act on it. "Deliver to
-            -- Handler" immediately below is a PLAYERS-scope option owned by
-            -- a different agent's pass -- left untouched here.
+            -- ROLE ICON (resource-wide settled scheme: fa-dog = K9-role/
+            -- CanShowK9UI()-gated, fa-user-tie = a separate human acting
+            -- on/for a K9, fa-handshake = partnership, fa-id-badge = high
+            -- command/credentialing). This option is OBJECT-scope (AddModel
+            -- on the ball prop) and only ever shown while the local
+            -- player's own ped IS the K9 (CanShowK9UI() below), so it gets
+            -- the same fa-dog every other K9-role ox_target option in this
+            -- resource now uses -- not the old fa-baseball, which named the
+            -- OBJECT rather than the ACTOR and was the only ox_target icon
+            -- in this resource keyed off the target's model instead of who
+            -- can act on it. "Deliver to Handler" immediately below is a
+            -- PLAYERS-scope option, handled separately below.
             icon = 'fas fa-dog',
             label = locale('fetch.pickup_target_label'),
             distance = Config.FetchMechanic.pickupInteractDistanceMeters,
@@ -588,18 +584,15 @@ local function RegisterFetchOxTargetOptions()
     -- canInteract predicate already documents in full). Routed through
     -- K9Compat.Get('target') (shared/compat/target.lua), never a direct
     -- `exports.ox_target` call.
-    -- THIRD-EYE CLARITY PASS (this pass, owner-directed, ped-side option
-    -- only -- "Pick Up Ball" above is object/model-based and stays with
-    -- the sibling agent covering that half of this same pass): icon
-    -- changed from fas fa-hand-holding to fas fa-dog, this resource's own
-    -- K9-role icon, since the ACTOR here is always the K9 carrying the
-    -- ball (ActiveFetchCarry can only be set after this same client's own
-    -- "Pick Up Ball" selection, itself gated on CanShowK9UI() above) —
-    -- never the human on the receiving end. Label reworded to plain
-    -- English. canInteract/onSelect are UNCHANGED (a real test in
+    -- THIRD-EYE CLARITY PASS (owner-directed): icon changed from
+    -- fas fa-hand-holding to fas fa-dog, this resource's own K9-role icon,
+    -- since the ACTOR here is always the K9 carrying the ball
+    -- (ActiveFetchCarry can only be set after this same client's own "Pick
+    -- Up Ball" selection, itself gated on CanShowK9UI() above) -- never the
+    -- human on the receiving end. Label reworded to plain English.
+    -- canInteract/onSelect are UNCHANGED (a real test in
     -- tests/clientfetch_spec.lua pins this predicate's exact "no further
-    -- gate beyond ActiveFetchCarry + not-self" shape, and that is out of
-    -- this pass's file ownership to revisit anyway).
+    -- gate beyond ActiveFetchCarry + not-self" shape).
     K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:deliverFetchBall',
@@ -620,11 +613,10 @@ local function RegisterFetchOxTargetOptions()
 end
 
 -- Sole call site for RegisterFetchOxTargetOptions(): this resource's OWN
--- start (the original, only trigger before this pass — `onResourceStart`
--- fires once for a resource's own boot, same idiom this file's other
--- `GetCurrentResourceName()` checks already use, just via the start event
--- instead of the stop event) OR a restart of whatever resource actually
--- backs the 'target' system — same two-branch shape as
+-- start (`onResourceStart` fires once for a resource's own boot, same idiom
+-- this file's other `GetCurrentResourceName()` checks already use, just via
+-- the start event instead of the stop event) OR a restart of whatever
+-- resource actually backs the 'target' system — same two-branch shape as
 -- server/tracking.lua's RegisterScentInventoryHook / server/inventory.lua's
 -- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
 -- against ox_inventory. This file never names a third-party target
@@ -645,13 +637,13 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
--- OWN-DEATH AUTO-DETACH/DROP (task requirement: "if ... the K9 dies ... the
--- cycle must end cleanly"). Lightweight poll, only running at all while this
--- client is actually carrying — mirrors client/propattachment.lua's own
--- identical IsEntityDead(PlayerPedId()) polling pattern for the same class
--- of check, itself modeled on client/vision.lua's/client/screenfx.lua's
--- established convention. Backs off to a coarse idle poll otherwise so this
--- thread costs nothing for the overwhelming majority of a session where
+-- OWN-DEATH AUTO-DETACH/DROP -- "if ... the K9 dies ... the cycle must end
+-- cleanly." Lightweight poll, only running at all while this client is
+-- actually carrying — mirrors client/propattachment.lua's own identical
+-- IsEntityDead(PlayerPedId()) polling pattern for the same class of check,
+-- itself modeled on client/vision.lua's/client/screenfx.lua's established
+-- convention. Backs off to a coarse idle poll otherwise so this thread
+-- costs nothing for the overwhelming majority of a session where
 -- FetchMechanic isn't actively in use — never a tight per-frame loop.
 CreateThread(function()
     while true do
@@ -679,10 +671,10 @@ CreateThread(function()
     end
 end)
 
--- CONFIRM-FAILURE BACKSTOP (task requirement: a rejected throw/drop confirm
--- must never leave its object behind forever). server/fetch.lua's
--- confirmFetchBallThrown and confirmFetchBallDropped handlers both have
--- failure branches (pending-TTL expiry, a stale HasK9Access re-check, an
+-- CONFIRM-FAILURE BACKSTOP: a rejected throw/drop confirm must never leave
+-- its object behind forever. server/fetch.lua's confirmFetchBallThrown and
+-- confirmFetchBallDropped handlers both have failure branches
+-- (pending-TTL expiry, a stale HasK9Access re-check, an
 -- unresolvable/wrong-model entity, or the GLOBAL NETID-UNIQUENESS INVARIANT
 -- collision guard) that silently `return` on rejection — unlike
 -- confirmFetchBallCarried's own sibling failure paths (which at least call
@@ -695,17 +687,17 @@ end)
 -- to ever clean it up.
 --
 -- This thread is a bounded last resort, not a substitute for that missing
--- signal (flagged back to server/fetch.lua's owner) — it never risks
--- deleting a legitimately-confirmed, still-in-play ball: in the SUCCESS
--- case this same netId is always eventually cleared well before this fires,
--- via pickup (carryFetchBall), recall/delivery (removeFetchBall), or the
--- server's own maintenance sweep despawning it at maxBallLifetimeMs — the
--- exact ceiling (plus a jitter margin) this thread itself waits for before
--- ever acting. A single flat 5s poll either way (mirrors
--- client/propattachment.lua's own vest-death-poll thread, whose identical
--- "no branch needed, the idle case is already this cheap" reasoning applies
--- here just as well) — checking two locals costs nothing, and the actual
--- native calls below only ever run in the rare deadline-reached branch.
+-- signal -- it never risks deleting a legitimately-confirmed, still-in-play
+-- ball: in the SUCCESS case this same netId is always eventually cleared
+-- well before this fires, via pickup (carryFetchBall), recall/delivery
+-- (removeFetchBall), or the server's own maintenance sweep despawning it at
+-- maxBallLifetimeMs — the exact ceiling (plus a jitter margin) this thread
+-- itself waits for before ever acting. A single flat 5s poll either way
+-- (mirrors client/propattachment.lua's own vest-death-poll thread, whose
+-- identical "no branch needed, the idle case is already this cheap"
+-- reasoning applies here just as well) — checking two locals costs
+-- nothing, and the actual native calls below only ever run in the rare
+-- deadline-reached branch.
 CreateThread(function()
     while true do
         Wait(5000)

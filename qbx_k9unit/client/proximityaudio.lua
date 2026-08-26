@@ -242,10 +242,31 @@ local FALLBACK_TRIGGER_DISTANCE_METERS = 25.0
 local audioMaxDistance = type(GetK9AudioMaxDistance) == 'function'
     and GetK9AudioMaxDistance()
     or FALLBACK_TRIGGER_DISTANCE_METERS
-local PROXIMITY_TRIGGER_DISTANCE_METERS = math.min(
-    ProximityAudioFXConfig.triggerDistance or FALLBACK_TRIGGER_DISTANCE_METERS,
-    audioMaxDistance
-)
+--
+-- CLAMPED AND WARNED, exactly like scanIntervalMs above, and for a worse
+-- reason. `x or default` is not enough here: a truthy non-number -- a
+-- quoted '25' from a hand-edited config, a boolean, a stray table --
+-- reaches math.min and throws, and this runs at FILE SCOPE. The error
+-- aborts the rest of this file's load, so the discovery thread and the
+-- onResourceStop cleanup handler never register, and the whole ambient
+-- audio feature is silently gone for that player's entire session with
+-- nothing but a raw stack trace to explain it.
+--
+-- A numeric zero or negative is the other half: it does not throw, because
+-- zero is truthy in Lua, but it means no loop ever starts. Both are caught
+-- below rather than only the one that happens to be loud.
+local configuredTriggerDistance = ProximityAudioFXConfig.triggerDistance
+local resolvedTriggerDistance = FALLBACK_TRIGGER_DISTANCE_METERS
+if configuredTriggerDistance ~= nil then
+    if type(configuredTriggerDistance) == 'number'
+        and configuredTriggerDistance == configuredTriggerDistance
+        and configuredTriggerDistance > 0 then
+        resolvedTriggerDistance = configuredTriggerDistance
+    else
+        print(('[qbx_k9unit] ProximityAudioFX: Config.ProximityAudioFX.triggerDistance must be a positive number of meters (got %s) -- falling back to the shipped default of %.1fm. An invalid value here would otherwise abort this file at load, taking the ambient-audio discovery thread and its onResourceStop cleanup with it; a non-positive one would silently stop any loop from ever starting.'):format(tostring(configuredTriggerDistance), FALLBACK_TRIGGER_DISTANCE_METERS))
+    end
+end
+local PROXIMITY_TRIGGER_DISTANCE_METERS = math.min(resolvedTriggerDistance, audioMaxDistance)
 
 -- RAGE-audio-style placeholder sound name, translated by client/audio.lua's
 -- ToAudioFileKey() the exact same way BARK_SOUND_NAME is (client/main.lua)

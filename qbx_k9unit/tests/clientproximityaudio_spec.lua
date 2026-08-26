@@ -163,6 +163,9 @@ local function newProximityAudioFixture(opts)
     if opts.scanIntervalMs ~= nil then
         env.Config.ProximityAudioFX.scanIntervalMs = opts.scanIntervalMs
     end
+    if opts.triggerDistance ~= nil then
+        env.Config.ProximityAudioFX.triggerDistance = opts.triggerDistance
+    end
 
     -- CLAMP-AND-WARN CAPTURE -- proves a bad scanIntervalMs actually warns
     -- (not just "doesn't crash"), same convention as
@@ -263,6 +266,43 @@ t.test('CLAMP AND WARN: scanIntervalMs = 0 no longer removes the throttle -- fal
         if line:find('Config.ProximityAudioFX.scanIntervalMs', 1, true) and line:find('got 0', 1, true) then warned = true end
     end
     t.isTrue(warned, 'must warn loudly, naming both the config path and the bad value -- silent clamping trains operators to never notice their config typo')
+end)
+
+-- ----------------------------------------------------------------------
+-- CLAMP AND WARN: Config.ProximityAudioFX.triggerDistance. The sibling
+-- guard above existed for scanIntervalMs and was never applied here, even
+-- though this one is worse: `triggerDistance or default` is evaluated at
+-- FILE SCOPE and fed straight to math.min, so a truthy non-number -- a
+-- quoted '25' from a hand-edited config, a boolean, a stray table --
+-- throws and aborts the rest of the file's load. The discovery thread and
+-- the onResourceStop cleanup never register, and the whole feature is gone
+-- for that session with only a stack trace to show for it.
+--
+-- These two tests pin both halves: the loud one that used to crash, and
+-- the quiet one where a truthy zero passes through and no loop ever
+-- starts.
+-- ----------------------------------------------------------------------
+
+t.test('CLAMP AND WARN: a non-number triggerDistance no longer aborts the file at load -- it falls back and warns, naming the key and the bad value', function()
+    local f = newProximityAudioFixture({ triggerDistance = '25' })
+    t.isTrue(f.threadCreateCount() > 0, 'FIXED: a truthy non-number reaching math.min at file scope used to throw and take the rest of this file down with it -- the discovery thread proves the file finished loading')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.ProximityAudioFX.triggerDistance', 1, true) and line:find('got 25', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must warn loudly, naming both the config path and the bad value')
+end)
+
+t.test('CLAMP AND WARN: a triggerDistance of 0 falls back rather than silently starting no loop -- zero is truthy in Lua, so `or` never catches it', function()
+    local f = newProximityAudioFixture({ triggerDistance = 0 })
+    t.isTrue(f.threadCreateCount() > 0, 'a zero must not abort the file either')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.ProximityAudioFX.triggerDistance', 1, true) and line:find('got 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a non-positive distance means no ambient loop ever starts -- silent is the wrong failure here')
 end)
 
 t.test('CLAMP AND WARN: a negative scanIntervalMs also falls back to the default and warns', function()
