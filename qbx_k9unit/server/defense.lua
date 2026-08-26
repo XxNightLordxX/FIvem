@@ -326,40 +326,30 @@ local DefenseTriggerCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     Config.Combat.HandlerDownDefense.retriggerCooldownMs, 30000, 'Config.Combat.HandlerDownDefense.retriggerCooldownMs'))
 DefenseTriggerCooldown.RegisterPlayerDropped()
 
--- POLL-INTERVAL VALIDATION (QA follow-up, this pass; UPDATED a later pass,
--- QA sandbox repro -- see cooldowns.lua's header ADDENDUM): the two cooldown
--- thresholds above (attackerReportCooldownMs/retriggerCooldownMs) are each
--- resolved through ResolveConfiguredThresholdMs before ever reaching
--- NewCooldown, so an invalid Config value there now degrades to a loud
--- warning + a safe built-in fallback rather than reaching
--- AssertValidDefaultThreshold's hard error at all in practice -- but
--- neither mechanism has any visibility into pollIntervalMs, since that
--- value never passes through NewCooldown or ResolveConfiguredThresholdMs;
--- it feeds a bare `Wait()` call directly in the maintenance thread below.
--- That makes it the one number in this exact Config block validated by
--- neither backstop, and a different (worse) failure mode than a bad
--- cooldown threshold: `Wait()` throws on a non-number argument, and
--- that throw is NOT inside the `pcall` below (the pcall only wraps
--- TryNotifyPartnerK9, deliberately, so a per-player error there can't kill
--- the shared thread for every OTHER player) -- an uncaught error here kills
--- the THREAD ITSELF, silently disabling HandlerDownDefense for every player
--- for the rest of this resource's uptime, with nothing more than a generic
--- Lua traceback in the console to say why. Same posture as
--- AssertValidDefaultThreshold, applied here to the one Config number that
--- constructor can't reach: a loud, immediate, resource-start error naming
--- the bad value, before the thread is ever created, instead of a silent
--- kill on the very first tick. Captured once into a local (not re-read from
--- Config every loop iteration) so the validated value is exactly what the
--- thread below actually uses.
-local PollIntervalMs = Config.Combat.HandlerDownDefense.pollIntervalMs
-assert(
-    type(PollIntervalMs) == 'number' and PollIntervalMs == PollIntervalMs and PollIntervalMs > 0,
-    ('[qbx_k9unit] server/defense.lua: Config.Combat.HandlerDownDefense.pollIntervalMs must be a positive number ' ..
-     '(got %s). This value feeds a bare Wait() in the maintenance thread below -- 0/negative/nil/NaN there ' ..
-     'either busy-loops or throws and silently kills that thread forever (disabling HandlerDownDefense for every ' ..
-     'player until this resource restarts with a fixed config), rather than merely mistiming the poll.')
-        :format(tostring(PollIntervalMs))
-)
+-- POLL-INTERVAL VALIDATION (QA follow-up, an earlier pass; UPDATED this pass
+-- -- QA sandbox repro, see server/cooldowns.lua's header ADDENDUM): this used
+-- to be its own hard `assert` here, reasoning (correctly) that pollIntervalMs
+-- is the one Config number in this file validated by neither
+-- AssertValidDefaultThreshold nor ResolveConfiguredThresholdMs (it feeds a
+-- bare `Wait()` directly in the maintenance thread below, never NewCooldown),
+-- and that an uncaught throw from inside that Wait() would silently kill the
+-- thread itself. The DIAGNOSIS was right; the REMEDY was the same mistake
+-- cooldowns.lua's header ADDENDUM documents finding in server/combat.lua:
+-- `error()` thrown from THIS FILE's own top-level chunk aborts server/
+-- defense.lua's load from this line onward -- taking the spoofable-override
+-- onResourceStart warning below, IsHandlerDown, TryNotifyPartnerK9, the
+-- maintenance CreateThread itself, the reportHandlerAttacker
+-- RegisterNetEvent, and this file's own playerDropped cleanup down with it,
+-- over one operator typo. Its two sibling cooldowns just above
+-- (AttackerReportCooldown/DefenseTriggerCooldown) were ALREADY migrated to
+-- ResolveConfiguredThresholdMs in that earlier pass -- pollIntervalMs was
+-- missed only because it feeds Wait() instead of NewCooldown, not because
+-- the risk was any different. Same fallback (1000ms) as config.lua's own
+-- shipped default for this field; still captured once into a local (not
+-- re-read from Config every loop iteration) so the thread below always uses
+-- exactly the validated value.
+local PollIntervalMs = ResolveConfiguredThresholdMs(
+    Config.Combat.HandlerDownDefense.pollIntervalMs, 1000, 'Config.Combat.HandlerDownDefense.pollIntervalMs')
 
 -- RED-TEAM FINDING PARITY (QA follow-up): server/combat.lua's own
 -- `onResourceStart` prints a loud warning when `Config.Features.PropDragging`

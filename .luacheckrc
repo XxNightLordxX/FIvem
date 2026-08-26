@@ -204,7 +204,17 @@ read_globals = {
     "GetEntityType", "GetEntityArchetypeName", "GetOffsetFromEntityInWorldCoords",
     "SetEntityCollision", "SetEntityVisible", "FreezeEntityPosition",
     "AttachEntityToEntity", "DetachEntity", "GetGamePool",
-    "GetHashKey", "GetWaterHeightNoWaves",
+    "GetHashKey",
+    -- GetWaterHeightNoWaves: NOT verified to this file's usual standard, and
+    -- recorded as such rather than left looking checked. Its decl page 404s
+    -- (not proof of absence -- many real natives have none), and the fallback
+    -- runtime.fivem.net/doc/natives.json is blocked by this environment's
+    -- egress proxy, so the apiset check could not be completed. It does exist
+    -- (WATER namespace, 0x8EE6B53CE13A9794) but that mirror carries no apiset
+    -- either. Its single call site, client/tracking.lua:418, is client-side,
+    -- and its sibling GetWaterHeight is a ubiquitous client native -- so the
+    -- practical risk is low. Re-check whenever runtime.fivem.net is reachable.
+    "GetWaterHeightNoWaves",
     "NetworkGetEntityFromNetworkId", "NetworkGetNetworkIdFromEntity",
     "NetworkDoesEntityExistWithNetworkId",
     "GetVehicleNumberPlateText", "IsPedInAnyVehicle",

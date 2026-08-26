@@ -776,8 +776,19 @@ RegisterCommand('k9lineuppick', function(source, args)
     -- Deliberately carries `src` (the conductor's own connection id), never
     -- a citizenid: a real listener that wants a durable identity can
     -- resolve one itself while `src` is still valid, exactly like every
-    -- other still-online-only outbound payload in this resource.
-    TriggerEvent('qbx_k9unit:events:scentLineupResolved', src, correct)
+    -- other still-online-only outbound payload in this resource. Fired via
+    -- the shared FireOutboundEvent (server/events.lua), never a raw
+    -- TriggerEvent -- matching all fourteen other `qbx_k9unit:events:*`
+    -- call sites in this resource. This one MUST NOT regress back to a bare
+    -- TriggerEvent: a throwing handler registered by some other resource on
+    -- this event runs synchronously, on this same call stack, and a bare
+    -- TriggerEvent would let that exception unwind straight into the
+    -- CleanupSession call immediately below, aborting it and leaving this
+    -- session stuck in Sessions/ParticipantSession forever -- exactly the
+    -- "unbounded trap" this file's header rules out. FireOutboundEvent
+    -- pcall-wraps the fire and only ever logs, never re-throws, so
+    -- CleanupSession always runs regardless of what any listener does.
+    FireOutboundEvent('qbx_k9unit:events:scentLineupResolved', src, correct)
 
     CleanupSession(src, session)
 end, false)
