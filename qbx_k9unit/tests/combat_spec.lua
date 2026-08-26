@@ -62,9 +62,16 @@
     delay.
 
     WHAT THIS FILE DOES NOT COVER, AND WHY:
-      - client/combat.lua is untested here -- client-only natives, no
-        server-side equivalent to sandbox against, same blanket exclusion
-        DEVELOPER_REFERENCE.md already states for every client/*.lua file.
+      - client/combat.lua is untested HERE -- this file's own scope is
+        server/combat.lua only. STALE NOTE, CORRECTED: this used to cite a
+        "blanket exclusion DEVELOPER_REFERENCE.md already states for every
+        client/*.lua file" as the reason -- that citation is stale, per
+        tests/medkit_spec.lua's identical correction for itself.
+        DEVELOPER_REFERENCE.md's own Part B, Item 3 records that blanket
+        exclusion as SUPERSEDED once tests/main_spec.lua proved the same
+        sandbox pattern generalizes to client/*.lua files.
+        client/combat.lua is covered directly by
+        tests/clientcombat_spec.lua -- not a permanent gap.
       - NonComplianceDetection's own movement-sampling HEURISTICS (bite-hold
         idle/speed tolerance, takedown net displacement, drag gap) are left
         disabled (Config.Combat.NonComplianceDetection.enabled = false, the

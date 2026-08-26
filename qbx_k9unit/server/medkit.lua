@@ -374,6 +374,31 @@ for _, jobName in ipairs(Config.K9Medkit.emsJobs or {}) do
     EmsJobSet[jobName] = true
 end
 
+-- QUALITY FIX (this pass): Config.K9Medkit.cooldownMs used to be read raw,
+-- directly, at every call site below (RunUseK9MedkitMutation's
+-- `effectiveCooldownMs`, and this sweep's own `staleAfterMs`) — the ONE
+-- cooldown-backing config value in this file with no validation at all,
+-- unlike every sibling file's identical-shaped config read
+-- (server/kennel.lua's DeployCooldown, server/fetch.lua's ThrowCooldown/
+-- PickupCooldown, server/propattachment.lua's ToggleCooldown's own
+-- onResourceStart assert, server/partnership.lua's PartnerRequestCooldown,
+-- all wrapped through this exact ResolveConfiguredThresholdMs helper or an
+-- equivalent hard assert). server/cooldowns.lua's own IsOnCooldown treats a
+-- non-positive threshold as PERMANENTLY on cooldown, never "no cooldown" —
+-- an operator typo'ing Config.K9Medkit.cooldownMs to 0 (meaning "no
+-- throttle") would instead have every SECOND medkit use against the SAME K9
+-- silently rejected forever with reason 'on_cooldown' (the FIRST use per K9
+-- always succeeds regardless, since `IsOnCooldown` returns `false` for a key
+-- that has never been `Touch`ed at all — see that function's own doc
+-- comment) — a real, live footgun this file shared with every other
+-- cooldown consumer before each of them adopted this same fix. Resolved
+-- ONCE here, at file-load time, and reused by every call site below instead
+-- of re-reading Config.K9Medkit.cooldownMs raw. Fallback matches config.lua's
+-- own shipped default (60000ms).
+local MEDKIT_COOLDOWN_FALLBACK_MS = 60000
+local MedkitBaseCooldownMs = ResolveConfiguredThresholdMs(
+    Config.K9Medkit.cooldownMs, MEDKIT_COOLDOWN_FALLBACK_MS, 'Config.K9Medkit.cooldownMs')
+
 -- Per-target (K9 citizenid) cooldown backing Config.K9Medkit.cooldownMs —
 -- keyed on the TARGET'S resolved, stable citizenid (never the raw,
 -- recyclable/spoofable-adjacent client-supplied targetServerId), same
@@ -387,7 +412,7 @@ local MedkitCooldown = NewCooldown()
 
 local MEDKIT_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 MedkitCooldown.StartSweep(MEDKIT_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
-    local staleAfterMs = Config.K9Medkit.cooldownMs * 2
+    local staleAfterMs = MedkitBaseCooldownMs * 2
     return (now - loggedAt) > staleAfterMs
 end)
 

@@ -979,6 +979,7 @@
         permission_key_edit_label: 'Edit',
         permission_key_delete_label: 'Delete',
         permission_key_default_badge: 'Default',
+        permission_key_retired_badge: 'Retired',
         column_description: 'Description',
         permission_key_error_denied: 'You are not authorized to manage the permission-key catalog.',
         permission_key_error_rate_limited: 'Please wait a moment before trying again.',
@@ -1227,6 +1228,24 @@
         xpTierDraft: null, // { ordinal, xp: string, label: string, speedMultiplier: string, scentRangeMultiplier: string, medkitCooldownMultiplier: string, badge: string, xpLocked } -- the ONE open rank's working copy; null = no editor open. `xp` is never user-editable when xpLocked (rank 1) -- always submitted as 0 regardless of this field's own value.
         xpTierFieldError: null, // 'xp' | 'label' | 'speedMultiplier' | 'scentRangeMultiplier' | 'medkitCooldownMultiplier' | 'badge' | null -- which of the open draft's own inputs the last xpTiersUpsert rejected (client-side pre-check OR the server's own refusal, same field either way)
         xpTierActionError: null, // { ordinal, text } -- an upsert REFUSAL rendered inline on that specific rank's own row, same "cannot, and here is why" convention as certTierActionError/permissionKeyActionError/shopLocationActionError/runtimeTunableFieldError above
+
+        // K9 Supply Shop ITEM CATALOG editing -- server/equipmentshop.lua's
+        // own "EQUIPMENT SHOP ITEM CATALOG" section. Sits alongside the
+        // Shop Locations tab above -- same "K9 Supply Shop" domain, split
+        // into two tabs because WHICH items are sold/at what price/order/
+        // purchase-requirement is a SEPARATE server-side authorization key
+        // ('k9.equipmentshopitems') from WHERE a shop ped stands
+        // ('k9.equipmentshoplocations') -- see that file's own
+        // CanManageShopItems/CanManageShopLocations doc comments. Same
+        // "never hardcoded, never preloaded" posture as certTiers/
+        // shopLocations/xpTiers above: `shopItems` is null until the first
+        // successful tablet:equipmentShopItemsList.
+        shopItems: null, // [{ key, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization }, ...], already sortOrder-ascending, straight from server/equipmentshop.lua's own ListEquipmentShopItems. A TOMBSTONED item never appears in this array at all (the server's own catalog merge excludes it entirely -- see that file's own "TOMBSTONE, NOT HARD-DELETE" section) -- this screen never has to render a "retired" row for one, only ever fewer rows after a successful delete.
+        shopItemsLoading: false,
+        shopItemsError: null,
+        shopItemDraft: null, // { key, price: string, label: string, currency: string, requiredTierKey: string, requiredSpecialization: string, isNew } -- the add/edit form's own working copy; requiredTierKey/requiredSpecialization are '' for "no requirement" (the draft form's own <select> "None" option), never null, so a plain `.value` read always works; null = form closed
+        shopItemFieldError: null, // 'key' | 'price' | 'label' | 'currency' | 'requiredTierKey' | 'requiredSpecialization' | null -- which of the draft form's own inputs the server's last equipmentShopItemsUpsert rejected
+        shopItemActionError: null, // { key, text } -- a Delete/Reorder refusal rendered inline on that specific row, same convention as certTierActionError above
 
         // K9 Audit Trail viewer -- server/admin.lua's five tabletAudit*
         // callbacks (this file's own NUI CONTRACT note on
@@ -1698,6 +1717,8 @@
             panel.appendChild(buildPermissionKeysScreen());
         } else if (state.screen === 'shop_locations' && state.viewer.isHighCommand) {
             panel.appendChild(buildShopLocationsScreen());
+        } else if (state.screen === 'shop_items' && state.viewer.isHighCommand) {
+            panel.appendChild(buildShopItemsScreen());
         } else if (state.screen === 'runtime_control' && state.viewer.isHighCommand) {
             panel.appendChild(buildRuntimeControlScreen());
         } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand) {
@@ -1884,6 +1905,33 @@
                 loadShopLocations();
             });
             tabs.appendChild(shopLocationsTab);
+
+            // K9 Supply Shop ITEM CATALOG editing -- SAME high-command gate
+            // (server/equipmentshop.lua's own CanManageShopItems is the
+            // real, re-verified-per-call gate; this tab hides the screen
+            // from everyone else as a convenience only). Sits alongside
+            // the Shop Locations tab immediately above -- same "K9 Supply
+            // Shop" domain, split into two tabs because WHICH items are
+            // sold (this tab) vs. WHERE the shop ped stands (the tab
+            // above) are two independent server-side authorization keys.
+            // Fresh entry clears any leftover draft/refusal, same reset
+            // discipline as every other tab switch on this page. Also
+            // opportunistically loads the certification-tier catalog
+            // (needed for this screen's own "Required Tier" picker) --
+            // SAME best-effort posture as openPerson()'s own
+            // loadCertTiers() call: a caller who cannot list tiers simply
+            // sees the raw tier key as plain text instead of a labelled
+            // dropdown option, never a broken control.
+            var shopItemsTab = mkButton(S('tab_shop_items'), 'k9tablet-tab' + (state.screen === 'shop_items' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'shop_items';
+                state.shopItemDraft = null;
+                state.shopItemFieldError = null;
+                state.shopItemActionError = null;
+                render();
+                loadEquipmentShopItems();
+                loadCertTiers();
+            });
+            tabs.appendChild(shopItemsTab);
 
             // Runtime feature control + tuning -- SAME high-command gate
             // (server/runtimecontrol.lua's own CanManageRuntimeControl is
@@ -4390,6 +4438,19 @@
         loadPersonSummary(citizenid);
         if (state.viewer && state.viewer.isHighCommand) {
             loadPersonFeatures(citizenid);
+            // Opportunistic, best-effort: populates state.permissionKeys
+            // for buildCapabilityList()'s own merged rendering (the
+            // Permission Keys tab shares this exact same state -- see
+            // that tab's loadPermissionKeys() doc comment). Gated on
+            // isHighCommand, unlike loadCertTiers() just below, because
+            // ONLY a high-command viewer ever reaches buildCapabilityList
+            // at all (see buildPersonScreen()) -- a non-high-command
+            // caller has nothing here to populate. A failed/denied fetch
+            // leaves state.permissionKeys exactly as it was (usually
+            // null); resolveCapabilityRows() falls back to rendering just
+            // the four shipped capabilities in that case, never an empty
+            // panel.
+            loadPermissionKeys();
         }
         // Opportunistic, best-effort: populates state.certTiers for this
         // screen's tier-assignment picker (buildCertificationDetail).

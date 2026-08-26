@@ -26,10 +26,16 @@
     real production code running for real.
 
     WHAT THIS FILE DOES NOT COVER, AND WHY:
-      - client/defense.lua is untested here (out of scope for this file --
-        client-only natives, no server-side equivalent to sandbox against;
-        same blanket exclusion DEVELOPER_REFERENCE.md already states for every
-        client/*.lua file).
+      - client/defense.lua is untested HERE (out of scope for this file --
+        this file's own scope is server/defense.lua only). STALE NOTE,
+        CORRECTED: this used to cite a "blanket exclusion DEVELOPER_REFERENCE.md
+        already states for every client/*.lua file" as the reason -- that
+        citation is stale, per tests/medkit_spec.lua's identical correction
+        for itself. DEVELOPER_REFERENCE.md's own Part B, Item 3 records that
+        blanket exclusion as SUPERSEDED once tests/main_spec.lua proved the
+        same sandbox pattern generalizes to client/*.lua files.
+        client/defense.lua is covered directly by
+        tests/clientdefense_spec.lua -- not a permanent gap.
       - server/combat.lua's requestBiteHold/requestTakedown validation path
         that a real handlerDownDefenseTrigger notification eventually feeds
         into (via client/defense.lua, per this file's own header REALITY-

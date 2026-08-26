@@ -11,7 +11,8 @@
     STYLE: follows tests/clientcombat_spec.lua/tests/clientmovement_spec.lua
     -- fresh sandbox per test, a local fixture Config (never the real
     config.lua, so this spec keeps passing regardless of how config.lua's
-    other 40 feature flags are set on any given day), K9Compat + a real
+    other Config.Features flags are set on any given day, whatever their
+    current count is), K9Compat + a real
     ox_target adapter loaded exactly the way
     tests/vehiclecombatguard_spec.lua already established for a client file
     that routes its ox_target registration through

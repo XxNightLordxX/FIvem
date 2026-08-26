@@ -554,7 +554,8 @@
         "xp_tier_error_invalid_badge": "Enter a valid badge (up to 30 characters, no special symbols) or leave it blank.",
         "xp_tier_error_invalid_order": "That XP threshold would put this rank out of order with the rank above or below it.",
         "xp_tier_error_db_error": "The rank could not be saved due to a database error. Try again.",
-        "xp_tier_error_invalid_payload": "That request was malformed. Try again."
+        "xp_tier_error_invalid_payload": "That request was malformed. Try again.",
+        "permission_key_retired_badge": "Retired"
     },
     "inventory": {
         "open_gear_target_label": "Open K9 Gear",

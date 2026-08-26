@@ -62,8 +62,9 @@
     overridable to `false` per-test via `newMovementFixture({ agilityBasicJump
     = false, ... })`, used only by PRIORITY #4 below. This spec never loads
     the real config.lua and asserts nothing about its shipped values, so it
-    keeps passing regardless of which way config.lua's 40 feature flags are
-    set on any given day. Every OTHER Config field this file reads
+    keeps passing regardless of which way config.lua's Config.Features
+    flags are set on any given day, whatever their current count is. Every
+    OTHER Config field this file reads
     (Config.LeashMaxDistance, Config.CertifyProximityMeters,
     Config.DoorInteraction.*) is read ONLY inside the three ox_target
     registration functions, which this spec never invokes (see "WHAT THIS

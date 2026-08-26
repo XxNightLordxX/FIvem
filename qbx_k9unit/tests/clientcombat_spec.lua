@@ -56,8 +56,8 @@
     (Features.BiteAndHold/NonLethalTakedown/PropDragging, plus the handful
     of Config.Combat.* sub-fields this file actually reads), never the real
     config.lua. This spec keeps passing regardless of which way config.lua's
-    40 feature flags are set on any given day, and regardless of the exact
-    numeric values shipped there.
+    Config.Features flags are set on any given day (whatever their current
+    count is), and regardless of the exact numeric values shipped there.
 
     THE VEHICLE-TUCK MUTUAL GUARD (IsBlockedByVehicleTuck / IsInK9Vehicle) --
     landed in client/combat.lua WHILE this spec was being written (a

@@ -416,10 +416,17 @@
         second, additive listener, not a replacement for that one.
 
     LOCALIZATION: `strings` ships the FULL, real, locale()-resolved set --
-    all 117 of html/tablet.js's own DEFAULT_STRINGS keys, one-for-one,
-    built by BuildTabletStrings() below from locales/en.json's `tablet`
-    group (keyed identically to DEFAULT_STRINGS, no `tablet.` prefix
-    inside that group). DEFAULT_STRINGS itself is KEPT, unchanged, in
+    EVERY key currently in html/tablet.js's own DEFAULT_STRINGS, one-for-
+    one (deliberately not stated as a literal count here -- that number
+    grows every time either file gains a string, and a hardcoded count in
+    a comment is just a future lie waiting to happen; see
+    tests/tabletlocalization_spec.lua's own "WHY THERE IS NO HARDCODED KEY
+    COUNT HERE ANY MORE" for the identical reasoning applied to that
+    spec's own assertions, which are what actually enforces this 1:1
+    match -- not this comment), built by BuildTabletStrings() below from
+    locales/en.json's `tablet` group (keyed identically to DEFAULT_STRINGS,
+    no `tablet.` prefix inside that group). DEFAULT_STRINGS itself is KEPT,
+    unchanged, in
     html/tablet.js -- it remains the resilience net for a key this payload
     ever fails to resolve (a misconfigured/hand-edited locale file, or a
     future key added to one side and not the other), never removed just
@@ -583,6 +590,7 @@ local TABLET_STRING_KEYS = {
     'permission_key_description_placeholder', 'permission_key_save_label',
     'permission_key_cancel_label', 'permission_key_edit_label',
     'permission_key_delete_label', 'permission_key_default_badge',
+    'permission_key_retired_badge',
     'column_description', 'permission_key_error_denied',
     'permission_key_error_rate_limited', 'permission_key_error_invalid_key',
     'permission_key_error_invalid_label', 'permission_key_error_invalid_description',

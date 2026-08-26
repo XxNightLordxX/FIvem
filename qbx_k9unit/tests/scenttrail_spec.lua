@@ -1096,6 +1096,46 @@ t.test('CLAMP AND WARN: a VALID, non-default pollIntervalMs is still used as-is,
     end
 end)
 
+t.test('CLAMP AND WARN: maxRadius = 0 no longer divide-by-zeroes the distance curve into NaN -- falls back to the shipped 30.0m default and warns loudly, naming the exact key', function()
+    local f = newClientFixture({ maxRadius = 0 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 30.0, found = false })
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 2000, 'FIXED: must resolve to a real, finite interval (the default curve\'s own max), never NaN')
+    t.isTrue(f.waitLog[1] == f.waitLog[1], 'sanity: NaN ~= NaN in IEEE 754 -- this assertion alone would already catch a NaN leaking through')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.ScentTrailHunt.maxRadius', 1, true) and line:find('got 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must warn loudly, naming both the config path and the bad value')
+end)
+
+t.test('CLAMP AND WARN: a negative maxRadius also falls back to the default and warns', function()
+    local f = newClientFixture({ maxRadius = -10.0 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 30.0, found = false })
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 2000)
+end)
+
+t.test('CLAMP AND WARN: a VALID, non-default maxRadius is still used as-is, not silently replaced by the fallback', function()
+    local f = newClientFixture({ maxRadius = 10.0 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 10.0, found = false }) -- exactly at the configured (non-default) radius
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 2000, 'at/beyond the real, configured (non-default) maxRadius the pulse must still sit at PULSE_MAX_INTERVAL_MS')
+    for _, line in ipairs(f.printLog) do
+        t.isNil(line:find('maxRadius', 1, true), 'a valid configured value must pass through silently')
+    end
+end)
+
 t.test('pulse pacing: silently no-ops (never errors) when PlayK9Sound does not exist -- BasicBarkSounds off, same as production', function()
     local f = newClientFixture({ basicBarkSounds = false })
     f.queueCallbackResponse({ started = true })

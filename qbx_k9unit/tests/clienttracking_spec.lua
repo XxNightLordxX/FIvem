@@ -290,8 +290,11 @@ local function newTrackingFixture(opts)
 
     -- Explicit per this task's own instruction: every flag this file reads
     -- is set here, per-fixture, never left to whatever config.lua ships
-    -- with (all 40 feature flags are true in config.lua as of this pass --
-    -- these tests must keep passing however that shipped default moves).
+    -- with (config.lua's Config.Features table currently defaults nearly
+    -- every flag to true, with rare individual exceptions -- these tests
+    -- must keep passing however that shipped default moves, and this
+    -- comment deliberately does not cite the current flag count, which
+    -- changes as features are added).
     env.Config.Features.WaterTrackingDecay = opts.waterTrackingDecay or false
     env.Config.Features.XPProgression = opts.xpProgression or false
     env.Config.Features.GunpowderSniffing = opts.gunpowderSniffing or false
