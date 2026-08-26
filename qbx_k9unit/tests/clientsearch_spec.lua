@@ -76,6 +76,22 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 local locale = Sandbox.locale
 
 -- ----------------------------------------------------------------------
+-- GetHashKey stand-in -- same deterministic, non-native formula
+-- clientmovement_spec.lua already uses for the identical reason: this
+-- pass's own K9_SEARCH_SCENARIO_BY_MODEL_HASH table (client/search.lua) is
+-- built from real GetHashKey calls at FILE-LOAD time, so this spec needs
+-- SOME stand-in for the file to load at all, even though most tests below
+-- never assert on that table's contents directly.
+-- ----------------------------------------------------------------------
+local function GetHashKey(name)
+    local hash = 0
+    for i = 1, #name do
+        hash = (hash * 31 + name:byte(i)) % 2147483647
+    end
+    return hash
+end
+
+-- ----------------------------------------------------------------------
 -- Sandbox setup
 -- ----------------------------------------------------------------------
 
@@ -215,6 +231,21 @@ local function newSearchFixture(opts)
         playSoundOnNetworkEntityCalls[#playSoundOnNetworkEntityCalls + 1] = { netId = netId, soundName = soundName }
     end
 
+    -- SEARCH SCENARIO stand-ins (this pass) -- see client/search.lua's own
+    -- "SEARCH SCENARIO" section. `myPedHandle` defaults to a fixed handle
+    -- with NO entry in `entityModels`, so ResolveSearchScenario() falls
+    -- through to K9_SEARCH_DEFAULT_SCENARIO by default -- exactly what
+    -- most tests below want without having to configure a model per test.
+    local myPedHandle = 1
+    local entityModels = {}
+    local function PlayerPedId() return myPedHandle end
+    local function GetEntityModel(entity) return entityModels[entity] end
+
+    local clearPedTasksImmediatelyCalls = {}
+    local function ClearPedTasksImmediately(ped)
+        clearPedTasksImmediatelyCalls[#clearPedTasksImmediatelyCalls + 1] = ped
+    end
+
     local overrides = {
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
@@ -230,6 +261,10 @@ local function newSearchFixture(opts)
         PlaySoundOnNetworkEntity = PlaySoundOnNetworkEntity,
         IsDuplicityVersion = IsDuplicityVersion,
         GetResourceState = GetResourceState,
+        GetHashKey = GetHashKey,
+        PlayerPedId = PlayerPedId,
+        GetEntityModel = GetEntityModel,
+        ClearPedTasksImmediately = ClearPedTasksImmediately,
         -- TriggerServerEvent deliberately NOT stubbed -- see this file's
         -- own header on why an unstubbed call failing loudly is the
         -- stronger check for "this file sends no server events beyond the
@@ -282,6 +317,19 @@ local function newSearchFixture(opts)
 
         setPlayerIndexForPed = function(entity, idx) playerIndexByPed[entity] = idx end,
         setMyPlayerId = function(v) myPlayerId = v end,
+
+        -- SEARCH SCENARIO / resource-stop cleanup stand-ins (this pass).
+        setMyPedHandle = function(v) myPedHandle = v end,
+        setEntityModel = function(entity, model) entityModels[entity] = model end,
+        clearPedTasksImmediatelyCalls = clearPedTasksImmediatelyCalls,
+        --- Fires every captured 'onResourceStop' handler (there is exactly
+        --- one, registered by this pass's own RESOURCE-STOP CLEANUP block) --
+        --- mirrors fireResourceStart below, using the SAME otherEventHandlers
+        --- capture this fixture's own AddEventHandler already routes any
+        --- non-'onResourceStart' event name into.
+        fireResourceStop = function(resourceName)
+            for _, fn in ipairs(otherEventHandlers['onResourceStop'] or {}) do fn(resourceName) end
+        end,
 
         --- The single "Search Vehicle" ox_target option definition, as
         --- registered by the most recent onResourceStart trigger.
@@ -425,6 +473,119 @@ t.test('onSelect: player cancelling/moving away mid-sniff (progressBar returns f
     f.queueCallbackResponse({ ok = true, contrabandFound = false })
     f.vehicleOption().onSelect({ entity = 500 })
     t.equals(f.callbackCallCount(), 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- SEARCH SCENARIO (this pass, coder-frontend) -- the header used to claim
+-- "plays a sniff animation" while PerformSearch called nothing but
+-- lib.progressBar. Pins that the progress bar call now really does carry
+-- an `anim.scenario`, and that it's resolved fresh from the CURRENT ped
+-- model each call rather than cached once. See client/search.lua's own
+-- "SEARCH SCENARIO" section for the full verification writeup (what was
+-- tried, and why WORLD_DOG_SITTING_* was reused rather than a fabricated
+-- name).
+-- ----------------------------------------------------------------------
+
+t.test('SEARCH SCENARIO: the progress bar now carries a real anim.scenario, not the bare shell it used to (this is the bug this pass fixes -- the header claimed an animation played when nothing did)', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.queueProgressBarResult(true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.equals(#f.progressBarCalls, 1)
+    local def = f.progressBarCalls[1]
+    t.isTrue(type(def.anim) == 'table', 'lib.progressBar must be called with a real anim table, not nothing at all')
+    t.isTrue(type(def.anim.scenario) == 'string' and #def.anim.scenario > 0, 'anim.scenario must be a real, non-empty scenario name')
+end)
+
+t.test('SEARCH SCENARIO: an unmapped/default ped model falls back to K9_SEARCH_DEFAULT_SCENARIO (WORLD_DOG_SITTING_SHEPHERD), never nil and never an empty string', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.queueProgressBarResult(true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+    -- setMyPedHandle/setEntityModel deliberately NOT called -- this fixture's
+    -- own default (myPedHandle = 1, no entry in entityModels) is exactly the
+    -- "unmapped model" case.
+
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.equals(f.progressBarCalls[1].anim.scenario, 'WORLD_DOG_SITTING_SHEPHERD')
+end)
+
+t.test('SEARCH SCENARIO: resolved fresh from the CURRENT ped model on every call, not cached from the first search', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+
+    f.setMyPedHandle(77)
+    f.setEntityModel(77, GetHashKey('a_c_rottweiler'))
+    f.queueProgressBarResult(true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+    f.vehicleOption().onSelect({ entity = 500 })
+    t.equals(f.progressBarCalls[1].anim.scenario, 'WORLD_DOG_SITTING_ROTTWEILER')
+
+    -- A breed swap between searches (appearance change) -- the SECOND
+    -- search must reflect the NEW model, not the first search's cached
+    -- scenario name.
+    f.setMyPedHandle(88)
+    f.setEntityModel(88, GetHashKey('a_c_husky'))
+    f.queueProgressBarResult(true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+    f.vehicleOption().onSelect({ entity = 500 })
+    t.equals(f.progressBarCalls[2].anim.scenario, 'WORLD_DOG_SITTING_RETRIEVER')
+end)
+
+-- ----------------------------------------------------------------------
+-- RESOURCE-STOP CLEANUP (this pass) -- the one exit path lib.progressBar's
+-- own anim.scenario cleanup cannot cover on its own (see client/search.lua's
+-- own RESOURCE-STOP CLEANUP comment for the full "why" -- ox_lib runs
+-- INSIDE this resource via shared_scripts, so a stop of this resource kills
+-- that coroutine before it reaches its own post-loop cleanup native call).
+-- ----------------------------------------------------------------------
+
+t.test('RESOURCE-STOP CLEANUP: stopping THIS resource mid-search clears the ped\'s scenario task immediately', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.setMyPedHandle(42)
+    -- Reentrant hook fires from INSIDE the (still-pending) progressBar call
+    -- -- exactly "the resource stops while the sniff animation is still
+    -- playing", the scenario this cleanup exists for.
+    f.setProgressBarReentrant(function()
+        f.fireResourceStop('qbx_k9unit')
+    end)
+    f.queueProgressBarResult(true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.equals(#f.clearPedTasksImmediatelyCalls, 1, 'a resource stop while searchInProgress must clear the CURRENT ped\'s scenario task exactly once')
+    t.equals(f.clearPedTasksImmediatelyCalls[1], 42, 'must clear the CURRENT PlayerPedId(), not a stale/hardcoded handle')
+end)
+
+t.test('RESOURCE-STOP CLEANUP: stopping THIS resource while NO search is running is a clean no-op', function()
+    local f = newSearchFixture()
+    f.fireResourceStop('qbx_k9unit')
+    t.equals(#f.clearPedTasksImmediatelyCalls, 0, 'must never touch ped tasks outside an active search')
+end)
+
+t.test('RESOURCE-STOP CLEANUP: an UNRELATED resource stopping mid-search must not trigger this cleanup at all', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.setProgressBarReentrant(function()
+        f.fireResourceStop('some_other_resource')
+    end)
+    f.queueProgressBarResult(true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.equals(#f.clearPedTasksImmediatelyCalls, 0, 'only THIS resource\'s own stop may trigger this cleanup')
 end)
 
 -- ----------------------------------------------------------------------

@@ -2,14 +2,22 @@
     qbx_k9unit/server/wellbeing.lua
 
     Phase 4 implementation. Owns Config.Features.FatigueSystem / MoodSystem /
-    FearStressSystem / DistractionSystem / InjuryLimping (DEVELOPER_REFERENCE.md
-    §13.0 Decision 1, §13.2, §13.4.3) — ONE shared per-citizenid stat store,
-    ONE shared Config.Wellbeing.tickIntervalMs decay/regen tick, each of the
-    five Config.Features flags independently gating only its OWN stat's tick
+    FearStressSystem / DistractionSystem / InjuryLimping / HungerThirstSystem
+    (DEVELOPER_REFERENCE.md §13.0 Decision 1, §13.2, §13.4.3 — HungerThirstSystem
+    added this pass, coder-backend, as a SIXTH sibling stat pair; see this
+    header's own "HUNGER/THIRST" section further down for its full design)
+    — ONE shared per-citizenid stat store, ONE shared
+    Config.Wellbeing.tickIntervalMs decay/regen tick, each of the six
+    Config.Features flags independently gating only its OWN stat's tick
     logic / gameplay-facing effects, exactly mirroring server/tracking.lua's
     existing Scent/Blood/Gunpowder precedent (three independently-toggleable
-    flags, one shared file pair, one shared prune loop) rather than five
-    near-duplicate files.
+    flags, one shared file pair, one shared prune loop) rather than six
+    near-duplicate files. Every "five flags" reference further down this
+    header predates HungerThirstSystem and describes THOSE five accurately
+    for what was true when written; not exhaustively rewritten to "six"
+    throughout, since most of that prose narrates a specific historical
+    fix (a security finding, a regression, a softlock) whose own five-flag
+    scope was, and remains, exactly correct as stated.
 
     "READ AT THE POINT OF ACTIVATION" DISCIPLINE (DEVELOPER_REFERENCE.md §3): every branch
     below is gated on its OWN Config.Features flag, not just declared —
@@ -211,17 +219,34 @@
        this file's OWN `RecentGunfire` log (only if FearStressSystem is
        enabled), subject to this file's OWN ingest cooldown (reuses
        Config.Tracking.Gunpowder.relayCooldownMs).
+    8. 'qbx_k9unit:server:feedK9Hunger' () [THIS FILE, this pass] Self-only,
+       no target (mirrors calmDownK9 above). Re-validates
+       Config.Features.HungerThirstSystem, the caller's own K9 model/access,
+       Config.Wellbeing.Hunger.feedItemName possession, and
+       HungerFeedCooldown (per-citizenid).
+    9. 'qbx_k9unit:server:giveK9Water' () [THIS FILE, this pass] Same shape
+       as feedK9Hunger, for Thirst — Config.Wellbeing.Thirst.drinkItemName,
+       ThirstReliefCooldown (per-citizenid, SHARED with drinkFromBowl below).
+    10. 'qbx_k9unit:server:drinkFromBowl' (bowlNetId: number) [THIS FILE,
+       this pass] Self-only. `bowlNetId` is the world bowl OBJECT's own
+       network id (client/wellbeing.lua's ox_target `data.entity`, converted
+       client-side via NetworkGetNetworkIdFromEntity) — re-resolved
+       server-side via server/entities.lua's ResolveNetworkEntity
+       (expectedEntityType = 3), re-checked against
+       Config.Wellbeing.Thirst.bowlSources' own model-hash set, and
+       re-checked for live proximity to the caller's own ped — never a
+       client-claimed "I am near a bowl." No item is consumed.
 
     Client events (RegisterNetEvent, server->client):
-    8. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) [server->client,
+    11. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) [server->client,
        requester only, client/wellbeing.lua] — one combined push per tick
-       carrying all five wellbeing values together (mirrors
+       carrying all six wellbeing values together (mirrors
        DEVELOPER_REFERENCE.md#hud-bridge's own "one combined message
        beats a split one" reasoning, DEVELOPER_REFERENCE.md §13.4.3.1).
        UPDATED (LIVE FEATURE FLAG PUSH, this pass): `stats.featureFlags` is
        now also included (see `SnapshotOf`'s own header comment above for
        the full "why piggyback here, not a new event" writeup) — the LIVE,
-       fresh-read state of all five Config.Features flags this file owns,
+       fresh-read state of all six Config.Features flags this file owns,
        so client/wellbeing.lua's move-rate composer and Injury sprint/jump
        block can react to a runtime tablet toggle within one tick instead of
        only ever seeing the value this client's OWN copy of config.lua
@@ -556,10 +581,102 @@
        on a LIST rather than a single critical dependency, in a file this
        pass does not own. Left to whoever next touches server/search.lua.
     ======================================================================
+
+    ======================================================================
+    HUNGER/THIRST (this pass, coder-backend) -- Config.Features.HungerThirstSystem.
+    A SIXTH sibling stat pair added to the SAME shared file/tick/store this
+    header already establishes -- not a parallel subsystem. Full reasoning
+    (rates, consequences, persistence, anti-farm) is in this task's own
+    hand-off report, not repeated in full here; this is the short version
+    for anyone reading only this file.
+
+    CONSEQUENCE, DELIBERATELY MILD: both stats feed a single MILD move-rate
+    multiplier each (Config.Wellbeing.Hunger/Thirst.speedPenaltyMultiplier,
+    via K9MoveRateModifiers.hunger/.thirst -- client/movement.lua's composer
+    is a generic `for _, modifier in pairs(K9MoveRateModifiers) do effective
+    = effective * modifier end`, so a new named key needs no change there).
+    Deliberately NOT a hard input block (unlike Injury) -- a starving/
+    dehydrated K9 must stay usable, just slower, per this task's own
+    instruction that this "should never be able to reach cannot work at
+    all." Clamped server-side to [0.5, 1.0] (see ClampConfiguredNumber call
+    sites below) so a bad config edit cannot turn "mild" into "frozen."
+
+    RATES: decayPerTick is tuned so Hunger empties in ~90 minutes (one
+    on-duty K9 shift) and Thirst in ~60 minutes (dogs need water more often
+    than food) if never fed/watered, at the shipped tickIntervalMs (5000ms).
+    See config.lua's own comment on each field for the exact arithmetic.
+
+    PERSISTENCE: hunger/thirst are added to the SAME persisted category as
+    fatigue/mood/fearStress/injury (see the WellbeingStats struct comment
+    below, category 1) -- "a K9 who logs off hungry should still be hungry
+    on reconnect within the same server session," same rule, same reason,
+    no new transient/category-2 field needed (there is no per-ped-instance
+    observation for these two stats the way lastCoords/
+    injuryDeathEpisodeStartedAt are for Fatigue/Injury).
+
+    NO DEATH/RESPAWN INTERACTION, DELIBERATELY: unlike Injury, dying and
+    being revived does not refill a K9's stomach -- no restore is wired for
+    either stat on that transition, and none should be added without
+    re-deriving Injury's own MIN_DEATH_EPISODE_DURATION_MS-style defenses
+    first (a full restore-on-revive for a stat with no real connection to
+    combat health would just be a second, needless exploit surface).
+
+    ANTI-FARM: passive decay is the ONLY thing that ever lowers either stat,
+    driven purely by TICK_INTERVAL_MS/GetGameTimer() -- no client input
+    (e.g. "am I sprinting") accelerates it, unlike Fatigue's sprint-decay,
+    specifically so a client cannot grief its OWN K9's hunger/thirst by
+    forging activity. Every RELIEF action below (feedK9Hunger/giveK9Water/
+    drinkFromBowl) is cooldowned per CITIZENID (the stat owner), stamped
+    BEFORE any item removal (TOCTOU-safe ordering, mirrors Mood/K9Medkit),
+    and real item consumption is a real, non-recoverable resource cost --
+    between the cooldown and the item cost, neither stat can be pushed to
+    max and held there for free or arbitrarily often.
+
+    SELF-SERVICE, A DELIBERATE DIVERGENCE FROM MOOD's petK9/feedK9: Mood's
+    `targetPed == usingPed` reject exists to force a genuine second player
+    into the loop (a bonding mechanic). Hunger/Thirst are framed here as
+    PERSONAL upkeep (matching both named competitors' own "food/water items
+    you carry for your own K9" framing, DEVELOPER_REFERENCE task's own WHY
+    section) -- so feedK9Hunger/giveK9Water are plain self-only actions (no
+    target parameter at all, exactly RequestK9CalmDown/calmDownK9's shape),
+    triggered by `/k9eat` and `/k9drink` (client/wellbeing.lua), not an
+    ox_target option on another player. A K9 with no partner online is never
+    locked out of feeding itself, unlike Mood.
+
+    WATER BOWL MODEL RISK, INHERITED AND DISCLOSED: drinkFromBowl (the free,
+    no-item world-prop path, Thirst only -- Hunger has no bowl equivalent,
+    see the report for why) targets Config.Wellbeing.Thirst.bowlSources,
+    shipped as `{ 'water_bowl' }` -- the SAME unverified model name
+    Config.Wellbeing.Fatigue.restSources already carries a disclosed risk
+    for. Kept as an INDEPENDENT list (not a re-read of Fatigue's own field)
+    so a confirmed replacement can be set here without touching Fatigue.
+    DEGRADES GRACEFULLY if it never resolves to a real model: ox_target's
+    AddModel (client/wellbeing.lua) simply never matches anything in the
+    world, so the option never appears -- Thirst still fully works via
+    giveK9Water (the item path), which has no model dependency at all.
+
+    CONFIG DEFENSIVENESS, A REAL CONSTRAINT OF THIS TASK'S OWN FILE-OWNERSHIP
+    BOUNDARY: this file does NOT own config.lua, so `Config.Wellbeing.Hunger`/
+    `.Thirst` may not exist yet on a server whose config.lua has not been
+    updated to add them. Every unconditional read (EnsureStats' defaults,
+    SnapshotOf's wellbeingTunables entries) guards with
+    `type(Config.Wellbeing.Hunger) == 'table'` before indexing into it, so a
+    server missing these tables entirely degrades to safe hardcoded
+    defaults rather than erroring out of THIS FILE'S OWN LOAD (which would
+    take Fatigue/Mood/FearStress/Distraction/Injury down with it -- the
+    exact "one Config typo takes five unrelated features down" failure this
+    file's own TICK_INTERVAL_MS validation above already refuses to repeat).
+    GetResolvedHungerThirstConfig() (CLAMP AND WARN, below) is the one place
+    that reads every field individually and is ONLY ever called from inside
+    an `if Config.Features.HungerThirstSystem then` branch -- "read at the
+    point of activation," restated for a config SECTION that may not exist
+    at all, not just a bad VALUE inside one that does.
+    ======================================================================
 ]]
 
 -- WellbeingStats[citizenid] = {
 --     fatigue, mood, fearStress, injury,     -- 0..Config.Wellbeing.<Stat>.max
+--     hunger, thirst,                         -- 0..Config.Wellbeing.<Stat>.max -- PERSISTED, same category as the four above (this pass, coder-backend)
 --     distractedUntil, hesitatingUntil,       -- GetGameTimer() ms timestamps, 0 = inactive
 --     hesitationEpisodeStartedAt,             -- GetGameTimer() ms, 0 = not currently in a
 --                                              -- continuous at/above-threshold episode -- see
@@ -736,6 +853,109 @@ local function Clamp(value, min, max)
     return value
 end
 
+--- CLAMP AND WARN for a plain numeric Config value that is NOT a
+--- millisecond threshold (ResolveConfiguredThresholdMs, server/cooldowns.lua,
+--- already covers that shape -- reused as-is for Hunger/Thirst's own
+--- *CooldownMs fields below). Covers decay/regen rates, thresholds out of
+--- 100, and multipliers -- exactly the shape Hunger/Thirst's own config
+--- introduces. Same "CLAMP AND WARN, never abort" reasoning as
+--- ResolveConfiguredThresholdMs's own header: called only from inside
+--- GetResolvedHungerThirstConfig() below, itself only ever reached from
+--- inside an `if Config.Features.HungerThirstSystem then` branch, but a
+--- bad value there must still degrade to a safe default with a loud
+--- warning rather than silently misbehave or throw.
+--- @param value any
+--- @param fallback number -- a positive, hardcoded call-site literal, never itself read from Config
+--- @param min number
+--- @param max number
+--- @param configKeyName string -- exact dotted Config path, for the printed warning only
+--- @return number
+local function ClampConfiguredNumber(value, fallback, min, max, configKeyName)
+    local n = tonumber(value)
+    if n == nil or n ~= n then -- n ~= n is Lua's own NaN test, same idiom client/wellbeing.lua's snapshot ingest already uses
+        print(('[qbx_k9unit] wellbeing.lua: %s is missing or not a number (found: %s). Using the built-in fallback of %s instead -- find %s in config.lua and set it to a number.'):format(configKeyName, tostring(value), tostring(fallback), configKeyName))
+        return fallback
+    end
+    if n < min or n > max then
+        local clamped = Clamp(n, min, max)
+        print(('[qbx_k9unit] wellbeing.lua: %s (%s) is outside its valid range [%s, %s]. Clamped to %s -- find %s in config.lua and set it within range.'):format(configKeyName, tostring(n), tostring(min), tostring(max), tostring(clamped), configKeyName))
+        return clamped
+    end
+    return n
+end
+
+-- ======================================================================
+-- HUNGER/THIRST — config resolution (this pass, coder-backend). See this
+-- file's header for the full design writeup. Memoized (like
+-- GetRestSourceModelHashes further below) so CLAMP-AND-WARN only ever
+-- prints once per resource lifetime, not once per tick -- resolved lazily,
+-- on first actual use from inside an `if Config.Features.HungerThirstSystem
+-- then` branch, never at this file's own unconditional top-level load
+-- (unlike TICK_INTERVAL_MS/HESITATION_DURATION_MS above, whose OWN
+-- subtables are long-shipped and safe to assume present --
+-- Config.Wellbeing.Hunger/.Thirst are brand new and this file does not own
+-- config.lua, so they may not exist yet on a given server; see this file's
+-- header for the full reasoning). Placed here, ahead of every event
+-- handler in this file, specifically so every one of them can call it
+-- unconditionally without a forward-reference problem.
+-- ======================================================================
+local ResolvedHungerThirstConfig = nil
+
+--- @return table
+local function GetResolvedHungerThirstConfig()
+    if ResolvedHungerThirstConfig then return ResolvedHungerThirstConfig end
+
+    local hungerCfg = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger or {}
+    local thirstCfg = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst or {}
+
+    ResolvedHungerThirstConfig = {
+        hungerMax                    = ClampConfiguredNumber(hungerCfg.max, 100, 1, 1000, 'Config.Wellbeing.Hunger.max'),
+        hungerDecayPerTick           = ClampConfiguredNumber(hungerCfg.decayPerTick, 0.093, 0, 100, 'Config.Wellbeing.Hunger.decayPerTick'),
+        hungerSpeedPenaltyThreshold  = ClampConfiguredNumber(hungerCfg.lowThreshold, 30, 0, 100, 'Config.Wellbeing.Hunger.lowThreshold'),
+        hungerSpeedPenaltyMultiplier = ClampConfiguredNumber(hungerCfg.speedPenaltyMultiplier, 0.95, 0.5, 1.0, 'Config.Wellbeing.Hunger.speedPenaltyMultiplier'),
+        hungerFeedRegenAmount        = ClampConfiguredNumber(hungerCfg.feedRegenAmount, 35, 0, 1000, 'Config.Wellbeing.Hunger.feedRegenAmount'),
+        hungerFeedItemName           = (type(hungerCfg.feedItemName) == 'string' and hungerCfg.feedItemName ~= '') and hungerCfg.feedItemName or 'k9_food',
+        hungerFeedCooldownMs         = ResolveConfiguredThresholdMs(hungerCfg.feedCooldownMs, 120000, 'Config.Wellbeing.Hunger.feedCooldownMs'),
+
+        thirstMax                    = ClampConfiguredNumber(thirstCfg.max, 100, 1, 1000, 'Config.Wellbeing.Thirst.max'),
+        thirstDecayPerTick           = ClampConfiguredNumber(thirstCfg.decayPerTick, 0.139, 0, 100, 'Config.Wellbeing.Thirst.decayPerTick'),
+        thirstSpeedPenaltyThreshold  = ClampConfiguredNumber(thirstCfg.lowThreshold, 30, 0, 100, 'Config.Wellbeing.Thirst.lowThreshold'),
+        thirstSpeedPenaltyMultiplier = ClampConfiguredNumber(thirstCfg.speedPenaltyMultiplier, 0.95, 0.5, 1.0, 'Config.Wellbeing.Thirst.speedPenaltyMultiplier'),
+        thirstDrinkRegenAmount       = ClampConfiguredNumber(thirstCfg.drinkRegenAmount, 35, 0, 1000, 'Config.Wellbeing.Thirst.drinkRegenAmount'),
+        thirstDrinkItemName          = (type(thirstCfg.drinkItemName) == 'string' and thirstCfg.drinkItemName ~= '') and thirstCfg.drinkItemName or 'k9_water',
+        thirstDrinkCooldownMs        = ResolveConfiguredThresholdMs(thirstCfg.drinkCooldownMs, 90000, 'Config.Wellbeing.Thirst.drinkCooldownMs'),
+        thirstBowlRegenAmount        = ClampConfiguredNumber(thirstCfg.bowlRegenAmount, 15, 0, 1000, 'Config.Wellbeing.Thirst.bowlRegenAmount'),
+        thirstBowlCooldownMs         = ResolveConfiguredThresholdMs(thirstCfg.bowlCooldownMs, 60000, 'Config.Wellbeing.Thirst.bowlCooldownMs'),
+        thirstBowlInteractRange      = ClampConfiguredNumber(thirstCfg.bowlInteractRange, 2.0, 0.5, 20.0, 'Config.Wellbeing.Thirst.bowlInteractRange'),
+        thirstBowlSources            = type(thirstCfg.bowlSources) == 'table' and thirstCfg.bowlSources or {},
+    }
+    return ResolvedHungerThirstConfig
+end
+
+-- Memoized model-hash set for Thirst's own bowlSources -- same pattern as
+-- Fatigue's GetRestSourceModelHashes further below, deliberately a SEPARATE
+-- list (not a re-read of Fatigue's own restSources) so a confirmed
+-- replacement model can be set here without touching Fatigue's field. See
+-- this file's header "WATER BOWL MODEL RISK" for the full disclosed-risk
+-- writeup this inherits. GetHashKey is a server-side native (this file's
+-- header CONFIDENCE GRADING item 6 already confirmed it directly against
+-- citizenfx/fivem's own native-decls for Fatigue's identical use) -- safe to
+-- call from here, well ahead of that confirmation's own call site.
+local ThirstBowlModelHashes = nil
+
+--- @return table<number, boolean>
+local function GetThirstBowlModelHashes()
+    if ThirstBowlModelHashes then return ThirstBowlModelHashes end
+
+    ThirstBowlModelHashes = {}
+    for _, modelName in ipairs(GetResolvedHungerThirstConfig().thirstBowlSources) do
+        if type(modelName) == 'string' and modelName ~= '' then
+            ThirstBowlModelHashes[GetHashKey(modelName)] = true
+        end
+    end
+    return ThirstBowlModelHashes
+end
+
 --- Returns the citizenid's stat entry, creating a fresh default one on
 --- first reference. Fatigue/Mood/Injury default to their own `max` (a K9
 --- starts fresh, not exhausted/miserable/injured); FearStress defaults to 0
@@ -769,6 +989,25 @@ local function EnsureStats(citizenid)
             -- (category 2) for why this MUST be reset (to 0, not `false` —
             -- this is a timestamp) wherever lastCoords is reset.
             injuryDeathEpisodeStartedAt = 0,
+            -- HUNGER/THIRST (this pass, coder-backend): PERSISTED, same
+            -- category as fatigue/mood/fearStress/injury above -- "a K9 who
+            -- logs off hungry should still be hungry on reconnect." Default
+            -- to each stat's own max (a K9 starts fresh, not already
+            -- starving), same convention as every other stat here.
+            -- CONFIG-DEFENSIVE: `Config.Wellbeing.Hunger`/`.Thirst` may not
+            -- exist yet on a server whose config.lua has not added them
+            -- (this file does not own config.lua) -- EnsureStats runs
+            -- unconditionally for EVERY stat regardless of which Features
+            -- flag is on, so an unguarded `Config.Wellbeing.Hunger.max`
+            -- read here would crash this function, and therefore every
+            -- OTHER wellbeing feature, the instant anything referenced this
+            -- citizenid -- not merely a HungerThirstSystem-gated failure.
+            -- Guarded, not warned: this is an inert default, never an
+            -- "activation" (see this file's header for that distinction) --
+            -- the loud warning lives in GetResolvedHungerThirstConfig()
+            -- below, reached only once the feature is actually gated on.
+            hunger = (type(Config.Wellbeing.Hunger) == 'table' and tonumber(Config.Wellbeing.Hunger.max)) or 100,
+            thirst = (type(Config.Wellbeing.Thirst) == 'table' and tonumber(Config.Wellbeing.Thirst.max)) or 100,
         }
         WellbeingStats[citizenid] = stats
     end
@@ -850,6 +1089,13 @@ local function SnapshotOf(stats)
         mood = stats.mood,
         fearStress = stats.fearStress,
         injury = stats.injury,
+        -- HUNGER/THIRST (this pass, coder-backend) -- plain persisted
+        -- numbers, already resolved by EnsureStats/TickWellbeing; nothing
+        -- here reads raw Config, so no config-defensiveness guard is needed
+        -- on these two lines specifically (see the wellbeingTunables entries
+        -- further down for the ones that DO read raw Config).
+        hunger = stats.hunger,
+        thirst = stats.thirst,
         distractedUntil = stats.distractedUntil,
         hesitatingUntil = stats.hesitatingUntil,
         featureFlags = {
@@ -858,6 +1104,7 @@ local function SnapshotOf(stats)
             FearStressSystem = Config.Features.FearStressSystem == true,
             DistractionSystem = Config.Features.DistractionSystem == true,
             InjuryLimping = Config.Features.InjuryLimping == true,
+            HungerThirstSystem = Config.Features.HungerThirstSystem == true,
         },
         wellbeingTunables = {
             fatigueSpeedPenaltyThreshold     = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
@@ -876,6 +1123,24 @@ local function SnapshotOf(stats)
             -- DOES, since client/wellbeing.lua is the one that actually
             -- calls RestorePlayerStamina.
             fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
+            -- HUNGER/THIRST (this pass, coder-backend). CONFIG-DEFENSIVE,
+            -- unlike every other line in this table: `Config.Wellbeing.Hunger`/
+            -- `.Thirst` may not exist yet on a server whose config.lua has
+            -- not landed them (this file's header explains why) --
+            -- SnapshotOf is built every tick for ANY of the six flags being
+            -- on, not just HungerThirstSystem, so an unguarded read here
+            -- would crash a snapshot push for e.g. a MoodSystem-only server.
+            -- Deliberately a light inline guard, NOT a
+            -- GetResolvedHungerThirstConfig() call -- that function's own
+            -- CLAMP-AND-WARN belongs strictly behind the
+            -- Config.Features.HungerThirstSystem gate ("read at the point of
+            -- activation"); this fallback is silent on purpose so a fully
+            -- disabled/unconfigured HungerThirstSystem never prints a
+            -- warning about a feature nobody has turned on.
+            hungerSpeedPenaltyThreshold  = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.lowThreshold or 30,
+            hungerSpeedPenaltyMultiplier = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.speedPenaltyMultiplier or 0.95,
+            thirstSpeedPenaltyThreshold  = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.lowThreshold or 30,
+            thirstSpeedPenaltyMultiplier = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.speedPenaltyMultiplier or 0.95,
         },
     }
 end
@@ -1442,6 +1707,184 @@ lib.callback.register('qbx_k9unit:server:applyK9Distraction', function(source, i
 end)
 
 -- ======================================================================
+-- HUNGER/THIRST — self-only relief actions (this pass, coder-backend). See
+-- this file's header "SELF-SERVICE, A DELIBERATE DIVERGENCE FROM MOOD" for
+-- why these are plain, targetless RegisterNetEvent handlers (exactly
+-- calmDownK9's shape above) rather than an ox_target option on another
+-- player's ped. Client-side triggers: `/k9eat` (feedK9Hunger), `/k9drink`
+-- (giveK9Water), and the "Drink from Bowl" ox_target world-object option
+-- (drinkFromBowl) -- all three in client/wellbeing.lua.
+--
+-- ANTI-FARM: each tracker below is keyed by CITIZENID (the stat owner, not
+-- the raw connection `source`) -- a citizenid, not a session, is what a
+-- cooldown against "how often can THIS K9 be fed" needs to bound, matching
+-- DistractionCooldown's own established per-citizenid shape above (not
+-- AffectionCooldown's per-(interactor,target) shape, since these are
+-- self-only -- there is no separate interactor identity to key on). Every
+-- possession check happens BEFORE the cooldown is stamped, and the cooldown
+-- is stamped BEFORE item removal -- the exact TOCTOU-safe ordering
+-- feedK9/K9Medkit already established. None of these three checks
+-- IsWellbeingFeaturePermittedForCitizenId -- exactly like petK9/feedK9/
+-- RestoreInjury above, a RELIEF action is never gated by a per-person harm
+-- block (see that function's own header for the full "immunity from harm,
+-- never gate relief" design).
+-- ======================================================================
+
+-- Shared by feedK9Hunger only (Hunger has no world-prop path).
+local HungerFeedCooldown = NewCooldown()
+local HUNGER_FEED_COOLDOWN_PRUNE_INTERVAL_MS = 60000
+HungerFeedCooldown.StartSweep(HUNGER_FEED_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    local staleAfterMs = GetResolvedHungerThirstConfig().hungerFeedCooldownMs * 2
+    return (now - loggedAt) > staleAfterMs
+end)
+
+-- SHARED by BOTH giveK9Water (item) and drinkFromBowl (world prop) --
+-- deliberately the SAME tracker instance, not merely the same threshold
+-- shape, mirroring AffectionCooldown's own established "one shared instance
+-- for two actions that restore the same stat" fix above (see that
+-- declaration's own comment for the exploit this closes): alternating
+-- "drink from bowl" then "use water item" on yourself must not double the
+-- effective thirst-regen rate within one cooldown window. The two actions
+-- use DIFFERENT thresholds (thirstDrinkCooldownMs vs. thirstBowlCooldownMs)
+-- at their own :IsOnCooldown/:Touch call sites — NewCooldown's per-call
+-- threshold override (the same mechanism DistractionCooldown's own
+-- per-target cooldown above already relies on) makes that safe: whichever
+-- action fires first stamps `now`, and the OTHER action's own (possibly
+-- different) threshold is what decides whether that stamp still blocks it.
+local ThirstReliefCooldown = NewCooldown()
+local THIRST_RELIEF_COOLDOWN_PRUNE_INTERVAL_MS = 60000
+ThirstReliefCooldown.StartSweep(THIRST_RELIEF_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    local hc = GetResolvedHungerThirstConfig()
+    local staleAfterMs = math.max(hc.thirstDrinkCooldownMs, hc.thirstBowlCooldownMs) * 2
+    return (now - loggedAt) > staleAfterMs
+end)
+
+RegisterNetEvent('qbx_k9unit:server:feedK9Hunger')
+AddEventHandler('qbx_k9unit:server:feedK9Hunger', function()
+    local src = source
+    if not Config.Features.HungerThirstSystem then return end
+
+    local ped, isK9 = ResolveK9Ped(src)
+    if ped == 0 or not isK9 then return end
+
+    local citizenid = ResolveCitizenid(src)
+    if not citizenid then return end
+
+    local hc = GetResolvedHungerThirstConfig()
+    if HungerFeedCooldown.IsOnCooldown(citizenid, hc.hungerFeedCooldownMs) then
+        NotifyPlayer(src, locale('wellbeing.reason_on_cooldown'), 'error')
+        return
+    end
+
+    -- ROUTED THROUGH K9Compat.Get('inventory') -- same stub-degrade writeup
+    -- as Mood's feedK9/Distraction's applyK9Distraction above: fails closed
+    -- to 0/false on the no-op stub, never a fabricated success.
+    local carriedCount = K9Compat.Get('inventory').GetItemCount(src, hc.hungerFeedItemName)
+    if not carriedCount or carriedCount < 1 then
+        NotifyPlayer(src, locale('wellbeing.reason_no_food'), 'error')
+        return
+    end
+
+    -- Cooldown stamped BEFORE removal — TOCTOU-safe ordering, matches
+    -- feedK9/K9Medkit exactly.
+    HungerFeedCooldown.Touch(citizenid)
+
+    local removed = K9Compat.Get('inventory').RemoveItem(src, hc.hungerFeedItemName, 1)
+    if not removed then
+        NotifyPlayer(src, locale('wellbeing.reason_no_food'), 'error')
+        return
+    end
+
+    local stats = EnsureStats(citizenid)
+    stats.hunger = Clamp(stats.hunger + hc.hungerFeedRegenAmount, 0, hc.hungerMax)
+    NotifyPlayer(src, locale('wellbeing.eat_success'), 'success')
+end)
+
+RegisterNetEvent('qbx_k9unit:server:giveK9Water')
+AddEventHandler('qbx_k9unit:server:giveK9Water', function()
+    local src = source
+    if not Config.Features.HungerThirstSystem then return end
+
+    local ped, isK9 = ResolveK9Ped(src)
+    if ped == 0 or not isK9 then return end
+
+    local citizenid = ResolveCitizenid(src)
+    if not citizenid then return end
+
+    local hc = GetResolvedHungerThirstConfig()
+    if ThirstReliefCooldown.IsOnCooldown(citizenid, hc.thirstDrinkCooldownMs) then
+        NotifyPlayer(src, locale('wellbeing.reason_on_cooldown'), 'error')
+        return
+    end
+
+    local carriedCount = K9Compat.Get('inventory').GetItemCount(src, hc.thirstDrinkItemName)
+    if not carriedCount or carriedCount < 1 then
+        NotifyPlayer(src, locale('wellbeing.reason_no_water'), 'error')
+        return
+    end
+
+    ThirstReliefCooldown.Touch(citizenid)
+
+    local removed = K9Compat.Get('inventory').RemoveItem(src, hc.thirstDrinkItemName, 1)
+    if not removed then
+        NotifyPlayer(src, locale('wellbeing.reason_no_water'), 'error')
+        return
+    end
+
+    local stats = EnsureStats(citizenid)
+    stats.thirst = Clamp(stats.thirst + hc.thirstDrinkRegenAmount, 0, hc.thirstMax)
+    NotifyPlayer(src, locale('wellbeing.drink_success'), 'success')
+end)
+
+--- @param netId number -- the world bowl object's own network id, resolved client-side from the ox_target `data.entity` the player actually clicked
+RegisterNetEvent('qbx_k9unit:server:drinkFromBowl')
+AddEventHandler('qbx_k9unit:server:drinkFromBowl', function(netId)
+    local src = source
+    if not Config.Features.HungerThirstSystem then return end
+
+    local ped, isK9 = ResolveK9Ped(src)
+    if ped == 0 or not isK9 then return end
+
+    local hc = GetResolvedHungerThirstConfig()
+    if #hc.thirstBowlSources == 0 then return end -- no bowl model configured at all -- see this file's header "WATER BOWL MODEL RISK"
+
+    -- SERVER-AUTHORITATIVE ENTITY RESOLUTION — reuses server/entities.lua's
+    -- shared ResolveNetworkEntity (netId -> live entity, existence-checked,
+    -- type-checked) rather than a hand-rolled NetworkGetEntityFromNetworkId/
+    -- DoesEntityExist pair, per that file's own "extracted from independent
+    -- hand-written copies" header. expectedEntityType = 3 (object) — a
+    -- client cannot claim a bowl netId that actually resolves to a ped or
+    -- vehicle.
+    local bowlEntity = ResolveNetworkEntity(netId, 3)
+    if not bowlEntity then return end
+
+    -- Never trusts the client's claim about WHICH object this is — the
+    -- model is re-derived server-side against Thirst's own bowlSources
+    -- hash set, exactly like Fatigue's rest-source scan re-derives model
+    -- identity above.
+    if not GetThirstBowlModelHashes()[GetEntityModel(bowlEntity)] then return end
+
+    -- Never trusts a client-claimed distance — both positions are resolved
+    -- server-side (the caller's own live ped, and the bowl entity just
+    -- proven to exist).
+    local dist = #(GetEntityCoords(ped) - GetEntityCoords(bowlEntity))
+    if dist > hc.thirstBowlInteractRange then return end
+
+    local citizenid = ResolveCitizenid(src)
+    if not citizenid then return end
+
+    if ThirstReliefCooldown.IsOnCooldown(citizenid, hc.thirstBowlCooldownMs) then
+        NotifyPlayer(src, locale('wellbeing.reason_on_cooldown'), 'error')
+        return
+    end
+    ThirstReliefCooldown.Touch(citizenid)
+
+    local stats = EnsureStats(citizenid)
+    stats.thirst = Clamp(stats.thirst + hc.thirstBowlRegenAmount, 0, hc.thirstMax)
+    NotifyPlayer(src, locale('wellbeing.drink_success'), 'success')
+end)
+
+-- ======================================================================
 -- RESOURCE-GLOBALS — see this file's header for the full contract on each.
 -- ======================================================================
 
@@ -1526,7 +1969,7 @@ end
 lib.callback.register('qbx_k9unit:server:getWellbeingSnapshot', function(source)
     if not (Config.Features.FatigueSystem or Config.Features.MoodSystem
         or Config.Features.FearStressSystem or Config.Features.DistractionSystem
-        or Config.Features.InjuryLimping) then
+        or Config.Features.InjuryLimping or Config.Features.HungerThirstSystem) then
         return nil
     end
 
@@ -1685,6 +2128,29 @@ local function TickWellbeing()
 
                     if Config.Features.MoodSystem then
                         stats.mood = Clamp(stats.mood + Config.Wellbeing.Mood.passiveRegenPerTick, 0, Config.Wellbeing.Mood.max)
+                    end
+
+                    if Config.Features.HungerThirstSystem then
+                        -- HUNGER/THIRST (this pass, coder-backend). Passive
+                        -- DECAY only -- see this file's header for why there
+                        -- is no passive regen path for either stat (eating/
+                        -- drinking is the only intended recovery, matching
+                        -- every mainstream hunger/thirst framework this
+                        -- resource's own task brief researched). PER-PERSON
+                        -- FEATURE CONTROL gates ONLY this decrement (the
+                        -- harmful direction) -- exactly the "immunity from
+                        -- harm, never a freeze" design
+                        -- IsWellbeingFeaturePermittedForCitizenId's own
+                        -- header establishes for every other stat above; a
+                        -- blocked citizenid simply never decays, and can
+                        -- still be fed/watered normally regardless (feedK9Hunger/
+                        -- giveK9Water/drinkFromBowl below never check this
+                        -- gate at all, same as petK9/feedK9/RestoreInjury).
+                        if IsWellbeingFeaturePermittedForCitizenId(citizenid, 'HungerThirstSystem') then
+                            local hc = GetResolvedHungerThirstConfig()
+                            stats.hunger = Clamp(stats.hunger - hc.hungerDecayPerTick, 0, hc.hungerMax)
+                            stats.thirst = Clamp(stats.thirst - hc.thirstDecayPerTick, 0, hc.thirstMax)
+                        end
                     end
 
                     if Config.Features.InjuryLimping then
@@ -2057,7 +2523,7 @@ CreateThread(function()
         Wait(TICK_INTERVAL_MS)
         if Config.Features.FatigueSystem or Config.Features.MoodSystem
             or Config.Features.FearStressSystem or Config.Features.DistractionSystem
-            or Config.Features.InjuryLimping then
+            or Config.Features.InjuryLimping or Config.Features.HungerThirstSystem then
             local ok, err = pcall(TickWellbeing)
             if not ok then
                 print(('[qbx_k9unit] wellbeing tick error: %s'):format(tostring(err)))
@@ -2141,5 +2607,16 @@ AddEventHandler('onResourceStart', function(resourceName)
     if Config.Features.DistractionSystem then
         WarnIfItemMissing(Config.Wellbeing.Distraction.meatBaitItemName, 'Config.Wellbeing.Distraction.meatBaitItemName', 'Config.Features.DistractionSystem')
         WarnIfItemMissing(Config.Wellbeing.Distraction.whistleItemName, 'Config.Wellbeing.Distraction.whistleItemName', 'Config.Features.DistractionSystem')
+    end
+
+    -- HUNGER/THIRST (this pass, coder-backend). CONFIG-DEFENSIVE, same
+    -- reasoning as every other Config.Wellbeing.Hunger/.Thirst read in this
+    -- file: guarded with `type(...) == 'table'` since this file does not
+    -- own config.lua and these subtables may not exist yet.
+    if Config.Features.HungerThirstSystem then
+        local hungerCfg = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger or {}
+        local thirstCfg = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst or {}
+        WarnIfItemMissing(hungerCfg.feedItemName, 'Config.Wellbeing.Hunger.feedItemName', 'Config.Features.HungerThirstSystem')
+        WarnIfItemMissing(thirstCfg.drinkItemName, 'Config.Wellbeing.Thirst.drinkItemName', 'Config.Features.HungerThirstSystem')
     end
 end)

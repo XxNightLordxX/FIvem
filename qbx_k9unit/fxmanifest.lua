@@ -188,6 +188,16 @@ client_scripts {
     'client/combat.lua', -- BiteAndHold/NonLethalTakedown, DEVELOPER_REFERENCE.md §12.5.1/§12.5.2 -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
     'client/partnership.lua', -- HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7/§12.3 -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
     'client/defense.lua', -- HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
+    -- DangerWarn (NEW FILE) -- the reverse direction of HandlerDownDefense
+    -- immediately above: a K9's own player, not an automatic detector,
+    -- deliberately warning their partnered handler. See
+    -- server/dangerwarn.lua's own header for the full design. No hard
+    -- load-order requirement -- CanShowK9UI/DenyK9UIAccess (client/main.lua)
+    -- and PlayK9Sound (client/audio.lua, behind a runtime existence guard)
+    -- are both reached only at CALL time, never at file-load time. Placed
+    -- here purely for topical grouping with client/defense.lua, the other
+    -- half of this pair.
+    'client/dangerwarn.lua',
     'client/propattachment.lua', -- R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
     'client/leashvisual.lua',    -- Makes the leash mechanic (client/movement.lua, server/main.lua) actually visible: a rendered rope between handler and K9 for the whole leash duration, plus a leash-handle prop on the handler's own hand. Loaded AFTER client/propattachment.lua deliberately, same "reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy" reasoning as client/fetch.lua's own placement note directly below -- no hard load-order requirement either (global-function resolution is at CALL time, not load time, per every other file's note in this list), kept here purely for consistency with that established convention. Adds no new event to client/movement.lua's or server/main.lua's contract -- it registers its OWN second handler for the SAME 'qbx_k9unit:client:leashAttached'/'qbx_k9unit:client:leashDetached' events client/movement.lua already handles (RegisterNetEvent supports multiple independent handlers per event name), and introduces this resource's first entity-scoped statebag (read: client/leashvisual.lua's own header "BYSTANDER VISIBILITY" section) so a rope is visible to nearby bystanders too, not just the two leash participants -- entirely self-contained; neither movement.lua nor server/main.lua was touched.
     'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
@@ -211,9 +221,22 @@ client_scripts {
     -- still), so this groups with the last of them rather than splitting
     -- across the list.
     'client/keybinds.lua',
+    -- APPREHENSION ANNOUNCEMENT (Config.Features.ApprehensionAnnouncement),
+    -- client half -- see server/announce.lua's own header for the full
+    -- design writeup. Registers its OWN RegisterCommand+RegisterKeyMapping
+    -- pair ('k9announce') rather than extending client/keybinds.lua, same
+    -- "each mechanic owns its own file" convention every other Phase 3+
+    -- feature in this list already follows. SOFT dependency only: reaches
+    -- CanShowK9UI/DenyK9UIAccess (client/main.lua) only at CALL time inside
+    -- RequestApprehensionWarning, never at file-load time, so no hard
+    -- load-order requirement -- placed here purely for topical grouping
+    -- with client/keybinds.lua, the other "keybind for a fast K9 action"
+    -- file.
+    'client/announce.lua',
     'client/training.lua', -- Training Mode (DEVELOPER_REFERENCE.md Part A Tier B §6) -- the client half of server/training.lua. Rehearses the search / bite-and-hold FLOW against a scripted fake server response inside a Config.TrainingZones area; never touches a real target and never mints XP (server/training.lua's THE XP DECISION section is the authority on why -- do not "restore" an award here). No load-order dependency: reaches the server only through lib.callback.await at call time.
     'client/equipmentshop.lua', -- K9 Supply shop walk-up (DEVELOPER_REFERENCE.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
+    'client/commandsuggestions.lua', -- NEW FILE -- chat:addSuggestion for every RegisterCommand this resource registers (fresh-install finding: zero chat:addSuggestion calls existed anywhere in this resource before this file). No load-order dependency at all: reads only Config (already loaded via shared_scripts) and fires a purely local TriggerEvent at its own onResourceStart, calling no other client file's globals. Placed last purely because it has nothing to be ordered against, same reasoning as client/exports.lua immediately above it.
 }
 
 server_scripts {
@@ -299,6 +322,23 @@ server_scripts {
     -- these functions -- through a type(fn) == 'function' guard, so it is a
     -- soft dependency, but there is no reason to make the guard do that job.
     'server/appearance.lua',
+    -- MANA_POLICEDOGS FEATURE-PARITY PASS -- an EXPLICIT, admin-pinned
+    -- "this citizenid is a dog" record (`k9_dog_characters`, migration
+    -- 0019), independent of any certification/permission credential --
+    -- see this file's own header for the full precedence writeup against
+    -- server/appearance.lua's existing certification-driven appearance.
+    -- Exposes IsPinnedDogCharacter/GetPinnedDogCharacterModel/
+    -- SetDogCharacter/RemoveDogCharacter, and the '/k9setdog'/
+    -- '/k9removedog' admin commands.
+    -- HARD load-order requirement on server/cooldowns.lua: NewCooldown is
+    -- called at this file's own file-load time. Placed after
+    -- server/appearance.lua (soft dependency on that file's
+    -- ApplyK9AppearanceDirect/MaybeRevertK9Appearance, both consulted only
+    -- at runtime through the usual type(fn) == 'function' guard, so this
+    -- is a placement preference grouping it with the file it most directly
+    -- extends, not a hard requirement) and after server/highcommand.lua
+    -- (IsHighCommand, also a runtime-only soft dependency).
+    'server/dogcharacter.lua',
     'server/permissions.lua',
     -- Owner-directed extension of the SAME "add or remove" ask
     -- server/certtiers.lua already answers for certification tiers, this
@@ -365,6 +405,21 @@ server_scripts {
     -- cooldowns.lua (NewCooldown at file-load time); reads partnership state via
     -- GetActivePartnerCitizenId, server-side only, never a client claim.
     'server/defense.lua',
+    -- DangerWarn (NEW FILE) -- the reverse direction of HandlerDownDefense
+    -- immediately above. HARD load-order dependency on server/cooldowns.lua
+    -- (NewCooldown at this file's own file-load time -- already satisfied
+    -- here). Calls HasK9Access (server/certifications.lua) and NotifyPlayer
+    -- (server/notify.lua) bare, both already loaded earlier in this list;
+    -- GetActivePartnerCitizenId (server/partnership.lua, immediately
+    -- above), HasPermission (server/permissions.lua, loaded earlier) and
+    -- ForEachNearbyPlayer (server/search.lua, loaded LATER in this list)
+    -- are all behind `type(...) == 'function'` runtime existence guards, so
+    -- none of this is a hard ordering requirement beyond cooldowns.lua --
+    -- placed here purely for topical grouping with server/defense.lua, the
+    -- other half of this pair. Never sends an exact coordinate, entity, or
+    -- identity of any third party to any client -- see that file's own
+    -- header "THE ONE PIECE OF INFORMATION THIS FILE ACTUALLY SENDS".
+    'server/dangerwarn.lua',
     'server/tracking.lua',
     'server/scenttrail.lua', -- PROJECT_HISTORY.md §2 "follow your nose" (ScentTrailHunt), server half. HARD load-order dependency on server/cooldowns.lua -- NewCooldown at this file's own file-load time -- already satisfied here. Holds the hidden coordinate and never sends it to a client; only a distance goes over the wire.
     'server/pursuitsprint.lua', -- PROJECT_HISTORY.md §5 (PursuitSprint), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time). Also holds the only correct implementation of the four-step per-person FeatureControl resolution -- read it before writing a second one anywhere else.
@@ -435,6 +490,24 @@ server_scripts {
     -- first tick rather than only after a resource restart, not a
     -- correctness requirement.
     'server/combat.lua',
+    -- APPREHENSION ANNOUNCEMENT (Config.Features.ApprehensionAnnouncement),
+    -- server half -- see this file's own header for the full real-world
+    -- sourcing and design-tension writeup. Companion gate for
+    -- server/combat.lua's ValidateCombatRequest (BiteAndHold/
+    -- NonLethalTakedown only): requires a real warning before a bite/
+    -- takedown may be STARTED, never consulted by any termination path.
+    -- HARD load-order requirement on server/cooldowns.lua: NewCooldown is
+    -- called at this file's own file-load time. ResolveNetworkEntity/
+    -- ResolveConnectedPlayerFromPed (server/entities.lua) and HasK9Access
+    -- (server/certifications.lua) are all reached only at RUN time, each
+    -- behind this resource's standard `type(fn) == 'function'` soft-
+    -- dependency guard -- server/combat.lua's own consumption of this
+    -- file's IsApprehensionWarned is the SAME guarded shape, so load order
+    -- between this file and server/combat.lua does not matter either;
+    -- placed immediately after it purely for topical grouping, same
+    -- reasoning server/recall.lua's own placement note (below) already
+    -- gives for itself.
+    'server/announce.lua',
     -- Recall (server half) -- the handler's escape hatch, ending
     -- whatever active effect their partnered K9 holds. Loaded after
     -- cooldowns.lua (NewCooldown at file-load time -- a hard requirement);
@@ -522,6 +595,21 @@ server_scripts {
     -- (NewCooldown at file-load time) and certifications.lua (HasK9Access
     -- and IsConfiguredK9Model, called at runtime).
     'server/integrations.lua',
+    -- Discord webhook logging (Config.Features.DiscordWebhook, ships
+    -- `false`) -- a pure LISTENER on the already-documented
+    -- `qbx_k9unit:events:*` contract server/exports.lua's own EVENT
+    -- CONTRACT section documents; it fires nothing new and touches no
+    -- other file. HARD load-order requirement on server/cooldowns.lua:
+    -- calls NewCooldown() at this file's own file-load time, immediately
+    -- past its own feature/URL gates. No dependency on server/events.lua
+    -- (that file's FireOutboundEvent is only what OTHER files call to
+    -- fire these events in the first place; this file only ever
+    -- AddEventHandler's on the event NAMES themselves, which works
+    -- regardless of load order the same way any other resource's own
+    -- listener would). Loaded after server/integrations.lua purely for
+    -- topical grouping (both are "external-system integration surface"
+    -- files) -- no functional dependency between the two.
+    'server/webhook.lua',
     'server/exports.lua',
     'server/selfcheck.lua', -- Boot-time self-check (dependency version + Config.Features key check + one-line boot summary), extending the discipline server/datastore.lua's own schema-collision safety net already established. Loaded LAST: it only WARNS (never blocks) and its own database-state clause deliberately waits on K9Store.WaitForSchemaCheckToSettle() rather than racing it, so placement here is about reading things last, not a load-order requirement of its own -- see that file's own header.
 }

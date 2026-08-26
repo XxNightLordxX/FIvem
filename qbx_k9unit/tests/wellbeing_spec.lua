@@ -175,6 +175,37 @@ local function baselineWellbeingConfig()
             -- own `restoreAmount > 0` guard).
             deathRespawnRestoreAmount = 100,
         },
+        -- HUNGER/THIRST (this pass, coder-backend) -- shipped defaults, same
+        -- arithmetic as this task's own report: decayPerTick tuned so a
+        -- full-to-empty drain takes ~90 minutes (Hunger) / ~60 minutes
+        -- (Thirst) at tickIntervalMs=5000 if never fed/watered.
+        Hunger = {
+            max                    = 100,
+            decayPerTick           = 0.093,
+            lowThreshold           = 30,
+            speedPenaltyMultiplier = 0.95,
+            feedItemName           = 'k9_food',
+            feedRegenAmount        = 35,
+            feedCooldownMs         = 120000,
+        },
+        Thirst = {
+            max                    = 100,
+            decayPerTick           = 0.139,
+            lowThreshold           = 30,
+            speedPenaltyMultiplier = 0.95,
+            drinkItemName          = 'k9_water',
+            drinkRegenAmount       = 35,
+            drinkCooldownMs        = 90000,
+            -- Shipped default is {'water_bowl'} -- emptied here by default,
+            -- same "not exercised unless a test opts in" convention this
+            -- file's own header already establishes for Fatigue.restSources;
+            -- the dedicated drinkFromBowl tests further down override this
+            -- per-fixture via wellbeingCfg.
+            bowlSources            = {},
+            bowlRegenAmount        = 15,
+            bowlCooldownMs         = 60000,
+            bowlInteractRange      = 2.0,
+        },
     }
 end
 
@@ -185,6 +216,7 @@ local function baselineFeatures(overrides)
         FearStressSystem   = false,
         DistractionSystem  = false,
         InjuryLimping      = false,
+        HungerThirstSystem = false,
     }
     for key, value in pairs(overrides or {}) do
         features[key] = value
@@ -316,6 +348,20 @@ local function newWellbeingFixture(opts)
     local function GetAllVehicles() return {} end
     local function GetHashKey(name) return name end
 
+    -- HUNGER/THIRST -- drinkFromBowl's own netId -> entity resolution goes
+    -- through the REAL, unmodified server/entities.lua's ResolveNetworkEntity
+    -- (loaded below), which itself calls these three raw natives. Keyed by
+    -- a plain opaque netId/entity number this fixture controls entirely via
+    -- setNetworkEntity below -- no relationship to pedBySource/coordsByPed's
+    -- own numbering, exactly like every other entity-handle table in this
+    -- fixture.
+    local entityByNetId = {}
+    local existingEntities = {}
+    local entityTypeByEntity = {}
+    local function NetworkGetEntityFromNetworkId(netId) return entityByNetId[netId] or 0 end
+    local function DoesEntityExist(entity) return existingEntities[entity] == true end
+    local function GetEntityType(entity) return entityTypeByEntity[entity] or 0 end
+
     -- STARTUP VALIDATION (this task) -- GetCurrentResourceName/onResourceStart
     -- support for exercising the new WarnIfItemMissing/onResourceStart block.
     local RESOURCE_NAME = 'qbx_k9unit'
@@ -414,6 +460,9 @@ local function newWellbeingFixture(opts)
         GetAllObjects        = GetAllObjects,
         GetAllVehicles       = GetAllVehicles,
         GetHashKey           = GetHashKey,
+        NetworkGetEntityFromNetworkId = NetworkGetEntityFromNetworkId,
+        DoesEntityExist      = DoesEntityExist,
+        GetEntityType        = GetEntityType,
         GetCurrentResourceName = GetCurrentResourceName,
         Config               = config,
         -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
@@ -460,6 +509,24 @@ local function newWellbeingFixture(opts)
         setHasK9Access = function(source, v) hasK9AccessBySource[source] = v end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         setHealth = function(ped, hp) healthByPed[ped] = hp end,
+        -- HUNGER/THIRST -- registers a fake world object entity behind a
+        -- netId, for drinkFromBowl's own ResolveNetworkEntity(netId, 3) call.
+        -- `entityType` defaults to 3 (object), matching a real bowl prop;
+        -- pass 1/2 to exercise ResolveNetworkEntity's own ped/vehicle
+        -- type-mismatch reject. Model/coords for `entity` are set the
+        -- ordinary way (setModel/setCoords above), since GetEntityModel/
+        -- GetEntityCoords read the exact same generic tables regardless of
+        -- whether the handle is a ped or a plain object.
+        setNetworkEntity = function(netId, entity, entityType)
+            entityByNetId[netId] = entity
+            existingEntities[entity] = true
+            entityTypeByEntity[entity] = entityType or 3
+        end,
+        removeNetworkEntity = function(netId)
+            local entity = entityByNetId[netId]
+            entityByNetId[netId] = nil
+            if entity then existingEntities[entity] = nil end
+        end,
         setItemCount = function(src, itemName, n)
             itemCounts[src] = itemCounts[src] or {}
             itemCounts[src][itemName] = n
@@ -538,14 +605,17 @@ end
 -- Sanity: the file loaded and registered what its own header documents.
 -- ========================================================================
 
-t.test('server/wellbeing.lua registers exactly its three documented server net events', function()
+t.test('server/wellbeing.lua registers exactly its six documented server net events (UPDATED this pass: three Hunger/Thirst additions -- feedK9Hunger/giveK9Water/drinkFromBowl -- alongside the original three)', function()
     local f = newWellbeingFixture()
     local count = 0
     for _ in pairs(f.registeredNetEvents) do count = count + 1 end
-    t.equals(count, 3)
+    t.equals(count, 6)
     t.isTrue(f.registeredNetEvents['qbx_k9unit:server:relayDamageEvent'] ~= nil)
     t.isTrue(f.registeredNetEvents['qbx_k9unit:server:relayWeaponFire'] ~= nil)
     t.isTrue(f.registeredNetEvents['qbx_k9unit:server:calmDownK9'] ~= nil)
+    t.isTrue(f.registeredNetEvents['qbx_k9unit:server:feedK9Hunger'] ~= nil)
+    t.isTrue(f.registeredNetEvents['qbx_k9unit:server:giveK9Water'] ~= nil)
+    t.isTrue(f.registeredNetEvents['qbx_k9unit:server:drinkFromBowl'] ~= nil)
 end)
 
 t.test('server/wellbeing.lua registers at least one playerDropped handler', function()
@@ -566,7 +636,7 @@ t.test('No TickWellbeing activity when every one of the five wellbeing feature f
     t.equals(#f.clientEvents, 0)
 end)
 
-t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at file load, even when every one of the five wellbeing feature flags is false -- exactly two threads always exist now, and idling over an all-off Config.Features costs nothing observable", function()
+t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at file load, even when every one of the six wellbeing feature flags is false -- exactly four threads always exist now, and idling over an all-off Config.Features costs nothing observable", function()
     -- INVERTED ON PURPOSE (this pass, coder-backend). This test used to be
     -- titled "DISCREPANCY: ..." and asserted exactly ONE CreateThread call
     -- with every flag off, pinning server/wellbeing.lua's OWN then-true
@@ -594,15 +664,29 @@ t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at 
     -- would reopen the exact unbounded-staleness gap the LIVE-FLIP FIX test
     -- below exists to prove closed.
     local f = newWellbeingFixture() -- all features false
-    t.equals(f.createThreadCallCount(), 2, "two CreateThread calls happen at file-load time even with every feature off -- DistractionCooldown's own always-on sweep, AND the now-unconditional TickWellbeing loop")
+    -- UPDATED THIS PASS (coder-backend, Hunger/Thirst): the count moved from
+    -- 2 to 4. Named exhaustively, so nobody has to re-derive this later:
+    -- (1) DistractionCooldown's own always-on sweep (pre-existing),
+    -- (2) the now-unconditional TickWellbeing loop (pre-existing),
+    -- (3) HungerFeedCooldown's own always-on sweep (NEW, this pass -- keyed
+    --     by citizenid, exactly DistractionCooldown's own shape, so it needs
+    --     the identical always-on :StartSweep cleanup strategy),
+    -- (4) ThirstReliefCooldown's own always-on sweep (NEW, this pass --
+    --     shared between giveK9Water and drinkFromBowl, same reasoning).
+    -- Both new sweeps run unconditionally regardless of HungerThirstSystem's
+    -- own flag, same as DistractionCooldown's sweep already does regardless
+    -- of DistractionSystem -- see server/wellbeing.lua's own HungerFeedCooldown/
+    -- ThirstReliefCooldown declarations for why an empty store costs nothing
+    -- observable while the feature is off.
+    t.equals(f.createThreadCallCount(), 4, "four CreateThread calls happen at file-load time even with every feature off -- DistractionCooldown/HungerFeedCooldown/ThirstReliefCooldown's own always-on sweeps, AND the now-unconditional TickWellbeing loop")
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, "the now-unconditional tick thread must idle cleanly with every flag off, no error")
     t.equals(#f.clientEvents, 0, "no wellbeingUpdate is ever pushed while every flag is off, even though the thread is now genuinely running")
 end)
 
-t.test('With any one wellbeing feature on, exactly two threads are created: the (now-unconditional) TickWellbeing loop, plus the always-on DistractionCooldown sweep', function()
+t.test('With any one wellbeing feature on, exactly four threads are created: the (now-unconditional) TickWellbeing loop, plus the three always-on cooldown sweeps (DistractionCooldown, HungerFeedCooldown, ThirstReliefCooldown)', function()
     local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
-    t.equals(f.createThreadCallCount(), 2)
+    t.equals(f.createThreadCallCount(), 4)
 end)
 
 -- ========================================================================
@@ -1973,6 +2057,444 @@ t.test('NO NEGATIVE/WRAPPED FATIGUE: even at the tunable\'s own maximum (20.0/ti
     end
     local final = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
     t.equals(final.fatigue, 0, 'after enough ticks at the maximum decay rate, fatigue settles at exactly 0, clamped -- never negative')
+end)
+
+-- ========================================================================
+-- HUNGER/THIRST (this pass, coder-backend). Config.Features.HungerThirstSystem.
+-- See server/wellbeing.lua's header "HUNGER/THIRST" section for the full
+-- design writeup this section proves.
+-- ========================================================================
+
+t.test('EVERY tracker in server/wellbeing.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, citizenid-keyed ones sweep, and none has neither', function()
+    -- Same "read the file's own text, not a runtime accessor" technique
+    -- tests/mainserver_spec.lua/tests/combat_spec.lua/tests/recall_spec.lua/
+    -- tests/partnership_spec.lua already established for the identical
+    -- invariant in their own files -- extended to server/wellbeing.lua for
+    -- the first time this pass, specifically because this task added THREE
+    -- new NewCooldown()/NewNestedCooldown() declarations
+    -- (HungerFeedCooldown/ThirstReliefCooldown; AffectionCooldown already
+    -- existed) and the task's own instructions call out this exact defect
+    -- class by name. A tracker with NEITHER strategy leaks for the whole
+    -- uptime of the server.
+    local handle = assert(io.open('../server/wellbeing.lua', 'r'))
+    local text = handle:read('*a')
+    handle:close()
+
+    local declared = {}
+    for name in text:gmatch('local%s+([%w_]+)%s*=%s*New[CN]') do
+        declared[#declared + 1] = name
+    end
+    t.isTrue(#declared >= 5,
+        ('sanity: only found %d tracker declaration(s) in server/wellbeing.lua -- the pattern has probably drifted; fix it rather than lowering this floor'):format(#declared))
+
+    for _, name in ipairs(declared) do
+        local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
+        local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
+        t.isTrue(hasPlayerDropped or hasSweep,
+            name .. ' has neither .RegisterPlayerDropped() nor .StartSweep() -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it')
+    end
+end)
+
+--- Wires a single online, K9-modeled, HungerThirstSystem-eligible player.
+--- @param f table
+--- @param opts table?
+--- @return number src, number ped
+local function wireHungerThirstK9(f, opts)
+    opts = opts or {}
+    local src = opts.src or 1
+    local ped = opts.ped or 9001
+    f.setPlayer(src, opts.citizenid or 'K9-CID')
+    f.setOnline({ src })
+    f.setPed(src, ped)
+    f.setModel(ped, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(ped, 0, 0, 0)
+    return src, ped
+end
+
+-- ------------------------------------------------------------------------
+-- PASSIVE DECAY
+-- ------------------------------------------------------------------------
+
+t.test('HungerThirstSystem off: TickWellbeing never touches hunger/thirst -- both stay at their default max forever', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = false } })
+    local src = wireHungerThirstK9(f)
+    f.runOneTick()
+    f.advance(5000)
+    f.runOneTick()
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    -- getWellbeingSnapshot itself returns nil when EVERY flag is off (this
+    -- file's own established contract) -- confirm that first, then re-fetch
+    -- with a sibling flag on so EnsureStats' own hunger/thirst DEFAULT (not
+    -- yet touched by any tick, since HungerThirstSystem is off) is visible.
+    t.isNil(snap, 'every wellbeing flag is off in this fixture -- getWellbeingSnapshot must return nil, not a snapshot of an inert stat')
+end)
+
+t.test('Passive decay: hunger and thirst each drop by exactly their own decayPerTick, once per tick, clamped at 0 and never negative', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+
+    f.runOneTick() -- primes, then one real pass
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.hunger, 100 - 0.093, 'hungerDecayPerTick applied exactly once')
+    t.equals(snap.thirst, 100 - 0.139, 'thirstDecayPerTick applied exactly once, a DIFFERENT (faster) rate than hunger')
+
+    -- Enough ticks to drive both stats to (and past) 0 -- confirm the clamp,
+    -- not merely the arithmetic.
+    for _ = 1, 2000 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local final = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(final.hunger, 0, 'hunger clamps at 0, never negative, no matter how many ticks elapse with no feeding')
+    t.equals(final.thirst, 0, 'thirst clamps at 0, never negative, no matter how many ticks elapse with no watering')
+end)
+
+t.test('CONSEQUENCE STAYS MILD: even at hunger=thirst=0, this file never blocks anything -- it only ever feeds K9MoveRateModifiers via the pushed snapshot; TickWellbeing itself has no sprint/jump block for either stat (unlike Injury)', function()
+    -- Server-side proof that this file's own TickWellbeing contains no
+    -- Hunger/Thirst-driven DisableControlAction-equivalent or hard refusal
+    -- anywhere -- the actual client-local move-rate multiplier is
+    -- client/wellbeing.lua's job (see tests/clientwellbeing_spec.lua for
+    -- that half). This test proves the SERVER never computes or pushes
+    -- anything resembling a boolean "blocked" state for these two stats --
+    -- only the plain numeric hunger/thirst values themselves, exactly like
+    -- Fatigue/Mood (a multiplier-only consequence), never like Injury
+    -- (which separately pushes sprintBlockThreshold/jumpBlockThreshold for
+    -- a REAL client-side hard block).
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    for _ = 1, 2000 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.hunger, 0)
+    t.equals(snap.thirst, 0)
+    t.isNil(snap.hungerBlocked, 'no such field exists -- this file never computes a hard block for Hunger')
+    t.isNil(snap.thirstBlocked, 'no such field exists -- this file never computes a hard block for Thirst')
+    -- The only Hunger/Thirst-derived values ever pushed are the plain
+    -- numbers and the two MILD tunables consumed by client-side
+    -- move-rate composition -- both present, both plain multipliers.
+    t.equals(snap.wellbeingTunables.hungerSpeedPenaltyMultiplier, 0.95)
+    t.equals(snap.wellbeingTunables.thirstSpeedPenaltyMultiplier, 0.95)
+end)
+
+t.test('PER-PERSON FEATURE CONTROL: a citizenid explicitly blocked from HungerThirstSystem never decays either stat, but is never frozen from being fed/watered -- same "immunity from harm, never gate relief" design as every sibling stat', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'K9-CID' and key == 'block.HungerThirstSystem' end
+
+    f.runOneTick()
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.hunger, 100, 'blocked citizenid never decays')
+    t.equals(snap.thirst, 100, 'blocked citizenid never decays')
+
+    -- Relief still works normally despite the block -- see feedK9Hunger's
+    -- own tests below for the full flow; this just confirms the gate is
+    -- absent from that path too.
+    f.setItemCount(src, 'k9_food', 1)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    local afterFeed = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(afterFeed.hunger, 100, 'already at max, but the point is the call was never refused by the block -- see the exact regen-amount test below for a non-clamped case')
+end)
+
+-- ------------------------------------------------------------------------
+-- feedK9Hunger — self-only, item-based
+-- ------------------------------------------------------------------------
+
+t.test('feedK9Hunger: feature disabled is a silent no-op -- no item consumed, no stat change, no notify', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = false } })
+    local src = wireHungerThirstK9(f)
+    f.setItemCount(src, 'k9_food', 5)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 5)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('feedK9Hunger: not currently K9-modeled is a silent no-op', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = 1
+    f.setPlayer(src, 'K9-CID')
+    f.setOnline({ src })
+    f.setPed(src, 9001)
+    f.setModel(9001, 999) -- NOT a configured K9 model
+    f.setCoords(9001, 0, 0, 0)
+    f.setItemCount(src, 'k9_food', 5)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 5)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('feedK9Hunger: no item carried -- refused with reason_no_food, no cooldown stamped (a real retry with the item in hand must still succeed)', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, Sandbox.locale('wellbeing.reason_no_food'))
+    t.equals(f.notifyCalls[1].notifyType, 'error')
+
+    f.setItemCount(src, 'k9_food', 1)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(#f.notifyCalls, 2)
+    t.equals(f.notifyCalls[2].notifyType, 'success', 'the earlier failed attempt (no item) must not have stamped the cooldown -- a real retry succeeds immediately')
+end)
+
+t.test('feedK9Hunger: real success -- consumes exactly one item, restores hunger by feedRegenAmount, clamped at max, and notifies success', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    f.setItemCount(src, 'k9_food', 2)
+
+    -- Lower hunger below max first so the regen is observable rather than
+    -- masked by the clamp.
+    for _ = 1, 500 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local before = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(before.hunger < 100 and before.hunger > 0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 1, 'exactly one k9_food consumed')
+    local after = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(after.hunger, math.min(100, before.hunger + 35), 'feedRegenAmount(35) applied, clamped to max')
+    t.equals(f.notifyCalls[1].description, Sandbox.locale('wellbeing.eat_success'))
+end)
+
+t.test('feedK9Hunger: SELF-SERVICE, a deliberate divergence from Mood -- a K9 with no partner online can feed itself repeatedly (subject only to the cooldown and real item cost), never refused for "no target"', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f) -- the ONLY online player
+    f.setItemCount(src, 'k9_food', 1)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.notifyCalls[1].notifyType, 'success', 'no second player was ever needed -- this is the deliberate divergence from Mood\'s feedK9/petK9')
+end)
+
+t.test('feedK9Hunger: cooldown blocks a second feed inside feedCooldownMs, even with items still in hand, and releases exactly on schedule', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    f.setItemCount(src, 'k9_food', 5)
+
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 4)
+
+    f.advance(119999) -- feedCooldownMs(120000) - 1ms
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 4, 'still on cooldown -- no item consumed')
+    t.equals(f.notifyCalls[2].description, Sandbox.locale('wellbeing.reason_on_cooldown'))
+
+    f.advance(1) -- exactly feedCooldownMs elapsed now
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 3, 'cooldown genuinely released -- a real feed succeeds')
+end)
+
+t.test('feedK9Hunger: cooldown is keyed by CITIZENID, not raw source -- reconnecting under a NEW source id with the SAME citizenid is still on cooldown (cannot be bypassed by disconnect/reconnect)', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f, { src = 1, citizenid = 'K9-CID' })
+    f.setItemCount(src, 'k9_food', 5)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.getItemCount(src, 'k9_food'), 4)
+
+    -- Same citizenid, brand-new connection id.
+    f.firePlayerDropped(src)
+    local newSrc = 2
+    f.setPlayer(newSrc, 'K9-CID')
+    f.setOnline({ newSrc })
+    f.setPed(newSrc, 9050)
+    f.setModel(9050, 555)
+    f.setCoords(9050, 0, 0, 0)
+    f.setItemCount(newSrc, 'k9_food', 5)
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', newSrc)
+    t.equals(f.getItemCount(newSrc, 'k9_food'), 5, 'still blocked -- the cooldown followed the citizenid across a reconnect under a different source id')
+end)
+
+-- ------------------------------------------------------------------------
+-- giveK9Water — self-only, item-based (same shape as feedK9Hunger)
+-- ------------------------------------------------------------------------
+
+t.test('giveK9Water: real success -- consumes exactly one item, restores thirst by drinkRegenAmount, clamped at max', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    f.setItemCount(src, 'k9_water', 2)
+    for _ = 1, 500 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local before = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    f.dispatchNetEvent('qbx_k9unit:server:giveK9Water', src)
+    t.equals(f.getItemCount(src, 'k9_water'), 1)
+    local after = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(after.thirst, math.min(100, before.thirst + 35))
+    t.equals(f.notifyCalls[1].description, Sandbox.locale('wellbeing.drink_success'))
+end)
+
+t.test('giveK9Water: no item -- reason_no_water, and feedK9Hunger\'s own cooldown is completely independent (feeding does not block watering)', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    local src = wireHungerThirstK9(f)
+    f.setItemCount(src, 'k9_food', 1)
+    f.setItemCount(src, 'k9_water', 0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:feedK9Hunger', src)
+    t.equals(f.notifyCalls[1].notifyType, 'success')
+
+    f.dispatchNetEvent('qbx_k9unit:server:giveK9Water', src)
+    t.equals(f.notifyCalls[2].description, Sandbox.locale('wellbeing.reason_no_water'), 'Hunger\'s own cooldown/success has no bearing on Thirst\'s independent tracker')
+end)
+
+-- ------------------------------------------------------------------------
+-- drinkFromBowl — self-only, world-prop, NO item consumed
+-- ------------------------------------------------------------------------
+
+t.test('drinkFromBowl: SERVER-AUTHORITATIVE -- a client-claimed netId that resolves to a real object of the WRONG model is rejected outright, no matter how close it is', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Thirst.bowlSources = { 'test_water_bowl' }
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, wellbeingCfg = cfg })
+    local src = wireHungerThirstK9(f)
+
+    f.setNetworkEntity(555, 8001, 3)
+    f.setModel(8001, 'NOT_a_bowl')
+    f.setCoords(8001, 0, 0, 0) -- right on top of the K9 -- distance is not the reason this fails
+    f.dispatchNetEvent('qbx_k9unit:server:drinkFromBowl', src, 555)
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.thirst, 100, 'never trusts the client\'s claim about which entity this netId is -- the model is re-derived server-side and rejected')
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('drinkFromBowl: SERVER-AUTHORITATIVE -- the right model but TOO FAR from the caller\'s own live position is rejected, never a client-claimed distance', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Thirst.bowlSources = { 'test_water_bowl' }
+    cfg.Thirst.bowlInteractRange = 2.0
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, wellbeingCfg = cfg })
+    local src = wireHungerThirstK9(f)
+
+    f.setNetworkEntity(555, 8001, 3)
+    f.setModel(8001, 'test_water_bowl')
+    f.setCoords(8001, 50, 0, 0) -- 50m away, well past bowlInteractRange
+    f.dispatchNetEvent('qbx_k9unit:server:drinkFromBowl', src, 555)
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.thirst, 100)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('drinkFromBowl: a netId that does not resolve to any real, existing entity (never spawned, or already despawned) is a safe no-op, never an error', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Thirst.bowlSources = { 'test_water_bowl' }
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, wellbeingCfg = cfg })
+    local src = wireHungerThirstK9(f)
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:drinkFromBowl', src, 99999)
+    t.isTrue(ok)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('drinkFromBowl: a non-number payload (a forged/malformed netId) is a safe no-op, never an error -- never trusts the client payload\'s own type', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Thirst.bowlSources = { 'test_water_bowl' }
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, wellbeingCfg = cfg })
+    local src = wireHungerThirstK9(f)
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:drinkFromBowl', src, { evil = true })
+    t.isTrue(ok)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('drinkFromBowl: real success -- correct model, within range, no item consumed at all, restores thirst by bowlRegenAmount', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Thirst.bowlSources = { 'test_water_bowl' }
+    cfg.Thirst.bowlInteractRange = 2.0
+    cfg.Thirst.bowlRegenAmount = 15
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, wellbeingCfg = cfg })
+    local src, ped = wireHungerThirstK9(f)
+    f.setNetworkEntity(555, 8001, 3)
+    f.setModel(8001, 'test_water_bowl')
+    f.setCoords(8001, 1.0, 0, 0) -- 1.0m, within the 2.0m range
+    f.setCoords(ped, 0, 0, 0)
+
+    for _ = 1, 500 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local before = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+
+    f.dispatchNetEvent('qbx_k9unit:server:drinkFromBowl', src, 555)
+    local after = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(after.thirst, math.min(100, before.thirst + 15))
+    t.equals(f.notifyCalls[1].description, Sandbox.locale('wellbeing.drink_success'))
+end)
+
+t.test('WATER BOWL MODEL RISK, DEGRADES GRACEFULLY: bowlSources = {} (the shipped default, since \'water_bowl\' is unverified) makes drinkFromBowl a total, silent no-op -- never an error -- even with a perfectly positioned, correctly-modeled real entity, and Thirst still works fully via giveK9Water regardless', function()
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } }) -- baselineWellbeingConfig's Thirst.bowlSources = {}
+    local src, ped = wireHungerThirstK9(f)
+    f.setNetworkEntity(555, 8001, 3)
+    f.setModel(8001, 'water_bowl')
+    f.setCoords(8001, 0, 0, 0)
+    f.setCoords(ped, 0, 0, 0)
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:drinkFromBowl', src, 555)
+    t.isTrue(ok, 'no bowl model configured at all -- must degrade to a safe no-op, never throw')
+    t.equals(#f.notifyCalls, 0)
+
+    -- The item-based path has no model dependency at all -- it still works.
+    f.setItemCount(src, 'k9_water', 1)
+    f.dispatchNetEvent('qbx_k9unit:server:giveK9Water', src)
+    t.equals(f.notifyCalls[1].notifyType, 'success', 'Thirst is never fully broken by an unresolved bowl model -- giveK9Water has no model dependency')
+end)
+
+t.test('ANTI-FARM: giveK9Water (item) and drinkFromBowl (world prop) SHARE one cooldown tracker -- alternating the two on yourself cannot double the effective thirst-regen rate inside one cooldown window', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Thirst.bowlSources = { 'test_water_bowl' }
+    cfg.Thirst.drinkCooldownMs = 90000
+    cfg.Thirst.bowlCooldownMs = 60000
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, wellbeingCfg = cfg })
+    local src = wireHungerThirstK9(f)
+    f.setNetworkEntity(555, 8001, 3)
+    f.setModel(8001, 'test_water_bowl')
+    f.setCoords(8001, 0, 0, 0)
+    f.setItemCount(src, 'k9_water', 5)
+
+    -- Item-drink first, stamping the shared tracker.
+    f.dispatchNetEvent('qbx_k9unit:server:giveK9Water', src)
+    t.equals(f.getItemCount(src, 'k9_water'), 4)
+    t.equals(f.notifyCalls[1].notifyType, 'success')
+
+    -- Bowl-drink immediately after: bowlCooldownMs(60000) has not elapsed
+    -- since the SAME shared stamp -- blocked, exactly like re-using the
+    -- same action would be.
+    f.dispatchNetEvent('qbx_k9unit:server:drinkFromBowl', src, 555)
+    t.equals(#f.notifyCalls, 2)
+    t.equals(f.notifyCalls[2].description, Sandbox.locale('wellbeing.reason_on_cooldown'), 'the bowl path must be blocked by the SAME stamp the item path just made -- proves one shared tracker instance, not two independent ones')
+
+    -- Once bowlCooldownMs(60000) has elapsed, the bowl path is free again --
+    -- proves this is a real, releasing cooldown, not a permanent lockout.
+    f.advance(60000)
+    f.dispatchNetEvent('qbx_k9unit:server:drinkFromBowl', src, 555)
+    t.equals(#f.notifyCalls, 3)
+    t.equals(f.notifyCalls[3].notifyType, 'success')
+end)
+
+-- ------------------------------------------------------------------------
+-- CONFIG-DEFENSIVENESS -- this file does not own config.lua; Config.Wellbeing
+-- .Hunger/.Thirst may not exist yet on a server whose config.lua has not
+-- landed them.
+-- ------------------------------------------------------------------------
+
+t.test('CONFIG-DEFENSIVE: Config.Wellbeing.Hunger/.Thirst entirely ABSENT (an old config.lua, HungerThirstSystem flipped on anyway) never crashes EnsureStats/SnapshotOf/TickWellbeing/WarnIfItemMissing -- degrades to safe hardcoded fallbacks instead', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Hunger = nil
+    cfg.Thirst = nil
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true, MoodSystem = true }, wellbeingCfg = cfg })
+    local src = wireHungerThirstK9(f)
+
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'TickWellbeing must never crash just because Config.Wellbeing.Hunger/.Thirst are missing entirely')
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(snap ~= nil, 'MoodSystem is on -- a snapshot must still be produced')
+    t.isTrue(type(snap.hunger) == 'number' and snap.hunger <= 100, 'hunger falls back to a safe hardcoded default (100, then decayed once) rather than erroring')
+    t.isTrue(type(snap.thirst) == 'number' and snap.thirst <= 100)
+
+    local okStart = pcall(f.fireResourceStart)
+    t.isTrue(okStart, 'the onResourceStart item-warning sweep must also survive a missing Config.Wellbeing.Hunger/.Thirst')
 end)
 
 os.exit(t.summary())

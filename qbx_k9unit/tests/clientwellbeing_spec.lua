@@ -181,6 +181,19 @@ local function newWellbeingFixture(opts)
         disableControlActionCalls[#disableControlActionCalls + 1] = { inputGroup = inputGroup, control = control, disable = disable }
     end
 
+    -- HUNGER/THIRST (this pass, coder-backend) -- "Drink from Bowl"'s own
+    -- onSelect resolves `data.entity` (a raw entity handle ox_target hands
+    -- back) via DoesEntityExist + NetworkGetNetworkIdFromEntity before ever
+    -- triggering the server event. GetHashKey is identity here (same
+    -- convention as tests/wellbeing_spec.lua's own server-side stub), so a
+    -- test can set bowlSources = {'test_water_bowl'} and match it directly
+    -- with no real hashing involved.
+    local existingEntities = {}
+    local function DoesEntityExist(entity) return existingEntities[entity] == true end
+    local netIdByEntity = {}
+    local function NetworkGetNetworkIdFromEntity(entity) return netIdByEntity[entity] end
+    local function GetHashKey(name) return name end
+
     -- lib.callback.await -- one shared FIFO queue, sufficient because every
     -- test below only ever has ONE callback-awaiting action in flight at a
     -- time (the on-demand snapshot thread, or exactly one Pet/Feed/
@@ -228,11 +241,12 @@ local function newWellbeingFixture(opts)
     -- the no-op stub -- the exports this file never actually exercises are
     -- still stubbed as harmless no-ops so verification passes.
     local addGlobalPlayerCalls = {}
+    local addModelCalls = {} -- { models = {...}, defs = {...} } -- HUNGER/THIRST "Drink from Bowl" (this pass, coder-backend)
     local oxTargetStub = {}
     function oxTargetStub.addGlobalPlayer(_, defs) addGlobalPlayerCalls[#addGlobalPlayerCalls + 1] = defs end
     function oxTargetStub.addGlobalVehicle() end
     function oxTargetStub.addGlobalObject() end
-    function oxTargetStub.addModel() end
+    function oxTargetStub.addModel(_, models, defs) addModelCalls[#addModelCalls + 1] = { models = models, defs = defs } end
     function oxTargetStub.addSphereZone() end
     function oxTargetStub.removeGlobalPlayer() end
     function oxTargetStub.removeGlobalVehicle() end
@@ -302,6 +316,10 @@ local function newWellbeingFixture(opts)
         Wait = runner.Wait,
         IsDuplicityVersion = IsDuplicityVersion,
         GetResourceState = GetResourceState,
+        -- HUNGER/THIRST (this pass, coder-backend).
+        DoesEntityExist = DoesEntityExist,
+        NetworkGetNetworkIdFromEntity = NetworkGetNetworkIdFromEntity,
+        GetHashKey = GetHashKey,
     }
 
     local env = Sandbox.newEnv(overrides)
@@ -316,8 +334,43 @@ local function newWellbeingFixture(opts)
     env.Config.Features.FearStressSystem = false
     env.Config.Features.DistractionSystem = false
     env.Config.Features.InjuryLimping = false
+    -- HUNGER/THIRST (this pass, coder-backend) -- same "explicit false,
+    -- regardless of config.lua's shipped default" discipline as the five
+    -- siblings above. real config.lua does not have this key at all yet
+    -- (this file does not own config.lua) -- defaulting it here either way
+    -- means this fixture behaves identically once it does.
+    env.Config.Features.HungerThirstSystem = false
     for key, value in pairs(opts.features or {}) do
         env.Config.Features[key] = value
+    end
+
+    -- HUNGER/THIRST config seed -- real config.lua has no
+    -- Config.Wellbeing.Hunger/.Thirst yet either (this file does not own
+    -- config.lua); seeded here with the same shipped-default ARITHMETIC
+    -- this task's own report gives config.lua, so LiveWellbeingTunables'
+    -- own boot-time seed (read at client/wellbeing.lua's file-load time,
+    -- below) has real numbers to seed from. `opts.wellbeingHunger`/
+    -- `opts.wellbeingThirst` let an individual test override this, e.g. to
+    -- exercise bowlSources. Passing `false` explicitly (not merely omitting
+    -- the option) leaves the subtable ABSENT altogether, for the
+    -- config-defensive "old config.lua never added this section at all"
+    -- test -- `nil`/omitted is what selects THIS fixture's own default seed.
+    if opts.wellbeingHunger == nil then
+        env.Config.Wellbeing.Hunger = {
+            max = 100, decayPerTick = 0.093, lowThreshold = 30, speedPenaltyMultiplier = 0.95,
+            feedItemName = 'k9_food', feedRegenAmount = 35, feedCooldownMs = 120000,
+        }
+    elseif opts.wellbeingHunger ~= false then
+        env.Config.Wellbeing.Hunger = opts.wellbeingHunger
+    end
+    if opts.wellbeingThirst == nil then
+        env.Config.Wellbeing.Thirst = {
+            max = 100, decayPerTick = 0.139, lowThreshold = 30, speedPenaltyMultiplier = 0.95,
+            drinkItemName = 'k9_water', drinkRegenAmount = 35, drinkCooldownMs = 90000,
+            bowlSources = {}, bowlRegenAmount = 15, bowlCooldownMs = 60000, bowlInteractRange = 2.0,
+        }
+    elseif opts.wellbeingThirst ~= false then
+        env.Config.Wellbeing.Thirst = opts.wellbeingThirst
     end
 
     -- Real K9Compat, real ox_target adapter -- see the oxTargetStub comment
@@ -395,6 +448,18 @@ local function newWellbeingFixture(opts)
             end
         end,
         addGlobalPlayerCallCount = function() return #addGlobalPlayerCalls end,
+
+        -- HUNGER/THIRST (this pass, coder-backend) -- "Drink from Bowl".
+        bowlOption = function()
+            for _, call in ipairs(addModelCalls) do
+                for _, def in ipairs(call.defs) do
+                    if def.name == 'qbx_k9unit:drinkFromBowl' then return def, call.models end
+                end
+            end
+        end,
+        addModelCallCount = function() return #addModelCalls end,
+        setEntityExists = function(entity, v) existingEntities[entity] = v end,
+        setEntityNetId = function(entity, netId) netIdByEntity[entity] = netId end,
 
         command = function(name) return commands[name] end,
         commandCount = function() local n = 0; for _ in pairs(commands) do n = n + 1 end; return n end,
@@ -1051,6 +1116,184 @@ t.test('NATIVE STAMINA ASSIST: a malformed/non-number wellbeingTunables value is
     f.stepOne(3)
     t.equals(#f.restorePlayerStaminaCalls, 2)
     t.equals(f.restorePlayerStaminaCalls[2].percentage, 0.6, 'a malformed incoming value must leave the last-known-good percentage in effect, not silently become 0/nil/garbage')
+end)
+
+-- ========================================================================
+-- HUNGER/THIRST (this pass, coder-backend). Config.Features.HungerThirstSystem.
+-- Client-side half of server/wellbeing.lua's own new section -- see that
+-- file's header for the full design writeup this mirrors.
+-- ========================================================================
+
+t.test('HungerThirstSystem off: incoming hunger/thirst stats never touch K9MoveRateModifiers, and no low/satisfied notify ever fires -- a fully defined, silent no-op path, same as every other flag-off case above', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = false } })
+    f.triggerWellbeingUpdate(65535, { hunger = 0, thirst = 0, featureFlags = { HungerThirstSystem = false } })
+    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'reset to neutral, never left at whatever it last was, even though the flag is off')
+    t.equals(f.k9MoveRateModifiers.thirst, 1.0)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('ApplyMoveRateModifiers: hunger/thirst below their own configured thresholds each apply their OWN configured multiplier; at/above, both reset to 1.0 -- exactly the same shape as Fatigue/Mood/Injury above', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
+
+    f.triggerWellbeingUpdate(65535, { hunger = 10, thirst = 10, featureFlags = { HungerThirstSystem = true } })
+    t.equals(f.k9MoveRateModifiers.hunger, 0.95, 'below lowThreshold(30) -- speedPenaltyMultiplier applied')
+    t.equals(f.k9MoveRateModifiers.thirst, 0.95)
+
+    f.triggerWellbeingUpdate(65535, { hunger = 99, thirst = 99, featureFlags = { HungerThirstSystem = true } })
+    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'at/above lowThreshold -- neutral, no penalty')
+    t.equals(f.k9MoveRateModifiers.thirst, 1.0)
+end)
+
+t.test('LIVE FEATURE FLAG: HungerThirstSystem switched OFF mid-session (via a pushed featureFlags update, not this client\'s own static boot copy) immediately clears an in-flight hunger/thirst move-rate penalty -- the same "flag off must remove the effect, not merely stop reapplying it" rule this file already proves for every sibling stat', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
+    f.triggerWellbeingUpdate(65535, { hunger = 5, thirst = 5, featureFlags = { HungerThirstSystem = true } })
+    t.equals(f.k9MoveRateModifiers.hunger, 0.95)
+
+    f.triggerWellbeingUpdate(65535, { hunger = 5, thirst = 5, featureFlags = { HungerThirstSystem = false } })
+    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'a live server-side toggle-OFF must remove the in-flight penalty on the very next push, even though the raw stat value (5) never changed')
+    t.equals(f.k9MoveRateModifiers.thirst, 1.0)
+end)
+
+t.test('LIVE WELLBEING TUNABLE: a pushed wellbeingTunables edit to hungerSpeedPenaltyThreshold/hungerSpeedPenaltyMultiplier takes effect on the very next push, including retroactively lifting a penalty already in effect', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
+    f.triggerWellbeingUpdate(65535, { hunger = 25, thirst = 100, featureFlags = { HungerThirstSystem = true } })
+    t.equals(f.k9MoveRateModifiers.hunger, 0.95, 'below the shipped default threshold(30)')
+
+    -- Operator raises the multiplier (loosens the penalty) AND lowers the
+    -- threshold (so 25 no longer qualifies) in one live edit.
+    f.triggerWellbeingUpdate(65535, { hunger = 25, thirst = 100, featureFlags = { HungerThirstSystem = true },
+        wellbeingTunables = { hungerSpeedPenaltyThreshold = 20, hungerSpeedPenaltyMultiplier = 0.99 } })
+    t.equals(f.k9MoveRateModifiers.hunger, 1.0, 'threshold lowered below the current stat -- the ALREADY-IN-EFFECT penalty is lifted immediately, not merely stopped from reapplying at the old number')
+end)
+
+t.test('Hunger/thirst threshold-crossing notifications fire ONCE per transition (never every tick), using the SAME threshold ApplyMoveRateModifiers just judged the move-rate penalty against', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } })
+
+    f.triggerWellbeingUpdate(65535, { hunger = 100, thirst = 100, featureFlags = { HungerThirstSystem = true } })
+    t.equals(#f.notifyCalls, 0, 'starts satisfied -- no notify on the very first push')
+
+    f.triggerWellbeingUpdate(65535, { hunger = 10, thirst = 100, featureFlags = { HungerThirstSystem = true } })
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('wellbeing.hunger_low'))
+
+    -- Staying low must NOT notify again.
+    f.triggerWellbeingUpdate(65535, { hunger = 9, thirst = 100, featureFlags = { HungerThirstSystem = true } })
+    t.equals(#f.notifyCalls, 1)
+
+    f.triggerWellbeingUpdate(65535, { hunger = 90, thirst = 100, featureFlags = { HungerThirstSystem = true } })
+    t.equals(#f.notifyCalls, 2)
+    t.equals(f.notifyCalls[2].description, locale('wellbeing.hunger_satisfied'))
+
+    -- Thirst is completely independent of hunger's own wasHungry state.
+    f.triggerWellbeingUpdate(65535, { hunger = 90, thirst = 5, featureFlags = { HungerThirstSystem = true } })
+    t.equals(#f.notifyCalls, 3)
+    t.equals(f.notifyCalls[3].description, locale('wellbeing.thirst_low'))
+end)
+
+t.test('/k9eat and /k9drink: ALWAYS registered regardless of HungerThirstSystem\'s boot-time value (RUNTIME TOGGLE FIX shape, same as every other command in this file)', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = false } })
+    t.isTrue(type(f.command('k9eat')) == 'function')
+    t.isTrue(type(f.command('k9drink')) == 'function')
+end)
+
+t.test('/k9eat: HungerThirstSystem off is a silent no-op -- never even consults CanShowK9UI, never triggers the server', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = false } })
+    f.command('k9eat')()
+    t.equals(f.canShowK9UICallCount(), 0)
+    t.equals(#f.triggerServerEventCalls, 0)
+end)
+
+t.test('/k9eat: HungerThirstSystem on, access denied -> DenyK9UIAccess fires, no server event', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = false })
+    f.command('k9eat')()
+    t.equals(f.denyCallCount(), 1)
+    t.equals(#f.triggerServerEventCalls, 0)
+end)
+
+t.test('/k9eat: HungerThirstSystem on, access granted -> triggers feedK9Hunger exactly once, no payload', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = true })
+    f.command('k9eat')()
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:feedK9Hunger')
+end)
+
+t.test('/k9drink: HungerThirstSystem on, access granted -> triggers giveK9Water exactly once', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = true })
+    f.command('k9drink')()
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:giveK9Water')
+end)
+
+t.test('"Drink from Bowl" ox_target option: ALWAYS registers when bowlSources is non-empty, regardless of HungerThirstSystem\'s boot-time value -- targets the hashed model list via AddModel, never AddGlobalPlayer', function()
+    local f = newWellbeingFixture({
+        features = { HungerThirstSystem = false },
+        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
+    })
+    local option, models = f.bowlOption()
+    t.isNotNil(option, 'must register even though HungerThirstSystem booted false -- gated at canInteract, not at registration')
+    t.equals(#models, 1)
+    t.equals(models[1], 'test_water_bowl', 'GetHashKey is identity in this fixture -- confirms the real model name reaches AddModel unmodified')
+end)
+
+t.test('WATER BOWL MODEL RISK, DEGRADES GRACEFULLY (client half): an empty/missing bowlSources means AddModel is never even called -- no option, no error, and no ox_target entry that could ever match anything', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true } }) -- default wellbeingThirst.bowlSources = {}
+    t.equals(f.addModelCallCount(), 0)
+    t.isNil(f.bowlOption())
+end)
+
+t.test('"Drink from Bowl" canInteract: gates on LiveFeatureFlags.HungerThirstSystem AND CanShowK9UI(), exactly like every other self-only wellbeing ability in this file', function()
+    local f = newWellbeingFixture({
+        features = { HungerThirstSystem = false },
+        canShowK9UI = true,
+        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
+    })
+    local option = f.bowlOption()
+    t.isFalse(option.canInteract())
+
+    f.triggerWellbeingUpdate(65535, { hunger = 100, thirst = 100, featureFlags = { HungerThirstSystem = true } })
+    t.isTrue(option.canInteract())
+
+    f.setCanShowK9UI(false)
+    t.isFalse(option.canInteract(), 'live flag true is not enough on its own -- CanShowK9UI() must also be true')
+end)
+
+t.test('"Drink from Bowl" onSelect: resolves the REAL clicked entity to its own netId and triggers drinkFromBowl with exactly that -- never a client-claimed/fabricated identifier', function()
+    local f = newWellbeingFixture({
+        features = { HungerThirstSystem = true },
+        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
+    })
+    local option = f.bowlOption()
+    f.setEntityExists(4242, true)
+    f.setEntityNetId(4242, 999)
+
+    option.onSelect({ entity = 4242 })
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:drinkFromBowl')
+    t.equals(f.triggerServerEventCalls[1].args[1], 999)
+end)
+
+t.test('"Drink from Bowl" onSelect: a stale/nonexistent entity handle (DoesEntityExist false) is a safe no-op, never a garbage netId sent to the server', function()
+    local f = newWellbeingFixture({
+        features = { HungerThirstSystem = true },
+        wellbeingThirst = { bowlSources = { 'test_water_bowl' } },
+    })
+    local option = f.bowlOption()
+    -- Deliberately never calling setEntityExists -- defaults to false.
+    option.onSelect({ entity = 4242 })
+    t.equals(#f.triggerServerEventCalls, 0)
+end)
+
+t.test('CONFIG-DEFENSIVE: Config.Wellbeing.Hunger/.Thirst entirely absent at THIS client\'s own boot (an old config.lua) never crashes this file\'s own load, and every hunger/thirst code path degrades to a safe hardcoded default instead of erroring', function()
+    local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, wellbeingHunger = false, wellbeingThirst = false })
+    -- `false` (not a table) forces this fixture to skip its own default
+    -- seed entirely -- see newWellbeingFixture's own `opts.wellbeingHunger
+    -- or {...}` shape: passing `false` is falsy, so this reads as "seed
+    -- nothing," exactly mirroring a real old config.lua missing the key.
+    t.isTrue(f.env.Config.Wellbeing.Hunger == false or f.env.Config.Wellbeing.Hunger == nil)
+
+    local ok = pcall(f.triggerWellbeingUpdate, 65535, { hunger = 10, thirst = 10, featureFlags = { HungerThirstSystem = true } })
+    t.isTrue(ok, 'a missing Config.Wellbeing.Hunger/.Thirst at boot must never crash ApplyWellbeingSnapshot/ApplyMoveRateModifiers')
+    t.equals(f.k9MoveRateModifiers.hunger, 0.95, 'falls back to the same hardcoded default (30/0.95) this file\'s own LiveWellbeingTunables seed uses when the real Config table is missing')
 end)
 
 os.exit(t.summary())

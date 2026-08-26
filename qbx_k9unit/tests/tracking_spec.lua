@@ -972,6 +972,88 @@ t.test('ScentVision: each dot expires against its OWN timestamp -- advancing the
     t.equals(#afterExpiry.points, 0, 'a point older than dotLifetimeMs must never be revealed, regardless of how it got old')
 end)
 
+t.test('LOITER FIX: a player who stays within minSampleMovementMeters of their own last dot has that dot\'s decay RESET on every capture pass, instead of aging out on schedule', function()
+    -- mana_policedogs competitor-parity request: "if a player hasn't moved
+    -- far enough away from their last dropped scent, their existing scent
+    -- will have its decay reset." Regression for the bug this pass fixes
+    -- in RecordScentVisionPoint (server/tracking.lua): the "hasn't moved
+    -- far enough" branch used to just `return`, never touching the
+    -- existing point's own timestamp, so a perfectly stationary player's
+    -- one dot aged out on the ORIGINAL capture time regardless of how long
+    -- they kept standing right there.
+    --
+    -- TEST-DESIGN NOTE (do not "simplify" this back, it was tried and it
+    -- masks the bug): querying IMMEDIATELY after a capture pass is not a
+    -- valid way to observe this fix. RecordScentVisionPoint's own
+    -- DiscardExpiredScentVisionPoints call runs FIRST, on every pass, even
+    -- pre-fix -- so if a capture pass happens to land AFTER the point's
+    -- original timestamp has already aged past dotLifetimeMs, the OLD
+    -- (buggy) code evicts it and then immediately appends a brand-new
+    -- point at that SAME pass's `now`, which coincidentally reads exactly
+    -- like a "reset" if you only ever query right after a capture pass --
+    -- even with the bug still present. The real, user-visible bug is a
+    -- point going dark in the GAP BETWEEN two capture passes. This test
+    -- therefore queries `advance()`d past the point's ORIGINAL lifetime
+    -- WITHOUT an intervening capture pass, exactly mirroring the sibling
+    -- "each dot expires against its OWN timestamp -- advancing the clock
+    -- directly" test's own technique above.
+    local f = newScentVisionFixture({ trackingOverrides = { dotLifetimeMs = 10000, minSampleMovementMeters = 2.0 } })
+    f.registerPlayer(1, 'K9-CID', 100)      -- the querying K9
+    f.registerPlayer(2, 'SUSPECT-CID', 200) -- the loitering suspect
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 0, 0, 0)
+
+    f.step() -- prime
+    f.step() -- capture pass #1 -- one point recorded at t = 0 (relative)
+
+    -- Suspect stands PERFECTLY still (never moves past minSampleMovementMeters)
+    -- across two more capture passes, each only 4000ms apart -- comfortably
+    -- UNDER dotLifetimeMs (10000), so DiscardExpiredScentVisionPoints never
+    -- evicts anything at either of these two passes, pre- or post-fix. This
+    -- is what isolates the ACTUAL branch under test (the refresh-on-loiter
+    -- fix), rather than the evict-and-recreate path covered by the note
+    -- above.
+    f.advance(4000)
+    f.step() -- capture pass #2 -- still at (0,0,0): fixed code refreshes the dot's timestamp to t=4000; buggy code leaves it at t=0
+    f.advance(4000)
+    f.step() -- capture pass #3 -- still at (0,0,0): fixed code refreshes to t=8000; buggy code STILL leaves it at t=0
+
+    -- Advance the CLOCK ONLY (no further capture pass) to t=12000 and query
+    -- right there, in the gap before capture pass #4 would ever run.
+    -- Fixed: dot's own age is (12000 - 8000) = 4000ms, well alive.
+    -- Buggy: dot's own age is STILL measured against its never-updated t=0
+    -- timestamp -- (12000 - 0) = 12000ms, past dotLifetimeMs (10000) -- the
+    -- query-time freshness filter in getScentVisionPoints (which reads the
+    -- SAME stored timestamp, independently of any discard pass) excludes
+    -- it, and this assertion fails, exactly the bug being fixed.
+    f.advance(4000)
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 1, 'a stationary player\'s dot must still be alive after its ORIGINAL age would have expired it, because every capture pass while loitering refreshes it -- querying between capture passes (not immediately after one) is what actually proves this')
+end)
+
+t.test('LOITER FIX: refreshing a stationary dot never grows storage -- a long loiter still holds exactly one point in the underlying bucket', function()
+    local f = newScentVisionFixture({ trackingOverrides = { dotLifetimeMs = 10000, minSampleMovementMeters = 2.0, maxPointsPerPerson = 4 } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 0, 0, 0)
+
+    f.step() -- prime
+
+    -- Many capture passes, all at the exact same spot, each spaced well
+    -- under dotLifetimeMs -- if the fix ever appended instead of
+    -- refreshing, this would blow straight past maxPointsPerPerson (4) and
+    -- this assertion would fail.
+    for _ = 1, 10 do
+        f.advance(1000)
+        f.step()
+    end
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 1, 'loitering in one spot must never accumulate more than the single dot minSampleMovementMeters already limits a stationary player to')
+end)
+
 t.test('ScentVision: maxPointsPerPerson is a hard cap regardless of how many capture passes accumulate', function()
     local f = newScentVisionFixture({ trackingOverrides = { maxPointsPerPerson = 3 } })
     f.registerPlayer(1, 'K9-CID', 100)

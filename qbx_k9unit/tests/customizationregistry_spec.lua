@@ -550,6 +550,19 @@ local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
     -- file exists to keep closed. NEVER "fix" this by wiring the check in.
     Recall = true,
 
+    -- server/webhook.lua posts this resource's own events into a Discord
+    -- channel that staff read. It is a SERVER-WIDE LOGGING POLICY, not
+    -- something one player does: there is no per-person request handler to
+    -- hang a block off, because no individual ever "uses" it. Blocking one
+    -- citizenid from it would have to mean "stop logging events ABOUT this
+    -- person" -- which is not a capability being taken away, it is a hole
+    -- deliberately punched in an audit trail, and is the opposite of what
+    -- every other block in this resource does. Exempt by nature, the same
+    -- way ResourceAutoDetect is. If a future pass ever wants per-person
+    -- log suppression, that is a new feature with its own name and its own
+    -- argument, not this key quietly gaining a block path.
+    DiscordWebhook = true,
+
     -- server/runtimecontrol.lua's own FEATURE_TIERS: tier = 'protected'.
     -- Both gate the very authorization functions (IsHighCommand/
     -- HasPermission) every OTHER block/grant check in this entire resource

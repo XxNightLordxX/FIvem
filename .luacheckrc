@@ -545,6 +545,15 @@ globals = {
     --     was taken away.
     "HasPermission", "GrantPermission", "RevokePermission",
     "ListActivePermissionsForCitizenId", "ListPermissionRoster",
+    -- IsHighCommandBypassCitizenId (owner-directed "high command gets every
+    -- permission/feature/upgrade automatically" pass) -- resolves a
+    -- CITIZENID (never a live `source`) to "is this person high command
+    -- right now", for the 'feature.<Name>' namespace's own HasPermission
+    -- bypass and for server/certtiers.lua's TierCapabilityPermits,
+    -- server/certifications.lua's HasSpecialization, and
+    -- server/progression.lua's cooldown-multiplier family, all consulted
+    -- behind the usual type(fn) == 'function' soft-dependency guard.
+    "IsHighCommandBypassCitizenId",
     -- Seams opened so other files can reach logic that was previously locked
     -- inside an ox_target closure or a `local`. Each verified defined before
     -- being declared here: client/inventory.lua:195, client/medkit.lua:181,
@@ -718,6 +727,33 @@ globals = {
     -- a missing function stops being visible, which is the failure class
     -- this project keeps finding.
     "ForceRevertK9Appearance",
+    -- MANA_POLICEDOGS FEATURE-PARITY PASS (server/dogcharacter.lua, NEW
+    -- FILE) -- an explicit, admin-pinned "this citizenid is a dog" record,
+    -- independent of any certification/permission credential. See that
+    -- file's own header for the full precedence writeup against
+    -- server/appearance.lua's existing certification-driven appearance.
+    -- IsPinnedDogCharacter/GetPinnedDogCharacterModel/SetDogCharacter/
+    -- RemoveDogCharacter are ALL already defined, in server/dogcharacter.lua
+    -- itself (not pending) -- listed here because IsPinnedDogCharacter/
+    -- GetPinnedDogCharacterModel are consumed from server/appearance.lua
+    -- (a soft dependency, `type(fn) == 'function'` guarded there) once that
+    -- file's own requested patch lands (see server/dogcharacter.lua's own
+    -- header "ROUTED CHANGES" items 2-3) -- until then those two names are
+    -- simply unread outside this file, which is not a lint issue.
+    "IsPinnedDogCharacter", "GetPinnedDogCharacterModel",
+    "SetDogCharacter", "RemoveDogCharacter",
+    -- ApplyK9AppearanceDirect -- PENDING, same precedent as
+    -- ForceRevertK9Appearance above: server/dogcharacter.lua's own
+    -- SetDogCharacter already calls it (guarded with
+    -- `type(fn) == 'function'`, degrading to a distinct, honest
+    -- 'appearance_hook_unavailable' outcome rather than an error) but
+    -- server/appearance.lua has not defined it yet as of this pass -- see
+    -- server/dogcharacter.lua's own header "ROUTED CHANGES" item 1 for the
+    -- exact function body requested. REMOVE THIS ENTRY if the function is
+    -- ever abandoned -- an allowlisted name that nothing defines is how a
+    -- missing function stops being visible, which is the failure class
+    -- this project keeps finding.
+    "ApplyK9AppearanceDirect",
     -- IsBiteHoldTargetEngaged -- PENDING, same precedent as
     -- ForceRevertK9Appearance immediately above, listed here deliberately
     -- rather than left to redden lint for everyone: client/appearance.lua's
@@ -1053,6 +1089,30 @@ globals = {
     -- server-side) -- NOT yet wired into server/combat.lua's
     -- ValidateCombatRequest, which is that file's own call to make.
     "IsSearchInProgressForSource",
+    -- server/announce.lua -- APPREHENSION ANNOUNCEMENT
+    -- (Config.Features.ApprehensionAnnouncement). Server-authoritative gate
+    -- consulted by server/combat.lua's ValidateCombatRequest (BiteAndHold/
+    -- NonLethalTakedown only) to require a real warning before a bite/
+    -- takedown may be STARTED -- never consulted by any termination path.
+    -- Same runtime-existence-guard convention as IsSearchInProgressForSource
+    -- immediately above: an absent function here (server/announce.lua not
+    -- yet routed into server/combat.lua's own call site) is a skipped
+    -- check, never an error.
+    "IsApprehensionWarned",
+    -- client/announce.lua -- the client half of the same feature. Resource-
+    -- global so client/keybinds.lua's own k9announce command (or any future
+    -- radial/tablet entry point) can reach it, same "one entry point, many
+    -- callers" convention as RequestRecall/RequestPursuitSprint above.
+    "RequestApprehensionWarning",
+    -- client/dangerwarn.lua (DangerWarn -- the reverse direction of
+    -- HandlerDownDefense: a K9's own player, not an automatic detector,
+    -- deliberately warning their partnered handler). Same "resource-global
+    -- so a future radial entry and a chat command/keybind can both reach
+    -- it" convention as RequestRecall/RequestPursuitSprint above -- not yet
+    -- wired into client/radial.lua, see that file's own header
+    -- "RADIAL/KEYBIND CONTRACT" section for the exact hookup a future
+    -- change there needs.
+    "RequestDangerWarn",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

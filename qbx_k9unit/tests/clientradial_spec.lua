@@ -243,6 +243,10 @@ local function newRadialFixture(opts)
         isLeashed = false, isInK9Vehicle = false, activeTrackType = nil,
         isBiteHoldEngaged = false, isDragEngaged = false, isFetchCarryEngaged = false,
         isSarCallActive = false, isTrainingModeActive = false,
+        -- Top-level icon access gate (this pass) -- see this file's header
+        -- addition for the same section.
+        isPartnered = false, isDragTargetEngaged = false,
+        isRestingInKennel = false, isCarryingKennel = false,
     }
     local function queryFn(name, field)
         return function(...)
@@ -301,6 +305,23 @@ local function newRadialFixture(opts)
     local function TriggerServerEvent(eventName, ...)
         triggerServerEventCalls[#triggerServerEventCalls + 1] = { event = eventName, args = { ... } }
     end
+
+    -- PERIODIC ICON REFRESH thread stub (this pass -- top-level icon access
+    -- gate). Sandbox.newThreadRunner()'s coroutine-backed CreateThread/Wait
+    -- pair (see fixtures/sandbox.lua's own doc comment) lets tests below
+    -- step through exactly one 15s refresh pass at a time via
+    -- `f.stepIconRefreshThread()`, rather than either looping forever
+    -- synchronously (the real Wait(15000) would never yield in a plain
+    -- for-loop model) or needing this fixture to fake real elapsed time.
+    local threadRunner = Sandbox.newThreadRunner()
+
+    -- GetGameTimer stub -- CONTROLLABLE, not just present. Needed now that
+    -- client/radial.lua's own ShouldShowK9RadialIcon() reads it directly
+    -- (the startup fail-open grace window) -- tests below advance it via
+    -- `f.advanceGameTimer(ms)` to move in and out of that window
+    -- deterministically, rather than a real Wait ever elapsing in a test.
+    local gameTimerNow = 0
+    local function GetGameTimer() return gameTimerNow end
 
     -- OX_LIB RESTART LIFECYCLE stubs -- same `AddEventHandler`/
     -- `GetCurrentResourceName` idiom as tests/inventory_spec.lua,
@@ -399,6 +420,13 @@ local function newRadialFixture(opts)
         RequestSetTrainingMode = record('RequestSetTrainingMode'),
         RequestTrainingSearchDrill = record('RequestTrainingSearchDrill'),
         RequestTrainingBiteDrill = record('RequestTrainingBiteDrill'),
+        -- Top-level icon access gate (this pass) -- consulted by
+        -- IsK9RadialIconNeededForOngoingEngagement(), not by any onSelect
+        -- closure.
+        IsPartnered = queryFn('IsPartnered', 'isPartnered'),
+        IsDragTargetEngaged = queryFn('IsDragTargetEngaged', 'isDragTargetEngaged'),
+        IsRestingInKennel = queryFn('IsRestingInKennel', 'isRestingInKennel'),
+        IsCarryingKennel = queryFn('IsCarryingKennel', 'isCarryingKennel'),
     }
 
     local overrides = {
@@ -406,6 +434,9 @@ local function newRadialFixture(opts)
         DenyK9UIAccess = DenyK9UIAccess,
         HasK9Access = HasK9Access,
         TriggerServerEvent = TriggerServerEvent,
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
+        GetGameTimer = GetGameTimer,
         PlayerPedId = PlayerPedId,
         GetEntityCoords = GetEntityCoords,
         GetActivePlayers = GetActivePlayers,
@@ -423,6 +454,14 @@ local function newRadialFixture(opts)
         -- wins) with a wrapper that only ever differs from the real thing
         -- for the five keys named there.
         locale = pendingLocale,
+        -- Top-level icon access gate (this pass) -- department membership
+        -- check reads QBX.PlayerData.job.name directly. Defaults to no job
+        -- at all (nil) -- a test wanting a department member sets
+        -- `f.env.QBX.PlayerData.job.name = 'police'` (or any real
+        -- Config.Departments key) directly against the exposed `env`
+        -- fixture field, same "mutate env directly" convention this
+        -- fixture already uses nowhere else needed a dedicated setter for.
+        QBX = { PlayerData = { job = { name = nil } } },
     }
     for name, fn in pairs(allStubs) do
         if not omitSet[name] then overrides[name] = fn end
@@ -580,6 +619,19 @@ local function newRadialFixture(opts)
         fireLeashStateChanged = fireLeashStateChanged,
         leashStateChangedHandlerCount = function() return #(eventHandlers['qbx_k9unit:client:leashStateChanged'] or {}) end,
         featureBlocksAppliedHandlerCount = function() return #(eventHandlers['qbx_k9unit:client:featureBlocksApplied'] or {}) end,
+
+        -- Top-level icon access gate (this pass).
+        advanceGameTimer = function(deltaMs) gameTimerNow = gameTimerNow + deltaMs end,
+        --- Runs exactly one PERIODIC ICON REFRESH pass (see
+        --- fixtures/sandbox.lua's own Sandbox.newThreadRunner() doc comment
+        --- on "NOTE on stepping semantics" for why this calls step() TWICE:
+        --- the thread's own body is `while true do Wait(...) ... end`, so
+        --- the first step() only reaches that initial Wait and primes the
+        --- coroutine; the second actually runs one refresh pass.
+        stepIconRefreshThread = function()
+            threadRunner.step()
+            threadRunner.step()
+        end,
     }
 end
 
@@ -1748,6 +1800,151 @@ t.test('LEASH LISTENER: firing leashStateChanged genuinely re-runs RegisterK9Rad
     f.fireLeashStateChanged()
 
     t.isTrue(#f.registerRadialOrder() > 0, 'the event must actually re-run RegisterK9RadialMenu(), not merely be listened for -- a handler that registers nothing is the same bug with extra steps')
+end)
+
+-- ============================================================================
+-- TOP-LEVEL ICON ACCESS GATE (this pass -- coder-security/coder-backend
+-- finding response: every player, including civilians, used to see the
+-- 'k9unit_open' opener unconditionally). See client/radial.lua's own
+-- "TOP-LEVEL ICON ACCESS GATE" header (right above RegisterK9RadialMenu())
+-- for the full three-part design this section proves: (1) never gates a
+-- way out, (2) fails OPEN on an unknown answer, (3) stays live across a
+-- mid-session change via the periodic refresh thread.
+--
+-- Every test below EXPLICITLY advances past the 8s startup grace window
+-- first (`f.advanceGameTimer(8001)`) unless it is specifically testing
+-- that window itself -- otherwise the fail-open grace period would mask
+-- every one of these from ever exercising the real department/access/
+-- engagement logic at all, exactly the "flap for the wrong reason"
+-- failure class this suite's own header warns about elsewhere.
+-- ============================================================================
+
+t.test('STARTUP GRACE WINDOW: a brand-new client (no department, no access, GetGameTimer still inside the 8s window) sees the icon fully reachable -- FAIL OPEN, not closed, on an unknown answer', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    -- fireResourceStart already ran once inside newRadialFixture() at
+    -- gameTimerNow == 0 -- still inside the window.
+    local opener = f.findRootItem('k9unit_open')
+    t.isNotNil(opener, 'the root opener must always be registered, blocked or not, reachable or not')
+    t.equals(opener.menu, 'k9unit', 'inside the grace window the opener must navigate normally, not degrade to an inert stub')
+    t.isNotNil(f.findMenu('k9unit'), 'the submenu itself must also be registered while the icon is reachable')
+end)
+
+t.test('AFTER THE GRACE WINDOW: no department, no K9 access, no ongoing engagement -- the opener becomes an INERT stub (stays visible, denies via DenyK9UIAccess, does not navigate)', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+
+    local opener = f.findRootItem('k9unit_open')
+    t.isNotNil(opener, 'the icon itself must STAY VISIBLE (same disclosed compromise as the featureblocks-blocked case) -- only its behavior changes')
+    t.isNil(opener.menu, 'must no longer navigate into the submenu -- the submenu itself may still exist in ox_lib\'s own registry (see client/radial.lua\'s own comment on why that registration is NOT re-gated on this same answer), but with the opener\'s own `menu` field cleared, nothing anywhere still points to it')
+
+    opener.onSelect()
+    t.isTrue(f.denyCallCount() >= 1, 'selecting the inert icon must deny via DenyK9UIAccess -- the SAME message every other gated action in this file already shows, not a new parallel string')
+end)
+
+t.test('AFTER THE GRACE WINDOW: department membership (QBX.PlayerData.job.name in Config.Departments) alone keeps the icon fully reachable, even with zero K9 access', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    -- 'police' is a real Config.Departments key in the shipped config.lua.
+    f.env.QBX.PlayerData.job.name = 'police'
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+
+    local opener = f.findRootItem('k9unit_open')
+    t.equals(opener.menu, 'k9unit', 'a department member sees the real, working icon even before ever being certified -- certification-specific refusals happen INSIDE the submenu, not by hiding the door to it')
+    t.isNotNil(f.findMenu('k9unit'))
+end)
+
+t.test('AFTER THE GRACE WINDOW: a job NOT in Config.Departments earns nothing by itself -- the icon degrades to inert without also holding K9 access', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    f.env.QBX.PlayerData.job.name = 'unemployed' -- not a real Config.Departments key
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+
+    t.isNil(f.findRootItem('k9unit_open').menu)
+end)
+
+t.test('AFTER THE GRACE WINDOW: HasK9Access() alone (a permission-grant holder outside any listed department) keeps the icon fully reachable', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = true })
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+
+    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit')
+end)
+
+-- NEVER GATE A WAY OUT -- the load-bearing half of this whole gate. Each of
+-- these proves an in-progress engagement keeps the icon (and therefore the
+-- ONLY reachable Detach Leash / Break Partnership / etc. surface) fully
+-- available even with zero department and zero K9 access -- exactly the
+-- "decertified mid-leash" stranding scenario this file's own header names.
+for _, case in ipairs({
+    { field = 'isLeashed', label = 'IsLeashed() (Detach Leash -- the ONE surface with no other exit at all)' },
+    { field = 'isPartnered', label = 'IsPartnered() (Break Partnership -- the OTHER surface with no other exit besides the tablet)' },
+    { field = 'isBiteHoldEngaged', label = 'IsBiteHoldEngaged() (also has its own keybind exit -- defense in depth, not load-bearing)' },
+    { field = 'isDragEngaged', label = 'IsDragEngaged()' },
+    { field = 'isDragTargetEngaged', label = 'IsDragTargetEngaged() (the DRAGGED party, not the dragger)' },
+    { field = 'isRestingInKennel', label = 'IsRestingInKennel() (also has its own keybind exit)' },
+    { field = 'isCarryingKennel', label = 'IsCarryingKennel()' },
+    { field = 'isFetchCarryEngaged', label = 'IsFetchCarryEngaged() (also has its own command exit)' },
+}) do
+    t.test(('NEVER GATE A WAY OUT: %s alone keeps the icon fully reachable with zero department and zero K9 access'):format(case.label), function()
+        local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+        f.advanceGameTimer(8001)
+        f.setState(case.field, true)
+        f.stepIconRefreshThread()
+
+        t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', ('%s must keep the icon reachable'):format(case.field))
+        t.isNotNil(f.findMenu('k9unit'), 'the submenu itself must be registered too, not just the opener')
+    end)
+end
+
+t.test('FEATUREBLOCKS BLOCK TAKES PRIORITY over the access gate: a RadialMenu block still denies via DenyK9FeatureBlocked, never DenyK9UIAccess, regardless of department/access/engagement state', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false, blockedFeatures = { RadialMenu = true } })
+    f.env.QBX.PlayerData.job.name = 'police' -- would otherwise make the icon fully reachable
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+
+    local opener = f.findRootItem('k9unit_open')
+    t.isNil(opener.menu)
+    opener.onSelect()
+    t.isTrue(f.denyK9FeatureBlockedCallCount() >= 1, 'a featureblocks block keeps its OWN distinct message even when this client would otherwise pass the access gate')
+    t.equals(f.denyCallCount(), 0, 'must not ALSO fire DenyK9UIAccess -- exactly one denial message per click, the correct one')
+end)
+
+t.test('PERIODIC ICON REFRESH: does not exist at all when Config.Features.RadialMenu is globally off -- no icon exists for anyone to reveal', function()
+    local f = newRadialFixture({ features = { RadialMenu = false } })
+    -- No thread was ever created for CreateThread to capture -- stepping
+    -- must be a safe no-op, not an error, and nothing must appear.
+    local ok = pcall(f.stepIconRefreshThread)
+    t.isTrue(ok, 'stepping with no thread registered must not throw')
+    t.isNil(f.findRootItem('k9unit_open'))
+end)
+
+t.test('PERIODIC ICON REFRESH: a player who becomes a department member MID-SESSION (no reconnect, no resource restart) sees the icon become reachable within one refresh pass', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+    t.isNil(f.findRootItem('k9unit_open').menu, 'precondition: inert before the job change')
+
+    -- The job change itself: QBX.PlayerData is qbx_core's own live-updated
+    -- cache -- this file has no event of its own for it, which is exactly
+    -- why the periodic thread (not an event listener) is what closes this
+    -- gap.
+    f.env.QBX.PlayerData.job.name = 'police'
+    f.stepIconRefreshThread()
+
+    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'the icon must become reachable within one refresh pass, with no resource restart and no reconnect')
+end)
+
+t.test('PERIODIC ICON REFRESH: a handler who is DECERTIFIED mid-session (HasK9Access flips false, no department either) loses the icon within one refresh pass -- proves the gate is genuinely LIVE in both directions', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = true })
+    f.advanceGameTimer(8001)
+    f.stepIconRefreshThread()
+    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'precondition: reachable while access is held')
+
+    f.setHasK9Access(false)
+    f.stepIconRefreshThread()
+
+    t.isNil(f.findRootItem('k9unit_open').menu, 'access revoked mid-session, with no ongoing engagement to protect, must degrade the icon to inert within one refresh pass')
 end)
 
 os.exit(t.summary())

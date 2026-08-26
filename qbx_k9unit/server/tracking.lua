@@ -616,6 +616,95 @@ local TRACK_TYPE_CONFIG = {
 }
 
 -- ======================================================================
+-- SPECIALIZATION-SCOPED TRACKING (owner-directed decluttering pass,
+-- 2026-08-26 -- see Config.SpecializationTracking's own header comment in
+-- config.lua for the full plain-English writeup this implements, including
+-- the deliberate MONOTONIC design -- a specialization only ever ADDS a
+-- trail type, there is no "generalist fallback" that grants everything to
+-- an uncertified dog).
+--
+-- VALIDATION (CLAMP AND WARN, never assert -- a bare top-level assert in
+-- this codebase kills every registration below it silently for the whole
+-- server uptime, per this resource's standing rule). Built ONCE at file
+-- load into a defensive copy: any Config.SpecializationTracking entry
+-- whose key is not a real Config.K9Specializations key, or whose value is
+-- not an array of real TRACK_TYPE_CONFIG track-type strings, is dropped
+-- (with one console warning naming the exact problem) rather than trusted
+-- or asserted.
+local VALIDATED_SPECIALIZATION_TRACK_TYPES = {}
+do
+    local rawMap = type(Config.SpecializationTracking) == 'table' and Config.SpecializationTracking or {}
+    local knownSpecializations = type(Config.K9Specializations) == 'table' and Config.K9Specializations or {}
+    for specKey, trackTypes in pairs(rawMap) do
+        if knownSpecializations[specKey] == nil then
+            print(('[qbx_k9unit] WARNING: Config.SpecializationTracking has an entry for %q, which is not a key in Config.K9Specializations -- ignoring it entirely (it will never unlock a track type for anyone). Fix Config.SpecializationTracking or Config.K9Specializations in config.lua to silence this warning.'):format(tostring(specKey)))
+        elseif type(trackTypes) ~= 'table' then
+            print(('[qbx_k9unit] WARNING: Config.SpecializationTracking[%q] must be an array of track type strings (got %s) -- ignoring it entirely.'):format(tostring(specKey), type(trackTypes)))
+        else
+            local validated = {}
+            for _, trackType in ipairs(trackTypes) do
+                if trackType == 'scent' then
+                    print(('[qbx_k9unit] WARNING: Config.SpecializationTracking[%q] lists \'scent\', which can never be specialization-gated (it is the base capability every K9-access handler already has -- see that config field\'s own header comment) -- ignoring just this entry.'):format(tostring(specKey)))
+                elseif TRACK_TYPE_CONFIG[trackType] then
+                    validated[#validated + 1] = trackType
+                else
+                    print(('[qbx_k9unit] WARNING: Config.SpecializationTracking[%q] lists unknown track type %q -- ignoring it (valid: blood, gunpowder).'):format(tostring(specKey), tostring(trackType)))
+                end
+            end
+            if #validated > 0 then
+                VALIDATED_SPECIALIZATION_TRACK_TYPES[specKey] = validated
+            end
+        end
+    end
+end
+
+--- Resolves the set of Track <Type> trail types `citizenid` may search for
+--- through the ONE merged tracking action (findNearestTrackableSource
+--- below), and also used to re-validate the OLDER single-type
+--- findTrackableSource callback further down so a client cannot bypass
+--- this gate by calling that event directly with an unlisted trackType.
+---
+--- 'scent' is unconditionally true -- see VALIDATED_SPECIALIZATION_TRACK_TYPES'
+--- own header and Config.SpecializationTracking's config.lua comment for why
+--- it can never be gated. Every OTHER track type is enabled if AND ONLY IF
+--- `citizenid` currently holds a specialization Config.SpecializationTracking
+--- maps to it (HasSpecialization, server/certifications.lua -- carries that
+--- function's own High Command bypass, so a high-command officer with no
+--- personally-granted specialization still gets every track type).
+---
+--- DELIBERATELY NOT MONOTONIC-BROKEN: there is NO "citizenid holds zero
+--- specializations -> enable everything" branch here (that was an earlier,
+--- rejected design -- see config.lua's own header for the full "make it
+--- more fluid" writeup). Adding a specialization can only ever turn a
+--- `false`/absent entry into `true` for this citizenid; it can never turn
+--- an already-true entry back to false. A citizenid with zero specializations
+--- gets exactly `{ scent = true }` -- the same baseline every dog already
+--- has today, nothing more, nothing less.
+--- @param citizenid string
+--- @param jobName string?
+--- @return table<string, boolean> enabled -- e.g. { scent = true, blood = true }
+local function ResolveEnabledTrackTypesForCitizenId(citizenid, jobName)
+    local enabled = { scent = true } -- base capability, NEVER gated -- see this function's own doc comment
+
+    -- Soft dependency, this resource's established `type(...) == 'function'`
+    -- convention (server/equipmentshop.lua's own HasSpecialization call
+    -- site) -- if server/certifications.lua is ever unavailable, this
+    -- simply resolves to "no specializations held," i.e. the same
+    -- `{ scent = true }` baseline, never an error.
+    if type(HasSpecialization) == 'function' and type(citizenid) == 'string' then
+        for specKey, trackTypes in pairs(VALIDATED_SPECIALIZATION_TRACK_TYPES) do
+            if HasSpecialization(citizenid, jobName, specKey) then
+                for _, trackType in ipairs(trackTypes) do
+                    enabled[trackType] = true
+                end
+            end
+        end
+    end
+
+    return enabled
+end
+
+-- ======================================================================
 -- ENTRY-COUNT CEILING (performance audit at 128 players, this pass --
 -- coder-backend). PruneTrackableLogs further down only ever enforced an AGE
 -- limit (Config.Tracking.<Type>.maxAgeSeconds) -- exactly the gap that
@@ -1966,6 +2055,39 @@ end
 --- (owner's own explicit instruction): every call first drops this SAME
 --- person's already-expired points before deciding whether to append a new
 --- one -- never accumulate-then-filter-only-at-read.
+---
+--- LOITER FIX (this pass, coder-frontend -- competitor-parity request:
+--- mana_policedogs "if a player hasn't moved far enough away from their
+--- last dropped scent, their existing scent will have its decay reset").
+--- CONFIRMED BUG, this pass: the "hasn't moved far enough" branch below
+--- used to just `return` -- doing nothing at all to the existing nearest
+--- point. That point's own `[4]` (loggedAt) timestamp was never touched,
+--- so a player standing (or hiding) perfectly still had their ONE dot
+--- silently age out on schedule regardless -- indistinguishable, from
+--- DiscardExpiredScentVisionPoints' own perspective, from that player
+--- having left minutes ago. FIXED: the SAME branch that decides not to add
+--- a new point now refreshes that existing point's own timestamp to `now`
+--- instead of leaving it untouched -- so a player who stays within
+--- `minMovement` of their own last recorded spot keeps a single dot fresh
+--- there for as long as they stay, and it only starts counting down for
+--- real the moment they actually move away past `minMovement` (which
+--- immediately records a genuinely NEW point at the new spot on the very
+--- next capture pass, per the branch below this one, unchanged).
+---
+--- STORAGE IMPACT: this can only ever REDUCE growth relative to before,
+--- never increase it. The "moved far enough" check already existed and
+--- already skipped appending in this exact case -- this fix only changes
+--- what happens to the ALREADY-existing point in that same skip, never
+--- adds a new array slot, and never bypasses maxPoints/dotLifetimeMs
+--- (a refreshed point still counts as exactly one entry against
+--- maxPointsPerPerson, same as before). If anything this REDUCES the
+--- steady-state entry count for a stationary player: without this fix, a
+--- player standing still for longer than dotLifetimeMs would have their
+--- one dot expire and then get reinstated as a brand-new dot the next time
+--- they took one big step, or simply stay at zero dots between then; with
+--- this fix that same player holds exactly one live, continuously-refreshed
+--- dot the entire time -- never more than the one dot minMovement was
+--- already limiting them to.
 --- @param src number
 --- @param coords vector3
 --- @param now number
@@ -1985,7 +2107,13 @@ local function RecordScentVisionPoint(src, coords, now, minMovement, maxPoints, 
     if last then
         local dx, dy, dz = coords.x - last[1], coords.y - last[2], coords.z - last[3]
         if (dx * dx + dy * dy + dz * dz) < (minMovement * minMovement) then
-            return -- hasn't moved far enough since their own last recorded point
+            -- LOITER FIX -- refresh this SAME point's own age instead of
+            -- leaving it to decay on a clock that no longer reflects
+            -- reality (see this function's own doc comment above).
+            -- Deliberately mutates index [4] in place (never re-appends),
+            -- so this can never grow `bucket` past its current length.
+            last[4] = now
+            return -- hasn't moved far enough since their own last recorded point -- decay reset, not a new point
         end
     end
 

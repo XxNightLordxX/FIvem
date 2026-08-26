@@ -586,7 +586,7 @@
       { action: 'tablet:open', data: {
           capabilities: { 'k9.access': {label,description}, ... },  // verbatim Config.Permissions text -- see html/tablet-bridge... no, see this file's DEFAULT_CAPABILITIES for the exact fallback copy this must match
           strings: { <key>: <resolved locale string>, ... },        // see DEFAULT_STRINGS below for the full key list this page understands
-          requestedView: 'highCommand'|null,                        // client/tablet.lua's new Config.CommandTablet.highCommandCommand shortcut -- PRESENTATION HINT ONLY. loadMyRecord() consumes this (see its own comment) strictly AFTER tablet:requestMyRecord's server-verified viewer.isHighCommand for THIS caller is known: true lands on the console tab pre-loaded, anything else shows a plain "you don't have access" notice with the caller's own record underneath, exactly as the ordinary command would show them. Never used to skip, gate, or shortcut any fetch above.
+          requestedView: 'highCommand'|'auto'|undefined,             // PRESENTATION HINT ONLY. loadMyRecord() consumes this (see its own comment) strictly AFTER tablet:requestMyRecord's server-verified viewer fields for THIS caller are known. 'auto' (the default, sent by the ordinary command/item/radial -- owner-directed, 2026-08-26, "one command ... based off the rank") lands a canAccessConsole()-qualifying caller on the console tab pre-loaded, and silently leaves everyone else on the ordinary landing screen -- no notice, since they never asked for the console. 'highCommand' (client/tablet.lua's now-OPTIONAL Config.CommandTablet.highCommandCommand shortcut, default disabled) applies the SAME canAccessConsole() check but shows a plain "you don't have access" notice for an insufficient caller who explicitly typed it, exactly as before this pass. Never used to skip, gate, or shortcut any fetch above.
           maxXpPerGrant: number|null,                               // Config.HighCommand.maxXpPerGrant, UX hint only
           shopLocationsEnabled: boolean,                            // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled: shows a disabled-server-wide note rather than hiding the screen; every equipmentShop* callback re-checks this live, server-side, regardless
           runtimeControlEnabled: boolean,                           // Config.Features.RuntimeFeatureControl -- UX hint only, SAME posture as themingEnabled/shopLocationsEnabled: shows a disabled-server-wide note rather than hiding the screen; runtimeListFeatures/ListTunables have no such gate at all (read-only values still load), only the four mutating runtimeSetFeature/runtimeSetTunable/runtimeResetFeature/runtimeResetTunable calls actually refuse ('feature_disabled') when this is off
@@ -742,13 +742,26 @@
         retry_label: 'Retry',
         search_placeholder: 'Search by name, citizen ID, or department...',
         refresh_label: 'Refresh',
-        empty_roster: 'No results. This list only ever shows people who already hold a certification -- it will never include someone who has never been certified before (for example, a brand-new handler). Use "Open by exact citizen ID" for them instead.',
+        empty_roster: 'No results. This list only ever shows people who already hold a certification -- it will never include someone who has never been certified before (for example, a brand-new handler). If they are online right now, pick them from the Online Players list above instead; otherwise use "Open by exact citizen ID".',
         column_name: 'Name',
         column_citizenid: 'Citizen ID',
         column_department: 'Department',
         column_certified: 'Certified',
         column_xp: 'XP / Tier',
         column_actions: 'Actions',
+        // ONLINE PLAYERS LIST (owner-directed, 2026-08-26: "make the add
+        // permission section... where its a list when i choose a player
+        // id") -- see buildOnlinePlayersSection()'s own header for the
+        // full contract.
+        online_players_heading: 'Online Players',
+        online_players_search_placeholder: 'Search online players by name, server ID, or job...',
+        online_players_empty: 'Nobody matching that search is online right now.',
+        online_players_opening_label: 'Opening...',
+        column_server_id: 'Server ID',
+        column_job: 'Job',
+        column_k9_access: 'K9 Access',
+        online_k9_access_yes: 'Has Access',
+        online_k9_access_no: 'No Access',
         certified_yes: 'Certified',
         certified_no: 'Not certified',
         certify_label: 'Certify',
@@ -821,7 +834,7 @@
         // search bar above it. Shared verbatim by buildConsoleScreen() and
         // the Guided Flows' buildFlowPersonPicker(), the two places this
         // box appears.
-        open_by_id_hint: 'Works for any citizen ID, even someone who has never held a certification -- for example, a brand-new person you are about to set up.',
+        open_by_id_hint: 'Works for any citizen ID, even someone who has never held a certification -- for example, a brand-new person you are about to set up. If they are online right now, it is easier to pick them from the Online Players list above instead.',
         // Workflow audit finding #1, 2026-08-26 -- shown on the Console
         // screen to a viewer who reaches it holding only 'k9.certify'/
         // 'k9.givexp' (canOpenPersonRecord() true, canAccessConsole()
@@ -1493,6 +1506,12 @@
         cmdref_k9whistle_usage: '/k9whistle',
         cmdref_k9whistle_does: 'Uses a whistle to distract any K9 nearby.',
         cmdref_k9whistle_needs: 'You must be holding the item this server has configured for a whistle. Open to any player, not just certified handlers. This feature must be turned on for your server.',
+        cmdref_k9eat_usage: '/k9eat',
+        cmdref_k9eat_does: 'Feeds your K9 from your own carried food, restoring Hunger.',
+        cmdref_k9eat_needs: 'You must currently be controlling your K9, and be holding the item this server has configured for K9 food. This feature must be turned on for your server.',
+        cmdref_k9drink_usage: '/k9drink',
+        cmdref_k9drink_does: 'Gives your K9 water from your own carried supply, restoring Thirst.',
+        cmdref_k9drink_needs: 'You must currently be controlling your K9, and be holding the item this server has configured for K9 water. This feature must be turned on for your server.',
 
         cmdref_k9lineup_usage: '/k9lineup <server id> <server id> ...',
         cmdref_k9lineup_does: 'Starts a scent line-up: invites several players to stand in a row so your K9 can pick the one real match out of them.',
@@ -2164,6 +2183,8 @@
         { command: 'k9throwfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9throwfetchball_usage', doesKey: 'cmdref_k9throwfetchball_does', needsKey: 'cmdref_k9throwfetchball_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
         { command: 'k9dropfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9dropfetchball_usage', doesKey: 'cmdref_k9dropfetchball_does', needsKey: 'cmdref_k9dropfetchball_needs', gate: { kind: 'open' } },
         { command: 'k9recallfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9recallfetchball_usage', doesKey: 'cmdref_k9recallfetchball_does', needsKey: 'cmdref_k9recallfetchball_needs', gate: { kind: 'open' } },
+        { command: 'k9eat', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9eat_usage', doesKey: 'cmdref_k9eat_does', needsKey: 'cmdref_k9eat_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
+        { command: 'k9drink', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9drink_usage', doesKey: 'cmdref_k9drink_does', needsKey: 'cmdref_k9drink_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
 
         // ---- Calling Your K9 Off ----
         { command: 'k9recall', category: 'calling_off', adminOnly: false, usageKey: 'cmdref_k9recall_usage', doesKey: 'cmdref_k9recall_does', needsKey: 'cmdref_k9recall_needs', gate: { kind: 'open', featureKey: 'Recall' }, defaultKeybind: 'U' },
@@ -2381,13 +2402,27 @@
         themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
         shopLocationsEnabled: false, // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled
         branding: {}, // { serverName, logo, theme:{4 colors} } -- Config.CommandTablet.branding, verbatim; see buildBrandingElement()/applyBrandingSeedTheme()
-        // 'highCommand' | null -- set from tablet:open's own `requestedView`
-        // (client/tablet.lua's new Config.CommandTablet.highCommandCommand
-        // shortcut), CONSUMED (reset to null) the first time loadMyRecord()
-        // resolves after an open -- see that function's own comment. A
-        // PRESENTATION HINT ONLY: it never gates a fetch by itself, it only
-        // decides which screen loadMyRecord() lands on once the server's
-        // own `viewer.isHighCommand` for THIS caller is known.
+        // 'highCommand' | 'auto' -- set from tablet:open's own
+        // `requestedView`, CONSUMED (reset to null) the first time
+        // loadMyRecord() resolves after an open -- see that function's own
+        // comment. A PRESENTATION HINT ONLY: it never gates a fetch by
+        // itself, it only decides which screen loadMyRecord() lands on
+        // once the server's own `viewer` fields for THIS caller are known.
+        // 'auto' is the default for EVERY ordinary open (the command, the
+        // item, the radial menu) -- owner-directed, 2026-08-26: "make it
+        // one command that makes it based off the rank in the department"
+        // -- a caller canAccessConsole() admits (isHighCommand, or an
+        // explicit 'k9.audit' grant -- the SAME gate the Console tab/Home
+        // card already use) lands straight on the console; anyone else
+        // lands wherever they always have (the 'home' screen), silently,
+        // no notice -- they never asked for the console, so refusing one
+        // would be a surprise, not a helpful message. 'highCommand' is the
+        // OLDER, now-optional Config.CommandTablet.highCommandCommand
+        // shortcut, still supported for a server that already has it bound
+        // to a key/macro: same canAccessConsole() check, but an
+        // insufficient caller who explicitly typed THIS command still sees
+        // 'high_command_required_notice' -- they asked, so they get told
+        // why not, exactly as before this pass.
         requestedView: null,
 
         viewer: null, // set once tablet:requestMyRecord resolves successfully
@@ -2434,6 +2469,26 @@
         roster: null, // { rows, truncated, truncatedMessage }
         rosterQuery: '',
         openByIdValue: '', // console screen's "open by exact citizen ID" box -- see buildConsoleScreen()
+
+        // ONLINE PLAYERS LIST (owner-directed, 2026-08-26: "make the add
+        // permission section... where its a list when i choose a player
+        // id") -- see buildOnlinePlayersSection()'s own header for the
+        // full contract. Server-backed search, same debounced shape as
+        // rosterQuery/loadRoster() just above, but a SEPARATE query/
+        // loading/error/result set: these are two independent lists on
+        // the same screen.
+        onlinePlayersLoading: false,
+        onlinePlayersError: null,
+        onlinePlayers: null, // { rows: [{source,name,jobLabel,hasK9Access,nonce}], truncated, truncatedMessage }
+        onlinePlayersQuery: '',
+        // Set to the `source` of the row currently being resolved
+        // (tablet:openOnlinePlayer in flight) -- disables that ONE row's
+        // button (never the whole screen) and guards against a fast
+        // double-click firing two resolves for the same row, each trying
+        // to consume the SAME single-use nonce (the second would only
+        // ever see 'stale_online_list', a confusing failure for something
+        // that was never really a problem).
+        onlinePlayersOpeningSource: null,
 
         person: null, // { citizenid, name } -- who the 'person' screen is currently showing
         personSummaryLoading: false,
@@ -2651,6 +2706,7 @@
     };
 
     var searchDebounceTimer = null;
+    var onlinePlayersSearchDebounceTimer = null; // SEPARATE from searchDebounceTimer above -- the Online Players search box and the roster search box are two independent inputs on the same screen; sharing one timer would let typing in either box cancel/reschedule the other's pending fetch
 
     // ------------------------------------------------------------------
     // DOM REFS
@@ -3914,7 +3970,10 @@
             var consoleTab = mkButton(S('tab_console'), 'k9tablet-tab' + (state.screen === 'console' || state.screen === 'person' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'console';
                 render();
-                if (canAccessConsole()) loadRoster(state.rosterQuery);
+                if (canAccessConsole()) {
+                    loadRoster(state.rosterQuery);
+                    loadOnlinePlayers(state.onlinePlayersQuery);
+                }
             });
             tabs.appendChild(consoleTab);
         }
@@ -4222,7 +4281,13 @@
         // 'not_authorized' for a screen that never renders the roster for
         // this viewer in the first place (buildConsoleScreen()'s own
         // narrowed branch) -- pointless network noise, not a real request.
-        if (canAccessConsole()) loadRoster(state.rosterQuery);
+        // SAME reasoning extends to loadOnlinePlayers() below (this pass)
+        // -- one more console-only list, one more skipped fetch for a
+        // viewer who would just be refused it.
+        if (canAccessConsole()) {
+            loadRoster(state.rosterQuery);
+            loadOnlinePlayers(state.onlinePlayersQuery);
+        }
     }
 
     /**
@@ -5537,6 +5602,19 @@
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('console_person_only_notice') }));
         }
 
+        // ONLINE PLAYERS LIST (this pass) -- see buildOnlinePlayersSection()'s
+        // own header. Placed FIRST, ahead of the certified-only roster and
+        // the "open by exact citizen ID" box below: it is the easiest,
+        // most immediately useful path for the common case ("who is on
+        // duty right now"), and closes the exact gap the owner named --
+        // picking someone by the server id visible in the pause menu,
+        // rather than needing a citizenid nothing in-game shows a player.
+        // Gated on fullAccess, the SAME audience as the roster -- see this
+        // section's own header for why this stays the narrower gate.
+        if (fullAccess) {
+            wrap.appendChild(buildOnlinePlayersSection());
+        }
+
         if (fullAccess) {
             var toolbar = mk('div', { class: 'k9tablet-toolbar' });
             var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
@@ -5657,6 +5735,122 @@
         actionsTd.appendChild(mkButton(S('manage_label'), 'k9tablet-btn', function () {
             openPerson(row.citizenid, row.name);
         }));
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /**
+     * ONLINE PLAYERS LIST -- owner-directed, 2026-08-26, verbatim: "make
+     * the add permission section on the ui tablet for the command tablet
+     * where its a list when i choose a player id and just click those
+     * permissions etc make it easier". The permission checkboxes
+     * themselves already exist (buildCapabilityList() on the Person
+     * screen) and are untouched by this section -- what did not exist was
+     * a way to REACH that screen for someone identifiable in game: the
+     * roster above lists only ALREADY-CERTIFIED citizenids, and the "open
+     * by exact citizen ID" box needs a citizenid, which nothing in-game
+     * ever shows a player -- the pause menu shows a SERVER id instead.
+     * This section is a NEW ENTRY POINT ONLY: picking a row calls
+     * openOnlinePlayer() -> openPerson(), the EXACT SAME Person screen and
+     * EXACT SAME grant controls the roster's Manage button already opens.
+     * No second grant mechanism exists here.
+     *
+     * Same audience as the roster immediately above -- `fullAccess`
+     * (canAccessConsole()) -- NOT the wider canOpenPersonRecord(): see
+     * server/tablet.lua's own CALLBACK 2b/2c header for why a browse/list
+     * capability stays at the narrower gate, matching the roster's own
+     * OWNER'S DECISION exactly rather than inventing a second rule.
+     *
+     * REFRESH: a manual button, not a poll -- matching the roster's own
+     * established convention (no polling exists anywhere else in this
+     * file) for the same reason: this list is read fresh, in full, from
+     * GetPlayers() on every request server-side (see that callback's own
+     * header), so a poll would mean every open, console-viewing officer's
+     * tablet re-running that scan plus a name/job/K9-access resolution
+     * per connected player on an interval, multiplied by however many
+     * officers keep this screen open at once -- for staleness that only
+     * ever matters at the ONE moment an operator is about to click a row,
+     * which the search box's own live round trip (see loadOnlinePlayers())
+     * already re-answers on every keystroke, and the Refresh button
+     * answers on demand for someone who is not typing at all.
+     * @returns {HTMLElement}
+     */
+    function buildOnlinePlayersSection() {
+        var wrap = mk('div', { class: 'k9tablet-online-players-section' });
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('online_players_heading') }));
+
+        var toolbar = mk('div', { class: 'k9tablet-toolbar' });
+        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('online_players_search_placeholder') } });
+        search.value = state.onlinePlayersQuery;
+        search.addEventListener('input', function (e) {
+            var q = e.target.value;
+            state.onlinePlayersQuery = q;
+            clearTimeout(onlinePlayersSearchDebounceTimer);
+            onlinePlayersSearchDebounceTimer = setTimeout(function () { loadOnlinePlayers(q); }, SEARCH_DEBOUNCE_MS);
+        });
+        toolbar.appendChild(search);
+        toolbar.appendChild(mkButton(S('refresh_label'), 'k9tablet-btn', function () { loadOnlinePlayers(state.onlinePlayersQuery); }));
+        wrap.appendChild(toolbar);
+
+        if (state.onlinePlayersLoading && !state.onlinePlayers) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.onlinePlayersError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.onlinePlayersError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadOnlinePlayers(state.onlinePlayersQuery); }));
+            return wrap;
+        }
+        if (!state.onlinePlayers || state.onlinePlayers.rows.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('online_players_empty') }));
+            return wrap;
+        }
+
+        if (state.onlinePlayers.truncated) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-truncated-note', text: state.onlinePlayers.truncatedMessage || S('truncated_notice') }));
+        }
+
+        wrap.appendChild(buildOnlinePlayersTable(state.onlinePlayers.rows));
+        return wrap;
+    }
+
+    function buildOnlinePlayersTable(rows) {
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_server_id'), S('column_name'), S('column_job'), S('column_k9_access'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < rows.length; i++) {
+            tbody.appendChild(buildOnlinePlayersRow(rows[i]));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    function buildOnlinePlayersRow(row) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: String(row.source) }));
+        tr.appendChild(mk('td', { text: row.name }));
+        tr.appendChild(mk('td', { text: row.jobLabel }));
+        tr.appendChild(mk('td', { class: row.hasK9Access ? 'k9tablet-cert-status--yes' : 'k9tablet-cert-status--no', text: row.hasK9Access ? S('online_k9_access_yes') : S('online_k9_access_no') }));
+
+        var actionsTd = mk('td');
+        var opening = state.onlinePlayersOpeningSource === row.source;
+        var anyOpening = state.onlinePlayersOpeningSource !== null;
+        // openOnlinePlayer() itself only ever allows ONE resolve in flight
+        // at a time (see its own state comment) -- every row's button is
+        // disabled while any one of them is resolving, not just the row
+        // that was clicked, so a click on a DIFFERENT row while one is
+        // pending is a visibly-disabled no-op rather than a silent one.
+        var manageBtn = mkButton(opening ? S('online_players_opening_label') : S('manage_label'), 'k9tablet-btn', function () {
+            openOnlinePlayer(row.source, row.nonce);
+        }, { disabled: anyOpening });
+        actionsTd.appendChild(manageBtn);
         tr.appendChild(actionsTd);
         return tr;
     }
@@ -10857,30 +11051,57 @@
             state.isK9Model = result.isK9Model === true;
             state.isPartnered = result.isPartnered === true;
 
-            // Config.CommandTablet.highCommandCommand shortcut (this pass)
-            // -- CONSUMED here, exactly once per open, strictly AFTER the
-            // server's own viewer.isHighCommand for THIS caller is known.
-            // This is presentation only: it decides which screen to land
-            // on, never whether the request above succeeded or what data
-            // it returned -- see THE SECURITY RULE at the top of this file
-            // and client/tablet.lua's own NUI CONTRACT note on
-            // `requestedView`. A caller who is genuinely high command
-            // lands on the console tab, pre-loaded; anyone else typed the
-            // High Command shortcut without holding the access it opens to
-            // -- refused with a plain, visible notice, never a blank or
-            // broken screen, and left on the exact same screen the
-            // ordinary command already lands everyone on by default (see
-            // handleOpen()'s own `state.screen` reset) -- never a second,
-            // different "consolation" view invented just for this path.
-            if (state.requestedView === 'highCommand') {
+            // AUTO-LANDING BY RANK (owner-directed, 2026-08-26: "make it
+            // one command that makes it based off the rank in the
+            // department" -- instead of a separate command just for a
+            // different landing screen). CONSUMED here, exactly once per
+            // open, strictly AFTER the server's own viewer fields for THIS
+            // caller are known -- never before: handleOpen() already left
+            // `state.screen` at the ordinary 'home' default the instant
+            // the tablet opened, so if this fetch is slow, times out, or
+            // fails outright, the caller sits on that same ordinary
+            // landing screen the whole time, NEVER the console -- fail
+            // toward the normal view, never toward the admin one. This is
+            // presentation only: it decides which screen to land on, never
+            // whether the request above succeeded or what data it
+            // returned -- see THE SECURITY RULE at the top of this file.
+            //
+            // Reuses canAccessConsole() -- the EXACT SAME gate the Console
+            // tab/Home card already use (isHighCommand, or an explicit
+            // 'k9.audit' grant) -- deliberately not a second, parallel
+            // notion of "is this person important enough". This is a
+            // LANDING SCREEN choice only: canAccessConsole() itself grants
+            // nothing, and every server-side callback the console screen
+            // goes on to call (tabletRequestRoster, etc.) re-verifies its
+            // own authorization from scratch regardless of how this
+            // caller arrived there -- see server/tablet.lua's
+            // CallerHasConsoleAccess.
+            //
+            // 'auto' (the ordinary command/item/radial, every day): a
+            // qualifying caller lands on the console, pre-loaded; anyone
+            // else stays on the SAME 'home' screen everyone always lands
+            // on -- silently, no notice, since they never asked for the
+            // console at all.
+            // 'highCommand' (the OPTIONAL, opt-in Config.CommandTablet.
+            // highCommandCommand shortcut, default disabled): identical
+            // qualifying check, but an insufficient caller who explicitly
+            // typed THIS command still sees a plain, visible refusal
+            // notice rather than being silently left on their own record,
+            // exactly as before this pass -- they asked, so they are told
+            // why not.
+            if (state.requestedView === 'highCommand' || state.requestedView === 'auto') {
+                var requestedExplicitly = state.requestedView === 'highCommand';
                 state.requestedView = null;
-                if (state.viewer && state.viewer.isHighCommand === true) {
+                if (canAccessConsole()) {
                     state.screen = 'console';
                     render();
                     loadRoster(state.rosterQuery);
+                    loadOnlinePlayers(state.onlinePlayersQuery);
                     return;
                 }
-                state.actionNotice = { kind: 'error', text: S('high_command_required_notice') };
+                if (requestedExplicitly) {
+                    state.actionNotice = { kind: 'error', text: S('high_command_required_notice') };
+                }
             }
 
             render();
@@ -10981,6 +11202,83 @@
                 truncatedMessage: typeof result.truncatedMessage === 'string' ? result.truncatedMessage : null,
             };
             render();
+        });
+    }
+
+    /**
+     * ONLINE PLAYERS LIST -- see buildOnlinePlayersSection()'s own header.
+     * SAME shape as loadRoster() immediately above (server-backed search,
+     * identical stale-response guard), a SEPARATE query/result pair.
+     * @param {string} query
+     */
+    function loadOnlinePlayers(query) {
+        state.onlinePlayersLoading = true;
+        state.onlinePlayersError = null;
+        render();
+
+        fetchNui('tablet:requestOnlinePlayers', { query: query || '' }).then(function (result) {
+            // STALE-RESPONSE GUARD -- see loadRoster()'s own identical
+            // comment just above; same reasoning, applied to this
+            // independent query/result pair.
+            if (query !== state.onlinePlayersQuery) return;
+
+            state.onlinePlayersLoading = false;
+            if (!result || result.ok !== true) {
+                state.onlinePlayersError = result || { error: 'unknown_error' };
+                state.onlinePlayers = null;
+                render();
+                return;
+            }
+            state.onlinePlayers = {
+                rows: result.rows || [],
+                truncated: result.truncated === true,
+                truncatedMessage: typeof result.truncatedMessage === 'string' ? result.truncatedMessage : null,
+            };
+            render();
+        });
+    }
+
+    /**
+     * Resolves ONE online-players row (server id + its opaque, single-use
+     * nonce) to the citizenid it belonged to, freshly, at the moment of
+     * THIS click -- then opens the Person screen for it, exactly as the
+     * roster's Manage button or the "open by exact citizen ID" box
+     * already do (reuses openPerson() verbatim -- this is a NEW ENTRY
+     * POINT into that screen, not a second grant mechanism).
+     *
+     * NEVER guesses a citizenid client-side and never reuses one from an
+     * earlier fetch of this same list -- see server/tablet.lua's
+     * tabletResolveOnlinePlayer for the RECYCLED-SOURCE-ID guard this
+     * round trip exists to close (the person who was at this server id
+     * when the list was drawn may have disconnected, or even been
+     * replaced by someone else entirely, by the time this click lands).
+     * A failure here (the row's own person is no longer there, or the
+     * list has simply gone stale) surfaces a plain, visible notice and
+     * does NOT navigate anywhere -- never a guess at who to open instead.
+     * @param {number} source
+     * @param {string} nonce
+     */
+    function openOnlinePlayer(source, nonce) {
+        if (state.onlinePlayersOpeningSource !== null) return; // one resolve in flight at a time -- see this field's own state comment
+        state.onlinePlayersOpeningSource = source;
+        render();
+
+        fetchNui('tablet:openOnlinePlayer', { source: source, nonce: nonce }).then(function (result) {
+            state.onlinePlayersOpeningSource = null;
+            if (!result || result.ok !== true || typeof result.citizenid !== 'string' || result.citizenid === '') {
+                // errorText() already prefers `result.message` when present
+                // (see its own definition) -- server/tablet.lua's
+                // tabletResolveOnlinePlayer always supplies one for both
+                // refusal codes this call can return
+                // ('target_disconnected'/'stale_online_list'), so this
+                // renders that exact, honest explanation rather than a
+                // generic failure notice.
+                state.actionNotice = { kind: 'error', text: errorText(result) };
+                render();
+                return;
+            }
+            var resolvedName = typeof result.name === 'string' && result.name !== '' ? result.name : null;
+            openPerson(result.citizenid, resolvedName);
         });
     }
 
@@ -12679,8 +12977,12 @@
         // See this file's header NUI CONTRACT note on `requestedView` --
         // presentation hint only, consumed once by loadMyRecord() below
         // (called a few lines down this same function) once the server's
-        // own viewer.isHighCommand for this caller is known.
-        state.requestedView = data.requestedView === 'highCommand' ? 'highCommand' : null;
+        // own viewer fields for this caller are known. Defaults to 'auto'
+        // (every ordinary open -- command/item/radial all send no explicit
+        // value, or 'auto' outright) rather than null: the single command
+        // now auto-routes a qualifying caller to the console on its own,
+        // see loadMyRecord()'s own comment.
+        state.requestedView = data.requestedView === 'highCommand' ? 'highCommand' : 'auto';
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
         state.peds = Array.isArray(data.peds) ? data.peds : [];
         state.specializations = (data.specializations && typeof data.specializations === 'object') ? data.specializations : {};

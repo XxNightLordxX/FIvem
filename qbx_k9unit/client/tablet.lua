@@ -124,23 +124,44 @@
     stays available in EVERY mode -- a UI affordance, not a third open
     mode, honouring the same OpenTablet() gate either way.
 
-    SECOND ENTRY POINT (this pass) -- Config.CommandTablet.highCommandCommand.
-    A separate RegisterCommand, always registered whenever
-    Config.Features.CommandTablet is on (independent of openMode above,
-    which only governs the ORIGINAL command's/item's reachability), that
-    calls the exact same OpenTablet(), just passing 'highCommand' as its
-    `requestedView` argument. It is a SHORTCUT TO A SCREEN, never a second
-    grant of access: OpenTablet() itself is unchanged (same
-    tabletOpen-already-true no-op guard, same single SetNuiFocus(true,
-    true), same SendNUIMessage), and the ONLY thing `requestedView` does is
-    ride along in the tablet:open payload as a presentation hint -- see the
-    NUI CONTRACT's own note on that field, and html/tablet.js's
-    loadMyRecord() for where it is actually consumed, strictly AFTER
-    tablet:requestMyRecord's server-verified `viewer.isHighCommand` comes
-    back for this specific caller. Missing/blank config falls back to a
-    loud console warning, same posture as the original command's own
-    missing-config warning above -- the ORIGINAL command/item stay fully
-    reachable regardless, since this is a pure addition.
+    ONE COMMAND, ROUTED BY RANK (owner-directed, 2026-08-26, verbatim:
+    "instead of having /k9tablet and k9hqtablet make it one command that
+    makes it based off the rank in the department"). The ORIGINAL command/
+    item/radial entry point above now ALWAYS calls OpenTablet() with no
+    argument, which resolves to `requestedView = 'auto'` in the tablet:open
+    payload -- html/tablet.js's loadMyRecord() reads that hint, strictly
+    AFTER the server's own viewer fields for this specific caller come
+    back, and lands a canAccessConsole()-qualifying caller (high command,
+    OR an explicit 'k9.audit' grant -- the SAME gate the Console tab/Home
+    card already use, REUSED here rather than a second, parallel notion of
+    "rank") straight on the console; everyone else lands exactly where the
+    ordinary command always landed them, silently, no notice. This is a
+    LANDING SCREEN choice only, never a second grant: OpenTablet() itself
+    is unchanged (same tabletOpen-already-true no-op guard, same single
+    SetNuiFocus(true, true), same SendNUIMessage), and `requestedView`
+    rides along in the payload purely as a presentation hint -- see the NUI
+    CONTRACT's own note on that field.
+
+    OPTIONAL SECOND ENTRY POINT -- Config.CommandTablet.highCommandCommand.
+    Now that the single command auto-routes by rank on its own, this
+    second command is no longer required for anyone -- DEFAULT DISABLED
+    (`false`) on a fresh install, per config.lua's own comment. It exists
+    ONLY for a server that already had this bound to a separate key/macro
+    and wants to keep that muscle memory working: when configured to a
+    non-empty string, it registers a SEPARATE RegisterCommand, always
+    registered whenever Config.Features.CommandTablet is on (independent of
+    openMode above, which only governs the ORIGINAL command's/item's
+    reachability), that calls the exact same OpenTablet(), just passing
+    'highCommand' as its `requestedView` argument. It is STILL a SHORTCUT
+    TO A SCREEN, never a second grant of access -- same canAccessConsole()
+    check as the 'auto' path above, the only difference being that an
+    insufficient caller who explicitly typed THIS command sees a visible
+    "you don't have access" notice instead of silently staying on their own
+    record (they asked, so they are told why not). `false`/missing/blank
+    config registers nothing and prints no warning (this is now the
+    ordinary, intended state, not a misconfiguration) -- the ORIGINAL
+    command/item stay fully reachable regardless, since this was always,
+    and remains, a pure addition on top of them.
     ======================================================================
 
     ======================================================================
@@ -155,6 +176,8 @@
       tablet:close {}                                             -> cb({})
       tablet:requestMyRecord {}                                   -> cb(MyRecordResult)
       tablet:requestRoster {query}                                -> cb(RosterResult)          [console audience]
+      tablet:requestOnlinePlayers {query}                         -> cb(OnlinePlayersResult)    [console audience -- SAME gate as requestRoster, not the wider person-lookup one]
+      tablet:openOnlinePlayer {source,nonce}                      -> cb({ok,citizenid?,name?,error?,message?}) [console audience -- resolves ONE online-players row to a citizenid, freshly, at click time; see server/tablet.lua's tabletResolveOnlinePlayer for the recycled-source-id guard]
       tablet:requestPersonSummary {targetCitizenId}               -> cb(PersonSummaryResult)    [console audience]
       tablet:requestPersonFeatures {targetCitizenId}               -> cb(PersonFeaturesResult)   [high command only]
       tablet:requestMyPartnerships {}                             -> cb(PartnershipsResult)      [Partnerships tab, everyone -- server/tablet.lua's tabletRequestMyPartnerships, enriched here with the caller's own active row's getPartnershipTenureProgress]
@@ -447,7 +470,7 @@
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
           strings = BuildTabletStrings() (locales/en.json's `tablet` group -- see LOCALIZATION below),
-          requestedView = 'highCommand' | nil, -- PRESENTATION HINT ONLY, threaded straight through from the OpenTablet(requestedView) argument the caller passed (see OPENING below for the two RegisterCommand call sites -- the ORIGINAL command/item always pass nil). Decides NOTHING by itself: html/tablet.js's loadMyRecord() only switches to the console screen once tablet:requestMyRecord's own `viewer.isHighCommand` -- server-verified, IsHighCommand(source), the SAME function every other high-command gate in this resource calls, re-run fresh on every request -- comes back true for THIS caller. A non-high-command caller who opened via the new command still gets their own record back exactly as tabletRequestMyRecord already returns it for the ordinary command; html/tablet.js just shows an explicit "you don't have access" notice above it instead of silently landing on the console tab.
+          requestedView = 'highCommand' | 'auto', -- PRESENTATION HINT ONLY, threaded straight through from the OpenTablet(requestedView) argument the caller passed (see OPENING above -- the ORIGINAL command/item/radial always pass nil, which resolves to 'auto' here). Decides NOTHING by itself: html/tablet.js's loadMyRecord() only switches to the console screen once tablet:requestMyRecord's own viewer fields for THIS caller are known, and it does so via canAccessConsole() (isHighCommand OR an explicit 'k9.audit' grant -- the SAME gate the Console tab itself uses), not isHighCommand alone. 'auto' (every ordinary open) silently leaves a non-qualifying caller on their own record, exactly as tabletRequestMyRecord already returns it; 'highCommand' (the optional, opt-in highCommandCommand shortcut) shows an explicit "you don't have access" notice above that same record instead.
           -- The Block Effect column's 'client_enforced' badge/hint text
           -- (block_client_enforced_badge/_hint) used to be sent as two
           -- STANDALONE fields here, resolved via a dedicated SafeLocale()
@@ -820,6 +843,14 @@ local TABLET_STRING_KEYS = {
     'retry_label', 'search_placeholder', 'refresh_label', 'empty_roster',
     'column_name', 'column_citizenid', 'column_department', 'column_certified',
     'column_xp', 'column_actions', 'certified_yes', 'certified_no',
+    -- ONLINE PLAYERS LIST (owner-directed, 2026-08-26: "make the add
+    -- permission section... where its a list when i choose a player id")
+    -- -- see html/tablet.js's buildOnlinePlayersSection() for the full
+    -- contract this new entry point implements.
+    'online_players_heading', 'online_players_search_placeholder',
+    'online_players_empty', 'online_players_opening_label',
+    'column_server_id', 'column_job', 'column_k9_access',
+    'online_k9_access_yes', 'online_k9_access_no',
     'certify_label', 'decertify_label', 'confirm_label', 'grant_label',
     'revoke_label', 'block_label', 'unblock_label', 'manage_label',
     -- Block Effect column (html/tablet.js's featureBlockEnforcement()) --
@@ -1202,6 +1233,8 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9throwfetchball_usage', 'cmdref_k9throwfetchball_does', 'cmdref_k9throwfetchball_needs',
     'cmdref_k9dropfetchball_usage', 'cmdref_k9dropfetchball_does', 'cmdref_k9dropfetchball_needs',
     'cmdref_k9recallfetchball_usage', 'cmdref_k9recallfetchball_does', 'cmdref_k9recallfetchball_needs',
+    'cmdref_k9eat_usage', 'cmdref_k9eat_does', 'cmdref_k9eat_needs',
+    'cmdref_k9drink_usage', 'cmdref_k9drink_does', 'cmdref_k9drink_needs',
     'cmdref_k9recall_usage', 'cmdref_k9recall_does', 'cmdref_k9recall_needs',
     'cmdref_k9calmdown_usage', 'cmdref_k9calmdown_does', 'cmdref_k9calmdown_needs',
     'cmdref_k9meatbait_usage', 'cmdref_k9meatbait_does', 'cmdref_k9meatbait_needs',
@@ -1487,17 +1520,21 @@ end
 --- certified: they still open it and see why, instead of never opening
 --- at all.
 ---
---- @param requestedView string? -- 'highCommand' | nil. PRESENTATION HINT
---- ONLY, forwarded verbatim as `requestedView` in the tablet:open payload
---- (see NUI CONTRACT above) -- it changes NOTHING about what this function
---- does: same tabletOpen no-op guard, same single SetNuiFocus(true, true)
---- call, same SendNUIMessage. Real authorization still happens entirely
---- server-side, inside tablet:requestMyRecord's own IsHighCommand(source)
---- check -- html/tablet.js decides what to SHOW from that response, never
---- from this argument. Callers: the original tablet command/item always
---- call OpenTablet() with no argument (nil); the new
---- Config.CommandTablet.highCommandCommand below is the only caller that
---- ever passes 'highCommand'.
+--- @param requestedView string? -- 'highCommand' | nil (nil resolves to
+--- 'auto' in the payload below). PRESENTATION HINT ONLY, forwarded as
+--- `requestedView` in the tablet:open payload (see NUI CONTRACT above) --
+--- it changes NOTHING about what this function does: same tabletOpen
+--- no-op guard, same single SetNuiFocus(true, true) call, same
+--- SendNUIMessage. Real authorization still happens entirely server-side
+--- -- html/tablet.js's loadMyRecord() only ever picks a LANDING SCREEN
+--- from this hint plus the server-verified viewer fields tablet:requestMyRecord
+--- returns; it never skips or shortcuts a single fetch or check because of
+--- it. Callers: the original tablet command, the ox_inventory item, and
+--- the K9 radial menu entry all call OpenTablet() with no argument (nil,
+--- which becomes 'auto' -- every ordinary open auto-routes a qualifying
+--- caller to the console by their own rank, owner-directed 2026-08-26);
+--- the OPTIONAL, opt-in Config.CommandTablet.highCommandCommand below is
+--- the only caller that ever passes 'highCommand' explicitly.
 --- @return nil
 function OpenTablet(requestedView)
     if tabletOpen then return end
@@ -1533,7 +1570,7 @@ function OpenTablet(requestedView)
         data = {
             capabilities = Config.Permissions, -- shared config, no round trip
             strings = BuildTabletStrings(), -- locales/en.json's `tablet` group, one key per html/tablet.js's own DEFAULT_STRINGS -- see this file's header LOCALIZATION note
-            requestedView = (requestedView == 'highCommand') and 'highCommand' or nil, -- see NUI CONTRACT above and this function's own @param doc -- presentation hint only
+            requestedView = (requestedView == 'highCommand') and 'highCommand' or 'auto', -- see NUI CONTRACT above and this function's own @param doc -- presentation hint only. 'auto' (not nil) by default so html/tablet.js's loadMyRecord() auto-routes EVERY ordinary open by the caller's own rank, not just the opt-in highCommandCommand shortcut -- owner-directed, 2026-08-26.
             -- The Block Effect column's 'client_enforced' badge/hint text
             -- (block_client_enforced_badge/_hint) used to be sent as two
             -- standalone fields here -- folded into the ordinary
@@ -1600,26 +1637,41 @@ if openMode == 'command' or openMode == 'both' then
 end
 
 -- ----------------------------------------------------------------------
--- SECOND ENTRY POINT (this pass) -- Config.CommandTablet.highCommandCommand.
--- See this file's header "SECOND ENTRY POINT" note above for the full
--- writeup. Registered UNCONDITIONALLY here (not gated on `openMode`,
--- which governs only the ORIGINAL command's/item's reachability) --
--- this is a wholly separate, always-available shortcut whenever
--- Config.Features.CommandTablet is on at all (the file-level early return
--- above already covers the flag being off, exactly like the original
--- command). Calls the SAME OpenTablet()/CloseTablet() pair, so it shares
--- the one focus lifecycle and the one tabletOpen no-op guard -- typing
--- this while the tablet is already open (via either command) is a safe
--- no-op, identical to typing the original command twice.
+-- OPTIONAL SECOND ENTRY POINT -- Config.CommandTablet.highCommandCommand.
+-- See this file's header "ONE COMMAND, ROUTED BY RANK" / "OPTIONAL SECOND
+-- ENTRY POINT" notes above for the full writeup. DEFAULT DISABLED
+-- (`false`, or simply absent) as of this pass -- the ORIGINAL command
+-- above now auto-routes a qualifying caller to the console on its own
+-- (requestedView = 'auto'), so this second command is no longer needed on
+-- a fresh install. `false`/nil/blank is therefore the ORDINARY, INTENDED
+-- state now, not a misconfiguration -- registers nothing, warns nothing.
+-- Only a genuinely INVALID value (present, but neither `false` nor a
+-- usable string -- e.g. a stray number or `true` left over from a hand
+-- edit) still warns, matching this resource's usual "silently doing
+-- nothing is worse than a loud, ignorable log line" posture for an actual
+-- mistake. When configured to a real command name, registered
+-- UNCONDITIONALLY here (not gated on `openMode`, which governs only the
+-- ORIGINAL command's/item's reachability) -- a wholly separate,
+-- always-available shortcut whenever Config.Features.CommandTablet is on
+-- at all (the file-level early return above already covers the flag being
+-- off, exactly like the original command). Calls the SAME OpenTablet()/
+-- CloseTablet() pair, so it shares the one focus lifecycle and the one
+-- tabletOpen no-op guard -- typing this while the tablet is already open
+-- (via either command) is a safe no-op, identical to typing the original
+-- command twice.
 -- ----------------------------------------------------------------------
 local hqTabletCommand = cfgTablet.highCommandCommand
 if type(hqTabletCommand) == 'string' and hqTabletCommand ~= '' then
     RegisterCommand(hqTabletCommand, function() OpenTablet('highCommand') end, false)
-else
-    print('[qbx_k9unit] WARNING: Config.CommandTablet.highCommandCommand is missing or not a valid string -- ' ..
+elseif hqTabletCommand ~= nil and hqTabletCommand ~= false then
+    print(('[qbx_k9unit] WARNING: Config.CommandTablet.highCommandCommand (%s) is set but is not a valid command string or `false` -- ' ..
         'the K9 High Command Tablet shortcut will not be reachable by command this session (the original ' ..
-        'tablet command/item, if configured, is unaffected).')
+        'tablet command/item, if configured, is unaffected; the single tablet command already auto-routes ' ..
+        'a qualifying caller to the console on its own regardless).'):format(tostring(hqTabletCommand)))
 end
+-- else: `false` or nil -- deliberately disabled, the new default. No
+-- warning: this is not a missing config, it is the intended "one command"
+-- state the owner asked for.
 
 if openMode == 'item' or openMode == 'both' then
     --- Runtime existence guard for the K9Compat-detected inventory's
@@ -2075,6 +2127,31 @@ end)
 RegisterNUICallback('tablet:requestRoster', function(data, cb)
     local query = (type(data) == 'table' and type(data.query) == 'string') and data.query or ''
     cb(AwaitServerCallback('qbx_k9unit:server:tabletRequestRoster', query))
+end)
+
+--- ONLINE PLAYERS LIST (this pass, coder-ui) -- see server/tablet.lua's
+--- own "CALLBACK 2b/2c" doc comment for the full contract/reasoning.
+--- Thin forward, matching tablet:requestRoster immediately above -- same
+--- shape, same (server-side) audience.
+RegisterNUICallback('tablet:requestOnlinePlayers', function(data, cb)
+    local query = (type(data) == 'table' and type(data.query) == 'string') and data.query or ''
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletRequestOnlinePlayers', query))
+end)
+
+--- Resolves ONE online-players row (a server id + the opaque nonce that
+--- row was minted with) to the citizenid it belonged to, freshly, at the
+--- moment of this call -- see tabletResolveOnlinePlayer's own doc comment
+--- (server/tablet.lua) for the RECYCLED-SOURCE-ID reasoning this exists
+--- to close. `data.source` is validated as a number here ONLY as a
+--- shape/type guard before the round trip -- it is never treated as an
+--- authorization decision either here or server-side; the server's own
+--- nonce lookup is the real check.
+RegisterNUICallback('tablet:openOnlinePlayer', function(data, cb)
+    if type(data) ~= 'table' or type(data.source) ~= 'number' or type(data.nonce) ~= 'string' or data.nonce == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletResolveOnlinePlayer', data.source, data.nonce))
 end)
 
 RegisterNUICallback('tablet:requestPersonSummary', function(data, cb)

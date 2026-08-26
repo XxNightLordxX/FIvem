@@ -120,11 +120,18 @@ local lastStats = {
     mood = 100,
     fearStress = 0,
     injury = 100,
+    -- HUNGER/THIRST (this pass, coder-backend) -- same "safe default" reasoning
+    -- as every other field here: fully-fed/fully-hydrated until the first
+    -- real snapshot arrives.
+    hunger = 100,
+    thirst = 100,
     distractedUntil = 0,
     hesitatingUntil = 0,
 }
 local wasDistracted = false
 local wasHesitating = false
+local wasHungry = false
+local wasThirsty = false
 
 -- ======================================================================
 -- LIVE FEATURE FLAGS -- closes a real, confirmed gap: every check below
@@ -173,6 +180,9 @@ local LiveFeatureFlags = {
     FearStressSystem = Config.Features.FearStressSystem == true,
     DistractionSystem = Config.Features.DistractionSystem == true,
     InjuryLimping = Config.Features.InjuryLimping == true,
+    -- HUNGER/THIRST (this pass, coder-backend) -- same live-flag mechanism,
+    -- same reasoning, as the five siblings above.
+    HungerThirstSystem = Config.Features.HungerThirstSystem == true,
 }
 
 -- ======================================================================
@@ -246,6 +256,19 @@ local LiveWellbeingTunables = {
     -- from this client's own static config copy until the first snapshot
     -- arrives, same safety argument (nothing here is a security boundary).
     fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
+    -- HUNGER/THIRST (this pass, coder-backend). CONFIG-DEFENSIVE (see
+    -- server/wellbeing.lua's header for the full reasoning): this CLIENT's
+    -- own static `Config.Wellbeing.Hunger`/`.Thirst` copy may not exist yet
+    -- either (this file does not own config.lua), so this seed is guarded
+    -- the same way server/wellbeing.lua's SnapshotOf guards its own
+    -- equivalent read -- a client that boots against an old config.lua
+    -- simply seeds these two at a safe default instead of erroring out of
+    -- this entire file's load (which would take every OTHER wellbeing
+    -- feature's client-side half down with it).
+    hungerSpeedPenaltyThreshold  = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.lowThreshold or 30,
+    hungerSpeedPenaltyMultiplier = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.speedPenaltyMultiplier or 0.95,
+    thirstSpeedPenaltyThreshold  = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.lowThreshold or 30,
+    thirstSpeedPenaltyMultiplier = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.speedPenaltyMultiplier or 0.95,
 }
 
 --- Recomputes this file's three owned `K9MoveRateModifiers` slots from
@@ -299,6 +322,35 @@ local function ApplyMoveRateModifiers()
         K9MoveRateModifiers.mood = 1.0
     end
 
+    -- HUNGER/THIRST (this pass, coder-backend). Two NEW named entries on the
+    -- SAME shared K9MoveRateModifiers table -- client/movement.lua's own
+    -- RecomputeK9MoveRate composer is a generic `for _, modifier in
+    -- pairs(K9MoveRateModifiers) do effective = effective * modifier end`
+    -- (confirmed by reading that function directly before adding these two
+    -- lines), so no change is needed there at all. DELIBERATELY MILD and
+    -- DELIBERATELY NOT a hard input block (unlike Injury's sprint/jump
+    -- block below) -- see server/wellbeing.lua's header for the full
+    -- "consequences must stay mild, never cannot-work-at-all" reasoning.
+    -- Same "reset to 1.0 in the else branch, never merely left untouched"
+    -- discipline as every modifier above, for the identical "flag switched
+    -- off mid-effect must remove the effect" reason.
+    if LiveFeatureFlags.HungerThirstSystem then
+        if lastStats.hunger < LiveWellbeingTunables.hungerSpeedPenaltyThreshold then
+            K9MoveRateModifiers.hunger = LiveWellbeingTunables.hungerSpeedPenaltyMultiplier
+        else
+            K9MoveRateModifiers.hunger = 1.0
+        end
+
+        if lastStats.thirst < LiveWellbeingTunables.thirstSpeedPenaltyThreshold then
+            K9MoveRateModifiers.thirst = LiveWellbeingTunables.thirstSpeedPenaltyMultiplier
+        else
+            K9MoveRateModifiers.thirst = 1.0
+        end
+    else
+        K9MoveRateModifiers.hunger = 1.0
+        K9MoveRateModifiers.thirst = 1.0
+    end
+
     RecomputeK9MoveRate()
 end
 
@@ -350,10 +402,39 @@ local function ApplyWellbeingSnapshot(stats)
     lastStats.mood = tonumber(stats.mood) or lastStats.mood
     lastStats.fearStress = tonumber(stats.fearStress) or lastStats.fearStress
     lastStats.injury = tonumber(stats.injury) or lastStats.injury
+    -- HUNGER/THIRST (this pass, coder-backend) -- same tonumber-or-keep-last
+    -- ingest as every other stat above.
+    lastStats.hunger = tonumber(stats.hunger) or lastStats.hunger
+    lastStats.thirst = tonumber(stats.thirst) or lastStats.thirst
     lastStats.distractedUntil = tonumber(stats.distractedUntil) or lastStats.distractedUntil
     lastStats.hesitatingUntil = tonumber(stats.hesitatingUntil) or lastStats.hesitatingUntil
 
     ApplyMoveRateModifiers()
+
+    -- HUNGER/THIRST -- cosmetic, one-shot notifications on a threshold
+    -- CROSSING only (never spammed every tick), same shape as the
+    -- Distraction/FearStress transition notifies below. Uses the SAME
+    -- threshold this tick's ApplyMoveRateModifiers() call just judged the
+    -- move-rate penalty against, so the notification and the actual
+    -- gameplay effect can never disagree about when the K9 became "hungry"/
+    -- "thirsty".
+    if LiveFeatureFlags.HungerThirstSystem then
+        local isHungryNow = lastStats.hunger < LiveWellbeingTunables.hungerSpeedPenaltyThreshold
+        if isHungryNow and not wasHungry then
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hunger_low'), type = 'error' })
+        elseif wasHungry and not isHungryNow then
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hunger_satisfied'), type = 'info' })
+        end
+        wasHungry = isHungryNow
+
+        local isThirstyNow = lastStats.thirst < LiveWellbeingTunables.thirstSpeedPenaltyThreshold
+        if isThirstyNow and not wasThirsty then
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.thirst_low'), type = 'error' })
+        elseif wasThirsty and not isThirstyNow then
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.thirst_satisfied'), type = 'info' })
+        end
+        wasThirsty = isThirstyNow
+    end
 
     if LiveFeatureFlags.DistractionSystem then
         local isDistractedNow = lastStats.distractedUntil > GetGameTimer()
@@ -400,7 +481,7 @@ end)
 -- otherwise; only runs at all if at least one wellbeing flag is enabled.
 if Config.Features.FatigueSystem or Config.Features.MoodSystem
     or Config.Features.FearStressSystem or Config.Features.DistractionSystem
-    or Config.Features.InjuryLimping then
+    or Config.Features.InjuryLimping or Config.Features.HungerThirstSystem then
     CreateThread(function()
         local wasK9 = false
         while true do
@@ -900,4 +981,108 @@ do
     RegisterCommand('k9whistle', function()
         UseDistractionItem('whistle', locale('wellbeing.reason_no_whistle'))
     end, false)
+end
+
+-- ======================================================================
+-- HUNGER/THIRST (this pass, coder-backend). See server/wellbeing.lua's
+-- header "SELF-SERVICE, A DELIBERATE DIVERGENCE FROM MOOD" for why these
+-- are plain self-only commands (mirroring RequestK9CalmDown's own shape
+-- exactly) rather than an ox_target option on another player's ped, and
+-- "WATER BOWL MODEL RISK" for the world-prop bowl option below.
+--
+-- COMMANDS ALWAYS REGISTER, regardless of Config.Features.HungerThirstSystem's
+-- boot-time value -- identical reasoning to every other command in this
+-- file (RequestK9CalmDown/k9meatbait/k9whistle): gating registration on the
+-- static boot-time copy would mean a client who booted with the feature off
+-- could never even attempt `/k9eat`/`/k9drink` after a later runtime
+-- toggle-ON, for the rest of that session. Gated instead at the point of
+-- use, on `LiveFeatureFlags.HungerThirstSystem`, then re-validated for real
+-- server-side regardless (server/wellbeing.lua's own feedK9Hunger/
+-- giveK9Water -- this file's own checks are display/UX only).
+-- ======================================================================
+RegisterCommand('k9eat', function()
+    if not LiveFeatureFlags.HungerThirstSystem then return end
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return
+    end
+    TriggerServerEvent('qbx_k9unit:server:feedK9Hunger')
+end, false)
+
+RegisterCommand('k9drink', function()
+    if not LiveFeatureFlags.HungerThirstSystem then return end
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return
+    end
+    TriggerServerEvent('qbx_k9unit:server:giveK9Water')
+end, false)
+
+-- ======================================================================
+-- THIRST — "Drink from Bowl" world-object ox_target option. Targets
+-- Config.Wellbeing.Thirst.bowlSources by MODEL, the same
+-- K9Compat.Get('target').AddModel primitive client/fetch.lua's own
+-- "Pick Up Ball" option and client/kennel.lua already use to target a
+-- world prop by model rather than a specific spawned instance -- confirmed
+-- against the SAME ox_target addModel API those two files already
+-- established, not re-derived here.
+--
+-- DEGRADES GRACEFULLY if `bowlSources` never resolves to a real model in
+-- this world (see server/wellbeing.lua's header "WATER BOWL MODEL RISK"):
+-- AddModel simply never matches any entity, so this option never appears
+-- for anyone -- Thirst still fully works via `/k9drink` above, which has no
+-- model dependency at all.
+--
+-- ALWAYS REGISTERS, regardless of Config.Features.HungerThirstSystem's
+-- boot-time value -- same "registration always happens, LiveFeatureFlags
+-- gates canInteract" rule as every other ox_target option in this file
+-- (see the MOOD section's own header above for the full reasoning), and the
+-- SAME onResourceStart/target-resource-restart re-registration fix that
+-- section's own RegisterMoodOxTargetOptions() already established (a
+-- restart of whichever resource actually backs ox_target/qb-target/etc.
+-- would otherwise silently drop this option forever without it).
+-- ======================================================================
+do
+    local function RegisterBowlOxTargetOptions()
+        local bowlSources = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.bowlSources or nil
+        if type(bowlSources) ~= 'table' or #bowlSources == 0 then return end
+
+        local models = {}
+        for _, modelName in ipairs(bowlSources) do
+            if type(modelName) == 'string' and modelName ~= '' then
+                models[#models + 1] = GetHashKey(modelName)
+            end
+        end
+        if #models == 0 then return end
+
+        K9Compat.Get('target').AddModel(models, {
+            {
+                name = 'qbx_k9unit:drinkFromBowl',
+                icon = 'fas fa-dog',
+                label = locale('wellbeing.bowl_target_label'),
+                distance = 2.0,
+                canInteract = function()
+                    if not LiveFeatureFlags.HungerThirstSystem then return false end
+                    return CanShowK9UI()
+                end,
+                onSelect = function(data)
+                    if not data or not data.entity or not DoesEntityExist(data.entity) then return end
+                    local netId = NetworkGetNetworkIdFromEntity(data.entity)
+                    TriggerServerEvent('qbx_k9unit:server:drinkFromBowl', netId)
+                end,
+            },
+        })
+    end
+
+    AddEventHandler('onResourceStart', function(resourceName)
+        if resourceName == GetCurrentResourceName() then
+            RegisterBowlOxTargetOptions()
+            return
+        end
+
+        K9Compat.Redetect()
+        if resourceName == K9Compat.Which('target') then
+            RegisterBowlOxTargetOptions()
+        end
+    end)
 end

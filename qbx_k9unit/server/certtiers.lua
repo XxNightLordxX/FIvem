@@ -910,6 +910,45 @@ function TierCapabilityPermits(citizenid, jobName, capabilityKey)
     if type(GetCertificationTier) ~= 'function' then return true end
     if type(citizenid) ~= 'string' or type(jobName) ~= 'string' then return true end
 
+    -- HIGH COMMAND BYPASS (owner-directed, this pass -- "high command
+    -- automatically gets every k9 upgrade"). WITHOUT this, a high-command
+    -- officer who happens to hold a REAL, active, job-matching certification
+    -- row whose TIER simply does not carry `capabilityKey` would be DENIED
+    -- here -- this function's own comment above already documents that a
+    -- citizenid with NO certification row at all is treated as
+    -- unresolvable-and-allowed, so before this fix an UNCERTIFIED
+    -- high-command officer passed by accident (via that unresolvable path)
+    -- while a CERTIFIED one, at the wrong tier, did not -- an inconsistency
+    -- that had nothing to do with rank and everything to do with whether
+    -- they happened to hold a cert row, which is exactly backwards for a
+    -- rank this resource elsewhere treats as "super op" (server/
+    -- highcommand.lua's own header). `type(...) == 'function'` soft
+    -- dependency guard, this resource's established convention -- this
+    -- function still works exactly as before if server/permissions.lua is
+    -- ever removed or Config.Features.HighCommand is off
+    -- (IsHighCommandBypassCitizenId's own IsHighCommand call re-checks that
+    -- flag on every invocation, no restart needed). `jobName` is passed
+    -- through as `expectedJobName` so a citizenid who is high command of
+    -- SOME department cannot use a DIFFERENT department's `jobName` string
+    -- to borrow that status here -- IsHighCommand itself already requires
+    -- the officer's own LIVE job to satisfy this, but this call is scoped
+    -- to the specific job this capability check is FOR, never the officer's
+    -- job in general. OFFLINE `citizenid` -> IsHighCommandBypassCitizenId
+    -- returns false -> falls through to the real, unchanged resolution
+    -- below, exactly as before this pass -- see that function's own doc
+    -- comment for why this is safe (never a source of over-grant).
+    -- NEVER GATES A NEW CALL SITE: this function's only real, request-time
+    -- consumers (server/combat.lua's ValidateCombatRequest,
+    -- server/certifications.lua's GrantSpecialization) are UNCHANGED by
+    -- this edit -- it only widens what THIS function itself returns for an
+    -- already-existing call, never adds a new one, and neither consumer is
+    -- reachable from a termination/cleanup path (see this file's own header
+    -- "NO UNBOUNDED TRAP" and combat.lua's own "REQUEST-TIME ONLY" comment
+    -- on ValidateCombatRequest).
+    if type(IsHighCommandBypassCitizenId) == 'function' and IsHighCommandBypassCitizenId(citizenid, jobName) then
+        return true
+    end
+
     -- `includeExpired = true` (SECURITY FIX, coder-security,
     -- tier-bypass-on-expiry review): the ordinary 2-argument
     -- GetCertificationTier(citizenid, jobName) folds an EXPIRED

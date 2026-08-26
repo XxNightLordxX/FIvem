@@ -2858,6 +2858,62 @@ t.test('HasSpecialization: an EXPIRED base cert soft-disables its specialization
 end)
 
 -- ----------------------------------------------------------------------
+-- HIGH COMMAND BYPASS (owner-directed "high command automatically gets
+-- every k9 upgrade" pass) -- MeetsTierRequirement and HasSpecialization
+-- both now consult server/permissions.lua's IsHighCommandBypassCitizenId,
+-- a soft dependency set directly on `f.env` (this file's own established
+-- pattern -- see the existing `f.env.IsHighCommand = ...` precedent
+-- elsewhere in this spec) rather than booting server/permissions.lua for
+-- real.
+-- ----------------------------------------------------------------------
+
+t.test('HIGH COMMAND BYPASS: MeetsTierRequirement is satisfied for a high-command officer who holds no certification at all', function()
+    local f = newFixture()
+    -- CIT1 has NO certification row whatsoever -- MeetsTierRequirement
+    -- fails closed for this citizenid on every ordinary path (its own doc
+    -- comment: "fails closed on a nil actual tier").
+    f.env.IsHighCommandBypassCitizenId = function(citizenid, jobName) return citizenid == 'HC-OFFICER' and jobName == 'police' end
+
+    t.isFalse(f.env.MeetsTierRequirement('ORDINARY_UNCERTIFIED', 'police', 'senior'), 'control: an ordinary uncertified citizenid is still denied')
+    t.isTrue(f.env.MeetsTierRequirement('HC-OFFICER', 'police', 'senior'), 'high command must clear a minimum-tier bar they never personally certified for')
+end)
+
+t.test('HIGH COMMAND BYPASS: MeetsTierRequirement still fails closed for high command on an unrecognized minTier -- never a way to paper over a caller bug', function()
+    local f = newFixture()
+    f.env.IsHighCommandBypassCitizenId = function(citizenid, _jobName) return citizenid == 'HC-OFFICER' end
+
+    t.isFalse(f.env.MeetsTierRequirement('HC-OFFICER', 'police', 'not-a-real-tier'))
+end)
+
+t.test('HIGH COMMAND BYPASS: HasSpecialization is satisfied for a high-command officer who was never granted it and holds no active certification', function()
+    local f = newFixture()
+    f.env.IsHighCommandBypassCitizenId = function(citizenid, jobName) return citizenid == 'HC-OFFICER' and jobName == 'police' end
+
+    t.isFalse(f.env.HasSpecialization('ORDINARY_UNCERTIFIED', 'police', 'narcotics'), 'control: an ordinary uncertified citizenid is still denied')
+    t.isTrue(f.env.HasSpecialization('HC-OFFICER', 'police', 'narcotics'), 'high command must hold a specialization "k9 upgrade" they never personally earned')
+end)
+
+t.test('HIGH COMMAND BYPASS: an OFFLINE citizenid (or one who is simply not high command) gets no bypass -- real resolution, unaffected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'trainee' } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    f.env.IsHighCommandBypassCitizenId = function(_citizenid, _jobName) return false end -- mirrors the real function's own offline/not-high-command answer
+
+    t.isFalse(f.env.MeetsTierRequirement('CIT1', 'police', 'certified'))
+    t.isFalse(f.env.HasSpecialization('CIT1', 'police', 'narcotics'))
+end)
+
+t.test('HIGH COMMAND BYPASS: soft dependency -- MeetsTierRequirement/HasSpecialization behave exactly as before when IsHighCommandBypassCitizenId is entirely absent', function()
+    local f = newFixture()
+    t.isNil(f.env.IsHighCommandBypassCitizenId, 'this fixture genuinely has no IsHighCommandBypassCitizenId defined by default')
+
+    t.isFalse(f.env.MeetsTierRequirement('ANYONE', 'police', 'senior'))
+    t.isFalse(f.env.HasSpecialization('ANYONE', 'police', 'narcotics'))
+end)
+
+-- ----------------------------------------------------------------------
 -- SetCertificationTier
 -- ----------------------------------------------------------------------
 

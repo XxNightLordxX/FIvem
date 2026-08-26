@@ -143,6 +143,37 @@ local function newFixture(opts)
         return source
     end
 
+    --- ONLINE PLAYERS LIST fixture support (this pass) -- simulates a
+    --- real disconnect: removes BOTH the by-source and by-citizenid
+    --- entries, exactly like a real qbx_core player object vanishing on
+    --- drop. Used to build the "recycled source id" scenario:
+    --- dropPlayer(5) then registerPlayer(5, otherCitizenid, ...) puts a
+    --- DIFFERENT citizenid at the SAME source number, mirroring FXServer
+    --- handing a freed connection slot to the next joiner.
+    --- @param source number
+    local function dropPlayer(source)
+        local p = playersBySource[source]
+        if p and p.PlayerData and playersByCitizenId[p.PlayerData.citizenid] == p then
+            playersByCitizenId[p.PlayerData.citizenid] = nil
+        end
+        playersBySource[source] = nil
+    end
+
+    --- @return string[] -- every currently-connected source, as strings,
+    --- matching FXServer's own GetPlayers() return shape (server/main.lua's
+    --- own header comment: "GetPlayers() returns connected player ids as
+    --- strings; tonumber'd below" -- server/tablet.lua's
+    --- tabletRequestOnlinePlayers does the identical tonumber() dance).
+    --- Numerically sorted so a test can assert on a stable row order.
+    local function GetPlayersStub()
+        local sources = {}
+        for src in pairs(playersBySource) do sources[#sources + 1] = src end
+        table.sort(sources)
+        local out = {}
+        for i, src in ipairs(sources) do out[i] = tostring(src) end
+        return out
+    end
+
     --- Registers a citizenid that is NEVER online for this fixture --
     --- exercised only through exports.qbx_core:GetOfflinePlayer, never
     --- GetPlayerByCitizenId/GetPlayer (see server/tablet.lua's
@@ -215,6 +246,7 @@ local function newFixture(opts)
         exports = exportsStub,
         lib = libStub,
         GetPlayerName = GetPlayerNameStub,
+        GetPlayers = GetPlayersStub,
         GetGameTimer = function() return fakeNow.value end,
         AddEventHandler = AddEventHandlerStub,
         print = function() end,
@@ -280,6 +312,7 @@ local function newFixture(opts)
         env = env,
         callbacks = capturedCallbacks,
         registerPlayer = registerPlayer,
+        dropPlayer = dropPlayer,
         registerOfflinePlayer = registerOfflinePlayer,
         addPermRow = addPermRow,
         addCertRow = addCertRow,
@@ -305,20 +338,24 @@ end
 -- identical "gate at registration, not just inside the handler" convention.
 -- ============================================================================
 
-t.test('Config.Features.CommandTablet == false: none of the four callbacks are registered', function()
+t.test('Config.Features.CommandTablet == false: none of the callbacks are registered', function()
     local f = newFixture({ config = { Features = { CommandTablet = false } } })
     t.isNil(f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'])
     t.isNil(f.callbacks['qbx_k9unit:server:tabletRequestRoster'])
+    t.isNil(f.callbacks['qbx_k9unit:server:tabletRequestOnlinePlayers'])
+    t.isNil(f.callbacks['qbx_k9unit:server:tabletResolveOnlinePlayer'])
     t.isNil(f.callbacks['qbx_k9unit:server:tabletRequestPersonSummary'])
     t.isNil(f.callbacks['qbx_k9unit:server:tabletRequestPersonFeatures'])
     t.isNil(f.callbacks['qbx_k9unit:server:tabletAssignK9Role'])
     t.isNil(f.callbacks['qbx_k9unit:server:tabletRevertK9Ped'])
 end)
 
-t.test('Config.Features.CommandTablet == true: all six local callbacks are registered', function()
+t.test('Config.Features.CommandTablet == true: all eight local callbacks are registered', function()
     local f = newFixture()
     t.isNotNil(f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'])
     t.isNotNil(f.callbacks['qbx_k9unit:server:tabletRequestRoster'])
+    t.isNotNil(f.callbacks['qbx_k9unit:server:tabletRequestOnlinePlayers'])
+    t.isNotNil(f.callbacks['qbx_k9unit:server:tabletResolveOnlinePlayer'])
     t.isNotNil(f.callbacks['qbx_k9unit:server:tabletRequestPersonSummary'])
     t.isNotNil(f.callbacks['qbx_k9unit:server:tabletRequestPersonFeatures'])
     t.isNotNil(f.callbacks['qbx_k9unit:server:tabletAssignK9Role'])
@@ -1087,6 +1124,292 @@ t.test('ROSTER CLAMP: exactly maxRosterRows candidates is NOT reported as trunca
     local result = cb(f, 'qbx_k9unit:server:tabletRequestRoster')(src, '')
     t.equals(#result.rows, 5)
     t.isFalse(result.truncated)
+end)
+
+-- ============================================================================
+-- tabletRequestOnlinePlayers / tabletResolveOnlinePlayer -- owner-directed,
+-- 2026-08-26: "make the add permission section... where its a list when i
+-- choose a player id". SAME console-audience gate as tabletRequestRoster
+-- above (CallerHasConsoleAccess), deliberately NOT the wider
+-- CallerHasPersonAccess tabletRequestPersonSummary admits -- see
+-- server/tablet.lua's own CALLBACK 2b/2c header for the full reasoning.
+-- ============================================================================
+
+t.test('tabletRequestOnlinePlayers: an unresolvable caller fails closed', function()
+    local f = newFixture()
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(999, '')
+    t.isFalse(result.ok)
+end)
+
+t.test('tabletRequestOnlinePlayers: SECURITY -- a caller with no console access (no grant, no rank, not high command) is denied', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'NOBODY', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletRequestOnlinePlayers: SECURITY -- UNTOUCHED by tabletRequestPersonSummary\'s own widening -- a caller holding ONLY an explicit k9.certify grant is still denied this BROWSE list', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'DELEGATE1', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('DELEGATE1', 'k9.certify', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isFalse(result.ok, 'a k9.certify-only holder can still open a KNOWN person via "open by exact citizen ID" -- but must not get a free roster of everyone online')
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletRequestOnlinePlayers: SECURITY -- a caller holding ONLY an explicit k9.givexp grant is likewise still denied', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'DELEGATE2', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('DELEGATE2', 'k9.givexp', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletRequestOnlinePlayers: a high-command caller sees every connected player (including themselves), with name/job/K9-access resolved, and NEVER a citizenid field', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function(source) return source == 2 end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } }, { firstname = 'Chief', lastname = 'Hopps' })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } }, { firstname = 'Rex', lastname = 'Shepherd' })
+    f.registerPlayer(3, 'SHERIFF1', { name = 'sheriff', grade = { level = 1 } }, { firstname = 'Sam', lastname = 'Deputy' })
+
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isTrue(result.ok)
+    t.equals(#result.rows, 3, 'the caller themselves is a real connected player too, and must appear like anyone else')
+    t.isFalse(result.truncated)
+
+    local bySource = {}
+    for _, row in ipairs(result.rows) do bySource[row.source] = row end
+
+    t.equals(bySource[1].name, 'Chief Hopps')
+    t.equals(bySource[1].jobLabel, 'Los Santos Police Department')
+    t.isFalse(bySource[1].hasK9Access)
+    t.isNil(bySource[1].citizenid, 'NEVER a citizenid on this response -- only source/name/jobLabel/hasK9Access/nonce (owner\'s own "nothing about the real person" bound)')
+
+    t.equals(bySource[2].name, 'Rex Shepherd')
+    t.isTrue(bySource[2].hasK9Access)
+
+    t.equals(bySource[3].jobLabel, 'Blaine County Sheriff')
+
+    t.isNotNil(bySource[1].nonce)
+    t.equals(type(bySource[1].nonce), 'string')
+end)
+
+t.test('tabletRequestOnlinePlayers: an explicit k9.audit grant (not high command) also qualifies -- the SAME non-high-command path tabletRequestRoster already admits', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'AUDITOR1', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('AUDITOR1', 'k9.audit', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isTrue(result.ok)
+end)
+
+t.test('tabletRequestOnlinePlayers: the free-text query matches by name, by server id, and by job, case-insensitively', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(42, 'K9-1', { name = 'police', grade = { level = 1 } }, { firstname = 'Rex', lastname = 'Shepherd' })
+    f.registerPlayer(7, 'SHERIFF1', { name = 'sheriff', grade = { level = 1 } }, { firstname = 'Sam', lastname = 'Deputy' })
+
+    local byName = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, 'rex')
+    t.equals(#byName.rows, 1)
+    t.equals(byName.rows[1].source, 42)
+
+    f.fakeNow.value = f.fakeNow.value + 501 -- past the shared read cooldown -- each call below is a SEPARATE request from the same source
+    local byId = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '42')
+    t.equals(#byId.rows, 1)
+    t.equals(byId.rows[1].source, 42)
+
+    f.fakeNow.value = f.fakeNow.value + 501
+    local byJob = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, 'sheriff')
+    t.equals(#byJob.rows, 1)
+    t.equals(byJob.rows[1].source, 7)
+end)
+
+t.test('ONLINE PLAYERS CLAMP: more connected players than the row cap truncates and reports a real truncatedMessage', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    for i = 1, 105 do
+        f.registerPlayer(i + 1, ('ONLINE%03d'):format(i), { name = 'police', grade = { level = 1 } })
+    end
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isTrue(result.ok)
+    t.equals(#result.rows, 100, 'a fixed, generous cap -- never "however many happen to be connected"')
+    t.isTrue(result.truncated)
+    t.isNotNil(result.truncatedMessage)
+end)
+
+t.test('tabletRequestOnlinePlayers: each call mints a FRESH nonce per row -- never reused across separate list builds', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } })
+
+    local first = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    f.fakeNow.value = f.fakeNow.value + 501 -- past the shared read cooldown
+    local second = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+
+    local firstNonce, secondNonce
+    for _, row in ipairs(first.rows) do if row.source == 2 then firstNonce = row.nonce end end
+    for _, row in ipairs(second.rows) do if row.source == 2 then secondNonce = row.nonce end end
+    t.isNotNil(firstNonce)
+    t.isNotNil(secondNonce)
+    t.isFalse(firstNonce == secondNonce, 'two separate list builds for the SAME row must never share a nonce')
+end)
+
+t.test('tabletResolveOnlinePlayer: SECURITY -- a caller with no console access is denied, regardless of the nonce/source given', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'NOBODY', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 999, 'garbage-nonce')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletResolveOnlinePlayer: a freshly-minted nonce resolves to the correct citizenid and name', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } }, { firstname = 'Rex', lastname = 'Shepherd' })
+
+    local list = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    local nonce
+    for _, row in ipairs(list.rows) do if row.source == 2 then nonce = row.nonce end end
+    t.isNotNil(nonce)
+
+    f.fakeNow.value = f.fakeNow.value + 501
+    local result = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, nonce)
+    t.isTrue(result.ok)
+    t.equals(result.citizenid, 'K9-1')
+    t.equals(result.name, 'Rex Shepherd')
+end)
+
+t.test('tabletResolveOnlinePlayer: an unknown/garbage nonce fails cleanly with stale_online_list, never a guessed citizenid', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, 'this-nonce-was-never-minted')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'stale_online_list')
+    t.isNil(result.citizenid)
+end)
+
+t.test('tabletResolveOnlinePlayer: invalid_args for a missing/malformed source or nonce, before any nonce lookup', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.equals(cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, nil, 'x').error, 'invalid_args')
+    t.equals(cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 'not-a-number', 'x').error, 'invalid_args')
+    t.equals(cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, nil).error, 'invalid_args')
+    t.equals(cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, '').error, 'invalid_args')
+end)
+
+t.test('tabletResolveOnlinePlayer: a nonce is SINGLE-USE -- resolving the same one twice fails the second time', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } })
+
+    local list = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    local nonce
+    for _, row in ipairs(list.rows) do if row.source == 2 then nonce = row.nonce end end
+
+    f.fakeNow.value = f.fakeNow.value + 501
+    local firstResolve = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, nonce)
+    t.isTrue(firstResolve.ok)
+
+    f.fakeNow.value = f.fakeNow.value + 501
+    local secondResolve = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, nonce)
+    t.isFalse(secondResolve.ok, 'a nonce already consumed must never resolve again -- replay protection, not just a one-time convenience')
+    t.equals(secondResolve.error, 'stale_online_list')
+end)
+
+t.test('tabletResolveOnlinePlayer: a nonce past its TTL fails with stale_online_list, even though the same player never moved', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } })
+
+    local list = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    local nonce
+    for _, row in ipairs(list.rows) do if row.source == 2 then nonce = row.nonce end end
+
+    f.fakeNow.value = f.fakeNow.value + 60001 -- past ONLINE_PLAYER_NONCE_TTL_MS
+    local result = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, nonce)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'stale_online_list')
+end)
+
+-- ============================================================================
+-- THE PART THAT MATTERS MOST (owner's own words) -- RECYCLED SOURCE IDS.
+-- A server id is freed the instant its holder disconnects and can be handed
+-- to a brand-new connection seconds later. These two tests prove
+-- tabletResolveOnlinePlayer never lets a stale click land on whoever now
+-- happens to occupy that same slot.
+-- ============================================================================
+
+t.test('RECYCLED SOURCE ID: the original occupant disconnects and a DIFFERENT player connects at the SAME source before the click -- resolve fails, and NEVER returns the new occupant\'s citizenid', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(5, 'ORIGINAL-PERSON', { name = 'police', grade = { level = 1 } })
+
+    local list = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    local nonce
+    for _, row in ipairs(list.rows) do if row.source == 5 then nonce = row.nonce end end
+    t.isNotNil(nonce)
+
+    -- ORIGINAL-PERSON disconnects; a completely different citizenid is
+    -- handed the exact same freed server id, 5, before the operator's
+    -- already-drawn list is clicked.
+    f.dropPlayer(5)
+    f.registerPlayer(5, 'RECYCLED-IMPOSTER', { name = 'police', grade = { level = 1 } })
+
+    f.fakeNow.value = f.fakeNow.value + 501
+    local result = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 5, nonce)
+
+    t.isFalse(result.ok, 'must refuse, never silently succeed against whoever is there now')
+    t.equals(result.error, 'target_disconnected')
+    t.isNil(result.citizenid, 'LOAD-BEARING: this must never be RECYCLED-IMPOSTER -- that would be a permission grant landing on the wrong person')
+    t.isTrue(result.citizenid ~= 'RECYCLED-IMPOSTER')
+end)
+
+t.test('RECYCLED SOURCE ID: the original occupant simply disconnects with nobody replacing them -- resolve fails cleanly, not a crash or a guess', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(5, 'ORIGINAL-PERSON', { name = 'police', grade = { level = 1 } })
+
+    local list = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    local nonce
+    for _, row in ipairs(list.rows) do if row.source == 5 then nonce = row.nonce end end
+
+    f.dropPlayer(5) -- nobody takes source 5 afterward
+
+    f.fakeNow.value = f.fakeNow.value + 501
+    local result = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 5, nonce)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_disconnected')
+    t.isNotNil(result.message, 'a plain, visible explanation, not a bare error code')
+end)
+
+t.test('RATE LIMIT: applies to tabletRequestOnlinePlayers too -- a second rapid call from the same console-access source is rejected', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '').ok)
+    local second = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited')
+end)
+
+t.test('RATE LIMIT: applies to tabletResolveOnlinePlayer too, and shares the SAME budget as tabletRequestOnlinePlayers', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'K9-1', { name = 'police', grade = { level = 1 } })
+
+    local list = cb(f, 'qbx_k9unit:server:tabletRequestOnlinePlayers')(src, '')
+    local nonce
+    for _, row in ipairs(list.rows) do if row.source == 2 then nonce = row.nonce end end
+
+    -- Immediately after the list call above, still within the same 500ms
+    -- window -- the resolve call must be rejected by the SAME shared
+    -- budget, never its own independent allowance.
+    local resolveAttempt = cb(f, 'qbx_k9unit:server:tabletResolveOnlinePlayer')(src, 2, nonce)
+    t.isFalse(resolveAttempt.ok)
+    t.equals(resolveAttempt.error, 'rate_limited')
 end)
 
 -- ============================================================================

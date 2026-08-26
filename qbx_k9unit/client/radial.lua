@@ -30,6 +30,10 @@
       - client/partnership.lua's BreakPartnership(), RequestPartnerUp(targetServerId).
       - client/recall.lua's RequestRecall().
       - client/defense.lua's ConfirmHandlerDownDefense(actionType).
+      - client/dangerwarn.lua's RequestDangerWarn(warnType) -- 'k9unit_dangerwarn'
+        submenu, same shape as client/defense.lua's 'k9unit_defense' immediately
+        above (see that submenu's own definition, right after
+        'k9unit_defense', for the full contract this follows).
       - client/fetch.lua's RequestThrowFetchBall(), ReleaseFetchBall(),
         RequestRecallFetchBall(), IsFetchCarryEngaged().
       - client/propattachment.lua's RequestToggleK9PropAttachment().
@@ -52,6 +56,23 @@
       - client/training.lua's IsTrainingModeActive(),
         RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
         RequestTrainingBiteDrill().
+      - THIS PASS (top-level icon access gate, coder-security/coder-backend
+        finding response): client/partnership.lua's IsPartnered(),
+        client/kennel.lua's IsRestingInKennel()/IsCarryingKennel(),
+        client/combat.lua's IsBiteHoldEngaged()/IsDragEngaged()/
+        IsDragTargetEngaged() (both already-established call targets
+        elsewhere in this file, now ALSO consulted here), and
+        client/main.lua's HasK9Access() — all read-only, all called from
+        ShouldShowK9RadialIcon()/IsK9RadialIconNeededForOngoingEngagement()
+        at REGISTRATION time (inside RegisterK9RadialMenu(), triggered by
+        this file's own onResourceStart dispatcher and the periodic
+        refresh thread at the bottom of this file), never from an onSelect
+        closure — safe for the identical reason given below for onSelect
+        callers: `onResourceStart` for THIS resource fires only once every
+        one of its own client_scripts has finished loading, so every
+        global these two functions read already exists by the time either
+        one first runs, regardless of client/radial.lua's own position
+        first in fxmanifest.lua's client_scripts list.
       Every cross-file global added after Phase 1 is called behind
       a `type(fn) == 'function'` runtime existence guard (this codebase's
       established soft-dependency convention — see e.g. RestoreInjury/AwardXP
@@ -442,6 +463,135 @@ end
 --- @return boolean
 local function IsRadialFeatureBlockedForMe(featureName)
     return type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked(featureName)
+end
+
+-- ======================================================================
+-- TOP-LEVEL ICON ACCESS GATE (this pass -- coder-security/coder-backend
+-- finding response). See this function's own "K9 UNIT RADIAL -- PER-
+-- PERSON BLOCK" header above for the sibling per-person block mechanism
+-- this is deliberately separate from (that one answers "has an
+-- operator/high-command blocked this feature for this specific person";
+-- this one answers "does this person currently look like a K9 handler at
+-- all"). FINDING: the 'k9unit_open' root opener used to register
+-- unconditionally for EVERY connected player whenever
+-- Config.Features.RadialMenu was true, regardless of department or K9
+-- access -- a civilian, a mechanic, anyone whose job is not in
+-- Config.Departments and who holds no K9 access grant saw a dog icon in
+-- their own pie menu that led, at best, to a chain of "you are not
+-- certified" refusals inside the submenu.
+--
+-- THREE THINGS THIS MUST GET RIGHT, in order of how badly getting them
+-- wrong would hurt someone:
+--
+-- 1. NEVER GATE A WAY OUT. IsK9RadialIconNeededForOngoingEngagement()
+--    below is checked FIRST and OR'd into the final answer, unconditionally
+--    ahead of the department/access questions. Audited every
+--    "release/stop/exit" action inside k9SubmenuItems above for whether it
+--    has ANY OTHER reachable surface at all:
+--      - Detach Leash: NO other surface. client/movement.lua's own
+--        "Attach Leash" ox_target option explicitly refuses to show while
+--        already leashed (`if IsLeashed() then return false end`), there
+--        is no detach keybind/command, and client/tablet.lua's own Detach
+--        action (~line 1713) is reachable only when
+--        Config.Features.CommandTablet is ALSO on. LOAD-BEARING.
+--      - Break Partnership: NO other surface besides the tablet (same
+--        CommandTablet caveat) -- no keybind/command of its own.
+--        LOAD-BEARING.
+--      - Release Bite & Hold / Release Drag: ALSO reachable via their own
+--        unconditional keybinds (client/keybinds.lua's k9bitehold/
+--        k9dragtoggle both check the engaged-release branch BEFORE any
+--        access gate) -- included below anyway for menu-based parity, not
+--        because either is independently load-bearing.
+--      - Exit Kennel: has its own unconditional keybind
+--        (client/keybinds.lua's k9exitkennel) -- included below anyway.
+--      - Release/Recall Fetch Ball: has its own commands, gated only on
+--        Config.Features.FetchMechanic, never on access -- included below
+--        anyway.
+--    So this must include, at minimum, IsLeashed() and IsPartnered() --
+--    every other predicate below is defense-in-depth, not load-bearing.
+--
+-- 2. FAIL OPEN, NOT CLOSED, on an unknown answer. See the grace-window
+--    comment on K9_RADIAL_ICON_GRACE_MS below: a civilian who briefly sees
+--    a useless icon for a few seconds after connecting is a cosmetic
+--    annoyance; a genuine handler with no icon and no idea why, because
+--    this client's own access answer had not resolved yet, is a support
+--    ticket. HasK9Access() (client/main.lua) itself already fails CLOSED
+--    on a genuine callback throw/timeout -- correct for ITS OWN callers
+--    (hot call sites gating an action the server re-verifies regardless of
+--    what this client believes), wrong for hiding this icon, which is why
+--    this gate never trusts a single HasK9Access() read the moment this
+--    client's own resource starts.
+--
+-- 3. LIVE, NOT JUST AT NEXT RESTART/RECONNECT. Department membership
+--    (QBX.PlayerData.job.name, checked below) is free and instant --
+--    QBX.PlayerData is qbx_core's own live-updated client cache (see
+--    fxmanifest.lua's own manifest-convention note), so a job change is
+--    reflected the very next time this runs with zero extra plumbing. K9
+--    access (certification/permission-grant based, HasK9Access()) has no
+--    equivalent live push in this resource today -- nothing fires a client
+--    event when a handler is certified or decertified mid-session -- so
+--    the periodic refresh thread further down this file (search
+--    "K9_RADIAL_ICON_REFRESH_INTERVAL_MS") re-runs RegisterK9RadialMenu()
+--    on a plain timer specifically so a newly-certified player sees the
+--    icon appear within one interval, not only on their next reconnect.
+-- ======================================================================
+
+--- Audits every "am I currently mid-something only the radial's own
+--- submenu can end" state predicate this file otherwise gates a release
+--- action's UI on (see this function's own "TOP-LEVEL ICON ACCESS GATE"
+--- header immediately above for which of these are load-bearing versus
+--- defense-in-depth). `type(fn) == 'function'` guards throughout, per this
+--- file's established soft-dependency convention -- absent means "cannot
+--- currently be true" for that one predicate, never treated as an error.
+--- @return boolean
+local function IsK9RadialIconNeededForOngoingEngagement()
+    if type(IsLeashed) == 'function' and IsLeashed() then return true end
+    if type(IsPartnered) == 'function' and IsPartnered() then return true end
+    if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then return true end
+    if type(IsDragEngaged) == 'function' and IsDragEngaged() then return true end
+    if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then return true end
+    if type(IsRestingInKennel) == 'function' and IsRestingInKennel() then return true end
+    if type(IsCarryingKennel) == 'function' and IsCarryingKennel() then return true end
+    if type(IsFetchCarryEngaged) == 'function' and IsFetchCarryEngaged() then return true end
+    return false
+end
+
+-- Startup FAIL-OPEN grace window -- see point 2 above. Set on the FIRST
+-- call to ShouldShowK9RadialIcon() in this client's own session (a
+-- module-level `local`, so it is computed at most once regardless of how
+-- many times RegisterK9RadialMenu() itself re-runs) and never recomputed
+-- afterwards. 8 seconds comfortably covers a normal connect (this
+-- resource's own server-side qbx_k9unit:server:hasK9Access callback is
+-- registered at THAT resource's own boot, always well before any player's
+-- client-side resource start in the ordinary case) and the one genuine
+-- risk case this pass's own brief names -- an operator-initiated `restart
+-- qbx_k9unit` racing an already-connected client's own onResourceStart
+-- against the server side re-registering its callback -- without leaving
+-- a stale "always show" answer around for meaningfully long afterwards.
+local K9_RADIAL_ICON_GRACE_MS = 8000
+local k9RadialIconGraceUntil
+
+--- Decides whether the top-level 'k9unit_open' opener should be reachable
+--- at all for the LOCAL player right now. See this function's own
+--- "TOP-LEVEL ICON ACCESS GATE" header immediately above this section for
+--- the full three-part writeup this implements.
+--- @return boolean
+local function ShouldShowK9RadialIcon()
+    if IsK9RadialIconNeededForOngoingEngagement() then return true end
+
+    local jobName = QBX and QBX.PlayerData and QBX.PlayerData.job and QBX.PlayerData.job.name
+    if jobName and type(Config.Departments) == 'table' and Config.Departments[jobName] then
+        return true
+    end
+
+    if not k9RadialIconGraceUntil then
+        k9RadialIconGraceUntil = GetGameTimer() + K9_RADIAL_ICON_GRACE_MS
+    end
+    if GetGameTimer() < k9RadialIconGraceUntil then
+        return true -- FAIL OPEN: still inside the startup grace window
+    end
+
+    return type(HasK9Access) == 'function' and HasK9Access()
 end
 
 local function RegisterK9RadialMenu()
@@ -1265,6 +1415,82 @@ local function RegisterK9RadialMenu()
         }
     end
 
+    --- Danger Warn -- server/dangerwarn.lua + client/dangerwarn.lua's own
+    --- "RADIAL/KEYBIND CONTRACT" header section, which names this exact
+    --- shape as the natural fit: "A radial submenu offering BOTH
+    --- RequestDangerWarn('Alert') and RequestDangerWarn('Threat')... is the
+    --- natural fit here -- client/defense.lua's own 'k9unit_defense'
+    --- submenu... is the precedent." Followed here structurally identically
+    --- to that precedent immediately above: a SUBMENU OF TWO TERMINAL
+    --- ACTIONS (not one context-sensitive toggle item), registered via its
+    --- own `lib.registerRadial` call with a fixed id, plus one opener item
+    --- appended to k9SubmenuItems carrying `menu = <that id>` and no
+    --- `onSelect` of its own -- exactly the same `lib.registerRadial` vs.
+    --- `lib.addRadialItem` split this file's own header warns must never be
+    --- confused (registerRadial for a navigable submenu's own contents,
+    --- addRadialItem only ever used for the single root 'k9unit_open'
+    --- opener at the very bottom of this function).
+    ---
+    --- Both sub-items call `RequestDangerWarn('Alert')`/
+    --- `RequestDangerWarn('Threat')` -- string literals, exactly as that
+    --- function's own header specifies ("pass the string literal 'Alert'
+    --- or 'Threat'"). Neither is a toggle and neither is a release/
+    --- termination path -- client/dangerwarn.lua's own header states this
+    --- file has "no held state, no active effect, and no start/stop pair of
+    --- any kind" -- so both sub-items are gated on CanShowK9UI() here, same
+    --- as the Handler-Down Defense sub-items above and RequestBiteHold's
+    --- initiation branch: this is a redundant pre-check (RequestDangerWarn
+    --- already performs the identical CanShowK9UI()/DenyK9UIAccess() check
+    --- internally and every further real decision -- partner lookup,
+    --- permission, rate limit -- is made server-side regardless of what
+    --- this client believes), kept anyway for the same "check here too,
+    --- even though the callee already checks" posture this file's other
+    --- gated items already use.
+    if Config.Features.DangerWarn then
+        lib.registerRadial({
+            id = 'k9unit_dangerwarn',
+            items = {
+                {
+                    id = 'k9_dangerwarn_alert',
+                    label = locale('radial.dangerwarn_alert_label'),
+                    icon = 'circle-exclamation',
+                    onSelect = function()
+                        if not CanShowK9UI() then
+                            DenyK9UIAccess()
+                            return
+                        end
+
+                        if type(RequestDangerWarn) == 'function' then
+                            RequestDangerWarn('Alert')
+                        end
+                    end,
+                },
+                {
+                    id = 'k9_dangerwarn_threat',
+                    label = locale('radial.dangerwarn_threat_label'),
+                    icon = 'skull-crossbones',
+                    onSelect = function()
+                        if not CanShowK9UI() then
+                            DenyK9UIAccess()
+                            return
+                        end
+
+                        if type(RequestDangerWarn) == 'function' then
+                            RequestDangerWarn('Threat')
+                        end
+                    end,
+                },
+            },
+        })
+
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_dangerwarn',
+            label = locale('radial.dangerwarn_menu_label'),
+            icon = 'triangle-exclamation',
+            menu = 'k9unit_dangerwarn',
+        }
+    end
+
     --- Fetch -- Phase 5 (FetchMechanic). client/fetch.lua exposes
     --- RequestThrowFetchBall()/ReleaseFetchBall()/RequestRecallFetchBall()/
     --- IsFetchCarryEngaged() specifically for a client/radial.lua entry to
@@ -1732,12 +1958,37 @@ local function RegisterK9RadialMenu()
     -- own "K9 UNIT RADIAL -- PER-PERSON BLOCK" header above.
     if Config.Features.RadialMenu then
         local radialMenuBlocked = IsRadialFeatureBlockedForMe('RadialMenu')
+        -- TOP-LEVEL ICON ACCESS GATE -- see this function's own header
+        -- above ("TOP-LEVEL ICON ACCESS GATE") for the full three-part
+        -- writeup. Only consulted when NOT already blocked -- a
+        -- featureblocks block is an operator decision that takes priority
+        -- over this client's own department/access/engagement state, and
+        -- keeps its own distinct message (DenyK9FeatureBlocked) rather
+        -- than being folded into this one.
+        local iconReachable = radialMenuBlocked or ShouldShowK9RadialIcon()
 
         -- The 'k9unit' submenu contents are only worth registering when
-        -- reachable at all -- an orphaned-but-populated submenu while
+        -- reachable AT ALL -- an orphaned-but-populated submenu while
         -- blocked is harmless (same disclosed nuance the GLOBAL
-        -- RadialMenu=false path already has -- nothing links to it), but
-        -- there is no reason to pay for it either.
+        -- RadialMenu=false path already has -- nothing links to it).
+        --
+        -- DELIBERATELY NOT re-gated on `iconReachable` (the access/
+        -- department/engagement answer) THE SAME WAY -- unlike the
+        -- `radialMenuBlocked` check above, `iconReachable` can flip back
+        -- and forth freely within a single session (the periodic refresh
+        -- thread re-evaluates it on a timer, precisely so it CAN), and
+        -- ox_lib's own `lib.registerRadial` has no verified removal
+        -- capability (see the ROOT OPENER comment just below for the full,
+        -- previously-verified citation) -- skipping this registration
+        -- while temporarily unreachable would not un-register a submenu
+        -- registered during an EARLIER, reachable pass; it would only
+        -- leave that earlier pass's contents stale (never rebuilt with
+        -- fresh onSelect closures) the next time this client becomes
+        -- reachable again, for zero actual removal benefit in exchange.
+        -- Registering it every time `not radialMenuBlocked`, exactly like
+        -- before this pass, keeps its contents always fresh and is
+        -- provably harmless either way: with the opener's own `menu` field
+        -- cleared (see below), literally nothing ever navigates here.
         if not radialMenuBlocked then
             lib.registerRadial({
                 id = 'k9unit',
@@ -1754,16 +2005,22 @@ local function RegisterK9RadialMenu()
         -- there is no correspondingly VERIFIED removal call this codebase
         -- has confirmed against ox_lib's own source (a prior draft of this
         -- file's header floated `lib.removeRadialItem` as a hypothetical
-        -- OPTION, never confirmed real -- see that history), and this
-        -- resource's own established discipline is to never call an
-        -- unverified native/API function on an assumption. So: BLOCKED
-        -- swaps the SAME id's `onSelect`/`menu` fields (still a REPLACE,
-        -- still fully within the verified contract) to a stub that
-        -- explains why, rather than navigating anywhere -- the icon stays
-        -- visible, but is honest and inert, never silently doing nothing.
-        -- If `lib.removeRadialItem` is ever confirmed real (ask
+        -- OPTION, never confirmed real -- see that history; this pass
+        -- tried to reach native-api-assistant to settle it for real before
+        -- committing to this compromise again and could not get a live
+        -- answer this session, so the same disclosed, previously-verified
+        -- compromise is kept rather than guessing), and this resource's
+        -- own established discipline is to never call an unverified
+        -- native/API function on an assumption. So: BLOCKED and
+        -- no-access/no-department/no-ongoing-engagement BOTH swap the SAME
+        -- id's `onSelect`/`menu` fields (still a REPLACE, still fully
+        -- within the verified contract) to a stub that explains why,
+        -- rather than navigating anywhere -- the icon stays visible, but
+        -- is honest and inert, never silently doing nothing. If
+        -- `lib.removeRadialItem` is ever confirmed real (ask
         -- native-api-assistant), this is the one spot to revisit for the
-        -- fully-honest "icon vanishes" behavior this design would prefer.
+        -- fully-honest "icon vanishes" behavior this design would prefer,
+        -- for BOTH the blocked and no-access cases.
         if radialMenuBlocked then
             lib.addRadialItem({
                 {
@@ -1772,6 +2029,24 @@ local function RegisterK9RadialMenu()
                     icon = 'dog',
                     onSelect = function()
                         if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+                    end,
+                },
+            })
+        elseif not iconReachable then
+            -- No department, no K9 access, and no ongoing engagement this
+            -- client could need to end -- see this function's own header
+            -- for the full gate this implements. Reuses DenyK9UIAccess()
+            -- verbatim: the exact same "you cannot use K9 features right
+            -- now" message every other gated action in this file already
+            -- shows, rather than minting a new, parallel denial string for
+            -- what is functionally the identical situation.
+            lib.addRadialItem({
+                {
+                    id = 'k9unit_open',
+                    label = locale('radial.menu_open_label'),
+                    icon = 'dog',
+                    onSelect = function()
+                        if type(DenyK9UIAccess) == 'function' then DenyK9UIAccess() end
                     end,
                 },
             })
@@ -1848,3 +2123,41 @@ end)
 AddEventHandler('qbx_k9unit:client:leashStateChanged', function()
     RegisterK9RadialMenu()
 end)
+
+-- PERIODIC ICON REFRESH -- see RegisterK9RadialMenu()'s own "TOP-LEVEL
+-- ICON ACCESS GATE" header, point 3, for why this exists: unlike
+-- department membership (QBX.PlayerData, live-updated for free) or the
+-- leash/featureblocks state changes already covered by their own
+-- dedicated local events immediately above, nothing in this resource
+-- fires a client event when a handler is certified, decertified, or
+-- granted/revoked K9 access mid-session. Re-running RegisterK9RadialMenu()
+-- on a plain timer is the only way this client's own icon visibility ever
+-- catches up to that without waiting for this resource (or ox_lib) to
+-- restart, or for this player to reconnect.
+--
+-- 15s is generous -- this is a COSMETIC surface (one icon's presence),
+-- never a security boundary or a time-critical prompt (every real action
+-- behind it is independently, server-side gated regardless of what this
+-- icon currently shows), so the largest interval that still feels
+-- reasonably prompt to a freshly-certified handler wins over anything
+-- tighter -- matches this codebase's own "no thread spinning faster than
+-- the feature's real responsiveness need" standard.
+--
+-- Gated on Config.Features.RadialMenu at file-load time (same static read
+-- every other top-level `if Config.Features.X then` in this file uses):
+-- when that flag is off globally, no icon exists for anyone, on any
+-- account, to reveal -- a thread that exists purely to reveal one would do
+-- nothing every 15s but call a function that itself returns immediately
+-- (RegisterK9RadialMenu()'s own outer `if Config.Features.RadialMenu
+-- then` guard), forever, for the lifetime of every single connected
+-- player's session. Not started at all in that case, rather than started
+-- and left to idle.
+if Config.Features.RadialMenu then
+    local K9_RADIAL_ICON_REFRESH_INTERVAL_MS = 15000
+    CreateThread(function()
+        while true do
+            Wait(K9_RADIAL_ICON_REFRESH_INTERVAL_MS)
+            RegisterK9RadialMenu()
+        end
+    end)
+end

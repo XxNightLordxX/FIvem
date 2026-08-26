@@ -591,6 +591,16 @@ local FEATURE_TIERS = {
     BoneSweepDevTool       = { tier = 'onstart', note = 'Also requires the qbx_k9unit_enable_bone_dev_tool convar and a boss-rank caller regardless of this flag -- see config.lua\'s own comment on this feature.' },
     -- ADDED 2026-08-26:
     K9EquipmentShop        = { tier = 'onstart', note = 'server/equipmentshop.lua registers the actual ox_inventory shop (RegisterShop plus item/currency verification) AND loads persisted runtime shop locations, BOTH inside their own AddEventHandler(\'onResourceStart\', ...) handlers, gated on Config.Features.K9EquipmentShop == true at that point only -- neither re-checks the flag again afterward, so having a purchasable shop at all needs a restart in EITHER direction, same shape as AdminAuditCommands/BoneSweepDevTool above. DISCLOSED PARTIAL LIVENESS, not folded into a false "live" claim: the runtime-shop-location management callbacks (equipmentShopGetLocations/AddLocation/MoveLocation and their siblings) ARE always registered and DO re-check the flag live on every call -- but they only manage WHERE an already-registered shop\'s ped stands, never whether the shop exists at all, so this entry reports the tier that governs the actual "can a player buy anything here" effect.' },
+    -- server/webhook.lua reads Config.Features.DiscordWebhook and
+    -- Config.DiscordWebhook.url once, at its own FILE-LOAD time, past its
+    -- own feature/URL gates -- NewCooldown() is called there, and the flush
+    -- thread is created there. Nothing re-reads the flag afterwards. So
+    -- switching this on at runtime does not start the poster, and switching
+    -- it off does not stop it, until the resource restarts. Classified
+    -- rawtoplevel rather than live for exactly that reason: a SetFeature
+    -- response must never tell an operator "already applied" for something
+    -- that will not take effect until they restart.
+    DiscordWebhook         = { tier = 'rawtoplevel', note = 'Posting to Discord starts and stops at resource start, not when you flip this. Change it and restart the resource. Note that the URL matters more than the flag: with no Config.DiscordWebhook.url set, nothing is posted regardless of this switch.' },
     ResourceAutoDetect     = { tier = 'onstart', note = 'shared/compat/core.lua (not owned by this pass -- read-only audit, this file does not edit it) is not gated by a raw top-level early return or a plain onResourceStart registration in the usual sense: DetectSystem() reads Config.Features.ResourceAutoDetect fresh on every call, and K9Compat.Redetect() (which calls DetectSystem for every system) DOES run again later -- on another resource starting/stopping when Config.Compat.redetectOnResourceRestart is true, and opportunistically from several feature files\' own defensive "redetect if the cached adapter looks stale" calls this file does not control. None of those later triggers are caused BY this file\'s own SetFeature call, though -- the only trigger this file can rely on with certainty is ScheduleInitialDetection\'s own CreateThread(Wait(startupGraceMs) then Redetect()), which fires exactly once, on THIS resource\'s own onResourceStart. Classified onstart, never live, so a SetFeature response never over-promises "already applied" for an effect this file cannot guarantee happens before the next restart -- an override may well take effect sooner in practice, opportunistically, but that is a bonus this file does not document as its contract.' },
 
     -- tier = 'rawtoplevel' -- gated before this resource\'s own onResourceStart ever fires; no restart of THIS resource alone can apply an override -- config.lua itself must be edited.
@@ -608,6 +618,15 @@ local FEATURE_TIERS = {
     SARCalls               = { tier = 'rawtoplevel', note = 'server/sarcalls.lua opens with "if not Config.Features.SARCalls then return end" before its own asserts, cooldown construction, and callback/command registrations -- the entire file is inert while the flag is off.' },
     ScentLineup            = { tier = 'rawtoplevel', note = 'server/scentlineup.lua opens with "if not Config.Features.ScentLineup then return end" before its own registrations -- the entire file is inert while the flag is off.' },
     TrainingMode           = { tier = 'rawtoplevel', note = 'server/training.lua opens with "if not Config.Features.TrainingMode then return end" before its own registrations -- the entire file is inert while the flag is off.' },
+    -- ADDED 2026-08-26 (coder-backend, DangerWarn handover items 1-4):
+    -- confirmed by direct read of server/dangerwarn.lua's own first
+    -- executable line, same verification standard as the six-entry batch
+    -- immediately above -- same shape as HandlerDownDefense above it,
+    -- carrying its own note (unlike that entry, which predates this
+    -- file's "quote the exact opening line" convention) so a future reader
+    -- does not have to go re-read server/dangerwarn.lua to confirm this
+    -- classification themselves.
+    DangerWarn             = { tier = 'rawtoplevel', note = 'server/dangerwarn.lua opens with "if not Config.Features.DangerWarn then return end" before its own config-safety resolution, cooldown construction, and RegisterNetEvent(\'qbx_k9unit:server:requestDangerWarn\', ...) -- the net event is never registered at all when the flag is off at load time.' },
     -- LOCKOUT-RISK (see "LOCKOUT-RISK FEATURES" below this table): turning
     -- this off, then actually following through with the config.lua edit +
     -- restart this tier already requires, removes the ONLY in-game surface

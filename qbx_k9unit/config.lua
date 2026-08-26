@@ -104,6 +104,9 @@ Config = {}
 --   Config.CertificationTiers ....... trainee / certified / senior, and how
 --                                     to add more
 --   Config.K9Specializations ........ narcotics, explosives, patrol
+--   Config.SpecializationTracking ... which of those specializations unlock
+--                                     which Track <Type> trail (owner
+--                                     decluttering pass, 2026-08-26)
 --   Config.AllowSelfCertification ... whether an officer may certify
 --                                     themselves
 --   Config.CertifyProximityMeters ... how close you must stand to certify
@@ -445,6 +448,7 @@ Config.Features = {
     -- Run /k9compat in game (see Config.Compat.diagnosticCommand) to print
     -- exactly what it found and what it could not find.
     ResourceAutoDetect   = true,
+    DiscordWebhook       = false,  -- post K9 events to a Discord channel. Needs a webhook URL set in Config.DiscordWebhook below; does nothing at all until then.
 
     -- server/leaderboard.lua. The /k9stats command: a ranked list of the
     -- top K9 handlers by XP. PRIVACY NOTE, decide this deliberately: it
@@ -593,6 +597,23 @@ Config.Features = {
     -- for everyone. Cosmetic only: theming can never change what anyone is
     -- authorized to do or see.
     TabletTheming        = true,
+
+    -- server/dangerwarn.lua + client/dangerwarn.lua. Lets a K9's OWN
+    -- player press a key (or use the radial) to tell their partnered
+    -- handler "something is off" or "this is a real threat" -- the reverse
+    -- direction of HandlerDownDefense above (that one lets the SERVER
+    -- notice a handler in trouble; this one lets the K9's own player speak
+    -- up, on purpose, about something only they could have seen). The
+    -- handler is told roughly which of 8 directions and roughly which of 4
+    -- distance bands their partner is in -- never an exact location, never
+    -- anything about a third party. Anyone standing close enough to the K9
+    -- also just hears it bark, same as they would in real life.
+    -- OFF BY DEFAULT, deliberately -- this is a brand-new mechanic and this
+    -- resource's own convention is that a new mechanic stays off until it
+    -- has been through its own security/balance review, same as
+    -- HandlerPartnership did before it shipped on. Turn it on once that
+    -- review has happened.
+    DangerWarn           = false,
 }
 
 -- ======================================================================
@@ -1262,11 +1283,134 @@ Config.K9Specializations = {
 }
 
 -- ======================================================================
+-- SPECIALIZATION-SCOPED TRACKING (owner-directed decluttering pass,
+-- 2026-08-26 -- "merge all the scent tracking stuff into one thing... when
+-- certed for extra stuff it just does it"). server/tracking.lua reads this
+-- to decide which Track <Type> trail(s) a K9's single merged "search"
+-- action (client/tracking.lua's StartCertifiedTrack, one radial item, one
+-- chat command) is allowed to resolve for, without the client ever
+-- choosing the type itself.
+--
+-- 'scent' -- the generic dropped-item scent trail (server/tracking.lua's
+-- TrackableLog.scent, fed by the ox_inventory swapItems hook) -- is
+-- DELIBERATELY ABSENT from this table and can NEVER be listed here. It is
+-- the BASE capability every K9-access handler already has today, not a
+-- narcotics-detection mechanic, and it is what client/sarcalls.lua's
+-- Search & Rescue calls and client/scenttrail.lua's Scent Trail Hunt
+-- narratively share the word "scent" with (though, confirmed by reading
+-- both files directly, neither one actually calls into this file's
+-- findTrackableSource/TrackableLog.scent at all -- they are fully separate
+-- minigames with their own server/sarcalls.lua and server/scenttrail.lua
+-- session state). Listing 'scent' under any specialization here would gate
+-- a base capability behind a narrow one for no reason connected to what
+-- 'scent' actually is -- do not "fix" this by adding it back.
+--
+-- MONOTONIC BY DESIGN (owner-directed follow-up, same pass -- "make it
+-- more fluid... [no state where] training a dog makes it worse at its
+-- job"): a specialization only ever ADDS a trail type to what a K9 can
+-- already track; there is no "generalist fallback" that grants everything
+-- to an uncertified dog and then takes types away the moment a
+-- specialization is granted. That means, in plain English for a
+-- non-technical owner reading this:
+--
+--   BLOOD AND GUNPOWDER TRACKING NOW REQUIRE A SPECIALIZATION GRANT. This
+--   is a REAL, INTENTIONAL CHANGE, not a bug: today, every K9-certified
+--   handler can already Track Blood / Track Gunpowder with no extra grant
+--   at all. After this config takes effect, a handler can ONLY track
+--   blood if their K9 holds the 'patrol' specialization, and can ONLY
+--   track gunpowder residue if it holds 'explosives' -- exactly the "if
+--   certed for X it does X" behavior that was asked for. If you have NOT
+--   granted ANY specializations on your server yet (the shipped default),
+--   your K9s can still track generic scent (search-and-rescue, scent
+--   vision, the scent lineup, everything unrelated to this table are all
+--   completely unaffected), but NONE of them can Track Blood or Track
+--   Gunpowder until you grant 'patrol'/'explosives' to them via the
+--   certification tablet. server/selfcheck.lua prints a one-line boot
+--   warning naming this exact situation so it is never a silent surprise
+--   discovered mid-shift. HIGH COMMAND OFFICERS ARE UNAFFECTED --
+--   HasSpecialization's own High Command bypass (server/certifications.lua)
+--   already grants every specialization automatically, so a high-command
+--   officer keeps both Track Blood and Track Gunpowder with nothing to
+--   grant.
+--
+-- Format: [Config.K9Specializations key] = { one or more of 'blood' |
+-- 'gunpowder' -- never 'scent', see above }. A key that is not a real
+-- Config.K9Specializations key, or a value that is not an array of valid
+-- track type strings, is CLAMPED AND WARNED at boot (never asserted) and
+-- simply ignored -- see server/tracking.lua's own validation block.
+Config.SpecializationTracking = {
+    explosives = { 'gunpowder' },
+    patrol     = { 'blood' },
+}
+
+-- ======================================================================
 -- K9 DOWN ALERT (Config.Features.K9DownDispatch) -- server/integrations.lua.
 -- Tuning for OUR OWN detection of a K9 going down. This is not an
 -- integration surface: there is nothing here naming another resource,
 -- because the alert is a broadcast event any system can listen for.
 -- ======================================================================
+-- ======================================================================
+-- DISCORD WEBHOOK LOGGING (Config.Features.DiscordWebhook, ships OFF) --
+-- server/webhook.lua. Posts K9 events into a Discord channel, so staff can
+-- keep an eye on things without anyone logging into the tablet.
+--
+-- A WEBHOOK URL IS A PASSWORD. Anyone who has it can post to that channel
+-- forever. Do not put a real one in a config file you share, upload, or
+-- commit anywhere public. This resource never prints it, never sends it to
+-- a player, and never puts it in an error message -- but it cannot stop you
+-- pasting it somewhere public yourself.
+--
+-- Nothing happens until `url` is set. The feature flag alone does nothing.
+-- ======================================================================
+Config.DiscordWebhook = {
+    -- Paste your channel's webhook URL here. Discord makes one for you
+    -- under Channel Settings -> Integrations -> Webhooks.
+    url = nil,
+
+    -- Optional. What the messages appear to be posted BY. Leave both nil to
+    -- use whatever the webhook itself is named in Discord.
+    username = nil,
+    avatarUrl = nil,
+
+    -- How often messages are sent, in milliseconds (8000 = eight seconds).
+    -- Events are collected up and posted together rather than one message
+    -- per event -- Discord rate-limits hard, and a busy shift would trip it
+    -- within seconds otherwise. LOWER = more up to date, more requests.
+    -- HIGHER = fewer requests, slightly behind.
+    batchIntervalMs = 8000,
+
+    -- The most events that can be waiting to send at once. If more arrive
+    -- than this while Discord is slow or down, the extra ones are DROPPED
+    -- and the next successful message tells you how many were lost. That is
+    -- deliberate: a queue with no limit would grow until the server ran out
+    -- of memory, and losing a few log lines is much better than that.
+    maxQueueSize = 40,
+
+    -- If Discord tells us we are sending too fast, wait this long before
+    -- trying again (60000 = one minute).
+    rateLimitBackoffMs = 60000,
+
+    -- Which events get posted. Turn off anything that is just noise for
+    -- your server. `searchCompleted` is the busiest one by a long way --
+    -- it fires every time any dog searches anybody -- so it ships off.
+    events = {
+        certificationGranted     = true,
+        certificationRevoked     = true,
+        certificationTierChanged = true,
+        certificationRenewed     = true,
+        specializationGranted    = true,
+        specializationRevoked    = true,
+        k9Down                   = true,
+        sarCallCompleted         = true,
+        searchCompleted          = false,
+        sarCallStarted           = false,
+        partnershipEstablished   = false,
+        partnershipEnded         = false,
+        xpTierReached            = false,
+        scentLineupResolved      = false,
+    },
+}
+
 Config.K9DownDispatch = {
     -- Health at or below which a K9 counts as down. Mirrors the same
     -- threshold server/wellbeing.lua uses. Raise it to get an earlier
@@ -2348,9 +2492,41 @@ Config.WaterTrackingDecay = {
 -- registry at search time, never duplicated into this config, so there is
 -- exactly one source of truth for item weight and it can never drift out
 -- of sync with a server's real items.lua.
+--
+-- OPTIONAL SPECIALIZATION CATEGORIES (owner-directed decluttering pass,
+-- 2026-08-26 -- "if i am certed in drugs... it will only search for
+-- drugs"). Two entry shapes now live in this SAME table, and BOTH are
+-- always supported at once -- this is a plain Lua array with some keys
+-- filled in, not a format switch, so an existing owner's plain array
+-- config (below) keeps working completely unmodified:
+--   1. A bare string, e.g. 'weed_bud' -- UNCATEGORISED. Found by EVERY K9
+--      with search access, regardless of specialization. This is the
+--      BASELINE and it is monotonic: specializing a dog never takes an
+--      uncategorised item away from it (owner-directed follow-up, same
+--      pass -- "make it more fluid... training a dog [must never make]
+--      it worse at its job"). The shipped list below is 100% this shape,
+--      so a fresh install finds every placeholder item exactly as it does
+--      today, with nothing to grant.
+--   2. `itemName = 'specializationKey'`, e.g. `coke_brick = 'narcotics'`
+--      -- CATEGORISED. Found only by a K9 whose citizenid currently holds
+--      that Config.K9Specializations key (server/certifications.lua's
+--      HasSpecialization, which carries its own High Command bypass --
+--      see server/search.lua's own resolution comment). A dog with NO
+--      matching specialization simply never finds this one specific item;
+--      it still finds every uncategorised item normally. `'specializationKey'`
+--      MUST be a real Config.K9Specializations key -- an entry naming
+--      anything else is CLAMPED AND WARNED at boot (never asserted) and
+--      degrades to shape 1 (uncategorised, found by everyone) -- see
+--      server/search.lua's own validation block for the exact warning
+--      text.
+-- Example of BOTH shapes in one table (NOT what ships below -- illustrative
+-- only): `{ 'weed_bud', coke_brick = 'narcotics', weapon_pistol = 'explosives' }`
+-- -- weed_bud stays findable by every K9; coke_brick only by a
+-- narcotics-specialized one; weapon_pistol only by an explosives-specialized
+-- one.
 -- ======================================================================
 Config.SearchContrabandItems = {
-    'weed_bud', 'coke_brick', 'meth_bag', 'weapon_pistol', -- placeholder examples only
+    'weed_bud', 'coke_brick', 'meth_bag', 'weapon_pistol', -- placeholder examples only -- all UNCATEGORISED (shape 1) so an upgrading server's search results do not change until an owner deliberately opts an item into shape 2
 }
 
 Config.SearchZones = {
@@ -4239,4 +4415,64 @@ Config.SARCalls = {
     missingPersonPedModel = 'mp_m_freemode_01',
     lostPropertyPropModel = 'prop_tennis_ball',
     revealDurationMs = 15000,
+}
+
+-- server/dangerwarn.lua + client/dangerwarn.lua (Config.Features.DangerWarn
+-- above). Lets a K9's own player press a key, or use the radial, to tell
+-- their partnered handler "something's off" (Alert) or "this is a real
+-- threat" (Threat). The handler only ever learns a rough direction and a
+-- rough distance to their partner -- never an exact spot, never anything
+-- about anyone else. Every setting below already has a safe built-in
+-- fallback baked into the code, so leaving this whole block out of your
+-- config entirely is fine -- these are here only for a server that wants
+-- to tune the feel.
+Config.DangerWarn = {
+    -- How long a K9 must wait between danger warnings, in milliseconds
+    -- (15 seconds). LOWER = warnings can be sent more often (weaker
+    -- anti-spam, more chatter for the handler). HIGHER = longer gap between
+    -- warnings (stronger anti-spam, but a genuinely fast-moving situation
+    -- may need a second warning sooner than this allows).
+    cooldownMs = 15000,
+
+    -- How far away, in meters, another connected player can be and still
+    -- hear the dog actually bark when a warning is sent. HIGHER = more
+    -- people nearby hear it (more atmosphere, more "everyone knows a dog
+    -- just barked"). LOWER = only people standing right next to the K9
+    -- hear anything. This has no effect on whether the HANDLER is told --
+    -- the handler always gets the full text alert regardless of distance.
+    audibleRadius = 30.0,
+
+    -- How the handler's distance readout is worded, in meters, measured
+    -- from the HANDLER to the K9. Each number is the outer edge of that
+    -- band -- "close" covers 0 up to this number, "nearby" covers from
+    -- there up to its own number, and so on; anything past "far" reads as
+    -- "very far away". Must stay in increasing order (close < nearby <
+    -- far) or the built-in fallback below is used instead. Narrowing these
+    -- bands makes the readout feel more precise; widening them makes it
+    -- vaguer.
+    distanceBuckets = {
+        close  = 15.0,
+        nearby = 50.0,
+        far    = 150.0,
+    },
+
+    -- The two warning types a K9's player can choose from, each with its
+    -- own bark sound (must already exist in html/sounds/ and be listed in
+    -- fxmanifest.lua's files{} block) and its own notification colour
+    -- ('error' shows red, 'warning' shows amber, matching ox_lib's own
+    -- notify types). You can add more entries here without touching any
+    -- code -- an unrecognized type sent by a player is simply treated as
+    -- this list's own 'Alert' entry.
+    Types = {
+        Alert  = { soundName = 'Bark_Alert',      notifyType = 'warning' },
+        Threat = { soundName = 'Bark_Aggressive', notifyType = 'error' },
+    },
+
+    -- Default keyboard key for the "Danger Warn: Alert" keybind (always
+    -- sends the lower-urgency Alert type -- Threat is only reachable
+    -- through the radial menu today). Always rebindable client-side in
+    -- Settings > Key Bindings > FiveM; changing this value later does not
+    -- move a binding a player already changed for themselves, it only sets
+    -- what a brand new player starts with.
+    keybind = 'N',
 }

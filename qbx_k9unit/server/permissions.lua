@@ -1143,6 +1143,94 @@ local function PermissionLabelFor(permissionKey)
     return permissionKey
 end
 
+--- OWNER-DIRECTED, this pass ("high command should automatically get every
+--- permission, every feature, every k9 upgrade -- not have to be granted
+--- things one by one"). Resolves a CITIZENID (not a live `source`) to "is
+--- this person high command RIGHT NOW" -- the missing piece every
+--- 'feature.<Name>' consumer needs, since (unlike the four admin-capability
+--- keys -- k9.access/certify/audit/givexp, whose own consuming gates already
+--- take a live `source` and can call server/highcommand.lua's
+--- IsHighCommand(source) directly, see this file's own header "HOW STEP 1 IS
+--- WIRED IN") every 'feature.<Name>'/'block.<Name>' consumer in this
+--- resource (server/search.lua, server/tracking.lua, server/combat.lua, and
+--- roughly twenty more, all sharing the identical
+--- `HasPermission(citizenid, 'feature.' .. Name)` shape) only ever has a
+--- CITIZENID on hand, never a `source`.
+---
+--- OFFLINE CITIZENID: returns `false`, UNCONDITIONALLY, deliberately -- this
+--- is NOT "assume not high command", it is "cannot know, so answer as if
+--- not" -- the exact same choice this file's own header "THE REVOKED BUT
+--- STILL HAS IT BY RANK CASE" already makes for the identical question
+--- ("their live job cannot be read at all... there is no secondary source
+--- of truth this file queries for an offline citizenid's current job"), and
+--- the exact same choice server/tablet.lua's own ResolveTargetHasK9Access
+--- documents for its own offline branch ("the offline fallback deliberately
+--- does NOT attempt to reconstruct autoAccessGrade/high-command bypass
+--- eligibility -- both are inherently properties of a LIVE job, which a
+--- disconnected citizenid does not have one of right now"). SAFE, not merely
+--- consistent: every consumer of this function only ever WIDENS access for a
+--- citizenid this returns `true` for -- answering `false` for an offline
+--- citizenid can only ever under-grant relative to what they would get the
+--- moment they reconnect while genuinely high command, never over-grant.
+--- Nobody's effective access DEPENDS on this returning true while offline --
+--- grep confirms every real caller (this file's own HasPermission,
+--- server/certtiers.lua's TierCapabilityPermits, server/certifications.lua's
+--- HasSpecialization, server/progression.lua's cooldown-multiplier family)
+--- is itself only ever reached from a live, in-session action gate.
+---
+--- NEVER CACHED -- re-resolved fresh on every call, matching
+--- server/highcommand.lua's own IsHighCommand (re-checks
+--- Config.Features.HighCommand and the caller's live job on every
+--- invocation, "so flipping the flag off must genuinely turn every bypass
+--- back off too, immediately, with no restart required") and this
+--- resource's blanket "never cache a live rank/authorization decision"
+--- convention -- a citizenid demoted or promoted mid-session is reflected on
+--- their VERY NEXT call, with no stale entry to invalidate. Costs one
+--- `exports.qbx_core:GetPlayerByCitizenId` lookup (an in-process, O(1)
+--- table read this resource already pays at dozens of other call sites
+--- every time it needs an online player's row from a citizenid -- never a
+--- network hop or a query) plus IsHighCommand's own existing
+--- `exports.qbx_core:GetPlayer(source)` lookup and live job/grade
+--- comparison -- no new I/O class, only ever paid when `citizenid` is
+--- currently online, and only ever paid AFTER an ordinary cache-hit check
+--- has already failed at each of this function's own call sites (see e.g.
+--- HasPermission below, which only reaches this once the plain grant-cache
+--- read has already come back false).
+---
+--- @param citizenid any
+--- @param expectedJobName string? -- OPTIONAL. When given, additionally
+---   requires the online player's OWN CURRENT `job.name` to equal this
+---   value before consulting IsHighCommand at all -- so a caller evaluating
+---   a specific job's own tier/specialization/certification state (server/
+---   certtiers.lua's TierCapabilityPermits, server/certifications.lua's
+---   HasSpecialization, both of which already take a `jobName` argument for
+---   exactly this reason) can never have a citizenid's high-command status
+---   in some OTHER, unrelated department bleed into a check scoped to THIS
+---   one. Omitted by every 'feature.<Name>' caller below, which has no job
+---   parameter of its own to cross-check against -- IsHighCommand(source)
+---   already independently requires the player's own live job to be a
+---   Config.Departments member with a satisfied highCommandGrade, so no
+---   further scoping is needed there.
+--- @return boolean
+function IsHighCommandBypassCitizenId(citizenid, expectedJobName)
+    if type(citizenid) ~= 'string' or citizenid == '' then return false end
+    if type(IsHighCommand) ~= 'function' then return false end
+    if type(exports) ~= 'table' or type(exports.qbx_core) ~= 'table' then return false end
+
+    local ok, player = pcall(exports.qbx_core.GetPlayerByCitizenId, exports.qbx_core, citizenid)
+    if not ok or type(player) ~= 'table' or type(player.PlayerData) ~= 'table' then return false end
+
+    if expectedJobName ~= nil then
+        local job = player.PlayerData.job
+        if type(job) ~= 'table' or job.name ~= expectedJobName then return false end
+    end
+
+    local source = player.PlayerData.source
+    if type(source) ~= 'number' then return false end
+
+    return IsHighCommand(source) == true
+end
+
 -- ======================================================================
 -- STEP 1 OF THE RESOLUTION ORDER -- the hot-path check every OTHER gate in
 -- this resource consults. See this file's header "CACHING" section for the
@@ -1150,10 +1238,24 @@ end
 -- ======================================================================
 
 --- Server-authoritative: does `citizenid` currently hold an ACTIVE grant of
---- `permissionKey`? THIS IS STEP 1 ONLY -- it does not consult high command
---- or any rank gate; callers that want the full 4-step resolution order
+--- `permissionKey`? THIS IS STEP 1 ONLY for the four admin-capability keys
+--- ('k9.access'/'k9.certify'/'k9.audit'/'k9.givexp') and every custom
+--- 'k9.<word>' capability key -- it does not consult high command or any
+--- rank gate for THOSE; callers that want the full 4-step resolution order
 --- call this FIRST, then fall through to their own existing high-command/
 --- rank checks (see header "HOW STEP 1 IS WIRED IN").
+---
+--- OWNER-DIRECTED EXCEPTION, this pass, 'feature.<Name>' ONLY (never
+--- 'block.<Name>', never any 'k9.<word>' key): ALSO returns `true` when no
+--- literal grant exists but `citizenid` is CURRENTLY ONLINE and high
+--- command right now (IsHighCommandBypassCitizenId below) -- "high command
+--- automatically gets every feature" was an explicit, separate ask from the
+--- admin-capability keys above, and 'feature.<Name>' has no consuming-gate
+--- call site of its own to attach a bypass to the way the four keys above
+--- do (server/search.lua and roughly twenty siblings all resolve
+--- 'feature.<Name>' through THIS function alone) -- see the bypass's own
+--- branch, right before this function's final `return false`, for the full
+--- reasoning on why this is the one and only place it needed to go.
 ---
 --- Re-checks Config.Features.PermissionGrants on EVERY call (never cached),
 --- matching server/highcommand.lua's IsHighCommand -- see header for why.
@@ -1277,7 +1379,52 @@ function HasPermission(citizenid, permissionKey)
     end
 
     local set = PermissionCache[citizenid]
-    return set ~= nil and set[permissionKey] == true
+    if set ~= nil and set[permissionKey] == true then return true end
+
+    -- HIGH COMMAND BYPASS (owner-directed, this pass -- "high command
+    -- automatically gets every feature, not one at a time"), 'feature.<Name>'
+    -- ONLY -- see IsHighCommandBypassCitizenId's own doc comment above for
+    -- the full contract (offline citizenid -> false, never cached, no new
+    -- I/O class). Deliberately EXCLUDED:
+    --   - 'block.<Name>' -- THE ONE THING THE PROJECT OWNER WILL NOT ACCEPT
+    --     LOSING. A block is a decision to restrain ONE specific person,
+    --     including a high-command one -- see this file's own "MEMORY-MODE
+    --     BLOCK ASYMMETRY" section immediately above for how seriously this
+    --     file already treats a block's own fail-closed guarantee. This
+    --     branch is reached only through the `permissionKey:match('^feature%.')`
+    --     guard below, which a literal `'block.'` prefix can never match, so
+    --     a block already wins by construction: HasPermission(citizenid,
+    --     'block.X') never reaches this branch at all, and every consuming
+    --     gate in this resource checks 'block.X' BEFORE 'feature.X' (see
+    --     e.g. server/search.lua's IsSearchFeaturePermittedForCitizenId),
+    --     so a real, active block short-circuits to `false` before this
+    --     bypass could ever be consulted for the same feature.
+    --   - the four admin-capability keys ('k9.access'/'k9.certify'/
+    --     'k9.audit'/'k9.givexp') and every custom 'k9.<word>' capability key
+    --     (server/runtimecontrol.lua's 'k9.runtimecontrol'/'k9.tablettheme',
+    --     server/equipmentshop.lua's 'k9.equipmentshoplocations'/
+    --     'k9.equipmentshopitems') -- every one of those already has its own
+    --     high-command bypass wired at its own SOURCE-based call site (see
+    --     this file's header "HOW STEP 1 IS WIRED IN"), and this function's
+    --     own doc comment promises "STEP 1 ONLY -- it does not consult high
+    --     command" for exactly that namespace: server/certifications.lua's
+    --     RevokePermission reconciliation (LegacyOrHighCommandStillQualifies
+    --     above) depends on HasPermission staying a PURE grant-cache read
+    --     for those keys to tell "fully revoked" apart from "still has it by
+    --     rank" -- adding a second, silent bypass path here would make that
+    --     reconciliation double-count and misreport.
+    -- INHERITS Config.Features.HighCommand (via IsHighCommand's own internal
+    -- re-check, every call, no restart needed) AND Config.Features.
+    -- PermissionGrants (via this very function's own top-of-function guard,
+    -- above) for free -- if the grant SYSTEM itself is off, there is no
+    -- "implicit grant" for high command to stand in for either, so this
+    -- bypass correctly goes dark alongside every real grant the instant
+    -- PermissionGrants is disabled.
+    if permissionKey:match('^feature%.') and IsHighCommandBypassCitizenId(citizenid) then
+        return true
+    end
+
+    return false
 end
 
 -- ======================================================================

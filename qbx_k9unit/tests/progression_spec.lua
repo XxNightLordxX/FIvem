@@ -653,6 +653,12 @@ local function newProgressionFixture(opts)
             { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
             { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
         },
+        -- HIGH COMMAND COOLDOWN-MULTIPLIER BYPASS section (this pass) knob --
+        -- nil unless a test opts in, mirroring opts.xpTiers/opts.xpAwards
+        -- immediately above; every pre-existing test in this file that never
+        -- passes opts.handlerXpTiers continues to load a Config2 with no
+        -- Config.HandlerXPTiers at all, unaffected.
+        HandlerXPTiers = opts.handlerXpTiers,
     }
 
     -- PER-PERSON FEATURE CONTROL fixture knob (this pass) -- nil unless a
@@ -690,6 +696,18 @@ local function newProgressionFixture(opts)
     if opts.withHasPermission ~= false then
         envOverrides2.HasPermission = defaultHasPermission2
     end
+    -- server/permissions.lua's IsHighCommandBypassCitizenId -- HIGH COMMAND
+    -- COOLDOWN-MULTIPLIER BYPASS section (this pass). Same
+    -- OMITTED-ENTIRELY-unless-supplied soft-dependency treatment as
+    -- HasPermission above/GetCertificationTier in tests/certtiers_spec.lua:
+    -- a real server always has server/permissions.lua loaded, but this
+    -- fixture exercises server/progression.lua's own
+    -- `type(IsHighCommandBypassCitizenId) == 'function'` guard directly, via
+    -- a plain citizenid -> boolean stub (the real function's own shape),
+    -- without booting server/permissions.lua/server/highcommand.lua for real.
+    if opts.isHighCommandBypassCitizenId then
+        envOverrides2.IsHighCommandBypassCitizenId = opts.isHighCommandBypassCitizenId
+    end
 
     local env2 = Sandbox.newEnv(envOverrides2)
 
@@ -713,6 +731,10 @@ local function newProgressionFixture(opts)
         AwardXPDirect = env2.AwardXPDirect,
         GetXP = env2.GetXP,
         GetXPTier = env2.GetXPTier,
+        GetHandlerXPTier = env2.GetHandlerXPTier,
+        GetXPTierMedkitCooldownMs = env2.GetXPTierMedkitCooldownMs,
+        GetHandlerXPTierMedkitCooldownMs = env2.GetHandlerXPTierMedkitCooldownMs,
+        GetHandlerXPTierKennelDeployCooldownMs = env2.GetHandlerXPTierKennelDeployCooldownMs,
         printedLines = printedLines2,
         setNow = function(ms) fakeNow2 = ms end,
         now = function() return fakeNow2 end,
@@ -1933,6 +1955,99 @@ t.test('HANDLER LADDER: the OLD, pre-rescale thresholds (750/2500/6000) would fa
 
     t.isTrue(OLD_CERTIFIED_HANDLER_XP > certifyAward, 'sanity: the OLD first-promotion threshold could NOT be reached by a single certification')
     t.isTrue(OLD_SENIOR_HANDLER_XP > tenureLifetimeCap, 'sanity: the OLD second-rank threshold could NOT be reached by tenure alone, ever (155 XP lifetime cap)')
+end)
+
+-- ============================================================================
+-- HIGH COMMAND COOLDOWN-MULTIPLIER BYPASS (owner-directed "high command
+-- automatically gets every k9 upgrade" pass). Drives GetXPTierMedkitCooldownMs/
+-- GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs
+-- directly, via newProgressionFixture's own IsHighCommandBypassCitizenId/
+-- handlerXpTiers knobs (soft-dependency stubs -- see that fixture's own doc
+-- comments) -- never the real server/permissions.lua/server/highcommand.lua.
+-- No server/k9profiles.lua loaded here, so GetK9EffectiveMultipliers stays
+-- entirely absent for every test in this section -- the bypass is exercised
+-- against the PLAIN tier resolution path, exactly like every citizenid who
+-- has never had an individual override set.
+-- ============================================================================
+
+t.test('HIGH COMMAND BYPASS: GetXPTierMedkitCooldownMs grants the ladder\'s best multiplier to a high-command citizenid whose own real tier has none', function()
+    -- Neither citizenid has earned any XP -- both resolve to the base
+    -- 'Recruit K9' tier. This fixture's own ladder sets
+    -- medkitCooldownMultiplier only on the top ('Elite K9') tier, so a
+    -- citizenid at the base tier ordinarily gets no discount at all.
+    local f = newProgressionFixture({
+        isHighCommandBypassCitizenId = function(citizenid) return citizenid == 'HC-K9' end,
+        xpTiers = {
+            { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, medkitCooldownMultiplier = 0.5 },
+        },
+    })
+
+    t.equals(f.GetXPTierMedkitCooldownMs('ORDINARY-K9', 10000), 10000, 'control: an ordinary, non-high-command K9 at the base tier is unaffected -- no discount')
+    t.equals(f.GetXPTierMedkitCooldownMs('HC-K9', 10000), 5000, 'high command must receive the BEST configured medkitCooldownMultiplier (0.5) even though their own real tier (Recruit) carries none')
+
+    -- REQUIREMENT 2 (never let a bypass read as an earned grant): GetXPTier/
+    -- GetXP themselves stay completely PURE -- the high-command citizenid's
+    -- own real, earned standing is untouched, so a tablet reading either
+    -- directly (server/tablet.lua's PersonSummaryResult) still tells the
+    -- truth about this citizenid's actual progression.
+    t.equals(f.GetXP('HC-K9'), 0, 'GetXP must never be inflated by the bypass')
+    t.equals(f.GetXPTier('HC-K9').label, 'Recruit K9', 'GetXPTier must never report a tier this citizenid has not actually earned')
+end)
+
+t.test('HIGH COMMAND BYPASS: never a ceiling -- a citizenid\'s own genuinely earned, already-best multiplier is never replaced', function()
+    local f = newProgressionFixture({
+        isHighCommandBypassCitizenId = function(citizenid) return citizenid == 'HC-K9' end,
+        xpTiers = {
+            { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, medkitCooldownMultiplier = 0.5 },
+        },
+    })
+    f.AwardXPDirect('HC-K9', 9000, 'test-setup')
+    t.equals(f.GetXPTier('HC-K9').label, 'Elite K9', 'sanity: HC-K9 genuinely earned the top tier this time')
+    t.equals(f.GetXPTierMedkitCooldownMs('HC-K9', 10000), 5000, 'the real, earned Elite multiplier is used -- identical to what the bypass would have supplied, never doubled up or replaced with something worse')
+end)
+
+t.test('HIGH COMMAND BYPASS: an OFFLINE citizenid (or one who is simply not high command) gets no bypass -- real resolution, unaffected', function()
+    local f = newProgressionFixture({
+        isHighCommandBypassCitizenId = function(_citizenid) return false end, -- mirrors the real function's own offline/not-high-command answer
+        xpTiers = {
+            { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, medkitCooldownMultiplier = 0.5 },
+        },
+    })
+    t.equals(f.GetXPTierMedkitCooldownMs('OFFLINE-OR-NOT-HC', 10000), 10000)
+end)
+
+t.test('HIGH COMMAND BYPASS: soft dependency -- GetXPTierMedkitCooldownMs behaves exactly as before when IsHighCommandBypassCitizenId is entirely absent', function()
+    local f = newProgressionFixture({
+        xpTiers = {
+            { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, medkitCooldownMultiplier = 0.5 },
+        },
+        -- no isHighCommandBypassCitizenId supplied at all
+    })
+    t.isNil(f.env.IsHighCommandBypassCitizenId, 'this fixture genuinely has no IsHighCommandBypassCitizenId defined by default')
+    t.equals(f.GetXPTierMedkitCooldownMs('ANYONE', 10000), 10000)
+end)
+
+t.test('HIGH COMMAND BYPASS: GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs both grant the ladder\'s best multiplier to a high-command handler with no earned rank', function()
+    local f = newProgressionFixture({
+        isHighCommandBypassCitizenId = function(citizenid) return citizenid == 'HC-HANDLER' end,
+        handlerXpTiers = {
+            { xp = 0,    label = 'Rookie Handler' },
+            { xp = 5000, label = 'Master Handler', medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60 },
+        },
+    })
+
+    t.equals(f.GetHandlerXPTierMedkitCooldownMs('ORDINARY-HANDLER', 60000), 60000, 'control: an ordinary, non-high-command handler at the base rank is unaffected')
+    t.equals(f.GetHandlerXPTierKennelDeployCooldownMs('ORDINARY-HANDLER', 5000), 5000, 'control: same for the kennel-deploy cooldown')
+
+    t.equals(f.GetHandlerXPTierMedkitCooldownMs('HC-HANDLER', 60000), 42000, 'high command must receive the BEST configured medkitTreatCooldownMultiplier (0.70) even though their own real rank (Rookie) carries none')
+    t.equals(f.GetHandlerXPTierKennelDeployCooldownMs('HC-HANDLER', 5000), 3000, 'and the same for kennelDeployCooldownMultiplier (0.60)')
+
+    -- Real earned standing stays truthful for the handler ladder too.
+    t.equals(f.GetHandlerXPTier('HC-HANDLER').label, 'Rookie Handler', 'GetHandlerXPTier must never report a rank this citizenid has not actually earned')
 end)
 
 os.exit(t.summary())

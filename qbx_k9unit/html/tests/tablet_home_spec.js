@@ -8,9 +8,15 @@
     is the ONE screen every viewer type lands on first.
 
     Specifically proves:
-      1. Home is the DEFAULT screen for every one of the four viewer types
-         the owner named (K9, handler, partner, high command) -- no click
-         required to reach it.
+      1. Home is the DEFAULT screen for every viewer type who does NOT
+         auto-route straight to the Console on open -- see "ONE COMMAND,
+         ROUTED BY RANK", 2026-08-26: a canAccessConsole()-qualifying
+         viewer (high command, or an explicit 'k9.audit' grant) now lands
+         on the Console automatically instead (goHome() below is how a
+         test in THIS file still inspects what Home itself renders for
+         such a viewer -- a different question from where they land by
+         default, which html/tests/tablet_auto_console_landing_spec.js
+         covers on its own).
       2. Each viewer type gets the right ROLE BADGE and the right set of
          screens reachable from Home (progressive disclosure: High Command
          Tools appears for state.viewer.isHighCommand === true, OR for a
@@ -84,20 +90,50 @@ async function openTablet(myRecordResult, extraHandlers) {
     return h;
 }
 
+/**
+ * ONE COMMAND, ROUTED BY RANK (this pass, 2026-08-26) -- openTablet()
+ * above posts a bare `{}` payload, which handleOpen() now defaults to
+ * `requestedView: 'auto'` (see client/tablet.lua's own NUI CONTRACT), so
+ * loadMyRecord() auto-lands any canAccessConsole()-qualifying viewer
+ * (high command, or an explicit 'k9.audit' grant) straight on the
+ * Console screen instead of Home -- see
+ * html/tests/tablet_auto_console_landing_spec.js for that ROUTING
+ * behavior's own dedicated coverage. This file is about what HOME
+ * renders for each viewer type, a different question from where a viewer
+ * lands by default -- so any test here that needs to inspect Home's own
+ * content for a console-qualifying viewer navigates there explicitly via
+ * the Home tab, exactly as tablet_console_spec.js already navigates to
+ * Console explicitly for its own subject matter.
+ * @param {object} h
+ */
+async function goHome(h) {
+    findByText(h.getRoot(), 'Home')[0].click();
+    await settle();
+}
+
 // ======================================================================
 // THE FOUR VIEWER TYPES -- role badge + right screens, all on the DEFAULT
 // (no-click) Home screen.
 // ======================================================================
 
-t.test('HIGH COMMAND: lands on Home by default, role badge reads "High Command", and the High Command signpost names its own access in plain language', async () => {
+t.test('HIGH COMMAND: Home shows role badge "High Command" and the High Command signpost names its own access in plain language (this pass: high command now auto-lands on Console instead, so this test navigates to Home explicitly to inspect it)', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'HC1', name: 'Chief Hopps', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false },
         certifications: [{ departmentKey: 'police', departmentLabel: 'Police', active: true, grantedBy: 'X', tier: 'senior', expiresAtUnix: null, expired: false, specializations: [] }],
         xp: 500, tierLabel: 'Veteran K9', myFeatures: [],
+    }, {
+        // Auto-landed on Console by this pass's own routing change --
+        // loadRoster() fires in the background before this test navigates
+        // back to Home; harmless either way (fetchNui never rejects), but
+        // an explicit ok:true response keeps this test's own console.log
+        // noise-free rather than resolving through the generic
+        // 'network_error' fallback.
+        'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
     });
+    await goHome(h);
 
-    t.isTrue(findByText(h.getRoot(), 'Welcome, Chief Hopps.').length >= 1, 'welcome heading shown immediately, no navigation needed');
+    t.isTrue(findByText(h.getRoot(), 'Welcome, Chief Hopps.').length >= 1, 'welcome heading shown once navigated to Home');
     t.equals(findByText(h.getRoot(), 'High Command').length, 1, 'role badge reads High Command');
     t.equals(findByText(h.getRoot(), 'View My Record').length, 1);
     t.equals(findByText(h.getRoot(), 'Open Command Console').length, 1, 'high command also gets the console quick action');
@@ -207,12 +243,15 @@ t.test('WORKFLOW AUDIT #3: a delegate holding TWO of the four capabilities gets 
     t.equals(findByText(h.getRoot(), "You've been granted access to: how the tablet looks and which supply shop locations are active.").length, 1, 'both held capabilities are named, joined with "and" -- neither the other two unheld ones nor the full high-command list appear');
 });
 
-t.test('WORKFLOW AUDIT #3 control: a TRUE high-command viewer keeps the original, unabridged signpost body -- this pass never touches the accurate case', async () => {
+t.test('WORKFLOW AUDIT #3 control: a TRUE high-command viewer keeps the original, unabridged signpost body -- this pass never touches the accurate case (navigated to Home explicitly -- this pass auto-lands high command on Console by default, a separate concern from what Home itself renders)', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'HC3', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false },
         certifications: [], xp: null, tierLabel: null, myFeatures: [],
+    }, {
+        'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
     });
+    await goHome(h);
 
     t.equals(findByText(h.getRoot(), 'Settings that affect the whole server: how the tablet looks, certification ranks, permission keys, the supply shop, which features are turned on, XP ranks, and the audit trail.').length, 1, 'high command still sees the full, accurate promise -- they really do have all of it');
     t.equals(findByText(h.getRoot(), "You've been granted access to: which features are turned on.").length, 0, 'the delegate-scoped phrasing never leaks into the high-command path');
@@ -246,13 +285,16 @@ t.test('CERTIFIED HANDLER (not high command, not a K9 model, k9.access only): ro
     t.isTrue(findByText(h.getRoot(), 'Recall your K9').length >= 1, 'an actionable, available ability shows on Home\'s own "ready to use" list, not only on My Record');
 });
 
-t.test('CERTIFIED HANDLER holding an explicit k9.audit grant (not high command): console quick action IS present -- the one non-high-command path server/tablet.lua\'s CallerHasConsoleAccess still admits', async () => {
+t.test('CERTIFIED HANDLER holding an explicit k9.audit grant (not high command): console quick action IS present -- the one non-high-command path server/tablet.lua\'s CallerHasConsoleAccess still admits (navigated to Home explicitly -- this pass auto-lands a k9.audit holder on Console by default)', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'OFFICER2', name: 'Officer Bell', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.audit'], allowSelfGrant: false },
         certifications: [{ departmentKey: 'police', departmentLabel: 'Police', active: true, grantedBy: 'X', tier: 'certified', expiresAtUnix: null, expired: false, specializations: [] }],
         xp: 100, tierLabel: 'Trained K9', myFeatures: [],
+    }, {
+        'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
     });
+    await goHome(h);
 
     t.equals(findByText(h.getRoot(), 'Certified Handler').length, 1);
     t.equals(findByText(h.getRoot(), 'High Command Tools').length, 0, 'k9.audit alone is still not high command -- no admin section');
@@ -328,12 +370,15 @@ t.test('a viewer with ZERO active certifications and no console access sees real
     t.isTrue(findByText(h.getRoot(), 'Not certified').length >= 1, 'My Record itself also renders this department as honestly not-yet-certified, never an error or a blank screen');
 });
 
-t.test('a viewer with zero certifications who IS high command still sees the High Command Tools section (the notice is additive, never a replacement screen)', async () => {
+t.test('a viewer with zero certifications who IS high command still sees the High Command Tools section (the notice is additive, never a replacement screen) -- navigated to Home explicitly, this pass auto-lands high command on Console by default', async () => {
     const h = await openTablet({
         ok: true,
         viewer: { citizenid: 'HC2', name: 'Overseer', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false },
         certifications: [], xp: null, tierLabel: null, myFeatures: [],
+    }, {
+        'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
     });
+    await goHome(h);
     t.equals(findByText(h.getRoot(), 'New Arrival').length, 0, 'isHighCommand takes priority over the uncertified role label');
     t.equals(findByText(h.getRoot(), 'High Command').length, 1);
     t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'still gets full admin access despite holding no certification personally');

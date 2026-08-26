@@ -195,6 +195,18 @@ local function boot(opts)
     if opts.getCertificationTier then
         envOverrides.GetCertificationTier = opts.getCertificationTier
     end
+    -- server/permissions.lua's IsHighCommandBypassCitizenId -- "high command
+    -- automatically gets every k9 upgrade" pass. Same OMITTED-unless-supplied
+    -- soft-dependency treatment as GetCertificationTier immediately above:
+    -- a real server always has server/permissions.lua loaded, but this spec
+    -- exercises TierCapabilityPermits' own `type(...) == 'function'` guard
+    -- deliberately, and lets a test drive the bypass directly (a plain
+    -- citizenid -> boolean stub, exactly the same shape the real function
+    -- has) without needing to boot server/permissions.lua/server/highcommand.lua
+    -- for real just to prove this file's OWN consumption of it.
+    if opts.isHighCommandBypassCitizenId then
+        envOverrides.IsHighCommandBypassCitizenId = opts.isHighCommandBypassCitizenId
+    end
     -- server/equipmentshop.lua's CountEquipmentShopItemsRequiringTier --
     -- the SECOND thing that can point at a tier. OMITTED from envOverrides
     -- entirely (not merely nil) unless a test supplies one, for exactly the
@@ -775,6 +787,87 @@ t.test('COMPOSITION: activating one capability never affects a DIFFERENT, still-
     f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
     t.isTrue(f.env.TierCapabilityPermits('CIT1', 'police', 'specializations_eligible'),
         'a sibling capability nobody has touched stays dormant independently, so it still permits unconditionally')
+end)
+
+-- ============================================================================
+-- SECTION 9b -- HIGH COMMAND BYPASS (owner-directed "high command
+-- automatically gets every k9 upgrade" pass). Proves TierCapabilityPermits'
+-- own new IsHighCommandBypassCitizenId consultation, via a plain stub (see
+-- boot()'s own opts.isHighCommandBypassCitizenId doc comment above) --
+-- never the real server/permissions.lua/server/highcommand.lua, exactly
+-- like `opts.getCertificationTier` stands in for GetCertificationTier
+-- immediately above.
+-- ============================================================================
+
+t.test('HIGH COMMAND BYPASS: satisfies an active capability the citizenid\'s own real tier does not grant', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return 'trainee' end, -- real, active, job-matching cert -- trainee does NOT hold this capability
+        isHighCommandBypassCitizenId = function(citizenid, _jobName) return citizenid == 'HC-OFFICER' end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    -- Control: an ordinary trainee-tier officer is genuinely denied once the
+    -- capability is active -- unaffected by this pass.
+    t.isFalse(f.env.TierCapabilityPermits('ORDINARY_TRAINEE', 'police', 'bite_hold_and_takedown'))
+
+    -- The high-command officer holds the SAME trainee-tier certification
+    -- (getCertificationTier answers identically for both citizenids) and
+    -- has never earned 'bite_hold_and_takedown' either -- yet is permitted,
+    -- because they are high command right now.
+    t.isTrue(f.env.TierCapabilityPermits('HC-OFFICER', 'police', 'bite_hold_and_takedown'),
+        'high command must be granted a tier capability their own real, active certification tier does not carry')
+end)
+
+t.test('HIGH COMMAND BYPASS: job-scoped -- a citizenid who is high command of a DIFFERENT job does not borrow that status here', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return 'trainee' end,
+        -- Stub answers true only when the JOB matches 'ambulance' -- proving
+        -- TierCapabilityPermits passes its own `jobName` argument through as
+        -- `expectedJobName`, never just the citizenid alone.
+        isHighCommandBypassCitizenId = function(citizenid, jobName) return citizenid == 'HC-OFFICER' and jobName == 'ambulance' end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isFalse(f.env.TierCapabilityPermits('HC-OFFICER', 'police', 'bite_hold_and_takedown'),
+        'high command of "ambulance" must not bypass a capability check scoped to "police"')
+end)
+
+t.test('HIGH COMMAND BYPASS: an OFFLINE citizenid (or one who is simply not high command) gets no bypass at all -- real resolution, unaffected', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return 'trainee' end,
+        isHighCommandBypassCitizenId = function(_citizenid, _jobName) return false end, -- mirrors the real function's own offline/not-high-command answer
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isFalse(f.env.TierCapabilityPermits('OFFLINE_OR_NOT_HC', 'police', 'bite_hold_and_takedown'))
+end)
+
+t.test('HIGH COMMAND BYPASS: soft dependency -- allows exactly as before when IsHighCommandBypassCitizenId is entirely absent (server/permissions.lua not loaded)', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return 'trainee' end,
+        -- no isHighCommandBypassCitizenId supplied at all
+    })
+    t.isNil(f.env.IsHighCommandBypassCitizenId, 'this test\'s own sandbox genuinely has no IsHighCommandBypassCitizenId defined')
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isFalse(f.env.TierCapabilityPermits('ANY_CIT', 'police', 'bite_hold_and_takedown'),
+        'with the bypass function entirely absent, resolution falls straight through to the real tier check, unaffected')
+end)
+
+t.test('HIGH COMMAND BYPASS: never consulted at all while the capability is DORMANT -- pure floor, changes nothing about the "allow by default" story', function()
+    local calls = 0
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName) return 'trainee' end,
+        isHighCommandBypassCitizenId = function(citizenid, jobName) calls = calls + 1; return citizenid == 'HC-OFFICER' end,
+    })
+    -- No certTiersUpsert call at all this test -- 'bite_hold_and_takedown' stays DORMANT.
+    t.isTrue(f.env.TierCapabilityPermits('HC-OFFICER', 'police', 'bite_hold_and_takedown'))
+    t.equals(calls, 0, 'IsCapabilityActiveInternal\'s own early return must short-circuit before ever reaching the high-command bypass')
 end)
 
 -- ============================================================================

@@ -4304,6 +4304,36 @@ function MeetsTierRequirement(citizenid, jobName, minTier)
     -- GetTierOrdinalOrLegacyFallback, so a future gate can compare
     -- against an operator-ADDED tier, not just the original three.
     if not IsKnownTierKeyOrLegacyFallback(minTier) then return false end
+
+    -- HIGH COMMAND BYPASS (owner-directed, this pass -- "high command
+    -- automatically gets every k9 upgrade"). This is the ONE OTHER live
+    -- min-tier gate in this resource (server/equipmentshop.lua's own
+    -- `entry.requiredTierKey` requirement, alongside
+    -- `entry.requiredSpecialization` below, which HasSpecialization's own
+    -- bypass covers) -- unlike server/certtiers.lua's TierCapabilityPermits,
+    -- this function fails CLOSED for a citizenid with no certification row
+    -- at all (an uncertified handler must not clear a minimum-tier bar by
+    -- accident), so without an explicit bypass here a high-command officer
+    -- who has never personally certified for this job would be denied an
+    -- item ordinary Elite-tier officers can buy -- exactly the "grant one
+    -- thing at a time" friction this pass exists to remove. Checked AFTER
+    -- the `minTier` validity guard above (a caller-bug malformed minTier
+    -- literal stays denied for everyone, high command included -- never a
+    -- new way to paper over a bug in this file's own static shop catalog).
+    -- Same `expectedJobName` scoping, same offline-citizenid answer
+    -- (false -> falls through to the unchanged resolution below), same
+    -- `type(...) == 'function'` soft-dependency guard as
+    -- server/certtiers.lua's identical bypass -- see
+    -- IsHighCommandBypassCitizenId's own doc comment (server/permissions.lua)
+    -- for the full contract. NEVER GATES A TERMINATION PATH: this
+    -- function's only real caller (server/equipmentshop.lua's buyItem hook)
+    -- is a request-time purchase gate, not a cleanup/teardown path, and this
+    -- edit adds no new call site.
+    if type(IsHighCommandBypassCitizenId) == 'function' and type(citizenid) == 'string' and type(jobName) == 'string'
+        and IsHighCommandBypassCitizenId(citizenid, jobName) then
+        return true
+    end
+
     local actualTier = GetCertificationTier(citizenid, jobName)
     if not IsKnownTierKeyOrLegacyFallback(actualTier) then return false end
     local actualOrdinal = GetTierOrdinalOrLegacyFallback(actualTier)
@@ -4323,6 +4353,33 @@ end
 --- @param specializationKey string
 --- @return boolean
 function HasSpecialization(citizenid, jobName, specializationKey)
+    -- HIGH COMMAND BYPASS (owner-directed, this pass -- "high command
+    -- automatically gets every k9 upgrade"). Specializations are exactly
+    -- the "k9 upgrade" a base certification alone does not carry (header
+    -- "SPECIALIZATIONS") -- without this, a high-command officer with no
+    -- active certification, or one whose cached specializations row simply
+    -- never had this key set, is denied a capability every other rank gate
+    -- in this resource already treats high command as automatically
+    -- qualifying for. Checked BEFORE the cache read below, mirroring
+    -- HasK9Access's own "checked before the cert-cache read... a genuine
+    -- bypass, not merely an alternate cache hit" placement. Same
+    -- `expectedJobName` scoping, same offline-citizenid answer (false ->
+    -- falls through to the unchanged cache read below), same
+    -- `type(...) == 'function'` soft-dependency guard as
+    -- server/certtiers.lua's TierCapabilityPermits/this file's own
+    -- MeetsTierRequirement, both given the identical bypass this same pass
+    -- -- see IsHighCommandBypassCitizenId's own doc comment
+    -- (server/permissions.lua) for the full contract. NEVER GATES A
+    -- TERMINATION PATH: this function's only real caller
+    -- (server/equipmentshop.lua's buyItem hook, `entry.requiredSpecialization`)
+    -- is a request-time purchase gate, and this edit adds no new call site
+    -- -- GrantSpecialization's own grant-time TierCapabilityPermits check
+    -- (server/certtiers.lua, this same pass) is a SEPARATE function this
+    -- edit does not touch.
+    if type(IsHighCommandBypassCitizenId) == 'function' and IsHighCommandBypassCitizenId(citizenid, jobName) then
+        return true
+    end
+
     local cached = Certifications[citizenid]
     if not (cached and cached.active and cached.job == jobName and not cached.expired) then return false end
     local jobSpecs = Specializations[citizenid] and Specializations[citizenid][jobName]

@@ -1212,6 +1212,118 @@ end
 -- unlike this file's own AwardHandlerXP doc comment used to speculate.
 -- ======================================================================
 
+-- ======================================================================
+-- HIGH COMMAND COOLDOWN-MULTIPLIER BYPASS (owner-directed, this pass --
+-- "high command automatically gets every k9 upgrade"). Applies to THIS
+-- file's own three cooldown-multiplier unlocks ONLY (GetHandlerXPTierMedkitCooldownMs
+-- and GetHandlerXPTierKennelDeployCooldownMs immediately below, and
+-- GetXPTierMedkitCooldownMs further down) -- see this
+-- file's own "COMPOSITION WITH THE PERMISSION/FEATURE-CONTROL LAYER"
+-- section further up for why this stops exactly here and goes no further:
+--
+--   * DELIBERATELY NOT applied to GetXPTier/GetXP/GetHandlerXPTier
+--     themselves. Those three remain the PURE, real-earned-data read every
+--     OTHER consumer in this resource relies on for a truthful answer --
+--     AwardXP's own tier-crossing detection compares GetXPTier's return
+--     BY REFERENCE (ResolveTier's own doc comment), server/tablet.lua's
+--     PersonSummaryResult renders GetXP/GetXPTier's `.label` as this
+--     citizenid's REAL standing, and server/search.lua's coop-search-bonus
+--     eligibility gate reads GetXPTier(...).xp as a real "has this citizenid
+--     progressed past zero" signal. Fabricating a top-tier answer inside
+--     any of those would make a high-command officer's tablet entry LIE
+--     about their own real, earned XP -- exactly the "a bypass must never
+--     read as an earned grant" property this pass's own instructions call
+--     out by name. A citizenid's real GetXPTier/GetXP answer is therefore
+--     completely unaffected by being high command; only the two COOLDOWN
+--     NUMBERS below are.
+--   * DELIBERATELY NOT applied to the speedMultiplier/scentRangeMultiplier
+--     movement/scent-range effects (server/k9profiles.lua's
+--     GetK9EffectiveMultipliers, consumed by client/movement.lua's
+--     K9MoveRateModifiers and server/tracking.lua's scent-range calc) --
+--     out of this file's own ownership for this pass (server/k9profiles.lua
+--     is not an owned file here) and, independently, a genuine anti-cheat
+--     concern this pass's own instructions flag by name: an INSTANT,
+--     rank-triggered jump in a K9's live movement speed is exactly the
+--     "speed/velocity change outside normal flow" class of thing that gets
+--     legitimate play flagged by common anti-cheat heuristics, unlike a
+--     pure timing NUMBER (how often a cooldown-gated action may be reused)
+--     which has no physical/movement signature at all. Reported to
+--     whoever owns server/k9profiles.lua/server/highcommand.lua rather than
+--     silently extended here.
+--
+-- FLOOR, NEVER A CEILING: BestValidTierMultiplier below only ever REPLACES
+-- an invalid/missing/worse-than-best multiplier with the single best value
+-- any REAL, configured tier in the same ladder already offers to an
+-- ordinary citizenid who earned it -- it can never make a high-command
+-- officer's own cooldown WORSE than their real tier/individual override
+-- already gives them, and it never invents a value better than what this
+-- server operator has actually configured somewhere in that ladder. This
+-- mirrors config.lua's own "high command implies every GRANT, it does not
+-- invent a new one out of thin air" posture for the permission-grant
+-- namespace.
+-- ======================================================================
+
+--- Smallest (most favorable -- every consumer of this value treats it as a
+--- cooldown-REDUCTION ratio, so a smaller number is a bigger discount)
+--- value of `fieldName` across every tier in `tiers` that independently
+--- passes the exact defensive-bounds check every consumer already applies
+--- on its own (number, not NaN, > 0, <= 1) -- never a raw, unchecked config
+--- value. Returns nil when no tier in `tiers` carries a valid value for
+--- this field at all (every tier omits it, or `tiers` is one of this
+--- file's own FALLBACK_XP_TIERS/FALLBACK_HANDLER_XP_TIERS single-entry
+--- safety nets, neither of which sets any cooldown-multiplier field) --
+--- callers must treat nil as "no bypass available", never invent a 0/1.0
+--- fallback of their own.
+--- @param tiers table -- GetValidatedXPTiers()/GetValidatedHandlerXPTiers()'s own return value
+--- @param fieldName string
+--- @return number?
+local function BestValidTierMultiplier(tiers, fieldName)
+    local best = nil
+    for i = 1, #tiers do
+        local tier = tiers[i]
+        local value = type(tier) == 'table' and tier[fieldName]
+        if type(value) == 'number' and value == value and value > 0 and value <= 1 then
+            if best == nil or value < best then best = value end
+        end
+    end
+    return best
+end
+
+--- Given `multiplier` (a caller's own already-resolved value for
+--- `fieldName` -- BEFORE that caller's own bounds check runs, so this may
+--- be nil, non-numeric, NaN, or out of the valid (0, 1] range), returns
+--- the BEST (smallest) valid value found across `tiers` for `fieldName`
+--- INSTEAD, but ONLY when `citizenid` is currently an online high-command
+--- officer (IsHighCommandBypassCitizenId -- soft dependency,
+--- `type(...) == 'function'` guarded; offline or feature-off both answer
+--- `false`, in which case `multiplier` is returned completely unchanged)
+--- AND that replacement is a genuine improvement (the caller's own
+--- multiplier is missing/invalid, or the best available value is strictly
+--- smaller/more generous) -- see this section's own header "FLOOR, NEVER A
+--- CEILING". Every defensive bound the caller was already going to apply
+--- to whatever this returns (non-numeric/NaN/<=0/>1 all fail closed back
+--- to `baseCooldownMs`) is UNCHANGED and still runs on the caller's own
+--- side -- this function never bypasses that check, it only supplies a
+--- different candidate value for it to evaluate.
+--- @param citizenid string
+--- @param multiplier any
+--- @param tiers table
+--- @param fieldName string
+--- @return any -- `multiplier` unchanged, or the best valid tier value found
+local function ApplyHighCommandCooldownBypass(citizenid, multiplier, tiers, fieldName)
+    if not (type(IsHighCommandBypassCitizenId) == 'function' and IsHighCommandBypassCitizenId(citizenid)) then
+        return multiplier
+    end
+
+    local best = BestValidTierMultiplier(tiers, fieldName)
+    if best == nil then return multiplier end
+
+    if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 or best < multiplier then
+        return best
+    end
+    return multiplier
+end
+
 --- @param citizenid string
 --- @param baseCooldownMs number
 --- @return number effectiveCooldownMs
@@ -1222,6 +1334,7 @@ function GetHandlerXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
 
     local tier = GetHandlerXPTier(citizenid)
     local multiplier = tier.medkitTreatCooldownMultiplier
+    multiplier = ApplyHighCommandCooldownBypass(citizenid, multiplier, GetValidatedHandlerXPTiers(), 'medkitTreatCooldownMultiplier')
 
     if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
         return baseCooldownMs
@@ -1240,6 +1353,7 @@ function GetHandlerXPTierKennelDeployCooldownMs(citizenid, baseCooldownMs)
 
     local tier = GetHandlerXPTier(citizenid)
     local multiplier = tier.kennelDeployCooldownMultiplier
+    multiplier = ApplyHighCommandCooldownBypass(citizenid, multiplier, GetValidatedHandlerXPTiers(), 'kennelDeployCooldownMultiplier')
 
     if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
         return baseCooldownMs
@@ -1454,6 +1568,20 @@ end
 --     doc estimated. Rejected on cost/ownership grounds, not a farmability
 --     concern -- flagged here so a future pass with wellbeing.lua ownership
 --     does not have to rediscover this from scratch.
+--
+-- ADDENDUM (owner-directed "high command gets every k9 upgrade" pass, this
+-- file's own "HIGH COMMAND COOLDOWN-MULTIPLIER BYPASS" section further
+-- down): none of the above is reopened by that pass. Every rejection above
+-- is about an XP TOTAL (a grindable, farmable number ANY citizenid can
+-- reach solo) auto-unlocking a capability with no human decision behind it
+-- -- being HIGH COMMAND is the opposite of that: a real, config-bounded,
+-- revocable job-rank threshold a human promotion decision already governs,
+-- exactly the "deliberate, named, revocable, audited human decision" this
+-- section's own words say IS the correct way to gate a capability. High
+-- command's own cooldown-multiplier bypass never lets a citizenid GRIND
+-- its way to the same effect, and a block still fully overrides it (see
+-- that section for the structural reason why) -- neither rejection above
+-- ever applied to a rank-based gate.
 -- ==========================================================================
 
 --- Resource-global — Part B §8 XP TIER UNLOCKS (see the section header
@@ -1549,6 +1677,15 @@ function GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
         local tier = GetXPTier(citizenid)
         multiplier = tier.medkitCooldownMultiplier
     end
+
+    -- HIGH COMMAND BYPASS -- see this file's own "HIGH COMMAND
+    -- COOLDOWN-MULTIPLIER BYPASS" section header above for the full
+    -- contract. Consulted AFTER the individual-override/tier resolution
+    -- above (never overrides a MORE generous individual override --
+    -- "FLOOR, NEVER A CEILING"), and still subject to the exact same
+    -- defensive-bounds check immediately below regardless of which of the
+    -- three sources it came from.
+    multiplier = ApplyHighCommandCooldownBypass(citizenid, multiplier, GetValidatedXPTiers(), 'medkitCooldownMultiplier')
 
     if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
         return baseCooldownMs

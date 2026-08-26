@@ -617,7 +617,13 @@ local function newIntegrationFixture()
     local libStub = { callback = { register = function(_name, _fn) end } }
 
     local Config = {
-        Features = { PermissionGrants = true, HighCommand = true, AdminAuditCommands = true, CommandTablet = false },
+        -- BiteAndHold, this pass: a real Config.Features key with no other
+        -- meaning to this fixture, purely so 'feature.BiteAndHold'/
+        -- 'block.BiteAndHold' validate against IsValidPermissionKey's own
+        -- `Config.Features[Name] ~= nil` check (see server/permissions.lua's
+        -- own doc comment on that function) -- needed for the HIGH COMMAND
+        -- BYPASS FOR feature.<Name> end-to-end section below.
+        Features = { PermissionGrants = true, HighCommand = true, AdminAuditCommands = true, CommandTablet = false, BiteAndHold = true },
         Departments = {
             police = { label = 'LSPD', certifierGrade = 4, auditGrade = 4, highCommandGrade = 6, autoAccessGrade = nil },
         },
@@ -1158,7 +1164,35 @@ do
             local ok, outcome = f2.env.GrantPermission(hc2Src, 'HC-OPTOUT', key)
             t.isFalse(ok, key .. ' self-grant must be refused when the switch is off')
             t.equals(outcome, 'self_grant_blocked', key .. ' must report self_grant_blocked')
-            t.isFalse(f2.env.HasPermission('HC-OPTOUT', key), key .. ' must not actually have been granted')
+
+            -- 'feature.<Name>' NEVER asserted via a plain HasPermission()
+            -- read here (this pass, HIGH COMMAND BYPASS FOR feature.<Name>):
+            -- HC-OPTOUT genuinely IS high command (isHighCommand stubs
+            -- source == 100 unconditionally true), and HasPermission now
+            -- deliberately reports 'feature.<Name>' as held for ANY
+            -- currently-online high-command citizenid regardless of
+            -- whether a literal grant row exists -- see
+            -- IsHighCommandBypassCitizenId's own doc comment. That bypass
+            -- is not disabled by allowHighCommandSelfGrant = false (a
+            -- DIFFERENT switch, governing only whether a NEW grant ROW may
+            -- be self-targeted) -- so HasPermission('HC-OPTOUT',
+            -- 'feature.BiteAndHold') correctly reads `true` here, and
+            -- asserting `false` would be testing for the wrong thing. What
+            -- THIS test must still prove is the actual claim in its own
+            -- name -- no GRANT ROW was created by the refused self-grant --
+            -- checked directly against the DB-backed history read
+            -- (ListActivePermissionsForCitizenId), which the bypass never
+            -- touches at all.
+            if key == 'feature.BiteAndHold' then
+                t.isTrue(f2.env.HasPermission('HC-OPTOUT', key), key .. ' reads as held anyway -- HC-OPTOUT is high command, and the feature.<Name> bypass is a separate, unaffected mechanism')
+                local historyOk, history = f2.env.ListActivePermissionsForCitizenId(hc2Src, 'HC-OPTOUT')
+                t.isTrue(historyOk)
+                for _, row in ipairs(history) do
+                    t.isFalse(row.permission == key, key .. ' must not have an actual grant ROW -- the self-grant itself must still have been refused')
+                end
+            else
+                t.isFalse(f2.env.HasPermission('HC-OPTOUT', key), key .. ' must not actually have been granted')
+            end
         end
     end)
 
@@ -2418,6 +2452,101 @@ do
         f.commands.k9decertifyoffline(officerSrc, { 'SOMEOTHERTARGET', 'police' })
         local last = f.notifyLog[#f.notifyLog]
         t.notContains(last.message, 'not authorized', 'the officer must still pass IsEligibleCertifier via rank alone, exactly as config.lua documents')
+    end)
+end
+
+-- ============================================================================
+-- HIGH COMMAND BYPASS FOR feature.<Name> (owner-directed "high command
+-- automatically gets every permission, every feature, every k9 upgrade"
+-- pass) -- end-to-end, through the REAL server/highcommand.lua (IsHighCommand)
+-- and server/permissions.lua (HasPermission/IsHighCommandBypassCitizenId),
+-- via newIntegrationFixture. Proves the five things this pass's own task
+-- named explicitly: an implicit feature.<Name> grant, a block still winning
+-- for a high-command target, the flag going dark with no restart, a
+-- non-high-command citizenid being completely unaffected, and the offline
+-- answer.
+-- ============================================================================
+
+do
+    local f = newIntegrationFixture()
+
+    t.test('HIGH COMMAND BYPASS: a high-command officer holds feature.BiteAndHold with no grant, no history, nothing -- purely by rank', function()
+        f.registerPlayer(2001, 'HCF-OFFICER', { name = 'police', grade = { level = 6 } }) -- meets highCommandGrade exactly
+        t.isTrue(f.env.HasPermission('HCF-OFFICER', 'feature.BiteAndHold'),
+            'high command must implicitly hold feature.<Name> without ever being granted it')
+        -- Never a REAL grant row -- ListActivePermissionsForCitizenId (the
+        -- DB-backed ground truth this bypass never touches) must still show
+        -- nothing for this citizenid.
+        local ok, history = f.env.ListActivePermissionsForCitizenId(2001, 'HCF-OFFICER')
+        t.isTrue(ok)
+        t.equals(#history, 0, 'the bypass must never manufacture an actual grant row -- this is an implication of rank, not a grant')
+    end)
+
+    t.test('HIGH COMMAND BYPASS: a NON-high-command citizenid is completely unaffected -- still denied feature.BiteAndHold with no grant', function()
+        f.registerPlayer(2002, 'ORDINARY-OFFICER', { name = 'police', grade = { level = 0 } })
+        t.isFalse(f.env.HasPermission('ORDINARY-OFFICER', 'feature.BiteAndHold'))
+    end)
+
+    t.test('HIGH COMMAND BYPASS: turning Config.Features.HighCommand off removes the bypass IMMEDIATELY, no restart -- and back on restores it', function()
+        f.registerPlayer(2003, 'HCF-TOGGLE', { name = 'police', grade = { level = 6 } })
+        t.isTrue(f.env.HasPermission('HCF-TOGGLE', 'feature.BiteAndHold'), 'sanity: the bypass is live before the flag is touched')
+
+        f.env.Config.Features.HighCommand = false
+        t.isFalse(f.env.HasPermission('HCF-TOGGLE', 'feature.BiteAndHold'),
+            'IsHighCommand re-checks Config.Features.HighCommand on every call -- flipping it off must go dark on the very next check, with no restart')
+
+        f.env.Config.Features.HighCommand = true
+        t.isTrue(f.env.HasPermission('HCF-TOGGLE', 'feature.BiteAndHold'),
+            'flipping it back on must restore the bypass immediately too -- this is a live re-check in both directions, never a one-shot latch')
+    end)
+
+    t.test('HIGH COMMAND BYPASS: an OFFLINE citizenid gets no bypass, even one who would qualify the moment they reconnect', function()
+        -- Deliberately never registered via f.registerPlayer -- GetPlayerByCitizenId
+        -- resolves to nil, exactly like a genuinely disconnected officer.
+        t.isFalse(f.env.HasPermission('NEVER-CONNECTED-THIS-SESSION', 'feature.BiteAndHold'),
+            'offline is answered as "cannot know, so no" -- never guessed as high command')
+    end)
+
+    -- THE ONE THING THE PROJECT OWNER WILL NOT ACCEPT LOSING.
+    t.test('HIGH COMMAND BYPASS: an explicit block.BiteAndHold on a high-command TARGET still blocks them -- a block beats the bypass', function()
+        local granterSrc = f.registerPlayer(2004, 'HCF-BLOCK-GRANTER', { name = 'police', isboss = true, grade = { level = 0 } })
+        f.registerPlayer(2005, 'HCF-BLOCK-TARGET', { name = 'police', grade = { level = 6 } }) -- genuinely high command
+
+        -- Sanity: before the block, this high-command target holds
+        -- feature.BiteAndHold purely by rank, exactly like the first test
+        -- in this section.
+        t.isTrue(f.env.HasPermission('HCF-BLOCK-TARGET', 'feature.BiteAndHold'))
+
+        local ok, outcome = f.env.GrantPermission(granterSrc, 'HCF-BLOCK-TARGET', 'block.BiteAndHold')
+        t.isTrue(ok, 'the block grant itself must succeed')
+        t.equals(outcome, 'ok')
+
+        -- The block itself is a REAL, independent, unaffected-by-rank grant --
+        -- HasPermission answers it exactly the same for anyone, high command
+        -- or not.
+        t.isTrue(f.env.HasPermission('HCF-BLOCK-TARGET', 'block.BiteAndHold'), 'the block itself must read as active')
+
+        -- HasPermission answers each namespace INDEPENDENTLY (this is not
+        -- new to this pass -- see this file's own header "RESOLUTION
+        -- ORDER"/"HOW STEP 1 IS WIRED IN"): 'feature.BiteAndHold' still
+        -- reads true on its own here, in isolation, because the bypass has
+        -- no reason to know about a DIFFERENT key's block row. What
+        -- actually enforces "a block always wins" is every REAL consuming
+        -- gate in this resource checking 'block.<Name>' BEFORE
+        -- 'feature.<Name>' (server/search.lua's
+        -- IsSearchFeaturePermittedForCitizenId and ~twenty siblings, all
+        -- sharing this identical two-line shape) -- reproduced inline
+        -- below, exactly as every one of those real gates is shaped, to
+        -- prove the ACTUAL, end-to-end resolution a real caller computes.
+        t.isTrue(f.env.HasPermission('HCF-BLOCK-TARGET', 'feature.BiteAndHold'),
+            'HasPermission itself still answers feature.<Name> independently -- the block win is enforced by caller ORDER, not by this function silently special-casing the other key')
+
+        local function isFeaturePermitted(citizenid, featureName)
+            if f.env.HasPermission(citizenid, 'block.' .. featureName) == true then return false end
+            return f.env.HasPermission(citizenid, 'feature.' .. featureName) == true
+        end
+        t.isFalse(isFeaturePermitted('HCF-BLOCK-TARGET', 'BiteAndHold'),
+            'the real, block-checked-first resolution every consuming gate in this resource uses must deny a blocked high-command officer -- a deliberate BLOCK on a specific person must still win, even for high command')
     end)
 end
 

@@ -9,11 +9,23 @@
     payload shapes this file must match).
 
     ======================================================================
-    ARCHITECTURE DECISION, STATED UP FRONT: this file registers FIVE of the
-    seven callbacks the tablet needs -- the genuinely CROSS-FILE aggregations
+    ARCHITECTURE DECISION, STATED UP FRONT: this file registers SEVEN of the
+    nine callbacks the tablet needs -- the genuinely CROSS-FILE aggregations
     that don't belong to any single owning subsystem:
       qbx_k9unit:server:tabletRequestMyRecord
       qbx_k9unit:server:tabletRequestRoster
+      qbx_k9unit:server:tabletRequestOnlinePlayers -- the "pick a player id
+        from a list" entry point into the Console/Person screens
+        (owner-directed, 2026-08-26: "make the add permission section...
+        where its a list when i choose a player id" -- a citizenid is not
+        something an operator can see in game, but a server id is). SAME
+        audience as tabletRequestRoster (CallerHasConsoleAccess) -- see
+        that gate's own doc comment and this callback's own header for why
+        this is a BROWSE capability, not the wider person-lookup one.
+      qbx_k9unit:server:tabletResolveOnlinePlayer -- resolves ONE row from
+        that list (a server id) to the citizenid it belonged to, freshly,
+        at the moment of the click -- see its own header for the
+        RECYCLED-SOURCE-ID guard this exists to close.
       qbx_k9unit:server:tabletRequestPersonSummary
       qbx_k9unit:server:tabletRequestPersonFeatures
       qbx_k9unit:server:tabletRequestMyPartnerships -- the Partners tab
@@ -24,7 +36,7 @@
         server/admin.lua's high-command-only audit tool) with this file's
         own ResolveDisplayName -- exactly the "no single owning file can
         produce this alone" test the paragraph below already applies to
-        the other four.
+        the others.
     The other two are registered INSIDE the file that already owns the
     logic they wrap, mirroring server/permissions.lua's own established
     precedent (that file's "TABLET CALLBACKS" section registers
@@ -75,7 +87,7 @@
     ======================================================================
     SECURITY RULE (client/tablet.lua's own words, repeated here because
     this is the file a modified client actually talks to): THE TABLET IS A
-    VIEW. IT DECIDES NOTHING. Every one of the four callbacks below
+    VIEW. IT DECIDES NOTHING. Every one of the callbacks below
     re-resolves the CALLER's own identity from `source` (ox_lib's callback
     dispatch value, server-verified, never a client-supplied one) and
     re-derives every permission/certification/XP fact from this resource's
@@ -83,7 +95,12 @@
     progression cache) -- never from a client-supplied citizenid, job, or
     boolean. A `targetCitizenId` argument selects WHOSE record to read; it
     is NEVER treated as an assertion about the CALLER's own identity or
-    authority. tabletRequestRoster/tabletRequestPersonSummary require the
+    authority. tabletRequestOnlinePlayers/tabletResolveOnlinePlayer take a
+    server id (`source`, an online player's connection slot) instead of a
+    citizenid -- but the exact same rule applies: `source` selects WHOSE
+    connection to read, resolved to a citizenid FRESH on the server, on
+    every call, never trusted from an earlier response. tabletRequestRoster/
+    tabletRequestOnlinePlayers/tabletRequestPersonSummary require the
     caller to hold real "console" access (an effective admin capability, or
     high command); tabletRequestPersonFeatures requires high command
     specifically -- both re-verified here on every call, never trusted from
@@ -356,8 +373,9 @@ local MAX_ROSTER_QUERY_LENGTH = 100  -- defensive bound on the free-text search 
 local MAX_CITIZENID_LENGTH = 50      -- VARCHAR(50), matching every citizenid column in this resource's schema
 
 -- ======================================================================
--- RATE LIMITING -- the four read/aggregation callbacks below (tabletRequestMyRecord/
--- Roster/PersonSummary/PersonFeatures) had NO cooldown at all, unlike every
+-- RATE LIMITING -- the read/aggregation callbacks below (tabletRequestMyRecord/
+-- Roster/OnlinePlayers/PersonSummary/PersonFeatures, plus
+-- tabletResolveOnlinePlayer) had NO cooldown at all, unlike every
 -- other client-triggered, DB-touching read this resource exposes
 -- (server/admin.lua's own AuditCooldown covers its five read-only audit
 -- callbacks/commands the exact same way; server/tracking.lua/server/search.lua
@@ -365,12 +383,12 @@ local MAX_CITIZENID_LENGTH = 50      -- VARCHAR(50), matching every citizenid co
 -- one extra query pair PER ACTIVELY-HELD DEPARTMENT, and tabletRequestRoster
 -- issues one query PER CONFIGURED DEPARTMENT, every single call -- a caller
 -- who can already reach one of these (any certified handler for
--- tabletRequestMyRecord; console-access/high-command for the other three)
+-- tabletRequestMyRecord; console-access/high-command for the others)
 -- could otherwise fire an unbounded number of these per second with nothing
--- server-side to slow them down. ONE SHARED instance across all four,
+-- server-side to slow them down. ONE SHARED instance across all of them,
 -- mirroring server/admin.lua's AuditCooldown / server/runtimecontrol.lua's
 -- RuntimeControlActionCooldown "one cooldown per related-action group" shape
--- -- these four are the tablet's own related "read a record" group. This is
+-- -- these are the tablet's own related "read a record" group. This is
 -- an anti-hammering floor, not an abuse gate: every caller reaching the
 -- Consume call below already PASSED this callback's own authorization check
 -- (see each callback's own placement of this call, always AFTER
@@ -1642,6 +1660,292 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
         result.truncatedMessage = SafeLocale('tablet.roster_truncated_notice', #rows)
     end
     return result
+end)
+
+-- ======================================================================
+-- CALLBACK 2b/2c -- tabletRequestOnlinePlayers / tabletResolveOnlinePlayer.
+-- Owner-directed, 2026-08-26, verbatim: "make the add permission section
+-- on the ui tablet for the command tablet where its a list when i choose
+-- a player id and just click those permissions etc make it easier". The
+-- Person screen's permission checkboxes already exist and already work
+-- (html/tablet.js's buildCapabilityList(), tablet:grantPermission/
+-- revokePermission) -- what did not exist was a way to REACH that screen
+-- for someone an operator can actually identify in game: the roster above
+-- lists ONLY citizenids holding an ACTIVE certification, and the "open by
+-- exact citizen ID" box needs a citizenid, which is not something a
+-- player ever sees -- the pause menu shows a SERVER id. This pair closes
+-- that gap by listing who is online RIGHT NOW, keyed by server id for
+-- display, resolved to a citizenid fresh on the server the moment a row
+-- is actually clicked. It is a NEW ENTRY POINT ONLY -- it reuses
+-- openPerson()/loadPersonSummary() and every existing grant control on
+-- the Person screen verbatim; no second grant mechanism was built.
+--
+-- AUTHORIZATION -- WHICH GATE, AND WHY: this is a BROWSE capability (list
+-- of EVERYONE currently connected, regardless of certification), the
+-- exact same shape of thing CallerHasConsoleAccess() was narrowed to
+-- prevent (see that function's own doc comment, OWNER'S DECISION
+-- 2026-08-25): letting a base-rank officer enumerate who else is on duty
+-- right now, by name and job, purely because they hold ONE delegated
+-- capability unrelated to browsing (e.g. 'k9.certify'/'k9.givexp' alone).
+-- So this pair is gated with CallerHasConsoleAccess -- the SAME, narrower
+-- gate as tabletRequestRoster -- and DELIBERATELY NOT the wider
+-- CallerHasPersonAccess a 'k9.certify'/'k9.givexp'-only holder also
+-- qualifies for. That viewer still reaches the Person screen exactly as
+-- before this pass (the "open by exact citizen ID" box, if they already
+-- know one) -- they simply do not get a free roster of everyone online.
+-- This is "match the one whose screen this belongs to" read as: the
+-- LISTING/BROWSING question this belongs with is tabletRequestRoster's,
+-- not tabletRequestPersonSummary's -- both eventually land on the same
+-- Person screen, but the roster and this list are the two BROWSE
+-- entry points into it, and browsing is the thing that was narrowed.
+--
+-- RECYCLED SOURCE IDS -- THE PART THAT MATTERS MOST: a server id is not a
+-- stable identity. It is freed the instant its holder disconnects and can
+-- be handed to a brand-new connection seconds later. Resolving a click
+-- purely from `exports.qbx_core:GetPlayer(clickedSourceId)` at click time
+-- would silently hand back WHOEVER now holds that slot, not the specific
+-- person the operator saw and clicked when the list was drawn -- landing
+-- a permission grant on the wrong person, the single worst failure mode
+-- this feature could have. The fix: tabletRequestOnlinePlayers mints a
+-- short-lived, single-use, OPAQUE nonce per row, recording (source,
+-- citizenid) as of THIS EXACT LIST BUILD; tabletResolveOnlinePlayer looks
+-- that nonce up and only succeeds if the CURRENT live occupant of that
+-- same source is STILL that same citizenid. A nonce is never a citizenid
+-- and never reused across list builds (so one operator's stale list can
+-- never be "revalidated" by some completely unrelated caller's more
+-- recent refresh landing the same source back on the SAME citizenid by
+-- coincidence -- see MintOnlinePlayerNonce's own doc comment). Everything
+-- downstream of a successful resolve -- the Person screen, every
+-- certify/grant/xp control on it -- keys on the resolved CITIZENID
+-- exactly as it already did for the roster/"open by ID" entry points; a
+-- server id is NEVER stored as, or substituted for, that key anywhere.
+-- ======================================================================
+
+local ONLINE_PLAYERS_ROW_CAP = 100 -- fixed, not config-driven (mirrors
+-- PARTNERSHIP_HISTORY_LIMIT's own "small, fixed, no config knob" shape).
+-- This list is built from an in-memory GetPlayers() scan, never a DB
+-- query -- unlike ClampedMaxRosterRows/DEFAULT_MAX_ROSTER_ROWS, raising
+-- this costs CPU/JSON-payload size only, never a slower query plan -- but
+-- it stays bounded rather than unbounded: a 900-slot server's whole
+-- population is not something an operator can usefully scroll anyway.
+-- Past this cap, `truncated`/`truncatedMessage` below tell the operator
+-- so, and how to narrow it -- the SAME search box the roster already
+-- offers (matches by name, server id, or job, applied to the FULL
+-- GetPlayers() scan before this cap is applied, so a search can still
+-- find someone past the display cap even though a bare, unfiltered list
+-- cannot show them all at once).
+local ONLINE_PLAYERS_QUERY_MAX_LENGTH = 100 -- same defensive bound as MAX_ROSTER_QUERY_LENGTH
+
+-- EPHEMERAL, SERVER-MEMORY ONLY -- never written to the database, never
+-- sent to any client as anything but an opaque, single-use string. See
+-- this section's own header "RECYCLED SOURCE IDS" for what this exists to
+-- prevent. Deliberately keyed by the MINTED NONCE, not by `source` alone
+-- -- a per-source (rather than per-mint) table would let one caller's
+-- fresh tabletRequestOnlinePlayers call overwrite the bookkeeping a
+-- DIFFERENT caller's still-open, stale list depends on, silently
+-- "revalidating" that stale list's own click the instant the two
+-- happened to agree on who currently holds that source -- exactly the
+-- wrong-person failure this whole mechanism exists to close. One entry
+-- per row, per list build, consumed (deleted) the moment
+-- tabletResolveOnlinePlayer looks it up, whether that lookup succeeds or
+-- fails.
+local OnlinePlayerNonces = {} -- nonce(string) -> { source: number, citizenid: string, mintedAt: number(ms, GetGameTimer()) }
+local ONLINE_PLAYER_NONCE_TTL_MS = 60000 -- generous relative to click latency, short relative to "an operator walked away and left the tablet open"
+local onlinePlayerNonceSequence = 0
+
+--- Deletes every nonce whose TTL has already elapsed. Called at the START
+--- of every tabletRequestOnlinePlayers call so this table never grows
+--- unbounded across a long session's worth of refreshes -- NOT on a
+--- timer/interval of its own, matching this file's "no background work
+--- beyond what a real request already triggers" convention elsewhere.
+local function PruneExpiredOnlinePlayerNonces()
+    local now = GetGameTimer()
+    for nonce, record in pairs(OnlinePlayerNonces) do
+        if (now - record.mintedAt) > ONLINE_PLAYER_NONCE_TTL_MS then
+            OnlinePlayerNonces[nonce] = nil
+        end
+    end
+end
+
+--- @param sourceId number
+--- @param citizenid string
+--- @return string
+local function MintOnlinePlayerNonce(sourceId, citizenid)
+    onlinePlayerNonceSequence = onlinePlayerNonceSequence + 1
+    local nonce = ('%d:%d:%d'):format(sourceId, onlinePlayerNonceSequence, GetGameTimer())
+    OnlinePlayerNonces[nonce] = { source = sourceId, citizenid = citizenid, mintedAt = GetGameTimer() }
+    return nonce
+end
+
+--- Cheap, in-memory job label for an ONLINE PlayerData.job -- deliberately
+--- NOT ResolveJobGradeInfo (below): that function's own online-preferred/
+--- offline-fallback pair exists to resolve a citizenid that might not be
+--- online at all, which costs an extra GetPlayerByCitizenId lookup this
+--- call site already has the answer to (this function is only ever called
+--- from inside a GetPlayers() loop that already holds the live
+--- PlayerData). Mirrors that function's own label precedence exactly
+--- (Config.Departments[job.name].label, then job.label, then the bare
+--- job.name) so the SAME job resolves to the SAME label whether shown
+--- here or on the Person screen.
+--- @param job table
+--- @return string
+local function JobLabelFromLiveJob(job)
+    local dept = type(Config.Departments) == 'table' and Config.Departments[job.name]
+    if type(dept) == 'table' and type(dept.label) == 'string' then return dept.label end
+    if type(job.label) == 'string' then return job.label end
+    return job.name
+end
+
+lib.callback.register('qbx_k9unit:server:tabletRequestOnlinePlayers', function(source, query)
+    local Player = exports.qbx_core:GetPlayer(source)
+    local callerCitizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if not callerCitizenid then
+        return { ok = false, error = 'not_authorized', message = locale('common.unable_to_resolve_citizenid') }
+    end
+
+    local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
+    if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
+        return { ok = false, error = 'not_authorized', message = SafeLocale('tablet.console_not_authorized') }
+    end
+
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
+    end
+
+    if type(query) ~= 'string' then query = '' end
+    if #query > ONLINE_PLAYERS_QUERY_MAX_LENGTH then query = query:sub(1, ONLINE_PLAYERS_QUERY_MAX_LENGTH) end
+    local needle = query:lower()
+
+    PruneExpiredOnlinePlayerNonces()
+
+    -- IN-MEMORY SCAN, NO DB ROUND TRIP AT ALL -- GetPlayers() is qbx_core's
+    -- own live connected-session list, and every field below (name, job,
+    -- HasK9Access) is resolved from data this process already holds in
+    -- memory for a connected player, exactly like server/main.lua's own
+    -- RefreshCertificationCache backfill loop over the same
+    -- GetPlayers()/tonumber pattern. No maxRosterRows-style multiplier/cap
+    -- pair is needed the way tabletRequestRoster has one: that exists
+    -- there because ROSTER_FETCH_ABSOLUTE_CAP bounds a DB LIMIT clause
+    -- BEFORE rows are fetched; here every currently-connected player is
+    -- already fully in memory regardless, so filtering happens over the
+    -- real, complete set and only the RESPONSE (not the work done to
+    -- build it) is capped below.
+    local candidates = {}
+    for _, playerId in ipairs(GetPlayers()) do
+        local src = tonumber(playerId)
+        if src then
+            local onlinePlayer = exports.qbx_core:GetPlayer(src)
+            local job = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.job
+            local citizenid = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.citizenid
+            if type(job) == 'table' and type(citizenid) == 'string' then
+                local name = ResolveDisplayName(citizenid)
+                local jobLabel = JobLabelFromLiveJob(job)
+                local hasK9Access = type(HasK9Access) == 'function' and HasK9Access(src) == true
+                local matches = needle == ''
+                    or name:lower():find(needle, 1, true) ~= nil
+                    or tostring(src):find(needle, 1, true) ~= nil
+                    or jobLabel:lower():find(needle, 1, true) ~= nil
+                if matches then
+                    candidates[#candidates + 1] = {
+                        source = src,
+                        citizenid = citizenid, -- SERVER-SIDE BOOKKEEPING ONLY -- stripped from every row below; see the nonce-minting loop's own comment.
+                        name = name,
+                        jobLabel = jobLabel,
+                        hasK9Access = hasK9Access,
+                    }
+                end
+            end
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        if a.name == b.name then return a.source < b.source end
+        return a.name < b.name
+    end)
+
+    local truncated = #candidates > ONLINE_PLAYERS_ROW_CAP
+    local rows = {}
+    local limit = math.min(#candidates, ONLINE_PLAYERS_ROW_CAP)
+    for i = 1, limit do
+        local candidate = candidates[i]
+        rows[#rows + 1] = {
+            source = candidate.source,
+            name = candidate.name,
+            jobLabel = candidate.jobLabel,
+            hasK9Access = candidate.hasK9Access,
+            -- OPAQUE, SINGLE-USE -- never a citizenid, never anything the
+            -- client could use to identify this person outside this one
+            -- round trip. See tabletResolveOnlinePlayer's own doc comment.
+            nonce = MintOnlinePlayerNonce(candidate.source, candidate.citizenid),
+        }
+    end
+
+    local result = { ok = true, rows = rows, truncated = truncated }
+    if truncated then
+        result.truncatedMessage = SafeLocale('tablet.online_players_truncated_notice', #rows)
+    end
+    return result
+end)
+
+--- Resolves ONE row from the online-players list (a server id) to the
+--- citizenid it belonged to, freshly, AT THE MOMENT OF THIS CALL -- never
+--- the citizenid a client might claim, and never trusted from a prior
+--- response. See this section's own header "RECYCLED SOURCE IDS" for the
+--- full reasoning `nonce` exists to close. Same audience as
+--- tabletRequestOnlinePlayers (CallerHasConsoleAccess) -- a caller who
+--- could not see the list in the first place must not be able to resolve
+--- an arbitrary source id through this callback either.
+lib.callback.register('qbx_k9unit:server:tabletResolveOnlinePlayer', function(source, targetSource, nonce)
+    local Player = exports.qbx_core:GetPlayer(source)
+    local callerCitizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if not callerCitizenid then
+        return { ok = false, error = 'not_authorized', message = locale('common.unable_to_resolve_citizenid') }
+    end
+
+    -- invalid_args BEFORE authorization/cooldown, matching
+    -- tabletRequestPersonSummary's own established ordering immediately
+    -- below (invalid_args -> authorization -> rate limit) -- a malformed
+    -- payload from a modified client must never spend either budget.
+    if type(targetSource) ~= 'number' or type(nonce) ~= 'string' or nonce == '' then
+        return { ok = false, error = 'invalid_args' }
+    end
+
+    local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
+    if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
+        return { ok = false, error = 'not_authorized', message = SafeLocale('tablet.console_not_authorized') }
+    end
+
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
+    end
+
+    PruneExpiredOnlinePlayerNonces()
+
+    -- SINGLE-USE: deleted the instant it is looked up, success or not, so
+    -- a click can never be replayed against the same list entry twice.
+    local record = OnlinePlayerNonces[nonce]
+    OnlinePlayerNonces[nonce] = nil
+
+    if not record or record.source ~= targetSource then
+        return { ok = false, error = 'stale_online_list', message = SafeLocale('tablet.online_player_stale') }
+    end
+
+    -- THE RECYCLED-SOURCE-ID GUARD ITSELF: `targetSource` is a currently-
+    -- (or was-recently-) connected server id, reused by a brand-new
+    -- connection the instant its previous holder drops. Re-resolving
+    -- PURELY from `targetSource` here would silently hand back WHOEVER
+    -- now holds that slot, not the specific person the operator saw and
+    -- clicked when the list was drawn. `record.citizenid` is who occupied
+    -- `targetSource` at the moment tabletRequestOnlinePlayers minted this
+    -- nonce; this only succeeds if the CURRENT live occupant of that same
+    -- source is STILL that same citizenid.
+    local targetPlayer = exports.qbx_core:GetPlayer(targetSource)
+    local liveCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
+    if not liveCitizenid or liveCitizenid ~= record.citizenid then
+        return { ok = false, error = 'target_disconnected', message = SafeLocale('tablet.online_player_disconnected') }
+    end
+
+    return { ok = true, citizenid = liveCitizenid, name = ResolveDisplayName(liveCitizenid) }
 end)
 
 -- ======================================================================

@@ -2,9 +2,19 @@
     qbx_k9unit/client/search.lua
 
     Phase 2. Owns Search Vehicle / Search Person: the two
-    ox_target options that play a sniff animation, then await the server's
-    real, server-computed contraband result — DEVELOPER_REFERENCE.md §11.1 sub-phases
-    2b/2c, §11.3's `client/search.lua` row. Deliberately a SEPARATE file
+    ox_target options that play an alert "investigating" scenario for the
+    duration of a progress bar, then await the server's real,
+    server-computed contraband result — DEVELOPER_REFERENCE.md §11.1
+    sub-phases 2b/2c, §11.3's `client/search.lua` row. CORRECTED (this
+    pass, coder-frontend): this header used to claim "play a sniff
+    animation" while the function below actually called nothing but
+    lib.progressBar — a real drift between comment and code, not a
+    documentation nuance. See PerformSearch's own SEARCH SCENARIO note
+    below for exactly what plays now and the honest confidence grading on
+    the scenario name chosen (no dog-specific "sniffing" scenario could be
+    independently confirmed to exist this pass — see that note for what was
+    tried and why this reuses an already-verified sibling instead of
+    guessing). Deliberately a SEPARATE file
     from client/tracking.lua even though both are "K9 sniffs, a result
     appears" in flavor — the split is by TRUST MODEL, not feature name:
     tracking reveals a client-cosmetic trail (no real capability granted,
@@ -196,6 +206,79 @@ local function IsBusyWithSomethingElse()
     return false, nil
 end
 
+--- ======================================================================
+--- SEARCH SCENARIO (this pass, coder-frontend) — closes the gap flagged by
+--- this file's own former header ("plays a sniff animation") not matching
+--- what PerformSearch actually did (nothing but lib.progressBar, no anim
+--- code anywhere in this file — confirmed by grep before this pass, not
+--- assumed).
+---
+--- VERIFICATION ATTEMPTED, THIS PASS: a genuine, dog-specific
+--- "sniffing"/"searching"/"investigating" scenario for the WORLD_DOG_*
+--- skeleton could NOT be independently confirmed. Tried, all from this
+--- sandbox's own egress allowlist: raw.githubusercontent.com (confirmed
+--- REACHABLE in general — two unrelated real repos on that same host
+--- resolved fine — but both community scenario-dump paths this codebase's
+--- own K9Sit()/door-scratch precedents cite, DioneB/GTAV-Scenarios and
+--- kibook/spooner's scenarios.lua, 404 on every branch/filename guessed
+--- this session), github.com repo pages (403), api.github.com code/repo
+--- search (session is repo-scope-restricted, not a general search),
+--- jsdelivr's gh package-file listing (no resolvable version for either
+--- repo), grep.app (bot-walled), gtaforums/duckduckgo (bot-walled/no
+--- usable results). native-api-assistant — this resource's own established
+--- point of contact for exactly this kind of check — was not a reachable,
+--- currently-running agent this session either. Recorded here, not
+--- silently skipped, per this task's own "do not fabricate, say so"
+--- instruction.
+---
+--- CHOICE MADE: rather than invent a "WORLD_DOG_SNIFFING_*"-shaped guess —
+--- which would silently no-op forever if wrong, per FiveM's own
+--- unregistered-scenario behavior — this REUSES the SAME already-verified,
+--- already-shipped per-breed table client/movement.lua's K9Sit() action
+--- uses (WORLD_DOG_SITTING_SHEPHERD/_ROTTWEILER/_RETRIEVER, itself
+--- cross-checked there against two independently maintained scenario
+--- dumps agreeing on these exact strings — see that file's own K9Sit()
+--- doc comment for the full grading). Duplicated here as a small local
+--- table rather than taken as a cross-file dependency on client/movement.lua
+--- — mirrors this file's own IsBusyWithSomethingElse() precedent just
+--- above for the identical "duplicate four guarded calls rather than make
+--- one file's internals another file's dependency" tradeoff, and this
+--- file's header already states no compile-time dependency on other client
+--- files is wanted. CONFIDENCE: HIGH the scenario strings themselves are
+--- real (inherited from K9Sit()'s own two-source verification); LOW/NONE
+--- that "sitting" is the semantically ideal pose for "actively searching" —
+--- an alert, stationary sit reads reasonably as "the dog has stopped to
+--- focus on something" and, critically, is not a fabricated name, so it
+--- either looks fine or (worst case) looks slightly odd — never silently
+--- does nothing. FOLLOW-UP flagged in this pass's own report: get
+--- native-api-assistant (or a session with real access to those two dumps)
+--- to confirm a genuine sniff/investigate scenario before treating this as
+--- final.
+--- @type table<number, string>
+local K9_SEARCH_SCENARIO_BY_MODEL_HASH = {}
+for model, scenario in pairs({
+    a_c_shepherd = 'WORLD_DOG_SITTING_SHEPHERD',
+    a_c_rottweiler = 'WORLD_DOG_SITTING_ROTTWEILER',
+    a_c_chop = 'WORLD_DOG_SITTING_ROTTWEILER', -- Chop is Rottweiler-framed; no Chop-specific scenario exists (same substitution K9Sit() already makes)
+    a_c_husky = 'WORLD_DOG_SITTING_RETRIEVER', -- no husky-specific scenario; RETRIEVER is the closest general/medium-dog sit (same substitution K9Sit() already makes)
+}) do
+    K9_SEARCH_SCENARIO_BY_MODEL_HASH[GetHashKey(model)] = scenario
+end
+local K9_SEARCH_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD' -- fallback if playing an unmapped/future Config.Peds model, same posture as K9Sit()'s own default
+
+--- Resolves the search scenario for the LOCAL player's CURRENT ped model —
+--- called fresh at the top of every PerformSearch() call (not cached),
+--- mirroring K9Sit()'s own per-call GetEntityModel() read, since a player's
+--- ped model can change between searches (breed swap, appearance change)
+--- and this must never play a stale scenario for a model the player no
+--- longer has.
+--- @return string
+local function ResolveSearchScenario()
+    local ped = PlayerPedId()
+    return K9_SEARCH_SCENARIO_BY_MODEL_HASH[GetEntityModel(ped)] or K9_SEARCH_DEFAULT_SCENARIO
+end
+--- ======================================================================
+
 --- Shared implementation behind the two ox_target options below. Plays the
 --- sniff animation/progress bar, awaits the server's authoritative result,
 --- and renders feedback — never computes or guesses a result itself. Kept
@@ -257,24 +340,41 @@ local function PerformSearch(targetType, targetEntity)
 
     searchInProgress = true
 
-    -- Sniff animation shell. OPEN, not resolved by DEVELOPER_REFERENCE.md §11 or
-    -- DEVELOPER_REFERENCE.md: the exact anim/scenario native for a
-    -- "sniffing/searching" pose would need the same native-api-assistant
-    -- confirmation pass client/movement.lua's K9Sit() precedent already got
-    -- for its WORLD_DOG_SITTING_* scenarios
-    -- (DEVELOPER_REFERENCE.md#tracking §4's identical flag for a
-    -- tracking-session sniff animation) — not guessed at here rather than
-    -- risk shipping a fabricated scenario name. lib.progressBar alone still
-    -- gives real UX value (pacing, a cancel/interrupt hook if the player
-    -- moves away mid-sniff) even without a confirmed anim underneath it;
-    -- swapping in a real scenario once confirmed is a one-line addition to
-    -- this call, not new plumbing.
+    -- SEARCH SCENARIO (this pass) — see this file's own "SEARCH SCENARIO"
+    -- section above ResolveSearchScenario() for the full verification
+    -- writeup (what was tried, what confidence grading applies, and why
+    -- this reuses K9Sit()'s already-verified WORLD_DOG_SITTING_* table
+    -- instead of guessing a new name). Routed through lib.progressBar's OWN
+    -- built-in `anim.scenario` field (confirmed against ox_lib's real
+    -- resource/interface/client/progress.lua source: `TaskStartScenarioInPlace`
+    -- is called once at the START of the bar, and — regardless of WHICH
+    -- exit condition ends the bar's own `while progress do ... end` loop
+    -- (a clean completion, canCancel, or an interruptProgress() hit for
+    -- death/ragdoll/cuffed/falling/swimming, since useWhileDead = false
+    -- below is exactly what makes death count as an interrupt) — the
+    -- SAME code path unconditionally runs `ClearPedTasks(cache.ped)`
+    -- immediately after that loop ends, before lib.progressBar ever
+    -- returns) rather than this file calling TaskStartScenarioInPlace/
+    -- ClearPedTasksImmediately directly, which would either fight ox_lib's
+    -- own call or double it. This is what satisfies "cancelled/cleaned up
+    -- on every exit path" for the search-cancelled, player-moved
+    -- (movement itself is disabled for the bar's duration via
+    -- `disable.move` below, so this can only mean the canCancel keybind),
+    -- and player-died-mid-search cases; the resource-stopped case is NOT
+    -- covered by ox_lib's own loop (that loop runs as a coroutine inside
+    -- THIS resource's own Lua state, per `@ox_lib/init.lua` being a
+    -- shared_script here rather than a separate resource's export — a stop
+    -- of this resource kills that coroutine before it ever reaches its own
+    -- post-loop cleanup) — see the dedicated onResourceStop handler this
+    -- pass adds near this file's other AddEventHandler calls for that one
+    -- remaining exit path.
     local completed = lib.progressBar({
         duration = Config.SearchZones.sniffAnimDurationMs,
         label = targetType == 'vehicle' and locale('search.progress_vehicle_label') or locale('search.progress_person_label'),
         useWhileDead = false,
         canCancel = true,
         disable = { move = true, combat = true },
+        anim = { scenario = ResolveSearchScenario() },
     })
 
     if not completed then
@@ -485,6 +585,32 @@ local function RegisterSearchOxTargetOptions()
         },
     })
 end
+
+-- RESOURCE-STOP CLEANUP (this pass, coder-frontend) — the one exit path
+-- lib.progressBar's own anim.scenario cleanup (see PerformSearch's own
+-- SEARCH SCENARIO comment above) does NOT cover on its own: a stop of THIS
+-- resource kills the coroutine running that bar's `while progress do ... end`
+-- loop (and everything else in this resource's own Lua state — ox_lib is
+-- pulled in via `@ox_lib/init.lua` in shared_scripts, i.e. it runs INSIDE
+-- this resource, not as a separate resource's export) before it ever
+-- reaches its own post-loop `ClearPedTasks` call, same "sticky native state
+-- must be reversed on stop" class of bug client/movement.lua's own
+-- onResourceStop handler already exists to prevent for
+-- isFirstPersonK9View — mirrored here for the identical reason. Only acts
+-- while `searchInProgress` is true, so a normal resource stop between
+-- searches costs nothing. GTA's own scenario-task-on-a-player-ped behavior
+-- (documented at K9_SEARCH_SCENARIO_BY_MODEL_HASH's own declaration
+-- comment: it self-cancels the instant the player provides movement input)
+-- would eventually self-correct even without this, since a stopped
+-- resource can no longer disable movement controls either — this handler
+-- just closes the gap immediately instead of leaving it to the player's
+-- next footstep.
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if searchInProgress then
+        ClearPedTasksImmediately(PlayerPedId())
+    end
+end)
 
 AddEventHandler('onResourceStart', function(resourceName)
     if resourceName == GetCurrentResourceName() then
