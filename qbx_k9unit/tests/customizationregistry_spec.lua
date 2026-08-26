@@ -326,7 +326,7 @@ end
 --- @return table<string, boolean> set
 local function ExtractClientEnforcedFeatures(text)
     local startPos = text:find('local CLIENT_ENFORCED_FEATURES = {', 1, true)
-    assert(startPos, 'local CLIENT_ENFORCED_FEATURES = { not found in client/featureblocks.lua -- this file must have changed shape, or been removed/renamed (see this pass\'s hand-off note: it is not yet wired into fxmanifest.lua as of this writing, but its source is still the intended source of truth for this list)')
+    assert(startPos, 'local CLIENT_ENFORCED_FEATURES = { not found in client/featureblocks.lua -- this file must have changed shape, or been removed/renamed (client/featureblocks.lua is wired into fxmanifest.lua\'s client_scripts list -- confirmed by reading it -- and its source remains the intended source of truth for this list)')
     local endPos = text:find('\n}', startPos, true)
     assert(endPos, 'no closing "}" found for CLIENT_ENFORCED_FEATURES in client/featureblocks.lua')
     local block = text:sub(startPos, endPos)

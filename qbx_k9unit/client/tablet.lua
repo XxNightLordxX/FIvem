@@ -309,8 +309,15 @@
         live-refreshes the registered shop after every successful edit) --
         no restart needed, unlike a raw config.lua edit.
       tablet:runtimeListFeatures {}                               -> cb({ok,features?,error?})   [high command -- server/runtimecontrol.lua]
-      tablet:runtimeSetFeature {name,value:boolean}               -> cb({ok,appliedLive?,restartRequired?,configEditRequired?,tier?,error?})
-      tablet:runtimeResetFeature {name}                           -> cb({ok,value?,restartRequired?,error?})
+        THIS PASS: each row in `features` now also carries `lockoutRisk`
+        (boolean), `sessionOnly` (boolean), and `lockoutWarning` (string,
+        present only when `lockoutRisk` is true) -- server/runtimecontrol.lua
+        already returned all three (its own runtimeListFeatures doc comment,
+        unchanged), this file merely stopped being the reason html/tablet.js
+        never read them. Forwarded verbatim, same as every other field on
+        this row.
+      tablet:runtimeSetFeature {name,value:boolean,confirm?:string}   -> cb({ok,appliedLive?,restartRequired?,configEditRequired?,tier?,lockoutRisk?,sessionOnly?,error?,warning?})
+      tablet:runtimeResetFeature {name,confirm?:string}               -> cb({ok,value?,restartRequired?,lockoutRisk?,sessionOnly?,error?,warning?})
       tablet:runtimeListTunables {}                                -> cb({ok,tunables?,error?})
       tablet:runtimeSetTunable {key,value:number}                 -> cb({ok,appliedLive?,restartRequired?,value?,error?,min?,max?})
       tablet:runtimeResetTunable {key}                            -> cb({ok,value?,restartRequired?,error?})
@@ -342,6 +349,28 @@
         the only real gate), only uses it as an `<input type="number">`
         min/max HINT that does not block submission.
 
+        THE LOCKOUT-RISK CONFIRMATION GATE, bridged, NOT DECIDED, HERE
+        (this pass): server/runtimecontrol.lua's own runtimeSetFeature/
+        runtimeResetFeature refuse to change a `lockoutRisk` feature
+        (HighCommand, PermissionGrants, RuntimeFeatureControl,
+        TabletTheming, CommandTablet) without a `confirm` argument equal to
+        that feature's own `name` EXACTLY -- `reason='confirmation_required'`
+        otherwise, carrying that feature's own `lockoutWarning` text back.
+        `data.confirm`, if present, is forwarded to the THIRD (SetFeature)
+        or SECOND (ResetFeature) argument, exactly as received, with NO
+        validation of its value beyond "is this even a string or nil"
+        below -- THIS FILE NEVER DECIDES AUTHORIZATION: it does not check
+        `confirm == data.name` itself before forwarding, and does not
+        synthesize/default a `confirm` value for a caller that omitted one.
+        The server's own exact-match check is the only real gate, run
+        again, independently, on every single call, regardless of what
+        html/tablet.js sent -- a hand-crafted NUI message bypassing that
+        page entirely gets refused by the server the same way. html/tablet.js's
+        own runtime-control screen is what actually shows the operator the
+        `lockoutWarning` text and requires them to type the feature's name
+        before ever sending this second call -- see that file's own header
+        note on its lockout-risk confirmation panel for the full UI
+        contract.
       tablet:auditCert {targetCitizenId, limit?}    -> cb(AuditResult)  [server/admin.lua's tabletAuditCert]
       tablet:auditPartner {targetCitizenId, limit?} -> cb(AuditResult)  [tabletAuditPartner]
       tablet:auditSearch {mode, value?, limit?}     -> cb(AuditResult)  [tabletAuditSearch -- mode in {'officer','plate','person','recent'}]
@@ -878,6 +907,21 @@ local TABLET_STRING_KEYS = {
     'runtime_feature_reset_label',
     'runtime_error_denied', 'runtime_error_rate_limited', 'runtime_error_db_error',
     'runtime_feature_error_invalid_feature', 'runtime_feature_error_invalid_value',
+    -- LOCKOUT-RISK CONFIRMATION (this pass) -- server/runtimecontrol.lua's
+    -- `lockoutRisk`/`sessionOnly`/`lockoutWarning` fields (runtimeListFeatures)
+    -- and the `confirm` argument (runtimeSetFeature/runtimeResetFeature),
+    -- previously landed server-side with zero reads on this page -- see
+    -- this file's own NUI CONTRACT note "THE LOCKOUT-RISK CONFIRMATION
+    -- GATE" above. `runtime_feature_error_confirmation_required` is this
+    -- page's own copy for `reason='confirmation_required'` -- NEVER the
+    -- server's raw `lockoutWarning` text, which is instead shown VERBATIM
+    -- (never paraphrased) in html/tablet.js's own confirmation panel.
+    'runtime_lockout_badge', 'runtime_lockout_row_hint',
+    'runtime_session_only_badge', 'runtime_session_only_hint',
+    'runtime_lockout_confirm_heading', 'runtime_lockout_confirm_instruction',
+    'runtime_lockout_confirm_input_label', 'runtime_lockout_confirm_input_placeholder',
+    'runtime_lockout_confirm_button', 'runtime_lockout_cancel_label',
+    'runtime_feature_error_confirmation_required',
     'runtime_tunable_edit_label', 'runtime_tunable_save_label',
     'runtime_tunable_cancel_label', 'runtime_tunable_reset_label',
     'runtime_tunable_type_integer', 'runtime_tunable_type_decimal',
@@ -2664,20 +2708,37 @@ RegisterNUICallback('tablet:runtimeListFeatures', function(_, cb)
     cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeListFeatures')))
 end)
 
+--- `data.confirm`, when present, MUST equal the feature's own `name`
+--- EXACTLY for server/runtimecontrol.lua to accept a change to a
+--- `lockoutRisk` feature -- see this file's own NUI CONTRACT note "THE
+--- LOCKOUT-RISK CONFIRMATION GATE" above. `nil` for every other feature
+--- (ignored entirely server-side) -- this file does not require it, does
+--- not check it against `data.name` itself, and does not decide
+--- authorization here; it only forwards whatever the page sent, exactly as
+--- received, to the one real gate.
 RegisterNUICallback('tablet:runtimeSetFeature', function(data, cb)
     if type(data) ~= 'table' or type(data.name) ~= 'string' or data.name == '' or type(data.value) ~= 'boolean' then
         cb({ ok = false, error = 'invalid_args' })
         return
     end
-    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeSetFeature', data.name, data.value)))
+    if data.confirm ~= nil and type(data.confirm) ~= 'string' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeSetFeature', data.name, data.value, data.confirm)))
 end)
 
+--- Same `confirm` contract as tablet:runtimeSetFeature above.
 RegisterNUICallback('tablet:runtimeResetFeature', function(data, cb)
     if type(data) ~= 'table' or type(data.name) ~= 'string' or data.name == '' then
         cb({ ok = false, error = 'invalid_args' })
         return
     end
-    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeResetFeature', data.name)))
+    if data.confirm ~= nil and type(data.confirm) ~= 'string' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeResetFeature', data.name, data.confirm)))
 end)
 
 RegisterNUICallback('tablet:runtimeListTunables', function(_, cb)

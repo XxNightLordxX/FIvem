@@ -202,24 +202,29 @@
     anywhere in this file or its own tests).
 
     ======================================================================
-    INTEGRATION HANDOFF -- PARTIALLY CLOSED (GAP 1 closure).
+    INTEGRATION HANDOFF -- FULLY CLOSED (GAP 1 closure).
     ======================================================================
 
     `GetK9EffectiveMultipliers` exists, is fully validated, fully audited,
     and fully unit-tested -- it originally had NO consumer outside this
-    file's own tests. That is now PARTIALLY WIRED, from THIS file's own
-    side of the seam, since `GetK9EffectiveMultipliers` is now a
-    resource-global (see its own updated doc comment above) so
-    server/progression.lua can call it:
+    file's own tests. Every consumer identified below is now WIRED, from
+    THIS file's own side of the seam, since `GetK9EffectiveMultipliers` is a
+    resource-global (see its own updated doc comment above) that
+    server/progression.lua, server/xptiers.lua, server/tracking.lua and
+    server/exports.lua all now call:
 
       * server/progression.lua's `GetXPTierMedkitCooldownMs(citizenid,
         baseCooldownMs)` -- WIRED. Now consults
         `GetK9EffectiveMultipliers(citizenid).medkitCooldownMultiplier`
         (soft-guarded, `type(...) == 'function'`) instead of reading
         `GetXPTier(citizenid).medkitCooldownMultiplier` raw, so a hand-tuned
-        dog's medkit cooldown reflects its override the moment
-        server/medkit.lua's own already-reported, still-unapplied one-line
-        integration (that file is not touched here) calls this accessor.
+        dog's medkit cooldown reflects its override. CORRECTED (this pass,
+        coder-backend): this bullet used to describe server/medkit.lua's own
+        call site as "already-reported, still-unapplied" -- re-verified
+        false by direct read. server/medkit.lua's HandleUseK9Medkit now
+        calls `GetXPTierMedkitCooldownMs(targetCitizenid, baseCooldownMs)`
+        (soft-guarded the same way) before checking `MedkitCooldown.IsOnCooldown`,
+        so the integration is applied, not merely accessor-ready.
       * The server->client `qbx_k9unit:client:xpTierChanged` snapshot push
         -- WIRED, in server/progression.lua (`PushTierSnapshot` / its new
         `BuildEffectiveTierSnapshot` helper). The payload now carries
@@ -251,21 +256,25 @@
         RefreshOverrideCache() call, soft-guarded and pcall-wrapped. This is
         what makes the effect genuinely LIVE, not merely "correct the next
         time something else happens to push a snapshot."
-        REMAINING, DISCLOSED BOUNDARY: a live edit made through
-        server/xptiers.lua's own tier EDITOR (changing a whole RANK's
+        CORRECTED (this pass, coder-backend): this boundary used to be
+        DISCLOSED as remaining -- re-verified false by direct read.
+        server/xptiers.lua's own tier EDITOR push (changing a whole RANK's
         speed/scent, as opposed to one individual K9's override, or an
-        XP-driven crossing/login) pushes through a SEPARATE channel
-        (`server/xptiers.lua:806`) that does not compose this file's own
-        override at all -- not fixed here, since it requires editing
-        server/xptiers.lua.
+        XP-driven crossing/login) is now ALSO WIRED: its own
+        `ComposeEffectiveXPTierSnapshot` helper composes this file's
+        `GetK9EffectiveMultipliers` onto the post-edit tier snapshot before
+        `PushRefreshedSnapshotsAfterEdit` sends it, with the same
+        soft-guarded, pcall'd fallback convention as every other consumer
+        below -- see that file's own doc comment on
+        `ComposeEffectiveXPTierSnapshot` for the full trace.
       * server/tracking.lua's own SERVER-SIDE scent-range consumer
-        (`GetXPTier(trackerCitizenid).scentRangeMultiplier`, used for a
-        real, live search-radius calculation) -- STILL NOT WIRED, since
-        server/tracking.lua is not touched here. The one-line fix is
-        `local effective = GetK9EffectiveMultipliers(trackerCitizenid);
-        local scentMult = (effective and effective.scentRangeMultiplier) or
-        tier.scentRangeMultiplier` in place of the raw tier read at that
-        file's own maxRange calculation -- reported, not applied.
+        (used for a real, live search-radius calculation) -- ALSO WIRED
+        (re-verified false by direct read; this bullet used to say STILL
+        NOT WIRED). That file's own `findTrackableSource` now resolves
+        `scentRangeMultiplier` through `GetK9EffectiveMultipliers`, with a
+        fallback to the raw `GetXPTier` read when that global is
+        unavailable -- see that file's own "INDIVIDUAL-OVERRIDE FIX"
+        comment for the full trace.
 
     Net effect, stated plainly, TRACED END TO END (not merely exposed and
     unit-tested -- see this file's own k9profiles_spec.lua and
@@ -286,13 +295,18 @@
       -> which calls SetPedMoveRateOverride on that K9's own ped.
     That last native call is the real, in-game, player-visible effect --
     every link in this chain was read to confirm it, not assumed from an
-    accessor existing. Its MEDKIT-COOLDOWN component is wired all the way
-    to the one remaining ready-to-apply patch in server/medkit.lua (that
-    file is not edited here; the accessor itself, not its one caller, is
-    what this file owns). Its SCENT-RANGE component is not yet visible
-    anywhere a player could observe it, because its one real consumer
-    (server/tracking.lua) is server-side, in a file not edited here --
-    disclosed above, not silently dropped.
+    accessor existing. CORRECTED (this pass, coder-backend): this paragraph
+    used to describe the MEDKIT-COOLDOWN component as wired only "to the one
+    remaining ready-to-apply patch in server/medkit.lua" and the
+    SCENT-RANGE component as "not yet visible anywhere a player could
+    observe it" -- both re-verified false by direct read. server/medkit.lua's
+    HandleUseK9Medkit now calls GetXPTierMedkitCooldownMs (which itself
+    calls GetK9EffectiveMultipliers) before its cooldown check, so the
+    MEDKIT-COOLDOWN component is player-visible end to end. server/tracking.lua's
+    findTrackableSource now resolves scentRangeMultiplier through
+    GetK9EffectiveMultipliers too, so the SCENT-RANGE component is likewise
+    player-visible (a genuinely wider search/detection range), not merely
+    stored and audited.
 ]]
 
 -- ======================================================================

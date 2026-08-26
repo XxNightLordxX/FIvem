@@ -278,7 +278,7 @@
     any current ox_inventory install).
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 4.
+    EVENT/CALLBACK CONTRACT.
 
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:openK9Inventory' (targetNetId: number)

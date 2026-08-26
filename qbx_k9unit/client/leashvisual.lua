@@ -198,17 +198,21 @@
                                        a rendered rope on ANY client the moment either ped
                                        stops resolving/existing, whether or not (a) ever fired
                                        for that particular client.
-      - Either player dying        -- DISCLOSED GAP IN THE UNDERLYING MECHANIC, confirmed by
-                                       reading server/main.lua in full before writing this file:
-                                       there is no death-triggered auto-detach in LeashPairs at
-                                       all (no wasted/death handler touches it). Not fixed here
-                                       (not this file's ownership; reported separately) -- but
-                                       this file's own visual/prop cleanup does NOT depend on
-                                       the mechanic ever detaching: the death-poll below clears
-                                       this client's own contribution (statebag write and/or
-                                       handle prop) directly on IsEntityDead(), and the
-                                       liveness pass tears down every OTHER client's rendered
-                                       rope the same way, independent of LeashPairs.
+      - Either player dying        -- CORRECTED (this pass): this row used to disclose a gap in
+                                       the underlying mechanic -- "there is no death-triggered
+                                       auto-detach in LeashPairs at all" -- that has since been
+                                       closed: server/main.lua's ForceDetachLeashForSource is now
+                                       also called from a dedicated death-poll thread there
+                                       (`IsLeashPartyDead`, LEASH_DEATH_CHECK_INTERVAL_MS --
+                                       confirmed by reading that file), so a death now does
+                                       broadcast leashDetached the same as a manual detach.
+                                       Independent of that server-side fix, this file's own
+                                       visual/prop cleanup never depended on the mechanic
+                                       detaching anyway: the death-poll below clears this
+                                       client's own contribution (statebag write and/or handle
+                                       prop) directly on IsEntityDead(), and the liveness pass
+                                       tears down every OTHER client's rendered rope the same
+                                       way, independent of LeashPairs.
       - Resource stop              -- onResourceStop below runs BOTH: this client's own
                                        statebag/prop cleanup (unconditionally, whichever role
                                        it was playing) and deletion of every rope THIS client

@@ -28,7 +28,7 @@
     compare server/combat.lua's own "NPC-TARGET NATIVE EXECUTION CONTEXT"
     section for the same kind of honest deviation writeup):
 
-    1. "Reuses Phase 2's server/tracking.lua damage-event log" (DEVELOPER_REFERENCE.md
+    1. "Reuses server/tracking.lua's damage-event log" (DEVELOPER_REFERENCE.md
        §12.1's 3e row, §12.2's `hostileLookbackSeconds` comment) is WRONG
        about what that log actually contains. Read server/tracking.lua in
        full before writing this file: `relayDamageEvent` is payload-less BY

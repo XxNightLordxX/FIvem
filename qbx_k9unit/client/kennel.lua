@@ -444,10 +444,19 @@ end)
 --- own doc comment), but kept as belt-and-suspenders in case some future
 --- caller/admin action ever deletes a kennel out from under an occupant
 --- anyway: this client must never depend on that never happening.
+---
+--- GATE THE START OF A THING, NEVER THE STOP (same doctrine as the "Exit
+--- Kennel" ox_target option's own canInteract fix, this pass): the
+--- self-release above must never be skippable by a stale/toggled
+--- Config.Features.DeployableKennel reread, or the exact same
+--- future-live-config-push trap applies here too — this handler no longer
+--- rereads the flag at all. It is only ever registered while the feature
+--- was on at THIS file's own load time (the REGISTRATION-TIME FEATURE GATE
+--- further down already covers "genuinely inert with the feature off from
+--- the start"); nothing below needs, or should have, a second, live check.
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:client:removeKennel', function(netId)
     if source ~= 65535 then return end -- SOURCE-ORIGIN GUARD, see client/combat.lua's own header block
-    if not Config.Features.DeployableKennel then return end
     if type(netId) ~= 'number' then return end
 
     if restState and restState.kennelNetId == netId then

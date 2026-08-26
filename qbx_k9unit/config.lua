@@ -1360,7 +1360,7 @@ Config.XPTiers = {
 }
 
 -- ======================================================================
--- PHASE 4 — XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
+-- XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
 -- Per-action award VALUES that accumulate toward Config.XPTiers' thresholds
 -- above (that table was drafted early and sat unused until this pass).
 -- DEVELOPER_REFERENCE.md §13.4.1 — the exact award-action list (searchContrabandFound/
@@ -1530,7 +1530,7 @@ Config.FindAlerts = {
 }
 
 -- ======================================================================
--- PHASE 2 — TRACKING (scent / blood / gunpowder). Ranges in meters, ages/
+-- TRACKING (scent / blood / gunpowder). Ranges in meters, ages/
 -- time windows in seconds. Each trail TYPE is independently gated by its
 -- own Config.Features flag (ScentTracking / BloodTracking /
 -- GunpowderSniffing) — these tuning tables only take effect for whichever
@@ -1680,7 +1680,7 @@ Config.WaterTrackingDecay = {
 }
 
 -- ======================================================================
--- PHASE 2 — SEARCH ZONES & CONTRABAND. Item names below must match real
+-- SEARCH ZONES & CONTRABAND. Item names below must match real
 -- ox_inventory item names on the target server -- PLACEHOLDER list, needs
 -- a config-validator/economy review before this ships for real. Item
 -- WEIGHT for tier computation is read live from ox_inventory's own item
@@ -1711,7 +1711,7 @@ Config.SearchZones = {
 }
 
 -- ======================================================================
--- PHASE 2 — DOOR INTERACTION (nudge-open / scratch-to-alert). See §11.6
+-- DOOR INTERACTION (nudge-open / scratch-to-alert). See §11.6
 -- for why "nudge-open" is conditioned on the target server having a
 -- separate door-lock resource, and why it's scoped client-only (mirrors
 -- the vehicle-entry-exit "no real capability granted" exception in §4.1).
@@ -1723,7 +1723,7 @@ Config.DoorInteraction = {
 }
 
 -- ======================================================================
--- PHASE 2 — VISION (thermal / night). Both are native-toggle keybinds, no
+-- VISION (thermal / night). Both are native-toggle keybinds, no
 -- custom shader/asset -- see §11.6 for the exact natives confirmed/refined
 -- against DEVELOPER_REFERENCE.md §7's original claim.
 -- ======================================================================
@@ -1741,7 +1741,7 @@ Config.Vision = {
 }
 
 -- ======================================================================
--- PHASE 3 — COMBAT & ADVANCED AGILITY (DEVELOPER_REFERENCE.md §12.2).
+-- COMBAT & ADVANCED AGILITY (DEVELOPER_REFERENCE.md §12.2).
 --
 -- UPDATE (coder-security, this pass): DEVELOPER_REFERENCE.md §12.0 item 8 (the
 -- client-relay/non-cooperating-target-client architecture question) is now
@@ -2021,7 +2021,7 @@ Config.Combat = {
 }
 
 -- ======================================================================
--- PHASE 3 — HANDLER/K9 PARTNERSHIP REGISTRY (Config.Features.HandlerPartnership,
+-- HANDLER/K9 PARTNERSHIP REGISTRY (Config.Features.HandlerPartnership,
 -- server/partnership.lua + client/partnership.lua). DEVELOPER_REFERENCE.md §12.0
 -- item 7 (Revision 5, coder-architect) / §12.3's file-plan entry.
 --
@@ -2377,7 +2377,7 @@ Config.AdvancedBarkRadial = {
 }
 
 -- ======================================================================
--- PHASE 4 — K9 INVENTORY (ox_inventory stash). Backs
+-- K9 INVENTORY (ox_inventory stash). Backs
 -- Config.Features.K9Inventory (still `false` above, per this resource's
 -- "ship disabled until acceptance criteria are fully met" convention).
 -- See DEVELOPER_REFERENCE.md §13.4.2 for the full security-critical integration
@@ -2442,7 +2442,7 @@ Config.K9Inventory = {
 }
 
 -- ======================================================================
--- PHASE 4 — K9 MEDKIT (Config.Features.K9Medkit).
+-- K9 MEDKIT (Config.Features.K9Medkit).
 -- DEVELOPER_REFERENCE.md §13.4.4/§13.2. Item consumption + heal validation live in
 -- server/medkit.lua; see that file's header for the full security-critical
 -- writeup (mirrors server/search.lua's contraband-search trust boundary,
@@ -2475,7 +2475,7 @@ Config.K9Medkit = {
 }
 
 -- ======================================================================
--- PHASE 4 — K9 WELLBEING (Config.Features.FatigueSystem / MoodSystem /
+-- K9 WELLBEING (Config.Features.FatigueSystem / MoodSystem /
 -- FearStressSystem / DistractionSystem / InjuryLimping). DEVELOPER_REFERENCE.md
 -- §13.0 Decision 1 / §13.2 / §13.4.3: ONE shared config table, ONE shared
 -- server/wellbeing.lua + client/wellbeing.lua pair, ONE shared per-citizenid

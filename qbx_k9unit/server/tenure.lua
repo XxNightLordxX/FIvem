@@ -1271,7 +1271,7 @@ end
     5. .luacheckrc `globals` ENTRY (repo root) -- only needed IF/WHEN
        GetPartnershipTenureProgress (this file, currently `local`) is
        promoted to a bare global for a future direct Lua-level consumer
-       beyond the callback this pass already ships, or if
+       beyond the callback this file already ships, or if
        RecordPartnershipActivity (item 2 above) is built:
 
            -- server/tenure.lua -- partnership-tenure progression reads.
