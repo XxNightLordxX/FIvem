@@ -283,6 +283,23 @@ designed but have an edge worth knowing about before you rely on them.
   off. If you've never heard of that convar, this tool isn't running on
   your server.
 
+- **Hunger/Thirst's "Drink from Bowl" world-prop model (`'water_bowl'`) is
+  an unverified guess, and if it's wrong the option just never appears —
+  with no error, anywhere.** `Config.Wellbeing.Thirst.bowlSources` ships
+  `{ 'water_bowl' }`, the same disclosed-risk shape
+  `Config.Wellbeing.Fatigue.restSources` already carries for its own rest
+  props. If that model name doesn't match anything in your world, the
+  ox_target "Drink from Bowl" entry silently never shows up on anything —
+  a scan that matches nothing looks identical to a K9 that's never near a
+  bowl, so there's nothing to notice or debug. This does **not** affect
+  the rest of Thirst: `giveK9Water` (the carried-item path, `/k9drink`)
+  works fully regardless, with no model dependency at all. Confirm a real
+  bowl prop's model name on your own server (or add it alongside the
+  existing guess) before assuming this option is reachable. Also see
+  `Config.Features.HungerThirstSystem`'s own comment in `config.lua` for
+  the second placeholder this feature ships with (`k9_food`/`k9_water`
+  item names).
+
 ---
 
 ## 3. Fixed — worth remembering

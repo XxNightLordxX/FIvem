@@ -1781,6 +1781,74 @@ t.test('OWNER DIRECTIVE: Config.CertificationExpiryDays / CertificationExpiryWar
     t.equals(r2.reason, 'out_of_range')
 end)
 
+-- ============================================================================
+-- OWNER-EDITABLE CEILING (Config.MaxSpeedScentMultiplier, Part A). This
+-- file's own PursuitSprint.speedMultiplier TUNABLE_REGISTRY entry used to
+-- hardcode `max = 3.0`; it is now `max = ResolveMaxSpeedScentMultiplier()`,
+-- resolved fresh from config.lua at THIS file's own load time -- the SAME
+-- setting server/xptiers.lua/server/k9profiles.lua each read through their
+-- own identical resolver (see this file's own copy, declared immediately
+-- above TUNABLE_REGISTRY, for the "no cross-file `local` import mechanism"
+-- writeup).
+-- ============================================================================
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: against the REAL config.lua (Config.MaxSpeedScentMultiplier = 10.0), PursuitSprint.speedMultiplier accepts 10.0 and rejects 10.01', function()
+    local f = bootAgainstRealConfig()
+    local ok1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'PursuitSprint.speedMultiplier', 10.0)
+    t.isTrue(ok1.ok, tostring(ok1.reason))
+    t.equals(f.env.Config.PursuitSprint.speedMultiplier, 10.0)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local rejected = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'PursuitSprint.speedMultiplier', 10.01)
+    t.isFalse(rejected.ok)
+    t.equals(rejected.reason, 'out_of_range')
+    t.equals(rejected.max, 10.0, 'the reported ceiling in the rejection itself must be the REAL config.lua value (10.0), not a stale hardcoded 3.0')
+end)
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: Config.MaxSpeedScentMultiplier = 5.0 accepts 4.9 and rejects 5.1', function()
+    local f = bootAgainstRealConfig({ maxSpeedScentMultiplier = 5.0 })
+    local ok1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'PursuitSprint.speedMultiplier', 4.9)
+    t.isTrue(ok1.ok, tostring(ok1.reason))
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local rejected = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'PursuitSprint.speedMultiplier', 5.1)
+    t.isFalse(rejected.ok)
+    t.equals(rejected.reason, 'out_of_range')
+    t.equals(rejected.max, 5.0)
+end)
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: a simulated reboot at Config.MaxSpeedScentMultiplier = 50.0 now accepts 40.0 (would have been rejected under the old hardcoded 3.0, and under the real config.lua\'s own 10.0 default)', function()
+    local f = bootAgainstRealConfig({ maxSpeedScentMultiplier = 50.0 })
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'PursuitSprint.speedMultiplier', 40.0)
+    t.isTrue(result.ok, tostring(result.reason))
+    t.equals(f.env.Config.PursuitSprint.speedMultiplier, 40.0)
+end)
+
+t.test('CEILING: 0, negative, NaN, infinity and a string are each rejected at a NON-DEFAULT ceiling too, and the call never errors (pcall)', function()
+    local f = bootAgainstRealConfig({ maxSpeedScentMultiplier = 5.0 })
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -1, nan, math.huge, -math.huge, 'not a number' }) do
+        f.fakeNow.value = f.fakeNow.value + 2000
+        local ok, result = pcall(f.callbacks['qbx_k9unit:server:runtimeSetTunable'], HC_SOURCE, 'PursuitSprint.speedMultiplier', bad)
+        t.isTrue(ok, ('must never throw for speedMultiplier = %s'):format(tostring(bad)))
+        t.isFalse(result.ok)
+    end
+end)
+
+t.test('CEILING: Config.MaxSpeedScentMultiplier missing/invalid on a REAL boot still falls back to 10.0 with a named warning (real config.lua always ships a valid value today, so this proves the resolver itself, not merely today\'s shipped number)', function()
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -5, nan, math.huge, -math.huge, 'not a number' }) do
+        local f = bootAgainstRealConfig({ maxSpeedScentMultiplier = bad })
+        local found = false
+        for _, line in ipairs(f.printedLines) do
+            if line:find('Config.MaxSpeedScentMultiplier', 1, true) and line:find('10', 1, true) then found = true end
+        end
+        t.isTrue(found, ('Config.MaxSpeedScentMultiplier = %s must print a named warning and fall back to 10.0'):format(tostring(bad)))
+        local accepted = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'PursuitSprint.speedMultiplier', 10.0)
+        t.isTrue(accepted.ok, ('Config.MaxSpeedScentMultiplier = %s must still fall back to accepting 10.0, not disable the file'):format(tostring(bad)))
+    end
+end)
+
 t.test('NON-NEGOTIABLE, THE SINGLE MOST IMPORTANT CHECK IN THIS FILE: no TUNABLE_REGISTRY entry may ever reach Config.Departments or Config.HighCommand.allowSelfGrant -- widening what high command may EDIT must never create a path to widening WHO COUNTS AS high command', function()
     local f = bootAgainstRealConfig()
     local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
