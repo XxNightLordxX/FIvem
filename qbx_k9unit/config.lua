@@ -48,6 +48,38 @@ Config = {}
 -- feature off in `Config.Features` instead, or set the cooldown to
 -- something very small like 1.
 --
+-- HEARD A PLAYER SAY "THE DOG'S ENERGY RUNS OUT TOO FAST"? Search this file
+-- for `Fatigue` -- that is this resource's own tiredness stat, inside
+-- Config.Wellbeing below. If what they actually mean is that the dog cannot
+-- SPRINT for as long as they would like, that same block also controls the
+-- game's own separate Stamina bar -- search for `nativeStaminaRestorePercent`.
+-- Two different systems, deliberately living in the same table; the comments
+-- there explain which is which.
+--
+-- ANOTHER TRAP WORTH KNOWING BEFORE YOU EDIT ANYTHING: a setting that high
+-- command has EVER changed from the K9 Command Tablet's Settings screen
+-- keeps winning over whatever you type into THIS file, across every future
+-- restart, until someone resets that exact setting from the tablet. This
+-- file is only the STARTING point the first time a feature or number is
+-- ever touched from the tablet; after that, the tablet's saved value is
+-- what the server actually uses, and editing config.lua for that one
+-- setting again silently does nothing.
+--
+-- WHY: deliberate, not a bug. It is what lets high command tune the server
+-- live without a restart, and it stops a routine config update quietly
+-- undoing a change they made on purpose. But it does mean a config.lua edit
+-- can look like it "did not work" for a reason that has nothing to do with
+-- a typo or a bad value.
+--
+-- HOW TO TELL: the server console says so at startup. Any setting where a
+-- saved tablet change disagrees with this file is named there by name, with
+-- both values. You can also open the tablet's Settings screen (high command
+-- only) and look at the row itself.
+--
+-- HOW TO UNDO IT: on that Settings screen, reset that one setting. That
+-- removes the saved change and makes config.lua authoritative for it again.
+-- No tablet access yourself? Ask whoever holds High Command to reset it.
+--
 -- THE ONE TO KNOW ABOUT: `Config.Features` is the master list of on/off
 -- switches, right below this. Almost every entry there has its own settings
 -- table further down with the same name -- turn something on there, then
@@ -119,7 +151,16 @@ Config = {}
 --   Config.SARCalls ................. missing-person and rescue calls
 --
 -- LOOK, SOUND AND FEEL
---   Config.Wellbeing ................ tiredness, mood, fear, injury
+--   Config.Wellbeing ................ tiredness (players may say "energy",
+--                                   "stamina" or "sprint"), mood, fear,
+--                                   injury. TWO separate energy systems
+--                                   live inside this one block: this
+--                                   resource's own Fatigue stat, and the
+--                                   game's own built-in Stamina bar
+--                                   (search this file for
+--                                   nativeStaminaRestorePercent). Both are
+--                                   explained where they live -- search for
+--                                   Fatigue to start.
 --   Config.AdvancedBarkRadial ....... the bark menu
 --   Config.ProximityAudioFX ......... hearing the dog from a distance
 --   Config.ContrabandScreenFX ....... the screen effect on a find
@@ -1062,7 +1103,8 @@ Config.CommandTablet = {
     -- and in 'item' mode that warning is escalated, because there is no
     -- command to fall back on. Four other placeholder item names in this
     -- config have the same requirement (k9_medkit, k9_treat, k9_meat_bait,
-    -- k9_ultrasonic_whistle); see the operator runbook's checklist.
+    -- k9_ultrasonic_whistle); see README.md's "Before real players touch
+    -- this" checklist for the full list and what each one is for.
     itemName = 'k9_tablet',
 
     -- NOT AN ENFORCED SWITCH -- READ BEFORE CHANGING (dead-config-field
@@ -1795,6 +1837,33 @@ Config.HandlerXP = {
 }
 
 -- ======================================================================
+-- THE REAL CEILING ON HOW MUCH XP ANYONE CAN EARN -- AND WHY IT IS NOT A
+-- SETTING IN THIS FILE.
+--
+-- Every award above, in both Config.XP.awards and Config.HandlerXP.awards,
+-- is ALSO capped by one shared "no more than this much per hour, no matter
+-- where it came from" limit per person -- currently 3,600 XP in any rolling
+-- hour, counted across both tables together. That number is not a setting
+-- here. It lives in the code, in server/progression.lua, as the constant
+-- XP_MINT_BUDGET_CAP_XP.
+--
+-- WHY THIS MATTERS TO YOU: if you raise an award above and a player who is
+-- already busy does not seem to earn any faster, this hidden ceiling is
+-- very likely why. They have already hit their hourly limit, and no single
+-- award number can push them past it. That is intentional -- it exists so
+-- that no one source of XP (including one you raise later) can outrun every
+-- other one and turn into a farm.
+--
+-- SHOULD IT BE A SETTING? Deliberately left as a code constant for now.
+-- Several of the rank thresholds and award amounts in this file were worked
+-- out by hand against this exact figure -- Config.XPTiers' own comment shows
+-- the arithmetic. Raising it from the tablet, with nothing warning you what
+-- it is attached to, could quietly invalidate all of that at once. If it is
+-- ever exposed as a setting it needs a plain warning saying so, not just a
+-- minimum and a maximum.
+-- ======================================================================
+
+-- ======================================================================
 -- CONTRABAND ALERT THRESHOLDS — Phase 2, placeholder pending
 -- config-validator/economy review against actual ox_inventory item weights.
 -- Order matters: server/search.lua walks this list and keeps the LAST tier
@@ -2264,6 +2333,22 @@ Config.Vision = {
 -- Re-diff this block against DEVELOPER_REFERENCE.md §12.2 in full if either of the
 -- above is picked up later, rather than assuming this copy stays in sync.
 -- ======================================================================
+-- IF YOU CAME HERE BECAUSE SOMEONE SAID "YOUR K9s ARE TOO STRONG" (or too
+-- weak): this is one of only TWO places in this file that complaint usually
+-- means. The other is Config.PursuitSprint, a long way further down --
+-- search this file for `Config.PursuitSprint`. That one is the short burst
+-- of extra running speed a dog gets while chasing a wanted suspect.
+--
+-- Which one you want depends on what people are actually complaining about:
+--   "the dog runs people down too easily, nobody can outrun it"
+--        -> Config.PursuitSprint, not anything below.
+--   "once the dog has hold of you, you can never get away"
+--        -> you are in the right place. Read on.
+--
+-- Every number below now says which way makes the dog stronger and which
+-- way makes it weaker, because several of them are not intuitive -- lowering
+-- a cooldown makes the dog STRONGER, and the two maxDuration settings are
+-- rare-case safety ceilings that will look like they do nothing.
 Config.Combat = {
     -- Can a K9 bite, take down or drag someone who is SITTING IN A
     -- VEHICLE? Default false -- a dog physically biting a person through
@@ -2370,6 +2455,8 @@ Config.Combat = {
     -- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
     -- balance pass, same status as every other Phase 3 tuning number here.
     PropDragging = {
+        -- HIGHER = a drag can be started from farther away (stronger). LOWER =
+        -- the dog has to be closer (weaker).
         range              = 2.5,    -- meters, self-initiated trigger range (matches BiteAndHold's)
         -- HOW LONG THIS K9 MUST WAIT BEFORE STARTING ANOTHER DRAG, in
         -- milliseconds (1000 = one second). Counts from the moment a drag
@@ -2399,8 +2486,17 @@ Config.Combat = {
         -- get longer between drags. Setting this to 0 or a negative number
         -- is refused and this default is used instead, with a warning.
         targetCooldownMs   = 20000,
+        -- HIGHER = the dog can drag somebody farther before the server steps in
+        -- and ends it (stronger). LOWER = a shorter leash on the whole drag
+        -- (weaker).
         maxDragDistance    = 30.0,   -- meters from the drag's start point before the server force-ends it. THIS is the real "no unbounded trap" enforcement — checked unconditionally in the maintenance loop, never gated behind NonComplianceDetection.enabled.
+        -- SAME CAVEAT AS Bite & Hold's maxDurationMs: a worst-case ceiling, not
+        -- the usual length of a drag -- most end when the dog lets go. Raising
+        -- it mainly affects the rare drag nobody ends manually.
         maxDragDurationMs  = 20000,  -- hard timeout if never manually released, same role as BiteAndHold's maxDurationMs
+        -- LOWER (towards 0) = the person moves even slower while being dragged,
+        -- so the dog has a firmer hold (stronger). HIGHER (towards 1.0) = they
+        -- keep more of their normal speed (weaker). 1.0 means no slowdown at all.
         dragSpeedMultiplier = 0.4,   -- Category B: applied to the TARGET's move rate while dragged. A modified client may ignore this; that is disclosed, not solved.
         -- function(targetServerId: number) -> boolean|nil, OPTIONAL.
         -- DEVELOPER_REFERENCE.md §12.0 item 6 made this a REQUIRED active config
@@ -2460,8 +2556,21 @@ Config.Combat = {
     },
 
     BiteAndHold = {
+        -- HIGHER = the dog can start a bite hold from farther away (stronger,
+        -- easier to reach a target). LOWER = it has to be closer (weaker).
         range         = 2.5,    -- meters, self-initiated trigger range
+        -- PROBABLY NOT THE SETTING YOU WANT. This is a safety ceiling, not the
+        -- usual length of a hold: nearly every hold ends long before it, when
+        -- the dog lets go. Raising it only affects the rare hold nobody ends
+        -- manually (that one runs longer -- stronger, but you will seldom see
+        -- it). Lowering it shortens that same rare case (weaker) and changes an
+        -- ordinary hold not at all. If "the dog is too strong", cooldownMs and
+        -- targetCooldownMs below are the settings that will actually move it.
         maxDurationMs = 15000,  -- hard timeout if never manually released — THIS IS the "no unbounded trap" guarantee for a non-consensual mechanic, DEVELOPER_REFERENCE.md §12.0 item 4. Never remove without an equally-hard replacement cap.
+        -- LOWER = the dog can start another bite hold sooner, so it is STRONGER.
+        -- This catches people out: reaching for a smaller number here to weaken
+        -- the dog does the opposite. HIGHER = a longer wait between attempts,
+        -- which is what actually makes it WEAKER.
         cooldownMs    = 20000,  -- per-K9 cooldown between attempts
         -- Per-target cooldown, mirroring NonLethalTakedown.targetCooldownMs
         -- below. Without it the per-K9 cooldown is the only bound, and the
@@ -2484,6 +2593,9 @@ Config.Combat = {
         -- single-stationary-target farm, it does not cap the mechanic
         -- overall, and the per-K9 cooldown was always the intended throttle
         -- for legitimate repeated use.
+        -- LOWER = the same person can be bitten again sooner (STRONGER for the
+        -- dog, rougher for them). HIGHER = they get longer between holds
+        -- (WEAKER for the dog, kinder to the person on the receiving end).
         targetCooldownMs = 35000,
         -- Default keyboard key for the "Bite & Hold / Release" TOGGLE
         -- keybind (client/keybinds.lua registers `k9bitehold` + this as its
@@ -2494,14 +2606,39 @@ Config.Combat = {
         toggleKeybind = 'B',
     },
     NonLethalTakedown = {
+        -- HIGHER = a takedown can be started from farther away (stronger).
+        -- LOWER = the dog has to be closer (weaker).
         range               = 3.0,
+        -- HIGHER = the target must be running even faster before a takedown is
+        -- allowed at all, so fewer people qualify (WEAKER, harder to use).
+        -- LOWER = a slower or nearly stationary person also qualifies
+        -- (STRONGER, easier to use).
         minTargetSpeed      = 4.0,   -- m/s, SERVER-COMPUTED from a short position-sample window at request time (see server/combat.lua's own note on why this is a bounded two-sample measurement, not a continuously-running per-ped tracker) — never a client-claimed "I am sprinting" flag. Applies identically whether the target is an NPC or a player.
+        -- NOT a strength setting. This only changes how quickly, and how
+        -- forgivingly, the speed check above makes up its mind. Leave it alone
+        -- unless you are chasing a specific case where the check fires when it
+        -- should not, or refuses when it should.
         speedSampleWindowMs = 250,   -- how long the server waits between its two position samples to compute the target's speed for the check above — UNTUNED, and itself re-validates everything (existence, proximity, already-held, eligibility) again after the wait, same TOCTOU discipline as this resource's other yielding server calls.
+        -- THIS is the real "how long does a takedown last" setting. Unlike Bite
+        -- & Hold's maxDurationMs above, this one IS the usual length, not just a
+        -- rare-case ceiling. HIGHER = the suspect stays down, and unable to be
+        -- hurt, for longer (STRONGER). LOWER = shorter (WEAKER).
         ragdollDurationMs   = 4000,  -- hard cap on BOTH the forced-ragdoll hold and the SetEntityCanBeDamaged(false) bracket — THIS IS the "no unbounded trap" guarantee for this mechanic, DEVELOPER_REFERENCE.md §12.0 item 4 (named there explicitly as "the ragdoll/damage-suppression window in NonLethalTakedown"). UNTUNED.
+        -- Cosmetic timing only -- changes how the fall LOOKS, not how strong a
+        -- takedown is.
         ragdollFallTimeMs   = 1000,  -- how long the suspect is driven into the fall animation, in ms. Source-confirmed as the duration parameter of the underlying game call. Keep it below ragdollDurationMs above -- the fall should finish inside the damage-immunity window, not outlive it. UNTUNED: dimensionally sane, but how it FEELS needs a live test.
+        -- Also not a strength setting, on top of the "may do nothing at all"
+        -- warning below.
         ragdollFallTimeP2   = 1500,  -- a second timing value the same game call takes. Honest warning: the game's own documentation says testers could not work out what it does ("didn't seem to affect anything"), so changing this may do literally nothing. Exposed anyway because it costs nothing and a live test on your build might disagree. If tuning it changes nothing, that is the expected result, not a bug.
+        -- LOWER = the dog can take somebody down again sooner (STRONGER -- not
+        -- the direction to reach for if you want a weaker dog). HIGHER = a
+        -- longer wait between takedowns (WEAKER).
         cooldownMs          = 25000, -- per-K9 cooldown
+        -- LOWER = the same person can be taken down again sooner (STRONGER).
+        -- HIGHER = they get longer in between (WEAKER).
         targetCooldownMs    = 30000, -- per-target cooldown -- stops repeat takedowns of the same already-downed target by multiple K9s in quick succession
+        -- A safety backstop, not a strength setting -- changing it will not make
+        -- takedowns feel stronger or weaker.
         healthFloor         = 100,   -- backstop only, NOT the primary non-lethal mechanism -- primary mechanism is the SetEntityCanBeDamaged bracket above
         -- Default keyboard key for the (non-toggle, one-shot) "Non-Lethal
         -- Takedown" keybind (client/keybinds.lua registers `k9takedown` +
@@ -3858,6 +3995,13 @@ Config.Database = {
 -- sprinting roughly 11% of the time -- a burst that finishes a chase
 -- already going their way, not a standing speed advantage.
 -- ======================================================================
+-- IF YOU CAME HERE FOR "YOUR K9s ARE TOO STRONG", THIS MAY BE THE WRONG
+-- BLOCK. This one covers ONLY a dog's short burst of extra running speed
+-- while chasing a wanted suspect. If what actually feels too strong is
+-- somebody being bitten, taken down or dragged and unable to escape, that
+-- is Config.Combat, a long way further up this file -- search for
+-- `Config.Combat`. Bite & Hold, Non-Lethal Takedown and Prop Dragging all
+-- live there.
 Config.PursuitSprint = {
     -- How much faster than normal, during the burst. 1.0 is no change.
     speedMultiplier = 1.4,
