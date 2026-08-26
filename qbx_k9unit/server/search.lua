@@ -1125,7 +1125,17 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- is hoisted to this outer scope (rather than staying local to the
     -- 'vehicle' branch below) because LogSearchAttempt, at the bottom of
     -- this function, needs it for the k9_search_log audit row.
+    --
+    -- `inventoryBackendName` is captured ONCE here (via K9Compat.Which,
+    -- the same public query tracking.lua's/inventory.lua's own
+    -- onResourceStart handlers already use for an identical class of
+    -- "which real resource is this" decision) and reused for both
+    -- `inventoryId`'s own derivation below AND the GetInventoryItems call
+    -- further down — never re-queried in between, so a resource
+    -- restart-triggered redetect racing this one request can never derive
+    -- `inventoryId` against one backend and then query a different one.
     local inventoryId, cooldownKey, plate
+    local inventoryBackendName = K9Compat.Which('inventory')
 
     if targetType == 'vehicle' then
         plate = GetVehicleNumberPlateText(entity)
@@ -1133,10 +1143,46 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         if not plate or plate == '' then
             return { ok = false, reason = 'invalid_target' }
         end
-        -- Confirmed against the real overextended/ox_inventory source
-        -- (DEVELOPER_REFERENCE.md#contraband-search §1): a vehicle trunk's inventory
-        -- id is literally 'trunk' .. plate.
-        inventoryId = ('trunk%s'):format(plate)
+        -- VEHICLE-TRUNK INVENTORY ID: NOT THE SAME STRING ON EVERY CONFIRMED
+        -- BACKEND — this used to be assumed to be a single, universal
+        -- 'trunk' .. plate format; it is not.
+        --
+        -- ox_inventory (CONFIRMED against the real overextended/ox_inventory
+        -- source, DEVELOPER_REFERENCE.md#contraband-search §1): a vehicle
+        -- trunk's inventory id is literally 'trunk' .. plate (no separator).
+        --
+        -- qb-inventory (CONFIRMED this pass, fetched and read directly from
+        -- qbcore-framework/qb-inventory branch `main`: client/vehicles.lua's
+        -- own `qb-inventory:client:vehicleCheck` callback builds
+        -- `local inventory = 'trunk-' .. plate` — HYPHENATED, a different
+        -- string entirely) — and, unlike ox_inventory, this identifier is a
+        -- PLAIN SCALAR key into a plain Lua table the whole way down
+        -- (server/functions.lua: `GetInventory(identifier)` returns
+        -- `Inventories[identifier]` directly; `Inventories` is populated at
+        -- this resource's own startup from a generic `SELECT * FROM
+        -- inventories` covering every persisted identifier — trunks
+        -- included — and lazily on first `OpenInventory`/`CreateInventory`
+        -- call otherwise). There is no netid-keyed lazy-vivify-from-DB
+        -- mechanism to work around the way ox_inventory's own uncached-trunk
+        -- path needs (see the `{ id, netid }` table shape below, which
+        -- exists ONLY for that ox_inventory-specific mechanism) — a
+        -- qb-inventory trunk nobody has opened this server's lifetime
+        -- legitimately has no entry yet and correctly reads as empty, not a
+        -- system failure. Passing that ox_inventory-only TABLE shape to
+        -- qb-inventory's own GetInventoryItems is what used to make vehicle
+        -- search always return empty on qb-inventory (that adapter's
+        -- GetInventoryItems fails closed to nil for ANY table-shaped `inv`,
+        -- by design — shared/compat/inventory.lua's own qb-inventory section
+        -- still does this, correctly, for every OTHER caller that might
+        -- pass one; this file simply stopped being one of them). Fixed here
+        -- by deriving the CORRECT, backend-real scalar identifier up front
+        -- and passing it as a plain scalar further down — never a guess:
+        -- both formats above are cited to a real, read source file.
+        if inventoryBackendName == 'qb-inventory' then
+            inventoryId = ('trunk-%s'):format(plate)
+        else
+            inventoryId = ('trunk%s'):format(plate)
+        end
         cooldownKey = 'vehicle:' .. plate
     else
         -- A connected player's own inventory is keyed by their live

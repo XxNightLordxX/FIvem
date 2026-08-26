@@ -55,10 +55,10 @@
       'qbx_k9unit:server:respondLeashAttach'   (Sections 4, 7-8)
       'qbx_k9unit:server:detachLeash'          (Section 9)
 
-    AddEventHandler('onResourceStart', ...), exactly 2 in this file (neither
-    is this spec's concern -- both belong to the certification-cache
-    backfill/config-safety-assert story, already this file's OWN documented
-    purpose #1, orthogonal to the leash subsystem; not fired anywhere below):
+    AddEventHandler('onResourceStart', ...), exactly 2 in this file, BOTH
+    now fired and pinned by Section 12 below (previously neither was --
+    see that section's own header for the "TODO that pointed nowhere" fix
+    this coverage accompanies):
       - the Config.DoorInteraction.nudgeRequiresUnlocked safety assert
       - the RefreshCertificationCache/k9certified-mirror backfill loop
 
@@ -79,15 +79,14 @@
     ======================================================================
 
     WHAT THIS FILE DOES NOT COVER, AND WHY:
-      - The two onResourceStart handlers (certification-cache backfill,
-        Config.DoorInteraction.nudgeRequiresUnlocked assert) -- both are
-        this file's OTHER documented responsibility (cache backfill on
-        restart), not the leash subsystem this task's brief singles out as
-        the highest-value untested surface, and both reach deep into
-        server/certifications.lua's own RefreshCertificationCache/SetMetaData
-        contract, which is that file's own spec's job, not this one's.
-        Registration is pinned (Section 1) as an inventory fact; the bodies
-        are never fired.
+      - RefreshCertificationCache's OWN internal DB-query/tier/expiry logic
+        (Section 12 below stubs it, same convention as HasK9Access/
+        IsConfiguredK9Model elsewhere in this file) -- that is genuinely
+        server/certifications.lua's own logic, already covered by its own
+        spec. Section 12 only pins server/main.lua's OWN responsibility:
+        that the backfill loop calls it, with the right arguments, for the
+        right set of already-connected players, and wires its return value
+        into the k9certified metadata mirror.
       - barkType's content/enum semantics -- DEVELOPER_REFERENCE.md and this file's own
         header both say Phase 1 treats it as an opaque passthrough string;
         Section 2 only pins length/type/cooldown/access gating, never a
@@ -199,12 +198,30 @@ local function newMainFixture(opts)
     local function HasK9Role(src) return hasRoleBySource[src] == true end
 
     local jobBySource = {} -- source -> job name, or nil = unresolved/no Player record at all
+    local citizenidBySource = {} -- source -> citizenid string, or nil = no Player record at all (Section 12's backfill loop)
+    local metaDataCalls = {} -- source -> { {key=, value=}, ... }, most recent last (Section 12: Player.Functions.SetMetaData)
     local exportsStub = {
         qbx_core = {
             GetPlayer = function(_self, src)
                 local job = jobBySource[src]
-                if not job then return nil end
-                return { PlayerData = { job = { name = job } } }
+                local citizenid = citizenidBySource[src]
+                -- No record at all (never connected/registered by this fixture)
+                -- vs. a record with no job assigned yet -- Section 12 needs to
+                -- exercise BOTH "GetPlayer returns nil" and "Player exists but
+                -- PlayerData.job is falsy", so a bare job==nil check can't be
+                -- the only gate here the way it was pre-Section-12 (every
+                -- caller before Section 12 only ever cared about the job case).
+                if not job and not citizenid then return nil end
+                return {
+                    PlayerData = { job = job and { name = job } or nil, citizenid = citizenid },
+                    Functions = {
+                        SetMetaData = function(key, value)
+                            metaDataCalls[src] = metaDataCalls[src] or {}
+                            local calls = metaDataCalls[src]
+                            calls[#calls + 1] = { key = key, value = value }
+                        end,
+                    },
+                }
             end,
         },
     }
@@ -230,7 +247,23 @@ local function newMainFixture(opts)
     local entityTypes = {} -- handle -> 1|2|3 (GetEntityType's real domain; 3 = object)
     local function GetEntityType(handle) return entityTypes[handle] or 0 end
 
-    local function GetPlayers() return {} end -- never exercised (onResourceStart bodies are never fired) -- present defensively only
+    local onlinePlayerIds = {} -- array of STRINGS (GetPlayers' real, documented return shape -- source ids as strings, tonumber'd by the backfill loop itself) -- Section 12
+    local function GetPlayers() return onlinePlayerIds end
+
+    -- Section 12 (resource-start cache backfill): server/certifications.lua
+    -- is NOT loaded into this sandbox (this file's job is main.lua's own
+    -- backfill LOOP, not RefreshCertificationCache's own DB/tier logic,
+    -- which is that file's own spec's job) -- same soft-dependency stub
+    -- convention as HasK9Access/IsConfiguredK9Model above. Keyed by
+    -- "citizenid|jobName" (both arguments the real function takes) so a
+    -- test can assert exactly which (citizenid, jobName) pair the loop
+    -- called it with, not just that it was called at all.
+    local refreshCalls = {} -- array of { citizenid=, jobName= }, call order preserved
+    local refreshResultByKey = {} -- "citizenid|jobName" -> boolean, default false (matches HasK9Access's own "no access" default posture)
+    local function RefreshCertificationCache(citizenid, jobName)
+        refreshCalls[#refreshCalls + 1] = { citizenid = citizenid, jobName = jobName }
+        return refreshResultByKey[citizenid .. '|' .. tostring(jobName)] == true
+    end
 
     local threadRunner = Sandbox.newThreadRunner() -- DoorScratchByDoorCooldown.StartSweep() runs at main.lua's OWN file-load time, unconditionally (not gated on Config.Features.DoorInteraction) -- CreateThread/Wait must exist regardless of which feature this fixture is testing
 
@@ -271,6 +304,7 @@ local function newMainFixture(opts)
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         GetPlayers = GetPlayers,
+        RefreshCertificationCache = RefreshCertificationCache,
         CreateThread = threadRunner.CreateThread,
         Wait = threadRunner.Wait,
         Config = config,
@@ -315,6 +349,26 @@ local function newMainFixture(opts)
             env.source = src
             for _, handler in ipairs(eventHandlers['playerDropped'] or {}) do
                 handler(reason)
+            end
+        end,
+        -- Section 12: registers `src` as "already connected" for GetPlayers()
+        -- AND gives exports.qbx_core:GetPlayer(src) a real-shaped record.
+        -- `jobName = nil` deliberately allowed (simulates a connected player
+        -- whose PlayerData.job hasn't resolved yet -- the backfill loop's own
+        -- `Player.PlayerData.job` guard must skip these, not error).
+        setOnlinePlayer = function(src, citizenid, jobName)
+            onlinePlayerIds[#onlinePlayerIds + 1] = tostring(src)
+            citizenidBySource[src] = citizenid
+            if jobName then jobBySource[src] = jobName end
+        end,
+        setRefreshResult = function(citizenid, jobName, active)
+            refreshResultByKey[citizenid .. '|' .. tostring(jobName)] = active
+        end,
+        refreshCalls = refreshCalls,
+        metaDataCallsFor = function(src) return metaDataCalls[src] or {} end,
+        fireOnResourceStart = function(resourceName)
+            for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
+                handler(resourceName or 'qbx_k9unit')
             end
         end,
         clearCaptures = function()
@@ -420,7 +474,7 @@ t.test('server/main.lua loads and registers exactly 5 RegisterNetEvent handlers,
     end
 end)
 
-t.test('server/main.lua registers exactly 2 onResourceStart handlers (cache backfill + config-safety assert -- neither fired by this leash-focused spec)', function()
+t.test('server/main.lua registers exactly 2 onResourceStart handlers (cache backfill + config-safety assert -- both fired and pinned by Section 12, not by this inventory-only test)', function()
     local f = newMainFixture()
     t.equals(f.eventHandlerCount('onResourceStart'), 2)
 end)
@@ -1313,8 +1367,135 @@ t.test('ephemeral by construction: a fresh module load (simulating a resource re
     t.isTrue(f1.ForceDetachLeashForSource(1), 'f1\'s real pairing still exists independently of f2')
 end)
 
+-- ========================================================================
+-- SECTION 12: resource-start certification-cache backfill (the "dangling
+-- TODO" fix). This file's own header used to say "Resource-start cache
+-- backfill (see TODO below)" -- but `grep -n TODO server/main.lua` finds
+-- only that one line, the header's own self-reference, and nothing below
+-- it. Read from the code (never from the comment, per this task's own
+-- instruction): the backfill is NOT missing. It is fully implemented, a
+-- few hundred lines further down, as the SECOND of this file's two
+-- `onResourceStart` handlers (the "STRUCTURAL GAP backfill" comment block
+-- immediately above it) -- it loops GetPlayers(), calls
+-- RefreshCertificationCache(citizenid, jobName) for every already-connected
+-- player with a resolved job, and resyncs the k9certified metadata mirror
+-- from that call's own return value. The dangling pointer is a stale
+-- self-reference left over from whenever the inline TODO comment that used
+-- to live at this handler's location was replaced by the real
+-- implementation (and its accompanying regression-test-fix commentary)
+-- without anyone updating the header's pointer to match -- i.e. this is
+-- case (a) from this task's brief ("implemented, someone deleted the TODO
+-- without updating the pointer"), not case (b) ("never implemented, the
+-- marker was lost along with the gap it flagged"). The header above has
+-- been corrected to stop pointing at a TODO that no longer exists; this
+-- section exists so that fact is pinned by a real test, not just a
+-- corrected comment -- until now, NOTHING fired either of this file's two
+-- onResourceStart handlers anywhere in this test suite (this file's own
+-- prior header disclosed skipping them; server/certifications.lua's own
+-- spec, tests/certifications_spec.lua, never loads server/main.lua at all
+-- and stubs its own unrelated GetPlayers() for a different purpose) -- so
+-- the backfill loop's actual behavior was previously unverified by any
+-- spec, resting entirely on manual code reading.
+-- ========================================================================
+
+t.test('onResourceStart backfill: an already-connected, already-job-resolved player is re-warmed via RefreshCertificationCache(citizenid, jobName) -- the exact scenario a `/restart qbx_k9unit` (or crash-restart) with players online produces', function()
+    local f = newMainFixture()
+    f.setOnlinePlayer(10, 'ABC123', 'police')
+    f.fireOnResourceStart()
+    t.equals(#f.refreshCalls, 1)
+    t.equals(f.refreshCalls[1].citizenid, 'ABC123')
+    t.equals(f.refreshCalls[1].jobName, 'police')
+end)
+
+t.test('onResourceStart backfill: resyncs the k9certified metadata mirror from RefreshCertificationCache\'s own return value -- true case', function()
+    local f = newMainFixture()
+    f.setOnlinePlayer(10, 'ABC123', 'police')
+    f.setRefreshResult('ABC123', 'police', true)
+    f.fireOnResourceStart()
+    local calls = f.metaDataCallsFor(10)
+    t.equals(#calls, 1)
+    t.equals(calls[1].key, 'k9certified')
+    t.isTrue(calls[1].value)
+end)
+
+t.test('onResourceStart backfill: resyncs the k9certified metadata mirror from RefreshCertificationCache\'s own return value -- false case (e.g. a stale, out-of-band-edited mirror that must be corrected DOWN, not just up)', function()
+    local f = newMainFixture()
+    f.setOnlinePlayer(11, 'XYZ789', 'police')
+    f.setRefreshResult('XYZ789', 'police', false)
+    f.fireOnResourceStart()
+    local calls = f.metaDataCallsFor(11)
+    t.equals(#calls, 1)
+    t.isFalse(calls[1].value)
+end)
+
+t.test('onResourceStart backfill: multiple already-connected players are each independently backfilled, in GetPlayers() order', function()
+    local f = newMainFixture()
+    f.setOnlinePlayer(10, 'AAA', 'police')
+    f.setOnlinePlayer(20, 'BBB', 'sheriff')
+    f.setRefreshResult('AAA', 'police', true)
+    f.setRefreshResult('BBB', 'sheriff', false)
+    f.fireOnResourceStart()
+    t.equals(#f.refreshCalls, 2)
+    t.equals(f.refreshCalls[1].citizenid, 'AAA')
+    t.equals(f.refreshCalls[2].citizenid, 'BBB')
+    t.isTrue(f.metaDataCallsFor(10)[1].value)
+    t.isFalse(f.metaDataCallsFor(20)[1].value)
+end)
+
+t.test('onResourceStart backfill: a connected player with no resolved job (Player.PlayerData.job falsy) is skipped -- no RefreshCertificationCache call, no metadata write, no error', function()
+    local f = newMainFixture()
+    f.setOnlinePlayer(10, 'NOJOB', nil)
+    local ok = pcall(f.fireOnResourceStart)
+    t.isTrue(ok, 'a job-less connected player must never abort this handler')
+    t.equals(#f.refreshCalls, 0)
+    t.equals(#f.metaDataCallsFor(10), 0)
+end)
+
+t.test('onResourceStart backfill: exports.qbx_core:GetPlayer returning nil (GetPlayers() named an id with no real Player record, e.g. a mid-drop race) is skipped -- no error, and does not abort processing the REST of the online player list', function()
+    local f = newMainFixture()
+    -- Simulate the "no Player record at all" case directly: an online id that
+    -- was never registered via setOnlinePlayer's citizenid/job bookkeeping,
+    -- but IS present in GetPlayers()'s own list.
+    f.setOnlinePlayer(99, nil, nil) -- citizenid AND job both nil => exportsStub.GetPlayer(99) returns nil, exactly like a real unresolved id
+    f.setOnlinePlayer(10, 'REAL', 'police') -- a genuine, resolvable player listed AFTER the unresolvable one
+    f.setRefreshResult('REAL', 'police', true)
+    local ok = pcall(f.fireOnResourceStart)
+    t.isTrue(ok, 'an unresolvable GetPlayer(src) must never abort the whole backfill loop')
+    t.equals(#f.refreshCalls, 1, 'only the genuinely resolvable player is backfilled')
+    t.equals(f.refreshCalls[1].citizenid, 'REAL')
+end)
+
+t.test('onResourceStart backfill: ignores a DIFFERENT resource starting (GetCurrentResourceName mismatch) -- zero RefreshCertificationCache calls even with players online', function()
+    local f = newMainFixture()
+    f.setOnlinePlayer(10, 'ABC123', 'police')
+    f.fireOnResourceStart('some_other_resource')
+    t.equals(#f.refreshCalls, 0)
+    t.equals(#f.metaDataCallsFor(10), 0)
+end)
+
+t.test('onResourceStart config-safety assert: Config.DoorInteraction.nudgeRequiresUnlocked = true (the shipped default) starts fine, no error', function()
+    local f = newMainFixture()
+    local ok = pcall(f.fireOnResourceStart)
+    t.isTrue(ok, 'the shipped-safe default must never itself trip the assert')
+end)
+
+t.test('onResourceStart config-safety assert: nudgeRequiresUnlocked = false fails LOUDLY (a thrown assert), naming the field, rather than silently accepting an unsafe lockpick-bypass config', function()
+    local f = newMainFixture()
+    f.config.DoorInteraction.nudgeRequiresUnlocked = false
+    local ok, err = pcall(f.fireOnResourceStart)
+    t.isFalse(ok, 'an unsafe nudgeRequiresUnlocked value must abort resource start, not be silently accepted (config-safety guards fail loud, not silent, per this project\'s own "never abort silently" rule read the other way: a REAL safety invariant DOES get a loud abort, unlike an ordinary tunable misconfiguration)')
+    t.isTrue(tostring(err):find('nudgeRequiresUnlocked', 1, true) ~= nil, 'the error must name the offending field')
+end)
+
+t.test('onResourceStart config-safety assert: ignores a DIFFERENT resource starting -- an unsafe nudgeRequiresUnlocked value does not abort an unrelated resource\'s own start', function()
+    local f = newMainFixture()
+    f.config.DoorInteraction.nudgeRequiresUnlocked = false
+    local ok = pcall(f.fireOnResourceStart, 'some_other_resource')
+    t.isTrue(ok, 'a different resource\'s own onResourceStart must never run this resource\'s own startup assert')
+end)
+
 print('')
-print('mainserver_spec.lua coverage summary (71 cases -- run this file, do not')
+print('mainserver_spec.lua coverage summary (81 cases -- run this file, do not')
 print('grep it, per DEVELOPER_REFERENCE.md §20\'s own "count you must run" note): relayBark')
 print('(8), relayDoorScratch (11), CheckLeashEligibility\'s 8 reject reasons + happy')
 print('path + 3 K9 role/model decoupling widening cases (15), symmetric role')
@@ -1323,8 +1504,11 @@ print('request-time pending/rate-limit ordering (4), respondLeashAttach incl.')
 print('double-accept/double-decline fail-closed AND the mismatched-fromServerId')
 print('FINDING (9), TOCTOU re-validation at accept (4), detach/ForceDetach')
 print('role-awareness (7), playerDropped disconnect/id-recycling (5), ephemeral-state')
-print('+ onResourceStop FINDING (2), file-load inventory (4). See this file\'s own')
-print('header for what is deliberately NOT covered and why, and Section 7 for the')
-print('one real, disclosed production finding this pass caught.')
+print('+ onResourceStop FINDING (2), file-load inventory (4), the two onResourceStart')
+print('handlers -- cache backfill + config-safety assert, previously registered but')
+print('never fired by any spec in this suite (10). See this file\'s own header for')
+print('what is deliberately NOT covered and why, Section 7 for the one real,')
+print('disclosed production finding this pass caught, and Section 12 for the')
+print('dangling-TODO-header fix this backfill coverage accompanies.')
 
 os.exit(t.summary())

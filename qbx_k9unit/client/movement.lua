@@ -1460,19 +1460,35 @@ for model, scenario in pairs({
 end
 local K9_DOOR_SCRATCH_DEFAULT_SCENARIO = 'WORLD_DOG_BARKING_SHEPHERD' -- fallback for an unmapped/future Config.Peds model, mirrors K9_SIT_DEFAULT_SCENARIO
 
--- Placeholder sound reference for the ACTING player's own local cue, played
--- immediately on the K9 itself (distinct from the shared/broadcast alert
--- cue played on the DOOR via the playDoorScratch receiver further below).
--- Same "harmless no-op until a real asset exists" reasoning as
--- client/main.lua's BARK_SOUND_NAME/BARK_SOUND_SET — reuses the SAME
--- placeholder soundset name ('qbx_k9unit_sounds') client/search.lua's
--- contraband-alert sound already uses, rather than inventing a second
--- placeholder soundset, since neither is a real shipped audio bank yet
--- either way (DEVELOPER_REFERENCE.md §7's bark-sounds asset-gap note applies identically
--- here — this is not a zero-asset feature in the end, just not a scripting
--- blocker).
+-- Sound reference for the ACTING player's own local cue, played immediately
+-- on the K9 itself (distinct from the shared/broadcast alert cue played on
+-- the DOOR via the playDoorScratch receiver further below).
+--
+-- CORRECTED THIS PASS: earlier revisions of this comment (and the sibling
+-- DOOR_NUDGE_SOUND_NAME/playDoorScratch call sites below) called
+-- 'qbx_k9unit_sounds' a "harmless no-op until a real asset exists" the same
+-- way client/main.lua's BARK_SOUND_NAME/K9_SOUND_SET header does — true of
+-- the RAGE-audio soundset name itself (no `.awc`/`.dat54` bank named
+-- 'qbx_k9unit_sounds' ships with this resource, or ever has), but that
+-- comment stopped being the whole story once client/audio.lua's real NUI
+-- audio bridge (PlayK9Sound) shipped: client/main.lua's playBark handler,
+-- client/search.lua's contraband-alert receiver, client/scenttrail.lua,
+-- client/sarcalls.lua and client/findalert.lua ALL dual-path every one of
+-- their sound cues through PlaySoundOnNetworkEntity, which tries the dead
+-- native call AND client/audio.lua's PlayK9Sound (the one path that can
+-- actually produce sound today, once an operator drops a matching .ogg into
+-- html/sounds/). This file's three door-audio call sites (this one,
+-- DOOR_NUDGE_SOUND_NAME's NudgeDoor, and the playDoorScratch receiver
+-- further below) used to be the ONLY sound cues left in this resource that
+-- called the native PlaySoundFromEntity directly and skipped that bridge
+-- entirely — silent forever, with no path to ever change that short of
+-- editing this file again. Fixed this pass: all three now go through
+-- PlaySoundOnNetworkEntity too, for the same "silent until an operator
+-- supplies a real file, never silent-forever-by-construction" property
+-- every other cue in this resource already has. See ToAudioFileKey() in
+-- client/audio.lua for why no matching .ogg shipping yet is fine — it
+-- degrades to the same silent no-op the native call already was.
 local DOOR_SCRATCH_SOUND_NAME = 'DoorScratch'
-local DOOR_SCRATCH_SOUND_SET = 'qbx_k9unit_sounds'
 
 --- Shared implementation behind the "Scratch to Alert" ox_target option's
 --- onSelect below.
@@ -1529,17 +1545,23 @@ local function ScratchAtDoor(entity)
     local scenarioName = K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH[GetEntityModel(ped)] or K9_DOOR_SCRATCH_DEFAULT_SCENARIO
     ClearPedTasksImmediately(ped)
     TaskStartScenarioInPlace(ped, scenarioName, 0, true)
-    PlaySoundFromEntity(-1, DOOR_SCRATCH_SOUND_NAME, ped, DOOR_SCRATCH_SOUND_SET, false, 0)
+    -- Routed through the shared PlaySoundOnNetworkEntity (client/main.lua)
+    -- rather than a direct PlaySoundFromEntity call — see
+    -- DOOR_SCRATCH_SOUND_NAME's own comment above for why. Own netId, same
+    -- pattern as client/sarcalls.lua's PlayOwnPedSound/client/scenttrail.lua's
+    -- PlayPulse (both play a one-shot cue on THIS client's own ped).
+    PlaySoundOnNetworkEntity(NetworkGetNetworkIdFromEntity(ped), DOOR_SCRATCH_SOUND_NAME)
 
     TriggerServerEvent('qbx_k9unit:server:relayDoorScratch', doorNetId)
 end
 
--- Placeholder sound reference for the nudge-open cosmetic cue, played
--- locally on the ACTING player's own K9 ONLY — there is no broadcast/relay
--- of any kind for nudge (unlike DOOR_SCRATCH_SOUND_NAME above, which is
--- also played on the door itself for every OTHER client once the server
--- round-trips it back). Same "harmless no-op until a real asset exists" /
--- shared-placeholder-soundset reasoning as DOOR_SCRATCH_SOUND_NAME.
+-- Sound reference for the nudge-open cosmetic cue, played locally on the
+-- ACTING player's own K9 ONLY — there is no broadcast/relay of any kind for
+-- nudge (unlike DOOR_SCRATCH_SOUND_NAME above, which is also played on the
+-- door itself for every OTHER client once the server round-trips it back).
+-- Same "routes through PlaySoundOnNetworkEntity, same as everything else in
+-- this resource" fix as DOOR_SCRATCH_SOUND_NAME above — see that constant's
+-- own comment for the full "CORRECTED THIS PASS" writeup.
 local DOOR_NUDGE_SOUND_NAME = 'DoorNudge'
 
 -- Feel/tuning knob for the cosmetic push impulse below — NOT a structural
@@ -1652,7 +1674,9 @@ local function NudgeDoor(entity)
     -- force); offset (0,0,0)/component 0 = applied at the ped's own center
     -- of mass, not an off-center torque.
     ApplyForceToEntity(ped, 3, dir.x * NUDGE_IMPULSE_FORCE, dir.y * NUDGE_IMPULSE_FORCE, 0.0, 0.0, 0.0, 0.0, 0, false, true, true, false, true)
-    PlaySoundFromEntity(-1, DOOR_NUDGE_SOUND_NAME, ped, DOOR_SCRATCH_SOUND_SET, false, 0)
+    -- Routed through PlaySoundOnNetworkEntity — see DOOR_SCRATCH_SOUND_NAME's
+    -- comment above (ScratchAtDoor's identical fix, same reasoning).
+    PlaySoundOnNetworkEntity(NetworkGetNetworkIdFromEntity(ped), DOOR_NUDGE_SOUND_NAME)
 end
 
 -- Register the "Scratch to Alert" ox_target option on nearby door-like
@@ -1792,10 +1816,17 @@ end)
 --- here, since a client should never assume a netId it receives over the
 --- network still resolves to something real by the time this fires
 --- (streamed out between broadcast and receipt is a normal, expected race,
---- not an error worth logging/notifying about). The resolve-and-guard
---- sequence itself is now client/main.lua's shared ResolveNetworkEntity()
---- (DEVELOPER_REFERENCE.md near-term item 2) — this was previously this
---- file's own independent copy of the identical sequence.
+--- not an error worth logging/notifying about).
+---
+--- CORRECTED THIS PASS: now calls client/main.lua's shared
+--- PlaySoundOnNetworkEntity() directly instead of resolving the entity here
+--- and calling the native PlaySoundFromEntity by hand — that function
+--- already performs the exact same ResolveNetworkEntity()-guarded resolve
+--- internally (DEVELOPER_REFERENCE.md near-term item 2), AND additionally
+--- dual-paths the cue through client/audio.lua's PlayK9Sound NUI bridge,
+--- same as client/main.lua's own playBark handler and every other sound cue
+--- in this resource. See DOOR_SCRATCH_SOUND_NAME's own comment above for why
+--- that bridge, not just the native call, matters here.
 --- @param doorNetId number
 RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)
     -- SOURCE-ORIGIN GUARD — see leashAttachRequest above / client/combat.lua's
@@ -1805,10 +1836,8 @@ RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)
     -- every other handler in this file, not because this one carries real
     -- exploit severity on its own.
     if source ~= 65535 then return end
-    local entity = ResolveNetworkEntity(doorNetId)
-    if not entity then return end
 
-    PlaySoundFromEntity(-1, DOOR_SCRATCH_SOUND_NAME, entity, DOOR_SCRATCH_SOUND_SET, false, 0)
+    PlaySoundOnNetworkEntity(doorNetId, DOOR_SCRATCH_SOUND_NAME)
 end)
 
 -- The ADVANCED AGILITY block (Config.Features.AgilityAdvanced's fence/

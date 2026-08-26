@@ -9,8 +9,16 @@
     mechanic explicitly (consent-based attach, elastic movement restriction
     while attached, zero-consent detach, safety-valve auto-detach —
     DEVELOPER_REFERENCE.md §6.1, §9 item 3b resolved). This file's role:
-      1. Resource-start cache backfill (see TODO below) — a structural gap
-         DEVELOPER_REFERENCE.md doesn't call out explicitly, flagged here.
+      1. Resource-start cache backfill — IMPLEMENTED below, as the second
+         of this file's two `onResourceStart` handlers (see that handler's
+         own "STRUCTURAL GAP backfill" comment for the full writeup). Not a
+         TODO: without it, an already-connected player's certification
+         cache would sit empty after a `/restart qbx_k9unit` (or
+         crash-restart) — a structural gap DEVELOPER_REFERENCE.md doesn't
+         call out explicitly, closed here. (This header used to say "see
+         TODO below" — stale, from before the backfill was written; there
+         is no TODO anywhere in this file. See tests/mainserver_spec.lua
+         Section 12 for the pinning spec.)
       2. A home for small, access-gated K9 actions that need SOME server
          authority but aren't part of the certification/permission system
          itself: bark relay, and now the leash consent handshake + the

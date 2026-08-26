@@ -182,7 +182,7 @@
 
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
-          strings = TABLET_STRINGS (currently {} -- see TODO below),
+          strings = BuildTabletStrings() (locales/en.json's `tablet` group -- see LOCALIZATION below),
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
           themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
@@ -203,17 +203,15 @@
         no further change on that file's side; html/tablet.js's own header
         documents what it does with a push arriving while hidden.
 
-    TODO, DISCLOSED NOT SILENT: `strings` ships empty. html/tablet.js's own
-    DEFAULT_STRINGS is a complete, byte-ready English fallback for every UI
-    string this page needs and is used automatically whenever a key is
-    absent from this payload -- exactly the "resilience net... until Lua
-    reliably sends every key" role its own header describes. Wiring real
-    locale() calls for that ~60-key set requires those keys to exist in
-    locales/en.json FIRST (this file cannot invent them inline, and the
-    test sandbox's locale() raises on a miss) -- requested in full, keyed
-    identically to DEFAULT_STRINGS, in this pass's own report. Functionally
-    complete today (this resource ships English only); only a
-    forward-compat gap for a future second language.
+    LOCALIZATION: `strings` ships the FULL, real, locale()-resolved set --
+    all 117 of html/tablet.js's own DEFAULT_STRINGS keys, one-for-one,
+    built by BuildTabletStrings() below from locales/en.json's `tablet`
+    group (keyed identically to DEFAULT_STRINGS, no `tablet.` prefix
+    inside that group). DEFAULT_STRINGS itself is KEPT, unchanged, in
+    html/tablet.js -- it remains the resilience net for a key this payload
+    ever fails to resolve (a misconfigured/hand-edited locale file, or a
+    future key added to one side and not the other), never removed just
+    because Lua now sends the real thing.
     ======================================================================
 
     ======================================================================
@@ -278,6 +276,76 @@ local function AwaitServerCallback(name, ...)
         return { ok = false, error = 'timeout' }
     end
     return result
+end
+
+--- Every DEFAULT_STRINGS key from html/tablet.js, in that file's own
+--- declared order -- kept as an explicit list (rather than derived from
+--- anything at runtime) so BuildTabletStrings() below and
+--- tests/tablet_strings_spec.lua both iterate the SAME set, and so a key
+--- added to html/tablet.js without a matching addition here/in
+--- locales/en.json's `tablet` group is caught by that spec instead of
+--- silently falling back to English forever. 117 keys total.
+local TABLET_STRING_KEYS = {
+    'title', 'close_label', 'tab_console', 'tab_my_record', 'loading',
+    'error_generic', 'error_not_authorized', 'error_timeout', 'error_network',
+    'retry_label', 'search_placeholder', 'refresh_label', 'empty_roster',
+    'column_name', 'column_citizenid', 'column_department', 'column_certified',
+    'column_xp', 'column_actions', 'certified_yes', 'certified_no',
+    'certify_label', 'decertify_label', 'confirm_label', 'grant_label',
+    'revoke_label', 'block_label', 'unblock_label', 'manage_label',
+    'back_label', 'givexp_label', 'givexp_placeholder', 'givexp_max_hint',
+    'self_grant_disabled_title', 'truncated_notice', 'action_working',
+    'action_failed', 'action_succeeded', 'no_certifications',
+    'my_certifications_heading', 'my_xp_heading', 'my_abilities_heading',
+    'no_abilities', 'search_features_placeholder', 'state_global_off',
+    'state_blocked', 'state_not_certified', 'state_requires_grant_missing',
+    'state_available', 'feature_column', 'status_column',
+    'person_features_heading', 'person_capabilities_heading',
+    'person_certifications_heading', 'person_xp_heading', 'xp_tier_unknown',
+    'use_label', 'not_available_short', 'opening_person',
+    'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',
+    'role_heading', 'role_model_label', 'role_assign_label',
+    'role_assign_hint', 'role_revert_label', 'role_revert_hint',
+    'role_no_peds_configured', 'tab_theme', 'theme_heading',
+    'theme_primary_label', 'theme_accent_label', 'theme_background_label',
+    'theme_text_label', 'theme_density_label', 'theme_density_comfortable',
+    'theme_density_compact', 'theme_header_title_label', 'theme_save_label',
+    'theme_reset_label', 'theme_disabled_note', 'theme_field_invalid',
+    'tab_cert_tiers', 'cert_tiers_heading', 'cert_tiers_add_label',
+    'cert_tier_key_label', 'cert_tier_key_placeholder', 'cert_tier_label_label',
+    'cert_tier_capabilities_label', 'cert_tier_no_capabilities',
+    'cert_tier_save_label', 'cert_tier_cancel_label', 'cert_tier_edit_label',
+    'cert_tier_delete_label', 'cert_tier_move_up_label', 'cert_tier_move_up_title',
+    'cert_tier_move_down_label', 'cert_tier_move_down_title', 'column_position',
+    'column_key', 'column_label', 'column_capabilities', 'cert_tier_error_denied',
+    'cert_tier_error_rate_limited', 'cert_tier_error_invalid_key',
+    'cert_tier_error_invalid_label', 'cert_tier_error_invalid_capabilities',
+    'cert_tier_error_busy', 'cert_tier_error_too_many_tiers',
+    'cert_tier_error_unknown_tier', 'cert_tier_error_protected_tier',
+    'cert_tier_error_tier_in_use', 'cert_tier_error_must_include_every_tier',
+    'cert_tier_error_invalid_key_set', 'cert_tier_error_db_error',
+    'cert_tier_error_invalid_payload',
+}
+
+--- Builds the FULL, localized `strings` payload for tablet:open, one
+--- locale() call per TABLET_STRING_KEYS entry against locales/en.json's
+--- `tablet` group (e.g. `locale('tablet.title')`). Pcall-wrapped PER KEY,
+--- matching AwaitServerCallback's own fail-safe posture just below -- a
+--- single missing/misconfigured key must never abort the whole payload or
+--- throw out of OpenTablet(); it is simply omitted, and html/tablet.js's
+--- own DEFAULT_STRINGS (kept, unchanged, in that file) covers exactly that
+--- gap for that one key, same "resilience net" role it already documents.
+--- @return table<string,string>
+local function BuildTabletStrings()
+    local strings = {}
+    for i = 1, #TABLET_STRING_KEYS do
+        local key = TABLET_STRING_KEYS[i]
+        local ok, value = pcall(locale, 'tablet.' .. key)
+        if ok and type(value) == 'string' then
+            strings[key] = value
+        end
+    end
+    return strings
 end
 
 --- The ONE place this file ever calls SetNuiFocus(false, false) -- see
@@ -356,7 +424,7 @@ function OpenTablet()
         action = 'tablet:open',
         data = {
             capabilities = Config.Permissions, -- shared config, no round trip
-            strings = {}, -- see this file's header TODO -- html/tablet.js's own DEFAULT_STRINGS covers every key until this is wired
+            strings = BuildTabletStrings(), -- locales/en.json's `tablet` group, one key per html/tablet.js's own DEFAULT_STRINGS -- see this file's header LOCALIZATION note
             maxXpPerGrant = (type(Config.HighCommand) == 'table' and type(Config.HighCommand.maxXpPerGrant) == 'number')
                 and Config.HighCommand.maxXpPerGrant or nil,
             peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role

@@ -190,14 +190,20 @@ end)
 -- through PlayK9Sound's own `data.sound` payload field)
 -- ----------------------------------------------------------------------
 
-t.test('ToAudioFileKey: the 4 known SOUND_NAME_TO_FILE_KEY entries map exactly as documented', function()
+t.test('ToAudioFileKey: the 6 known SOUND_NAME_TO_FILE_KEY entries map exactly as documented', function()
     local f = newAudioFixture()
     f.registerEntity(1, 2)
+    -- DoorScratch/DoorNudge added alongside client/movement.lua's fix
+    -- routing its door-audio cues (previously a direct, dead
+    -- PlaySoundFromEntity call only) through PlaySoundOnNetworkEntity ->
+    -- PlayK9Sound, same as every other sound cue in this resource.
     local expected = {
         Bark = 'bark',
         Bark_Alert = 'bark_alert',
         Bark_Aggressive = 'bark_aggressive',
         Bark_Calm = 'bark_calm',
+        DoorScratch = 'door_scratch',
+        DoorNudge = 'door_nudge',
     }
     for soundName, fileKey in pairs(expected) do
         f.env.PlayK9Sound(1, soundName)

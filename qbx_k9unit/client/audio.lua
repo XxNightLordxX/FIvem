@@ -216,11 +216,28 @@ local AUDIO_MAX_LOOP_MS = 60000
 --- config.lua — those strings stay exactly what they are today,
 --- unrelated to whether a real .ogg file exists yet at the key they map
 --- to here.
+---
+--- ADDED THIS PASS: 'DoorScratch'/'DoorNudge' (client/movement.lua's
+--- DOOR_SCRATCH_SOUND_NAME/DOOR_NUDGE_SOUND_NAME), now that those two call
+--- sites route through PlayK9Sound at all (see that file's own comment on
+--- DOOR_SCRATCH_SOUND_NAME for the fix this closes — they used to call the
+--- native PlaySoundFromEntity directly and never reached this file). Neither
+--- key has a shipped html/sounds/*.ogg as of this pass (only bark/
+--- bark_alert/bark_aggressive/bark_calm/growl_ambient do); listed explicitly
+--- anyway, same as the four Bark entries below, purely so the intended
+--- filename (door_scratch/door_nudge, underscored to match this table's own
+--- naming convention) is documented rather than left to ToAudioFileKey()'s
+--- best-effort fallback transform (which would guess 'doorscratch'/
+--- 'doornudge' instead — still a harmless no-op either way, just a
+--- less-obvious filename for an operator to guess when eventually adding
+--- the asset).
 local SOUND_NAME_TO_FILE_KEY = {
     ['Bark']            = 'bark',           -- client/main.lua's BARK_SOUND_NAME, the Phase 1 generic bark
     ['Bark_Alert']      = 'bark_alert',      -- config.lua's Config.AdvancedBarkRadial
     ['Bark_Aggressive'] = 'bark_aggressive', -- config.lua's Config.AdvancedBarkRadial
     ['Bark_Calm']       = 'bark_calm',       -- config.lua's Config.AdvancedBarkRadial
+    ['DoorScratch']     = 'door_scratch',    -- client/movement.lua's DOOR_SCRATCH_SOUND_NAME
+    ['DoorNudge']       = 'door_nudge',      -- client/movement.lua's DOOR_NUDGE_SOUND_NAME
 }
 
 --- Translates a RAGE-audio-style sound name into the base filename this

@@ -303,16 +303,18 @@
     var CONFIRM_WINDOW_MS = 3000;
 
     /** English fallback UI-chrome strings, keyed exactly as
-     * client/tablet.lua's `strings` map in the tablet:open payload is
-     * expected to use (see this file's header contract) -- e.g. Lua sends
-     * `strings.title = locale('k9tablet.title')`. Used ONLY when the
-     * corresponding key is missing from that payload (before
-     * client/tablet.lua wires locale() through, or if a future key is
-     * added here before the locale file catches up), so this page is
-     * never blank/broken while the three teams building this feature in
-     * parallel are still converging -- see S() below. This is a
-     * resilience net, not a permanent i18n system: once Lua reliably sends
-     * every key, this object is simply never consulted.
+     * client/tablet.lua's `strings` map in the tablet:open payload uses
+     * (see this file's header contract). client/tablet.lua's
+     * BuildTabletStrings() sends `strings.title = locale('tablet.title')`
+     * (and so on, one locale() call per key here) from locales/en.json's
+     * `tablet` group, which is kept byte-identical to this object. Used
+     * ONLY when a key is missing from that payload -- a hand-edited or
+     * out-of-sync locale file, or a future key added here before
+     * locales/*.json catches up -- so this page is never blank/broken for
+     * a single missing key -- see S() below. This is a resilience net, not
+     * a permanent i18n system: for every key currently in this object,
+     * Lua already sends the real, locale()-resolved value, and this
+     * fallback is simply never consulted.
      * @type {Record<string,string>} */
     var DEFAULT_STRINGS = {
         title: 'K9 Command Tablet',
