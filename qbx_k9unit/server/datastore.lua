@@ -212,13 +212,12 @@ local TABLE_MISSING_THIS_SESSION = {}
 -- see VerifyTableShapesAgainstKnownSchema's own header). NEVER read
 -- directly by a K9Store.* accessor -- only by
 -- K9Store.WaitForSchemaCheckToSettle() below, which every OTHER file's own
--- boot-time cache read of a table in EXPECTED_TABLE_COLUMNS (currently
--- certtiers.lua, permissionkeycatalog.lua, xptiers.lua, k9profiles.lua --
--- see that function's own doc comment for why this list is bigger than it
--- looks and how to tell if a new file needs adding to it) must call before
--- trusting its own first query -- see that function's own header for the
--- race this closes and this file's own "SCHEMA COLLISION SAFETY NET"
--- section near the bottom for the full writeup.
+-- boot-time cache read of a table in EXPECTED_TABLE_COLUMNS must call
+-- before trusting its own first query -- see that function's own doc
+-- comment for the current, authoritative caller list (kept in exactly ONE
+-- place now, not repeated here) and this file's own "SCHEMA COLLISION
+-- SAFETY NET" section near the bottom for the full writeup of the race
+-- this closes.
 local SCHEMA_CHECK_SETTLED = false
 
 --- @param tableName string? -- OPTIONAL. When given, also checks
@@ -338,11 +337,55 @@ end
 --- the schema-collision determination above is final, or until a bounded
 --- timeout elapses, whichever comes first. This is the ONE call every
 --- OTHER file's own onResourceStart handler that reads a `k9_*` table this
---- file's EXPECTED_TABLE_COLUMNS list also checks (currently
---- permissionkeycatalog.lua, xptiers.lua, equipmentshop.lua, k9profiles.lua) must make
---- BEFORE its own first K9Store.* read -- see the "BOOT-ORDER SETTLEMENT"
---- header just above for the exact race this closes.
+--- file's EXPECTED_TABLE_COLUMNS list also checks must make BEFORE its own
+--- first K9Store.* read -- see the "BOOT-ORDER SETTLEMENT" header just
+--- above for the exact race this closes.
 ---
+--- THE AUTHORITATIVE CALLER LIST (boot-order-race audit, this pass -- this
+--- comment is now the ONLY place this list is written out; every other
+--- mention of it in this file points back HERE instead of keeping its own
+--- copy, precisely because four separate hand-typed copies had already
+--- drifted out of sync with each other and with reality before this pass
+--- -- one omitted server/certtiers.lua entirely, one wrongly implied
+--- server/equipmentshop.lua already called this when it did not yet).
+--- Currently, in fxmanifest.lua server_scripts load order:
+---   server/permissions.lua        -- 2 call sites: the FeatureControl
+---     startup warning does NOT call this (no k9_* table read there), but
+---     the onResourceStart backfill loop (RefreshPermissionCache per
+---     already-connected officer) does.
+---   server/permissionkeycatalog.lua
+---   server/main.lua                -- the certification-cache backfill
+---     loop (RefreshCertificationCache, server/certifications.lua's own
+---     export) -- lives here, not in certifications.lua itself, because
+---     that is where fxmanifest.lua's own load order put the backfill.
+---   server/certtiers.lua
+---   server/partnership.lua         -- the partnership-cache backfill loop
+---     (RefreshPartnershipCache per already-connected officer).
+---   server/progression.lua         -- the XP/handler-XP cache backfill
+---     loop (LoadXPForCitizenid/LoadHandlerXPForCitizenid).
+---   server/xptiers.lua
+---   server/k9profiles.lua
+---   server/equipmentshop.lua       -- 2 call sites: the UNCONDITIONAL
+---     runtime-shop-locations boot load (runs on every boot, not gated on
+---     Config.Features.K9EquipmentShop -- the single most-exposed instance
+---     of this race in this whole resource), and
+---     ActivateEquipmentShopIfEnabled (reached from two onResourceStart
+---     handlers AND a live runtime toggle-on -- the wait lives inside that
+---     one shared function rather than at each of its three call sites).
+--- NOT on this list, deliberately: server/tenure.lua, whose only boot-time-
+--- adjacent read is a CreateThread loop that always waits at least one
+--- full tick interval (5 minutes by default, never less than
+--- SCHEMA_CHECK_WAIT_TIMEOUT_MS under any sane config) before its first
+--- real query -- structurally different from an onResourceStart handler
+--- racing this probe's own first yield, so it does not need this call (see
+--- that file's own tick-loop comment if this changes).
+--- HOW TO TELL IF A NEW FILE NEEDS ADDING: it registers its own
+--- `onResourceStart` handler (or a CreateThread loop with no meaningful
+--- delay before its first query) that reads a table in
+--- EXPECTED_TABLE_COLUMNS above, directly or through a K9Store.* accessor.
+--- If so, add it to fxmanifest.lua's own load-order comment for that file
+--- AND to this list, in the SAME change -- this list drifting is exactly
+--- the bug this paragraph exists to stop from recurring a third time.
 --- DOES NOT BLOCK INDEFINITELY, BY CONSTRUCTION: this polls
 --- SCHEMA_CHECK_SETTLED at most `SCHEMA_CHECK_WAIT_TIMEOUT_MS /
 --- SCHEMA_CHECK_WAIT_POLL_MS` times (a fixed, small number), via `Wait(...)`
