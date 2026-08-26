@@ -1311,6 +1311,82 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 end)
 
+-- ======================================================================
+-- MOVE-RATE WATCHDOG -- closes a real, verified "unbounded trap" this
+-- composer's own ANY-PED widening (the "SCOPE, CORRECTED" gate above,
+-- `IsOwnModelK9() or HasK9Access()`) opened, found while auditing that fix
+-- for a guaranteed removal path on losing the role ("close the any-ped
+-- speed-system gap" task, this pass).
+--
+-- THE GAP, CONFIRMED BY READING THE REAL CALL GRAPH, NOT ASSUMED: every
+-- caller of RecomputeK9MoveRate() other than this file's own onResourceStop
+-- handler above is itself gated behind a SERVER-PUSHED event --
+-- client/wellbeing.lua's wellbeingUpdate, client/progression.lua's
+-- xpTierChanged, client/pursuitsprint.lua's own start/tick/end calls -- and
+-- server/wellbeing.lua's own TickWellbeing (its one source for the first of
+-- those three) skips its ENTIRE per-player body, including the broadcast
+-- itself, the instant `ResolveK9Ped(source)` answers `isK9 = false` (that
+-- file's own gate, `(looksLikeK9 or holdsK9Role) and HasK9Access(source)`).
+-- Certification revocation (server/certifications.lua's RevokeCertification)
+-- sends the revoked player a plain ox_lib notify (NotifyPlayer) and NOTHING
+-- else -- no event this file, client/wellbeing.lua, or client/progression.lua
+-- listens for. Before the ANY-PED widening this was harmless: an off-model
+-- player's gate was `not IsOwnModelK9()` alone, always true for them, so
+-- RecomputeK9MoveRate() always forced 1.0 regardless of whether anything
+-- ever called it again. AFTER the widening, an off-model role-holder can
+-- carry a REAL non-1.0 rate (fatigue/injury/mood/xpTier/pursuitSprint) --
+-- and if their role/access is revoked while they stay online and off-model,
+-- NOTHING left in this resource ever calls RecomputeK9MoveRate() for them
+-- again. The override applied at the moment of revocation would otherwise
+-- persist until a full client relog or a restart of this resource -- exactly
+-- the unbounded case this task's own rules forbid, and strictly worse than
+-- the pre-widening behavior for exactly the population this widening was
+-- meant to help.
+--
+-- THE FIX: a slow, self-gating poll that re-invokes RecomputeK9MoveRate()
+-- ONLY while lastAppliedMoveRate is currently non-neutral -- i.e., only
+-- while THIS resource genuinely believes it has a real effect applied right
+-- now. This is deliberately NOT an unconditional "recompute for everyone,
+-- always" loop: HasK9Access() is a network round trip once its own 1000ms
+-- TTL cache (client/main.lua) lapses, and this poll's own interval is
+-- longer than that TTL by design (see the interval constants below) -- an
+-- unconditional loop would force a fresh server callback for EVERY
+-- connected player, forever, the overwhelming majority of whom have never
+-- touched a K9 feature at all, a real server-wide cost this design avoids
+-- by construction. Gated on the cheap, purely-local lastAppliedMoveRate
+-- comparison FIRST, so the idle case (the common case, for players who are
+-- not currently benefiting from any move-rate effect) never even reads
+-- IsOwnModelK9()/HasK9Access() at all.
+--
+-- Idles at MOVE_RATE_WATCHDOG_IDLE_MS while lastAppliedMoveRate == 1.0
+-- (nothing to watch), tightens to MOVE_RATE_WATCHDOG_ACTIVE_MS once a real
+-- effect is applied -- comparable in cadence to server/wellbeing.lua's own
+-- TICK_INTERVAL_MS default (5000ms, Config.Wellbeing.tickIntervalMs), so
+-- this does not introduce staleness meaningfully worse than what this
+-- resource already accepts elsewhere for the SAME stats while everything is
+-- working normally. Worst case, this thread is the ONLY thing that ever
+-- notices a lost role/access again: convergence to neutral happens within
+-- one MOVE_RATE_WATCHDOG_ACTIVE_MS window, never "forever."
+--
+-- Deliberately does NOT replace or duplicate any existing caller -- every
+-- one of those still applies its own change immediately, on its own event,
+-- exactly as before. This is a backstop for the specific case where no
+-- such event ever arrives again, not a replacement for any of them.
+-- ======================================================================
+local MOVE_RATE_WATCHDOG_ACTIVE_MS = 5000
+local MOVE_RATE_WATCHDOG_IDLE_MS = 15000
+
+CreateThread(function()
+    while true do
+        if lastAppliedMoveRate ~= 1.0 then
+            RecomputeK9MoveRate()
+            Wait(MOVE_RATE_WATCHDOG_ACTIVE_MS)
+        else
+            Wait(MOVE_RATE_WATCHDOG_IDLE_MS)
+        end
+    end
+end)
+
 -- NOT THE SAME QUESTION AS THE MOVE-RATE COMPOSER ABOVE, DELIBERATELY: that
 -- section's gate now includes HasK9Access() (a role check) alongside
 -- IsOwnModelK9(), because a move-rate EFFECT is something a ROLE grants.

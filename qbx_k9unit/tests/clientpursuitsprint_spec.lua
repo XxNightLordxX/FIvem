@@ -355,16 +355,36 @@ t.test('Config.Features.PursuitSprint = true: registers its own command, its own
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION B -- config-shape asserts (input edge cases: a misconfigured
--- operator's config.lua must fail LOUD at load time, not silently).
+-- SECTION B -- config-shape CLAMP AND WARN (input edge cases: a
+-- misconfigured operator's config.lua must keep this file loading -- with
+-- a loud, named warning -- not abort its load and silently un-register
+-- every PursuitSprint command/keybind/event below the bad line).
+--
+-- REGRESSION (this pass): these two tests used to assert the OPPOSITE --
+-- that a missing Config.PursuitSprint table, or an invalid speedMultiplier,
+-- FAILED THE ENTIRE FILE'S LOAD via a hard `assert`. See
+-- server/cooldowns.lua's header ADDENDUM and this file's own updated
+-- header comment for why that was the wrong remedy: an uncaught error
+-- thrown from this file's own top-level chunk (no deferring
+-- onResourceStart/RegisterNetEvent wrapper around it) would silently
+-- un-register every PursuitSprint client handler, over one operator typo.
 -- ----------------------------------------------------------------------
 
-t.test('Config.PursuitSprint missing entirely: load fails loudly with the documented assert message', function()
+t.test('Config.PursuitSprint missing entirely: no longer fails to load -- clamps every field to its shipped fallback, warns loudly, and the command/keybind still register', function()
     local runner = newTrackedRunner()
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
     local Config = { Features = { AgilityBasicJump = true, PursuitSprint = true } } -- no Config.PursuitSprint table at all
+    local registerCommandCalls, registerKeyMappingCalls = {}, {}
     local env = Sandbox.newEnv({
         Config = Config, GetHashKey = GetHashKey, CreateThread = runner.CreateThread, Wait = runner.Wait,
-        RegisterCommand = function() end, RegisterKeyMapping = function() end,
+        print = printStub,
+        RegisterCommand = function(name, handler) registerCommandCalls[#registerCommandCalls + 1] = { name = name, handler = handler } end,
+        RegisterKeyMapping = function(commandName) registerKeyMappingCalls[#registerKeyMappingCalls + 1] = { commandName = commandName } end,
         RegisterNetEvent = function() end, AddEventHandler = function() end,
         GetCurrentResourceName = function() return RESOURCE_NAME end,
         PlayerPedId = function() return 1 end, DoesEntityExist = function() return true end,
@@ -374,16 +394,46 @@ t.test('Config.PursuitSprint missing entirely: load fails loudly with the docume
     })
     Sandbox.loadInto('../client/movement.lua', env)
     local ok, err = pcall(Sandbox.loadInto, '../client/pursuitsprint.lua', env)
-    t.isFalse(ok)
-    t.contains(tostring(err), 'Config.PursuitSprint')
+    t.isTrue(ok, 'client/pursuitsprint.lua failed to load: ' .. tostring(err))
+
+    local warned = false
+    for _, line in ipairs(printLog) do
+        if line:find('Config.PursuitSprint', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must print a warning naming Config.PursuitSprint as missing')
+
+    t.equals(Config.PursuitSprint.speedMultiplier, 1.4)
+    t.equals(Config.PursuitSprint.durationMs, 5000)
+    t.equals(Config.PursuitSprint.requestRangeMeters, 20.0)
+
+    -- Filtered BY NAME, not a raw count -- client/movement.lua (loaded
+    -- first, same as every other test in this file) also registers its own
+    -- unrelated 'qbx_k9unit:toggleCamera' command/keybind into this same
+    -- shared list.
+    local registeredCommand, registeredKeyMapping
+    for _, c in ipairs(registerCommandCalls) do
+        if c.name == 'qbx_k9unit:pursuitsprint' then registeredCommand = c end
+    end
+    for _, k in ipairs(registerKeyMappingCalls) do
+        if k.commandName == 'qbx_k9unit:pursuitsprint' then registeredKeyMapping = k end
+    end
+    t.isNotNil(registeredCommand, 'qbx_k9unit:pursuitsprint must still register')
+    t.isNotNil(registeredKeyMapping, 'its keybind must still register')
 end)
 
-t.test('Config.PursuitSprint.speedMultiplier <= 0: load fails loudly', function()
+t.test('Config.PursuitSprint.speedMultiplier <= 0: no longer fails to load -- clamps to the shipped 1.4 fallback and warns loudly', function()
     local runner = newTrackedRunner()
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
     local Config = { Features = { AgilityBasicJump = true, PursuitSprint = true },
         PursuitSprint = { speedMultiplier = 0, durationMs = 200, requestRangeMeters = 10.0 } }
     local env = Sandbox.newEnv({
         Config = Config, GetHashKey = GetHashKey, CreateThread = runner.CreateThread, Wait = runner.Wait,
+        print = printStub,
         RegisterCommand = function() end, RegisterKeyMapping = function() end,
         RegisterNetEvent = function() end, AddEventHandler = function() end,
         GetCurrentResourceName = function() return RESOURCE_NAME end,
@@ -394,8 +444,17 @@ t.test('Config.PursuitSprint.speedMultiplier <= 0: load fails loudly', function(
     })
     Sandbox.loadInto('../client/movement.lua', env)
     local ok, err = pcall(Sandbox.loadInto, '../client/pursuitsprint.lua', env)
-    t.isFalse(ok)
-    t.contains(tostring(err), 'speedMultiplier')
+    t.isTrue(ok, 'client/pursuitsprint.lua failed to load: ' .. tostring(err))
+
+    local warned = false
+    for _, line in ipairs(printLog) do
+        if line:find('speedMultiplier', 1, true) and line:find('found: 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact key and the value found')
+    t.equals(Config.PursuitSprint.speedMultiplier, 1.4)
+    -- valid siblings pass through unchanged
+    t.equals(Config.PursuitSprint.durationMs, 200)
+    t.equals(Config.PursuitSprint.requestRangeMeters, 10.0)
 end)
 
 -- ----------------------------------------------------------------------

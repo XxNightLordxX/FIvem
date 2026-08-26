@@ -2,10 +2,10 @@
     tests/clientmovement_spec.lua
 
     Direct, black-box tests of client/movement.lua against the REAL,
-    unmodified production file. Per this pass's own task brief, scope is
-    deliberately concentrated on the three things named as "what matters
-    most" for this file, each of which has produced a real bug this
-    session:
+    unmodified production file. Originally scoped to three priorities named
+    as "what matters most" for this file; a fourth and fifth were added in
+    the "close the any-ped speed-system gap" pass to pin down a real,
+    previously disclosed test gap and a real, newly-found cleanup gap:
 
       1. RequestLeashAttach()'s gate -- the officer-initiated-vs-K9-initiated
          asymmetry fix (see that function's own "BUG FIX" doc comment in
@@ -14,9 +14,23 @@
       2. The THREE, distinct, non-overlapping onResourceStop handlers (camera
          view-mode reset, leash auto-detach, move-rate override reset).
       3. RecomputeK9MoveRate() -- the multiplicative composer, its clamp
-         range, and its own onResourceStop-driven reset.
+         range, its ANY-PED `IsOwnModelK9() or HasK9Access()` gate, and its
+         own onResourceStop-driven reset.
+      4. The AgilityBasicJump=false jump/crouch suppression thread -- proves
+         it stays keyed on IsEntityModelK9(PlayerPedId()) (the BODY), not
+         IsOwnModelK9() (which would incorrectly also suppress a role-holder
+         on a human body), pinning the owner's own explicit, dated decision.
+      5. The always-on move-rate WATCHDOG (added this pass) -- closes a real
+         "unbounded trap" the ANY-PED fix in #3 opened: an off-model
+         role-holder can now carry a genuine non-1.0 rate, but every OTHER
+         caller of RecomputeK9MoveRate() is gated behind a server push that
+         simply stops once role/access is lost, with no dedicated
+         "you lost K9 access" broadcast anywhere in this resource. Proves
+         the watchdog converges such a player back to neutral on its own,
+         AND that it costs nothing (no HasK9Access() network round trip) for
+         the overwhelming common case of a player with nothing to watch.
 
-    Everything else in this 1600+ line file is covered LIGHTLY or not at
+    Everything else in this 1900+ line file is covered LIGHTLY or not at
     all -- see "WHAT THIS FILE DOES NOT COVER" at the bottom for the full,
     honest list. This is a deliberate scope decision (matching this task's
     own instruction to do the named priorities well rather than everything
@@ -25,12 +39,14 @@
     FIXTURE CONFIG, NOT REAL config.lua -- per this task's explicit
     instruction: this file's own fixture builds a small, LOCAL `Config`
     table with only the one field client/movement.lua actually reads at
-    LOAD time (`Config.Features.AgilityBasicJump`, forced `true` throughout
-    this file specifically so the AgilityBasicJump-suppression CreateThread
-    branch — a jump/crouch DisableControlAction loop entirely orthogonal to
-    this spec's three priorities — never registers, so this fixture never
-    needs to stub DisableControlAction at all). This spec never loads the
-    real config.lua and asserts nothing about its shipped values, so it
+    LOAD time (`Config.Features.AgilityBasicJump`). Defaults to `true`
+    (this file's long-standing default, so every PRIORITY #1-3 test below
+    that passes no opts at all keeps meaning exactly what it always meant --
+    the AgilityBasicJump-suppression CreateThread branch never registers,
+    so those tests never need to stub DisableControlAction at all) --
+    overridable to `false` per-test via `newMovementFixture({ agilityBasicJump
+    = false, ... })`, used only by PRIORITY #4 below. This spec never loads
+    the real config.lua and asserts nothing about its shipped values, so it
     keeps passing regardless of which way config.lua's 40 feature flags are
     set on any given day. Every OTHER Config field this file reads
     (Config.LeashMaxDistance, Config.CertifyProximityMeters,
@@ -39,16 +55,18 @@
     FILE DOES NOT COVER") -- so this fixture's Config table genuinely never
     needs those fields either, not because they were forgotten.
 
-    CreateThread IS CAPTURED BUT NEVER INVOKED -- this spec only counts how
-    many threads client/movement.lua registers (a cheap sanity check that
-    the AgilityBasicJump branch really did skip its own CreateThread call
-    given the fixture's Config above, leaving exactly the one elastic
-    leash-pull-back thread), never steps or asserts on that thread's BODY.
-    That thread (softLimit/hardCap pull-back, the auto-detach safety valve)
-    is a real, disclosed gap below -- exercising it would need the same
-    Sandbox.newThreadRunner() + Vec3 + GetEntityCoords/SetEntityCoords
-    machinery combat_spec.lua/clientradial_spec.lua already use, and this
-    task's own brief did not name it as one of the three priorities.
+    CreateThread IS CAPTURED, AND OPTIONALLY STEPPABLE -- by default
+    (opts.stepThreads unset/false) this spec only counts how many threads
+    client/movement.lua registers, never steps or asserts on any thread's
+    BODY. PRIORITY #4 below opts INTO real stepping
+    (`newMovementFixture({ stepThreads = true, ... })`, backed by
+    Sandbox.newThreadRunner()) specifically to exercise the jump/crouch
+    suppression thread's body; the elastic leash pull-back thread (softLimit/
+    hardCap pull-back, the auto-detach safety valve) remains a real,
+    disclosed gap below even when stepThreads is on for a DIFFERENT test --
+    fully exercising ITS math would additionally need Vec3 + GetEntityCoords/
+    SetEntityCoords machinery combat_spec.lua/clientradial_spec.lua already
+    use, which no test in this file sets up.
 
     NOTIFICATION TYPE: 'info', NOT 'inform' -- ox_lib's real
     NotificationType union is 'info' | 'warning' | 'success' | 'error';
@@ -94,8 +112,21 @@ local RESOURCE_NAME = 'qbx_k9unit'
 --- loaded against a LOCAL fixture Config (see this file's header) plus a
 --- controllable/capturing stand-in for every native or cross-file global
 --- this spec's exercised call paths touch.
+--- @param opts { agilityBasicJump: boolean?, stepThreads: boolean? }? --
+---   agilityBasicJump defaults to `true` (this file's long-standing default,
+---   preserved for every pre-existing call site below that passes no opts
+---   at all -- see this file's header on why AgilityBasicJump=true is the
+---   default). Set to `false` to register the jump/crouch suppression
+---   thread instead (PRIORITY #4 below). stepThreads defaults to `false`
+---   (CreateThread only counted, never invoked, as before) -- set `true` to
+---   back CreateThread/Wait with Sandbox.newThreadRunner() so a registered
+---   thread's body can actually be stepped, needed only by PRIORITY #4's
+---   suppression-thread tests below.
 --- @return table fixture
-local function newMovementFixture()
+local function newMovementFixture(opts)
+    opts = opts or {}
+    local threadRunner = opts.stepThreads and Sandbox.newThreadRunner() or nil
+
     local isOwnModelK9 = true
     local canShowK9UI = true
     local function IsOwnModelK9() return isOwnModelK9 end
@@ -148,6 +179,22 @@ local function newMovementFixture()
     local function DoesEntityExist(entity) return existingEntities[entity] == true end
     local function GetEntityModel(entity) return entityModels[entity] end
 
+    -- PRIORITY #4 (AgilityBasicJump suppression thread) -- a SEPARATE
+    -- knob from IsOwnModelK9()/entityModels above on purpose: the real
+    -- production gate for this thread is `IsEntityModelK9(PlayerPedId())`,
+    -- deliberately NOT IsOwnModelK9() (owner's decision, see that thread's
+    -- own "OWNER'S DECISION, 2026-08-25: MODEL, not role" comment) -- a
+    -- role-holder on a human body must have IsOwnModelK9() able to read
+    -- `true` (role-widened) while this reads `false` (real body is human),
+    -- which a single shared table could not represent.
+    local entityModelK9 = {}
+    local function IsEntityModelK9(entity) return entityModelK9[entity] == true end
+
+    local disableControlActionCalls = {}
+    local function DisableControlAction(inputGroup, control, disable)
+        disableControlActionCalls[#disableControlActionCalls + 1] = { inputGroup = inputGroup, control = control, disable = disable }
+    end
+
     local setMoveRateCalls = {}
     local function SetPedMoveRateOverride(ped, rate)
         setMoveRateCalls[#setMoveRateCalls + 1] = { ped = ped, rate = rate }
@@ -176,14 +223,35 @@ local function newMovementFixture()
     local netEvents = {}
     local function RegisterNetEvent(eventName, handler) netEvents[eventName] = handler end
 
-    -- Captured, never invoked -- see this file's header on why the elastic
-    -- pull-back thread's BODY is a disclosed gap, not exercised here.
+    -- Captured, and invoked ONLY when opts.stepThreads is true (PRIORITY #4
+    -- and PRIORITY #5 below) -- see this file's header on why the elastic
+    -- pull-back thread's BODY specifically stays a disclosed gap
+    -- regardless. threadRunner.CreateThread captures every thread this file
+    -- registers, in registration order: (1) the elastic leash pull-back
+    -- thread (registered near the top of the file), (2) the always-on
+    -- move-rate watchdog (PRIORITY #5, unconditional -- registers
+    -- regardless of AgilityBasicJump), (3) the jump/crouch suppression
+    -- thread under test in PRIORITY #4 (registered further down still, and
+    -- ONLY when AgilityBasicJump=false). Every fixture accessor that steps
+    -- threads (PRIORITY #4/#5's `step()`) resumes ALL of them every call --
+    -- see that accessor's own doc comment below for why resuming the OTHER
+    -- threads alongside whichever one a given test is actually targeting is
+    -- safe and asserted-inert.
     local threadCount = 0
-    local function CreateThread(_fn) threadCount = threadCount + 1 end
+    local function CreateThread(fn)
+        threadCount = threadCount + 1
+        if threadRunner then threadRunner.CreateThread(fn) end
+    end
+    -- Only ever reached when threadRunner exists (CreateThread above is the
+    -- only way a thread body starts running at all in this fixture) -- a
+    -- harmless no-op otherwise, never called.
+    local function Wait(ms) if threadRunner then threadRunner.Wait(ms) end end
 
     -- See this file's header "FIXTURE CONFIG, NOT REAL config.lua" -- the
-    -- ONLY field client/movement.lua reads at load time.
-    local Config = { Features = { AgilityBasicJump = true } }
+    -- ONLY field client/movement.lua reads at load time. Defaults to `true`
+    -- (this file's long-standing default -- see newMovementFixture()'s own
+    -- doc comment above), overridable per-test via opts.agilityBasicJump.
+    local Config = { Features = { AgilityBasicJump = opts.agilityBasicJump ~= false } }
 
     local env = Sandbox.newEnv({
         GetHashKey = GetHashKey,
@@ -193,7 +261,10 @@ local function newMovementFixture()
         AddEventHandler = AddEventHandler,
         RegisterNetEvent = RegisterNetEvent,
         CreateThread = CreateThread,
+        Wait = Wait,
         IsOwnModelK9 = IsOwnModelK9,
+        IsEntityModelK9 = IsEntityModelK9,
+        DisableControlAction = DisableControlAction,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
         HasK9Access = HasK9Access,
@@ -232,6 +303,29 @@ local function newMovementFixture()
         end,
         setPedMissing = function() pedHandle = 0 end,
         setModel = function(entity, hash) entityModels[entity] = hash end,
+        setEntityModelK9 = function(entity, v) entityModelK9[entity] = v end,
+        disableControlActionCalls = disableControlActionCalls,
+        --- Resumes EVERY captured thread once (Sandbox.newThreadRunner()'s
+        --- own step() semantics). Only meaningful when this fixture was
+        --- built with opts.stepThreads = true -- see newMovementFixture()'s
+        --- own doc comment above. Registers, in this order: (1) the elastic
+        --- leash pull-back thread, (2) the always-on move-rate watchdog
+        --- (PRIORITY #5), and, ONLY when AgilityBasicJump=false, (3) the
+        --- jump/crouch suppression thread under test in PRIORITY #4.
+        --- Resuming ALL of them every call, even when a given test only
+        --- cares about one, is safe and asserted-inert for the other two:
+        --- `leashState` is never set to non-nil by any test in either
+        --- PRIORITY #4 or #5, so thread (1)'s own body short-circuits
+        --- straight to its idle Wait() without ever touching
+        --- GetEntityCoords/IsPedInAnyVehicle/any other native this fixture
+        --- does not stub; thread (2) (the watchdog) only ever does real
+        --- work while `lastAppliedMoveRate` is non-1.0, so a PRIORITY #4
+        --- test (which never touches the move-rate composer at all) always
+        --- finds it idle.
+        step = function()
+            assert(threadRunner, 'newMovementFixture(opts): step requires opts.stepThreads = true')
+            threadRunner.step()
+        end,
         registerPlayer = function(serverId, playerIndex) playerIndexByServerId[serverId] = playerIndex end,
         threadCount = function() return threadCount end,
         keyMappingCount = function() return keyMappingCount end,
@@ -295,9 +389,9 @@ t.test('registers exactly 1 onResourceStart handler (ox_target lifecycle re-regi
     t.equals(f.onResourceStartHandlerCount(), 1)
 end)
 
-t.test('creates exactly 1 thread (the elastic leash pull-back thread) given AgilityBasicJump=true in this fixture\'s Config -- proves the AgilityBasicJump-suppression thread branch really is skipped', function()
+t.test('creates exactly 2 threads (the elastic leash pull-back thread, and the always-on move-rate watchdog) given AgilityBasicJump=true in this fixture\'s Config -- proves the AgilityBasicJump-suppression thread branch really is skipped', function()
     local f = newMovementFixture()
-    t.equals(f.threadCount(), 1)
+    t.equals(f.threadCount(), 2, 'leash pull-back + move-rate watchdog (see PRIORITY #5, the watchdog is unconditional -- it registers regardless of AgilityBasicJump)')
 end)
 
 t.test('registers exactly 4 RegisterNetEvent handlers (leashAttachRequest, leashAttached, leashDetached, playDoorScratch)', function()
@@ -770,6 +864,173 @@ t.test('ANY-PED FIX: switching FROM a legitimate access-only (non-K9-model) stat
 end)
 
 -- ========================================================================
+-- PRIORITY #4 -- the AgilityBasicJump=false suppression thread, ADDED THIS
+-- PASS to close a real, previously-disclosed gap (see the former version of
+-- "WHAT THIS FILE DOES NOT COVER" below, and the "close the any-ped
+-- speed-system gap" task this session): the ANY-PED FIX above widens
+-- RecomputeK9MoveRate()'s gate to `IsOwnModelK9() or HasK9Access()` because a
+-- move-rate EFFECT is something a ROLE grants -- but this thread answers a
+-- DIFFERENT question ("does this ped's own SKELETON have a jump/crouch
+-- animation to suppress"), stays keyed on `IsEntityModelK9(PlayerPedId())`
+-- alone (a pure body/model check, never IsOwnModelK9()), and is the owner's
+-- own explicit, dated decision (see client/movement.lua's own "OWNER'S
+-- DECISION, 2026-08-25: MODEL, not role" comment on this exact thread) that
+-- a role-holder on a human body keeps jump and crouch. Nothing anywhere in
+-- this suite previously exercised this thread's body at all -- these are the
+-- first tests that do.
+-- ========================================================================
+
+t.test('AgilityBasicJump=false, real K9-modeled ped: the suppression thread disables INPUT_JUMP (22) and INPUT_DUCK (36) every step, at Wait(0)', function()
+    local f = newMovementFixture({ agilityBasicJump = false, stepThreads = true })
+    f.setEntityModelK9(1, true) -- pedHandle 1, this fixture's default PlayerPedId()
+
+    f.step() -- one full loop-body pass (Wait sits at the END of this thread's convention, see the fixture's own "step" doc comment)
+
+    t.equals(#f.disableControlActionCalls, 2, 'both controls must be disabled every pass while suppression is active')
+    t.equals(f.disableControlActionCalls[1].inputGroup, 0)
+    t.equals(f.disableControlActionCalls[1].control, 22, 'INPUT_JUMP')
+    t.equals(f.disableControlActionCalls[1].disable, true)
+    t.equals(f.disableControlActionCalls[2].control, 36, 'INPUT_DUCK')
+    t.equals(f.disableControlActionCalls[2].disable, true)
+
+    f.step() -- a second pass must re-disable both controls again -- DisableControlAction's own contract requires re-assertion every frame, it does not persist on its own
+    t.equals(#f.disableControlActionCalls, 4, 'must re-assert every single pass (Wait(0) => every frame), never assume one call is sufficient')
+end)
+
+t.test('OWNER\'S DECISION PINNED: AgilityBasicJump=false, role-holder on a HUMAN body (IsOwnModelK9 true via role, IsEntityModelK9(PlayerPedId()) false) -- jump/crouch are NEVER suppressed, proving this thread reads the body, not the role', function()
+    local f = newMovementFixture({ agilityBasicJump = false, stepThreads = true })
+    f.setIsOwnModelK9(true) -- the role-widened, "any-ped" answer -- deliberately NOT what this thread's own gate reads
+    -- f.setEntityModelK9(1, ...) deliberately left unset -- pedHandle 1's
+    -- real body stays human (entityModelK9[1] defaults falsy), exactly the
+    -- "certified handler, human body" case the owner's decision protects.
+
+    f.step()
+    f.step() -- two passes, same as the positive test above, to prove this isn't a one-shot fluke
+
+    t.equals(#f.disableControlActionCalls, 0, 'a role-holder on a human body must keep jump and crouch -- IsOwnModelK9() being true must NOT be enough to trigger suppression')
+end)
+
+t.test('AgilityBasicJump=false, plain human ped (neither role nor K9 model): also never suppressed -- the ordinary, non-K9 case must be inert exactly as it always was', function()
+    local f = newMovementFixture({ agilityBasicJump = false, stepThreads = true })
+    -- Every knob at its fixture default: isOwnModelK9 defaults true in this
+    -- file's own fixture (see newMovementFixture()'s very first local) --
+    -- flip it to false here so this test genuinely represents "not a K9 by
+    -- any measure", not an accidental duplicate of the role-holder case
+    -- above.
+    f.setIsOwnModelK9(false)
+
+    f.step()
+
+    t.equals(#f.disableControlActionCalls, 0)
+end)
+
+t.test('AgilityBasicJump=false, real K9-modeled ped losing its model mid-session (e.g. a K9-to-human PedModel swap): suppression stops on the VERY NEXT pass, no separate cleanup path needed', function()
+    local f = newMovementFixture({ agilityBasicJump = false, stepThreads = true })
+    f.setEntityModelK9(1, true)
+    f.step()
+    t.equals(#f.disableControlActionCalls, 2, 'suppressed while still K9-modeled')
+
+    f.setEntityModelK9(1, false) -- model swap -- no longer a K9 body
+    f.step()
+    t.equals(#f.disableControlActionCalls, 2, 'no NEW DisableControlAction calls once the body is no longer K9-modeled -- this thread re-reads IsEntityModelK9(PlayerPedId()) fresh every single pass, so there is nothing left to "clean up": the very next pass already stops calling DisableControlAction at all, which is itself the full removal path for this thread (unlike SetPedMoveRateOverride, DisableControlAction applies for exactly the one frame it is called on and does nothing further once simply not re-asserted)')
+end)
+
+t.test('AgilityBasicJump=true (this fixture\'s existing default): the suppression thread never registers at all, so DisableControlAction can never fire regardless of model -- confirms PRIORITY #4\'s tests above are exercising a thread that genuinely does not exist in the shipped default', function()
+    local f = newMovementFixture({ stepThreads = true }) -- agilityBasicJump omitted -> defaults true
+    f.setEntityModelK9(1, true)
+
+    f.step() -- steps whatever DID get created (the leash pull-back thread and the move-rate watchdog -- see PRIORITY #5 -- neither touches DisableControlAction)
+
+    t.equals(f.threadCount(), 2, 'leash pull-back + move-rate watchdog -- see the earlier, pre-existing "creates exactly 2 threads" sanity test; no suppression thread')
+    t.equals(#f.disableControlActionCalls, 0)
+end)
+
+-- ========================================================================
+-- PRIORITY #5 -- the always-on move-rate watchdog, ADDED THIS PASS to close
+-- a real, verified "unbounded trap": the ANY-PED FIX above (PRIORITY #3)
+-- lets an OFF-MODEL role-holder carry a genuine non-1.0 move-rate override
+-- (fatigue/injury/mood/xpTier/pursuitSprint) for the first time -- but every
+-- caller that would ever recompute it again is itself gated behind a
+-- SERVER-PUSHED event (wellbeingUpdate/xpTierChanged/pursuitSprint's own
+-- start-tick-end calls), and server/wellbeing.lua's TickWellbeing skips its
+-- entire per-player body -- broadcast included -- the instant a player's
+-- role/access is lost (confirmed by reading server/wellbeing.lua's
+-- ResolveK9Ped and its one call site in TickWellbeing). Certification
+-- revocation (server/certifications.lua) sends only a plain notify, nothing
+-- this file or any of its callers listens for. Before the ANY-PED fix this
+-- was harmless (an off-model player's OLD gate, `not IsOwnModelK9()` alone,
+-- was always true for them); after it, losing role/access while staying
+-- online and off-model would otherwise leave whatever rate was last applied
+-- in place FOREVER (until a full relog or a resource restart) -- exactly
+-- the case this task's own rules forbid, and worse than pre-fix behavior
+-- for exactly the population the fix was meant to help. See the watchdog's
+-- own header comment in client/movement.lua for the full writeup this
+-- section proves against the REAL function.
+-- ========================================================================
+
+t.test('WATCHDOG IDLE: while lastAppliedMoveRate has never left neutral, stepping the watchdog does NOT call HasK9Access() at all -- proves the common case (a player who has never triggered any move-rate effect) never pays the underlying network round trip, even though this thread runs unconditionally for every player', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setIsOwnModelK9(false) -- if the watchdog read this gate unconditionally every poll, this would force a HasK9Access() call
+
+    f.step()
+    f.step()
+
+    t.equals(f.hasK9AccessCallCount(), 0, 'the watchdog must check its own cheap local lastAppliedMoveRate FIRST, before ever reaching IsOwnModelK9()/HasK9Access()')
+    t.equals(#f.setMoveRateCalls, 0, 'no native call at all while there is genuinely nothing to watch')
+end)
+
+t.test('WATCHDOG ACTIVE: once a real non-1.0 rate is applied, stepping the watchdog re-invokes RecomputeK9MoveRate() for real -- a second, independent SetPedMoveRateOverride call with no other trigger involved', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setIsOwnModelK9(true)
+    f.env.K9MoveRateModifiers.fatigue = 0.85
+    f.env.RecomputeK9MoveRate() -- the ordinary caller path (mirrors client/wellbeing.lua) -- establishes the non-neutral baseline the watchdog must then notice
+    t.equals(#f.setMoveRateCalls, 1)
+
+    f.step() -- the watchdog thread alone, no direct RecomputeK9MoveRate() call this time
+
+    t.equals(#f.setMoveRateCalls, 2, 'the watchdog must have made its OWN, independent SetPedMoveRateOverride call')
+    t.equals(f.setMoveRateCalls[2].rate, 0.85, 'still the same real, current fatigue modifier -- the watchdog recomputes from live state, not a cached snapshot')
+end)
+
+t.test('WATCHDOG CLOSES THE GAP: OWNER-VERIFIED SCENARIO -- an off-model role-holder (IsOwnModelK9 false, HasK9Access true) carrying a real fatigue penalty has their role/access revoked WHILE NOTHING ELSE EVER CALLS RecomputeK9MoveRate() AGAIN -- the watchdog alone converges them back to neutral within one poll', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true) -- e.g. a certified handler on a human body, per the ANY-PED fix
+    f.env.K9MoveRateModifiers.fatigue = 0.85
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 0.85, 'sanity: the real effect is genuinely applied off-model, exactly as PRIORITY #3\'s ANY-PED FIX tests already prove')
+
+    -- THE REVOCATION: role/access lost. Simulates server/certifications.lua's
+    -- RevokeCertification -- no event fires client-side that this file (or
+    -- client/wellbeing.lua/client/progression.lua) listens for; the ONLY
+    -- thing that changes is what HasK9Access() will now answer the next
+    -- time anything asks it.
+    f.setHasK9Access(false)
+
+    -- No direct f.env.RecomputeK9MoveRate() call here on purpose -- proving
+    -- the watchdog itself is what notices, not a test artifact calling the
+    -- real fix function again by hand.
+    f.step()
+
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 1.0, 'THE FIX: without the watchdog this would still read 0.85 forever -- the watchdog\'s own periodic re-check is what forces the reset once neither IsOwnModelK9() nor HasK9Access() holds any longer')
+end)
+
+t.test('WATCHDOG SELF-QUIETS: once its own reset has run, a SECOND step makes no further native calls -- the idle branch takes back over instead of re-asserting 1.0 forever', function()
+    local f = newMovementFixture({ stepThreads = true })
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.env.K9MoveRateModifiers.mood = 0.9
+    f.env.RecomputeK9MoveRate()
+
+    f.setHasK9Access(false)
+    f.step()
+    t.equals(#f.setMoveRateCalls, 2, 'first watchdog pass: the reset call')
+
+    f.step()
+    t.equals(#f.setMoveRateCalls, 2, 'second watchdog pass: already neutral (lastAppliedMoveRate == 1.0) -- the idle branch takes over, exactly like the "WATCHDOG IDLE" test above, no further calls')
+end)
+
+-- ========================================================================
 -- WHAT THIS FILE DOES NOT COVER, AND WHY (per this task's own instruction
 -- to disclose uncovered paths rather than silently skip them):
 --
@@ -806,12 +1067,20 @@ end)
 --     ox_target registration functions above (only reachable through
 --     onResourceStart-registered ox_target options this spec never fires,
 --     or directly as `local`s this spec cannot reach at all).
---   - The AgilityBasicJump-suppression CreateThread branch -- this
---     fixture's Config forces Config.Features.AgilityBasicJump = true
---     specifically so this branch never registers at all (see this file's
---     header). The `false` branch (DisableControlAction(0, INPUT_JUMP/
---     INPUT_DUCK, true) every frame while IsOwnModelK9()) is entirely
---     untested here.
+--   - The AgilityBasicJump-suppression CreateThread branch -- NOW COVERED,
+--     see PRIORITY #4 above (added this pass, as part of closing the
+--     any-ped speed-system gap): newMovementFixture({ agilityBasicJump =
+--     false, stepThreads = true }) registers and actually steps this
+--     thread's body, proving it gates on IsEntityModelK9(PlayerPedId())
+--     (the body), never IsOwnModelK9() (which would incorrectly also
+--     suppress a role-holder on a human body -- the owner's own explicit,
+--     dated decision this section's own tests pin). Still not covered:
+--     the idle-poll interval itself (Wait(1000) in the non-suppressing
+--     branch) is asserted only indirectly, via DisableControlAction not
+--     firing -- this fixture's Wait stub discards its `ms` argument
+--     entirely (Sandbox.newThreadRunner()'s own contract), so the exact
+--     1000 vs. 0 distinction between the two branches is not independently
+--     verified here, only each branch's DisableControlAction behavior is.
 --   - The SOURCE-ORIGIN GUARD's open engine-level question (can `source`
 --     ever fail open to something other than 65535 on a genuine dispatch)
 --     is NOT settled by the light source-guard tests in this file, exactly

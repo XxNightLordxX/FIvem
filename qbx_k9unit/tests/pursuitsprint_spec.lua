@@ -273,10 +273,40 @@ t.test('SERVER: Config.Features.PursuitSprint = false -- registers zero events, 
     t.equals(#f.notifyLog, 0)
 end)
 
-t.test('SERVER: Config.Features.PursuitSprint = true but Config.PursuitSprint entirely missing -- fails loudly at load, not silently', function()
-    local f = newServerFixture({ pursuitSprintCfg = false, expectLoadError = true })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'Config.PursuitSprint is missing')
+-- REGRESSION (this pass): this test used to assert the OPPOSITE -- that
+-- Config.PursuitSprint being entirely missing FAILED THE ENTIRE FILE'S LOAD
+-- via a hard `assert`. That was the very last top-level assert in this
+-- file, on the theory that there was "nothing sensible to clamp/substitute
+-- for the whole table missing" -- which does not hold up: substituting an
+-- empty table lets every per-field resolver below fall back to its own
+-- already-established default, exactly like every individual-field
+-- REGRESSION test above already proves for speedMultiplier/durationMs/
+-- requestRangeMeters/cooldownMs. The file now loads, the event registers,
+-- and the feature keeps working entirely on built-in fallbacks while
+-- printing one unmissable warning.
+t.test('SERVER: Config.Features.PursuitSprint = true but Config.PursuitSprint entirely missing -- no longer aborts this file\'s load -- clamps every field to its shipped fallback, warns loudly, and the feature keeps working', function()
+    local f = newServerFixture({ pursuitSprintCfg = false })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint is missing', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must print a warning naming Config.PursuitSprint as missing')
+
+    t.equals(f.Config.PursuitSprint.speedMultiplier, REAL_SPEED_MULTIPLIER)
+    t.equals(f.Config.PursuitSprint.durationMs, REAL_DURATION_MS)
+    t.equals(f.Config.PursuitSprint.requestRangeMeters, REAL_RANGE_METERS)
+
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 5, 0, 0)
+    f.registerTargetNetId(9001, 200)
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1, 'a granted request must still succeed even though the whole settings table was missing')
 end)
 
 -- ------------------------------------------------------------------
@@ -1031,8 +1061,20 @@ local function newClientFixture(opts)
         setMoveRateCalls[#setMoveRateCalls + 1] = { ped = ped, rate = rate }
     end
 
+    -- CLAMP-AND-WARN CAPTURE -- mirrors the server fixture's own printLog
+    -- above. Needed to prove client/pursuitsprint.lua's clamp-and-warn
+    -- guard actually warns (not just "doesn't crash") without spamming real
+    -- stdout during the test run.
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
     local overrides = {
         Config = Config,
+        print = printStub,
         PlayerPedId = PlayerPedId,
         GetEntityCoords = GetEntityCoords,
         IsEntityDead = IsEntityDead,
@@ -1097,6 +1139,7 @@ local function newClientFixture(opts)
     return {
         env = env,
         Config = Config,
+        printLog = printLog,
         registerCommandCalls = registerCommandCalls,
         registerKeyMappingCalls = registerKeyMappingCalls,
         triggerServerEventCalls = triggerServerEventCalls,
@@ -1176,10 +1219,47 @@ t.test('CLIENT: Config.Features.PursuitSprint = false -- registers no pursuit-sp
     t.isNil(findByField(f.registerKeyMappingCalls, 'commandName', 'qbx_k9unit:pursuitsprint'))
 end)
 
-t.test('CLIENT: Config.PursuitSprint missing while the flag is true fails loudly at load', function()
-    local f = newClientFixture({ pursuitSprintCfg = false, expectLoadError = true })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'Config.PursuitSprint is missing')
+-- REGRESSION (this pass): this test used to assert the OPPOSITE -- that
+-- Config.PursuitSprint being missing (or any of its individual fields being
+-- invalid) FAILED THE ENTIRE FILE'S LOAD via a hard `assert`, mirroring
+-- server/pursuitsprint.lua's own now-fixed asserts (see this file's SERVER
+-- REGRESSION tests above). Same wrong remedy, same fix: clamp-and-warn, the
+-- file loads, the command/keybind still register, and the feature keeps
+-- working on built-in fallbacks.
+t.test('CLIENT: Config.PursuitSprint missing while the flag is true no longer aborts this file\'s load -- clamps every field to its shipped fallback, warns loudly, and the command/keybind still register', function()
+    local f = newClientFixture({ pursuitSprintCfg = false })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must print a warning naming Config.PursuitSprint as missing')
+
+    t.equals(f.Config.PursuitSprint.speedMultiplier, REAL_SPEED_MULTIPLIER)
+    t.equals(f.Config.PursuitSprint.durationMs, 5000)
+    t.equals(f.Config.PursuitSprint.requestRangeMeters, REAL_RANGE_METERS)
+    t.isNotNil(findByField(f.registerCommandCalls, 'name', 'qbx_k9unit:pursuitsprint'), 'qbx_k9unit:pursuitsprint must still register')
+    t.isNotNil(findByField(f.registerKeyMappingCalls, 'commandName', 'qbx_k9unit:pursuitsprint'), 'its keybind must still register')
+end)
+
+t.test('CLIENT: an individually invalid Config.PursuitSprint.requestRangeMeters no longer aborts this file\'s load -- clamps to the shipped 20.0 fallback and warns loudly, valid siblings pass through unchanged', function()
+    local f = newClientFixture({
+        pursuitSprintCfg = { speedMultiplier = REAL_SPEED_MULTIPLIER, durationMs = 300, requestRangeMeters = -5 },
+    })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint.requestRangeMeters', 1, true)
+            and line:find('found: -5', 1, true)
+            and line:find(tostring(REAL_RANGE_METERS), 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+    t.equals(f.Config.PursuitSprint.requestRangeMeters, REAL_RANGE_METERS)
+    t.equals(f.Config.PursuitSprint.speedMultiplier, REAL_SPEED_MULTIPLIER, 'a valid sibling field must pass through unchanged')
 end)
 
 t.test('CLIENT: registers exactly one pursuit-sprint command and one keybind, using the real locale key and default key "N" -- looked up BY NAME since client/movement.lua shares this same command/keybind registry', function()
@@ -1329,6 +1409,32 @@ t.test('END-TIMER: the modifier resets to neutral and the REAL SetPedMoveRateOve
     -- stays nil throughout this whole file, so that thread's body always
     -- takes its cheap idle branch and never touches this test's own
     -- assertions.
+    --
+    -- client/movement.lua's ALSO-always-on move-rate WATCHDOG (added in the
+    -- "close the any-ped speed-system gap" pass -- see that file's own
+    -- header comment on it) is a THIRD thread sharing this same runner, and
+    -- is NOT harmless for this specific test the way the leash thread is:
+    -- unlike the leash thread, the watchdog's own body directly calls the
+    -- REAL RecomputeK9MoveRate() (Wait sits at the END of its loop, same
+    -- convention as every other thread in that file, so every single resume
+    -- while lastAppliedMoveRate is non-1.0 performs one real pass) --
+    -- exactly the guaranteed-removal-path behavior that fix is FOR, not a
+    -- test artifact to work around. Once dispatchGrant() above leaves
+    -- lastAppliedMoveRate at REAL_SPEED_MULTIPLIER (non-1.0), every one of
+    -- the 4 runner.step() calls below ALSO resumes the watchdog, and each
+    -- resume re-applies the still-boosted rate for real (RecomputeK9MoveRate()
+    -- never dedupes its own qualifying branch, by design -- see
+    -- tests/clientmovement_spec.lua's own pinned test for that). That is 4
+    -- extra real SetPedMoveRateOverride calls (one per step while still
+    -- boosted) on top of the 2 this test originally counted (the grant, and
+    -- pursuit sprint's own end-timer reset) = 6 total, confirmed empirically
+    -- against the real, unmodified production files. The exact total is
+    -- asserted below for documentation value, but the assertions that
+    -- actually matter for THIS test's own purpose -- the end-timer genuinely
+    -- fires and the LAST real native call reflects the reset -- are the
+    -- `pursuitSprint == 1.0` and `setMoveRateCalls[#setMoveRateCalls].rate`
+    -- checks, which hold regardless of how many OTHER always-on threads
+    -- happen to share this runner in the future.
     f.runner.step()
     f.runner.step()
     f.runner.step()
@@ -1336,8 +1442,8 @@ t.test('END-TIMER: the modifier resets to neutral and the REAL SetPedMoveRateOve
     f.runner.step()
 
     t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.0)
-    t.equals(#f.setMoveRateCalls, 2, 'once for the grant (1.4x), once for the end-timer reset (1.0x)')
-    t.equals(f.setMoveRateCalls[2].rate, 1.0)
+    t.equals(#f.setMoveRateCalls, 6, 'the grant, 4 watchdog re-assertions while still boosted (one per step), and the end-timer reset -- see this test\'s own comment above for the full accounting')
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 1.0, 'the LAST real native call must reflect the end-timer reset, regardless of how many total calls preceded it')
 end)
 
 t.test('END-ON-DEATH: IsEntityDead(PlayerPedId()) true mid-burst ends the burst EARLY, well before durationMs elapses', function()

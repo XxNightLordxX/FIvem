@@ -209,9 +209,7 @@
 if not Config.Features.PursuitSprint then return end
 
 -- ======================================================================
--- CONFIG SHAPE -- fail loudly at resource start ONLY for a structurally
--- wrong-shaped block (nothing sensible to clamp/substitute for "the whole
--- table is missing"); CLAMP AND WARN for every individual number inside it
+-- CONFIG SHAPE -- CLAMP AND WARN for every individual number inside it
 -- (this pass -- see server/cooldowns.lua's header ADDENDUM: "does an
 -- operator's config.lua edit alone... reach this value? If yes it must be
 -- clamped and warned about, never asserted and aborted"). speedMultiplier/
@@ -230,10 +228,24 @@ if not Config.Features.PursuitSprint then return end
 -- was any different. Deliberately placed AFTER the feature-flag gate above
 -- (same convention agility.lua follows): a server that never turns this
 -- feature on is never affected by config.lua not yet having this block.
+--
+-- The "whole table is missing" case below USED TO be its own hard `assert`
+-- too, on the theory that there was "nothing sensible to clamp/substitute
+-- for the whole table missing" -- that theory doesn't hold up: substituting
+-- an empty table lets every one of the per-field resolvers immediately
+-- below fall back to its own already-established default, exactly as if
+-- an operator had left each field individually blank. Closing this out
+-- removes the last top-level assert in this file.
 -- ======================================================================
-assert(type(Config.PursuitSprint) == 'table',
-    "qbx_k9unit: Config.Features.PursuitSprint is true but Config.PursuitSprint is missing from config.lua. " ..
-    "Add the settings table (speedMultiplier/durationMs/cooldownMs/requestRangeMeters) before enabling this feature.")
+if type(Config.PursuitSprint) ~= 'table' then
+    print(
+        '[qbx_k9unit] WARNING: Config.Features.PursuitSprint is true but Config.PursuitSprint is missing or ' ..
+        'not a table -- using this file\'s own built-in defaults (speedMultiplier=1.4, durationMs=5000, ' ..
+        'cooldownMs=45000, requestRangeMeters=20.0) for every field it would have set. Add the settings table ' ..
+        'back to config.lua.'
+    )
+    Config.PursuitSprint = {}
+end
 
 --- Same clamp-and-warn shape as server/cooldowns.lua's
 --- ResolveConfiguredThresholdMs, for the two fields below that are not

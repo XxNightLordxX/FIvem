@@ -176,25 +176,64 @@
 if not Config.Features.PursuitSprint then return end
 
 -- ======================================================================
--- CONFIG SHAPE ASSERTS -- mirrors server/pursuitsprint.lua's own asserts
--- exactly (both files validate independently since either could load on a
--- misconfigured server without the other -- e.g. a client-only or
--- server-only partial deploy during an update). Placed after the
--- feature-flag gate above, same convention as client/agility.lua's
--- Config.Combat.AgilityAdvanced.detectionMethod assert.
+-- CONFIG SHAPE -- CLAMP AND WARN, NOT ASSERT (this pass -- see
+-- server/cooldowns.lua's header ADDENDUM: "does an operator's config.lua
+-- edit alone... reach this value? If yes it must be clamped and warned
+-- about, never asserted and aborted"). This used to be four hard `assert`s
+-- here, deliberately mirroring server/pursuitsprint.lua's own -- but that
+-- file has SINCE moved to clamp-and-warn for the exact same reason this
+-- one now does: an uncaught error thrown from THIS FILE's own top-level
+-- chunk (this guard sits directly after the feature-flag early-return
+-- above, no deferring onResourceStart/RegisterNetEvent wrapper around it)
+-- aborts client/pursuitsprint.lua's load from that line onward, silently
+-- un-registering 'qbx_k9unit:vault'-equivalent PursuitSprint keybind/net
+-- handlers below, over one operator typo. Mirrors server/pursuitsprint.lua's
+-- own ResolveConfiguredPositiveNumber shape (that file's server-only
+-- ResolveConfiguredThresholdMs, from server/cooldowns.lua, is not
+-- reachable from a client script, so this is a small independent copy of
+-- the same idea, not a shared extraction). Resolved values are written
+-- BACK into Config.PursuitSprint so every later direct read in this file
+-- (durationMs/speedMultiplier/requestRangeMeters are all re-read straight
+-- off Config, not captured to a local) sees the same corrected value.
 -- ======================================================================
-assert(type(Config.PursuitSprint) == 'table',
-    "qbx_k9unit: Config.Features.PursuitSprint is true but Config.PursuitSprint is missing from config.lua. " ..
-    "Add the settings table (speedMultiplier/durationMs/cooldownMs/requestRangeMeters) before enabling this feature.")
+if type(Config.PursuitSprint) ~= 'table' then
+    print(
+        '[qbx_k9unit] WARNING: Config.Features.PursuitSprint is true but Config.PursuitSprint is missing or not ' ..
+        'a table -- using this file\'s own built-in defaults (speedMultiplier=1.4, durationMs=5000, ' ..
+        'requestRangeMeters=20.0) so the feature still works. Add the settings table back to config.lua.'
+    )
+    Config.PursuitSprint = {}
+end
 
-assert(type(Config.PursuitSprint.speedMultiplier) == 'number' and Config.PursuitSprint.speedMultiplier > 0,
-    "qbx_k9unit: Config.PursuitSprint.speedMultiplier must be a positive number.")
+--- Same clamp-and-warn shape as server/pursuitsprint.lua's own
+--- ResolveConfiguredPositiveNumber (a small independent copy -- see this
+--- block's header comment above for why it is not shared). Never errors;
+--- prints one warning naming the exact key, the bad value found, and the
+--- fallback substituted.
+--- @param value any
+--- @param fallback number
+--- @param keyName string
+--- @param requirementText string
+--- @return number
+local function ResolveConfiguredPositiveNumber(value, fallback, keyName, requirementText)
+    if type(value) == 'number' and value == value and value > 0 then
+        return value
+    end
+    print(('[qbx_k9unit] %s must be %s (found: %s). Using the built-in fallback of %s instead so this feature ' ..
+        'keeps working while the config is fixed -- find %s in config.lua and correct it.')
+            :format(keyName, requirementText, tostring(value), tostring(fallback), keyName))
+    return fallback
+end
 
-assert(type(Config.PursuitSprint.durationMs) == 'number' and Config.PursuitSprint.durationMs > 0,
-    "qbx_k9unit: Config.PursuitSprint.durationMs must be a positive number of milliseconds.")
+Config.PursuitSprint.speedMultiplier = ResolveConfiguredPositiveNumber(
+    Config.PursuitSprint.speedMultiplier, 1.4, 'Config.PursuitSprint.speedMultiplier', 'a positive number')
 
-assert(type(Config.PursuitSprint.requestRangeMeters) == 'number' and Config.PursuitSprint.requestRangeMeters > 0,
-    "qbx_k9unit: Config.PursuitSprint.requestRangeMeters must be a positive number of meters.")
+Config.PursuitSprint.durationMs = ResolveConfiguredPositiveNumber(
+    Config.PursuitSprint.durationMs, 5000, 'Config.PursuitSprint.durationMs', 'a positive number of milliseconds')
+
+Config.PursuitSprint.requestRangeMeters = ResolveConfiguredPositiveNumber(
+    Config.PursuitSprint.requestRangeMeters, 20.0, 'Config.PursuitSprint.requestRangeMeters',
+    'a positive number of meters')
 
 --- Finds the nearest OTHER live PLAYER'S ped within `rangeMeters` of the
 --- local player. DISPLAY-ONLY CONVENIENCE, never the security boundary --
