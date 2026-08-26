@@ -340,8 +340,8 @@ CREATE TABLE IF NOT EXISTS `k9_certification_specializations` (
 -- qbx_k9unit :: k9_search_log
 --
 -- Persistent audit log for the Phase 2 contraband-search action
--- (`qbx_k9unit:server:searchTarget`, phase2_notes/DEVELOPER_REFERENCE.md#contraband-search
--- §6 last bullet, DEVELOPER_REFERENCE.md §11.4 item 2's "STILL-OPEN" list). Added per
+-- (`qbx_k9unit:server:searchTarget`, qbx_k9unit/DEVELOPER_REFERENCE.md#contraband-search,
+-- DEVELOPER_REFERENCE.md §11.4 item 2's "STILL-OPEN" list). Added per
 -- db-schema's Phase 2 review of the open question both of those raised:
 -- does a search action warrant the same kind of durable accountability
 -- trail `k9_certifications` already provides for grants/revokes?
@@ -436,7 +436,7 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
                                                                     -- 'found'/'clean' = a real inventory read completed (contrabandFound true/false);
                                                                     -- 'search_failed' = the inventory read itself errored/returned nil (searchTarget's
                                                                     -- reason = 'search_failed' path) -- kept as its own distinct value, never
-                                                                    -- collapsed into 'clean', carrying phase2_notes/DEVELOPER_REFERENCE.md#contraband-search's
+                                                                    -- collapsed into 'clean', carrying qbx_k9unit/DEVELOPER_REFERENCE.md#contraband-search's
                                                                     -- explicit "never collapse search_failed into contrabandFound=false" requirement
                                                                     -- all the way down into the audit record itself.
   `total_weight`       INT UNSIGNED DEFAULT NULL,                  -- the real computed totalWeight for 'found'/'clean' (0 for 'clean'); NULL for
@@ -700,13 +700,13 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- table closes that gap. THE SPEC/DESIGN ARTIFACT GOVERNING ITS SHAPE
 -- PREDATES THIS EDIT: this `CREATE TABLE` is intentionally the same shape
 -- already reviewed and sketched (not applied) in
--- phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 4, derived here directly
+-- qbx_k9unit/DEVELOPER_REFERENCE.md#xp-schema, derived here directly
 -- from server/progression.lua's real, currently-shipping queries rather
 -- than re-derived from scratch -- the two agree because the sketch is
 -- what that file was written against.
 --
 -- Governing spec: DEVELOPER_REFERENCE.md section 13.4.1 (`Config.Features.
--- XPProgression`), and phase2_notes/DEVELOPER_REFERENCE.md#xp-schema's own
+-- XPProgression`), and qbx_k9unit/DEVELOPER_REFERENCE.md#xp-schema's own
 -- persistence-decision note (sections 2-4) for the full "why a table, not
 -- qbx_core metadata" rationale -- restated briefly here: (1) atomic
 -- accumulation via a single `INSERT ... ON DUPLICATE KEY UPDATE
@@ -756,7 +756,7 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- not an audit trail of individual award events. Whether a separate
 -- append-only `k9_xp_log`-style table is also worth adding for
 -- anti-cheat/dispute auditing is a distinct, still-open question
--- (phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 6 item 2) -- not
+-- (qbx_k9unit/DEVELOPER_REFERENCE.md#xp-schema) -- not
 -- decided or added here.
 --
 -- `xp`'s tier is intentionally NOT computed in SQL (no generated column
@@ -809,8 +809,8 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
                                                           -- (server/progression.lua's ResolveTier). UNSIGNED guards against a
                                                           -- negative value at the type level, but is not a substitute for
                                                           -- app-layer clamping if a future "reduce/reset XP" admin path is
-                                                          -- ever added (see phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 6
-                                                          -- item 3) -- no such path exists in this codebase today.
+                                                          -- ever added (see qbx_k9unit/DEVELOPER_REFERENCE.md#xp-schema) -- no
+                                                          -- such path exists in this codebase today.
   `handler_xp` INT UNSIGNED NOT NULL DEFAULT 0,          -- accumulated HANDLER total, independent of `xp` above; source of truth
                                                           -- for Config.HandlerXPTiers lookups (server/progression.lua's
                                                           -- ResolveHandlerTier). See this table's own header note on why this
