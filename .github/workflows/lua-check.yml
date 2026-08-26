@@ -619,7 +619,7 @@ jobs:
         # This resource had 48 files and zero automated tests until now. Every
         # logic bug found this session -- three XP farms, a remote-steal, a
         # registry desync, a hesitation lockout -- was caught by a human-style
-        # read, not by a tool. See tests/README.md for what the harness covers
+        # read, not by a tool. See DEVELOPER_REFERENCE.md section 20 (Test suite) for what the harness covers
         # and, more usefully, what it deliberately does not: client/*.lua needs
         # game natives, and server/search.lua's ResolveAlertTier is `local`
         # with no testable entry point. run.sh exits non-zero on any failure.

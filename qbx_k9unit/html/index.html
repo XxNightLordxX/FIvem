@@ -14,14 +14,16 @@
     ======================================================================
 
     Design sources (read these before changing the contract below):
-      - phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge  (authoritative naming/shape)
-      - phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge   (earlier exploratory pass;
-        superseded on naming/message-shape by the bridge design doc above —
-        kept for its OPEN visibility-gate discussion, which is still
-        unresolved)
+      - DEVELOPER_REFERENCE.md#hud-bridge  (authoritative naming/shape)
+
+    These used to be two separate citations into phase2_notes/RESEARCH_ARCHIVE.md,
+    one of them kept only for an OPEN visibility-gate question. Both are now the
+    one section above: that archive was merged into DEVELOPER_REFERENCE.md, and
+    the visibility gate is no longer open -- it resolved to CanShowK9UI()
+    (client/main.lua), which is what this page's own show/hide already follows.
 
     This is a plain HTML/CSS/JS page, no framework, no build step — see
-    phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §2's reasoning (nothing else in this
+    DEVELOPER_REFERENCE.md#hud-bridge's reasoning (nothing else in this
     resource has any JS tooling; this is a receive-only readout, not a
     component tree that benefits from a reactive framework).
 
