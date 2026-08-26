@@ -267,6 +267,17 @@
       `HasK9Access` (server/certifications.lua) at run time only, both
       behind `type(...) == 'function'` guards -- genuine soft dependencies,
       no load-order requirement either way.
+    - THIS FILE calls `ForceDetachLeashForSource` (server/main.lua),
+      `EndActiveEffectForHolder` (server/combat.lua), and
+      `ForceBreakPartnershipForCitizenId` (server/partnership.lua) at run
+      time only, from RevokePermission's own 'k9.access'-fully-revoked
+      teardown (see that function's own doc comment for the full "de-assign
+      button" writeup) -- all three behind `type(...) == 'function'` guards.
+      Genuinely required here, not just defensive style: all three load
+      AFTER this file in fxmanifest.lua's server_scripts list, so none can
+      be assumed present by load order the way server/certifications.lua
+      (loaded even later than all three) can assume server/main.lua's
+      ForceDetachLeashForSource.
     - THIS FILE is consulted BY server/certifications.lua and
       server/admin.lua (see above) -- this file does NOT call into either of
       those two, so there is no load-order cycle.
@@ -931,6 +942,73 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- grant-side call above.
     if permissionKey == 'k9.access' and stillHasAccess == nil and type(MaybeRevertK9Appearance) == 'function' then
         MaybeRevertK9Appearance(targetCitizenid)
+    end
+
+    -- SECURITY FIX (coder-backend, this pass -- "the de-assign button"
+    -- gap): server/tablet.lua's own header documents THIS EXACT call
+    -- (RevokePermission(..., 'k9.access')) as high command's official
+    -- "de-assign K9 role" action, and explicitly reassures its own reader
+    -- that MaybeRevertK9Appearance's automatic revert closes the loop --
+    -- true for the PED-MODEL half only. Until now this function did
+    -- nothing else at all on a confirmed full loss of 'k9.access': no
+    -- leash detach, no partnership break, no bite-hold/takedown/drag end.
+    -- An officer de-assigned mid-incident through the one, first-class,
+    -- DOCUMENTED path for doing so kept physically holding or dragging
+    -- their target, and kept an active leash/partnership pairing, for the
+    -- rest of that mechanic's own duration -- the exact
+    -- leash-holding-a-suspect-for-twenty-seconds shape
+    -- server/certifications.lua's RevokeCertification/
+    -- RevokeCertificationOffline/OnJobUpdate already close for a
+    -- CERTIFICATION loss; 'k9.access' is a second, independent door into
+    -- the identical hold.
+    --
+    -- Scoped to `stillHasAccess == nil` -- the ONLY outcome this function
+    -- itself already treats as a CONFIRMED, complete loss of K9 access
+    -- (identical gate as the MaybeRevertK9Appearance call and the
+    -- target-facing notification above it). `stillHasAccess == nil` can
+    -- only be reached when `onlineTargetSrc` is truthy (see the if/else
+    -- above that sets it), and for 'k9.access' specifically it is set by
+    -- LegacyOrHighCommandStillQualifies calling the real, live
+    -- HasK9Access(onlineTargetSrc) -- so `nil` here means HasK9Access has
+    -- ALREADY confirmed zero remaining routes (certification, this
+    -- now-revoked permission grant, autoAccessGrade, high command), not
+    -- merely "the permission row is gone."
+    --
+    -- Called UNCONDITIONALLY of any of those routes' own state -- the "no
+    -- unbounded trap" rule: this is a fresh, already-confirmed loss, not a
+    -- re-check to gate the teardown behind. Every one of the three calls
+    -- below is guarded by a `type(...) == 'function'` runtime existence
+    -- check -- this resource's established soft-dependency convention,
+    -- and a genuine necessity here specifically: server/main.lua
+    -- (ForceDetachLeashForSource), server/combat.lua
+    -- (EndActiveEffectForHolder), and server/partnership.lua
+    -- (ForceBreakPartnershipForCitizenId) ALL load AFTER this file in
+    -- fxmanifest.lua's server_scripts list, so none of the three can be
+    -- assumed present by load order the way certifications.lua (loaded
+    -- even later) can assume main.lua's ForceDetachLeashForSource.
+    --
+    -- Deliberately does NOT run for `stillHasAccess == 'unknown_target_offline'`
+    -- -- this file's own established posture (header "THE REVOKED BUT
+    -- STILL HAS IT BY RANK CASE") is to never claim an outcome it cannot
+    -- verify for a genuinely offline target. A leash pairing and an
+    -- active hold are both online-only, ephemeral state (server/main.lua/
+    -- server/combat.lua) and literally cannot exist for a disconnected
+    -- citizenid, so skipping those two costs nothing for an offline
+    -- target; a DB-backed partnership is deliberately left standing
+    -- rather than broken on a guess that may resolve the other way the
+    -- moment they reconnect and are found to still qualify by rank.
+    if permissionKey == 'k9.access' and stillHasAccess == nil then
+        if type(ForceDetachLeashForSource) == 'function' then
+            ForceDetachLeashForSource(onlineTargetSrc, 'k9_access_revoked')
+        end
+
+        if type(EndActiveEffectForHolder) == 'function' then
+            pcall(EndActiveEffectForHolder, onlineTargetSrc)
+        end
+
+        if type(ForceBreakPartnershipForCitizenId) == 'function' then
+            ForceBreakPartnershipForCitizenId(targetCitizenid, 'k9_access_revoked')
+        end
     end
 
     return true, 'ok', stillHasAccess

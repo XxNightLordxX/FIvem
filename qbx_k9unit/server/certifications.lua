@@ -1777,6 +1777,29 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     -- doc comment.
     ForceDetachLeashIfOnline(citizenid, 'certification_revoked')
 
+    -- CONSISTENCY FIX (this pass): same TOCTOU-window reasoning as
+    -- ForceDetachLeashIfOnline immediately above (and the `k9certified`
+    -- mirror write above that) -- if the target reconnects between the
+    -- online-check guard earlier in this function and this UPDATE
+    -- actually landing, an in-progress bite-hold/takedown/drag they hold
+    -- as the K9-role party must not outlive this revoke either. This is
+    -- the THIRD member of the "must not outlive certification" family --
+    -- leash and partnership are both already covered at every revoke call
+    -- site in this file; this was the one path still missing
+    -- EndActiveEffectForHolder, leaving this file inconsistent with its
+    -- own invariant. Genuinely narrow in practice: server/combat.lua's own
+    -- playerDropped handler already ends any hold the instant this
+    -- citizenid actually disconnected, so a hold formed BEFORE that
+    -- disconnect cannot still exist by the time a reconnect happens here
+    -- -- this only matters for a brand-new hold somehow initiated inside
+    -- the reconnect-to-UPDATE-landing window itself. SOURCE-keyed, reusing
+    -- `nowOnlinePlayer` resolved immediately above rather than a second
+    -- GetPlayerByCitizenId lookup. Same runtime existence guard as every
+    -- other EndActiveEffectForHolder call site in this file.
+    if nowOnlinePlayer and nowOnlinePlayer.PlayerData and nowOnlinePlayer.PlayerData.source and type(EndActiveEffectForHolder) == 'function' then
+        pcall(EndActiveEffectForHolder, nowOnlinePlayer.PlayerData.source)
+    end
+
     -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): unlike leash immediately
     -- above (a genuine, in-memory-only no-op for a truly offline citizenid
     -- — see ForceDetachLeashIfOnline's own doc comment), a K9 partnership
@@ -2469,6 +2492,75 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     end
 
     local cached = Certifications[citizenid]
+
+    -- SECOND, INDEPENDENT gap in the "loses K9 access" family (distinct
+    -- from leaving the department above and from losing an active
+    -- certification below): HasK9Access grants K9-role access via THREE
+    -- routes and keeps no record of which one applied -- an active
+    -- certification (this file's own Certifications cache), an active
+    -- `k9.access` permission grant (server/permissions.lua), or a job
+    -- grade at/above Config.Departments[job].autoAccessGrade. A citizenid
+    -- whose ONLY route is autoAccessGrade has no active row in
+    -- Certifications at all, so the job-name-change branch below (gated
+    -- on `cached.active`) returns before it ever looks at the grade. Left
+    -- unhandled, an ordinary SAME-department demotion below
+    -- autoAccessGrade left an already-formed K9-role leash pairing,
+    -- partnership row, and any in-progress bite-hold/takedown/drag
+    -- completely untouched -- identical in shape to the
+    -- leash-holding-a-suspect-for-twenty-seconds incident this file
+    -- already closed for the certification-revoke path, just reached
+    -- through a different door, and reachable with NO admin action at all
+    -- -- an ordinary promotion/demotion does it.
+    --
+    -- SCOPED DELIBERATELY NARROW to avoid any interaction with the
+    -- job-name-change reconciliation logic below (which owns its own
+    -- DB-write confirm/reconcile dance end to end): this only fires when
+    -- `cached` already exists AND is scoped to this EXACT job name --
+    -- i.e. this is provably a grade-only change within the department
+    -- this citizenid was already known to be in as of their last cache
+    -- refresh (PlayerLoaded, the onResourceStart backfill, or their own
+    -- prior grant/revoke/OnJobUpdate touch), never a cross-department
+    -- move (which the branch below already owns). `cached` being ABSENT
+    -- (never refreshed this session) or scoped to a DIFFERENT job name (a
+    -- genuine department change, however recent) both intentionally skip
+    -- this branch -- neither can be told apart from a same-department
+    -- demotion without a second job-tracking cache this fix does not
+    -- introduce. DISCLOSED, NARROW RESIDUAL WINDOW: a non-cert citizenid
+    -- who changes department more than once without an intervening
+    -- PlayerLoaded/backfill keeps a stale `cached.job` from before their
+    -- most recent move, so a LATER same-department demotion in their NEW
+    -- department would not be caught by this branch either -- accepted
+    -- rather than adding a second cache purely to close it, since
+    -- HasK9Access itself (the actual authorization gate) is never wrong
+    -- either way; only this best-effort teardown trigger can miss it.
+    if job and Config.Departments[job.name] and cached and cached.job == job.name and not cached.active then
+        local dept = Config.Departments[job.name]
+        local stillHasNonCertAccess =
+            (type(HasPermission) == 'function' and HasPermission(citizenid, 'k9.access'))
+            or (type(IsHighCommand) == 'function' and IsHighCommand(source))
+            or (type(dept.autoAccessGrade) == 'number' and job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.autoAccessGrade)
+
+        if not stillHasNonCertAccess then
+            -- Mirrors RevokeCertification's online branch exactly --
+            -- called UNCONDITIONALLY once this specific access route is
+            -- confirmed lost, never re-gated on whether some OTHER route
+            -- might independently justify keeping the pairing: the
+            -- leash/partnership/hold that exist right now were formed
+            -- under eligibility that no longer holds, and a fresh
+            -- HasK9Access re-check on the next real access attempt is
+            -- what re-establishes anything, not a stale pairing carried
+            -- over from before this demotion.
+            ForceDetachLeashForSource(source, 'k9_access_lost')
+
+            if type(EndActiveEffectForHolder) == 'function' then
+                pcall(EndActiveEffectForHolder, source)
+            end
+
+            if type(ForceBreakPartnershipForCitizenId) == 'function' then
+                ForceBreakPartnershipForCitizenId(citizenid, 'k9_access_lost')
+            end
+        end
+    end
 
     -- No active cert to revoke, nothing to do.
     if not (cached and cached.active) then return end
