@@ -264,15 +264,36 @@ zero effect on anything else.
   flip *while the server is running* needs its own confirmation screen in
   the tablet, and that's a bigger, separate piece of work.
 
-## What I need from you
+## Decisions taken on your behalf
 
-1. A yes/no on Stage 7 (remove Scent Trail Hunt, or keep it as a training
-   drill instead — your choice, not a forced binary).
-2. Which of Stages 1–6 you want done now vs. later — they don't have to
-   go together.
-3. Confirmation you're fine with Stage 4/5 needing a short verification
-   pass on the exact current button behaviour before they ship, rather
-   than shipping on my best guess.
+You said: *"Do whatever you need to do your best judgement i trust you."*
+Combined with *"Overhaul all the features if they are redudant or have not
+much applicable remove it"*, that's enough authority to stop asking and
+start. Here's what was decided and why, so you can reverse any of it.
+
+**Stage 7 — Scent Trail Hunt is being removed.** You told me twice to
+remove what's redundant, the dependency check came back clean (nothing
+else reads it, no database table, no history to lose), and it is a genuine
+duplicate of real scent tracking pointed at a made-up spot. The one
+argument against — that it's currently the only way a new handler
+practises following a trail — is real but thin: they can practise on a
+real trail instead. **This is one commit to undo.** If you want it back as
+a training drill, say so and it returns under Training rather than next to
+real tracking, which is where it should have been all along.
+
+**Stages 1–6 all proceed**, in that order, because they're independent and
+the early ones are risk-free. Stage 6 remains a deliberate decision to
+change nothing about combat.
+
+**Stages 4 and 5 get the verification pass** before they ship. Merging the
+kennel, feeding and fetch options means guessing intent from context, and
+guessing wrong on a reversible action is an annoyance rather than a
+disaster — but it's still worth ten minutes of checking rather than
+shipping on assumption.
+
+Nothing about the two safety promises above changes: nothing currently
+switched off turns itself on, and a merged action never grants what the
+separate one didn't.
 
 Nothing here has been built yet. Say the word on any of the above and I'll
 start.
