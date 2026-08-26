@@ -1,0 +1,441 @@
+--[[
+    tests/clientkeybinds_spec.lua
+
+    Direct, black-box tests of client/keybinds.lua against the REAL,
+    unmodified production file -- the owner-directed "combat should be
+    keybinds, not third-eye" pass. This file registers five NEW
+    RegisterCommand/RegisterKeyMapping pairs (k9bitehold, k9takedown,
+    k9dragtoggle, k9sit, k9bark) plus ONE keybind-only addition for the
+    PRE-EXISTING `k9recall` command (client/recall.lua).
+
+    THE THREE THINGS THIS SPEC EXISTS TO PIN:
+      1. SAME FUNCTION, NEVER A FORKED ENTRY POINT -- every command calls
+         the IDENTICAL resource-global function client/radial.lua's own
+         "K9 Unit" submenu already calls (IsBiteHoldEngaged/ReleaseBiteHold/
+         RequestBiteHold, RequestTakedown, IsDragEngaged/ReleaseDrag/
+         RequestDrag, K9Sit). Proven the same way this suite proves a "same
+         function" claim elsewhere: the fixture below supplies each of
+         those as a small recording stub and asserts on WHICH ONE was
+         called for a given toggle state, never re-deriving the
+         gating/targeting logic itself (that already belongs to
+         client/combat.lua's own spec).
+      2. PER-MECHANIC REGISTRATION GATING -- each of the three combat
+         commands/keybinds exists ONLY when its OWN Config.Features flag is
+         true, independent of the other two (client/combat.lua's own
+         looser file-level OR-gate is deliberately NOT mirrored here -- see
+         client/keybinds.lua's header). Sit is registered
+         UNCONDITIONALLY (no Config.Features flag governs it at all, same
+         as client/movement.lua's own ToggleK9Camera() precedent). Bark and
+         the k9recall KEYBIND both follow their own single dedicated flag.
+      3. k9recall gets ONLY a RegisterKeyMapping call from this file, never
+         a second RegisterCommand -- proven by loading client/keybinds.lua
+         ALONE (never client/recall.lua) and confirming no `k9recall`
+         command handler exists in this fixture at all, only a keyMapping
+         entry.
+
+    STUBBING EFFORT: proportionate. Every native/global this file could
+    possibly call is either a small recording stub or DELIBERATELY ABSENT
+    (RegisterNetEvent, CreateThread, Wait, TaskPlayAnim, and every other
+    movement/task native) -- if this file ever grew a per-frame thread or a
+    direct native call, the relevant "absence" test below would fail with
+    "attempt to call a nil value", not silently pass. locale() is the REAL
+    Sandbox.locale reading the real locales/en.json, so every test that
+    reaches a locale() call also proves that key actually exists in the
+    shipped locale file.
+
+    ONE FRESH SANDBOX PER TEST.
+]]
+
+local t = dofile('testkit.lua')
+local Sandbox = dofile('fixtures/sandbox.lua')
+local locale = Sandbox.locale
+
+-- ----------------------------------------------------------------------
+-- Sandbox setup
+-- ----------------------------------------------------------------------
+
+--- @param opts {
+---     biteAndHold: boolean?, nonLethalTakedown: boolean?, propDragging: boolean?,
+---     basicBarkSounds: boolean?, recall: boolean?,
+---     provideBiteHoldGlobals: boolean?, provideDragGlobals: boolean?,
+---     provideTakedown: boolean?, provideK9Sit: boolean?,
+---     canShowK9UI: boolean?,
+---     toggleKeybindBite: string?, keybindTakedown: string?, toggleKeybindDrag: string?,
+--- }?
+local function newKeybindsFixture(opts)
+    opts = opts or {}
+
+    local commandHandlers = {}
+    local function RegisterCommand(name, handler, _restricted) commandHandlers[name] = handler end
+
+    local keyMappingCalls = {}
+    local function RegisterKeyMapping(commandName, description, ioType, defaultKey)
+        keyMappingCalls[#keyMappingCalls + 1] = { commandName = commandName, description = description, ioType = ioType, defaultKey = defaultKey }
+    end
+
+    local biteHoldEngaged = false
+    local releaseBiteHoldCalls = 0
+    local requestBiteHoldCalls = 0
+    local function IsBiteHoldEngaged() return biteHoldEngaged end
+    local function ReleaseBiteHold() releaseBiteHoldCalls = releaseBiteHoldCalls + 1 end
+    local function RequestBiteHold() requestBiteHoldCalls = requestBiteHoldCalls + 1 end
+
+    local dragEngaged = false
+    local releaseDragCalls = 0
+    local requestDragCalls = 0
+    local function IsDragEngaged() return dragEngaged end
+    local function ReleaseDrag() releaseDragCalls = releaseDragCalls + 1 end
+    local function RequestDrag() requestDragCalls = requestDragCalls + 1 end
+
+    local requestTakedownCalls = 0
+    local function RequestTakedown() requestTakedownCalls = requestTakedownCalls + 1 end
+
+    local k9SitCalls = 0
+    local function K9Sit() k9SitCalls = k9SitCalls + 1 end
+
+    local canShowK9UI = opts.canShowK9UI
+    if canShowK9UI == nil then canShowK9UI = true end
+    local denyCalls = 0
+    local function CanShowK9UI() return canShowK9UI end
+    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
+
+    local serverEvents = {}
+    local function TriggerServerEvent(eventName, ...)
+        serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
+    end
+
+    local Config = {
+        Features = {
+            BiteAndHold = opts.biteAndHold ~= false,
+            NonLethalTakedown = opts.nonLethalTakedown ~= false,
+            PropDragging = opts.propDragging ~= false,
+            BasicBarkSounds = opts.basicBarkSounds ~= false,
+            Recall = opts.recall ~= false,
+        },
+        Combat = {
+            BiteAndHold = { toggleKeybind = opts.toggleKeybindBite or 'B' },
+            NonLethalTakedown = { keybind = opts.keybindTakedown or 'T' },
+            PropDragging = { toggleKeybind = opts.toggleKeybindDrag or 'Y' },
+        },
+    }
+
+    local overrides = {
+        Config = Config,
+        RegisterCommand = RegisterCommand,
+        RegisterKeyMapping = RegisterKeyMapping,
+        CanShowK9UI = CanShowK9UI,
+        DenyK9UIAccess = DenyK9UIAccess,
+        TriggerServerEvent = TriggerServerEvent,
+    }
+    if opts.provideBiteHoldGlobals ~= false then
+        overrides.IsBiteHoldEngaged = IsBiteHoldEngaged
+        overrides.ReleaseBiteHold = ReleaseBiteHold
+        overrides.RequestBiteHold = RequestBiteHold
+    end
+    if opts.provideDragGlobals ~= false then
+        overrides.IsDragEngaged = IsDragEngaged
+        overrides.ReleaseDrag = ReleaseDrag
+        overrides.RequestDrag = RequestDrag
+    end
+    if opts.provideTakedown ~= false then
+        overrides.RequestTakedown = RequestTakedown
+    end
+    if opts.provideK9Sit ~= false then
+        overrides.K9Sit = K9Sit
+    end
+
+    local env = Sandbox.newEnv(overrides)
+    Sandbox.loadInto('../client/keybinds.lua', env)
+
+    return {
+        env = env,
+        commandHandlers = commandHandlers,
+        keyMappingCalls = keyMappingCalls,
+        serverEvents = serverEvents,
+        denyCallCount = function() return denyCalls end,
+        setCanShowK9UI = function(v) canShowK9UI = v end,
+        setBiteHoldEngaged = function(v) biteHoldEngaged = v end,
+        setDragEngaged = function(v) dragEngaged = v end,
+        releaseBiteHoldCallCount = function() return releaseBiteHoldCalls end,
+        requestBiteHoldCallCount = function() return requestBiteHoldCalls end,
+        releaseDragCallCount = function() return releaseDragCalls end,
+        requestDragCallCount = function() return requestDragCalls end,
+        requestTakedownCallCount = function() return requestTakedownCalls end,
+        k9SitCallCount = function() return k9SitCalls end,
+        commandCount = function()
+            local n = 0
+            for _ in pairs(commandHandlers) do n = n + 1 end
+            return n
+        end,
+        findKeyMapping = function(commandName)
+            for _, call in ipairs(keyMappingCalls) do
+                if call.commandName == commandName then return call end
+            end
+            return nil
+        end,
+        runCommand = function(name)
+            local handler = assert(commandHandlers[name], 'client/keybinds.lua did not register ' .. name)
+            handler()
+        end,
+    }
+end
+
+-- ----------------------------------------------------------------------
+-- SECTION A -- per-mechanic registration gating.
+-- ----------------------------------------------------------------------
+
+t.test('all five feature flags on: registers all five commands, all five keybinds, plus the k9recall keybind (six keyMapping calls total)', function()
+    local f = newKeybindsFixture()
+    t.equals(f.commandCount(), 5)
+    t.isNotNil(f.commandHandlers['k9bitehold'])
+    t.isNotNil(f.commandHandlers['k9takedown'])
+    t.isNotNil(f.commandHandlers['k9dragtoggle'])
+    t.isNotNil(f.commandHandlers['k9sit'])
+    t.isNotNil(f.commandHandlers['k9bark'])
+    t.equals(#f.keyMappingCalls, 6)
+end)
+
+t.test('Config.Features.BiteAndHold = false: no k9bitehold command, no keybind for it -- the other four are unaffected', function()
+    local f = newKeybindsFixture({ biteAndHold = false })
+    t.isNil(f.commandHandlers['k9bitehold'])
+    t.isNil(f.findKeyMapping('k9bitehold'))
+    t.equals(f.commandCount(), 4)
+    t.isNotNil(f.commandHandlers['k9takedown'])
+    t.isNotNil(f.commandHandlers['k9dragtoggle'])
+end)
+
+t.test('Config.Features.NonLethalTakedown = false: no k9takedown command, no keybind for it', function()
+    local f = newKeybindsFixture({ nonLethalTakedown = false })
+    t.isNil(f.commandHandlers['k9takedown'])
+    t.isNil(f.findKeyMapping('k9takedown'))
+    t.equals(f.commandCount(), 4)
+end)
+
+t.test('Config.Features.PropDragging = false: no k9dragtoggle command, no keybind for it', function()
+    local f = newKeybindsFixture({ propDragging = false })
+    t.isNil(f.commandHandlers['k9dragtoggle'])
+    t.isNil(f.findKeyMapping('k9dragtoggle'))
+    t.equals(f.commandCount(), 4)
+end)
+
+t.test('Config.Features.BasicBarkSounds = false: no k9bark command, no keybind for it', function()
+    local f = newKeybindsFixture({ basicBarkSounds = false })
+    t.isNil(f.commandHandlers['k9bark'])
+    t.isNil(f.findKeyMapping('k9bark'))
+    t.equals(f.commandCount(), 4)
+end)
+
+t.test('Config.Features.Recall = false: no k9recall keyMapping entry at all (and this file never registers a k9recall COMMAND regardless)', function()
+    local f = newKeybindsFixture({ recall = false })
+    t.isNil(f.findKeyMapping('k9recall'))
+    t.isNil(f.commandHandlers['k9recall'])
+end)
+
+t.test('all combat/bark flags off: k9sit is STILL registered -- it has no dedicated Config.Features flag of its own, same as client/movement.lua ToggleK9Camera()', function()
+    local f = newKeybindsFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false, basicBarkSounds = false, recall = false })
+    t.equals(f.commandCount(), 1)
+    t.isNotNil(f.commandHandlers['k9sit'])
+    t.equals(#f.keyMappingCalls, 1)
+    t.equals(f.keyMappingCalls[1].commandName, 'k9sit')
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION B -- k9recall: keybind-only, never a second command.
+-- ----------------------------------------------------------------------
+
+t.test('k9recall: this file registers ONLY a RegisterKeyMapping call, with default key U -- never a RegisterCommand (client/recall.lua owns that, and is NOT loaded in this fixture at all)', function()
+    local f = newKeybindsFixture()
+    t.isNil(f.commandHandlers['k9recall'], 'client/keybinds.lua must never define its own k9recall command handler')
+    local mapping = f.findKeyMapping('k9recall')
+    t.isNotNil(mapping)
+    t.equals(mapping.defaultKey, 'U')
+    t.equals(mapping.ioType, 'keyboard')
+    t.equals(mapping.description, locale('recall.keybind_label'))
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION C -- default keys come from config, and match the locale labels.
+-- ----------------------------------------------------------------------
+
+t.test('k9bitehold keybind default reads Config.Combat.BiteAndHold.toggleKeybind, not a hardcoded literal', function()
+    local f = newKeybindsFixture({ toggleKeybindBite = 'Z' })
+    t.equals(f.findKeyMapping('k9bitehold').defaultKey, 'Z')
+    t.equals(f.findKeyMapping('k9bitehold').description, locale('combat.bite_hold_keybind_label'))
+end)
+
+t.test('k9takedown keybind default reads Config.Combat.NonLethalTakedown.keybind, not a hardcoded literal', function()
+    local f = newKeybindsFixture({ keybindTakedown = 'Z' })
+    t.equals(f.findKeyMapping('k9takedown').defaultKey, 'Z')
+    t.equals(f.findKeyMapping('k9takedown').description, locale('combat.takedown_keybind_label'))
+end)
+
+t.test('k9dragtoggle keybind default reads Config.Combat.PropDragging.toggleKeybind, not a hardcoded literal', function()
+    local f = newKeybindsFixture({ toggleKeybindDrag = 'Z' })
+    t.equals(f.findKeyMapping('k9dragtoggle').defaultKey, 'Z')
+    t.equals(f.findKeyMapping('k9dragtoggle').description, locale('combat.drag_keybind_label'))
+end)
+
+t.test('k9sit / k9bark keybind descriptions match their locale labels (defaults are literal, not config-driven -- see this file own header)', function()
+    local f = newKeybindsFixture()
+    local sit = f.findKeyMapping('k9sit')
+    t.equals(sit.defaultKey, 'V')
+    t.equals(sit.description, locale('radial.sit_keybind_label'))
+
+    local bark = f.findKeyMapping('k9bark')
+    t.equals(bark.defaultKey, 'C')
+    t.equals(bark.description, locale('radial.bark_keybind_label'))
+end)
+
+t.test('no two of this file own default keys collide with each other', function()
+    local f = newKeybindsFixture()
+    local seen = {}
+    for _, call in ipairs(f.keyMappingCalls) do
+        t.isNil(seen[call.defaultKey], ('default key %s used more than once in client/keybinds.lua'):format(tostring(call.defaultKey)))
+        seen[call.defaultKey] = call.commandName
+    end
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION D -- SAME FUNCTION: each command calls the identical global
+-- client/radial.lua's own item already calls, chosen by the identical
+-- toggle predicate.
+-- ----------------------------------------------------------------------
+
+t.test('k9bitehold: not engaged -> calls RequestBiteHold(), never ReleaseBiteHold()', function()
+    local f = newKeybindsFixture()
+    f.setBiteHoldEngaged(false)
+    f.runCommand('k9bitehold')
+    t.equals(f.requestBiteHoldCallCount(), 1)
+    t.equals(f.releaseBiteHoldCallCount(), 0)
+end)
+
+t.test('k9bitehold: engaged -> calls ReleaseBiteHold(), never RequestBiteHold()', function()
+    local f = newKeybindsFixture()
+    f.setBiteHoldEngaged(true)
+    f.runCommand('k9bitehold')
+    t.equals(f.releaseBiteHoldCallCount(), 1)
+    t.equals(f.requestBiteHoldCallCount(), 0)
+end)
+
+t.test('k9bitehold: tolerates IsBiteHoldEngaged/ReleaseBiteHold/RequestBiteHold being entirely undefined (soft dependency) -- must not error', function()
+    local f = newKeybindsFixture({ provideBiteHoldGlobals = false })
+    t.isNil(f.env.IsBiteHoldEngaged)
+    f.runCommand('k9bitehold') -- must not error
+end)
+
+t.test('k9dragtoggle: not engaged -> calls RequestDrag(), never ReleaseDrag()', function()
+    local f = newKeybindsFixture()
+    f.setDragEngaged(false)
+    f.runCommand('k9dragtoggle')
+    t.equals(f.requestDragCallCount(), 1)
+    t.equals(f.releaseDragCallCount(), 0)
+end)
+
+t.test('k9dragtoggle: engaged -> calls ReleaseDrag(), never RequestDrag()', function()
+    local f = newKeybindsFixture()
+    f.setDragEngaged(true)
+    f.runCommand('k9dragtoggle')
+    t.equals(f.releaseDragCallCount(), 1)
+    t.equals(f.requestDragCallCount(), 0)
+end)
+
+t.test('k9dragtoggle: tolerates IsDragEngaged/ReleaseDrag/RequestDrag being entirely undefined (soft dependency) -- must not error', function()
+    local f = newKeybindsFixture({ provideDragGlobals = false })
+    t.isNil(f.env.IsDragEngaged)
+    f.runCommand('k9dragtoggle') -- must not error
+end)
+
+t.test('k9takedown: calls RequestTakedown() exactly once, unconditionally (no toggle -- see client/combat.lua own header on why this mechanic has no release counterpart)', function()
+    local f = newKeybindsFixture()
+    f.runCommand('k9takedown')
+    t.equals(f.requestTakedownCallCount(), 1)
+end)
+
+t.test('k9takedown: tolerates RequestTakedown being entirely undefined (soft dependency) -- must not error', function()
+    local f = newKeybindsFixture({ provideTakedown = false })
+    t.isNil(f.env.RequestTakedown)
+    f.runCommand('k9takedown') -- must not error
+end)
+
+t.test('k9sit: calls K9Sit() exactly once -- this file adds NO second CanShowK9UI() check of its own (K9Sit() already gates internally)', function()
+    local f = newKeybindsFixture()
+    f.runCommand('k9sit')
+    t.equals(f.k9SitCallCount(), 1)
+    t.equals(f.denyCallCount(), 0, 'k9sit must not call DenyK9UIAccess() itself -- that is K9Sit() own job')
+end)
+
+t.test('k9sit: tolerates K9Sit being entirely undefined (soft dependency) -- must not error', function()
+    local f = newKeybindsFixture({ provideK9Sit = false })
+    t.isNil(f.env.K9Sit)
+    f.runCommand('k9sit') -- must not error
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION E -- k9bark: the one command with its own inline gate (no
+-- shared global exists to call into -- see this file own header "THE ONE
+-- DISCLOSED EXCEPTION").
+-- ----------------------------------------------------------------------
+
+t.test('k9bark: CanShowK9UI() true -> fires the RAW relayBark server event with the literal bark type, exactly once', function()
+    local f = newKeybindsFixture()
+    f.runCommand('k9bark')
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:relayBark')
+    t.equals(f.serverEvents[1].args[1], 'bark')
+    t.equals(f.denyCallCount(), 0)
+end)
+
+t.test('k9bark: CanShowK9UI() false -> DenyK9UIAccess() called, NO server event fired', function()
+    local f = newKeybindsFixture({ canShowK9UI = false })
+    f.runCommand('k9bark')
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.denyCallCount(), 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION F -- no per-frame cost: this file starts zero threads and calls
+-- zero natives outside a command handler's own on-press body.
+-- ----------------------------------------------------------------------
+
+t.test('NO CONTINUOUS THREAD: this file registers zero CreateThread calls of any kind -- every action here is purely on-press, never a polling loop', function()
+    local threadCalls = 0
+    local env = Sandbox.newEnv({
+        Config = {
+            Features = { BiteAndHold = true, NonLethalTakedown = true, PropDragging = true, BasicBarkSounds = true, Recall = true },
+            Combat = {
+                BiteAndHold = { toggleKeybind = 'B' },
+                NonLethalTakedown = { keybind = 'T' },
+                PropDragging = { toggleKeybind = 'Y' },
+            },
+        },
+        RegisterCommand = function() end,
+        RegisterKeyMapping = function() end,
+        CanShowK9UI = function() return true end,
+        DenyK9UIAccess = function() end,
+        TriggerServerEvent = function() end,
+        CreateThread = function(_fn) threadCalls = threadCalls + 1 end,
+    })
+    Sandbox.loadInto('../client/keybinds.lua', env)
+    t.equals(threadCalls, 0)
+end)
+
+t.test('k9bitehold/k9dragtoggle/k9takedown/k9sit/k9bark handlers never touch any movement/task/animation native directly -- proven by their total absence from the sandbox', function()
+    local f = newKeybindsFixture()
+    for _, name in ipairs({
+        'SetEntityCoords', 'SetEntityHeading', 'TaskPlayAnim', 'TaskCombatPed',
+        'TaskGoToEntity', 'ClearPedTasks', 'ClearPedTasksImmediately',
+        'DisableControlAction', 'SetPedMoveRateOverride', 'AttachEntityToEntity',
+        'PlayerPedId', 'GetEntityCoords',
+    }) do
+        t.isNil(f.env[name], name .. ' must be genuinely absent from this sandbox for this test to prove anything')
+    end
+
+    f.runCommand('k9bitehold')
+    f.runCommand('k9dragtoggle')
+    f.runCommand('k9takedown')
+    f.runCommand('k9sit')
+    f.runCommand('k9bark')
+    -- Reaching here at all (no "attempt to call a nil value" error) is the assertion.
+end)
+
+os.exit(t.summary())

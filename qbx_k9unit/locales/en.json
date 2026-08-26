@@ -1,5 +1,13 @@
 {
     "admin": {
+        "catalog_audit_label_cert_tiers": "Certification tier catalog audit trail",
+        "catalog_audit_label_k9_profiles": "Individual K9 override audit trail",
+        "catalog_audit_label_permission_keys": "Permission key catalog audit trail",
+        "catalog_audit_label_runtime_overrides": "Runtime tunable/feature override audit trail",
+        "catalog_audit_label_shop_items": "Equipment shop item catalog audit trail",
+        "catalog_audit_label_shop_locations": "Equipment shop location audit trail",
+        "catalog_audit_label_tablet_themes": "Tablet theme audit trail",
+        "catalog_audit_label_xp_tiers": "XP tier catalog audit trail",
         "cert_history_label": "Certification history for %s",
         "cert_row_format": "job=%s active=%s granted_by=%s granted_at=%s revoked_by=%s revoked_at=%s",
         "dept_cert_row_format": "citizenid=%s granted_by=%s granted_at=%s",
@@ -128,6 +136,9 @@
         "renew_target_online_use_online_action": "They are online right now (server id %s). Use /k9recertify on them instead."
     },
     "combat": {
+        "bite_hold_keybind_label": "K9: Bite & Hold / Release",
+        "takedown_keybind_label": "K9: Non-Lethal Takedown",
+        "drag_keybind_label": "K9: Drag / Release",
         "bite_hold_holder_status": "Holding on — this releases automatically in %ds unless you let go sooner.",
         "bite_hold_ended": "The bite and hold ended.",
         "bite_hold_target_notice": "A K9 has bitten down and is holding you — you can't sprint or fire while it holds on.",
@@ -921,11 +932,26 @@
         "already_active_deployed": "You already have an active kennel deployed — pick it up before deploying another.",
         "already_deployed": "You already have a kennel deployed.",
         "deployed_success": "Kennel deployed.",
+        "enter_already_resting": "You are already resting in a kennel.",
+        "enter_kennel_occupied": "A K9 is already resting in that kennel.",
+        "enter_not_authorized": "You are not authorized to rest in a K9 kennel.",
+        "enter_success": "You settle into the kennel to rest.",
+        "enter_target_label": "Rest in Kennel",
+        "enter_too_far": "You need to be closer to the kennel to rest in it.",
+        "exit_kennel_lost": "You lost track of the kennel and got up.",
+        "exit_kennel_removed": "The kennel was removed — you're back on your feet.",
+        "exit_own_downed": "You were downed and are no longer resting in the kennel.",
+        "exit_success": "You climb out of the kennel.",
+        "exit_target_label": "Exit Kennel",
+        "invalid_kennel": "That doesn't look like a valid kennel.",
         "no_suitable_ground": "No suitable ground to place the kennel here.",
         "not_authorized_to_deploy": "You are not authorized to deploy a K9 kennel.",
         "not_owner": "You do not own that kennel.",
         "picked_up_success": "Kennel picked up.",
+        "picked_up_success_occupant_released": "Kennel picked up — the resting K9 has been let out.",
+        "pickup_not_authorized": "You are not authorized to pick up a K9 kennel.",
         "pickup_target_label": "Pick Up Kennel",
+        "pickup_too_far": "You need to be closer to the kennel to pick it up.",
         "placement_already_in_progress": "A kennel placement is already in progress.",
         "placement_failed": "Kennel placement failed.",
         "placement_failed_already_claimed": "Kennel placement failed — that object is already claimed.",
@@ -1032,6 +1058,8 @@
         "vest_prop_load_failed": "K9 vest prop failed to load."
     },
     "radial": {
+        "sit_keybind_label": "K9: Sit",
+        "bark_keybind_label": "K9: Bark",
         "sar_call_toggle_label": "Search & Rescue Call",
         "training_menu_label": "Training",
         "training_toggle_label": "Start/Stop Training",
@@ -1064,6 +1092,7 @@
         "vehicle_toggle_label": "Enter/Exit Vehicle"
     },
     "recall": {
+        "keybind_label": "K9: Recall Partner",
         "not_engaged": "Your K9 is not currently engaged with a target.",
         "not_partnered_to_recall": "You are not currently partnered with a K9 to recall.",
         "partner_not_online": "Your K9 partner is not currently online.",
@@ -1189,8 +1218,10 @@
         "released": "Released from the vehicle.",
         "vehicle_lost": "Lost contact with the vehicle — released.",
         "released_on_death": "Your K9 went down while loaded — released from the vehicle.",
-        "target_enter_label": "Load K9 Into Vehicle",
-        "target_exit_label": "Release K9 From Vehicle"
+        "no_seat_available": "Every seat in that vehicle is taken — your K9 has nowhere to sit.",
+        "entry_interrupted": "Loading your K9 into the vehicle was interrupted — try again.",
+        "target_enter_label": "Get in the Back Seat",
+        "target_exit_label": "Get Out of the Vehicle"
     },
     "vision": {
         "thermal_on": "Thermal vision on.",
@@ -1230,5 +1261,8 @@
     "hud": {
         "distraction_active": "Distracted",
         "distraction_clear": "Clear"
+    },
+    "leashvisual": {
+        "rope_textures_unavailable": "Leash rope textures failed to load — the leash still works, but no rope will be visible this session."
     }
 }

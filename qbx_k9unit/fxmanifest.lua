@@ -195,6 +195,21 @@ client_scripts {
     'client/audio.lua', -- Phase 5 NUI audio bridge. The NUI audio bridge, and it is LIVE: client/main.lua's PlaySoundOnNetworkEntity calls PlayK9Sound() (guarded with type()), and all five sound keys this bridge can request now ship and are listed in this manifest's files{} block (see html/sounds/CREDITS.md for provenance and licensing). A key with no file degrades to a silent no-op end to end, which looks exactly like the feature being off -- so keep that list complete.
     'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Its sound, growl_ambient.ogg, now ships (Config.ProximityAudioFX.soundName -> ToAudioFileKey's lowercase fallback, not the SOUND_NAME_TO_FILE_KEY map).
     'client/recall.lua', -- Phase 3 Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
+    -- Owner-directed "combat should be keybinds, not third-eye" pass. Adds
+    -- RegisterCommand+RegisterKeyMapping pairs for the fast, in-the-moment
+    -- K9 actions that previously had NEITHER (client/combat.lua's
+    -- BiteAndHold/NonLethalTakedown/PropDragging were radial-only), plus
+    -- Sit/Bark (the owner's own named fast-action examples) and a keybind
+    -- for the pre-existing `k9recall` command (client/recall.lua). SOFT
+    -- dependency only -- every cross-file call is behind this resource's
+    -- standard `type(fn) == 'function'` guard, not a load-order assumption
+    -- (see that file's own header) -- placed here, after
+    -- client/recall.lua, purely for readability: recall.lua is the
+    -- LATEST-loading of this file's three direct dependencies
+    -- (client/combat.lua loads much earlier, client/movement.lua earlier
+    -- still), so this groups with the last of them rather than splitting
+    -- across the list.
+    'client/keybinds.lua',
     'client/training.lua', -- Training Mode (DEVELOPER_REFERENCE.md Part A Tier B §6) -- the client half of server/training.lua. Rehearses the search / bite-and-hold FLOW against a scripted fake server response inside a Config.TrainingZones area; never touches a real target and never mints XP (server/training.lua's THE XP DECISION section is the authority on why -- do not "restore" an award here). No load-order dependency: reaches the server only through lib.callback.await at call time.
     'client/equipmentshop.lua', -- K9 Supply shop walk-up (DEVELOPER_REFERENCE.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.

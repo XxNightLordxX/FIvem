@@ -1103,6 +1103,95 @@ Config.VehicleInteractMeters = 3.0
 Config.LeashMaxDistance = 8.0
 
 -- ======================================================================
+-- LEASH VISUAL (client/leashvisual.lua) -- makes the leash mechanic above
+-- actually VISIBLE: a rendered rope between the handler and the K9 for the
+-- whole duration of an active leash, plus a leash-handle prop on the
+-- handler's own hand. Rides entirely on top of Config.Features.LeashMechanics
+-- above rather than being its own togglable feature area -- there is no
+-- separate Config.Features entry for this, since with LeashMechanics off
+-- the leashAttached/leashDetached events this file reacts to never fire at
+-- all, and it is automatically fully inert either way. `enabled` below is
+-- purely an extra operator kill-switch for the VISUAL specifically (e.g. a
+-- very high-population server that wants the mechanic but not the extra
+-- rope/prop entities), independent of that.
+--
+-- BONE INDICES -- SAME HONEST DEFAULT AS Config.PropAttachments BELOW (read
+-- that block's own header first; this is the exact same situation, not a
+-- new one). AttachEntitiesToRope takes bone-relative OFFSETS derived from
+-- these indices (client/leashvisual.lua's GetBoneLocalOffset), never a bone
+-- NAME string -- this resource's research has never found a confirmed bone
+-- NAME for the a_c_* K9 skeleton (see Config.PropAttachments/
+-- client/bonetool.lua), and never went looking for one on the human
+-- skeleton for this feature either, so both indices below default to 0
+-- (root -- always valid, never crashes, looks wrong: the rope anchors near
+-- each ped's own center rather than precisely a collar/hand point).
+-- Refine with Config.Features.BoneSweepDevTool (works on ANY currently-worn
+-- ped model, human or K9 -- it is not K9-specific) and set the real values
+-- here once found.
+Config.LeashVisual = {
+    enabled = true,
+
+    -- Bone index the rope's K9-side endpoint offsets from (the K9's own
+    -- ped).
+    k9BoneIndex = 0,
+    -- Bone index the rope's officer-side endpoint offsets from (the
+    -- handler's own ped) -- ALSO reused as the attach bone for
+    -- handleModel/handleFallbackModel below, since both represent the same
+    -- "where on the handler's body does the leash line originate" point.
+    officerBoneIndex = 0,
+
+    -- Rope look/feel. ropeType is a zero-based index into ropedata.xml
+    -- (AddRope's own documented set, game build 3258): 0 = RopeThin, the
+    -- thinnest and most leash-like of the 8 shipped types (1/2/7 are
+    -- steel-cable textured, meant for tow cables). AddRope's own docs state
+    -- an out-of-range ropeType CRASHES THE GAME -- client/leashvisual.lua
+    -- clamps this to [0, 7] defensively rather than trusting it blindly,
+    -- but this should still never be hand-edited outside that range.
+    ropeType = 0,
+    -- The rope's maximum droop/extend length, in meters. Deliberately
+    -- LARGER than Config.LeashMaxDistance above rather than equal to it: a
+    -- rope whose max length exactly matched the real enforced range would
+    -- look taut/rigid at all times, right up to the exact moment
+    -- client/movement.lua's own elastic pull-back (LEASH_HARD_CAP_FACTOR =
+    -- 1.5) kicks in. Sized to roughly that same 1.5x factor here (8.0 * 1.5
+    -- = 12.0) so the rope only looks genuinely taut right around where the
+    -- real mechanic starts correcting distance, and hangs with a natural
+    -- droop well inside that. Kept as its OWN independent field (not a
+    -- computed `Config.LeashMaxDistance * 1.5` expression) so an operator
+    -- can retune the cosmetic droop without touching the mechanic's own
+    -- range, or vice versa.
+    ropeMaxLengthMeters = 12.0,
+    -- The rope's minimum length, in meters -- how slack it can go when the
+    -- two peds are close together. 0.0 lets it go fully slack, the correct
+    -- look for two people standing close.
+    ropeMinLengthMeters = 0.0,
+
+    -- Bounded wait for RopeAreTexturesLoaded() before giving up on ever
+    -- rendering a rope for the rest of THIS client's session
+    -- (client/leashvisual.lua's EnsureRopeTexturesLoaded) -- same
+    -- "generous ceiling, then fail loudly rather than hang forever"
+    -- reasoning as REQUEST_MODEL_TIMEOUT_MS elsewhere in this resource
+    -- (client/kennel.lua, client/propattachment.lua).
+    ropeTextureTimeoutMs = 5000,
+
+    -- Leash-handle prop attached to the HANDLER's (officer-role party's)
+    -- own hand for the leash's duration -- UNVERIFIED, same honest
+    -- disclosure as Config.PropAttachments.propModel below: no confirmed
+    -- GTA V leash-handle prop model was found this pass. There is no
+    -- native-decls-equivalent registry of PROP MODEL NAMES to check the way
+    -- there is for natives -- a model's existence can only be confirmed
+    -- empirically against a live client, which this pass did not have.
+    -- Survivable by design: fallbackPropModel below is the SAME
+    -- confirmed-safe placeholder this resource already uses elsewhere
+    -- (Config.PropAttachments.fallbackPropModel / Config.DeployableKennel's
+    -- own fallback) specifically because an obviously-wrong prop tells an
+    -- operator to go find a real one, where a silent no-op would just look
+    -- like the feature is broken.
+    handleModel = 'p_ing_dogleash01x', -- UNVERIFIED GUESS, not sourced from any confirmed model list -- replace with a real leash-handle prop once one is found
+    handleFallbackModel = 'prop_tennis_ball',
+}
+
+-- ======================================================================
 -- NOTE (coder-architect, Phase 1 rewrite): Config.K9DespawnGraceSeconds
 -- was added in the first scaffolding pass for a handler->K9 netId
 -- registry that no longer exists — DEVELOPER_REFERENCE.md's post-draft correction
@@ -1617,6 +1706,16 @@ Config.Combat = {
         -- guess when this is nil, exactly like WantedStatusCheckOverride
         -- above.
         IsPlayerDownedOverride = nil,
+        -- Default keyboard key for the "Drag / Release" TOGGLE keybind
+        -- (client/keybinds.lua registers `k9dragtoggle` + this as its
+        -- RegisterKeyMapping default). Always rebindable client-side, same
+        -- disclosure as HandlerDownDefense.confirmKey below -- and the same
+        -- REAL CONSTRAINT: RegisterKeyMapping only sets a DEFAULT. Once a
+        -- player has rebound this in Settings > Key Bindings > FiveM,
+        -- changing this value in a later config update does NOT move their
+        -- existing binding -- it only changes what a BRAND NEW player (or
+        -- one who never touched this specific binding) starts with.
+        toggleKeybind = 'Y',
     },
 
     -- DEVELOPER_REFERENCE.md §12.5.3, implemented in server/defense.lua +
@@ -1676,6 +1775,13 @@ Config.Combat = {
         -- overall, and the per-K9 cooldown was always the intended throttle
         -- for legitimate repeated use.
         targetCooldownMs = 35000,
+        -- Default keyboard key for the "Bite & Hold / Release" TOGGLE
+        -- keybind (client/keybinds.lua registers `k9bitehold` + this as its
+        -- RegisterKeyMapping default). Always rebindable client-side -- see
+        -- PropDragging.toggleKeybind above for the full disclosure of the
+        -- REAL CONSTRAINT: RegisterKeyMapping only sets a DEFAULT and
+        -- cannot move a player's own already-rebound key.
+        toggleKeybind = 'B',
     },
     NonLethalTakedown = {
         range               = 3.0,
@@ -1687,6 +1793,13 @@ Config.Combat = {
         cooldownMs          = 25000, -- per-K9 cooldown
         targetCooldownMs    = 30000, -- per-target cooldown -- stops repeat takedowns of the same already-downed target by multiple K9s in quick succession
         healthFloor         = 100,   -- backstop only, NOT the primary non-lethal mechanism -- primary mechanism is the SetEntityCanBeDamaged bracket above
+        -- Default keyboard key for the (non-toggle, one-shot) "Non-Lethal
+        -- Takedown" keybind (client/keybinds.lua registers `k9takedown` +
+        -- this as its RegisterKeyMapping default). Always rebindable
+        -- client-side -- see PropDragging.toggleKeybind above for the full
+        -- disclosure of the REAL CONSTRAINT: RegisterKeyMapping only sets a
+        -- DEFAULT and cannot move a player's own already-rebound key.
+        keybind             = 'T',
     },
 
     AgilityAdvanced = {
@@ -1867,6 +1980,15 @@ Config.AdminAudit = {
         Certifications = 25,
         Partnerships   = 25,
         SearchLog      = 25,
+        -- GAP 2 closure (owner-directed "full control ... accountability"
+        -- pass): backs the new qbx_k9unit:server:tabletAuditCatalog
+        -- callback, which reads the eight previously write-only catalog-edit
+        -- audit tables (cert tiers, permission keys, XP tiers, shop items,
+        -- shop locations, per-K9 overrides, runtime overrides, tablet
+        -- themes) -- server/admin.lua additionally clamps this into
+        -- [1, 100] in code regardless of what is set here, same as every
+        -- other key in this table.
+        CatalogAudit   = 25,
     },
 }
 
@@ -1958,6 +2080,30 @@ Config.DeployableKennel = {
     -- reasoning in server/main.lua (a request nobody ever answers must not
     -- linger indefinitely).
     pendingPlacementTtlMs = 15000,
+
+    -- CARRY VISUAL (this pass -- "make the pickup feel real"). Purely
+    -- cosmetic bone/offset/rotation for the kennel-shaped prop
+    -- client/kennel.lua attaches to a handler's own ped while carrying a
+    -- just-picked-up kennel (client/propattachment.lua's own
+    -- AttachPropToOwnPed, reused rather than reimplemented). UNTUNED
+    -- placeholder, same disclosed-confidence status as
+    -- placementForwardOffsetMeters above — boneIndex 0 (the root/pelvis
+    -- bone) is deliberately used instead of a hand-specific bone: it is
+    -- guaranteed valid on every ped skeleton (this resource's own
+    -- client/combat.lua PropDragging attach already uses bone 0 for the
+    -- same reason), whereas a specific hand-bone index could not be
+    -- confirmed against a second independent source this session (the same
+    -- egress-proxy blocker propModel's own confidence note above already
+    -- discloses) and an invalid bone index is a real visual-placement risk,
+    -- not just a cosmetic nitpick. The offsets below place the carried prop
+    -- roughly in front of the handler's chest instead.
+    carryBoneIndex = 0,
+    carryOffsetX = 0.0,
+    carryOffsetY = 0.3,
+    carryOffsetZ = 0.35,
+    carryRotX = 0.0,
+    carryRotY = 0.0,
+    carryRotZ = 0.0,
 }
 -- ONE-KENNEL-PER-HANDLER LIMIT (not a config knob — see server/kennel.lua's
 -- header for the full "your call, documented" reasoning): the server-side
@@ -2138,7 +2284,20 @@ Config.Wellbeing = {
         -- server before enabling FatigueSystem, or the rest bonus simply
         -- never triggers -- silently, since a scan that matches nothing is
         -- indistinguishable from a K9 that is never near a rest source.
-        restSources             = { 'water_bowl' },
+        -- WIRED IN THIS PASS (K9-can-rest-in-a-kennel task): added
+        -- Config.DeployableKennel.propModel ('prop_dog_cage_01', ALREADY
+        -- confirmed real -- see that field's own confidence note) as a
+        -- second rest source, exactly the one-line addition this field's
+        -- own CHANGELOG entry already anticipated. Deliberately did NOT add
+        -- Config.DeployableKennel.fallbackPropModel here: that fallback is
+        -- 'prop_tennis_ball', the SAME shared model server/kennel.lua's own
+        -- header CROSS-FEATURE GAP section already documents colliding with
+        -- server/fetch.lua's ball and server/propattachment.lua's fallback
+        -- vest -- adding it here would make an unrelated dropped fetch ball
+        -- or worn vest fallback prop silently grant the Fatigue rest bonus
+        -- to any K9 standing near it. The primary model is unique to this
+        -- feature; only it is listed.
+        restSources             = { 'water_bowl', 'prop_dog_cage_01' },
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty
         -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
         -- client/movement.lua's own comment computes the worst case as

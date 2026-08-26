@@ -324,6 +324,28 @@ read_globals = {
     "lib", "locale", "exports", "MySQL",
     -- qbx_core's client-side player-data cache (client/hud.lua)
     "QBX",
+    -- client/vehicle.lua's real-seat K9 vehicle entry (this pass, replacing
+    -- the old attach-to-trunk approximation). Every one of these 404s on
+    -- ext/native-decls (a 404 there is never proof of absence, per this
+    -- file's own standing rule) and was instead verified against the
+    -- documented fallback, runtime.fivem.net/doc/natives.json (fetched
+    -- 2026-08-26), which carries a real hash + parameter list for each:
+    --   IS_VEHICLE_SEAT_FREE                 VEHICLE 0x22AC59A870E6A669
+    --   SET_PED_INTO_VEHICLE                 PED     0xF75B0D629E1C063D
+    --   GET_VEHICLE_MAX_NUMBER_OF_PASSENGERS VEHICLE 0xA7C4F2C6E744A550
+    --   SET_VEHICLE_DOOR_OPEN                VEHICLE 0x7C65DAC73C35C862
+    --   SET_VEHICLE_DOOR_SHUT                VEHICLE 0x93D9BD300D7789E5
+    --   TASK_LEAVE_VEHICLE                   TASK    0xD3DBCE61A490BE02
+    -- None carry an `apiset` key in that database, which -- per this file's
+    -- own established reading of the same field elsewhere above -- means
+    -- the default, client-only; every call site is in client/vehicle.lua.
+    -- GET_VEHICLE_PED_IS_IN is the one exception with a real, live decl
+    -- page: https://raw.githubusercontent.com/citizenfx/fivem/master/
+    -- ext/native-decls/GetVehiclePedIsIn.md returns HTTP 200, ns PED, hash
+    -- 0x9A9112A0FE9A4713.
+    "IsVehicleSeatFree", "SetPedIntoVehicle", "GetVehicleMaxNumberOfPassengers",
+    "SetVehicleDoorOpen", "SetVehicleDoorShut", "TaskLeaveVehicle",
+    "GetVehiclePedIsIn",
 }
 
 -- Read+write: this resource's OWN cross-file globals. Every one of these is
