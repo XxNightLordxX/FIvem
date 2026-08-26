@@ -1009,6 +1009,129 @@ t.test('tabletRequestPersonSummary: certifications array carries tier/expiry/spe
 end)
 
 -- ============================================================================
+-- PERMISSION-KEY CATALOG AWARENESS (this pass) -- tabletRequestPersonSummary's
+-- own inline `permissions` builder has the SAME bug/fix as
+-- ResolveEffectivePermissions above: it must consult the live catalog, or a
+-- custom key's Grant/Revoke row on the tablet's person screen reads "not
+-- held" forever even after a real grant. See
+-- server/tablet.lua's own AdminCapabilityCandidateKeys for the shared
+-- contract these mirror.
+-- ============================================================================
+
+t.test('tabletRequestPersonSummary: permissions -- a custom, non-default GRANTED key shows as held', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.specialaudit', label = 'Special Audit' } }
+        end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('TARGET1', 'k9.specialaudit', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    local found = false
+    for _, key in ipairs(result.permissions) do if key == 'k9.specialaudit' then found = true end end
+    t.isTrue(found, 'a granted custom key must appear in the person-summary permissions array -- this is the exact bug this pass closes')
+end)
+
+t.test('tabletRequestPersonSummary: permissions -- a custom, non-default UNGRANTED key does NOT show as held', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.specialaudit', label = 'Special Audit' } }
+        end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    -- TARGET1 exists (implicitly, offline) but never received a grant.
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    for _, key in ipairs(result.permissions) do
+        t.isFalse(key == 'k9.specialaudit', 'an ungranted custom key must never read as held')
+    end
+end)
+
+t.test('tabletRequestPersonSummary: permissions -- a TOMBSTONED-but-held custom key still appears (so it remains revocable)', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        -- 'k9.specialaudit' is no longer in the live catalog at all --
+        -- exactly what a tombstoned key looks like.
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.access', label = 'x' } }
+        end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('TARGET1', 'k9.specialaudit', 'HC1', true) -- still an ACTIVE grant, despite the tombstone
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    local found = false
+    for _, key in ipairs(result.permissions) do if key == 'k9.specialaudit' then found = true end end
+    t.isTrue(found, 'a tombstoned key someone still actively holds must still surface, or high command could never revoke it from this screen')
+end)
+
+t.test('tabletRequestPersonSummary: permissions -- the four shipped keys resolve unchanged when the catalog is present', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        listPermissionCatalogKeys = function()
+            return {
+                { key = 'k9.access', label = 'x' }, { key = 'k9.certify', label = 'x' },
+                { key = 'k9.audit', label = 'x' }, { key = 'k9.givexp', label = 'x' },
+            }
+        end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('TARGET1', 'k9.access', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.equals(#result.permissions, 1)
+    t.equals(result.permissions[1], 'k9.access')
+end)
+
+t.test('tabletRequestPersonSummary: permissions -- a THROWING catalog degrades to the four shipped keys, never an empty capability panel', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        listPermissionCatalogKeys = function() error('simulated catalog failure') end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('TARGET1', 'k9.access', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    local found = false
+    for _, key in ipairs(result.permissions) do if key == 'k9.access' then found = true end end
+    t.isTrue(found, 'a catalog read failure must never empty this response -- an empty capability panel reads as "no permissions", which is false and alarming')
+end)
+
+t.test('tabletRequestPersonSummary: permissions -- never leaks a feature./block. per-feature grant disguised as an admin capability', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.specialaudit', label = 'Special Audit' } }
+        end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('TARGET1', 'feature.BiteAndHold', 'HC1', true)
+    f.addPermRow('TARGET1', 'block.NightVision', 'HC1', true)
+    f.addPermRow('TARGET1', 'k9.specialaudit', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isTrue(result.ok)
+    t.equals(#result.permissions, 1, 'only the genuine admin-capability grant may appear here')
+    t.equals(result.permissions[1], 'k9.specialaudit')
+end)
+
+t.test('tabletRequestPersonSummary: SECURITY -- an unauthorized caller gets nothing, even when the target holds a custom granted key', function()
+    local f = newFixture({
+        listPermissionCatalogKeys = function()
+            return { { key = 'k9.specialaudit', label = 'Special Audit' } }
+        end,
+    })
+    local src = f.registerPlayer(1, 'NOBODY', { name = 'police', grade = { level = 1 } }) -- no console access
+    f.addPermRow('TARGET1', 'k9.specialaudit', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.isNil(result.permissions, 'a denied caller must receive no permissions data at all, custom key or not')
+end)
+
+-- ============================================================================
 -- tabletRequestPersonFeatures -- HIGH COMMAND ONLY (load-bearing).
 -- ============================================================================
 
