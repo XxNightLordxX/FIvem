@@ -1324,6 +1324,7 @@
         "leash_now_anchoring": "You are now anchoring the leash.",
         "leash_detached": "Leash detached.",
         "leash_detached_partner_disconnected": "Leash detached — your partner disconnected.",
+        "leash_detached_partner_died": "Leash detached — your partner died.",
         "leash_snapped_too_far": "Leash snapped — you got too far from your handler.",
         "attach_leash_target_label": "Attach Leash",
         "attach_leash_handler_target_label": "Handler: Put This K9 on Your Leash",

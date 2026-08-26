@@ -6218,6 +6218,13 @@
         return wrap;
     }
 
+    /** @param {{category?:string}} feature @returns {string} name-cell class for this row's domain (scent/vehicle get a light visual accent here too; every other row keeps no class at all, byte-identical to before this pass). */
+    function personFeatureNameCellClass(feature) {
+        if (feature && feature.category === 'scent') return 'k9tablet-person-feature-name--scent';
+        if (feature && feature.category === 'vehicle') return 'k9tablet-person-feature-name--vehicle';
+        return null;
+    }
+
     /**
      * THE HONESTY REQUIREMENT this task exists to satisfy: this row's
      * Block Effect cell renders BEFORE Actions, so an operator sees what a
@@ -6226,13 +6233,6 @@
      * three-state contract this reads and why it is never derived from
      * `feature.key` here.
      */
-    /** @param {{category?:string}} feature @returns {string} name-cell class for this row's domain (scent/vehicle get a light visual accent here too; every other row keeps no class at all, byte-identical to before this pass). */
-    function personFeatureNameCellClass(feature) {
-        if (feature && feature.category === 'scent') return 'k9tablet-person-feature-name--scent';
-        if (feature && feature.category === 'vehicle') return 'k9tablet-person-feature-name--vehicle';
-        return null;
-    }
-
     function buildPersonFeatureRow(feature) {
         var tr = mk('tr');
         var nameCls = personFeatureNameCellClass(feature);
