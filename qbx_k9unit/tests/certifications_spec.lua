@@ -3339,6 +3339,96 @@ t.test('GrantSpecialization: a duplicate-key error thrown by the INSERT is treat
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_already_granted'), 'inform'))
 end)
 
+-- ----------------------------------------------------------------------
+-- GrantSpecialization TOCTOU (concurrency audit, reproduced): the
+-- `cached.active`/`cached.job`/`not cached.expired` precondition is read
+-- ONCE, synchronously, BEFORE GrantInFlight[lockKey] is set and BEFORE
+-- doGrantInsert's own two genuinely-yielding MySQL awaits
+-- (K9Store.Spec_GetActiveId, K9Store.Spec_Insert) ever run. A concurrent
+-- RevokeCertification's own DB write (K9Store.Cert_RevokeActive) is
+-- itself a real yield point that can commit -- and refresh the cache --
+-- entirely inside that window. Reproduced here with the SAME
+-- yielding-MySQL-stub-through-a-real-coroutine technique as the
+-- GrantCertification GrantInFlight test above (see that test's own
+-- header for why this is the only way to prove a genuine interleaving,
+-- not just test-harness luck). LOAD-BEARING.
+-- ----------------------------------------------------------------------
+
+t.test('GrantSpecialization: LOAD-BEARING TOCTOU -- a RevokeCertification that commits WHILE a concurrent GrantSpecialization is suspended inside its own pre-check await must not leave a granted specialization row behind', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'SPEC-GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(11, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(11, 1011, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    -- Warm the cache with a genuinely active base certification for
+    -- TARGET BEFORE any of the race stubs below are installed -- an
+    -- ordinary, non-yielding refresh, exactly like every other test in
+    -- this file.
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+    t.isTrue(f.env.GetCertificationTier('TARGET', 'police') ~= nil, 'sanity: TARGET starts genuinely certified')
+
+    local insertCalled = false
+    f.mysql.insert.await = function(_sql, _params)
+        insertCalled = true
+        return 1
+    end
+
+    -- Distinguishes GrantSpecialization's own pre-check
+    -- (K9Store.Spec_GetActiveId, table k9_certification_specializations)
+    -- from RevokeCertification's post-revoke cache-refresh read
+    -- (K9Store.Cert_GetActiveId, table k9_certifications) -- ONLY the
+    -- former yields, modeling the real coroutine suspension point a
+    -- genuine oxmysql round trip would be. The latter must resolve
+    -- immediately so the revoke below runs start-to-finish as a single,
+    -- ordinary call, exactly matching the report's "officer A's revoke
+    -- commits" step (this test needs the RACE to be genuine only on the
+    -- grant side -- RevokeCertification's own concurrency is already
+    -- covered elsewhere).
+    f.mysql.scalar.await = function(sql, _params)
+        if sql:find('k9_certification_specializations', 1, true) then
+            coroutine.yield()
+            return nil -- no pre-existing active specialization row
+        end
+        return nil -- Cert_GetActiveId during the revoke's own cache refresh: confirmed inactive
+    end
+
+    local coGrant = coroutine.create(function()
+        f.commands['k9specialize'].fn(10, { '20', 'narcotics' })
+    end)
+
+    -- Run the specialization grant up to its FIRST yield -- this is the
+    -- point in real FXServer where GrantSpecialization's ONE-TIME,
+    -- synchronous `cached.active` precondition has already passed and
+    -- GrantInFlight[lockKey] is already set, and the coroutine is now
+    -- suspended awaiting the pre-check SELECT.
+    local ok1, err1 = coroutine.resume(coGrant)
+    t.isTrue(ok1, tostring(err1))
+    t.equals(coroutine.status(coGrant), 'suspended', 'the grant must be paused mid-flight at the specialization pre-check await')
+
+    -- Officer B's revoke now runs to completion, entirely underneath the
+    -- suspended grant above -- a plain, ordinary call (this side of the
+    -- race never yields for this test, matching the report's "A's revoke
+    -- commits" step).
+    f.commands['k9decertify'].fn(11, { '20' })
+    t.isTrue(notifiedExactly(f, 11, Sandbox.locale('certifications.revoke_success'), 'success'), 'sanity: the revoke must have genuinely committed')
+    t.isNil(f.env.GetCertificationTier('TARGET', 'police'), 'sanity: the cache must already reflect the revoke before the grant resumes')
+
+    -- Resume the grant -- drains every remaining yield until it finishes.
+    while coroutine.status(coGrant) ~= 'dead' do
+        local ok, err = coroutine.resume(coGrant)
+        t.isTrue(ok, tostring(err))
+    end
+
+    t.isFalse(insertCalled, 'the INSERT must never run once the target has been decertified underneath the in-flight grant')
+    t.isFalse(f.env.HasSpecialization('TARGET', 'police', 'narcotics'), 'no specialization row may exist for a target decertified mid-grant')
+    t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.specialization_requires_active_cert_hint'), 'error'),
+        'the granter must see the same "requires active cert" refusal a fresh, non-racing attempt against an already-decertified target would get -- not a false "granted" success')
+end)
+
 -- ======================================================================
 -- TIER CAPABILITIES (coordinator-assigned, this pass): server/certtiers.lua's
 -- TierCapabilityPermits(citizenid, jobName, capabilityKey) had zero real
@@ -3736,6 +3826,130 @@ t.test('RenewCertification: clears the warned/lapsed session flags so a genuinel
         if e.source == 20 and e.message == Sandbox.locale('certifications.expiry_lapsed_notice') then lapsedCountAfterSecondLapse = lapsedCountAfterSecondLapse + 1 end
     end
     t.equals(lapsedCountAfterSecondLapse, lapsedCountAfterRenewal + 1, 'a renewal must clear the one-per-session lapsed flag so a genuinely NEW lapse can be announced again')
+end)
+
+-- ----------------------------------------------------------------------
+-- CONCURRENCY-AUDIT FIX (this pass): Config.CertificationExpiryCheckIntervalMs
+-- validation, mirroring server/tenure.lua's own IDENTICAL checkIntervalMs
+-- fix -- see that file's own doc comment (immediately above its
+-- checkIntervalMs CreateThread registration) for the full writeup, and
+-- this file's own equivalent comment above its own CreateThread
+-- registration for why the same fix applies here at lower severity (this
+-- sweep is cache-only, never a live SQL query -- see this section's own
+-- header). The OLD `rawIntervalMs > 0` check accepted a hand-edited `1`
+-- exactly as readily as a sane `300000`, entirely bypassing the K9
+-- Command Tablet's own 30000-3600000ms bound for this exact field (a
+-- bound enforced ONLY by the tablet's own UI, never re-verified here) and
+-- the shared 250ms floor server/cooldowns.lua's ResolveConfiguredThresholdMs
+-- already enforces for every other Config-sourced interval in this
+-- resource -- now delegated to that same function instead.
+--
+-- SHARED-THREADRUNNER NOTE: with Config.Features.CertificationExpiry on
+-- (every test below), server/certifications.lua's file scope registers
+-- THREE separate CreateThread loops onto this ONE fixture-wide
+-- threadRunner: CertifyXpMintCooldown's 24h StartSweep cleanup
+-- (unconditional, registered first, near this file's top), THIS
+-- section's own expiry-check thread (registered second, only when the
+-- feature above is on), and the always-on unresolved-certification
+-- resync sweep (registered third, unconditional, 30000ms). fixtures/
+-- sandbox.lua's own newThreadRunner.step() resumes every registered
+-- thread once per call, in registration order, so the three threads'
+-- captured Wait() values interleave 1:1:1 in the SAME f.waitCalls array
+-- -- expiryThreadWaitCalls() below isolates just this section's own
+-- thread's captures (position 2 of every 3) so each test can assert on
+-- ITS OWN thread's interval without the other two, unrelated threads'
+-- fixed 86400000/30000 values ever being mistaken for a regression here.
+-- ----------------------------------------------------------------------
+
+--- @param f table -- a newFixture() result
+--- @return table -- just this section's expiry-check thread's own captured Wait() ms values, in order
+local function expiryThreadWaitCalls(f)
+    local out = {}
+    for i = 2, #f.waitCalls, 3 do out[#out + 1] = f.waitCalls[i] end
+    return out
+end
+
+--- @param f table
+--- @param substr string
+--- @return number -- how many f.printLog entries contain `substr`
+local function countPrintedLinesContaining(f, substr)
+    local count = 0
+    for _, line in ipairs(f.printLog) do
+        if line:find(substr, 1, true) then count = count + 1 end
+    end
+    return count
+end
+
+t.test('CONCURRENCY-AUDIT FIX: CertificationExpiryCheckIntervalMs = 0 never reaches Wait() directly -- the real 300000ms fallback is used instead, with a loud warning naming the key', function()
+    -- NOTE on count: threadRunner.step() both PRIMES (one Wait() call,
+    -- reaching the very first loop iteration) and STEPS (one more Wait()
+    -- call, after the first real TickCertificationExpiryWarnings pass
+    -- loops back to the top) -- see fixtures/sandbox.lua's own
+    -- newThreadRunner doc comment, and tests/tenure_spec.lua's own
+    -- identical convention for the equivalent tenure thread.
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryCheckIntervalMs = 0 })
+    f.threadRunner.step()
+    f.threadRunner.step()
+    local calls = expiryThreadWaitCalls(f)
+    t.equals(#calls, 2)
+    t.equals(calls[1], 300000, 'a 0 checkIntervalMs must never be passed straight to Wait() directly')
+    t.equals(calls[2], 300000, 'the fallback must apply on every loop pass, not just the first')
+    t.equals(countPrintedLinesContaining(f, 'CertificationExpiryCheckIntervalMs'), 2, 'one warning per validation pass, matching the 2 captured Wait() calls above')
+end)
+
+t.test('CONCURRENCY-AUDIT FIX: CertificationExpiryCheckIntervalMs = 1 (a valid, POSITIVE number, but below the shared 250ms floor) is ALSO caught now -- the old `> 0` check let this straight through completely unclamped', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryCheckIntervalMs = 1 })
+    f.threadRunner.step()
+    f.threadRunner.step()
+    local calls = expiryThreadWaitCalls(f)
+    t.equals(calls[1], 300000, 'a sub-250ms positive value must never reach Wait() verbatim -- it must resolve to the safe fallback like every other bad shape')
+    t.equals(calls[2], 300000)
+    t.isTrue(countPrintedLinesContaining(f, 'CertificationExpiryCheckIntervalMs') > 0)
+    t.isTrue(countPrintedLinesContaining(f, '(1)') > 0, 'the warning must name the actual bad value found, not just say "invalid"')
+end)
+
+t.test('CONCURRENCY-AUDIT FIX: CertificationExpiryCheckIntervalMs exactly AT the shared 250ms floor is used verbatim, no warning -- the floor is inclusive, not exclusive', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryCheckIntervalMs = 250 })
+    f.threadRunner.step()
+    f.threadRunner.step()
+    local calls = expiryThreadWaitCalls(f)
+    t.equals(calls[1], 250)
+    t.equals(calls[2], 250)
+    t.equals(countPrintedLinesContaining(f, 'CertificationExpiryCheckIntervalMs'), 0)
+end)
+
+t.test('CertificationExpiryCheckIntervalMs entirely MISSING falls back silently too -- no warning, matching this resource\'s established "not configured yet" convention', function()
+    local f = newFixture({ features = { CertificationExpiry = true } }) -- expiryCheckIntervalMs omitted -> nil
+    f.threadRunner.step()
+    f.threadRunner.step()
+    local calls = expiryThreadWaitCalls(f)
+    t.equals(calls[1], 300000)
+    t.equals(calls[2], 300000)
+    t.equals(countPrintedLinesContaining(f, 'CertificationExpiryCheckIntervalMs'), 0, 'a merely-absent field is not the same as a present-but-bad one -- must stay silent')
+end)
+
+t.test('A VALID, positive CertificationExpiryCheckIntervalMs is used exactly as configured, with no warning', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryCheckIntervalMs = 45000 })
+    f.threadRunner.step()
+    f.threadRunner.step()
+    local calls = expiryThreadWaitCalls(f)
+    t.equals(calls[1], 45000, 'the real configured value must be used verbatim, not silently overridden by the fallback')
+    t.equals(calls[2], 45000)
+    t.equals(countPrintedLinesContaining(f, 'CertificationExpiryCheckIntervalMs'), 0)
+end)
+
+t.test('CONCURRENCY-AUDIT FIX: the CertificationExpiryCheckIntervalMs warning repeats once per pass against a persistently-broken config, never a flood -- the same ResolveConfiguredThresholdMs call is what sets the fallback Wait() uses, so a repeat can only land once per full 300000ms fallback interval', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryCheckIntervalMs = 0 })
+    f.threadRunner.step() -- prime (1 Wait call)
+    f.threadRunner.step() -- + 1 step (1 more Wait call) = 2 total
+    f.threadRunner.step() -- + 1 more step = 3 total
+    f.threadRunner.step() -- + 1 more step = 4 total
+    local calls = expiryThreadWaitCalls(f)
+    t.equals(#calls, 4)
+    t.equals(countPrintedLinesContaining(f, 'CertificationExpiryCheckIntervalMs'), 4, 'one warning per validation pass -- each one only fires after the FULL 300000ms fallback interval the previous pass already selected, never faster')
+    for i = 1, #calls do
+        t.equals(calls[i], 300000, 'the fallback keeps applying on every single loop pass, not just the first')
+    end
 end)
 
 -- ======================================================================

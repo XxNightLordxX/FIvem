@@ -1014,14 +1014,41 @@ end
 -- to catch. Unlike that file's hard resource-start assert (appropriate
 -- there since PollIntervalMs is captured once, before its thread is ever
 -- created), this file re-reads the value every iteration, so a soft
--- fallback + one-time warning (mirroring server/recall.lua's own
+-- fallback + warning (mirroring server/recall.lua's own
 -- RequestCooldownMs = 0 footgun fix) is the fix that fits this file's own
 -- per-iteration re-read design without changing it. A MISSING config value
 -- (nil -- the "TenureBonus schema/config not landed on this server yet"
 -- case this file elsewhere treats as a total silent no-op) stays silent,
 -- matching this file's own established convention; only a PRESENT-but-bad
--- value (0, negative, NaN, or a non-number) warns.
-local WarnedBadTenureCheckInterval = false
+-- value warns.
+--
+-- CONCURRENCY-AUDIT FIX (this pass): the check above ("is this even a
+-- usable positive number") is exactly what server/cooldowns.lua's own
+-- ResolveConfiguredThresholdMs already enforces for every OTHER
+-- Config-sourced interval in this resource (see that function's own
+-- header) -- PLUS a 250ms hard floor this file's own hand-rolled
+-- `rawIntervalMs > 0` check never had at all. The K9 Command Tablet
+-- itself only ever offers 10000-3600000ms for this exact field, but that
+-- bound lives ENTIRELY in the tablet's own UI/validation (html/tablet.js,
+-- server/tablet.lua) -- nothing here re-verified it, so a hand-edited
+-- `Config.Partnership.TenureBonus.checkIntervalMs = 1` (or any other
+-- value below the shared 250ms floor) used to sail straight past the OLD
+-- `> 0` check into Wait() below completely unclamped, firing this
+-- thread's real k9_partnerships query once per K9-role player on every
+-- pass -- a genuine DB-hammering footgun, not merely a mistimed poll.
+-- Delegated to ResolveConfiguredThresholdMs now instead of a second,
+-- hand-rolled copy of its own floor/validity rules -- this file no longer
+-- needs to independently re-derive what "a usable interval" means, and
+-- gets the exact same clear, key-naming warning message every other
+-- Config-sourced interval in this resource already prints on a bad value.
+-- NOT memoized behind a "warn once" flag the way the pre-fix code was:
+-- once a bad value is caught, THIS SAME call is what determines the
+-- fallback Wait() below uses, so a repeat warning can only ever fire once
+-- per full TENURE_CHECK_INTERVAL_FALLBACK_MS (300000ms) fallback interval
+-- -- a live reminder a real value is broken, never a flood -- worlds
+-- apart from the pre-fix danger, where a bad value skipped the fallback
+-- entirely and could re-enter this loop as fast as Wait() itself
+-- returns.
 local TENURE_CHECK_INTERVAL_FALLBACK_MS = 300000
 
 if Config.Features.HandlerPartnership and Config.Features.XPProgression and Config.Features.PartnershipTenureBonus then
@@ -1029,13 +1056,8 @@ if Config.Features.HandlerPartnership and Config.Features.XPProgression and Conf
         while true do
             local tenureCfg = Config.Partnership and Config.Partnership.TenureBonus
             local rawIntervalMs = type(tenureCfg) == 'table' and tenureCfg.checkIntervalMs or nil
-            local intervalMs = TENURE_CHECK_INTERVAL_FALLBACK_MS
-            if type(rawIntervalMs) == 'number' and rawIntervalMs == rawIntervalMs and rawIntervalMs > 0 then
-                intervalMs = rawIntervalMs
-            elseif rawIntervalMs ~= nil and not WarnedBadTenureCheckInterval then
-                WarnedBadTenureCheckInterval = true
-                print(('[qbx_k9unit] tenure: Config.Partnership.TenureBonus.checkIntervalMs (%s) is not a positive number -- using the built-in %dms interval instead. A non-positive/NaN value here would otherwise feed Wait() directly every loop pass, which can busy-loop or silently kill this thread forever (disabling every future tenure-milestone grant) rather than merely mistiming the poll.'):format(tostring(rawIntervalMs), TENURE_CHECK_INTERVAL_FALLBACK_MS))
-            end
+            local intervalMs = rawIntervalMs == nil and TENURE_CHECK_INTERVAL_FALLBACK_MS
+                or ResolveConfiguredThresholdMs(rawIntervalMs, TENURE_CHECK_INTERVAL_FALLBACK_MS, 'Config.Partnership.TenureBonus.checkIntervalMs')
             Wait(intervalMs)
             local ok, err = pcall(TickPartnershipTenure)
             if not ok then

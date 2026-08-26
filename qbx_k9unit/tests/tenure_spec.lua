@@ -280,6 +280,19 @@ local function newTenureFixture(opts)
     -- SQL/params shape unchanged. See tests/admin_spec.lua for the
     -- precedent this comment mirrors.
     Sandbox.loadInto('../server/datastore.lua', env)
+    -- server/cooldowns.lua -- REAL, unmodified, loaded next (matches
+    -- fxmanifest.lua's own datastore.lua -> cooldowns.lua -> tenure.lua
+    -- order). CONCURRENCY-AUDIT FIX (this pass): server/tenure.lua's
+    -- checkIntervalMs validation now delegates to this file's own
+    -- ResolveConfiguredThresholdMs (resource-global, no `local`) instead
+    -- of a hand-rolled copy of its floor/validity rules -- see
+    -- server/tenure.lua's own doc comment immediately above its
+    -- checkIntervalMs CreateThread registration for the full writeup.
+    -- Loading the real file here (rather than stubbing the function)
+    -- keeps the CHECKINTERVALMS VALIDATION tests below a genuine
+    -- regression guard on the real 250ms floor, not a reimplementation of
+    -- it asserted independently of the production code.
+    Sandbox.loadInto('../server/cooldowns.lua', env)
     -- server/datastore.lua prints a one-time, load-time boot banner
     -- ("Config.Database.enabled -- persisting to..."/"...running IN
     -- MEMORY ONLY") through this SAME env.print stub. That banner is
@@ -644,17 +657,30 @@ t.test('DISCREPANCY/RACE: the in-memory pre-filter reports a K9-role partnership
 end)
 
 -- ----------------------------------------------------------------------
--- CHECKINTERVALMS VALIDATION (this pass's own fix): a misconfigured
+-- CHECKINTERVALMS VALIDATION: a misconfigured
 -- Config.Partnership.TenureBonus.checkIntervalMs must never reach Wait()
 -- unguarded -- mirrors server/defense.lua's own PollIntervalMs finding for
 -- the identical failure shape (a bad value here can busy-loop or silently
 -- kill this shared thread forever). Unlike server/defense.lua's load-time
 -- assert, this file re-reads the config every loop pass, so the fix is a
--- soft fallback (to the real shipped default, 300000ms) plus a one-time
--- warning, not a hard resource-start failure.
+-- soft fallback (to the real shipped default, 300000ms) plus a warning,
+-- not a hard resource-start failure.
+--
+-- CONCURRENCY-AUDIT FIX (this pass): this validation now delegates to the
+-- REAL server/cooldowns.lua ResolveConfiguredThresholdMs (loaded into
+-- this fixture above) rather than a hand-rolled `rawIntervalMs > 0` check
+-- -- see server/tenure.lua's own doc comment for the full writeup. Two
+-- consequences pinned below that were NOT true of the old hand-rolled
+-- check: (1) a valid, POSITIVE value below the shared 250ms floor (e.g. a
+-- hand-edited `1`, bypassing the K9 Command Tablet's own 10000ms tablet
+-- minimum entirely) now ALSO falls back and warns, where the old
+-- `> 0` check let it straight through; (2) the warning is no longer
+-- deduplicated behind a "once ever" flag -- it now fires once per
+-- fallback-interval pass (still never a flood, since the fallback itself
+-- is what bounds how often the loop re-evaluates at all).
 -- ----------------------------------------------------------------------
 
-t.test('FOOTGUN FIX: checkIntervalMs = 0 never reaches Wait() directly -- the real 300000ms fallback is used instead, with a loud one-time warning', function()
+t.test('FOOTGUN FIX: checkIntervalMs = 0 never reaches Wait() directly -- the real 300000ms fallback is used instead, with a loud warning', function()
     -- NOTE on count: runOneTick() both PRIMES (one Wait() call, reaching the
     -- very first loop iteration) and STEPS (one more Wait() call, after the
     -- first real TickPartnershipTenure pass loops back to the top) -- see
@@ -666,8 +692,26 @@ t.test('FOOTGUN FIX: checkIntervalMs = 0 never reaches Wait() directly -- the re
     t.equals(#fx.waitCalls, 2)
     t.equals(fx.waitCalls[1], 300000, 'a 0 checkIntervalMs must never be passed straight to Wait() -- it can busy-loop the real thread')
     t.equals(fx.waitCalls[2], 300000, 'the fallback must apply on every loop pass, not just the first')
-    t.equals(#fx.printedLines, 1)
+    t.equals(#fx.printedLines, 2, 'one warning per pass through the validation, matching the 2 captured Wait() calls above')
     t.contains(fx.printedLines[1], 'checkIntervalMs')
+    t.contains(fx.printedLines[2], 'checkIntervalMs')
+end)
+
+t.test('CONCURRENCY-AUDIT FIX: checkIntervalMs = 1 (a valid, POSITIVE number, but below the shared 250ms floor) is ALSO caught now -- the old `> 0` check let this straight through unclamped, a real DB-hammering footgun since this thread queries once per K9-role player', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 1, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 300000, 'a sub-250ms positive value must never reach Wait() verbatim -- it must resolve to the safe fallback like every other bad shape')
+    t.equals(fx.waitCalls[2], 300000)
+    t.contains(fx.printedLines[1], 'checkIntervalMs')
+    t.contains(fx.printedLines[1], '1', 'the warning must name the actual bad value found, not just say "invalid"')
+end)
+
+t.test('CONCURRENCY-AUDIT FIX: checkIntervalMs exactly AT the shared 250ms floor is used verbatim, no warning -- the floor is inclusive, not exclusive', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 250, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 250)
+    t.equals(fx.waitCalls[2], 250)
+    t.equals(#fx.printedLines, 0)
 end)
 
 t.test('FOOTGUN FIX: a negative checkIntervalMs is treated exactly like 0 -- same fallback, same warning', function()
@@ -710,15 +754,16 @@ t.test('A VALID, positive checkIntervalMs is used exactly as configured, with no
     t.equals(#fx.printedLines, 0)
 end)
 
-t.test('The checkIntervalMs warning prints at most ONCE across many ticks, even though the same bad value is re-read every loop pass', function()
+t.test('CONCURRENCY-AUDIT FIX: the checkIntervalMs warning now repeats once per pass against a persistently-broken config, instead of "once ever" -- but this can NEVER be a flood, because the very same ResolveConfiguredThresholdMs call is what sets the fallback Wait() below uses, so a repeat can only land once per full 300000ms fallback interval', function()
     local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 0, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
     runOneTick(fx) -- prime (1 Wait call) + 1 step (1 more Wait call) = 2 total
     runOneTick(fx) -- already primed -- 1 more step = 1 more Wait call = 3 total
     runOneTick(fx) -- 1 more step = 1 more Wait call = 4 total
-    t.equals(#fx.printedLines, 1, 'a live server under normal tick volume against an already-broken config must get exactly one warning line, not a flood')
+    t.equals(#fx.printedLines, 4, 'one warning per validation pass (matching the 4 captured Wait() calls) -- each one only fires after the FULL 300000ms fallback interval the previous pass already selected, never faster')
     t.equals(#fx.waitCalls, 4)
     for i = 1, #fx.waitCalls do
         t.equals(fx.waitCalls[i], 300000, 'the fallback keeps applying on every single loop pass, not just the first')
+        t.contains(fx.printedLines[i], 'checkIntervalMs')
     end
 end)
 

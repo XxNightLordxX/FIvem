@@ -3904,6 +3904,48 @@ local function GrantSpecialization(granterSrc, targetServerId, specializationKey
             return
         end
 
+        -- TOCTOU FIX (concurrency audit; mirrors server/partnership.lua's
+        -- respondPartnerUp critical section -- see that file's own
+        -- "TOCTOU FIX" comment for the precedent this copies). The
+        -- `cached.active`/`cached.job`/`not cached.expired` precondition a
+        -- few dozen lines above this closure was read ONCE, synchronously,
+        -- BEFORE GrantInFlight[lockKey] was ever set and BEFORE this
+        -- doGrantInsert closure's own two genuinely-yielding MySQL awaits
+        -- (K9Store.Spec_GetActiveId just above, K9Store.Spec_Insert just
+        -- below) ever ran. RevokeCertification's own DB write
+        -- (K9Store.Cert_RevokeActive) is itself a real await/yield point
+        -- that can complete entirely inside that window and flip
+        -- Certifications[targetCitizenid] to inactive underneath this
+        -- coroutine -- nothing re-checked that afterwards. Concretely: two
+        -- supervisors act on the same target at once -- one revokes while
+        -- the other is mid-specialization-grant; the revoke's UPDATE
+        -- commits and refreshes the cache while this grant is suspended at
+        -- the pre-check SELECT above; this coroutine then resumed straight
+        -- into the INSERT with no re-check, leaving a real, persisted
+        -- specialization row for a citizenid who was decertified a moment
+        -- earlier. HasSpecialization itself re-checks cached.active at
+        -- READ time (see that function's own doc comment) so this was
+        -- never a live capability bypass -- but the stray row silently
+        -- reactivates the very next time this citizenid is recertified,
+        -- with zero new grant action, which is the actual bug.
+        --
+        -- Re-read the LIVE cache here -- the last synchronous check before
+        -- the INSERT, with nothing else yielding in between
+        -- (ResolveGranterCitizenId immediately above is a synchronous,
+        -- in-memory exports.qbx_core:GetPlayer call, never a MySQL round
+        -- trip) -- so a concurrent revoke landing inside the window above
+        -- is caught here, before the row is ever written, instead of
+        -- leaving a stray row that quietly reactivates on a later,
+        -- unrelated recertification. Same outcome/locale key the original,
+        -- now-stale precondition check above uses, since this is the exact
+        -- same refusal reason, just caught late instead of early.
+        local freshCached = Certifications[targetCitizenid]
+        if not (freshCached and freshCached.active and freshCached.job == jobName and not freshCached.expired) then
+            NotifyPlayer(granterSrc, locale('certifications.specialization_requires_active_cert_hint'), 'error')
+            outcome = 'requires_active_cert'
+            return
+        end
+
         local insertOk, insertErr = pcall(K9Store.Spec_Insert, targetCitizenid, jobName, specializationKey, granterCitizenid)
 
         if not insertOk then
@@ -5131,20 +5173,33 @@ local function TickCertificationExpiryWarnings()
     end
 end
 
-local WarnedBadExpiryCheckIntervalMs = false
+-- CONCURRENCY-AUDIT FIX (this pass): mirrors server/tenure.lua's own
+-- identical `checkIntervalMs` fix -- see that file's own doc comment,
+-- immediately above its equivalent CreateThread registration, for the
+-- full writeup this one intentionally does not repeat verbatim. Same
+-- shape here: the OLD `rawIntervalMs > 0` check accepted a hand-edited
+-- `1` just as readily as a sane `300000`, entirely bypassing the K9
+-- Command Tablet's own 30000-3600000ms bound for this exact field (a
+-- bound enforced ONLY by the tablet's own UI, never re-verified here) and
+-- the shared 250ms floor server/cooldowns.lua's ResolveConfiguredThresholdMs
+-- already enforces for every other Config-sourced interval in this
+-- resource. Lower blast radius than tenure.lua's own version of this bug
+-- (this sweep is cache-only -- GetPlayers()/Certifications reads, never a
+-- live SQL query, per this section's own header above) but the identical
+-- defect shape, so the identical fix: delegate to
+-- ResolveConfiguredThresholdMs rather than a second hand-rolled copy of
+-- its floor/validity rules, with the same "no warn-once flag needed"
+-- reasoning tenure.lua's own comment explains (a bad value's own warning
+-- can now only repeat once per EXPIRY_CHECK_INTERVAL_FALLBACK_MS, since
+-- that fallback is what the very same call sets Wait() to use next).
 local EXPIRY_CHECK_INTERVAL_FALLBACK_MS = 300000
 
 if Config.Features and Config.Features.CertificationExpiry == true then
     CreateThread(function()
         while true do
             local rawIntervalMs = Config.CertificationExpiryCheckIntervalMs
-            local intervalMs = EXPIRY_CHECK_INTERVAL_FALLBACK_MS
-            if type(rawIntervalMs) == 'number' and rawIntervalMs == rawIntervalMs and rawIntervalMs > 0 then
-                intervalMs = rawIntervalMs
-            elseif rawIntervalMs ~= nil and not WarnedBadExpiryCheckIntervalMs then
-                WarnedBadExpiryCheckIntervalMs = true
-                print(('[qbx_k9unit] certifications: Config.CertificationExpiryCheckIntervalMs (%s) is not a positive number -- using the built-in %dms interval instead.'):format(tostring(rawIntervalMs), EXPIRY_CHECK_INTERVAL_FALLBACK_MS))
-            end
+            local intervalMs = rawIntervalMs == nil and EXPIRY_CHECK_INTERVAL_FALLBACK_MS
+                or ResolveConfiguredThresholdMs(rawIntervalMs, EXPIRY_CHECK_INTERVAL_FALLBACK_MS, 'Config.CertificationExpiryCheckIntervalMs')
             Wait(intervalMs)
             local ok, err = pcall(TickCertificationExpiryWarnings)
             if not ok then
