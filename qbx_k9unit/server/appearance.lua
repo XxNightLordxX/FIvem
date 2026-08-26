@@ -620,7 +620,7 @@ end)
 --- @param targetCitizenid string
 --- @param modelName string
 --- @return boolean ok
---- @return string outcome -- every GrantPermission outcome, plus 'invalid_model'
+--- @return string outcome -- every GrantPermission outcome, plus 'invalid_model' and 'db_error'
 function ApplyK9PedRole(granterSrc, targetCitizenid, modelName)
     if not IsValidPedModelName(modelName) then
         LogAppearanceAudit(WhoLabelForSource(granterSrc), 'applyK9PedRole',
@@ -688,7 +688,19 @@ function ApplyK9PedRole(granterSrc, targetCitizenid, modelName)
     -- below, before the real swap runs against them for the first time).
     local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
     local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
-    WriteAppearanceApplied(targetCitizenid, modelName, nil, granterCitizenid or granterLabel)
+    -- DISCARDED-WRITE FIX (this pass): this write's boolean result was
+    -- previously discarded outright -- a DB failure here used to be reported
+    -- to the granter as `true, 'persisted_offline'` (an "inform" toast
+    -- promising the role would be there on the target's next login) even
+    -- though nothing was actually persisted. Reported honestly instead,
+    -- matching this resource's established `reason = 'db_error'` convention
+    -- for a SafeWrite-contract write returning `false` (see e.g.
+    -- server/certtiers.lua's identical pattern).
+    local wroteOk = WriteAppearanceApplied(targetCitizenid, modelName, nil, granterCitizenid or granterLabel)
+    if not wroteOk then
+        LogAppearanceAudit(granterLabel, 'applyK9PedRole', ('model=%s target=%s'):format(modelName, targetCitizenid), 'db_error')
+        return false, 'db_error'
+    end
     LogAppearanceAudit(granterLabel, 'applyK9PedRole', ('model=%s target=%s'):format(modelName, targetCitizenid), 'persisted_offline')
     NotifyPlayer(granterSrc, locale('appearance.apply_pending_offline'), 'inform')
     return true, 'persisted_offline'
@@ -710,9 +722,18 @@ function ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid, modelName)
 
     local sent = SendSwapRequest(targetCitizenid, 'apply', resolvedModel, granterLabel)
     if not sent then
-        WriteAppearanceApplied(targetCitizenid, resolvedModel, nil, granterCitizenid or 'system')
+        -- DISCARDED-WRITE FIX (this pass): return value previously ignored --
+        -- see confirmK9PedSwap's own identical fix above for the full
+        -- reasoning. This function is a void automatic side effect (its
+        -- callers, GrantCertification/GrantPermission, never check a return
+        -- value by design), so the only way this failure is ever visible at
+        -- all is an accurate audit outcome.
+        local wroteOk = WriteAppearanceApplied(targetCitizenid, resolvedModel, nil, granterCitizenid or 'system')
         LogAppearanceAudit(granterLabel, 'applyK9AppearanceOnGrant',
-            ('model=%s target=%s'):format(resolvedModel, targetCitizenid), 'persisted_offline')
+            ('model=%s target=%s'):format(resolvedModel, targetCitizenid), wroteOk and 'persisted_offline' or 'db_error')
+        if not wroteOk then
+            print(('[qbx_k9unit] appearance.lua ApplyK9AppearanceOnGrant: DB write failed for citizenid=%s -- the automatic K9 appearance grant was NOT persisted for this offline target.'):format(targetCitizenid))
+        end
     end
 end
 
@@ -734,7 +755,7 @@ end
 --- @param citizenid string
 --- @param granterLabel string
 --- @return boolean ok
---- @return string outcome -- 'ok' | 'no_active_assignment' | 'no_fallback_configured'
+--- @return string outcome -- 'ok' | 'no_active_assignment' | 'no_fallback_configured' | 'db_error'
 local function PerformRevert(citizenid, granterLabel)
     local row = GetAppearanceRow(citizenid)
     if not row or row.active ~= 1 then return false, 'no_active_assignment' end -- nothing currently applied for this citizenid
@@ -756,7 +777,21 @@ local function PerformRevert(citizenid, granterLabel)
             return false, 'no_fallback_configured'
         end
         local sent = SendSwapRequest(citizenid, 'revert', fallback, granterLabel)
-        if not sent then WriteAppearanceReverted(citizenid) end
+        if not sent then
+            -- DISCARDED-WRITE FIX (this pass): this write's boolean result
+            -- was previously discarded -- ForceRevertK9Appearance (this
+            -- function's caller) then unconditionally reported `true, 'ok'`
+            -- and notified high command "reverted successfully" even when
+            -- the row was never actually cleared. That matters MORE here
+            -- than for an ordinary write: ForceRevertK9Appearance is
+            -- deliberately credential-blind (it can be called on a target who
+            -- STILL holds an active certification), so PlayerLoaded's own
+            -- HasK9Role backstop would NOT catch a silently-failed clear on
+            -- their next reconnect the way it does for an automatic
+            -- (credential-driven) revert -- the K9 model would simply come
+            -- back, silently undoing the exact action high command just took.
+            if not WriteAppearanceReverted(citizenid) then return false, 'db_error' end
+        end
         return true, 'ok'
     end
 
@@ -767,7 +802,10 @@ local function PerformRevert(citizenid, granterLabel)
         -- next connect. They reconnect looking like whatever they logged
         -- out as, which is correct: the swap, if any was ever live, has
         -- already been undone from server-authoritative state.
-        WriteAppearanceReverted(citizenid)
+        --
+        -- DISCARDED-WRITE FIX (this pass): same reasoning as the fallback
+        -- branch immediately above -- see that branch's own comment.
+        if not WriteAppearanceReverted(citizenid) then return false, 'db_error' end
     end
     return true, 'ok'
 end
@@ -786,7 +824,20 @@ function MaybeRevertK9Appearance(citizenid)
     if type(HasPermission) == 'function' and HasPermission(citizenid, 'k9.access') then return end
     if IsCertifiedK9ForAnyJob(citizenid) then return end
 
-    PerformRevert(citizenid, 'system')
+    -- DISCARDED-WRITE FIX (this pass): this is a void automatic side effect
+    -- (this function's own callers never check a return value, by design --
+    -- same as ApplyK9AppearanceOnGrant above), so a failed revert was
+    -- previously indistinguishable from a successful one anywhere in the
+    -- logs. Not itself a NEW security gap -- HasK9Role/HasK9Access are
+    -- already false for this citizenid (that's why this reconciliation ran
+    -- at all), so PlayerLoaded's own stale-row HasK9Role backstop still
+    -- refuses to re-apply the model on their next reconnect regardless of
+    -- whether this particular write landed -- but a silent DB failure here
+    -- deserves a console line, not nothing.
+    local ok, outcome = PerformRevert(citizenid, 'system')
+    if not ok and outcome == 'db_error' then
+        print(('[qbx_k9unit] appearance.lua MaybeRevertK9Appearance: revert DB write failed for citizenid=%s.'):format(citizenid))
+    end
 end
 
 --- The tablet's explicit, high-command-initiated "remove K9 ped, revert to
@@ -806,7 +857,7 @@ end
 --- @param granterSrc number
 --- @param targetCitizenid string
 --- @return boolean ok
---- @return string outcome -- 'ok' | 'denied' | 'rate_limited' | 'invalid_target' | 'no_active_assignment' | 'no_fallback_configured'
+--- @return string outcome -- 'ok' | 'denied' | 'rate_limited' | 'invalid_target' | 'no_active_assignment' | 'no_fallback_configured' | 'db_error'
 function ForceRevertK9Appearance(granterSrc, targetCitizenid)
     if not (type(IsHighCommand) == 'function' and IsHighCommand(granterSrc)) then
         LogAppearanceAudit(WhoLabelForSource(granterSrc), 'forceRevertK9Appearance', ('target=%s'):format(tostring(targetCitizenid)), 'denied')
@@ -859,8 +910,18 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     -- CanShowK9UI()/every gate ultimately reduces to -- if it says no,
     -- clear the stale row here and now rather than re-apply it.
     if type(HasK9Role) == 'function' and not HasK9Role(src) then
-        WriteAppearanceReverted(citizenid)
-        LogAppearanceAudit('system', 'k9AppearancePlayerLoaded', ('citizenid=%s'):format(citizenid), 'stale_row_cleared_no_role')
+        -- DISCARDED-WRITE FIX (this pass): return value previously ignored.
+        -- The fail-safe behavior itself is unaffected either way -- this
+        -- branch already `return`s below without ever re-applying the model,
+        -- regardless of whether the clear-write actually landed -- but the
+        -- audit trail must not claim 'stale_row_cleared_no_role' (success)
+        -- for a write that silently failed.
+        if WriteAppearanceReverted(citizenid) then
+            LogAppearanceAudit('system', 'k9AppearancePlayerLoaded', ('citizenid=%s'):format(citizenid), 'stale_row_cleared_no_role')
+        else
+            print(('[qbx_k9unit] appearance.lua PlayerLoaded: stale-row clear DB write failed for citizenid=%s -- the K9 model was NOT re-applied this connect (fail-safe), but the stale active=1 row is still there for a future attempt to clear.'):format(citizenid))
+            LogAppearanceAudit('system', 'k9AppearancePlayerLoaded', ('citizenid=%s'):format(citizenid), 'stale_row_clear_db_error')
+        end
         return
     end
 
@@ -925,8 +986,15 @@ AddEventHandler('playerDropped', function(_reason)
         local pending = PendingSwap[citizenid]
         PendingSwap[citizenid] = nil
         if pending and pending.kind == 'revert' then
-            WriteAppearanceReverted(citizenid)
-            LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'committed_on_disconnect')
+            -- DISCARDED-WRITE FIX (this pass): return value previously
+            -- ignored -- see confirmK9PedSwap's own identical fix above for
+            -- the full reasoning, applied here to the disconnect-commit path.
+            if WriteAppearanceReverted(citizenid) then
+                LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'committed_on_disconnect')
+            else
+                print(('[qbx_k9unit] appearance.lua playerDropped: commit-on-disconnect revert DB write failed for citizenid=%s.'):format(citizenid))
+                LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'committed_on_disconnect_db_error')
+            end
         end
     end
 end)

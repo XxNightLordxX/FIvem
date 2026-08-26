@@ -857,5 +857,10 @@
         "reason_use_generic": "Unable to use that right now.",
         "refocused": "Your K9 refocuses.",
         "settled": "Your K9 settles down."
+    },
+    "equipmentshop": {
+        "blocked_from_shop": "High Command has blocked you from using the K9 equipment shop.",
+        "requires_tier": "That item needs the '%s' certification tier before you can buy it.",
+        "requires_specialization": "That item needs the '%s' specialization before you can buy it."
     }
 }

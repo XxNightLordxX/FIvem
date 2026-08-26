@@ -319,9 +319,13 @@ end)
 
 t.test('AwardXP: a non-string citizenid is a safe no-op', function()
     AwardXP(12345, 'smallAward')
-    -- Nothing to assert by key (no string key was ever touched) -- the real
-    -- assertion is that this line does not throw.
-    t.isTrue(true)
+    -- Real assertions, not merely "this line does not throw" (which
+    -- t.test's own pcall wrapper already guarantees on its own): a numeric
+    -- citizenid must not silently coerce into a string-keyed award under
+    -- either the raw numeric key or its string form -- both must read back
+    -- as untouched.
+    t.equals(GetXP(12345), 0, 'a non-string citizenid must never accumulate XP under its own raw (numeric) key')
+    t.equals(GetXP(tostring(12345)), 0, 'a non-string citizenid must never be silently coerced into a string key either')
 end)
 
 t.test('AwardXP: an empty-string citizenid is a safe no-op', function()

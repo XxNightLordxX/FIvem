@@ -75,6 +75,16 @@ end
 local fakeNow = 0
 local function GetGameTimer() return fakeNow end
 
+-- SESSION HYGIENE (2026-08-26): server/scenttrail.lua now starts a real
+-- background sweep thread (see that file's header section by this exact
+-- name) -- CreateThread/Wait must be provided so the file loads at all, and
+-- so the sweep body can be stepped deterministically. Same
+-- Sandbox.newThreadRunner() technique tests/sarcalls_spec.lua's own SECTION 1
+-- already uses for server/sarcalls.lua's structurally identical tick loop.
+local sweepThreadRunner = Sandbox.newThreadRunner()
+local function CreateThread(fn) sweepThreadRunner.CreateThread(fn) end
+local function Wait(ms) sweepThreadRunner.Wait(ms) end
+
 -- Forward-declared: server/scenttrail.lua's playerDropped/stopScentHunt
 -- handlers both read the AMBIENT `source` global (this resource's own
 -- established convention for these two FiveM event shapes, e.g.
@@ -188,6 +198,8 @@ serverEnv = Sandbox.newEnv({
     Config = ServerConfig,
     exports = exportsStub,
     HasPermission = HasPermission,
+    CreateThread = CreateThread, -- SESSION HYGIENE: server/scenttrail.lua's own background sweep thread now calls this at file-load time
+    Wait = Wait,
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', serverEnv) -- hard load-order dependency, see server/scenttrail.lua's own FILE-TO-FILE CONTRACT
@@ -510,6 +522,103 @@ t.test('cleanup still works for a blocked person: stopScentHunt remains UNCONDIT
     fakeNow = fakeNow + 1000
     local poll = pollScentHunt(107)
     t.isFalse(poll.active, 'the hunt must actually be gone -- a mid-hunt block must never strand an active hunt unstoppable')
+end)
+
+-- ----------------------------------------------------------------------
+-- SESSION HYGIENE (2026-08-26) -- this file's own header section by this
+-- exact name. Pins the real bug: client/scenttrail.lua's own poll loop
+-- treats ANY `{ active = false }` response as "the hunt is over" and simply
+-- stops polling, WITHOUT sending stopScentHunt -- so if pollScentHunt's own
+-- access/feature re-validation failed WITHOUT also clearing ActiveHunts,
+-- the record would silently outlive the only thing that was ever going to
+-- ask about it again, permanently blocking a fresh hunt as 'already_active'.
+-- ----------------------------------------------------------------------
+
+t.test('SESSION HYGIENE: HasK9Access() turning false mid-hunt is not just reported inactive -- pollScentHunt must ALSO clear the record, or the client (which stops polling on active=false) would strand it forever', function()
+    pedCoordsBySource[200] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local started = startScentHunt(200)
+    t.isTrue(started.started)
+
+    -- Access revoked mid-hunt (e.g. a certification lapse) -- the client
+    -- never calls stopScentHunt for this; it just stops polling because the
+    -- next answer it gets is `{ active = false }`.
+    hasAccess = false
+    fakeNow = fakeNow + 1000
+    local poll = pollScentHunt(200)
+    t.isFalse(poll.active)
+    hasAccess = true
+
+    -- THE REGRESSION ASSERTION: even though nothing ever called
+    -- stopScentHunt and the player never disconnected, a fresh hunt must
+    -- succeed the moment access is restored -- not be permanently rejected
+    -- as already_active.
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local fresh = startScentHunt(200)
+    t.isTrue(fresh.started, 'a hunt must never be permanently stranded just because one poll happened while access was false')
+end)
+
+t.test('SESSION HYGIENE: Config.Features.ScentTrailHunt toggled off mid-hunt is not just reported inactive -- pollScentHunt must ALSO clear the record', function()
+    pedCoordsBySource[201] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local started = startScentHunt(201)
+    t.isTrue(started.started)
+
+    ServerConfig.Features.ScentTrailHunt = false
+    fakeNow = fakeNow + 1000
+    local poll = pollScentHunt(201)
+    t.isFalse(poll.active)
+    ServerConfig.Features.ScentTrailHunt = true
+
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local fresh = startScentHunt(201)
+    t.isTrue(fresh.started, 'a hunt must never be permanently stranded just because one poll happened while the feature was off')
+end)
+
+t.test('SESSION HYGIENE: the background sweep thread clears an unfinished hunt older than maxHuntDurationMs even if NOTHING ever polls it again', function()
+    pedCoordsBySource[202] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local started = startScentHunt(202)
+    t.isTrue(started.started)
+
+    -- Prime the sweep coroutine (its own Wait(...) is the very first
+    -- statement in the loop body -- see Sandbox.newThreadRunner's own
+    -- doc comment: the first step() only reaches that Wait and yields).
+    sweepThreadRunner.step()
+
+    -- Advance well past maxHuntDurationMs and run exactly one sweep pass --
+    -- deliberately WITHOUT ever calling pollScentHunt(202) again, proving
+    -- this is a real, unconditional, self-scheduled expiry and not merely
+    -- pollScentHunt's own lazy check in disguise.
+    fakeNow = fakeNow + ServerConfig.ScentTrailHunt.maxHuntDurationMs + 1
+    sweepThreadRunner.step()
+
+    -- A fresh start must now succeed immediately -- proving the sweep
+    -- actually cleared ActiveHunts[202], not merely that some later poll
+    -- would eventually have noticed.
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local fresh = startScentHunt(202)
+    t.isTrue(fresh.started, 'the sweep thread must clear a stale hunt on its own, with no poll ever required')
+end)
+
+t.test('SESSION HYGIENE: the background sweep thread leaves a genuinely fresh hunt untouched', function()
+    pedCoordsBySource[203] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    startScentHunt(203)
+
+    sweepThreadRunner.step() -- prime
+    sweepThreadRunner.step() -- one real pass, well before maxHuntDurationMs has elapsed
+
+    fakeNow = fakeNow + 1000
+    local poll = pollScentHunt(203)
+    t.isTrue(poll.active, 'the sweep must never clear a hunt that has not actually expired')
 end)
 
 -- ========================================================================

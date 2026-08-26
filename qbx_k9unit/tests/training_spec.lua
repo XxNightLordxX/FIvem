@@ -420,11 +420,22 @@ end)
 t.test('toggle OFF is NEVER rate-limited -- back-to-back on/off/on/off all succeed with zero cooldown wait', function()
     local src = freshEligibleSource()
     setTrainingMode(src, true)
+    clientEvents = {}
+    -- Real assertion, not merely "no error is thrown" (which t.test's own
+    -- pcall wrapper already guarantees on its own regardless of this test):
+    -- if OFF were ever accidentally routed through ToggleCooldown/
+    -- ActionCooldown (the gate ON genuinely has), only the FIRST of these
+    -- three back-to-back calls would still push a client event and the
+    -- other two would be silently swallowed -- exactly the kind of
+    -- regression a bare `t.isTrue(true)` can never catch.
     setTrainingMode(src, false)
     setTrainingMode(src, false)
     setTrainingMode(src, false)
-    -- no error, no exception -- OFF has no gate to trip at all
-    t.isTrue(true)
+    local offEventsForSrc = 0
+    for _, evt in ipairs(clientEvents) do
+        if evt.target == src then offEventsForSrc = offEventsForSrc + 1 end
+    end
+    t.equals(offEventsForSrc, 3, 'all three back-to-back OFF calls must each push their own client event -- zero cooldown wait means zero calls silently dropped')
 end)
 
 t.test('a non-true desiredOn value (nil, a string, a number) is treated as OFF', function()

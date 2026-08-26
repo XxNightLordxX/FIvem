@@ -155,7 +155,12 @@ local DEFAULT_PERMISSIONS = {
     ['k9.givexp']  = { label = 'Grant XP', description = 'x' },
 }
 
---- @param opts table? -- { world, database, isHighCommand, permissions, features, loadCatalog (default true) }
+--- @param opts table? -- { world, database, isHighCommand (pass exactly `false`,
+---   not merely nil/omitted, to leave IsHighCommand entirely UNDEFINED in the
+---   sandbox env -- the strong form of the gating-function-undefined failure
+---   mode, distinct from every other caller's isHighCommand, which is always a
+---   real, callable function that merely RETURNS false for a non-HC source),
+---   permissions, features, loadCatalog (default true) }
 --- @return table fixture
 local function boot(opts)
     opts = opts or {}
@@ -199,7 +204,12 @@ local function boot(opts)
         },
     }
 
-    local isHighCommand = opts.isHighCommand or function() return false end
+    -- opts.isHighCommand == false (an explicit false, never merely nil/omitted)
+    -- means "never define IsHighCommand in the sandbox env at all" -- see this
+    -- function's own doc comment above. Every other caller gets a real, callable
+    -- stub (default: always denies).
+    local omitIsHighCommand = opts.isHighCommand == false
+    local isHighCommand = (not omitIsHighCommand) and (opts.isHighCommand or function() return false end) or nil
     local notifyLog = {}
     local function NotifyPlayer(source, message, kind)
         notifyLog[#notifyLog + 1] = { source = source, message = message, kind = kind }
@@ -227,11 +237,19 @@ local function boot(opts)
         lib = libStub,
         exports = exportsStub,
         MySQL = makeMysqlStub(world),
-        IsHighCommand = isHighCommand,
         NotifyPlayer = NotifyPlayer,
         GetPlayers = function() return opts.onlineSources or {} end,
         Config = Config,
     }
+    -- Only added when NOT omitted -- Sandbox.newEnv's own `for key, value in
+    -- pairs(overrides)` would otherwise happily set env.IsHighCommand = nil,
+    -- which is a no-op in Lua (assigning nil to a table field never creates the
+    -- key), so this branch is purely documentation of intent -- but written
+    -- explicitly rather than relying on that no-op so a future reader/refactor
+    -- never "fixes" this into always assigning a stub.
+    if not omitIsHighCommand then
+        envOverrides.IsHighCommand = isHighCommand
+    end
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -311,6 +329,32 @@ t.test('AUTHORIZATION: server-side re-check ignores whatever the caller claims -
     local result = f.callbacks['qbx_k9unit:server:permKeysUpsert'](NON_HC_SOURCE, { key = 'k9.custom', label = 'Custom', isHighCommand = true, ok = true })
     t.isFalse(result.ok)
     t.equals(result.reason, 'denied')
+end)
+
+t.test('AUTHORIZATION: FAILS CLOSED when IsHighCommand is entirely UNDEFINED (not merely false) -- all three callbacks, for ANY source including one that would otherwise be high command', function()
+    -- The STRONG form: CanManagePermissionKeys' own production guard is
+    -- `type(IsHighCommand) == 'function' and IsHighCommand(source)` -- this
+    -- proves that guard is real (denies when the global genuinely does not
+    -- exist, e.g. a load-order break that left server/highcommand.lua never
+    -- loaded), not merely that a stub returning false is honoured. Every
+    -- OTHER test in this section only ever proves the weaker "a defined
+    -- IsHighCommand that returns false denies" case.
+    local f = boot({ isHighCommand = false })
+    t.isNil(f.env.IsHighCommand, 'sanity: this fixture genuinely never defines IsHighCommand')
+
+    local listResult = f.callbacks['qbx_k9unit:server:permKeysList'](HC_SOURCE)
+    t.isFalse(listResult.ok)
+    t.equals(listResult.reason, 'denied')
+
+    local upsertResult = f.callbacks['qbx_k9unit:server:permKeysUpsert'](HC_SOURCE, { key = 'k9.custom', label = 'Custom' })
+    t.isFalse(upsertResult.ok)
+    t.equals(upsertResult.reason, 'denied')
+    t.isFalse(f.env.IsKnownPermissionCatalogKey('k9.custom'), 'an undefined-gate caller must never actually create the key')
+
+    local deleteResult = f.callbacks['qbx_k9unit:server:permKeysDelete'](HC_SOURCE, 'k9.access')
+    t.isFalse(deleteResult.ok)
+    t.equals(deleteResult.reason, 'denied')
+    t.isTrue(f.env.IsKnownPermissionCatalogKey('k9.access'), 'an undefined-gate delete must not tombstone anything')
 end)
 
 -- ============================================================================

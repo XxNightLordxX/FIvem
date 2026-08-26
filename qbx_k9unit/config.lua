@@ -211,20 +211,25 @@ Config.Features = {
     -- server/partnership.lua (coder-backend, this pass). Gates the
     -- mutually-consented "Partner Up" registry ONLY -- HandlerDownDefense
     -- and BiteAndHold's Recall actor (the two features this registry
-    -- unblocks) are each STILL independently gated by their OWN flags
-    -- above and remain unimplemented as of this pass regardless of this
-    -- flag's value; flipping this on by itself does not enable either.
-    -- DEFAULT DIVERGES FROM DEVELOPER_REFERENCE.md §12.0 item 7 point 5's OWN
-    -- "recommended default true" text -- deliberate, not an oversight: that
-    -- recommendation predates any real code existing, and this resource's
-    -- actual shipped convention for every other Phase 3 mechanic (see the
-    -- Config.Combat header comment above: BiteAndHold/NonLethalTakedown
-    -- ship fully implemented but still `false`) is that a newly-landed
-    -- Phase 3+ mechanic stays off by default until its own balance/security
-    -- go-live review, independent of implementation completeness. This flag
-    -- was directed to default `false` for exactly that reason -- flip only
-    -- after reviewing server/partnership.lua's own header for what is and
-    -- isn't independently verified.
+    -- unblocks) are each independently gated by their OWN flags above.
+    -- At the time this paragraph was written both of those remained
+    -- unimplemented regardless of this flag's value; that is no longer
+    -- true -- HandlerDownDefense (server/defense.lua) and Recall
+    -- (server/recall.lua) are both implemented, and both flags ship `true`
+    -- above, same as this one.
+    -- DEFAULT ONCE DIVERGED FROM DEVELOPER_REFERENCE.md §12.0 item 7 point 5's
+    -- OWN "recommended default true" text -- that was deliberate at the
+    -- time, not an oversight: that recommendation predated any real code
+    -- existing, and this resource's then-shipped convention for every
+    -- other Phase 3 mechanic was that a newly-landed mechanic stays off by
+    -- default until its own balance/security go-live review, independent
+    -- of implementation completeness. This flag was directed to default
+    -- `false` for exactly that reason. That go-live review has SINCE
+    -- happened -- see server/partnership.lua's own header for what was
+    -- independently verified -- and this flag now ships `true` above,
+    -- consistent with BiteAndHold/NonLethalTakedown/PropDragging/
+    -- HandlerDownDefense all having gone through the same review and now
+    -- shipping `true` too.
     HandlerPartnership   = true,
 
     -- server/tenure.lua (DEVELOPER_REFERENCE.md Part B §7). Grants a one-time,
@@ -1397,10 +1402,15 @@ Config.Vision = {
 -- their PLAYER-target paths, gated by `RequireWantedStatus` below) are
 -- implemented this pass in `server/combat.lua` / `client/combat.lua`,
 -- under item 8's five binding guardrails. `Config.Features.BiteAndHold`/
--- `NonLethalTakedown` STAY `false` above regardless — shipping the code
--- gated-off-by-default is not the same decision as flipping either flag on
--- a live server, which still wants its own separate go/no-go (balance
--- review, anim preview for BiteAndHold — see server/combat.lua's header).
+-- `NonLethalTakedown` shipped `false` above at that point — shipping the
+-- code gated-off-by-default was not the same decision as flipping either
+-- flag on a live server, which still wanted its own separate go/no-go
+-- (balance review, anim preview for BiteAndHold). That review has SINCE
+-- happened: server/combat.lua's own header records the red-team
+-- trust-boundary pass both features went through, and `BiteAndHold`/
+-- `NonLethalTakedown` now ship `true` above. This paragraph is kept only
+-- for the history of why the implementation and the flag flip were
+-- originally separate decisions.
 --
 -- STILL DELIBERATELY NOT ADDED — genuinely different, still-open blockers:
 --   - `PropDragging` is OUT OF SCOPE for this pass (not requested, not
@@ -1428,8 +1438,15 @@ Config.Vision = {
 --         low-trust hint channel, and no server-authoritative consequence
 --         depends on that hint; the K9's confirmation is re-validated from
 --         scratch by ValidateCombatRequest.
---     Both features still ship `false`, per this resource's convention that
---     a newly-landed mechanic stays off until its own go-live review.
+--     Both features shipped `false` at that point, per this resource's
+--     convention that a newly-landed mechanic stays off until its own
+--     go-live review. That review has SINCE happened for both:
+--     server/defense.lua's own header documents HandlerDownDefense being
+--     flipped to `true` by the config owner after its go-live review, and
+--     server/combat.lua's red-team trust-boundary pass covers PropDragging
+--     the same way it covers BiteAndHold/NonLethalTakedown above. Both
+--     `Config.Combat.PropDragging` and `Config.Combat.HandlerDownDefense`
+--     now ship `true` above.
 -- Re-diff this block against DEVELOPER_REFERENCE.md §12.2 in full if either of the
 -- above is picked up later, rather than assuming this copy stays in sync.
 -- ======================================================================
@@ -1799,8 +1816,10 @@ Config.AdminAudit = {
 }
 
 -- ======================================================================
--- PHASE 5 (R&D) — DEPLOYABLE KENNEL (Config.Features.DeployableKennel,
--- still `false` by default — see this block's own note on that below).
+-- PHASE 5 (R&D) — DEPLOYABLE KENNEL (Config.Features.DeployableKennel).
+-- This shipped `false` by default when this section was written, pending
+-- its own go-live review; that review has since happened and the flag now
+-- ships `true` above.
 -- DEVELOPER_REFERENCE.md#phase-5-research §5: "handler places a world...
 -- kennel object... server-authoritative validation (proximity,
 -- certification, one-per-handler limit), with cleanup on resource stop/
@@ -1894,10 +1913,12 @@ Config.DeployableKennel = {
 -- header for why.
 
 -- ======================================================================
--- PHASE 5 (R&D) — ADVANCED BARK RADIAL (Config.Features.AdvancedBarkRadial,
--- still `false` by default — layered on top of Config.Features.BasicBarkSounds
--- per this resource's existing Phase-5-on-Phase-1 convention, see
--- client/radial.lua's Bark item for the enforcement of that layering).
+-- PHASE 5 (R&D) — ADVANCED BARK RADIAL (Config.Features.AdvancedBarkRadial —
+-- layered on top of Config.Features.BasicBarkSounds per this resource's
+-- existing Phase-5-on-Phase-1 convention, see client/radial.lua's Bark item
+-- for the enforcement of that layering). This shipped `false` by default
+-- when this section was written, pending its own go-live review; that
+-- review has since happened and the flag now ships `true` above.
 -- DEVELOPER_REFERENCE.md §6.7 names the variant set explicitly: "Radial bark options
 -- (aggressive/alert/calm) each play a distinct sound asset attached to the
 -- K9 entity" — that's the exact set shipped here, not an arbitrary pick

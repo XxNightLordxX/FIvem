@@ -108,6 +108,20 @@ local function newFixture(opts)
         end },
     }
 
+    -- ---- event handlers (RATE LIMITING, this pass) ----
+    -- server/cooldowns.lua's TabletReadCooldown.RegisterPlayerDropped() call
+    -- (server/tablet.lua's own file-load time) needs a real AddEventHandler
+    -- to register against -- a plain capture-and-store stub, same shape
+    -- tests/runtimecontrol_spec.lua's own AddEventHandlerStub already
+    -- established, though this fixture has no need to actually FIRE
+    -- 'playerDropped' anywhere yet (no test here currently depends on that
+    -- cleanup); it only needs the call itself not to error.
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
     -- ---- players ----
     local playersBySource = {}
     local playersByCitizenId = {}
@@ -167,12 +181,25 @@ local function newFixture(opts)
         HighCommand = { allowSelfGrant = false },
     }
 
+    -- RATE LIMITING (this pass) -- server/tablet.lua's four read callbacks
+    -- now share TabletReadCooldown (NewCooldown, keyed by source), which
+    -- calls GetGameTimer() at cooldown-check time. fakeNow lets a test pin
+    -- and advance that clock deterministically -- same pattern
+    -- tests/runtimecontrol_spec.lua already established for its own
+    -- RuntimeControlActionCooldown coverage. Starts at 0 for every fresh
+    -- fixture (a new env/NewCooldown instance per newFixture() call, same
+    -- as every other piece of this fixture's state), so no cross-test
+    -- contamination.
+    local fakeNow = { value = 0 }
+
     local env = Sandbox.newEnv({
         Config = Config,
         MySQL = mysql,
         exports = exportsStub,
         lib = libStub,
         GetPlayerName = GetPlayerNameStub,
+        GetGameTimer = function() return fakeNow.value end,
+        AddEventHandler = AddEventHandlerStub,
         print = function() end,
         -- Test-controlled soft dependencies -- see this file's header.
         IsHighCommand = opts.isHighCommand or function(_source) return false end,
@@ -205,6 +232,11 @@ local function newFixture(opts)
     -- chunk runs. `mysql` above is unchanged: K9Store's DB-mode branches call the
     -- exact same MySQL.query.await/MySQL.scalar.await this stub already dispatches
     -- on by SQL substring, since K9Store mirrors that SQL verbatim.
+    -- server/cooldowns.lua -- HARD load-order requirement, same as the real
+    -- fxmanifest.lua's own placement: server/tablet.lua now calls
+    -- NewCooldown at its own file-load time (TabletReadCooldown), so
+    -- cooldowns.lua must already be loaded into this SAME env first.
+    Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/tablet.lua', env)
 
@@ -216,6 +248,8 @@ local function newFixture(opts)
         addCertRow = addCertRow,
         permRows = permRows,
         certRows = certRows,
+        fakeNow = fakeNow,
+        eventHandlers = eventHandlers,
     }
 end
 

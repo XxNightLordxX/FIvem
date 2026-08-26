@@ -642,3 +642,39 @@ lib.callback.register('qbx_k9unit:server:pollScentHunt', function(source)
 
     return { active = true, distance = distance, found = found }
 end)
+
+-- ======================================================================
+-- SESSION HYGIENE -- BACKGROUND SWEEP (see this file's header section by
+-- that exact name for the full incident this closes). Unconditional,
+-- independent of whether any client ever polls again -- mirrors
+-- server/scentlineup.lua's own phase-expiry sweep and server/sarcalls.lua's
+-- own tick-loop timeout check, both of which already do not rely on the
+-- client to expire themselves. ActiveHunts is small and ephemeral (at most
+-- one entry per currently-connected, currently-hunting source), so a linear
+-- `pairs` pass on this interval is cheap. Removing ONLY the current key of a
+-- Lua table mid-`pairs()` traversal (never a different key) is well-defined
+-- per the Lua 5.4 reference manual -- server/scentlineup.lua's own sweep
+-- already relies on this exact property, and this loop does the same thing
+-- (`ActiveHunts[src] = nil`).
+--
+-- Deliberately does NOT duplicate pollScentHunt's own access/feature-loss
+-- check -- that specific case is already closed immediately (no need to
+-- wait for this interval) by pollScentHunt's own SESSION HYGIENE fix above.
+-- This sweep's only job is the pure time-based backstop: a hunt older than
+-- Config.ScentTrailHunt.maxHuntDurationMs is cleared regardless of whether
+-- anything ever asks about it again.
+-- ======================================================================
+local HUNT_SWEEP_INTERVAL_MS = 30000 -- local implementation constant, not Config-owned -- same "internal detail, not an operator tuning knob" posture server/scentlineup.lua's own SWEEP_INTERVAL_MS declaration comment establishes for the identical shape
+
+CreateThread(function()
+    while true do
+        Wait(HUNT_SWEEP_INTERVAL_MS)
+
+        local now = GetGameTimer()
+        for src, hunt in pairs(ActiveHunts) do
+            if (now - hunt.startedAt) > ScentHuntConfig.maxHuntDurationMs then
+                ActiveHunts[src] = nil
+            end
+        end
+    end
+end)

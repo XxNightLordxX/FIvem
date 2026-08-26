@@ -1554,6 +1554,79 @@ t.test('sarCallEnded(timeout / abandoned): never spawns a reveal, never sits/bar
     t.equals(f.k9SitCallCount(), 0)
 end)
 
+-- ------------------------------------------------------------------
+-- STALE-REVEAL GUARD -- BUG (found + fixed this pass): ShowReveal()'s own
+-- LoadModelWithTimeout call can YIELD (its Wait(50) polling loop) before
+-- CreatePed/CreateObject ever runs. If a SECOND, genuinely NEWER
+-- sarCallEnded('found') push (this client finishing one call, immediately
+-- starting and completing another before the FIRST reveal's own model ever
+-- finished loading) ran its own ClearReveal() + creation sequence to
+-- completion WHILE the first attempt was still stuck waiting on its model,
+-- the first attempt's own unconditional `revealEntity = newEntity`
+-- assignment (once its model finally loaded) would silently overwrite the
+-- second, now-current attempt's entity -- orphaned, since nothing would
+-- hold its handle again. Same bug class, and the same fix (a generation
+-- check before the assignment, reusing this function's own pre-existing
+-- generation counter), as client/vision.lua's own "STALE-CAM GUARD" on
+-- ToggleCameraFeed and client/kennel.lua's own "STALE-KENNEL GUARD" on
+-- deployKennelAt.
+-- ------------------------------------------------------------------
+
+t.test('BUG (found + fixed this pass): a second sarCallEnded("found") for a genuinely NEWER call, completing while the FIRST reveal\'s own model load is still in flight, does not overwrite/orphan the second reveal once the first finally resolves', function()
+    local f = newClientFixture()
+
+    -- HasModelLoaded reports "still loading" on its very first ever poll
+    -- (forcing exactly one Wait(50) yield inside call A's own
+    -- LoadModelWithTimeout), then "loaded" for every poll after that --
+    -- including every poll call B ever makes, so B resolves synchronously.
+    local pollCount = 0
+    f.env.HasModelLoaded = function(_modelHash)
+        pollCount = pollCount + 1
+        return pollCount > 1
+    end
+
+    -- Call A: starts and "finds" a person. Suspends mid-flight inside its
+    -- own model-load wait, BEFORE it has created anything (CreatePed only
+    -- runs after LoadModelWithTimeout returns).
+    f.queueCallbackResponse({ started = true })
+    f.env.RequestStartSarCall()
+    local coA = coroutine.create(function() f.fireCallEnded('found', 'person') end)
+    local okA, errA = coroutine.resume(coA)
+    assert(okA, 'coroutine A errored before its first yield: ' .. tostring(errA))
+    assert(coroutine.status(coA) == 'suspended', 'expected A to be mid-flight inside its own LoadModelWithTimeout Wait(50) poll, not already finished -- if this fails, the HasModelLoaded stub above is wrong, not the production code')
+    t.equals(#f.createdPeds, 0, 'A must not have created its reveal ped yet -- it is still waiting on its own model')
+
+    -- Call B: a genuinely NEWER, independent call this SAME client starts
+    -- and finishes completely (property found) WHILE A is still stuck --
+    -- sarCallActive/currentSarCallId are already reset by A's own handler
+    -- (both assignments happen BEFORE ShowReveal() is ever called), so this
+    -- is a legitimate second call, not a rejected re-entrant one.
+    f.queueCallbackResponse({ started = true })
+    f.env.RequestStartSarCall()
+    f.fireCallEnded('found', 'property')
+    t.equals(#f.createdObjects, 1, 'B must have created its own reveal object, fully synchronously')
+    local bEntity = f.createdObjects[1].handle
+
+    -- Drain A to completion -- its own model has "loaded" by now (every
+    -- poll from the second one onward reports true).
+    while coroutine.status(coA) ~= 'dead' do
+        local ok, err = coroutine.resume(coA)
+        assert(ok, 'coroutine A errored mid-flight: ' .. tostring(err))
+    end
+    t.equals(#f.createdPeds, 1, 'A did eventually create its own (now-stale) reveal ped')
+    local aEntity = f.createdPeds[1].handle
+
+    t.equals(#f.deleteEntityCalls, 1, 'FIXED: the STALE-REVEAL GUARD deletes A\'s own now-stale ped the instant it finishes, rather than assigning it into revealEntity and orphaning B\'s still-live object')
+    t.equals(f.deleteEntityCalls[1], aEntity, 'the entity deleted by the guard is A\'s OWN stale ped, not B\'s object')
+
+    -- Proves revealEntity still correctly tracks B's object, not A's stale
+    -- ped: onResourceStop's own ClearReveal() must delete B's entity next,
+    -- and must never re-touch A's already-deleted one.
+    f.fireResourceStop()
+    t.equals(#f.deleteEntityCalls, 2, 'onResourceStop cleans up B\'s still-live reveal object too')
+    t.equals(f.deleteEntityCalls[2], bEntity, 'the second delete call targets B\'s object, confirming revealEntity correctly tracked the current (newer) reveal throughout, not the orphaned first one')
+end)
+
 t.test('onResourceStop: clears any live reveal entity as a backstop, even if its own timer never fired', function()
     local f = newClientFixture()
     f.queueCallbackResponse({ started = true })
