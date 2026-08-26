@@ -1954,6 +1954,29 @@ function EndActiveEffectForHolder(holderSrc)
     return true
 end
 
+--- How many currently-open ActiveHolds entries have exactly this
+--- `effectType` right now -- exposed as a plain global function (this
+--- resource's established "global helper, private per-file state"
+--- convention, same shape as EndActiveEffectForHolder directly above) for
+--- server/runtimecontrol.lua's own active-usage confirmation gate (see
+--- that file's "ACTIVE-USAGE CONFIRMATION FEATURES" section): a real,
+--- live headcount of "how many players are mid-bite-and-hold/takedown/
+--- drag right now", read fresh on every call, never cached. A READ-ONLY
+--- accessor -- never mutates ActiveHolds, never ends or affects a hold,
+--- exactly like GetActivePartnerCitizenId/IsActivePartnerOf's own
+--- read-only role in server/partnership.lua for a different registry.
+--- @param effectType 'bite'|'takedown'|'drag'
+--- @return integer count
+function CountActiveHoldsByEffectType(effectType)
+    local count = 0
+    for _, hold in pairs(ActiveHolds) do
+        if hold.effectType == effectType then
+            count = count + 1
+        end
+    end
+    return count
+end
+
 --- LIFECYCLE QA FIX (this pass) — closes the gap a lifecycle QA pass found:
 --- when the K9 HOLDER dies mid-hold or mid-drag while remaining connected
 --- (the DISCONNECT case is already handled correctly by playerDropped

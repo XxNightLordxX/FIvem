@@ -387,6 +387,24 @@ local function FindKennelOccupantByNetId(netId, excludeCitizenId)
     return nil
 end
 
+--- How many citizenids currently have a KennelOccupants entry right now --
+--- a real, live headcount of "how many K9s are genuinely resting inside a
+--- deployed kennel this instant", read fresh on every call, never cached.
+--- Exposed as a plain global function (this resource's established
+--- "global helper, private per-file state" convention) for
+--- server/runtimecontrol.lua's own active-usage confirmation gate (see
+--- that file's "ACTIVE-USAGE CONFIRMATION FEATURES" section). READ-ONLY --
+--- never mutates KennelOccupants, never disturbs an occupant, same
+--- "read-only accessor" role FindKennelOccupantByNetId already has above.
+--- @return integer count
+function CountKennelOccupants()
+    local count = 0
+    for _ in pairs(KennelOccupants) do
+        count = count + 1
+    end
+    return count
+end
+
 --- Mirrors FindKennelOwnerByNetId/FindKennelOccupantByNetId's exact shape,
 --- applied to CarriedKennels — "is some citizenid currently carrying this
 --- exact netId." Declared here for the same reason as

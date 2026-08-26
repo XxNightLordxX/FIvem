@@ -410,12 +410,37 @@ local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a buck
 -- usable table at this file's OWN load time -- never 0, since 0 here would
 -- silently reintroduce the exact "first award always denied" regression this
 -- constant exists to fix, just for the narrower case of a malformed config.
+--
+-- EXTENDED (HANDLER XP pass, coder-backend) to ALSO sum Config.HandlerXP.
+-- awards, for the identical reason: AwardHandlerXP (below) draws on this
+-- SAME shared bucket, and server/tenure.lua's own multi-milestone-in-one-
+-- tick case pays the handler-role party up to three
+-- handlerPartnershipTenure{1,7,30}Day awards in the same tick it pays the
+-- K9-role party its own three -- a DIFFERENT citizenid's bucket in the
+-- common case (handler and K9 are normally two different characters), but
+-- there is nothing structurally preventing one citizenid from holding a
+-- handler-role partnership and a K9-role partnership at once, so this
+-- constant's own "never silently drift out of sync" promise now covers
+-- both tables it is actually spent against, not just one of them. A
+-- fixture/spec Config with no Config.HandlerXP table at all (e.g. every
+-- existing progression_spec.lua fixture predating this pass) is unaffected
+-- -- the guard below simply adds nothing in that case, identical to its
+-- pre-existing behavior.
 local XP_MINT_BUDGET_STARTER_TOKENS = 100
-if type(Config.XP) == 'table' and type(Config.XP.awards) == 'table' then
+do
     local sum = 0
-    for _, amount in pairs(Config.XP.awards) do
-        if type(amount) == 'number' and amount > 0 then
-            sum = sum + amount
+    if type(Config.XP) == 'table' and type(Config.XP.awards) == 'table' then
+        for _, amount in pairs(Config.XP.awards) do
+            if type(amount) == 'number' and amount > 0 then
+                sum = sum + amount
+            end
+        end
+    end
+    if type(Config.HandlerXP) == 'table' and type(Config.HandlerXP.awards) == 'table' then
+        for _, amount in pairs(Config.HandlerXP.awards) do
+            if type(amount) == 'number' and amount > 0 then
+                sum = sum + amount
+            end
         end
     end
     if sum > 0 then
@@ -782,6 +807,207 @@ end
 --- @return number
 function GetXP(citizenid)
     return K9XP[citizenid] or 0
+end
+
+-- ==========================================================================
+-- HANDLER XP (Config.Features.HandlerXPProgression) -- the handler-facing
+-- twin of the K9-facing block immediately above. See config.lua's own
+-- Config.HandlerXPTiers/Config.HandlerXP headers for the full "why a
+-- SECOND accumulated total, on the SAME k9_progression row, not a second
+-- reading of the K9's own `xp`" design -- not re-litigated here.
+--
+-- HandlerXP[citizenid] = number (accumulated handler total). Local, same
+-- "nothing outside this file should read/write it directly" rule as K9XP
+-- above -- always go through AwardHandlerXP/GetHandlerXPTier.
+-- ==========================================================================
+local HandlerXP = {}
+
+-- FALLBACK LADDER, used only when Config.HandlerXPTiers turns out to be
+-- missing or malformed (see GetValidatedHandlerXPTiers below) -- a single
+-- base-tier entry, the same "unknown state defaults to least privilege"
+-- baseline every other tier fallback in this file already uses. Safe as a
+-- PERMANENT fallback, not just a momentary one: every one of
+-- Config.HandlerXPTiers' own effect fields is OPTIONAL and only ever
+-- SHORTENS a cooldown or LENGTHENS a distance (config.lua's own header --
+-- never grants access), so a citizenid stuck on this fallback forever is
+-- exactly as safe as one correctly resolved to 'Rookie Handler' -- neither
+-- ever unlocks anything beyond the base tier's own (absence of) effects.
+local FALLBACK_HANDLER_XP_TIERS = { { xp = 0, label = 'Rookie Handler' } }
+
+local ValidatedHandlerXPTiers -- memoized result of GetValidatedHandlerXPTiers below
+local HandlerXPTiersWarned = false
+
+--- Prints the "handler ranks are unavailable" warning at most ONCE per
+--- resource lifetime, no matter how many times GetValidatedHandlerXPTiers
+--- below is called against a broken config.
+--- @param reason string -- what specifically is wrong with Config.HandlerXPTiers, appended to a fixed prefix
+local function WarnHandlerXPTiersOnce(reason)
+    if HandlerXPTiersWarned then return end
+    HandlerXPTiersWarned = true
+    print(
+        ('[qbx_k9unit] progression: Config.HandlerXPTiers %s -- handler ranks are UNAVAILABLE for this ' ..
+         'session (GetHandlerXPTier will resolve every citizenid to the single built-in base tier, ' ..
+         "'Rookie Handler', with no bonus effect fields). This does NOT affect AwardHandlerXP's own " ..
+         'ability to accumulate and persist handler_xp -- only the LADDER used to describe standing is ' ..
+         'unavailable; every already-earned handler_xp total is untouched and will resolve correctly ' ..
+         'again the moment this table is fixed. Fix Config.HandlerXPTiers in config.lua (a non-empty ' ..
+         'array, ascending by xp, first entry xp = 0) to restore it.'):format(reason)
+    )
+end
+
+--- CLAMP AND WARN, DELIBERATELY NEVER THROW -- mirrors the established
+--- precedent in server/cooldowns.lua's own ResolveConfiguredThresholdMs
+--- (read that function's header for the full "why clamp-and-warn, not
+--- assert" reasoning this mirrors). Deliberately NOT the same shape as the
+--- analogous Config.XPTiers guard further below in this file (a hard
+--- `assert` inside an `AddEventHandler('onResourceStart', ...)` block):
+--- that guard is correct for Config.XPTiers specifically BECAUSE
+--- XPProgression ships `true` by default and is load-bearing, so a
+--- malformed table there is a genuine, always-relevant operator bug worth
+--- stopping the boot over. Config.HandlerXPTiers backs a DIFFERENT flag
+--- that ships `false` by default and is explicitly documented as not yet
+--- safe to enable -- an owner who never touches this table, or trims it
+--- out of an edited config while the feature stays off, must never see a
+--- thrown error at boot for a feature they are not using. Worse, a bare
+--- `assert` INSIDE an `onResourceStart` handler aborts that ENTIRE handler
+--- function the instant it fires, silently skipping every line still to
+--- run below the throw, for the rest of this resource's uptime -- exactly
+--- the "one bad config value silently deletes an unrelated feature"
+--- incident class this codebase has already found and fixed once (see
+--- commit "Stop one bad config value silently deleting the ambient audio
+--- feature"). Computed lazily, on ResolveHandlerTier's own first call --
+--- not registered against `onResourceStart` at all, so there is no handler
+--- here that could ever abort anything else.
+--- @return table tiers -- either the real, validated Config.HandlerXPTiers, or FALLBACK_HANDLER_XP_TIERS
+local function GetValidatedHandlerXPTiers()
+    if ValidatedHandlerXPTiers then return ValidatedHandlerXPTiers end
+
+    local tiers = Config.HandlerXPTiers
+    if type(tiers) ~= 'table' or #tiers == 0 then
+        WarnHandlerXPTiersOnce('is missing, not a table, or empty')
+        ValidatedHandlerXPTiers = FALLBACK_HANDLER_XP_TIERS
+        return ValidatedHandlerXPTiers
+    end
+    if type(tiers[1]) ~= 'table' or type(tiers[1].xp) ~= 'number' or tiers[1].xp ~= 0 then
+        WarnHandlerXPTiersOnce(('[1].xp must be exactly 0 (found: %s)'):format(tostring(tiers[1] and tiers[1].xp)))
+        ValidatedHandlerXPTiers = FALLBACK_HANDLER_XP_TIERS
+        return ValidatedHandlerXPTiers
+    end
+    for i = 1, #tiers do
+        local tier = tiers[i]
+        if type(tier) ~= 'table' or type(tier.xp) ~= 'number' then
+            WarnHandlerXPTiersOnce(('[%d] must be a table with a numeric xp field'):format(i))
+            ValidatedHandlerXPTiers = FALLBACK_HANDLER_XP_TIERS
+            return ValidatedHandlerXPTiers
+        end
+        if i > 1 and tier.xp <= tiers[i - 1].xp then
+            WarnHandlerXPTiersOnce(('must be strictly ascending by xp -- entry %d (xp=%s) does not exceed entry %d (xp=%s)'):format(i, tostring(tier.xp), i - 1, tostring(tiers[i - 1].xp)))
+            ValidatedHandlerXPTiers = FALLBACK_HANDLER_XP_TIERS
+            return ValidatedHandlerXPTiers
+        end
+    end
+
+    ValidatedHandlerXPTiers = tiers
+    return ValidatedHandlerXPTiers
+end
+
+--- Resolves `xp` to the matching entry in the VALIDATED Config.HandlerXPTiers
+--- (GetValidatedHandlerXPTiers above -- never the raw config table directly).
+--- Identical walk shape to ResolveTier above -- kept as its own, separate
+--- function rather than a parameterized ResolveTier(xp, tiers) because the
+--- two tier tables are genuinely independent axes (a citizenid's K9-role
+--- standing and handler-role standing never share a walk, per config.lua's
+--- own "why a second ladder" reasoning), and collapsing them into one
+--- shared helper would invite a future edit to accidentally thread a K9-XP
+--- value through the handler ladder, or vice versa.
+--- @param xp number
+--- @return table tier -- { xp, label, ...optional bonus multiplier fields }
+local function ResolveHandlerTier(xp)
+    local tiers = GetValidatedHandlerXPTiers()
+    local resolvedTier = tiers[1]
+    for _, tier in ipairs(tiers) do
+        if xp >= tier.xp then
+            resolvedTier = tier
+        end
+    end
+    return resolvedTier
+end
+
+--- Resource-global. Always returns a real Config.HandlerXPTiers entry,
+--- defaulting to the base tier ('Rookie Handler', config.lua) for an
+--- uncached citizenid -- never nil, same fail-safe posture as GetXPTier
+--- above. Unlike GetXPTierMedkitCooldownMs's own individual-override
+--- composition, this returns the PLAIN tier value -- no per-INDIVIDUAL-K9
+--- override layer exists for the handler ladder (server/k9profiles.lua's
+--- own override rows are about an individual K9's ped/mechanics, not a
+--- human handler's own standing).
+--- @param citizenid string
+--- @return table tier
+function GetHandlerXPTier(citizenid)
+    return ResolveHandlerTier(HandlerXP[citizenid] or 0)
+end
+
+--- Loads a citizenid's real handler-XP total from k9_progression.handler_xp
+--- into the HandlerXP cache. Mirrors LoadXPForCitizenid above exactly,
+--- including its pcall-wrapped, fail-to-a-safe-0-baseline posture -- a
+--- database that has not yet applied sql/migrations/0017_add_k9_progression_
+--- handler_xp.sql throws "Unknown column 'handler_xp'" out of
+--- K9Store.HandlerXP_Get, which this function catches and degrades to 0,
+--- exactly like an ordinary "no row yet" result.
+--- @param citizenid string
+--- @return number handlerXp -- the freshly-cached value
+local function LoadHandlerXPForCitizenid(citizenid)
+    local queryOk, xpOrErr = pcall(K9Store.HandlerXP_Get, citizenid)
+
+    if not queryOk then
+        print(('[qbx_k9unit] progression: LoadHandlerXPForCitizenid query failed for %s (has migration 0017 been applied?): %s'):format(citizenid, tostring(xpOrErr)))
+        HandlerXP[citizenid] = 0
+        return 0
+    end
+
+    HandlerXP[citizenid] = xpOrErr or 0
+    return HandlerXP[citizenid]
+end
+
+-- Config.HandlerXPTiers' own shape validation lives entirely in
+-- GetValidatedHandlerXPTiers above now (lazy, clamp-and-warn, never an
+-- onResourceStart assert) -- see that function's own doc comment for why
+-- an assert-inside-onResourceStart shape is specifically wrong for a
+-- flag that ships off by default.
+
+-- Config.HandlerXP.awards' own value-range validation -- CLAMP AND WARN,
+-- same reasoning as GetValidatedHandlerXPTiers above, applied to a
+-- DIFFERENT malformed-config shape (an individual award amount, not the
+-- tier ladder). Deliberately NOT the assert-inside-onResourceStart shape
+-- Config.XP.awards' own identical guard further below uses -- that guard
+-- is correct for Config.XP.awards specifically because XPProgression is
+-- on-by-default and load-bearing; Config.HandlerXP.awards backs a flag
+-- that ships off, so a missing/malformed table here must never abort an
+-- onResourceStart handler for an unrelated, always-loaded feature (this
+-- exact incident -- five unrelated specs failing at boot on a table they
+-- never define -- is what prompted this rewrite; see git history/PR
+-- discussion for the full report). Warns AT MOST ONCE per actionKey per
+-- resource lifetime, checked lazily inside AwardHandlerXP itself rather
+-- than eagerly at boot, so a feature that is never turned on and never
+-- called never even evaluates this.
+local HandlerAwardAmountWarned = {} -- actionKey -> true
+
+--- @param actionKey string
+--- @param amount number -- already confirmed `type(amount) == 'number'` by the caller
+--- @return number? validAmount -- `amount` unchanged if it passes, nil if it does not (caller then treats this exactly like any other unpayable award: a silent no-op)
+local function ValidateHandlerAwardAmount(actionKey, amount)
+    if amount >= 0 and (not XPMintBudgetEnabled or amount <= XP_MINT_BUDGET_CAP_XP) then
+        return amount
+    end
+    if not HandlerAwardAmountWarned[actionKey] then
+        HandlerAwardAmountWarned[actionKey] = true
+        if amount < 0 then
+            print(('[qbx_k9unit] progression: Config.HandlerXP.awards.%s (%s XP) must not be negative -- a negative amount would silently INFLATE the shared XP mint budget instead of spending it (see AwardXP\'s own identical runtime guard for the exact mechanism). Treating this actionKey as unpayable rather than risking that. Fix this value in config.lua.'):format(actionKey, tostring(amount)))
+        else
+            print(('[qbx_k9unit] progression: Config.HandlerXP.awards.%s (%s XP) exceeds XP_MINT_BUDGET_CAP_XP (%d XP) -- this award could never be paid, for any citizenid, ever, regardless of how long they wait. Treating this actionKey as unpayable rather than crashing. Fix this value in config.lua, or raise XP_MINT_BUDGET_CAP_XP (server/progression.lua).'):format(actionKey, tostring(amount), XP_MINT_BUDGET_CAP_XP))
+        end
+    end
+    return nil
 end
 
 -- ==========================================================================
@@ -1449,6 +1675,172 @@ function AwardXP(citizenid, actionKey)
     end
 end
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- HANDLER XP. Identical four-step shape to
+-- IsXPProgressionPermittedForCitizenId above (config.lua's own
+-- Config.FeatureControl header documents the 4-step resolution; step 1,
+-- Config.Features.HandlerXPProgression, is already AwardHandlerXP's own
+-- first line below) -- mirrors server/pursuitsprint.lua's
+-- IsPursuitSprintPermittedForCitizenId shape verbatim, same as its K9-XP
+-- sibling. A block here stops a specific citizenid from EARNING any
+-- further HANDLER XP through this entry point; it never touches handler
+-- XP already on their row, and never affects the SAME citizenid's own K9
+-- XP (a separate total, gated by its own separate `block.XPProgression`
+-- check above) or any OTHER citizenid's award.
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsHandlerXPProgressionPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- IsXPProgressionPermittedForCitizenId's own identical comment above.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.HandlerXPProgression') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.HandlerXPProgression == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.HandlerXPProgression') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
+--- Resource-global -- HANDLER XP (Config.Features.HandlerXPProgression).
+--- Mirrors AwardXP above as closely as this second, HANDLER-facing total
+--- deserves -- the SAME order of checks (feature flag, malformed-argument
+--- guard, unknown-actionKey log, per-person block/grant gate, THE SAME
+--- 500ms-per-(citizenid, actionKey) AwardXPCooldown chokepoint rate floor
+--- AwardXP already enforces -- shared, not a second NewNestedCooldown
+--- instance, which is safe because Config.HandlerXP.awards' actionKey
+--- strings (handlerCertifyK9, handlerTreatK9, ...) are a disjoint
+--- namespace from Config.XP.awards' own (searchContrabandFound,
+--- takedownSuccess, ...), so a K9 award and a handler award for the same
+--- citizenid can never collide on the same (citizenid, actionKey) key --
+--- and, per this task's own explicit requirement, THE SAME shared
+--- cross-mechanic XP_MINT_BUDGET_*/XPMintBudget token bucket AwardXP
+--- already draws from, keyed by the SAME citizenid, never a second,
+--- independent bucket. A citizenid grinding both a K9 role and a handler
+--- role at once still only ever mints 3,600 XP/hr COMBINED across both
+--- totals, never 3,600 of each -- see this file's own EIGHTH-XP-FARM-FIX
+--- header for why that budget exists and why splitting it per-mechanic-
+--- family would reopen the exact compound-farm gap that section closes.
+---
+--- DELIBERATELY SIMPLER THAN AwardXP IN ONE RESPECT: no tier-crossing
+--- outbound event and no client-facing push. AwardXP's own tier crossing
+--- fires 'qbx_k9unit:events:xpTierReached' and pushes
+--- 'qbx_k9unit:client:xpTierChanged' because a K9-tier crossing changes a
+--- live, client-visible mechanical effect (speedMultiplier/
+--- scentRangeMultiplier/medkitCooldownMultiplier, per Config.XPTiers).
+--- Config.HandlerXPTiers' own three effect fields
+--- (medkitTreatCooldownMultiplier/kennelDeployCooldownMultiplier/
+--- leashRangeMultiplier) are documented in config.lua as "defined, not yet
+--- wired" -- no consumer reads GetHandlerXPTier for a live effect today, so
+--- there is nothing for a client push to announce yet. Add one, mirroring
+--- PushTierSnapshot/BuildEffectiveTierSnapshot above, in the SAME change
+--- that wires the first real consumer -- not speculatively here.
+---
+--- Persistence uses K9Store.HandlerXP_UpsertAdd's own SafeWrite (boolean)
+--- contract, DELIBERATELY UNLIKE AwardXP's own K9Store.XP_UpsertAdd call
+--- (which raw-mirrors MySQL.insert.await and relies on ITS OWN pcall to
+--- catch a thrown error) -- see that accessor's own doc comment
+--- (server/datastore.lua) for why. Still non-blocking via the same
+--- CreateThread wrapper AwardXP uses, for the identical reason (`.await`
+--- yields the coroutine it runs in; running it inside a freshly spawned
+--- thread keeps AwardHandlerXP itself returning immediately to its own
+--- caller regardless).
+--- @param citizenid string
+--- @param actionKey string -- a key in Config.HandlerXP.awards
+function AwardHandlerXP(citizenid, actionKey)
+    if not Config.Features.HandlerXPProgression then return end -- real server-side no-op regardless of caller state, per DEVELOPER_REFERENCE.md §3
+    if type(citizenid) ~= 'string' or citizenid == '' then return end -- defensive: never trust a malformed caller argument
+
+    local handlerAwards = type(Config.HandlerXP) == 'table' and Config.HandlerXP.awards or nil
+    local amount = type(handlerAwards) == 'table' and handlerAwards[actionKey] or nil
+    if type(amount) ~= 'number' then
+        -- Defensive: an unknown actionKey is a CALLER bug (a typo'd string
+        -- literal at a new call site), not a runtime condition to silently
+        -- swallow -- log it so it's visible in server console rather than
+        -- silently granting 0 handler XP forever. Mirrors AwardXP's own
+        -- identical guard.
+        print(('[qbx_k9unit] progression: AwardHandlerXP called with unknown actionKey %q for citizenid %s'):format(tostring(actionKey), citizenid))
+        return
+    end
+
+    -- Value-range validation -- see ValidateHandlerAwardAmount's own doc
+    -- comment for why this is clamp-and-warn, not an onResourceStart
+    -- assert. A known actionKey with an unpayable amount (negative, or
+    -- larger than the shared budget could ever cover) is treated as a
+    -- silent no-op here, same as the unknown-actionKey branch above,
+    -- except the warning (at most once per actionKey) names the value
+    -- problem specifically rather than "unknown actionKey".
+    amount = ValidateHandlerAwardAmount(actionKey, amount)
+    if type(amount) ~= 'number' then return end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsHandlerXPProgressionPermittedForCitizenId
+    -- above. Checked before any rate-floor/budget state is touched, same
+    -- "pure entry guard" discipline AwardXP's own identical check follows.
+    if not IsHandlerXPProgressionPermittedForCitizenId(citizenid) then return end
+
+    -- CHOKEPOINT-LEVEL RATE FLOOR -- reuses AwardXPCooldown, THE SAME
+    -- NewNestedCooldown(500) instance AwardXP consumes above -- see this
+    -- function's own doc comment for why sharing it is safe (disjoint
+    -- actionKey namespaces between the two award tables).
+    if not AwardXPCooldown.Consume(citizenid, actionKey, 500) then
+        print(('[qbx_k9unit] progression: AwardHandlerXP rate floor tripped for citizenid %s actionKey %q -- this should never happen from genuine play; investigate the calling code path'):format(citizenid, actionKey))
+        return
+    end
+
+    -- EIGHTH XP-FARM FIX, SHARED -- see this function's own doc comment:
+    -- THE SAME XPMintBudget bucket AwardXP already spends against, keyed by
+    -- the SAME citizenid. Logic below is byte-identical to AwardXP's own
+    -- budget block (including the defensive `amount > 0` re-check for the
+    -- identical non-positive-amount footgun described there) -- kept as a
+    -- second copy rather than factored into one shared helper because
+    -- AwardXP's own copy is deliberately inlined for the same reason
+    -- (this file's established style keeps each award entry point
+    -- self-contained and independently auditable rather than routing both
+    -- through one more layer of indirection for two call sites).
+    if XPMintBudgetEnabled and amount > 0 then
+        local budgetNow = GetGameTimer()
+        local bucket = XPMintBudget[citizenid]
+        if not bucket then
+            bucket = { tokens = XP_MINT_BUDGET_STARTER_TOKENS, lastRefillAt = budgetNow }
+            XPMintBudget[citizenid] = bucket
+        else
+            RefillMintBudget(bucket, budgetNow)
+        end
+        if bucket.tokens < amount then
+            -- Silent no-op on trip -- same convention as AwardXP's own
+            -- identical budget-exhaustion path.
+            return
+        end
+        bucket.tokens = bucket.tokens - amount
+    end
+
+    local oldXp = HandlerXP[citizenid] or 0
+    local newXp = oldXp + amount
+    -- Update the in-memory cache SYNCHRONOUSLY, before the DB write below --
+    -- same correctness reasoning as AwardXP's own K9XP write.
+    HandlerXP[citizenid] = newXp
+
+    -- Non-blocking write via K9Store.HandlerXP_UpsertAdd's own SafeWrite
+    -- (boolean) contract -- see this function's own doc comment for why
+    -- this differs from AwardXP's own pcall-around-a-throwing-call shape.
+    CreateThread(function()
+        local persisted = K9Store.HandlerXP_UpsertAdd(citizenid, amount)
+        if not persisted then
+            print(('[qbx_k9unit] progression: AwardHandlerXP UPSERT failed for citizenid %s -- %d XP for actionKey %q was NOT persisted to k9_progression.handler_xp (in-memory handler-tier/session effects already applied and are unaffected)'):format(citizenid, amount, actionKey))
+        end
+    end)
+end
+
 --- Awards an EXPLICIT XP amount, for /k9givexp only.
 ---
 --- This deliberately breaks the invariant AwardXP above exists to protect.
@@ -1544,6 +1936,19 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     if type(targetSrc) == 'number' then
         PushTierSnapshot(targetSrc, citizenid, ResolveTier(xp))
     end
+
+    -- HANDLER XP cache warm -- same "keep it warmed/kept in sync regardless
+    -- of the flag" posture as LoadXPForCitizenid's own call two lines above
+    -- (cheap, one already-happening login-time query, and avoids a citizenid
+    -- with real accumulated handler_xp reading back as 0 for the rest of
+    -- this session just because AwardHandlerXP has not fired yet this
+    -- session -- AwardHandlerXP's own `HandlerXP[citizenid] or 0` read would
+    -- otherwise silently treat an un-warmed cache as "starts from zero,"
+    -- exactly the same class of staleness LoadXPForCitizenid already exists
+    -- to prevent for the K9 side). No client push -- see GetHandlerXPTier's
+    -- own doc comment for why no xpTierChanged-shaped event exists yet for
+    -- the handler ladder.
+    LoadHandlerXPForCitizenid(citizenid)
 end)
 
 -- STRUCTURAL GAP backfill (mirrors server/main.lua's identical backfill for
@@ -1576,7 +1981,19 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- case: earning XP at all already required the flag to have been
     -- deliberately turned on once; the common "flag has always been
     -- false" default-install case this fix targets cannot exhibit it.
-    if not Config.Features.XPProgression then return end
+    --
+    -- WIDENED (HANDLER XP pass, coder-backend) to also cover
+    -- Config.Features.HandlerXPProgression -- this loop must not return
+    -- early just because XPProgression is off if HandlerXPProgression is
+    -- independently on (and vice versa): the two are separate flags gating
+    -- two separate caches (K9XP/HandlerXP) on the SAME k9_progression row.
+    -- Each half below is still independently gated on its OWN flag, same
+    -- "no wasted query for a sub-feature that is off" discipline the
+    -- original fix established -- widening the OUTER early-return alone,
+    -- without also gating each half inside the loop, would have
+    -- reintroduced exactly the wasted-K9XP-query case this fix was written
+    -- to close, for any server running HandlerXPProgression alone.
+    if not (Config.Features.XPProgression or Config.Features.HandlerXPProgression) then return end
 
     for _, playerIdStr in ipairs(GetPlayers()) do
         local src = tonumber(playerIdStr)
@@ -1584,8 +2001,13 @@ AddEventHandler('onResourceStart', function(resourceName)
             local Player = exports.qbx_core:GetPlayer(src)
             if Player and Player.PlayerData and Player.PlayerData.citizenid then
                 local citizenid = Player.PlayerData.citizenid
-                local xp = LoadXPForCitizenid(citizenid)
-                PushTierSnapshot(src, citizenid, ResolveTier(xp))
+                if Config.Features.XPProgression then
+                    local xp = LoadXPForCitizenid(citizenid)
+                    PushTierSnapshot(src, citizenid, ResolveTier(xp))
+                end
+                if Config.Features.HandlerXPProgression then
+                    LoadHandlerXPForCitizenid(citizenid)
+                end
             end
         end
     end
@@ -1609,6 +2031,9 @@ AddEventHandler('playerDropped', function(_reason)
     local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
     if citizenid then
         K9XP[citizenid] = nil
+        -- Same bounded-memory-growth rationale as K9XP's own eviction
+        -- immediately above, applied to its handler-facing twin.
+        HandlerXP[citizenid] = nil
         -- Drops every actionKey entry AwardXPCooldown holds for this
         -- citizenid in one call (NewNestedCooldown's :Clear(primaryKey)
         -- shape) — see that tracker's own declaration comment for why this

@@ -1240,6 +1240,81 @@ function K9Store.XP_GetSnapshotRows(citizenid)
     return { { xp = row.xp, updated_at = FormatDateTime(row.updated_at_unix or row.created_at_unix) } }
 end
 
+-- ----------------------------------------------------------------------
+-- handler_xp -- a SECOND, INDEPENDENT accumulated total on this SAME
+-- `k9_progression` row (added by sql/migrations/0017_add_k9_progression_
+-- handler_xp.sql; sql/install.sql already carries it for a fresh install).
+-- Mirrored from server/progression.lua's AwardHandlerXP/GetHandlerXPTier --
+-- see config.lua's own Config.HandlerXPTiers header for the full "why a
+-- second column, not a second reading of `xp`" reasoning.
+--
+-- DELIBERATELY NOT in EXPECTED_TABLE_COLUMNS['k9_progression'] above (see
+-- sql/install.sql's own `k9_progression` header, the paragraph right after
+-- its CREATE TABLE, for the full reasoning already recorded there): that
+-- list is a STABLE, FOUNDING column signature used to detect a genuine
+-- name collision, and `handler_xp` has not been true of every
+-- k9_progression row since the table was created the way
+-- citizenid/xp/created_at/updated_at have -- including it there would
+-- misreport every real installation that has not yet applied migration
+-- 0017 as a foreign-table collision and disable MySQL for the entire
+-- resource. A pre-0017 database is therefore a normal, expected case here,
+-- not a bug -- both accessors below degrade it safely rather than assume
+-- the column exists.
+--
+-- READ CONTRACT: HandlerXP_Get mirrors XP_Get's own raw-mirror-of-
+-- MySQL.scalar.await contract exactly (throws on a genuine DB-mode error,
+-- including "Unknown column 'handler_xp'" against a pre-migration-0017
+-- database) -- the caller (server/progression.lua's own
+-- LoadHandlerXPForCitizenid, mirroring LoadXPForCitizenid) is what
+-- pcall-wraps this and degrades a missing column to a safe 0-handler-XP
+-- baseline, exactly like LoadXPForCitizenid already does for XP_Get.
+--
+-- WRITE CONTRACT, DELIBERATELY DIFFERENT FROM XP_UpsertAdd: XP_UpsertAdd
+-- above raw-mirrors MySQL.insert.await (throws to its own caller, which
+-- wraps it in a CreateThread + pcall of its own). HandlerXP_UpsertAdd
+-- instead mirrors this file's SafeWrite contract (boolean, never throws --
+-- same shape as Override_Upsert/Override_Delete above), so a write against
+-- a not-yet-migrated database (or any other genuine DB error) degrades to
+-- a plain `false` AwardHandlerXP can check directly, rather than an error
+-- string its own pcall has to unwrap. Chosen for this second, newer
+-- accessor specifically so that contract is exercised by a real caller
+-- from day one, rather than only ever existing as an unused convention
+-- elsewhere in this file.
+--- @return number? handlerXp -- nil if this citizenid has no row yet (matches XP_Get's own nil-on-no-row shape)
+function K9Store.HandlerXP_Get(citizenid)
+    if DatabaseEnabled() then
+        return MySQL.scalar.await('SELECT handler_xp FROM k9_progression WHERE citizenid = ? LIMIT 1', { citizenid })
+    end
+    local row = ProgressionRows[citizenid]
+    return row and row.handler_xp or nil
+end
+
+--- Mirrors the SafeWrite contract (boolean, never throws) -- see this
+--- section's own header immediately above for why this accessor's contract
+--- deliberately differs from its `xp`-column sibling, XP_UpsertAdd.
+--- @param delta number -- the per-award DELTA, never the new running total
+--- @return boolean ok
+function K9Store.HandlerXP_UpsertAdd(citizenid, delta)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.insert.await,
+            'INSERT INTO k9_progression (citizenid, handler_xp) VALUES (?, ?) ON DUPLICATE KEY UPDATE handler_xp = handler_xp + VALUES(handler_xp), updated_at = CURRENT_TIMESTAMP',
+            { citizenid, delta })
+        if not ok then
+            print(('[qbx_k9unit] datastore: HandlerXP_UpsertAdd write failed for %s (has sql/migrations/0017_add_k9_progression_handler_xp.sql been applied?): %s'):format(citizenid, tostring(err)))
+            return false
+        end
+        return true
+    end
+    local row = ProgressionRows[citizenid]
+    if not row then
+        row = { xp = 0, handler_xp = 0, created_at_unix = NowUnix() }
+        ProgressionRows[citizenid] = row
+    end
+    row.handler_xp = (row.handler_xp or 0) + delta
+    row.updated_at_unix = NowUnix()
+    return true
+end
+
 -- ======================================================================
 -- k9_search_log
 --
@@ -3227,7 +3302,7 @@ local function VerifyTableShapesAgainstKnownSchema()
         SCHEMA_COLLISION_DETECTED = true
         print('[qbx_k9unit] datastore: this resource\'s own tables were not found in this database -- it looks like the SQL was never imported.')
         print('[qbx_k9unit] datastore: Running IN MEMORY ONLY for this session. Every feature works right now, for everyone on the server -- certifications, XP, partnerships, permissions, the tablet, all of it. What is missing is memory across a restart: when this server next restarts, all of it resets and everyone starts over. The audit trail is not kept at all.')
-        print('[qbx_k9unit] datastore: TO FIX: import sql/install.sql into the database this server uses, then restart this resource. Nothing else needs changing -- Config.Database.enabled is already true. If you MEANT to run without a database, set Config.Database.enabled = false in config.lua and this message stops.')
+        print('[qbx_k9unit] datastore: TO FIX: run sql/k9_setup.sh against the database this server uses -- it runs install.sql, then every file in sql/migrations/, in the right order, safely, whether this is a first install or an upgrade. If you are pasting SQL by hand instead (no shell/mysql CLI available), run sql/install.sql first, then every file under sql/migrations/ in numeric order (0001, 0002, 0003, ... through the highest number present) -- install.sql alone does NOT create every table this resource uses; skipping the migrations folder will trigger this same warning again on the next restart. Then restart this resource. If you MEANT to run without a database, set Config.Database.enabled = false in config.lua and this message stops. See sql/DATABASE_GUIDE.md for a step-by-step version of all of this.')
         return
     end
 

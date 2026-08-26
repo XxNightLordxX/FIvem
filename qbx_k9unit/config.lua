@@ -289,17 +289,37 @@ Config.Features = {
     -- (search/track/bite/takedown). See Config.HandlerXPTiers' own header
     -- for the full "why a second total, not the same one" reasoning.
     --
-    -- DEFAULT FALSE, DELIBERATELY -- NOT YET SAFE TO ENABLE ON A LIVE
-    -- SERVER. The award-minting machinery (the shared cross-mechanic XP
-    -- mint budget, the per-(citizenid, actionKey) rate floor) is real and
-    -- shared with XPProgression's own AwardXP, so it is not undefended --
-    -- but TWO of the three earning hooks this pass defines
-    -- (`handlerTreatK9`, `handlerKennelDeploy` -- see Config.HandlerXP.awards
-    -- below) have NO per-actor mint cooldown of their own yet, because that
-    -- cooldown belongs in server/medkit.lua/server/kennel.lua respectively
-    -- (not owned by this pass -- see server/progression.lua's own
-    -- AwardHandlerXP doc comment for the exact contract each file's owner
-    -- needs to add). Concretely, WITHOUT that cooldown,
+    -- CODE LANDED (this pass, coder-backend): AwardHandlerXP/GetHandlerXPTier
+    -- now exist in server/progression.lua, K9Store.HandlerXP_Get/
+    -- HandlerXP_UpsertAdd now exist in server/datastore.lua, this flag has
+    -- its own FEATURE_TIERS entry (server/runtimecontrol.lua) and its own
+    -- `block.HandlerXPProgression`/`feature.HandlerXPProgression`
+    -- per-person path (server/progression.lua's
+    -- IsHandlerXPProgressionPermittedForCitizenId, the identical four-step
+    -- shape every other feature here already gets) -- so this key is back.
+    --
+    -- STILL DEFAULT FALSE, DELIBERATELY -- for a NARROWER reason than
+    -- before this pass (the missing-code gap above is closed; a real
+    -- anti-farm gap on two specific award keys is not). Of the six award
+    -- keys in Config.HandlerXP.awards below, FOUR are wired this pass and
+    -- each already rides a real per-actor throttle of its own:
+    -- `handlerCertifyK9` (server/certifications.lua's GrantCertification
+    -- AND GrantCertificationOffline, both already gated by that file's own
+    -- per-granter IsCertifyActionOnCooldown check), and the three
+    -- `handlerPartnershipTenure{1,7,30}Day` milestones (server/tenure.lua's
+    -- CheckTenureMilestonesForK9, one-time-per-partnership-row, never
+    -- repeating -- the SAME CAS guard the K9-side milestones already rely
+    -- on). The remaining TWO -- `handlerTreatK9` (server/medkit.lua) and
+    -- `handlerKennelDeploy` (server/kennel.lua) -- are DELIBERATELY LEFT
+    -- UNWIRED this pass: AwardHandlerXP is called from NOWHERE for either
+    -- of those two actionKeys. Neither file has a per-actor XP MINT
+    -- cooldown today -- server/medkit.lua's own MedkitCooldown is keyed by
+    -- the TARGET K9's citizenid, not the USING handler's, and
+    -- server/kennel.lua's own DeployCooldown throttles the ACTION, not a
+    -- per-actor mint -- and the arithmetic below (unchanged, still
+    -- accurate) shows exactly why minting through either unthrottled would
+    -- be unsafe even with the shared budget backing it up. Concretely,
+    -- WITHOUT a dedicated per-actor mint cooldown,
     -- Config.DeployableKennel.deployCooldownMs's own 5000ms default lets a
     -- SOLO handler mint handlerKennelDeploy's 8 XP every 5 seconds with no
     -- accomplice and no per-actor throttle at all -- 5,760 XP/hr
@@ -309,26 +329,12 @@ Config.Features = {
     -- budget still caps the damage (nobody can mint UNLIMITED XP), but it
     -- would make kennel-deploy-spam the fastest way to cap out a
     -- citizenid's TOTAL K9+handler XP for the hour, crowding out every
-    -- legitimate award. Flip this to `true` only once the per-actor mint
-    -- cooldowns described in server/progression.lua's own AwardHandlerXP
-    -- doc comment have actually landed in those two files -- same
+    -- legitimate award. Flip this to `true` only once a real per-actor mint
+    -- cooldown has landed in server/medkit.lua AND server/kennel.lua AND
+    -- each file's own success path actually calls AwardHandlerXP -- same
     -- "landed as a foundation, reviewed before go-live" posture
     -- Config.Features.HandlerPartnership itself went through above.
-    -- NOT A SWITCH YET, ON PURPOSE. `HandlerXPProgression` is deliberately
-    -- absent from this table until the code above describes actually
-    -- exists. Everything else for it is here and ready -- the ladder
-    -- (Config.HandlerXPTiers), the award amounts (Config.HandlerXP.awards),
-    -- and the database column (sql/migrations/0017_add_k9_progression_
-    -- handler_xp.sql) -- but server/progression.lua has no AwardHandlerXP
-    -- or GetHandlerXPTier yet, so a switch here would be a setting an owner
-    -- could turn on that did absolutely nothing. This resource has a rule
-    -- against that, enforced by two tests that will fail the moment anyone
-    -- adds the key back without the code: tests/runtimefeaturetiers_spec.lua
-    -- (every switch must be classified in server/runtimecontrol.lua's
-    -- FEATURE_TIERS) and tests/customizationregistry_spec.lua (every switch
-    -- must have a per-person block path). Add the key back in the same
-    -- change that adds the code, its FEATURE_TIERS entry, and its
-    -- `block.HandlerXPProgression` check -- not before.
+    HandlerXPProgression = false,
 
     HealthStaminaHUD     = true,
     FatigueSystem        = true,

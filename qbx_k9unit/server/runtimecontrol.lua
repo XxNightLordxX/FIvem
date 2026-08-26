@@ -18,6 +18,19 @@
       for every viewer. COSMETIC ONLY -- see "PART 2" below for the exact
       boundary.
 
+    TWO SHAPES OF "this needs a typed confirmation before it applies", ONE
+    MECHANISM: "LOCKOUT-RISK FEATURES" below (HighCommand/PermissionGrants/
+    RuntimeFeatureControl/TabletTheming/CommandTablet -- always risky, no
+    matter what anyone is doing) and "ACTIVE-USAGE CONFIRMATION FEATURES"
+    below that (BiteAndHold/NonLethalTakedown/PropDragging/DeployableKennel
+    -- risky only while a player is genuinely doing that exact thing right
+    now, with a real, live headcount in the warning). Both share the
+    identical response shape (`reason = 'confirmation_required'`,
+    `lockoutRisk = true`, `warning = <text>`) and the identical
+    html/tablet.js read-and-type panel -- see that second section's own
+    header for why this is one mechanism serving two triggers, not two
+    mechanisms.
+
     ======================================================================
     THE ENGINE CONSTRAINT -- READ THIS BEFORE TRUSTING ANY TOGGLE THIS FILE
     OFFERS. Every feature in this resource gates its RegisterCommand/
@@ -473,6 +486,16 @@ end
 local FEATURE_TIERS = {
     -- tier = 'live' -- see header "THE FULL AUDIT" for the exact evidence per entry.
     XPProgression          = { tier = 'live' },
+    -- server/progression.lua's AwardHandlerXP re-checks
+    -- Config.Features.HandlerXPProgression fresh on its own first line,
+    -- exactly like AwardXP re-checks XPProgression above -- genuinely live,
+    -- not merely registered once at load/start time. Ships `false` by
+    -- default (config.lua's own comment on this key: two of its six award
+    -- keys are deliberately left unwired pending a per-actor mint cooldown
+    -- in server/medkit.lua/server/kennel.lua) -- that is an economy/anti-farm
+    -- readiness question, not a liveness one, so it does not change this
+    -- classification.
+    HandlerXPProgression   = { tier = 'live' },
     HandlerPartnership     = { tier = 'live' },
     -- RESOLVED (coder-backend, this pass): this entry used to disclose a
     -- partial-liveness gap -- server/combat.lua's own expiry maintenance
@@ -488,6 +511,16 @@ local FEATURE_TIERS = {
     -- free to walk unconditionally). See server/combat.lua's own comments
     -- at both thread definitions, and tests/combat_spec.lua's two
     -- "LIVE-FLIP FIX" tests, for the full writeup and regression coverage.
+    -- ACTIVE-USAGE CONFIRMATION (this pass, coder-ui) -- see
+    -- "ACTIVE-USAGE CONFIRMATION FEATURES" below GetFeatureLockoutWarning
+    -- for the full mechanism: SetFeature/ResetFeature additionally refuse
+    -- to disable any one of these four with the SAME
+    -- reason='confirmation_required'/`confirm` gate as a lockoutRisk
+    -- feature, WHILE (and only while) at least one player is genuinely
+    -- doing the exact thing it gates right now -- a real, live headcount
+    -- in the warning text, never a generic "are you sure?". Never blocks
+    -- releasing/ending one already in progress; only blocks STARTING to
+    -- disable the feature.
     BiteAndHold            = { tier = 'live' },
     NonLethalTakedown      = { tier = 'live' },
     PropDragging           = { tier = 'live' },
@@ -730,6 +763,170 @@ local function GetFeatureLockoutWarning(name)
     local warning = entry and entry.lockoutWarning
     if type(warning) == 'string' and warning ~= '' then return warning end
     return ('Changing Config.Features.%s carries a lockout risk this file could not resolve a specific warning for -- proceed only if you understand exactly what this flag gates and how to recover via config.lua + a restart if it goes wrong.'):format(tostring(name))
+end
+
+-- ======================================================================
+-- ACTIVE-USAGE CONFIRMATION FEATURES -- separate from, and ADDITIONAL TO,
+-- the LOCKOUT-RISK mechanism just above. A lockout-risk feature is always
+-- risky, regardless of what any player happens to be doing at the moment
+-- (HighCommand/PermissionGrants/RuntimeFeatureControl/TabletTheming/
+-- CommandTablet, all five above). These four are the opposite shape:
+-- completely ordinary, everyday `tier = 'live'` toggles the rest of the
+-- time, but genuinely disruptive AT THE EXACT MOMENT a player is doing the
+-- specific thing each one gates, because disabling it live blocks anyone
+-- from STARTING that thing again until it is switched back on.
+--
+-- REUSED, NOT REINVENTED (this task's own explicit instruction): the SAME
+-- response shape (`reason = 'confirmation_required'`, `lockoutRisk =
+-- true`, `warning = <text>`) and the SAME client-side read-and-type panel
+-- (html/tablet.js's buildRuntimeLockoutConfirmPanel(), which renders any
+-- row with `lockoutRisk = true` identically regardless of WHY it is
+-- true -- see that function's own doc comment). The only thing genuinely
+-- new here is WHEN `lockoutRisk` becomes true for one of these four:
+-- computed FRESH, at the moment of the call (list, set, or reset), from a
+-- live headcount this file asks the feature's own implementation file
+-- for -- never cached, because "3 players are doing this right now" stops
+-- being true the instant it stops being true.
+--
+-- WHY ONLY THESE FOUR, out of every `tier = 'live'` entry above -- checked
+-- against the real code, not assumed from a feature's name or from this
+-- task's own brief:
+--   BiteAndHold / NonLethalTakedown / PropDragging -- server/combat.lua's
+--     ActiveHolds table holds one entry per currently-open hold/takedown/
+--     drag, keyed by effectType ('bite'/'takedown'/'drag') -- exactly the
+--     "someone is doing this right now" state this mechanism needs. Read
+--     via CountActiveHoldsByEffectType(effectType), a plain global
+--     function server/combat.lua exposes for this (this resource's
+--     established "global helper, private per-file state" convention --
+--     see e.g. EndActiveEffectForHolder's own doc comment in that same
+--     file), NEVER trusted to exist (runtime-existence-guarded +
+--     pcall-wrapped exactly like every other soft cross-file dependency in
+--     this resource -- see server/recall.lua's own EndActiveEffectForHolder
+--     guard for the identical shape) so this file's own test sandbox
+--     (tests/runtimecontrol_spec.lua, which loads ONLY
+--     server/cooldowns.lua + server/runtimecontrol.lua by that spec's own
+--     header) keeps working with no active-usage count available at all,
+--     exactly as if nobody were using anything.
+--   DeployableKennel -- server/kennel.lua's KennelOccupants table holds one
+--     entry per citizenid whose K9 is genuinely resting inside a deployed
+--     kennel right now. Read via CountKennelOccupants(), same soft-
+--     dependency shape as above.
+--   TrainingMode -- DELIBERATELY EXCLUDED, despite being the third example
+--     this task's own brief named ("a training drill running"). Checked
+--     against the real code before deciding, not taken from the brief:
+--     TrainingMode is `tier = 'rawtoplevel'` (see FEATURE_TIERS' own entry
+--     above) -- server/training.lua's ENTIRE file is gated by a single
+--     `if not Config.Features.TrainingMode then return end` at its own
+--     top level, executed once, when that file itself loads. If it was
+--     true at boot (the ordinary case), every one of that file's handlers
+--     is already registered and NEVER re-checks the flag again for the
+--     rest of this session -- so a live tablet toggle of TrainingMode
+--     already has ZERO effect on anyone's current session (SetFeature's
+--     own `rawtoplevel` response branch already says so plainly:
+--     `restartRequired = true, configEditRequired = true`). Adding a "N
+--     players are training right now" active-usage warning to a toggle
+--     that provably changes nothing live this session would be exactly
+--     the overclaiming this file's own header rejects elsewhere (see "A
+--     NOTE ON Recall" above for the same discipline applied to a
+--     different feature) -- a confirmation dialog for a switch that
+--     already tells the truth about doing nothing live is not needed, and
+--     a dishonest one would be worse than none.
+--   Every OTHER `tier = 'live'` feature (XPProgression,
+--     HandlerXPProgression, HandlerPartnership, ScentTracking/
+--     BloodTracking/GunpowderSniffing, ContrabandAlerts/SearchZones,
+--     K9Inventory, K9Medkit, LeashMechanics, BasicBarkSounds/
+--     DoorInteraction, CertificationExpiry, FatigueSystem/MoodSystem/
+--     FearStressSystem/DistractionSystem/InjuryLimping,
+--     PartnershipTenureBonus) has no equivalent "one player is inside a
+--     continuous session of this right now" state to count in the first
+--     place -- each of those is a momentary check-then-act (a single XP
+--     award, a single medkit use, a single bark relay), not an ongoing
+--     hold/occupancy this file could meaningfully warn about mid-flight.
+--
+-- WHAT THIS DOES NOT CLAIM: disabling any of these four does NOT force-end
+-- an already-open hold or evict an already-resting K9 -- verified directly
+-- against the code, not assumed. server/combat.lua's shared maintenance
+-- thread (expiry/holder-death/vehicle-entry/max-drag-distance) and every
+-- release event (releaseBiteHold/releaseTakedown/releaseDrag) never
+-- re-check Config.Features.* at all, and server/kennel.lua's
+-- requestExitKennel is likewise ungated -- exactly this resource's own
+-- "never gate a termination path" rule, independently confirmed here
+-- rather than taken on faith. GetActiveUsageWarning below says so
+-- explicitly, for the same reason GetFeatureLockoutWarning's own callers
+-- never overclaim what a sessionOnly toggle persists.
+-- ======================================================================
+
+--- Runtime-existence-guarded + pcall-wrapped read of server/combat.lua's
+--- own ActiveHolds table, via the plain global function that file exposes
+--- for exactly this -- see "ACTIVE-USAGE CONFIRMATION FEATURES" above for
+--- the full reasoning.
+--- @param effectType 'bite'|'takedown'|'drag'
+--- @return integer? count -- nil if server/combat.lua is not loaded in
+--- this environment (this file's own test sandbox, by design), never a
+--- false 0 standing in for "unknown".
+local function CountLiveCombatHolds(effectType)
+    if type(CountActiveHoldsByEffectType) ~= 'function' then return nil end
+    local ok, n = pcall(CountActiveHoldsByEffectType, effectType)
+    if ok and type(n) == 'number' then return n end
+    return nil
+end
+
+--- Same shape as CountLiveCombatHolds above, for server/kennel.lua's own
+--- KennelOccupants table.
+--- @return integer? count
+local function CountLiveKennelOccupants()
+    if type(CountKennelOccupants) ~= 'function' then return nil end
+    local ok, n = pcall(CountKennelOccupants)
+    if ok and type(n) == 'number' then return n end
+    return nil
+end
+
+--- name -> { countFn = function(): integer?, activity = string } -- see
+--- "ACTIVE-USAGE CONFIRMATION FEATURES" above for which four features are
+--- here and why, and why TrainingMode is deliberately not.
+local ACTIVE_USAGE_FEATURES = {
+    -- `activity` is deliberately WITHOUT its own leading article -- see
+    -- GetActiveUsageWarning below, which supplies "a"/"currently" in two
+    -- DIFFERENT grammatical positions for the same string ("in a
+    -- bite-and-hold" and "a NEW bite-and-hold") -- baking an article into
+    -- the noun itself produced a genuine "a NEW a bite-and-hold" bug,
+    -- caught by this pass's own tests before it ever reached a player.
+    BiteAndHold       = { countFn = function() return CountLiveCombatHolds('bite') end,     activity = 'bite-and-hold' },
+    NonLethalTakedown = { countFn = function() return CountLiveCombatHolds('takedown') end, activity = 'non-lethal takedown' },
+    PropDragging      = { countFn = function() return CountLiveCombatHolds('drag') end,     activity = 'prop drag' },
+    -- DeployableKennel's own activity string is a full clause, not a noun
+    -- phrase needing an article at all -- see its own branch below.
+    DeployableKennel  = { countFn = CountLiveKennelOccupants,                                activity = 'resting inside a deployed kennel' },
+}
+
+--- @param name string
+--- @return integer? count -- a POSITIVE count if `name` is one of
+--- ACTIVE_USAGE_FEATURES and at least one player is doing that thing right
+--- now; nil otherwise (either `name` is not one of these four, the live
+--- count came back 0, or the count could not be read at all -- all three
+--- cases mean the same thing here: no active-usage confirmation is owed).
+local function GetActiveUsageCount(name)
+    local entry = ACTIVE_USAGE_FEATURES[name]
+    if not entry then return nil end
+    local ok, count = pcall(entry.countFn)
+    if ok and type(count) == 'number' and count > 0 then return count end
+    return nil
+end
+
+--- Plain-English, REAL-NUMBER warning for an active-usage confirmation --
+--- this task's own explicit requirement: say WHAT will happen, never "are
+--- you sure?". Honest about what actually happens on each of these four
+--- (see "WHAT THIS DOES NOT CLAIM" above -- an already-open hold/occupancy
+--- is never force-ended by this).
+--- @param name string @param count integer -- already confirmed > 0 by GetActiveUsageCount
+--- @return string
+local function GetActiveUsageWarning(name, count)
+    local entry = ACTIVE_USAGE_FEATURES[name]
+    local subject = (count == 1) and '1 player is' or (count .. ' players are')
+    if name == 'DeployableKennel' then
+        return ('%s currently %s right now. Disabling %s will NOT remove them or force an exit -- a K9 already resting can always leave normally, unaffected -- but nobody will be able to deploy, enter, or pick up a kennel until it is turned back on.'):format(subject, entry.activity, name)
+    end
+    return ('%s currently in a %s right now. Disabling %s will NOT end an already-started hold -- automatic release, expiry, and manual release all keep working regardless -- but nobody will be able to start a NEW %s until it is turned back on.'):format(subject, entry.activity, name, entry.activity)
 end
 
 -- ======================================================================
@@ -1885,6 +2082,16 @@ lib.callback.register('qbx_k9unit:server:runtimeListFeatures', function(source)
         local overrideKey = 'feature:' .. name
         local override = ActiveOverrides[overrideKey]
         local lockoutRisk = GetFeatureLockoutRisk(name)
+        -- ACTIVE-USAGE CONFIRMATION (see that section above
+        -- GetFeatureLockoutWarning for the full mechanism) -- only
+        -- meaningful while `currentValue` is true (a feature already off
+        -- has nothing pending to disable, so no badge is owed here even if
+        -- a stray leftover count existed). Folds into the SAME
+        -- `lockoutRisk`/`lockoutWarning` fields the static entries above
+        -- use, so html/tablet.js needs no changes at all to show this
+        -- exactly like any other lockout-risk row.
+        local activeUsageCount = currentValue and GetActiveUsageCount(name) or nil
+        if activeUsageCount then lockoutRisk = true end
         rows[#rows + 1] = {
             name = name,
             currentValue = currentValue,
@@ -1906,9 +2113,14 @@ lib.callback.register('qbx_k9unit:server:runtimeListFeatures', function(source)
             -- means a successful change here is NOT persisted -- the
             -- tablet should tell the officer this change reverts on the
             -- next restart unless config.lua is also edited to match.
+            -- `lockoutRisk` is TRUE for two different reasons now (a
+            -- static self-lockout risk, OR a live active-usage count right
+            -- now) -- the tablet does not need to tell them apart; either
+            -- way `lockoutWarning` already carries the real, specific
+            -- explanation to show verbatim.
             lockoutRisk = lockoutRisk,
             sessionOnly = GetFeatureSessionOnly(name),
-            lockoutWarning = lockoutRisk and GetFeatureLockoutWarning(name) or nil,
+            lockoutWarning = lockoutRisk and (activeUsageCount and GetActiveUsageWarning(name, activeUsageCount) or GetFeatureLockoutWarning(name)) or nil,
         }
     end
     return { ok = true, features = rows }
@@ -1920,9 +2132,12 @@ end)
 --- @param confirm string? -- REQUIRED, and must equal `name` EXACTLY, for
 --- any feature with `lockoutRisk = true` (see FEATURE_TIERS' own
 --- lockoutRisk entries and "LOCKOUT-RISK FEATURES" above GetFeatureTier
---- for the full mechanism) -- ignored entirely for every other feature,
---- so every existing caller of this callback for a non-lockout-risk
---- feature keeps working unmodified with only 3 arguments.
+--- for the full mechanism) OR one of the four "ACTIVE-USAGE CONFIRMATION
+--- FEATURES" (see that section above GetFeatureLockoutWarning) while
+--- `newValue == false` and at least one player is genuinely doing that
+--- thing right now -- ignored entirely for every other feature/value
+--- combination, so every existing caller of this callback keeps working
+--- unmodified with only 3 arguments.
 lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, name, newValue, confirm)
     if not (Config.Features and Config.Features.RuntimeFeatureControl == true) then
         return { ok = false, reason = 'feature_disabled' }
@@ -1984,10 +2199,20 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
     -- `name` EXACTLY -- not merely truthy -- so a UI cannot pass a single
     -- hardcoded `true` for every toggle without actually naming which one
     -- it is confirming.
+    --
+    -- ACTIVE-USAGE CONFIRMATION GATE (see "ACTIVE-USAGE CONFIRMATION
+    -- FEATURES" above GetFeatureLockoutWarning for the full mechanism) --
+    -- STACKED onto the same gate, not a separate one: only relevant when
+    -- `newValue == false` (turning something OFF is the only direction
+    -- that can strand a player mid-use; turning it back ON never can), and
+    -- re-checked FRESH right here, at the moment of this exact call, never
+    -- trusted from a stale list response or a client-supplied count.
     local lockoutRisk = GetFeatureLockoutRisk(name)
+    local activeUsageCount = (newValue == false) and GetActiveUsageCount(name) or nil
+    if activeUsageCount then lockoutRisk = true end
     if lockoutRisk and confirm ~= name then
         LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s'):format(name), 'confirmation_required')
-        return { ok = false, reason = 'confirmation_required', lockoutRisk = true, warning = GetFeatureLockoutWarning(name) }
+        return { ok = false, reason = 'confirmation_required', lockoutRisk = true, warning = activeUsageCount and GetActiveUsageWarning(name, activeUsageCount) or GetFeatureLockoutWarning(name) }
     end
 
     local oldValue = Config.Features[name]
@@ -2076,17 +2301,28 @@ lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, 
         return { ok = false, reason = 'invalid_feature' }
     end
 
+    local defaultValue = CONFIG_LUA_DEFAULT_FEATURES[name]
+
     -- LOCKOUT-RISK CONFIRMATION GATE -- see runtimeSetFeature's identical
     -- gate above for the full reasoning; symmetric here on purpose.
+    --
+    -- ACTIVE-USAGE CONFIRMATION GATE -- also symmetric with
+    -- runtimeSetFeature's own stacked check above: relevant here exactly
+    -- when the RESULT of this reset would turn the feature off
+    -- (`defaultValue == false`), the same "resulting value" test
+    -- SetFeature applies to its own `newValue` argument -- never based on
+    -- the CURRENT value, which a reset does not care about (config.lua's
+    -- own shipped default is the only thing that matters here).
     local lockoutRisk = GetFeatureLockoutRisk(name)
+    local activeUsageCount = (defaultValue == false) and GetActiveUsageCount(name) or nil
+    if activeUsageCount then lockoutRisk = true end
     if lockoutRisk and confirm ~= name then
         LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s'):format(name), 'confirmation_required')
-        return { ok = false, reason = 'confirmation_required', lockoutRisk = true, warning = GetFeatureLockoutWarning(name) }
+        return { ok = false, reason = 'confirmation_required', lockoutRisk = true, warning = activeUsageCount and GetActiveUsageWarning(name, activeUsageCount) or GetFeatureLockoutWarning(name) }
     end
 
     local overrideKey = 'feature:' .. name
     local oldValue = Config.Features[name]
-    local defaultValue = CONFIG_LUA_DEFAULT_FEATURES[name]
     local sessionOnly = GetFeatureSessionOnly(name)
 
     -- SESSION-ONLY PERSISTENCE SKIP -- see runtimeSetFeature's identical

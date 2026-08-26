@@ -719,6 +719,19 @@ globals = {
     -- correct-but-invisible until that citizenid's next real tier crossing,
     -- reconnect, or a resource restart.
     "PushXPTierSnapshotIfOnline",
+    -- server/progression.lua -- HANDLER XP (Config.Features.
+    -- HandlerXPProgression), a SEPARATE accumulated total from AwardXP/
+    -- GetXPTier above (own `handler_xp` column, own Config.HandlerXPTiers
+    -- ladder). AwardHandlerXP is read from server/certifications.lua (both
+    -- GrantCertification and GrantCertificationOffline) and
+    -- server/tenure.lua's CheckTenureMilestonesForK9, each behind a
+    -- `type(AwardHandlerXP) == 'function'` runtime existence guard, same
+    -- soft-dependency convention as AwardXP itself. GetHandlerXPTier has no
+    -- external caller yet (exposed for the same future-consumer reason
+    -- GetXP was originally exposed) but is listed here now rather than
+    -- deferred, since it is already a real, tested, resource-global
+    -- function as of this pass.
+    "AwardHandlerXP", "GetHandlerXPTier",
     -- client/movement.lua's PHASE4_SPEC.md §13.0 Decision 2 "move-rate
     -- composer" -- REAL, IMPLEMENTED (coder-frontend pass, real-bug fix):
     -- a qa-tester finding caught client/wellbeing.lua unconditionally
@@ -819,6 +832,18 @@ globals = {
     -- zero-consent-release shape as RequestBiteHold/ReleaseBiteHold above.
     -- Not yet wired into client/radial.lua; exposed for that future entry.
     "RequestDrag", "ReleaseDrag", "IsDragEngaged",
+    -- server/combat.lua / server/kennel.lua -- READ-ONLY live headcount
+    -- accessors for server/runtimecontrol.lua's own "ACTIVE-USAGE
+    -- CONFIRMATION FEATURES" gate (that file's own header section): "how
+    -- many players are doing this specific thing right now", so a high-
+    -- command officer disabling BiteAndHold/NonLethalTakedown/PropDragging/
+    -- DeployableKennel while it is genuinely in use gets a real, current
+    -- number in the confirmation warning rather than a generic "are you
+    -- sure?". Both runtime-existence-guarded + pcall-wrapped by their one
+    -- caller, same soft-dependency convention as EndActiveEffectForHolder
+    -- above -- server/runtimecontrol.lua's own test sandbox does not load
+    -- either combat.lua or kennel.lua, by that spec's own design.
+    "CountActiveHoldsByEffectType", "CountKennelOccupants",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

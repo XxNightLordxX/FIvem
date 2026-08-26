@@ -602,6 +602,200 @@ t.test('runtimeListFeatures reports lockoutRisk/sessionOnly/lockoutWarning so th
     t.isFalse(rowByName.BasicBarkSounds.lockoutRisk == true)
 end)
 
+-- ============================================================================
+-- SECTION 3B -- ACTIVE-USAGE CONFIRMATION: BiteAndHold/NonLethalTakedown/
+-- PropDragging/DeployableKennel additionally refuse to be switched OFF
+-- while at least one player is genuinely doing that exact thing right now
+-- -- server/combat.lua's CountActiveHoldsByEffectType / server/kennel.lua's
+-- CountKennelOccupants are NOT loaded by this file's own sandbox (boot()
+-- above loads ONLY server/cooldowns.lua + server/runtimecontrol.lua, per
+-- this file's own header) -- every test below injects a stand-in directly
+-- onto `f.env`, the SAME "runtime-existence-guarded soft dependency"
+-- pattern tests/recall_spec.lua/tests/certifications_spec.lua already use
+-- for `f.env.EndActiveEffectForHolder`.
+-- ============================================================================
+
+--- @param extraFeatures table? -- merged over the four active-usage
+--- features (all on by default) plus TrainingMode (also on, for the
+--- exclusion test below) -- e.g. { BiteAndHold = false } to start one off.
+local function bootWithActiveUsageFeatures(extraFeatures)
+    local features = {
+        RuntimeFeatureControl = true, TabletTheming = true,
+        BiteAndHold = true, NonLethalTakedown = true, PropDragging = true, DeployableKennel = true,
+        TrainingMode = true,
+    }
+    for k, v in pairs(extraFeatures or {}) do features[k] = v end
+    return boot({ config = { Features = features, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })
+end
+
+t.test('THE LOCKOUT CASE IS ACTUALLY BLOCKED, not merely asked about: SetFeature(BiteAndHold, false) while 2 holds are genuinely open is refused, and Config.Features.BiteAndHold is left COMPLETELY UNCHANGED -- no override row, no audit row claiming success', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    f.env.CountActiveHoldsByEffectType = function(effectType) return (effectType == 'bite') and 2 or 0 end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BiteAndHold', false)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'confirmation_required')
+    t.isTrue(result.lockoutRisk)
+    t.isTrue(type(result.warning) == 'string' and result.warning:find('2', 1, true) ~= nil, 'the warning must carry the REAL, current number -- "2" -- not a generic "are you sure?"')
+    t.isTrue(result.warning:find('bite%-and%-hold') ~= nil, 'must name the actual activity in plain English')
+
+    -- THE BLOCK ITSELF, independently verified, not inferred from `ok`:
+    t.isTrue(f.env.Config.Features.BiteAndHold, 'the live flag must be COMPLETELY UNCHANGED -- this is the actual lockout, not merely a dialog that was skipped')
+    t.isNil(f.world.overrides['feature:BiteAndHold'], 'no override row may exist for a refused change')
+    t.equals(#f.world.overrideAudit, 0, 'no audit row may claim this change happened')
+
+    -- Confirming with the exact name now genuinely applies it.
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local confirmed = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BiteAndHold', false, 'BiteAndHold')
+    t.isTrue(confirmed.ok)
+    t.isFalse(f.env.Config.Features.BiteAndHold, 'now genuinely off, once actually confirmed')
+end)
+
+t.test('an active-usage warning uses SINGULAR wording for exactly 1, plural for more than 1', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+
+    f.env.CountActiveHoldsByEffectType = function() return 1 end
+    local one = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'NonLethalTakedown', false)
+    t.isTrue(one.warning:find('1 player is', 1, true) ~= nil, 'singular: ' .. tostring(one.warning))
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    f.env.CountActiveHoldsByEffectType = function() return 3 end
+    local three = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'NonLethalTakedown', false)
+    t.isTrue(three.warning:find('3 players are', 1, true) ~= nil, 'plural: ' .. tostring(three.warning))
+end)
+
+t.test('with NOBODY currently doing it (count = 0), SetFeature(BiteAndHold, false) applies IMMEDIATELY with no confirmation demanded at all', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    f.env.CountActiveHoldsByEffectType = function() return 0 end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BiteAndHold', false)
+    t.isTrue(result.ok, 'zero active usage must never demand a confirmation this task does not need')
+    t.isFalse(f.env.Config.Features.BiteAndHold)
+end)
+
+t.test('with server/combat.lua NOT LOADED at all in this environment (no CountActiveHoldsByEffectType global whatsoever), SetFeature(PropDragging, false) still applies immediately -- an absent probe must never be treated as "everyone is using it"', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    -- Deliberately NOT setting f.env.CountActiveHoldsByEffectType at all.
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'PropDragging', false)
+    t.isTrue(result.ok, 'a missing probe must fail SAFE (treated as "nobody using it"), never fail closed into a permanent, un-skippable confirmation wall')
+end)
+
+t.test('a probe that ERRORS instead of returning a number is swallowed by pcall -- SetFeature still applies, never throws out of the callback', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    f.env.CountActiveHoldsByEffectType = function() error('boom -- server/combat.lua exploded') end
+
+    local ok, result = pcall(f.callbacks['qbx_k9unit:server:runtimeSetFeature'], HC_SOURCE, 'BiteAndHold', false)
+    t.isTrue(ok, 'a broken cross-file probe must never crash this callback')
+    t.isTrue(result.ok)
+end)
+
+t.test('turning a feature BACK ON is NEVER gated by active usage, no matter how many players are using it -- this confirmation gates STARTING to disable, never the opposite direction', function()
+    local f = bootWithActiveUsageFeatures({ DeployableKennel = false })
+    f.env.IsHighCommand = function() return true end
+    f.env.CountKennelOccupants = function() return 99 end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'DeployableKennel', true)
+    t.isTrue(result.ok, 'enabling a feature can never strand anyone -- must never be gated')
+    t.isTrue(f.env.Config.Features.DeployableKennel)
+end)
+
+t.test('DeployableKennel: the SAME gate, driven by CountKennelOccupants instead of CountActiveHoldsByEffectType, with its own honest (never "will end it") wording', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    f.env.CountKennelOccupants = function() return 4 end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'DeployableKennel', false)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'confirmation_required')
+    t.isTrue(result.warning:find('4', 1, true) ~= nil)
+    t.isTrue(result.warning:find('kennel', 1, true) ~= nil)
+    t.isTrue(result.warning:find('NOT remove them', 1, true) ~= nil, 'must never overclaim that an already-resting K9 is force-evicted -- it is not')
+    t.isTrue(f.env.Config.Features.DeployableKennel, 'unchanged until confirmed')
+end)
+
+t.test('ResetFeature is symmetric with SetFeature on active-usage confirmation: gated when the RESULTING (config.lua default) value is false, exact same real-number warning, exact same block until confirmed', function()
+    -- f2's config.lua default for DeployableKennel is `true` -- an
+    -- override sets it to `false` first (unconfirmed, but count=0 by
+    -- default so no gate applies to THAT set), then resetting it removes
+    -- the override and restores the `true` default -- the RESULT is true,
+    -- so this must never be gated, no matter the count stubbed in.
+    local f2 = bootWithActiveUsageFeatures()
+    f2.env.IsHighCommand = function() return true end
+    f2.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'DeployableKennel', false)
+    f2.fakeNow.value = f2.fakeNow.value + 2000
+    f2.env.CountKennelOccupants = function() return 50 end
+    local resetToTrue = f2.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'DeployableKennel')
+    t.isTrue(resetToTrue.ok, 'resetting TO true (the config.lua default here) must never be gated by active usage, no matter the count')
+    t.isTrue(f2.env.Config.Features.DeployableKennel)
+
+    -- f3's config.lua default is `false` -- an override sets it to `true`
+    -- first (confirmed, since RuntimeFeatureControl/TabletTheming/etc. are
+    -- irrelevant here but the ON direction is never gated anyway), then
+    -- resetting it removes the override and restores the `false` default
+    -- -- the RESULT is false, so THIS is gated exactly like an explicit
+    -- SetFeature(false) would be.
+    local f3 = boot({ config = { Features = { RuntimeFeatureControl = true, TabletTheming = true, DeployableKennel = false }, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })
+    f3.env.IsHighCommand = function() return true end
+    f3.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'DeployableKennel', true, 'DeployableKennel')
+    f3.fakeNow.value = f3.fakeNow.value + 2000
+    f3.env.CountKennelOccupants = function() return 7 end
+
+    local unconfirmedReset = f3.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'DeployableKennel')
+    t.isFalse(unconfirmedReset.ok, 'resetting back to the config.lua default of false must be gated exactly like an explicit SetFeature(false) would be, since the RESULT is the same')
+    t.equals(unconfirmedReset.reason, 'confirmation_required')
+    t.isTrue(unconfirmedReset.warning:find('7', 1, true) ~= nil)
+    t.isTrue(f3.env.Config.Features.DeployableKennel, 'must remain true (the override), completely unchanged, until confirmed')
+
+    f3.fakeNow.value = f3.fakeNow.value + 2000
+    local confirmedReset = f3.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'DeployableKennel', 'DeployableKennel')
+    t.isTrue(confirmedReset.ok)
+    t.isFalse(f3.env.Config.Features.DeployableKennel)
+end)
+
+t.test('DELIBERATE EXCLUSION, verified: TrainingMode is tier=rawtoplevel (a live toggle already does nothing this session) and is NEVER active-usage-gated, even when a drill is reported running -- an honest confirmation-free toggle beats a dishonest one', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    -- Even if some future file exposed a training-session counter, THIS
+    -- feature must not consult it -- TrainingMode is intentionally absent
+    -- from ACTIVE_USAGE_FEATURES. Nothing to stub; this proves the ABSENCE
+    -- of a gate, not merely an untriggered one.
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'TrainingMode', false)
+    t.isTrue(result.ok, 'TrainingMode must apply (config.lua-edit-required, but never gated) with no confirm argument at all')
+    t.isNil(result.lockoutRisk, 'TrainingMode is not a lockoutRisk feature by either mechanism')
+    t.isFalse(f.env.Config.Features.TrainingMode)
+end)
+
+t.test('runtimeListFeatures: a currently-OFF feature never shows active-usage lockoutRisk even if a stray count exists -- nothing pending to disable, so no warning is owed', function()
+    local f = bootWithActiveUsageFeatures({ BiteAndHold = false })
+    f.env.IsHighCommand = function() return true end
+    f.env.CountActiveHoldsByEffectType = function() return 5 end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    local rowByName = {}
+    for _, row in ipairs(result.features) do rowByName[row.name] = row end
+    t.isFalse(rowByName.BiteAndHold.lockoutRisk == true, 'already off -- there is nothing this confirmation could still be protecting')
+end)
+
+t.test('runtimeListFeatures: a currently-ON feature with active usage right now shows lockoutRisk + the real-number warning BEFORE any click, exactly like a static lockout-risk row', function()
+    local f = bootWithActiveUsageFeatures()
+    f.env.IsHighCommand = function() return true end
+    f.env.CountActiveHoldsByEffectType = function(effectType) return (effectType == 'drag') and 6 or 0 end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    local rowByName = {}
+    for _, row in ipairs(result.features) do rowByName[row.name] = row end
+    t.isTrue(rowByName.PropDragging.lockoutRisk, 'PropDragging must be reported as lockoutRisk while 6 drags are open')
+    t.isTrue(rowByName.PropDragging.lockoutWarning:find('6', 1, true) ~= nil)
+    t.isFalse(rowByName.BiteAndHold.lockoutRisk == true, 'a SIBLING feature at 0 active holds must not be flagged just because a different effectType is busy')
+end)
+
 t.test('LOAD-BEARING: SetFeature refuses tier=unaudited outright (the fail-closed net for a feature nobody has classified yet), with a named console warning', function()
     -- A Config.Features key that exists ONLY in this test's fixture config,
     -- never in the real FEATURE_TIERS table server/runtimecontrol.lua ships

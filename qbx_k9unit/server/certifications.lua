@@ -1859,6 +1859,28 @@ local function GrantCertification(granterSrc, targetServerId)
         -- header.
         FireOutboundEvent('qbx_k9unit:events:certificationGranted', targetCitizenid, jobName, granterCitizenid)
 
+        -- HANDLER XP (Config.Features.HandlerXPProgression, server/
+        -- progression.lua) -- paid to the GRANTER, never the target, for
+        -- the config-documented 'handlerCertifyK9' action: this INSERT only
+        -- ever runs for a genuinely NEW certification (existingId's own
+        -- check above already refused a re-grant onto an already-active
+        -- row), so this is exactly the "rare and deliberate by nature"
+        -- moment config.lua's own Config.HandlerXP header names as the
+        -- reason this is the single highest award in that table. Safe to
+        -- call unconditionally here (AwardHandlerXP itself re-checks
+        -- Config.Features.HandlerXPProgression as its own first line, and
+        -- this file does not need to know or care whether that flag is on)
+        -- -- already covered by this same function's own per-granter
+        -- IsCertifyActionOnCooldown throttle above, so no new anti-farm
+        -- state is needed for this call site. Runtime existence guard, not
+        -- a load-order assumption (server/progression.lua loads AFTER this
+        -- file in fxmanifest.lua's server_scripts list) -- same
+        -- soft-dependency convention as ApplyK9AppearanceOnGrant's own
+        -- guard immediately below.
+        if type(AwardHandlerXP) == 'function' then
+            AwardHandlerXP(granterCitizenid, 'handlerCertifyK9')
+        end
+
         -- Read-only mirror for client HUD display ONLY (DEVELOPER_REFERENCE.md §4.3) — NEVER
         -- read by any server-side authorization check. Do not add a read of
         -- this field to HasK9Access or any other gate.
@@ -2027,6 +2049,18 @@ local function GrantCertificationOffline(granterSrc, citizenid, jobName)
         ExpiryLapsedNotified[citizenid] = nil
 
         FireOutboundEvent('qbx_k9unit:events:certificationGranted', citizenid, jobName, granterCitizenid)
+
+        -- HANDLER XP -- same 'handlerCertifyK9' award, same reasoning, as
+        -- GrantCertification's own identical call above (see that call
+        -- site's own doc comment for the full writeup): this is a second
+        -- door to the exact same "a NEW certification was just granted"
+        -- event, and a handler who happens to grant through
+        -- /k9certifyoffline instead of /k9certify must not be treated
+        -- differently. Already covered by this function's own identical
+        -- per-granter IsCertifyActionOnCooldown throttle above.
+        if type(AwardHandlerXP) == 'function' then
+            AwardHandlerXP(granterCitizenid, 'handlerCertifyK9')
+        end
 
         -- Reconciles the read-only HUD mirror (and gives the target their
         -- own success notice) if they reconnected in the narrow TOCTOU

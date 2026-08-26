@@ -919,6 +919,25 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
         if type(AwardXP) == 'function' and milestone and type(milestone.actionKey) == 'string' then
             AwardXP(k9Citizenid, milestone.actionKey)
         end
+        -- HANDLER XP (Config.Features.HandlerXPProgression, server/
+        -- progression.lua's AwardHandlerXP) -- paid to the HANDLER-role
+        -- party (`row.handler_citizenid`, already resolved and re-verified
+        -- department-member above, per CONSTRAINT 5 COMPLIANCE), the SAME
+        -- tick the K9-role party is paid its own actionKey immediately
+        -- above. `milestone.handlerActionKey` is config.lua's own new,
+        -- OPTIONAL field (Config.Partnership.TenureBonus.milestones) --
+        -- guarded here exactly like `milestone.actionKey` is guarded above,
+        -- so a milestone entry that has not been given a handlerActionKey
+        -- yet (or an operator-edited config that omits it) simply pays no
+        -- handler XP for that tier, never errors. Inherits this loop's own
+        -- one-time-per-partnership-row CAS guard (the UPDATE above already
+        -- committed `tenure_bonus_tier_granted` before this loop ever runs)
+        -- and same-pair-reform seeding for free -- no new anti-farm state
+        -- needed for this half either, per config.lua's own header on this
+        -- exact field.
+        if type(AwardHandlerXP) == 'function' and milestone and type(milestone.handlerActionKey) == 'string' then
+            AwardHandlerXP(row.handler_citizenid, milestone.handlerActionKey)
+        end
     end
 
     if targetTier >= #tenureCfg.milestones then
