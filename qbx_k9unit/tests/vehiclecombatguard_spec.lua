@@ -220,6 +220,33 @@ local function newVehicleFixture(opts)
         eventHandlers[eventName] = eventHandlers[eventName] or {}
         eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
     end
+
+    -- SEAT-RACE FIX (coder-frontend pass, out-of-scope mechanical patch --
+    -- flagged to this file's owner rather than silently absorbed):
+    -- client/vehicle.lua's EnterNearestK9Vehicle() now sends
+    -- 'qbx_k9unit:server:requestVehicleSeatClaim' and waits for a real
+    -- server grant (server/vehicle.lua, NEW FILE) before touching any door/
+    -- seat native at all -- see that file's own EVENT/CALLBACK CONTRACT
+    -- header. Without RegisterNetEvent/TriggerServerEvent stubs, loading the
+    -- real client/vehicle.lua here throws at load time
+    -- ("attempt to call a nil value (global 'RegisterNetEvent')"), taking
+    -- every test in this whole file down with it -- this addition is the
+    -- minimal, mechanical fix for that, mirroring
+    -- tests/clientvehicle_spec.lua's own fixture shape exactly (same
+    -- capture-and-echo-back-verbatim grantSeatClaim() helper). No existing
+    -- assertion's INTENT changes: every test that expected a successful,
+    -- unblocked entry now also calls grantSeatClaim() once, between
+    -- EnterNearestK9Vehicle() and runLatestThreadToCompletion() -- see
+    -- those two call sites below for the two lines this added.
+    local netEvents = {}
+    local function RegisterNetEvent(eventName, handler)
+        netEvents[eventName] = handler
+    end
+    local serverEventCalls = {}
+    local function TriggerServerEvent(eventName, ...)
+        serverEventCalls[#serverEventCalls + 1] = { event = eventName, args = { ... } }
+    end
+
     -- CAPTURE, DON'T AUTO-RUN: client/vehicle.lua's own file-load-time
     -- watchdog thread (a `while true do ... end` loop) is created via
     -- CreateThread the moment Sandbox.loadInto() below executes this file --
@@ -309,6 +336,8 @@ local function newVehicleFixture(opts)
         ResolveNetworkEntity = ResolveNetworkEntity,
         lib = { notify = lib_notify },
         AddEventHandler = AddEventHandler,
+        RegisterNetEvent = RegisterNetEvent,
+        TriggerServerEvent = TriggerServerEvent,
         CreateThread = CreateThread,
         Wait = Wait,
         GetCurrentResourceName = GetCurrentResourceName,
@@ -384,6 +413,22 @@ local function newVehicleFixture(opts)
                 end
                 iterations = iterations + 1
             end
+        end,
+        -- SEAT-RACE FIX -- see this fixture's own RegisterNetEvent/
+        -- TriggerServerEvent comment above. Echoes the MOST RECENT
+        -- requestVehicleSeatClaim call's own (vehicleNetId, seatIndex,
+        -- token) back exactly as the real server always does.
+        grantSeatClaim = function()
+            local call
+            for i = #serverEventCalls, 1, -1 do
+                if serverEventCalls[i].event == 'qbx_k9unit:server:requestVehicleSeatClaim' then
+                    call = serverEventCalls[i]
+                    break
+                end
+            end
+            assert(call, 'vehicle fixture: grantSeatClaim() called with no outstanding requestVehicleSeatClaim')
+            env.source = 65535
+            netEvents['qbx_k9unit:client:vehicleSeatClaimGranted'](call.args[1], call.args[2], call.args[3])
         end,
     }
 end
@@ -497,6 +542,7 @@ end
 t.test('vehicle: EnterNearestK9Vehicle succeeds when neither drag nor bite hold is engaged', function()
     local f = newVehicleFixture({ isDragEngaged = false, isBiteHoldEngaged = false })
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim() -- SEAT-RACE FIX: the server round trip must be granted before the door/seat sequence even starts
     f.runLatestThreadToCompletion() -- drives the door-open/seat/door-shut sequence to completion
     t.equals(#f.doorOpenCalls, 1, 'should have opened the chosen seat door')
     t.equals(#f.seatCalls, 1, 'should have seated the ped for real (SET_PED_INTO_VEHICLE), not attached it')
@@ -536,6 +582,7 @@ end)
 t.test('vehicle: the guard degrades cleanly (no error, enters normally) when client/combat.lua never loaded at all', function()
     local f = newVehicleFixture({ omitCombatGlobals = true })
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim() -- SEAT-RACE FIX
     f.runLatestThreadToCompletion()
     t.equals(#f.seatCalls, 1, 'IsDragEngaged/IsBiteHoldEngaged being entirely absent globals must not block entry')
     t.isTrue(f.env.IsInK9Vehicle())

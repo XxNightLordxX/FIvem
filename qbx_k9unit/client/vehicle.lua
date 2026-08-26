@@ -21,17 +21,88 @@
     mapping rationale.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — this file does not register or trigger any
-    network event/callback. Vehicle entry/exit is purely a client-local
-    action on the acting player's own ped — no TriggerServerEvent/
-    TriggerClientEvent anywhere in this file, and no dedicated server event
-    exists for it, matching the same reasoning originally applied to leash
-    before the leash mechanic grew a real consent+restriction requirement.
-    UNLIKE leash, vehicle entry/exit is still single-player-INITIATED in its
-    effects, so that reasoning still holds here — noted as an assumption
-    worth re-confirming rather than asserted as certainly fine, same as the
-    original leash assumption was (before leash's requirements changed and
-    proved that assumption wrong there; it may or may not still hold here).
+    EVENT/CALLBACK CONTRACT (REWRITTEN THIS PASS — SEAT-RACE FIX). Until
+    now this section said "this file does not register or trigger any
+    network event/callback ... vehicle entry/exit is purely a client-local
+    action" and flagged that assumption "worth re-confirming." A
+    concurrency audit confirmed it was wrong: two K9 handlers selecting
+    "Enter Vehicle" on the same cruiser within the same ~400ms door-open
+    window each independently compute the SAME "best free seat" (neither
+    has entered yet, so IS_VEHICLE_SEAT_FREE reads free for both), and since
+    nothing anywhere arbitrated between them, both SET_PED_INTO_VEHICLE
+    calls landed on the identical vehicle/seat pair. Exactly the same bug
+    class this resource already fixed for leash
+    (requestLeashAttach/respondLeashAttach, server/main.lua) and kennel
+    (requestEnterKennel/requestPickupKennel, server/kennel.lua) — this was
+    the one paired mechanic still relying on "nobody else could possibly be
+    doing this at the same time," and it was wrong here for the same reason
+    it was wrong there.
+
+    THE FIX — a server-side seat claim, server/vehicle.lua (NEW FILE), same
+    check-then-write-with-no-yield discipline as server/kennel.lua's own
+    requestEnterKennel/requestPickupKennel:
+      'qbx_k9unit:server:requestVehicleSeatClaim' (vehicleNetId: number, seatIndex: number, requestToken: number) [server/vehicle.lua]
+        Sent immediately after this file's own local pre-flight checks pass
+        (feature flag, CanShowK9UI, per-person block, drag/bite-hold mutual
+        guard, IsPedInAnyVehicle, nearest-vehicle, FindBestK9Seat) and BEFORE
+        any door/seat native is ever touched — a denial therefore never has
+        to undo a door it already opened. requestToken is an opaque,
+        per-request, monotonically increasing local counter this file
+        generates and the server only ever echoes back verbatim (never
+        interpreted server-side) — see pendingSeatClaim below for why:
+        vehicleEntryInProgress means at most one request is ever actually
+        outstanding at a time, but a response can still arrive AFTER this
+        file has already given up and abandoned it (see
+        VEHICLE_SEAT_CLAIM_TIMEOUT_MS below) — the token lets that stale
+        response be told apart from the current one rather than acted on by
+        mistake.
+      'qbx_k9unit:client:vehicleSeatClaimGranted' (vehicleNetId, seatIndex, requestToken) [THIS FILE]
+        Server granted the claim. ONLY NOW does this file open the door and
+        run the existing DOOR_OPEN_DELAY/re-validate/seat/DOOR_SHUT_DELAY
+        sequence (unchanged in substance from before this pass), releasing
+        the claim (see below) the instant it either genuinely seats the ped
+        or aborts for a purely local reason (drag/bite-hold started mid-
+        delay, vehicle/ped gone, the seat taken by an ordinary human via
+        vanilla controls) — none of which the server's own claim registry
+        can see or needs to; it only ever arbitrates between two requests
+        going through THIS event.
+      'qbx_k9unit:client:vehicleSeatClaimDenied' (vehicleNetId, seatIndex, requestToken) [THIS FILE]
+        Server refused (not certified, invalid/wrong-model vehicle, too far,
+        or — the actual race this pass exists to close — someone else
+        already holds this exact seat's claim). The server has already told
+        the player why via NotifyPlayer server-side (matches
+        server/kennel.lua's own requestEnterKennel convention: the server
+        owns messaging for its OWN rejection reasons) — this handler only
+        resets this file's local bookkeeping; no local notify.
+      'qbx_k9unit:server:releaseVehicleSeatClaim' (vehicleNetId: number, seatIndex: number) [server/vehicle.lua]
+        Fire-and-forget, sent the instant a granted claim's job is done
+        (seated, or aborted locally) so it never lingers for its own
+        server-side TTL once genuinely unneeded — a freshly-vacated seat
+        would otherwise wrongly read "taken" to the next comer until the
+        stale claim expires. Also sent, best-effort, from this file's own
+        onResourceStop handler and from the give-up timeout below — never
+        gated on anything, per this file's own "never gate a termination
+        path" doctrine (see ExitK9Vehicle() below).
+
+    server/vehicle.lua independently re-verifies HasK9Access(src) and the
+    claimed vehicle's model against Config.K9Vehicles, server-side — BOTH
+    are new, and BOTH close the exact gap this section used to flag ("a
+    modified client ... had the same freedom ... flagged for independent
+    confirmation"): a modified client can no longer claim a seat in a K9
+    vehicle at all without passing the same access check every other paired
+    mechanic in this resource already enforces server-side.
+
+    ExitK9Vehicle() below is COMPLETELY UNCHANGED by this pass and stays
+    100% local, with no server contact of any kind — once a ped is
+    genuinely SET_PED_INTO_VEHICLE'd, GET_VEHICLE_PED_IS_IN/game-engine seat
+    occupancy is itself the authoritative, networked truth every other
+    client already observes, so there is nothing left for a server-side
+    arbiter to decide on the way out. Per this resource's "gate the start of
+    a thing, never the stop" rule, exiting must never depend on a round trip
+    that could fail, time out, or leave a player waiting to get out of a
+    car — see client/kennel.lua's/server/kennel.lua's own comments on this
+    exact rule, which this file's own design was checked against before
+    writing a line of the fix above.
 
     NOT ACTUALLY INVISIBLE TO OTHER PLAYERS (worth stating explicitly since
     it's a real change from before): SET_PED_INTO_VEHICLE/
@@ -85,19 +156,30 @@
 -- WHY A PLAIN TOP-LEVEL RETURN IS SAFE HERE, NOT AN UNBOUNDED TRAP --
 -- worked out deliberately, not assumed, because this file's own watchdog
 -- thread exists specifically to prevent a player being stranded mid-ride:
---   1. VehicleEntryExit is `tier = 'clientonly'` in server/runtimecontrol.lua's
---      own FEATURE_TIERS audit -- there is NO server-side registration point
---      for this feature at all (confirmed by that file's own grep-before-
---      writing claim), and Config.Features itself is a plain static table
---      in config.lua (no metatable, no live-reload proxy -- confirmed by
---      reading config.lua directly). There is therefore no code path,
---      anywhere in this resource, that changes what THIS CLIENT's own
---      Config.Features.VehicleEntryExit evaluates to for the lifetime of
---      this file's current load -- an operator "disabling it" can only mean
---      editing config.lua's source and restarting this resource. A
---      same-session, no-restart toggle simply cannot happen for this flag,
---      by construction, so this gate cannot fire out from under a rider
---      whose current script instance already loaded with the flag true.
+--   1. STALENESS NOTE (SEAT-RACE FIX pass): server/runtimecontrol.lua's own
+--      FEATURE_TIERS still lists VehicleEntryExit as `tier = 'clientonly'`
+--      ("zero occurrences in any server/*.lua file") as of this pass's own
+--      start -- that specific factual claim is now stale, since
+--      server/vehicle.lua (NEW FILE, this pass) does check
+--      Config.Features.VehicleEntryExit, per-request, inside its own
+--      requestVehicleSeatClaim handler (the same 'live'-tier shape
+--      DeployableKennel's own FEATURE_TIERS entry already documents for
+--      server/kennel.lua). Flagged to coder-architect/whoever owns
+--      server/runtimecontrol.lua to correct that entry rather than silently
+--      left to drift, since this file does not own that one. What does NOT
+--      change: Config.Features itself is still a plain static table in
+--      config.lua (no metatable, no live-reload proxy -- confirmed by
+--      reading config.lua directly), on BOTH realms independently, so there
+--      is still no code path, anywhere in this resource, that changes what
+--      THIS CLIENT's own Config.Features.VehicleEntryExit evaluates to for
+--      the lifetime of this file's current load -- an operator "disabling
+--      it" can only mean editing config.lua's source and restarting this
+--      resource (and, independently, the server process, for its own copy
+--      of the same flag). A same-session, no-restart toggle simply cannot
+--      happen for THIS CLIENT's flag, by construction, so this gate cannot
+--      fire out from under a rider whose current script instance already
+--      loaded with the flag true -- the reasoning below is otherwise
+--      unaffected by server/vehicle.lua's new existence.
 --   2. The one real path that DOES change the flag's value for this client
 --      -- editing config.lua and restarting this resource -- necessarily
 --      stops the OLD script instance first (FXServer fires `onResourceStop`
@@ -149,6 +231,21 @@ local vehicleState = nil
 -- here purely to stop a double-click/double-select from racing two
 -- concurrent entry sequences against the same ped.
 local vehicleEntryInProgress = false
+
+--- SEAT-RACE FIX — the single outstanding server seat-claim request this
+--- client may have in flight at any time (vehicleEntryInProgress above
+--- already guarantees at most one exists). Covers BOTH phases of a request
+--- uniformly — "still waiting on requestVehicleSeatClaim's response" AND
+--- "granted, mid local door/seat sequence" — deliberately, so every cleanup
+--- path (the give-up timeout, onResourceStop) only has to check ONE field
+--- to know whether there is a live server-side claim to release. Cleared
+--- the instant the request is settled one way or another: granted-and-then-
+--- seated-or-aborted, denied, or timed out locally. See this file's own
+--- EVENT/CALLBACK CONTRACT header section above for the full request/
+--- response design.
+--- @type { token: number, vehicle: number, ped: number, doorIndex: number?, seatIndex: number, vehicleNetId: number, granted: boolean } | nil
+local pendingSeatClaim = nil
+local seatClaimTokenSeq = 0
 
 --- @return boolean
 function IsInK9Vehicle()
@@ -254,6 +351,16 @@ local SEAT_TO_DOOR_INDEX = {
 local VEHICLE_DOOR_OPEN_DELAY_MS = 400  -- door swings open before the K9 is seated
 local VEHICLE_DOOR_SHUT_DELAY_MS = 300  -- brief pause once seated before the door swings shut
 local EXIT_STALL_FALLBACK_MS = 4000     -- ExitK9Vehicle()'s own graceful-exit stall fallback (see below)
+
+-- SEAT-RACE FIX — task requirement "the client must still degrade sanely
+-- if the server never answers": how long this file waits for
+-- requestVehicleSeatClaim's response before giving up locally and treating
+-- it exactly like a denial. Generous relative to an ordinary round trip
+-- (normally well under a second) without leaving a player who clicked
+-- "Enter Vehicle" wondering indefinitely — same order of magnitude as this
+-- file's own EXIT_STALL_FALLBACK_MS above and server/main.lua's
+-- LEASH_REQUEST_TTL_MS-style bounded waits elsewhere in this resource.
+local VEHICLE_SEAT_CLAIM_TIMEOUT_MS = 5000
 
 --- @param maxDistance number
 --- @return number? vehicle
@@ -430,6 +537,28 @@ function EnterNearestK9Vehicle()
         return
     end
 
+    -- SEAT-RACE FIX pass — DELIBERATE ADDITION, the reverse of the two
+    -- guards above. IsDragTargetEngaged() (client/combat.lua) answers "am I
+    -- the one CURRENTLY BEING dragged" — a ped attached to another ped via
+    -- AttachEntityToEntity every tick (combat.lua's own "ActiveDragAsHolder"
+    -- maintenance block). SET_PED_INTO_VEHICLE on a ped that is simultaneously
+    -- a rigid child of another entity is a nested-attachment case nobody
+    -- designed for, physically nonsensical for the identical reason
+    -- IsBlockedByVehicleTuck() already refuses a drag/bite/takedown attempt
+    -- against a vehicle-tucked K9 (client/combat.lua) — this closes the
+    -- corresponding gap in THIS direction. A K9 (or any ped this resource
+    -- lets a human control) can genuinely be a drag TARGET, per
+    -- FindNearestDraggableCandidate's own "any ped in range" search, so this
+    -- is a real, reachable case, not a hypothetical. Went WITH refusing it,
+    -- for the same reasoning as the two checks immediately above: soft
+    -- dependency guard, since IsDragTargetEngaged only exists once
+    -- client/combat.lua's own PropDragging gate lets that global get
+    -- defined.
+    if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.blocked_by_being_dragged'), type = 'error' })
+        return
+    end
+
     local ped = PlayerPedId()
     -- Real-defect guard: IS_PED_IN_ANY_VEHICLE (verified against the Cfx
     -- native reference, PED namespace, BOOL return) catches the case where
@@ -475,7 +604,70 @@ function EnterNearestK9Vehicle()
     -- best-effort rather than presented as solved.
     NetworkRequestControlOfEntity(vehicle)
 
-    local doorIndex = SEAT_TO_DOOR_INDEX[seatIndex]
+    -- SEAT-RACE FIX — ask the server to claim this exact (vehicle, seat)
+    -- pair BEFORE touching a single door/seat native. See this file's own
+    -- EVENT/CALLBACK CONTRACT header section above for the full design;
+    -- everything below this point is unchanged in substance from before
+    -- this pass, just deferred until 'qbx_k9unit:client:vehicleSeatClaimGranted'
+    -- confirms nobody else already holds this seat.
+    seatClaimTokenSeq = seatClaimTokenSeq + 1
+    local token = seatClaimTokenSeq
+    local vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle)
+
+    pendingSeatClaim = {
+        token = token,
+        vehicle = vehicle,
+        ped = ped,
+        doorIndex = SEAT_TO_DOOR_INDEX[seatIndex],
+        seatIndex = seatIndex,
+        vehicleNetId = vehicleNetId,
+        granted = false,
+    }
+
+    TriggerServerEvent('qbx_k9unit:server:requestVehicleSeatClaim', vehicleNetId, seatIndex, token)
+
+    -- GIVE-UP TIMEOUT — task requirement "the client must still degrade
+    -- sanely if the server never answers": if neither
+    -- vehicleSeatClaimGranted nor vehicleSeatClaimDenied has settled THIS
+    -- exact request (token match) within VEHICLE_SEAT_CLAIM_TIMEOUT_MS,
+    -- treat it exactly like a denial rather than leaving
+    -- vehicleEntryInProgress stuck true forever with no door ever having
+    -- opened. The `not pendingSeatClaim.granted` guard means this never
+    -- fires once a grant has actually been received — from that point on,
+    -- the bounded local door/seat sequence below is what governs
+    -- completion, exactly as it always has.
+    CreateThread(function()
+        Wait(VEHICLE_SEAT_CLAIM_TIMEOUT_MS)
+        if pendingSeatClaim and pendingSeatClaim.token == token and not pendingSeatClaim.granted then
+            pendingSeatClaim = nil
+            vehicleEntryInProgress = false
+            -- Best-effort: in case the server's grant is genuinely just
+            -- slow rather than lost and arrives a moment after this fires,
+            -- this frees the seat immediately instead of leaving it
+            -- reserved for the rest of the server's own claim TTL. Safe
+            -- no-op if nothing was ever actually granted.
+            TriggerServerEvent('qbx_k9unit:server:releaseVehicleSeatClaim', vehicleNetId, seatIndex)
+            lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.entry_interrupted'), type = 'error' })
+        end
+    end)
+end
+
+--- Server granted this client's outstanding seat claim — see this file's
+--- own EVENT/CALLBACK CONTRACT header section for the full design. Runs the
+--- same door-open/re-validate/seat/door-shut sequence this file always has,
+--- just now gated on a real server grant instead of a purely local
+--- assumption that nobody else could be doing the same thing at once.
+--- @param vehicleNetId number
+--- @param seatIndex number
+--- @param token number
+RegisterNetEvent('qbx_k9unit:client:vehicleSeatClaimGranted', function(vehicleNetId, seatIndex, token)
+    if source ~= 65535 then return end -- SOURCE-ORIGIN GUARD — see client/combat.lua's own header block for the full writeup
+    if not pendingSeatClaim or pendingSeatClaim.token ~= token then return end -- stale/unmatched — see pendingSeatClaim's own doc comment
+    pendingSeatClaim.granted = true
+    local claim = pendingSeatClaim
+
+    local vehicle, ped, doorIndex = claim.vehicle, claim.ped, claim.doorIndex
+
     if doorIndex then
         SetVehicleDoorOpen(vehicle, doorIndex, false, false)
     end
@@ -483,20 +675,23 @@ function EnterNearestK9Vehicle()
     -- Deferred so the door has a moment to visibly swing open before the
     -- K9 appears seated ("a short animation-friendly delay") -- run in a
     -- dedicated thread rather than a bare Wait() in this function body so
-    -- this doesn't depend on every caller (ox_target onSelect, ox_lib
-    -- radial onSelect, the tablet NUI trigger) already running inside a
-    -- yield-safe coroutine context.
+    -- this doesn't depend on every caller (a net event handler here) already
+    -- running inside a yield-safe coroutine context.
     CreateThread(function()
         Wait(VEHICLE_DOOR_OPEN_DELAY_MS)
 
         -- Re-validate everything that could have changed during the delay:
         -- the vehicle itself, our own ped's state, the chosen seat (someone
-        -- else could have taken it in the meantime — never displace them),
-        -- and the same drag/bite-hold mutual guard checked above (either
-        -- effect could have started during this exact window). Any failure
-        -- here aborts cleanly: shuts the door back if it was opened, clears
-        -- the in-progress flag, and tells the player why, rather than
-        -- forcing the seat regardless.
+        -- else could have taken it in the meantime — never displace them;
+        -- the server's own claim only ever arbitrates between two requests
+        -- going through this same event, it has no way to see an ordinary
+        -- human sitting down via vanilla controls), and the same drag/
+        -- bite-hold mutual guard checked before the claim was requested
+        -- (either effect could have started during this exact window). Any
+        -- failure here aborts cleanly: shuts the door back if it was
+        -- opened, clears the in-progress flag, releases the now-unneeded
+        -- claim, and tells the player why, rather than forcing the seat
+        -- regardless.
         local abortReason = nil
         if not DoesEntityExist(vehicle) then
             abortReason = 'vehicle.entry_interrupted'
@@ -510,6 +705,12 @@ function EnterNearestK9Vehicle()
             abortReason = 'vehicle.blocked_by_drag'
         elseif type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then
             abortReason = 'vehicle.blocked_by_bite_hold'
+        elseif type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
+            -- Mirrors the pre-flight guard above — see its own doc comment
+            -- for the full reasoning; re-checked here because the delay
+            -- gives this effect the same window to start in between that
+            -- drag/bite-hold already get re-checked for.
+            abortReason = 'vehicle.blocked_by_being_dragged'
         end
 
         if abortReason then
@@ -517,12 +718,20 @@ function EnterNearestK9Vehicle()
                 SetVehicleDoorShut(vehicle, doorIndex, false)
             end
             vehicleEntryInProgress = false
+            if pendingSeatClaim == claim then pendingSeatClaim = nil end
+            TriggerServerEvent('qbx_k9unit:server:releaseVehicleSeatClaim', vehicleNetId, seatIndex)
             lib.notify({ title = locale('common.notify_title'), description = locale(abortReason), type = 'error' })
             return
         end
 
         NetworkRequestControlOfEntity(vehicle) -- control can be lost again during the delay; re-ask once more, same fire-and-forget posture
         SetPedIntoVehicle(ped, vehicle, seatIndex)
+        -- Genuinely seated now — GET_VEHICLE_PED_IS_IN/game-engine seat
+        -- occupancy is itself authoritative from this instant on, so the
+        -- server-side claim has done its job and is released immediately
+        -- rather than left to linger for its own TTL.
+        if pendingSeatClaim == claim then pendingSeatClaim = nil end
+        TriggerServerEvent('qbx_k9unit:server:releaseVehicleSeatClaim', vehicleNetId, seatIndex)
 
         Wait(VEHICLE_DOOR_SHUT_DELAY_MS)
         if doorIndex and DoesEntityExist(vehicle) then
@@ -532,11 +741,27 @@ function EnterNearestK9Vehicle()
         -- Store the NETWORK id, not the raw `vehicle` handle above — see
         -- ResolveVehicleFromState()'s doc comment for why the handle itself
         -- isn't trusted to stay valid for the whole ride.
-        vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle), seatIndex = seatIndex }
+        vehicleState = { vehicleNetId = vehicleNetId, seatIndex = seatIndex }
         vehicleEntryInProgress = false
         lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.loaded'), type = 'success' })
     end)
-end
+end)
+
+--- Server refused this client's outstanding seat claim — either a real
+--- rejection (not certified, invalid vehicle, too far) or the actual race
+--- this pass exists to close (someone else already holds this exact seat's
+--- claim). The server has already told the player why via NotifyPlayer
+--- server-side (matches server/kennel.lua's own requestEnterKennel
+--- convention) — this handler only resets local bookkeeping.
+--- @param vehicleNetId number
+--- @param seatIndex number
+--- @param token number
+RegisterNetEvent('qbx_k9unit:client:vehicleSeatClaimDenied', function(vehicleNetId, seatIndex, token)
+    if source ~= 65535 then return end -- SOURCE-ORIGIN GUARD — see client/combat.lua's own header block for the full writeup
+    if not pendingSeatClaim or pendingSeatClaim.token ~= token or pendingSeatClaim.granted then return end -- stale/unmatched/already-granted — see pendingSeatClaim's own doc comment
+    pendingSeatClaim = nil
+    vehicleEntryInProgress = false
+end)
 
 --- Releases the K9 from its vehicle seat and clears vehicleState.
 --- No-op if not currently in a vehicle. Deliberately NOT gated behind
@@ -633,6 +858,20 @@ end
 -- player-blocking condition.
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
+
+    -- SEAT-RACE FIX — a resource restart does not disconnect the player, so
+    -- server/vehicle.lua's own playerDropped cleanup never fires for this
+    -- case; without this, any claim this client currently holds (waiting on
+    -- a response, or already granted and mid door/seat sequence) would sit
+    -- reserved for the remainder of its own server-side TTL for no reason.
+    -- Best-effort and unconditional, same posture as every other release
+    -- call in this file — never gated on anything, per this file's own
+    -- "never gate a termination path" doctrine.
+    if pendingSeatClaim then
+        TriggerServerEvent('qbx_k9unit:server:releaseVehicleSeatClaim', pendingSeatClaim.vehicleNetId, pendingSeatClaim.seatIndex)
+        pendingSeatClaim = nil
+    end
+
     if not vehicleState then return end
 
     ForceLeaveVehicle(PlayerPedId())
@@ -734,13 +973,18 @@ end)
 -- header names as the reason HasK9Access() has a short TTL cache, since
 -- canInteract can run several times a second while hovering.
 -- Gate visibility with Config.Features.VehicleEntryExit AND the access
--- check above — this is a DISPLAY optimization per DEVELOPER_REFERENCE.md §3/§4.5, not
--- the security boundary (there's no server round-trip to independently
--- re-verify here since this action has no server event at all, per this
--- file's header note — if that turns out to be the wrong call, the fix is
--- adding a thin gated server event here the same way leash ended up
--- needing one, not silently trusting the client further than intended;
--- nothing below forecloses adding one later).
+-- check above — this is a DISPLAY optimization per DEVELOPER_REFERENCE.md
+-- §3/§4.5, not the security boundary. UPDATED (SEAT-RACE FIX pass): this
+-- action now DOES have a real server round trip
+-- (requestVehicleSeatClaim/vehicleSeatClaimGranted/Denied, above) that
+-- independently re-verifies HasK9Access and the vehicle's model
+-- server-side — the "if that turns out to be the wrong call, the fix is
+-- adding a thin gated server event here" this comment used to end on has
+-- now happened. What's still true, unchanged: canInteract itself remains
+-- pure UX (hides the option rather than letting onSelect show a rejection),
+-- and EnterNearestK9Vehicle() re-checks everything canInteract already
+-- checked regardless of what canInteract decided — the real boundary is,
+-- and stays, server-side.
 -- ROUTED THROUGH K9Compat.Get('target') (shared/compat/target.lua), never a
 -- direct `exports.ox_target` call -- both canInteract/onSelect pairs below
 -- are unchanged (still authored against ox_target's own convention), so an
@@ -780,6 +1024,7 @@ local function RegisterVehicleOxTargetOptions()
                 -- file already documents for every other predicate here.
                 if type(IsDragEngaged) == 'function' and IsDragEngaged() then return false end
                 if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then return false end
+                if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then return false end
                 if not K9VehicleHashes[GetEntityModel(entity)] then return false end
                 -- DISPLAY-OPTIMIZATION MIRROR of EnterNearestK9Vehicle()'s own
                 -- FindBestK9Seat() refusal (this resource's own "never show an

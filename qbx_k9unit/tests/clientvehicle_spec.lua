@@ -28,20 +28,51 @@
     establishes for the identical reason):
       1. The PERSISTENT watchdog thread (`while true do ... end`, no exit),
          created once at file-load time -- always capturedThreads[1].
-      2. EnterNearestK9Vehicle()'s own one-shot door-open/seat/door-shut
-         sequence -- created fresh by each call that gets far enough to
-         need it (every guard above it passed).
+      2. EITHER of two one-shot threads created fresh by each entry attempt
+         that gets far enough to need one (every guard above it passed):
+         the GIVE-UP TIMEOUT thread (created by EnterNearestK9Vehicle()
+         itself, the instant it sends requestVehicleSeatClaim -- see the
+         SEAT-RACE FIX section below), and, once granted, the door-open/
+         seat/door-shut sequence thread (created by the
+         vehicleSeatClaimGranted handler).
       3. ExitK9Vehicle()'s own one-shot, bounded stall-fallback thread --
          created fresh by each call that gets far enough to need it (the
          ped was actually seated somewhere).
     The fixture's CreateThread stub CAPTURES every thread as a coroutine
     rather than running any of them automatically -- runLatestThreadToCompletion()
-    explicitly drives whichever one was most recently created (#2 or #3,
-    per whichever action a test just took) to completion or a bounded 50
-    resumes, and stepWatchdogOnce() explicitly resumes ONLY
+    explicitly drives whichever one was most recently created to completion
+    or a bounded 50 resumes, and stepWatchdogOnce() explicitly resumes ONLY
     capturedThreads[1], once. Never mixed: no test calls
     runLatestThreadToCompletion() when it means to drive the watchdog, or
     vice versa.
+
+    SEAT-RACE FIX (this pass) -- client/vehicle.lua now sends
+    'qbx_k9unit:server:requestVehicleSeatClaim' and waits for
+    'qbx_k9unit:client:vehicleSeatClaimGranted'/'...Denied' (server/vehicle.lua,
+    NEW FILE) BEFORE ever touching a door/seat native -- see that pair's own
+    EVENT/CALLBACK CONTRACT header comments for the full design and the
+    concurrency bug this closes. This fixture therefore now provides:
+    RegisterNetEvent/TriggerServerEvent stubs (capturing every call in
+    `serverEventCalls`, same "capture, don't auto-run" posture as
+    CreateThread), `dispatchClientEvent(eventName, src, ...)` (sets
+    `env.source` then invokes the captured handler -- lets a test simulate
+    either a genuine server response, src = 65535, or a spoofed one for the
+    SOURCE-ORIGIN GUARD tests), and two thin convenience wrappers over it,
+    `grantSeatClaim()`/`denySeatClaim()`, which read the MOST RECENT
+    requestVehicleSeatClaim call's own (vehicleNetId, seatIndex, token) and
+    echo it back exactly as the real server always does -- the minimal-diff
+    way most of this file's pre-existing tests now complete a "happy path"
+    entry: `EnterNearestK9Vehicle()` -> `grantSeatClaim()` ->
+    `runLatestThreadToCompletion()`, in that order, wherever the original
+    two-line sequence used to be enough on its own.
+
+    `opts.onServerEvent` (constructor option, new) lets a test intercept
+    every TriggerServerEvent call as it happens -- used by exactly one test
+    below (the two-independent-client interleaving proof) to wire two
+    separate fixture instances through a shared, minimal seat-claim relay
+    that mirrors server/vehicle.lua's own check-then-claim shape, without
+    reimplementing that file's full access/proximity logic (which is
+    tests/vehicle_spec.lua's own job).
 
     SCOPE, DELIBERATELY NARROWED TO AVOID COLLIDING WITH
     tests/vehiclecombatguard_spec.lua: that file already thoroughly covers
@@ -50,7 +81,33 @@
     production file, including the mid-delay re-check this pass added --
     this spec does not duplicate that coverage, only this file's OTHER
     behavior (seat/door selection, real termination/cleanup, any-ped,
-    double-fire, per-person block, feature-off inertness).
+    double-fire, per-person block, feature-off inertness, and now the
+    seat-claim round trip). ONE DELIBERATE, DISCLOSED EXCEPTION: this pass
+    also adds narrow coverage for IsDragTargetEngaged() -- a THIRD mutual-
+    guard global, new to client/combat.lua this same pass, that
+    tests/vehiclecombatguard_spec.lua's own header does not mention at all
+    (it only names IsDragEngaged/IsBiteHoldEngaged). Since nothing else in
+    this suite exercises it and it lives in the identical guard chain this
+    file's own EnterNearestK9Vehicle() now carries, it is tested here rather
+    than left completely uncovered -- flagged for whoever owns
+    tests/vehiclecombatguard_spec.lua to relocate/duplicate there for
+    naming consistency if they prefer, not done here since that file is
+    outside this pass's own edit scope.
+
+    IMPORTANT: this file loading the REAL server/vehicle.lua's own request
+    handler is deliberately NOT how this suite proves the fix -- that would
+    duplicate tests/vehicle_spec.lua's own job and mix two files' test
+    conventions in one spec (this codebase's established, one-real-file-
+    per-side pattern -- see e.g. tests/kennel_spec.lua loading only
+    server/kennel.lua for the server side, tests/clientkennel_spec.lua
+    loading only client/kennel.lua for the client side). Instead, the
+    interleaving test below hand-writes a MINIMAL relay that mirrors
+    server/vehicle.lua's own check-then-claim shape (first request for a
+    given vehicle+seat wins, no yield in between) purely so client-side
+    behavior at the CLIENT boundary -- does EnterNearestK9Vehicle() actually
+    wait for a real grant before calling SET_PED_INTO_VEHICLE -- can be
+    proven with two independent, real client/vehicle.lua instances racing
+    each other, the same shape the audit's own two-instance demo used.
 ]]
 
 local t = dofile('testkit.lua')
@@ -81,7 +138,7 @@ local RESOURCE_NAME = 'qbx_k9unit'
 local VEHICLE_MODEL = 'police'
 local OTHER_VEHICLE_SENTINEL = 777 -- "some unrelated vehicle the ped got into via ordinary game controls"
 
---- @param opts { vehicleEntryExit: boolean? }?
+--- @param opts { vehicleEntryExit: boolean?, isDragTargetEngaged: boolean?, onServerEvent: function? }?
 --- @return table fixture
 local function newVehicleFixture(opts)
     opts = opts or {}
@@ -101,6 +158,16 @@ local function newVehicleFixture(opts)
     local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
     local denyK9FeatureBlockedCallCount = 0
     local function DenyK9FeatureBlocked() denyK9FeatureBlockedCallCount = denyK9FeatureBlockedCallCount + 1 end
+
+    -- SEAT-RACE FIX -- IsDragTargetEngaged() controllable stand-in. See this
+    -- file's own header for why this ONE extra combat.lua global is modeled
+    -- here (unlike IsDragEngaged/IsBiteHoldEngaged, deliberately left out of
+    -- scope for tests/vehiclecombatguard_spec.lua to cover). Always defined
+    -- (never a soft-dependency omission test in THIS file -- that shape is
+    -- already covered for the sibling guards over in
+    -- tests/vehiclecombatguard_spec.lua, no need to re-prove the identical
+    -- `type(fn) == 'function'` degrade pattern a third time here).
+    local dragTargetEngaged = opts.isDragTargetEngaged or false
 
     local notifyCalls = {}
     local lib = { notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end }
@@ -230,6 +297,37 @@ local function newVehicleFixture(opts)
         eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
     end
 
+    -- SEAT-RACE FIX -- RegisterNetEvent captures exactly one handler per
+    -- event name (this file registers each of its two new events once),
+    -- same convention as tests/kennel_spec.lua's own server-side fixture.
+    local netEvents = {}
+    local function RegisterNetEvent(eventName, handler)
+        netEvents[eventName] = handler
+    end
+
+    -- SEAT-RACE FIX -- captures every TriggerServerEvent call
+    -- (requestVehicleSeatClaim / releaseVehicleSeatClaim) rather than
+    -- sending it anywhere by default -- most tests below only need to
+    -- inspect `serverEventCalls`/call `grantSeatClaim()`/`denySeatClaim()`.
+    -- `opts.onServerEvent`, when supplied, is ALSO invoked with every call
+    -- (constructor option) -- used by exactly one test (the two-client
+    -- interleaving proof) to relay calls between two independent fixture
+    -- instances.
+    local serverEventCalls = {}
+    local function TriggerServerEvent(eventName, ...)
+        serverEventCalls[#serverEventCalls + 1] = { event = eventName, args = { ... } }
+        if opts.onServerEvent then opts.onServerEvent(eventName, ...) end
+    end
+
+    --- @param name string
+    --- @return table? call -- { event = string, args = table }
+    local function lastServerEventNamed(name)
+        for i = #serverEventCalls, 1, -1 do
+            if serverEventCalls[i].event == name then return serverEventCalls[i] end
+        end
+        return nil
+    end
+
     -- CAPTURE, DON'T AUTO-RUN -- see this file's own header for the full
     -- "three different CreateThread lifetimes" rationale.
     local capturedThreads = {}
@@ -315,10 +413,13 @@ local function newVehicleFixture(opts)
         NetworkGetNetworkIdFromEntity = NetworkGetNetworkIdFromEntity,
         ResolveNetworkEntity = ResolveNetworkEntity,
         AddEventHandler = AddEventHandler,
+        RegisterNetEvent = RegisterNetEvent,
+        TriggerServerEvent = TriggerServerEvent,
         CreateThread = CreateThread,
         Wait = Wait,
         K9Compat = K9Compat,
         GetCurrentResourceName = function() return RESOURCE_NAME end,
+        IsDragTargetEngaged = function() return dragTargetEngaged end,
     }
     if featureBlocksAvailable then
         envOverrides.IsK9FeatureBlocked = IsK9FeatureBlocked
@@ -389,6 +490,40 @@ local function newVehicleFixture(opts)
         end,
         setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
         denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
+        setDragTargetEngaged = function(v) dragTargetEngaged = v end,
+        -- SEAT-RACE FIX -- see this file's own header for the full design.
+        serverEventCalls = serverEventCalls,
+        lastServerEventNamed = lastServerEventNamed,
+        --- Sets env.source then invokes the captured handler for
+        --- `eventName` -- the generic primitive `grantSeatClaim`/
+        --- `denySeatClaim` below and the SOURCE-ORIGIN GUARD tests are both
+        --- built on. `src` = 65535 models a genuine server-originated event
+        --- (FiveM's own documented sentinel); anything else models a
+        --- spoofed/locally-fired one.
+        dispatchClientEvent = function(eventName, src, ...)
+            env.source = src
+            local handler = netEvents[eventName]
+            assert(handler, 'vehicle fixture: no handler registered for ' .. eventName)
+            return handler(...)
+        end,
+        --- Simulates the server granting the MOST RECENT
+        --- requestVehicleSeatClaim call, echoing back that exact call's own
+        --- (vehicleNetId, seatIndex, token) -- exactly what the real server
+        --- always does (server/vehicle.lua's own header). Fails loudly if
+        --- no such request was ever made.
+        grantSeatClaim = function()
+            local call = lastServerEventNamed('qbx_k9unit:server:requestVehicleSeatClaim')
+            assert(call, 'vehicle fixture: grantSeatClaim() called with no outstanding requestVehicleSeatClaim')
+            env.source = 65535
+            netEvents['qbx_k9unit:client:vehicleSeatClaimGranted'](call.args[1], call.args[2], call.args[3])
+        end,
+        --- Same as grantSeatClaim() above, but denies instead.
+        denySeatClaim = function()
+            local call = lastServerEventNamed('qbx_k9unit:server:requestVehicleSeatClaim')
+            assert(call, 'vehicle fixture: denySeatClaim() called with no outstanding requestVehicleSeatClaim')
+            env.source = 65535
+            netEvents['qbx_k9unit:client:vehicleSeatClaimDenied'](call.args[1], call.args[2], call.args[3])
+        end,
     }
 end
 
@@ -465,9 +600,399 @@ t.test('EnterNearestK9Vehicle: a vehicle of an unlisted model is never selected,
 end)
 
 -- ========================================================================
+-- SEAT-RACE FIX -- the new server round trip itself: request shape, the
+-- door staying untouched until a real grant arrives, SOURCE-ORIGIN GUARDs,
+-- stale-token rejection, the deny path, the give-up timeout, and
+-- onResourceStop releasing an outstanding claim. See this file's own header
+-- for the full design.
+-- ========================================================================
+
+t.test('SEAT-RACE FIX: EnterNearestK9Vehicle sends requestVehicleSeatClaim with the real vehicle netId and the locally-chosen seatIndex, and touches NO door/seat native until a grant actually arrives', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+
+    local call = f.lastServerEventNamed('qbx_k9unit:server:requestVehicleSeatClaim')
+    t.isNotNil(call, 'must ask the server before doing anything physical')
+    t.equals(call.args[2], 1, 'seat 1 is the locally-computed best free seat, sent to the server')
+    t.isTrue(type(call.args[3]) == 'number', 'a request token must be sent')
+    t.equals(#f.doorOpenCalls, 0, 'no door touched until the server actually grants the claim')
+    t.equals(#f.seatCalls, 0)
+    t.equals(f.threadCount(), 1, 'the give-up timeout thread, not a door/seat sequence -- that one only starts once granted')
+end)
+
+t.test('SEAT-RACE FIX: server grants the claim -- door opens ONLY now, the rest of the sequence runs exactly as before', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    t.equals(#f.doorOpenCalls, 0)
+
+    f.grantSeatClaim()
+    t.equals(#f.doorOpenCalls, 1, 'the door opens the instant a grant arrives')
+    t.equals(#f.seatCalls, 0, 'not seated yet -- still mid door-open delay')
+
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1)
+    t.isTrue(f.env.IsInK9Vehicle())
+
+    local releaseCall = f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim')
+    t.isNotNil(releaseCall, 'a successfully-used claim must be released immediately, not left to its own server-side TTL')
+end)
+
+t.test('SEAT-RACE FIX: server denies the claim -- resets local state, never opens a door, and shows NO second local notify (the server already told the player why, server-side)', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    local notifyCountBefore = #f.notifyCalls
+
+    f.denySeatClaim()
+
+    t.equals(#f.doorOpenCalls, 0)
+    t.equals(#f.seatCalls, 0)
+    t.isFalse(f.env.IsInK9Vehicle())
+    t.equals(#f.notifyCalls, notifyCountBefore, 'the server owns messaging for its own rejection reasons -- this file must not show a redundant local notify')
+
+    -- A denial must never permanently block future attempts.
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1)
+end)
+
+t.test('SEAT-RACE FIX SOURCE-ORIGIN GUARD: a spoofed vehicleSeatClaimGranted (source ~= 65535) is ignored -- never opens a door', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    local call = f.lastServerEventNamed('qbx_k9unit:server:requestVehicleSeatClaim')
+
+    f.dispatchClientEvent('qbx_k9unit:client:vehicleSeatClaimGranted', 999, call.args[1], call.args[2], call.args[3])
+
+    t.equals(#f.doorOpenCalls, 0, 'a locally-fired/spoofed grant must never be trusted')
+    t.isFalse(f.env.IsInK9Vehicle())
+
+    -- The genuine grant, from the real server sentinel, must still work
+    -- afterward -- the spoofed attempt must not have consumed/corrupted the
+    -- real pending claim.
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1)
+end)
+
+t.test('SEAT-RACE FIX SOURCE-ORIGIN GUARD: a spoofed vehicleSeatClaimDenied (source ~= 65535) is ignored -- does not reset vehicleEntryInProgress', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    local call = f.lastServerEventNamed('qbx_k9unit:server:requestVehicleSeatClaim')
+
+    f.dispatchClientEvent('qbx_k9unit:client:vehicleSeatClaimDenied', 999, call.args[1], call.args[2], call.args[3])
+
+    -- Still pending, per the spoofed message being ignored: a second entry
+    -- attempt must still be refused as a double-fire, not silently allowed.
+    f.env.EnterNearestK9Vehicle()
+    t.equals(#f.serverEventCalls, 1, 'must not have sent a second request -- vehicleEntryInProgress is still true')
+end)
+
+t.test('SEAT-RACE FIX: a grant for a STALE token (an already-abandoned earlier request) is ignored', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    local call = f.lastServerEventNamed('qbx_k9unit:server:requestVehicleSeatClaim')
+    local staleToken = call.args[3] - 1
+
+    f.dispatchClientEvent('qbx_k9unit:client:vehicleSeatClaimGranted', 65535, call.args[1], call.args[2], staleToken)
+
+    t.equals(#f.doorOpenCalls, 0, 'a response for a different (stale) request must never act on the current one')
+end)
+
+t.test('SEAT-RACE FIX GIVE-UP TIMEOUT: no grant or deny ever arrives -- gives up locally after the bounded wait, best-effort releases, notifies, and never leaves vehicleEntryInProgress stuck', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    t.equals(f.threadCount(), 1, 'the give-up timeout thread')
+
+    f.runLatestThreadToCompletion() -- drives the give-up timeout thread through its single bounded Wait()
+
+    t.equals(#f.seatCalls, 0)
+    t.equals(#f.doorOpenCalls, 0)
+    t.isFalse(f.env.IsInK9Vehicle())
+    t.equals(f.lastNotify().description, locale('vehicle.entry_interrupted'))
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'), 'best-effort release even though nothing was ever confirmed granted')
+
+    -- Never stuck: a fresh attempt must work normally afterward.
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1)
+end)
+
+t.test('SEAT-RACE FIX GIVE-UP TIMEOUT: never fires once a grant has already been received -- the bounded local door/seat sequence governs completion from that point on', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim() -- consumes the pending claim, marks it granted, opens the door, starts the door/seat thread
+
+    -- The give-up timeout thread (capturedThreads[1] of this ride, still
+    -- alive) is driven directly here rather than via runLatestThreadToCompletion()
+    -- (which would drive the NEWER door/seat thread instead) -- proving the
+    -- give-up thread's own `not pendingSeatClaim.granted` guard makes it a
+    -- true no-op post-grant, not merely unreached.
+    t.equals(f.threadCount(), 2, 'both the give-up timeout thread and the new door/seat thread now exist')
+
+    f.runLatestThreadToCompletion() -- drives the door/seat thread (the most recently created one) to completion
+    t.equals(#f.seatCalls, 1)
+    t.isTrue(f.env.IsInK9Vehicle())
+end)
+
+t.test('SEAT-RACE FIX: onResourceStop releases an outstanding, not-yet-answered seat claim -- a resource restart mid-request must not leave the seat reserved for the rest of the server-side TTL', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+
+    f.fireResourceStop(RESOURCE_NAME)
+
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'), 'must release the still-pending claim on resource stop')
+end)
+
+t.test('SEAT-RACE FIX: onResourceStop ALSO releases a claim already granted but not yet acted on (mid door/seat sequence)', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim() -- door opens, door/seat thread created, but never driven
+
+    f.fireResourceStop(RESOURCE_NAME)
+
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'), 'a granted-but-not-yet-seated claim must also be released')
+end)
+
+-- ========================================================================
+-- SEAT-RACE FIX -- THE ACTUAL CONCURRENCY PROOF: two INDEPENDENT, real
+-- client/vehicle.lua instances, each with its own state, racing the SAME
+-- real vehicle/seat -- the exact shape the audit's own demo used ("loading
+-- the real client/vehicle.lua twice as two independent script instances
+-- with their own network-latency replicas and interleaving their
+-- coroutines in lock-step"). See this file's own header for why the relay
+-- below is a minimal stand-in for server/vehicle.lua's own check-then-claim
+-- shape, not a re-implementation of its full access/proximity logic.
+-- ========================================================================
+
+--- A minimal, faithful stand-in for server/vehicle.lua's own check-then-
+--- claim core: the FIRST queued request for a given (vehicleNetId,
+--- seatIndex) pair is granted, every subsequent one for the SAME pair is
+--- denied, with no yield of any kind in `processNext()` -- exactly this
+--- resource's own "ordinary event-processing order is what serializes two
+--- requests" discipline (server/vehicle.lua's/server/kennel.lua's own
+--- header). Requests are QUEUED, not answered immediately, so a test can
+--- put BOTH clients' requests genuinely in flight -- neither yet
+--- answered -- before deciding the processing order, the same "both dogs
+--- pick Enter Vehicle before either hears back" moment the real bug lived
+--- in.
+--- @return table relay
+local function newSeatClaimRelay()
+    local claims = {}  -- "netId:seatIndex" -> src currently holding it
+    local pending = {} -- queue of { src, netId, seatIndex, token }
+    local clientsBySource = {}
+
+    local relay = {}
+
+    --- @param src string|number -- any unique key identifying one client instance
+    --- @param clientFixture table -- a newVehicleFixture() return value
+    function relay.register(src, clientFixture)
+        clientsBySource[src] = clientFixture
+    end
+
+    --- @param src string|number
+    --- @return function -- pass as that client's own `opts.onServerEvent`
+    function relay.onServerEventFor(src)
+        return function(eventName, ...)
+            if eventName == 'qbx_k9unit:server:requestVehicleSeatClaim' then
+                local netId, seatIndex, token = ...
+                pending[#pending + 1] = { src = src, netId = netId, seatIndex = seatIndex, token = token }
+            elseif eventName == 'qbx_k9unit:server:releaseVehicleSeatClaim' then
+                local netId, seatIndex = ...
+                local key = netId .. ':' .. seatIndex
+                if claims[key] == src then claims[key] = nil end
+            end
+        end
+    end
+
+    --- @return number
+    function relay.pendingCount() return #pending end
+
+    --- Processes exactly one QUEUED request, FIFO -- see this function's
+    --- own doc comment above for why this is the load-bearing "no yield
+    --- between check and claim" step.
+    function relay.processNext()
+        local req = table.remove(pending, 1)
+        assert(req, 'seat claim relay: processNext() called with nothing queued')
+        local key = req.netId .. ':' .. req.seatIndex
+        local eventName
+        if claims[key] and claims[key] ~= req.src then
+            eventName = 'qbx_k9unit:client:vehicleSeatClaimDenied'
+        else
+            claims[key] = req.src
+            eventName = 'qbx_k9unit:client:vehicleSeatClaimGranted'
+        end
+        clientsBySource[req.src].dispatchClientEvent(eventName, 65535, req.netId, req.seatIndex, req.token)
+    end
+
+    return relay
+end
+
+t.test('SEAT-RACE FIX -- TWO REAL, INDEPENDENT client/vehicle.lua INSTANCES racing the SAME real vehicle/seat, both requests genuinely in flight before either is answered: exactly ONE ever calls SET_PED_INTO_VEHICLE, the other is denied and never touches a door', function()
+    local relay = newSeatClaimRelay()
+
+    local clientA = newVehicleFixture({ onServerEvent = relay.onServerEventFor('A') })
+    local clientB = newVehicleFixture({ onServerEvent = relay.onServerEventFor('B') })
+    relay.register('A', clientA)
+    relay.register('B', clientB)
+
+    -- The SAME real vehicle, from each client's own local perspective. In
+    -- real FiveM each client has its own local entity handle for the same
+    -- networked object -- irrelevant here, since what actually matters is
+    -- that both fixtures map their own handle to the SAME netId (both use
+    -- entity handle 50, and NetworkGetNetworkIdFromEntity assigns netIds in
+    -- per-fixture call order, so both resolve to netId 1) -- this is
+    -- objectively one real vehicle in the shared game world, exactly the
+    -- scenario the audit described.
+    clientA.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    clientB.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    -- Both handlers select "Enter Vehicle" before EITHER has heard back
+    -- from the server -- the exact audit scenario: "two dogs standing near
+    -- the same K9 cruiser both pick Enter Vehicle inside the same ~400ms
+    -- window." Both independently compute seat 1 as the best free seat,
+    -- since neither has entered yet -- exactly the precondition the
+    -- original client-only design could never arbitrate.
+    clientA.env.EnterNearestK9Vehicle()
+    clientB.env.EnterNearestK9Vehicle()
+
+    t.equals(relay.pendingCount(), 2, 'both requests are genuinely simultaneous, in flight, before either is answered -- this is what a client-only design could never see')
+    t.equals(#clientA.doorOpenCalls, 0, 'sanity: neither client has touched a door yet')
+    t.equals(#clientB.doorOpenCalls, 0)
+
+    -- The server necessarily processes them ONE AT A TIME, in SOME order --
+    -- ordinary FIFO here, matching whichever request the relay's own queue
+    -- happened to receive first (A). This one call is the entire fix: the
+    -- CHECK-AND-CLAIM inside it has no yield, so B's request cannot see a
+    -- half-written state.
+    relay.processNext() -- grants A
+    relay.processNext() -- denies B -- A already holds (vehicleNetId=1, seatIndex=1)
+
+    clientA.runLatestThreadToCompletion() -- A's door-open/seat/door-shut sequence
+    -- B was denied before ever calling SetVehicleDoorOpen -- nothing left
+    -- to drive for B at all.
+
+    t.equals(#clientA.seatCalls, 1, 'A genuinely gets seated')
+    t.equals(#clientB.seatCalls, 0, 'B is NEVER seated -- this is the actual concurrency bug the fix closes')
+    t.equals(#clientB.doorOpenCalls, 0, 'B never even opens a door -- denied before any physical action')
+    t.isTrue(clientA.env.IsInK9Vehicle())
+    t.isFalse(clientB.env.IsInK9Vehicle())
+
+    -- The stronger, exact-audit-language assertion: never do both
+    -- SET_PED_INTO_VEHICLE calls land on the same vehicle/seat pair.
+    local totalSeatCallsOnThisSeat = #clientA.seatCalls + #clientB.seatCalls
+    t.equals(totalSeatCallsOnThisSeat, 1, 'at most one SET_PED_INTO_VEHICLE call for this vehicle/seat pair, combined across both clients')
+end)
+
+t.test('SEAT-RACE FIX -- the LOSING order also works: if B\'s request happens to be processed first, A is the one denied -- the fix arbitrates by processing order, not by identity', function()
+    local relay = newSeatClaimRelay()
+
+    local clientA = newVehicleFixture({ onServerEvent = relay.onServerEventFor('A') })
+    local clientB = newVehicleFixture({ onServerEvent = relay.onServerEventFor('B') })
+    relay.register('A', clientA)
+    relay.register('B', clientB)
+
+    clientA.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    clientB.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    clientA.env.EnterNearestK9Vehicle()
+    clientB.env.EnterNearestK9Vehicle()
+    t.equals(relay.pendingCount(), 2)
+
+    relay.processNext() -- grants A (still queued first -- FIFO)
+    relay.processNext() -- denies B
+
+    -- Symmetry check with a FRESH pair of clients where B's request is
+    -- queued and processed FIRST this time.
+    local relay2 = newSeatClaimRelay()
+    local clientC = newVehicleFixture({ onServerEvent = relay2.onServerEventFor('C') })
+    local clientD = newVehicleFixture({ onServerEvent = relay2.onServerEventFor('D') })
+    relay2.register('C', clientC)
+    relay2.register('D', clientD)
+    clientC.addVehicle(60, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    clientD.addVehicle(60, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    clientD.env.EnterNearestK9Vehicle() -- D requests FIRST this time
+    clientC.env.EnterNearestK9Vehicle()
+    t.equals(relay2.pendingCount(), 2)
+
+    relay2.processNext() -- grants D (first in the queue)
+    relay2.processNext() -- denies C
+
+    clientD.runLatestThreadToCompletion()
+    t.equals(#clientD.seatCalls, 1, 'whichever request is processed first wins -- D this time')
+    t.equals(#clientC.seatCalls, 0, 'and the other is denied -- C this time')
+end)
+
+-- ========================================================================
+-- SEAT-RACE FIX -- IsDragTargetEngaged() mutual guard (client/combat.lua,
+-- new this pass -- "am I the one currently BEING dragged"). See this file's
+-- own header for why this is tested here rather than in
+-- tests/vehiclecombatguard_spec.lua.
+-- ========================================================================
+
+t.test('IsDragTargetEngaged pre-flight guard: refuses immediately, no thread, no server contact, when the local ped is currently being dragged', function()
+    local f = newVehicleFixture({ isDragTargetEngaged = true })
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    f.env.EnterNearestK9Vehicle()
+
+    t.equals(#f.serverEventCalls, 0, 'must refuse before ever contacting the server')
+    t.equals(f.threadCount(), 0)
+    t.equals(f.lastNotify().description, locale('vehicle.blocked_by_being_dragged'))
+end)
+
+t.test('IsDragTargetEngaged canInteract mirror: the "Get in the Back Seat" option hides while being dragged', function()
+    local f = newVehicleFixture({ isDragTargetEngaged = true })
+    f.fireResourceStart(RESOURCE_NAME)
+    local enterOption
+    for _, o in ipairs(f.addGlobalVehicleCalls[1]) do
+        if o.name == 'qbx_k9unit:enterVehicle' then enterOption = o end
+    end
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    t.isFalse(enterOption.canInteract(50, 1.0, {}, VEHICLE_MODEL))
+
+    f.setDragTargetEngaged(false)
+    t.isTrue(enterOption.canInteract(50, 1.0, {}, VEHICLE_MODEL))
+end)
+
+t.test('IsDragTargetEngaged MID-DELAY re-check: starts being dragged AFTER a grant but before the door-open delay finishes -- aborts, shuts the door back, releases the claim', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    t.equals(#f.doorOpenCalls, 1)
+
+    f.setDragTargetEngaged(true) -- starts mid-delay
+    f.runLatestThreadToCompletion()
+
+    t.equals(#f.seatCalls, 0, 'must never seat a ped that started being dragged during the delay')
+    t.equals(#f.doorShutCalls, 1, 'the door this file opened must still be shut again')
+    t.isFalse(f.env.IsInK9Vehicle())
+    t.equals(f.lastNotify().description, locale('vehicle.blocked_by_being_dragged'))
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'), 'the now-unneeded granted claim must be released')
+end)
+
+-- ========================================================================
 -- REAL SEATING -- happy path, seat/door mapping, and "auto-find the best
 -- spot" (rear preferred, never the driver's seat, never a taken seat, clear
 -- refusal when nothing qualifies -- no silent fallback to anywhere else).
+-- Every "happy path" sequence below now reads:
+--   EnterNearestK9Vehicle() -> grantSeatClaim() -> runLatestThreadToCompletion()
+-- -- see this file's own header for why grantSeatClaim() is the
+-- minimal-diff way to keep exercising exactly the same downstream behavior
+-- these tests always covered.
 -- ========================================================================
 
 t.test('happy path: opens the door, seats the ped for real (not attach/freeze/hide), shuts the door, becomes visible-and-collidable by construction (no collision/visibility natives touched at all)', function()
@@ -476,9 +1001,10 @@ t.test('happy path: opens the door, seats the ped for real (not attach/freeze/hi
     f.addVehicle(51, VEHICLE_MODEL, 1.0, 0.0, 0.0) -- nearer
 
     f.env.EnterNearestK9Vehicle()
-    t.equals(f.threadCount(), 1, 'the door-open/seat/door-shut sequence runs in its own thread')
-    t.isFalse(f.env.IsInK9Vehicle(), 'not seated yet -- still mid door-open delay')
+    t.equals(f.threadCount(), 1, 'the give-up timeout thread starts immediately -- the door-open/seat/door-shut sequence only starts once granted')
+    t.isFalse(f.env.IsInK9Vehicle(), 'not seated yet -- still waiting on the server')
 
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     t.equals(#f.doorOpenCalls, 1)
@@ -499,6 +1025,7 @@ t.test('SEAT/DOOR MAPPING: rear-left (seat 1) is tried first on a standard 4-sea
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0) -- default maxPassengers = 3 -> seats -1..2, all free
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     t.equals(f.seatCalls[1].seatIndex, 1, 'rear, driver\'s side is first in the preference order')
@@ -510,6 +1037,7 @@ t.test('SEAT/DOOR MAPPING: seat 1 occupied falls back to seat 2 (rear, passenger
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.setSeatOccupied(50, 1, true)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     t.equals(f.seatCalls[1].seatIndex, 2)
@@ -522,6 +1050,7 @@ t.test('SEAT/DOOR MAPPING: both rear seats occupied falls back to seat 0 (front 
     f.setSeatOccupied(50, 1, true)
     f.setSeatOccupied(50, 2, true)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     t.equals(f.seatCalls[1].seatIndex, 0)
@@ -536,7 +1065,8 @@ t.test('NEVER THE TRUNK, NEVER THE DRIVER: every non-driver seat occupied refuse
     f.setSeatOccupied(50, 2, true)
     f.env.EnterNearestK9Vehicle()
 
-    t.equals(f.threadCount(), 0, 'must refuse synchronously -- never even start the door-open sequence')
+    t.equals(f.threadCount(), 0, 'must refuse synchronously -- never even contact the server')
+    t.equals(#f.serverEventCalls, 0)
     t.equals(#f.seatCalls, 0)
     t.equals(#f.doorOpenCalls, 0)
     t.equals(f.lastNotify().description, locale('vehicle.no_seat_available'))
@@ -547,16 +1077,18 @@ t.test('a 2-seat vehicle (maxPassengers = 1, no rear seats at all) correctly fal
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0, 1) -- maxPassengers=1 -> valid seats -1..0 only
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     t.equals(f.seatCalls[1].seatIndex, 0)
     t.isTrue(f.env.IsInK9Vehicle())
 end)
 
-t.test('MID-DELAY ABORT: the vehicle is deleted during the door-open delay -- aborts, shuts nothing (nothing left to shut), never seats', function()
+t.test('MID-DELAY ABORT: the vehicle is deleted during the door-open delay -- aborts, shuts nothing (nothing left to shut), never seats, releases the now-unneeded claim', function()
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     t.equals(#f.doorOpenCalls, 1, 'the door open call already fired before the delay')
 
     f.deleteVehicleEntity(50) -- something else deletes it mid-delay
@@ -566,12 +1098,14 @@ t.test('MID-DELAY ABORT: the vehicle is deleted during the door-open delay -- ab
     t.equals(#f.doorShutCalls, 0, 'nothing left to shut a door on')
     t.isFalse(f.env.IsInK9Vehicle())
     t.equals(f.lastNotify().description, locale('vehicle.entry_interrupted'))
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'))
 end)
 
-t.test('MID-DELAY ABORT: the chosen seat fills up during the door-open delay -- aborts, shuts the door back, never displaces whoever took it', function()
+t.test('MID-DELAY ABORT: the chosen seat fills up during the door-open delay -- aborts, shuts the door back, never displaces whoever took it, releases the claim', function()
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle() -- picks seat 1 (rear, driver's side)
+    f.grantSeatClaim()
 
     f.setSeatOccupied(50, 1, true) -- someone else takes it mid-delay
     f.runLatestThreadToCompletion()
@@ -580,12 +1114,14 @@ t.test('MID-DELAY ABORT: the chosen seat fills up during the door-open delay -- 
     t.equals(#f.doorShutCalls, 1, 'the door this file opened must still be shut again')
     t.isFalse(f.env.IsInK9Vehicle())
     t.equals(f.lastNotify().description, locale('vehicle.no_seat_available'))
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'))
 end)
 
 t.test('MID-DELAY ABORT: the ped dies during the door-open delay -- aborts rather than seating a corpse', function()
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
 
     f.setPedDead(true)
     f.runLatestThreadToCompletion()
@@ -599,12 +1135,16 @@ t.test('DOUBLE-FIRE: a second EnterNearestK9Vehicle() while already tucked in is
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.equals(#f.seatCalls, 1)
+    local threadCountAfterFirstRide = f.threadCount()
+    local serverEventCountAfterFirstRide = #f.serverEventCalls -- the request, plus the release fired right after seating
 
     f.env.EnterNearestK9Vehicle()
     t.equals(#f.seatCalls, 1, 'a second call while IsInK9Vehicle() is true must not seat again')
-    t.equals(f.threadCount(), 1, 'must not even start a second sequence')
+    t.equals(f.threadCount(), threadCountAfterFirstRide, 'must not even start a second sequence -- no new thread, no new server contact')
+    t.equals(#f.serverEventCalls, serverEventCountAfterFirstRide, 'must not have sent a second request')
 end)
 
 t.test('DOUBLE-FIRE: a second EnterNearestK9Vehicle() DURING the door-open delay (before the first has finished) is also a clean no-op -- vehicleEntryInProgress guard', function()
@@ -612,22 +1152,27 @@ t.test('DOUBLE-FIRE: a second EnterNearestK9Vehicle() DURING the door-open delay
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
     t.equals(f.threadCount(), 1)
-    t.isFalse(f.env.IsInK9Vehicle(), 'sanity: still mid-delay, not seated yet')
+    t.isFalse(f.env.IsInK9Vehicle(), 'sanity: still mid-request, not seated yet')
 
     f.env.EnterNearestK9Vehicle() -- double-click during the animation window
     t.equals(f.threadCount(), 1, 'must not start a second concurrent sequence against the same ped')
+    t.equals(#f.serverEventCalls, 1, 'must not have sent a second request to the server either')
 
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.equals(#f.seatCalls, 1, 'exactly one seat call, from the original sequence only')
     t.isTrue(f.env.IsInK9Vehicle())
 end)
 
 -- ========================================================================
--- ExitK9Vehicle -- deliberately NEVER gated behind CanShowK9UI(). Real
--- seating changes what "exit" means: vehicleState clears synchronously and
--- immediately, a graceful TASK_LEAVE_VEHICLE is issued, and a bounded
--- courtesy thread force-ejects the ped if that animation never actually
--- finishes (owner's own "bulletproof" requirement).
+-- ExitK9Vehicle -- deliberately NEVER gated behind CanShowK9UI(), and
+-- deliberately NEVER touches the server at all (see this file's own header
+-- EVENT/CALLBACK CONTRACT section: "ExitK9Vehicle() below is COMPLETELY
+-- UNCHANGED by this pass"). Real seating changes what "exit" means:
+-- vehicleState clears synchronously and immediately, a graceful
+-- TASK_LEAVE_VEHICLE is issued, and a bounded courtesy thread force-ejects
+-- the ped if that animation never actually finishes (owner's own
+-- "bulletproof" requirement).
 -- ========================================================================
 
 t.test('ExitK9Vehicle: a no-op when not currently tucked in', function()
@@ -640,6 +1185,7 @@ t.test('ExitK9Vehicle: already out via ordinary game controls before this was ev
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.isTrue(f.env.IsInK9Vehicle())
 
@@ -656,6 +1202,7 @@ t.test('ANY PED / NEVER TRAPPED: ExitK9Vehicle works even with CanShowK9UI() fal
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.isTrue(f.env.IsInK9Vehicle())
 
@@ -670,6 +1217,7 @@ t.test('ExitK9Vehicle: happy path -- the animation genuinely finishes before the
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     f.env.ExitK9Vehicle()
@@ -688,6 +1236,7 @@ t.test('BULLETPROOF EXIT: the graceful animation stalls (door jammed, etc.) -- t
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     f.env.ExitK9Vehicle()
@@ -704,6 +1253,7 @@ t.test('BULLETPROOF EXIT: the ped dies before the graceful animation resolves --
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     f.env.ExitK9Vehicle()
@@ -719,6 +1269,7 @@ t.test('DOUBLE-FIRE: a second ExitK9Vehicle() after already exiting is a clean n
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     f.env.ExitK9Vehicle()
     t.equals(#f.taskLeaveVehicleCalls, 1)
@@ -745,6 +1296,7 @@ t.test('onResourceStop: a resource restart mid-ride hard-ejects an ALIVE ped via
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     local threadCountBefore = f.threadCount()
 
@@ -762,6 +1314,7 @@ t.test('onResourceStop: a dead ped mid-ride is hard-ejected via CLEAR_PED_TASKS_
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     f.setPedDead(true)
 
@@ -775,6 +1328,7 @@ t.test('onResourceStop: a mismatched resourceName never fires, even mid-ride', f
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     f.fireResourceStop('some_other_resource')
     t.equals(#f.taskLeaveVehicleCalls, 0)
@@ -801,6 +1355,7 @@ t.test('watchdog: still genuinely seated -- no release, across many ticks', func
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     f.stepWatchdogOnce()
@@ -815,6 +1370,7 @@ t.test('watchdog: the ped exits via ordinary game controls -- releases silently 
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     f.simulatePedExitedVehicle()
@@ -827,6 +1383,7 @@ t.test('watchdog: the vehicle is deleted out from under the ped (engine auto-eje
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     f.deleteVehicleEntity(50) -- this fixture's own deleteVehicleEntity() models the engine's auto-eject too
@@ -840,6 +1397,7 @@ t.test('watchdog OWN-DEATH RELEASE: a dead ped while tucked in releases IMMEDIAT
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     f.setPedDead(true)
 
@@ -855,6 +1413,7 @@ t.test('watchdog OWN-DEATH RELEASE: takes precedence even when the vehicle has A
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     f.setPedDead(true)
     f.setVehicleResolvable(false)
@@ -885,6 +1444,7 @@ t.test('ANY PED: EnterNearestK9Vehicle works via CanShowK9UI() alone, with IsOwn
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     local ok, err = pcall(f.env.EnterNearestK9Vehicle)
     t.isTrue(ok, 'must not reach for a global this file does not use: ' .. tostring(err))
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.isTrue(f.env.IsInK9Vehicle())
     t.equals(f.seatCalls[1].ped, 1, 'the seated entity is PlayerPedId() -- the player\'s own ped -- never a spawned stand-in')
@@ -926,6 +1486,7 @@ t.test('"Get Out of the Vehicle" canInteract: only true when hovering the EXACT 
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.addVehicle(51, VEHICLE_MODEL, 1.0, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle() -- nearest is 50
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
 
     t.isTrue(exitOption.canInteract(50, 1.0, {}, VEHICLE_MODEL))
@@ -953,6 +1514,7 @@ t.test('EnterNearestK9Vehicle: VehicleEntryExit blocked -- denies via DenyK9Feat
 
     t.equals(#f.seatCalls, 0)
     t.equals(f.threadCount(), 0)
+    t.equals(#f.serverEventCalls, 0, 'must refuse before ever contacting the server')
     t.equals(f.denyK9FeatureBlockedCallCount(), 1)
     t.isFalse(f.env.IsInK9Vehicle())
 end)
@@ -962,6 +1524,7 @@ t.test('EnterNearestK9Vehicle: a block on a DIFFERENT feature name never affects
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.setBlocked('NightVision', true)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.equals(#f.seatCalls, 1)
 end)
@@ -970,6 +1533,7 @@ t.test('ExitK9Vehicle: a block on VehicleEntryExit never refuses exiting -- term
     local f = newVehicleFixture()
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.isTrue(f.env.IsInK9Vehicle())
 
@@ -983,6 +1547,7 @@ t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked unde
     t.isNil(f.env.IsK9FeatureBlocked)
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
     f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.equals(#f.seatCalls, 1, 'an unknown block state must never freeze this ability -- it must fail OPEN')
 end)
