@@ -881,6 +881,46 @@ local function HandleOpenK9Inventory(source, targetNetId)
     return { ok = true, stashId = ('k9inv-%s'):format(targetCitizenid) }
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.K9Inventory
+--- flag) is already checked by the callback below, before this function is
+--- ever reached. Gates the INTERACTOR (`source` in the callback below) --
+--- the person requesting to open a K9's gear stash, whether that is the
+--- K9's own player opening their own gear or a departmental handler opening
+--- a partner's -- not the target K9 the stash belongs to:
+---   2. an explicit block.K9Inventory grant -> DENY
+---   3. K9Inventory listed in RequireGrant -> ALLOW only with an active
+---      feature.K9Inventory grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsK9InventoryPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.K9Inventory') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.K9Inventory == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.K9Inventory') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- DEVELOPER_REFERENCE.md §13.4.2. THE security-critical callback of this file, per
 --- this file's own header claim of server/search.lua-level scrutiny.
 lib.callback.register('qbx_k9unit:server:openK9Inventory', function(source, targetNetId)
@@ -890,6 +930,22 @@ lib.callback.register('qbx_k9unit:server:openK9Inventory', function(source, targ
 
     if not Config.Features.K9Inventory then
         return { ok = false, reason = 'feature_disabled' } -- real server-side no-op regardless of client UI state
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsK9InventoryPermittedForCitizenId
+    -- above. Checked BEFORE the cooldown/mutex below, matching
+    -- server/pursuitsprint.lua's own "cheapest/no-side-effect checks first"
+    -- discipline, so a blocked interactor never burns their own cooldown
+    -- window for a request that was always going to be refused. Gates the
+    -- INTERACTOR (`source`), never the target -- HandleOpenK9Inventory's own
+    -- IsAuthorizedForK9Inventory already answers "is this interactor
+    -- generally allowed to open K9 gear at all"; this answers the
+    -- orthogonal "has high command specifically switched this OFF for this
+    -- one interactor" question.
+    local interactorPlayer = exports.qbx_core:GetPlayer(source)
+    local interactorCitizenid = interactorPlayer and interactorPlayer.PlayerData and interactorPlayer.PlayerData.citizenid
+    if not interactorCitizenid or not IsK9InventoryPermittedForCitizenId(interactorCitizenid) then
+        return { ok = false, reason = 'not_authorized' }
     end
 
     if K9InventoryOpenCooldown.IsOnCooldown(source) then

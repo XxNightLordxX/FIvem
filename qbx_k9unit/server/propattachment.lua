@@ -371,6 +371,49 @@ end
 -- ======================================================================
 if Config.Features.PropAttachments then
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.PropAttachments
+--- flag) is already checked by the REGISTRATION-TIME FEATURE GATE this
+--- function lives inside, before it is ever reached. Consulted ONLY on the
+--- ADD branch of requestToggleK9PropAttachment below -- never on the REMOVE
+--- branch (already active -> take it off), which runs BEFORE this check and
+--- must stay unconditional: a handler taking their own vest off is this
+--- feature's "no unbounded trap" exit path, the identical posture
+--- server/recall.lua's header documents for detaching a leash/dropping a
+--- ball/exiting a kennel/ending training.
+---   2. an explicit block.PropAttachments grant -> DENY
+---   3. PropAttachments listed in RequireGrant -> ALLOW only with an active
+---      feature.PropAttachments grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsPropAttachmentsPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.PropAttachments') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.PropAttachments == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.PropAttachments') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Step 1: toggle. See this file's header EVENT/CALLBACK CONTRACT item 1.
 RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     local src = source
@@ -381,7 +424,9 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     if not citizenid then return end
 
     -- Already active -> this request means "take it off." No round trip
-    -- needed to remove something, unlike placing it.
+    -- needed to remove something, unlike placing it. UNCONDITIONAL -- see
+    -- IsPropAttachmentsPermittedForCitizenId's own doc comment above for why
+    -- this branch is never gated on a block.
     if PropAttachmentState[citizenid] then
         RemovePropAttachmentForCitizenid(citizenid)
         NotifyPlayer(src, locale('propattachment.removed_success'), 'success')
@@ -395,6 +440,14 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     -- their own cooldown allowance for attempts that were always going to
     -- be rejected anyway.
     if not HasK9Access(src) then
+        NotifyPlayer(src, locale('propattachment.not_authorized_equipment'), 'error')
+        return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsPropAttachmentsPermittedForCitizenId
+    -- above. Checked BEFORE ToggleCooldown.Consume below, same ordering
+    -- reasoning as the HasK9Access check immediately above.
+    if not IsPropAttachmentsPermittedForCitizenId(citizenid) then
         NotifyPlayer(src, locale('propattachment.not_authorized_equipment'), 'error')
         return
     end

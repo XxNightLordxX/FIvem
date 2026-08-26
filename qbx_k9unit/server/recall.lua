@@ -47,6 +47,27 @@
     only, see `RecallCooldown` below), and (c) that the CALLER is genuinely,
     per server-authoritative state, the target K9's established partner --
     never HasK9Access, never CanShowK9UI, on either party.
+
+    PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl,
+    client/tablet.lua's Block/Unblock control) IS DELIBERATELY NOT
+    IMPLEMENTED HERE, EVEN THOUGH THE TABLET OFFERS A Block/Unblock CONTROL
+    FOR Recall LIKE EVERY OTHER Config.Features ENTRY. This is not an
+    oversight matching the audit gap every other feature in this pass
+    closed -- it is the one deliberate exception, for exactly the reason
+    stated above: Recall is this resource's primary escape hatch, and "no
+    termination/cleanup path may be gated" is a hard rule, not a preference,
+    for the identical reason `ForceDetachLeashForSource`/`doDetachLeash`/
+    `releaseFetchBall`/kennel pickup/training-off never consult a block
+    either. A high-command operator can still set `block.Recall` on a
+    citizenid via the tablet's existing, generic grant/block plumbing
+    (server/permissions.lua's `IsValidPermissionKey` accepts it, since
+    `Recall` is a real `Config.Features` key) -- that row is simply never
+    read by this file, by design, so it can never have any effect. Do not
+    "fix" this by wiring a check in here without re-deriving this reasoning
+    first; doing so would reopen the exact "a handler whose K9 partner's
+    certification is revoked mid-bite must still be able to call their dog
+    off" gap this file's whole header exists to keep closed, just gated on
+    a block row instead of a certification.
     ======================================================================
 
     SCOPE: ALL THREE ENGAGEMENT TYPES, NOT JUST BITEANDHOLD --

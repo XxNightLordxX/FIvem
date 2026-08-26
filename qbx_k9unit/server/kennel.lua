@@ -332,6 +332,50 @@ local function RemoveKennelForCitizenid(citizenid)
     TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, kennel.netId)
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.DeployableKennel
+--- flag) is already checked by requestDeployKennel below, before this
+--- function is ever reached. Consulted ONLY at requestDeployKennel (the
+--- "opening" action, placing a new kennel) -- never at requestPickupKennel,
+--- cancelKennelPlacement, the playerDropped handler, or the onResourceStop
+--- sweep, all of which are this feature's own "no unbounded trap" exit
+--- paths (a handler removing/exiting their own already-deployed kennel)
+--- and must keep working exactly as server/recall.lua's own header
+--- documents for the identical reason -- "exit a kennel" is one of the
+--- specific termination paths this pass is required to leave unconditional.
+---   2. an explicit block.DeployableKennel grant -> DENY
+---   3. DeployableKennel listed in RequireGrant -> ALLOW only with an
+---      active feature.DeployableKennel grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsDeployableKennelPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.DeployableKennel') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.DeployableKennel == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.DeployableKennel') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Step 1: certified handler asks to place a kennel near themselves. See
 --- this file's header "WHY THE SERVER COMPUTES THE PLACEMENT COORDS" block
 --- for why this computes and hands over a spawn point rather than
@@ -346,15 +390,25 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
         return
     end
 
-    if not DeployCooldown.Consume(src) then
-        return -- silent no-op: rate-limited, matches bark/leash-request/certify-action convention
-    end
-
     local player = exports.qbx_core:GetPlayer(src)
     local citizenid = player and player.PlayerData and player.PlayerData.citizenid
     if not citizenid then
         NotifyPlayer(src, locale('common.unable_to_resolve_citizenid'), 'error')
         return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsDeployableKennelPermittedForCitizenId
+    -- above. Checked BEFORE DeployCooldown.Consume below, matching
+    -- server/pursuitsprint.lua's own "cheapest/no-side-effect checks first"
+    -- discipline, so a blocked handler never burns their own deploy
+    -- cooldown for a request that was always going to be refused.
+    if not IsDeployableKennelPermittedForCitizenId(citizenid) then
+        NotifyPlayer(src, locale('kennel.not_authorized_to_deploy'), 'error')
+        return
+    end
+
+    if not DeployCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, matches bark/leash-request/certify-action convention
     end
 
     if Kennels[citizenid] then

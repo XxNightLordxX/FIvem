@@ -312,6 +312,15 @@ local AdminConfig = {
     },
 }
 
+-- lib.callback.register stub -- server/admin.lua now registers a CALLBACK
+-- SURFACE (tabletAuditCert/tabletAuditPartner/tabletAuditSearch/tabletAuditXp/
+-- tabletAuditDept) inside the same onResourceStart block this spec fires
+-- below; this file's own assertions are about the NotifyPlayer delegation
+-- path only (Part 3's header), so a pure no-op capture is enough -- same
+-- shape tests/permissions_spec.lua's own second `libStub` already uses for
+-- the identical "just don't let lib.callback.register error" purpose.
+local adminLibStub = { callback = { register = function(_name, _fn) end } }
+
 local adminEnv = Sandbox.newEnv({
     GetGameTimer = GetGameTimerForAdmin,
     RegisterCommand = RegisterCommandForAdmin,
@@ -323,6 +332,7 @@ local adminEnv = Sandbox.newEnv({
     TriggerClientEvent = TriggerClientEventForAdmin,
     print = function(...) end,
     Config = AdminConfig,
+    lib = adminLibStub,
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', adminEnv)

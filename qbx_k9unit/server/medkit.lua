@@ -723,6 +723,45 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     return result
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.K9Medkit
+--- flag) is already checked by the callback below, before this function is
+--- ever reached. Gates the USING player (`source` below) -- see this
+--- file's own FILE-TO-FILE CONTRACT for why eligibility to USE a medkit is
+--- job-only, never HasK9Access -- not the K9 being treated:
+---   2. an explicit block.K9Medkit grant -> DENY
+---   3. K9Medkit listed in RequireGrant -> ALLOW only with an active
+---      feature.K9Medkit grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsK9MedkitPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.K9Medkit') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.K9Medkit == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.K9Medkit') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- DEVELOPER_REFERENCE.md §13.4.4. Server-authoritative "use a K9 medkit" callback.
 lib.callback.register('qbx_k9unit:server:useK9Medkit', function(source, targetServerId)
     if type(targetServerId) ~= 'number' then
@@ -734,6 +773,18 @@ lib.callback.register('qbx_k9unit:server:useK9Medkit', function(source, targetSe
     end
 
     if not IsMedkitUserAuthorized(source) then
+        return { ok = false, reason = 'no_access' }
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsK9MedkitPermittedForCitizenId
+    -- above. Checked BEFORE MedkitMutex/RunUseK9MedkitMutation below,
+    -- matching server/pursuitsprint.lua's own "cheapest/no-side-effect
+    -- checks first, mutation last" discipline, so a blocked USING player
+    -- never burns the TARGET's own per-K9 treatment cooldown for a request
+    -- that was always going to be refused.
+    local usingPlayer = exports.qbx_core:GetPlayer(source)
+    local usingCitizenid = usingPlayer and usingPlayer.PlayerData and usingPlayer.PlayerData.citizenid
+    if not usingCitizenid or not IsK9MedkitPermittedForCitizenId(usingCitizenid) then
         return { ok = false, reason = 'no_access' }
     end
 

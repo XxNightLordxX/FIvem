@@ -132,6 +132,21 @@ local function printStub(...)
     capturedPrints[#capturedPrints + 1] = table.concat(parts, '\t')
 end
 
+-- lib.callback.register stub -- mirrors tests/wellbeing_spec.lua's own
+-- identical shape exactly: captures each registered handler by name so this
+-- suite can invoke server/admin.lua's CALLBACK SURFACE (tabletAuditCert/
+-- tabletAuditPartner/tabletAuditSearch/tabletAuditXp/tabletAuditDept) the
+-- same way ox_lib's real dispatcher would -- `callbacks[name](source, ...)`
+-- -- without needing a real ox_lib runtime.
+local registeredCallbacks = {}
+local LibStub = {
+    callback = {
+        register = function(name, handler)
+            registeredCallbacks[name] = handler
+        end,
+    },
+}
+
 local Config = {
     Features = { AdminAuditCommands = true },
     AdminAudit = {
@@ -169,6 +184,7 @@ local env = Sandbox.newEnv({
     NotifyPlayer = NotifyPlayerStub,
     print = printStub,
     Config = Config,
+    lib = LibStub,
 })
 
 -- server/admin.lua calls NewCooldown() at file-load time (AuditCooldown) --
@@ -207,6 +223,15 @@ t.isNotNil(registeredCommands.k9auditsearch, 'onResourceStart must register k9au
 -- of both commands below.
 t.isNotNil(registeredCommands.k9auditxp, 'onResourceStart must register k9auditxp')
 t.isNotNil(registeredCommands.k9auditdept, 'onResourceStart must register k9auditdept')
+
+-- CALLBACK SURFACE (this pass) -- registered inside the SAME onResourceStart
+-- block, behind the SAME Config.Features.AdminAuditCommands gate, as the
+-- five commands above.
+t.isNotNil(registeredCallbacks['qbx_k9unit:server:tabletAuditCert'], 'onResourceStart must register tabletAuditCert')
+t.isNotNil(registeredCallbacks['qbx_k9unit:server:tabletAuditPartner'], 'onResourceStart must register tabletAuditPartner')
+t.isNotNil(registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'], 'onResourceStart must register tabletAuditSearch')
+t.isNotNil(registeredCallbacks['qbx_k9unit:server:tabletAuditXp'], 'onResourceStart must register tabletAuditXp')
+t.isNotNil(registeredCallbacks['qbx_k9unit:server:tabletAuditDept'], 'onResourceStart must register tabletAuditDept')
 
 --- Test helper: runs one command invocation from a FRESH, always-authorized,
 --- never-previously-rate-limited source (a new integer every call), so each
@@ -1038,6 +1063,302 @@ t.test('k9auditdept: a populated roster renders via FormatDeptCertRow (admin.dep
     t.contains(body, 'granted_at=2024-01-01 00:00:00')
     t.contains(body, 'citizenid=ABCD2222')
     t.contains(body, 'granted_by=ADMIN2')
+end)
+
+-- ----------------------------------------------------------------------
+-- CALLBACK SURFACE (this pass) -- tabletAuditCert/tabletAuditPartner/
+-- tabletAuditSearch/tabletAuditXp/tabletAuditDept. Each callback mirrors its
+-- command counterpart's authorization, rate limiting, argument validation,
+-- and query layer exactly -- these cases specifically prove that mirroring
+-- (not merely that the callback "works" in isolation), plus the ONE new
+-- behavior a callback has that a command never could: `rows` is the RAW row
+-- table, never a formatted string, and `limit` arrives as a genuine Lua
+-- number rather than a chat-command string (exercising ClampLimit's NaN
+-- hardening, unreachable via any command).
+-- ----------------------------------------------------------------------
+
+t.test('tabletAuditCert: an unauthorized caller is denied, no query runs, shape is { ok = false, error = "not_authorized", message }', function()
+    resetCaptures()
+    local src = 9201
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.contains(result.message, 'not authorized')
+    t.contains(capturedPrints[#capturedPrints], 'ran tabletAuditCert(n/a) -> denied')
+end)
+
+t.test('tabletAuditCert: an invalid citizenid is rejected as invalid_args, no query runs', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, '')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+    t.contains(capturedPrints[#capturedPrints], 'ran tabletAuditCert(n/a) -> invalid_args')
+end)
+
+t.test('tabletAuditCert: a valid authorized call returns RAW rows (not a formatted string), plus ok/label', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certifications WHERE citizenid = ?', 1, true) then
+            return {
+                { job = 'police', active = 1, granted_by = 'ADMIN1', granted_at = '2024-01-01 00:00:00', revoked_by = nil, revoked_at = nil },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 1)
+    t.isTrue(result.ok)
+    t.equals(type(result.rows), 'table')
+    t.equals(#result.rows, 1)
+    t.equals(result.rows[1].job, 'police', 'rows must be the RAW k9_certifications row -- a real field, not a substring of a formatted line')
+    t.equals(result.rows[1].granted_by, 'ADMIN1')
+    t.contains(result.label, 'ABCD1234')
+    -- Callbacks never call NotifyPlayer/PresentRows -- the notification path
+    -- this task explicitly says must not be rewritten stays untouched.
+    t.equals(#capturedNotifications, 0, 'a callback invocation must never also fire a chat toast')
+    t.contains(capturedPrints[#capturedPrints], 'ran tabletAuditCert(ABCD1234) -> ok')
+end)
+
+t.test('tabletAuditCert: limit is clamped exactly like the command path -- an out-of-range numeric limit clamps to the hard max (100)', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 999999)
+    t.equals(#capturedQueries, 1)
+    local limitStr = capturedQueries[1].sql:match('LIMIT (%d+)')
+    t.equals(tonumber(limitStr), 100)
+end)
+
+t.test('tabletAuditCert: NaN HARDENING -- a raw NaN Lua number (only reachable via a callback, never a chat command) falls back to the configured default instead of reaching string.format unclamped', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local nan = 0 / 0
+    local ok, result = pcall(registeredCallbacks['qbx_k9unit:server:tabletAuditCert'], src, 'ABCD1234', nan)
+    t.isTrue(ok, 'a NaN limit must never raise an uncaught error: ' .. tostring(result))
+    t.equals(#capturedQueries, 1)
+    local limitStr = capturedQueries[1].sql:match('LIMIT (%d+)')
+    t.isNotNil(limitStr, 'the embedded LIMIT must still be a plain integer even when the caller supplied NaN')
+    t.equals(tonumber(limitStr), 50, 'NaN must fall back to the configured default (Certifications = 50), same as an unparseable string')
+    t.isTrue(result.ok)
+end)
+
+t.test('tabletAuditCert: rate limiting is the SAME shared AuditCooldown budget the commands use -- a recent command call blocks a subsequent callback call from the same source', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    fakeNow = 7000
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1)
+
+    fakeNow = 7100 -- within CommandCooldownMs (300)
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 1, 'the callback must be rate-limited by the command\'s own recent call from the same source')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'rate_limited')
+
+    fakeNow = 7500 -- past the cooldown window
+    local result2 = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 2)
+    t.isTrue(result2.ok)
+end)
+
+t.test('tabletAuditCert: a callback call ALSO feeds the shared cooldown -- blocks a subsequent command from the same source', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    fakeNow = 8000
+    registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 1)
+
+    fakeNow = 8100 -- within cooldown
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1, 'the command must be rate-limited by the callback\'s own recent call from the same source')
+end)
+
+t.test('tabletAuditCert: PER-PERSON FEATURE CONTROL applies identically -- an explicit block denies even job.isboss', function()
+    resetCaptures()
+    grantPermission('CITFC-CB-1', 'block.AdminAuditCommands', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-CB-1',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletAuditPartner: an invalid citizenid is rejected as invalid_args', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditPartner'](src, '')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+end)
+
+t.test('tabletAuditPartner: returns the SAME merged/sorted/truncated raw rows MergeSortedByIdDesc produces for the command path', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('k9_citizenid = ?', 1, true) then
+            return {
+                { id = 2, k9_citizenid = 'K9-2', handler_citizenid = 'H', active = 1 },
+                { id = 5, k9_citizenid = 'K9-5', handler_citizenid = 'H', active = 1 },
+            }
+        elseif sql:find('handler_citizenid = ?', 1, true) then
+            return {
+                { id = 8, k9_citizenid = 'K9-8', handler_citizenid = 'H', active = 0 },
+                { id = 1, k9_citizenid = 'K9-1', handler_citizenid = 'H', active = 0 },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditPartner'](src, 'ABCD1234', 3)
+    t.equals(#capturedQueries, 2, 'one query per unique index, same as the command path')
+    t.isTrue(result.ok)
+    t.equals(#result.rows, 3, 'limit=3 truncates the 4th-ranked row out entirely')
+    t.equals(result.rows[1].id, 8)
+    t.equals(result.rows[2].id, 5)
+    t.equals(result.rows[3].id, 2)
+end)
+
+t.test('tabletAuditSearch: an unrecognized mode is rejected before value is even inspected', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'DROP TABLE k9_search_log', 'x')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+end)
+
+t.test('tabletAuditSearch: "officer" mode dispatches to searcher_citizenid = ? and returns raw rows', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('searcher_citizenid = ?', 1, true) then
+            return {
+                { searcher_citizenid = 'OFFICER1', searcher_job = 'police', target_type = 'person', target_plate = nil, target_citizenid = 'SUSPECT1', result = 'clean', total_weight = nil, alert_tier = nil, searched_at = '2024-02-02 00:00:00', id = 1 },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'officer', 'OFFICER1')
+    t.equals(#capturedQueries, 1)
+    t.contains(capturedQueries[1].sql, 'searcher_citizenid = ?')
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].searcher_citizenid, 'OFFICER1')
+    t.equals(result.rows[1].result, 'clean')
+end)
+
+t.test('tabletAuditSearch: "person" mode dispatches to target_citizenid = ?, NOT searcher_citizenid = ?', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'person', 'SUSPECT2')
+    t.equals(#capturedQueries, 1)
+    t.contains(capturedQueries[1].sql, 'target_citizenid = ?')
+    t.notContains(capturedQueries[1].sql, 'searcher_citizenid = ?')
+    t.equals(capturedQueries[1].params[1], 'SUSPECT2')
+end)
+
+t.test('tabletAuditSearch: "plate" mode trims whitespace via NormalizePlateArg, same as the command path', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'plate', '  ABC 123  ')
+    t.equals(#capturedQueries, 1)
+    t.equals(capturedQueries[1].params[1], 'ABC 123')
+end)
+
+t.test('tabletAuditSearch: an all-whitespace plate is rejected, no query runs', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'plate', '   ')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+end)
+
+t.test('tabletAuditSearch: "recent" mode takes no WHERE clause and no `value` argument', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'recent')
+    t.equals(#capturedQueries, 1)
+    t.notContains(capturedQueries[1].sql, 'WHERE')
+    t.contains(capturedQueries[1].sql, 'ORDER BY id DESC')
+    t.isTrue(result.ok)
+end)
+
+t.test('tabletAuditSearch: limit is clamped -- an out-of-range numeric limit on "recent" clamps to the hard max (100)', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'recent', nil, 999999)
+    t.equals(#capturedQueries, 1)
+    local limitStr = capturedQueries[1].sql:match('LIMIT (%d+)')
+    t.equals(tonumber(limitStr), 100)
+end)
+
+t.test('tabletAuditXp: an invalid citizenid is rejected as invalid_args', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditXp'](src, '')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+end)
+
+t.test('tabletAuditXp: a populated result returns the raw xp/updated_at row, not a formatted string', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_progression', 1, true) then
+            return { { xp = 4200, updated_at = '2024-04-04 00:00:00' } }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditXp'](src, 'ABCD1234')
+    t.equals(#capturedQueries, 1)
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].xp, 4200)
+    t.equals(result.rows[1].updated_at, '2024-04-04 00:00:00')
+end)
+
+t.test('tabletAuditDept: an unconfigured department is rejected as invalid_args, no query runs', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditDept'](src, 'ambulance')
+    t.equals(#capturedQueries, 0)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+end)
+
+t.test('tabletAuditDept: a valid department returns the same three-column active roster shape the command exposes -- nothing wider', function()
+    resetCaptures()
+    fixtureResponder = function(sql)
+        if sql:find('FROM k9_certifications', 1, true) and sql:find('job = ?', 1, true) then
+            return {
+                { citizenid = 'ABCD1111', granted_by = 'ADMIN1', granted_at = '2024-01-01 00:00:00' },
+            }
+        end
+        return {}
+    end
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditDept'](src, 'police', 10)
+    t.equals(#capturedQueries, 1)
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].citizenid, 'ABCD1111')
+    t.equals(result.rows[1].granted_by, 'ADMIN1')
+    t.equals(result.rows[1].granted_at, '2024-01-01 00:00:00')
+end)
+
+t.test('tabletAuditDept: console (source == 0) IS NOT a valid caller of a callback -- IsAuthorizedAdmin still resolves it via TrustConsole exactly like the command path (regression guard: no special-casing was added for source == 0 in the callback body)', function()
+    resetCaptures()
+    Config.AdminAudit.TrustConsole = true
+    fakeNow = fakeNow + 1000
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditDept'](0, 'police')
+    t.equals(#capturedQueries, 1, 'TrustConsole = true must still authorize source == 0 through the exact same IsAuthorizedAdmin call the commands use')
+    t.isTrue(result.ok)
+    Config.AdminAudit.TrustConsole = false
 end)
 
 os.exit(t.summary())

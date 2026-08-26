@@ -406,6 +406,48 @@ local function CheckTrainingActionEligibility(src)
     return true, citizenid
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.TrainingMode
+--- flag) is already checked by the top-of-file gate above, before this
+--- function is ever reached. Consulted ONLY on the ON transition below --
+--- NEVER on OFF, which is this file's own explicitly documented
+--- unconditional "no unbounded trap" exit path (point 4/EVENT CONTRACT
+--- above: "no cooldown, no HasK9Access check, no zone check") and is one of
+--- the specific termination paths ("end training") this pass is required to
+--- leave untouched.
+---   2. an explicit block.TrainingMode grant -> DENY
+---   3. TrainingMode listed in RequireGrant -> ALLOW only with an active
+---      feature.TrainingMode grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsTrainingModePermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.TrainingMode') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.TrainingMode == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.TrainingMode') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Step 1: toggle Training Mode. See this file's header "EVENT/CALLBACK
 --- CONTRACT" and point 4 ("UNMISTAKABLY DISTINCT") for the full contract.
 --- `desiredOn` is coerced to a strict boolean -- ANY non-`true` value
@@ -437,13 +479,26 @@ RegisterNetEvent('qbx_k9unit:server:setTrainingMode', function(desiredOn)
     end
 
     -- ON is a real, gated transition -- see this file's header point 2.
-    if not ToggleCooldown.Consume(src) then
-        return -- silent no-op: rate-limited, matches this resource's established spam-guard convention
-    end
-
+    -- HasK9Access and the PER-PERSON FEATURE CONTROL check below both run
+    -- BEFORE ToggleCooldown.Consume (moved ahead of it this pass, together
+    -- with HasK9Access, specifically so a block never burns the toggle
+    -- cooldown for a request that was always going to be refused -- same
+    -- "cheapest/no-side-effect checks first" discipline as every other
+    -- migrated file's request handler).
     if type(HasK9Access) ~= 'function' or not HasK9Access(src) then
         NotifyPlayer(src, locale('training.no_access'), 'error')
         return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsTrainingModePermittedForCitizenId
+    -- above.
+    if not IsTrainingModePermittedForCitizenId(citizenid) then
+        NotifyPlayer(src, locale('training.no_access'), 'error')
+        return
+    end
+
+    if not ToggleCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, matches this resource's established spam-guard convention
     end
 
     if #TrainingZones == 0 then

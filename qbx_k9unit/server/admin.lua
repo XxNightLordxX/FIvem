@@ -339,6 +339,32 @@
        by (department instead of citizenid), never WHAT is disclosed.
     ======================================================================
 
+    CALLBACK SURFACE (this pass) — every command above only ever formats
+    its query results into a chat toast or a console print; there was, until
+    now, no way for the tablet (or any other in-game consumer) to reach the
+    RAW rows themselves. Five `lib.callback.register` endpoints now mirror
+    the five commands one-to-one, each a thin wrapper around the EXACT SAME
+    Query* function (therefore the exact same K9Store.* accessor) its
+    command counterpart already calls, gated by the EXACT SAME
+    IsAuthorizedAdmin(source) call, the EXACT SAME shared AuditCooldown
+    budget, and the EXACT SAME ClampLimit bound — registered inside the same
+    onResourceStart block, behind the same Config.Features.AdminAuditCommands
+    gate, so a callback can never be reached more easily than the command it
+    mirrors. See the full "CALLBACK SURFACE" comment block immediately above
+    the five `lib.callback.register(...)` calls near the end of this file
+    (inside onResourceStart, right after the five RegisterCommand blocks)
+    for the complete argument/return-shape contract:
+      qbx_k9unit:server:tabletAuditCert    (source, citizenid, limit)
+      qbx_k9unit:server:tabletAuditPartner (source, citizenid, limit)
+      qbx_k9unit:server:tabletAuditSearch  (source, mode, value, limit)
+      qbx_k9unit:server:tabletAuditXp      (source, citizenid)
+      qbx_k9unit:server:tabletAuditDept    (source, job, limit)
+    Every one returns `{ ok = true, rows = <table>, label = <string> }` on
+    success or `{ ok = false, error = 'not_authorized'|'rate_limited'|'invalid_args', message = string? }`
+    otherwise — never a formatted string. No NUI callback and no
+    client/tablet.lua change are part of this pass; this is the
+    server-side contract a follow-up tablet screen builds against.
+
     RATE LIMITING: one shared NewCooldown() instance (server/cooldowns.lua
     — per this task's explicit "use the shared constructors" convention)
     across all five commands, keyed by the CALLER's own source, mirroring
@@ -378,6 +404,11 @@
       k9_partnerships, k9_search_log, and k9_progression — read
       sql/install.sql's header comments on all four tables (index
       rationale, exact column shapes) before changing any query below.
+    - THIS FILE calls `lib.callback.register` (ox_lib, CALLBACK SURFACE
+      section above) — same soft dependency every other `lib.callback.
+      register`/`locale()` call site in this resource already has on
+      ox_lib being started first; no NEW load-order requirement this file
+      did not already have via its own pre-existing `locale(...)` calls.
     ======================================================================
 
     CONFIG THIS FILE ASSUMES EXISTS — NOT owned by this file for this task
@@ -699,12 +730,39 @@ end
 --- header "SQL SAFETY" section for why the RETURNED integer (never
 --- `rawArg` itself, and now never a raw `defaultValue` either) is the only
 --- thing that ever reaches a query string.
---- @param rawArg string? -- args[n] from a RegisterCommand handler, or nil
+---
+--- NaN HARDENING (this pass, added for the CALLBACK SURFACE below): every
+--- pre-existing caller of this function is a RegisterCommand handler, whose
+--- `rawArg` is always either nil or a plain string straight from chat
+--- input -- `tonumber('nan')` is nil on this codebase's own Lua 5.4 build
+--- (see tests/admin_spec.lua's own locked-in regression case for that
+--- exact fact), so a real NaN value could never previously reach `parsed`
+--- at all. The CALLBACK SURFACE below accepts `limit` as a plain Lua
+--- number straight off the wire (a `lib.callback` argument, never a
+--- string), and `tonumber(x)` on an ALREADY-NaN number returns that SAME
+--- NaN unchanged, not nil -- so a malicious/buggy client could send a raw
+--- NaN double as `limit` and reach this function with a `parsed` value no
+--- comparison against it can ever resolve (`nan < 1` and `nan > hardMax`
+--- are BOTH false; `math.floor(nan)` itself does not error, so unlike the
+--- string.format('%d', ...) UNCAUGHT-error case this file's docs already
+--- name, NaN would instead silently walk straight past both clamp checks
+--- and OUT of this function, only to throw later, inside
+--- server/datastore.lua's own `%d` embed, the very failure mode this
+--- function exists to prevent). Guarded explicitly here, once, for every
+--- caller (command or callback alike) via the standard `x ~= x` NaN
+--- self-inequality test -- treated identically to an unparseable/absent
+--- `rawArg` (falls back to `defaultValue`, then still runs through the
+--- SAME floor+range clamp below, same as every other path through this
+--- function).
+--- @param rawArg string|number|nil -- a RegisterCommand string arg, a lib.callback numeric arg, or nil/absent
 --- @param defaultValue number
 --- @param hardMax number
 --- @return number limit
 local function ClampLimit(rawArg, defaultValue, hardMax)
-    local parsed = tonumber(rawArg) or defaultValue
+    local parsed = tonumber(rawArg)
+    if parsed == nil or parsed ~= parsed then
+        parsed = defaultValue
+    end
     parsed = math.floor(parsed)
     if parsed < 1 then return 1 end
     if parsed > hardMax then return hardMax end
@@ -1290,5 +1348,273 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end, false)
 
-    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept).')
+    -- ======================================================================
+    -- CALLBACK SURFACE (this pass) -- the missing half this task exists to
+    -- close: the five commands above only ever format their query results
+    -- into a chat toast (PresentRows) or a console print
+    -- (PrintRowsToConsole); there was, until now, no way for the tablet (or
+    -- any other in-game consumer) to reach the underlying ROWS themselves.
+    -- Every callback below is a thin `lib.callback.register` wrapper around
+    -- the EXACT SAME Query* local function (therefore the EXACT SAME
+    -- K9Store.* accessor, the EXACT SAME hardcoded SQL text) its command
+    -- counterpart already calls above -- see this file's header "SQL
+    -- SAFETY" section, entirely unchanged by this addition. THIS FILE
+    -- STILL COMPUTES NOTHING NEW: a callback returns the raw row table a
+    -- Query* function already produced, nothing more.
+    --
+    -- AUTHORIZATION IS IDENTICAL TO THE COMMAND IT MIRRORS -- not a
+    -- separate, easier-to-reach check. Every callback below calls the SAME
+    -- `IsAuthorizedAdmin(source)` every RegisterCommand handler above
+    -- already calls, re-deriving the caller's job/grade/permission state
+    -- from their OWN server-held `source` on every single invocation --
+    -- never a client-sent flag, never a value cached from an earlier call.
+    -- These callbacks are registered inside this SAME onResourceStart
+    -- block, behind the SAME `Config.Features.AdminAuditCommands` gate the
+    -- five commands above already require: if that flag is not `true`,
+    -- NONE of these callbacks are ever registered either, not merely a
+    -- runtime no-op that still replies once invoked -- a callback reachable
+    -- while the feature is off would be a strictly EASIER path into this
+    -- data than the commands it is supposed to mirror, exactly the
+    -- privilege-escalation shape this task's own brief warns against by
+    -- name.
+    --
+    -- RATE LIMITING IS THE SAME SHARED BUDGET, NOT A SEPARATE ONE -- every
+    -- callback below calls the SAME `AuditCooldown` instance, keyed by the
+    -- SAME caller `source`, as every command above. A caller cannot double
+    -- their effective query rate against k9_search_log by alternating
+    -- between the chat command and the tablet callback; both draw down the
+    -- one cooldown bucket per source.
+    --
+    -- EVERY RESULT SET IS BOUNDED THE SAME WAY -- every `limit` argument
+    -- below is passed through the SAME `ClampLimit(rawArg, defaultValue,
+    -- HARD_MAX_RESULTS)` the command path already uses before it can ever
+    -- reach a Query* function, never a client-supplied value passed through
+    -- unclamped. See ClampLimit's own doc comment above, "NaN HARDENING
+    -- (this pass)", for the ONE new hostile-input case this callback
+    -- surface specifically opens (a raw NaN Lua number, only reachable
+    -- because `limit` here arrives as a number over the wire rather than a
+    -- string from chat) and why it is closed inside ClampLimit itself, once,
+    -- rather than re-derived per call site here.
+    --
+    -- RETURN SHAPE mirrors server/tablet.lua's own established
+    -- `{ ok, error, message, ... }` convention (see e.g. that file's
+    -- tabletRequestPersonSummary) rather than inventing a new one:
+    --   success: { ok = true, rows = <table>, label = <string> }
+    --     `rows` is the RAW array K9Store.* already returns for that query
+    --     (see each Query* function's own doc comment a few hundred lines
+    --     above for the exact column list) -- the entire point of this
+    --     task, never a formatted string. `label` is the SAME human-
+    --     readable description (via the SAME `locale(...)` call) the
+    --     command path already builds for its own toast/console header --
+    --     included purely as a display convenience, never itself a source
+    --     of additional data.
+    --   failure: { ok = false, error = 'not_authorized' | 'rate_limited' | 'invalid_args', message = string? }
+    --     `message` is only ever populated on `not_authorized` (the SAME
+    --     `locale('admin.not_authorized')` text NotifyPlayer already sends
+    --     for a denied command), matching server/tablet.lua's own
+    --     documented "message stays optional, absence is a clean fallback"
+    --     contract for its other two error codes.
+    -- A callback NEVER exposes a wider column set than its command
+    -- counterpart already prints -- e.g. tabletAuditDept's rows are the
+    -- SAME `citizenid, granted_by, granted_at` triple `/k9auditdept`'s own
+    -- "DISPLAY BOUNDARY" header section documents, nothing wider.
+    --
+    -- AUDIT-OF-THE-AUDIT still applies unchanged -- every callback
+    -- invocation (allowed, denied, rate-limited, or malformed) is logged
+    -- via the SAME `LogAuditInvocation` the commands use, under a DISTINCT
+    -- `tabletAuditX` label (rather than `k9auditx`) so an operator reading
+    -- the console log can tell which path -- console/chat command vs.
+    -- tablet callback -- a given invocation came through.
+    --
+    -- NUI/CLIENT WIRING IS DELIBERATELY OUT OF SCOPE HERE: no
+    -- `client/tablet.lua` change and no NUI callback are part of this pass
+    -- -- these five `lib.callback.register` names, their argument shapes,
+    -- and their `{ ok, rows, label, error, message }` return shape are the
+    -- CONTRACT a follow-up tablet screen builds against, not built here.
+    -- ======================================================================
+
+    --- 'qbx_k9unit:server:tabletAuditCert' -- mirrors '/k9auditcert'. See
+    --- QueryCertificationHistory above for the exact row shape returned.
+    --- @param source number
+    --- @param citizenid string?
+    --- @param limit number?
+    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    lib.callback.register('qbx_k9unit:server:tabletAuditCert', function(source, citizenid, limit)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'tabletAuditCert', 'n/a', 'denied')
+            return { ok = false, error = 'not_authorized', message = locale('admin.not_authorized') }
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'tabletAuditCert', 'n/a', 'rate_limited')
+            return { ok = false, error = 'rate_limited' }
+        end
+
+        if not IsValidCitizenId(citizenid) then
+            LogAuditInvocation(source, 'tabletAuditCert', 'n/a', 'invalid_args')
+            return { ok = false, error = 'invalid_args' }
+        end
+
+        local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
+        local rows = QueryCertificationHistory(citizenid, clampedLimit)
+        local label = locale('admin.cert_history_label', citizenid)
+
+        LogAuditInvocation(source, 'tabletAuditCert', citizenid, 'ok')
+        return { ok = true, rows = rows, label = label }
+    end)
+
+    --- 'qbx_k9unit:server:tabletAuditPartner' -- mirrors '/k9auditpartner'.
+    --- See QueryPartnershipHistory above for the exact row shape returned
+    --- (already merged across both roles and sorted/truncated by
+    --- MergeSortedByIdDesc).
+    --- @param source number
+    --- @param citizenid string?
+    --- @param limit number?
+    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    lib.callback.register('qbx_k9unit:server:tabletAuditPartner', function(source, citizenid, limit)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'tabletAuditPartner', 'n/a', 'denied')
+            return { ok = false, error = 'not_authorized', message = locale('admin.not_authorized') }
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'tabletAuditPartner', 'n/a', 'rate_limited')
+            return { ok = false, error = 'rate_limited' }
+        end
+
+        if not IsValidCitizenId(citizenid) then
+            LogAuditInvocation(source, 'tabletAuditPartner', 'n/a', 'invalid_args')
+            return { ok = false, error = 'invalid_args' }
+        end
+
+        local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.Partnerships, HARD_MAX_RESULTS)
+        local rows = QueryPartnershipHistory(citizenid, clampedLimit)
+        local label = locale('admin.partnership_history_label', citizenid)
+
+        LogAuditInvocation(source, 'tabletAuditPartner', citizenid, 'ok')
+        return { ok = true, rows = rows, label = label }
+    end)
+
+    --- 'qbx_k9unit:server:tabletAuditSearch' -- mirrors '/k9auditsearch'.
+    --- `mode` is checked against the SAME VALID_SEARCH_LOG_MODES whitelist
+    --- BEFORE `value` is even inspected -- same "an unauthorized/malformed
+    --- caller learns nothing about argument validity, not even whether
+    --- their chosen mode string was recognized" posture this file's own
+    --- '/k9auditsearch' command comment already documents. See
+    --- QuerySearchLogByOfficer/ByPlate/ByPerson/Recent above for the exact
+    --- row shape returned (identical across all four modes).
+    --- @param source number
+    --- @param mode string? -- 'officer' | 'plate' | 'person' | 'recent'
+    --- @param value string? -- citizenid (officer/person) or plate (plate); ignored for 'recent'
+    --- @param limit number?
+    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    lib.callback.register('qbx_k9unit:server:tabletAuditSearch', function(source, mode, value, limit)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'denied')
+            return { ok = false, error = 'not_authorized', message = locale('admin.not_authorized') }
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'rate_limited')
+            return { ok = false, error = 'rate_limited' }
+        end
+
+        if not VALID_SEARCH_LOG_MODES[mode] then
+            LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'invalid_args')
+            return { ok = false, error = 'invalid_args' }
+        end
+
+        local rows, label
+
+        if mode == 'officer' or mode == 'person' then
+            if not IsValidCitizenId(value) then
+                LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'invalid_args')
+                return { ok = false, error = 'invalid_args' }
+            end
+            local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
+            rows = (mode == 'officer') and QuerySearchLogByOfficer(value, clampedLimit) or QuerySearchLogByPerson(value, clampedLimit)
+            label = locale('admin.search_log_label_by_value', mode, value)
+        elseif mode == 'plate' then
+            local plate = NormalizePlateArg(value)
+            if not plate then
+                LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'invalid_args')
+                return { ok = false, error = 'invalid_args' }
+            end
+            local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
+            rows = QuerySearchLogByPlate(plate, clampedLimit)
+            label = locale('admin.search_log_label_plate', plate)
+        else -- 'recent'
+            local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
+            rows = QuerySearchLogRecent(clampedLimit)
+            label = locale('admin.search_log_label_recent')
+        end
+
+        LogAuditInvocation(source, 'tabletAuditSearch', label, 'ok')
+        return { ok = true, rows = rows, label = label }
+    end)
+
+    --- 'qbx_k9unit:server:tabletAuditXp' -- mirrors '/k9auditxp'. No
+    --- `limit` argument -- `citizenid` is k9_progression's own PRIMARY KEY
+    --- (see QueryProgressionSnapshot's own doc comment above), so `rows` is
+    --- always an array of 0 or 1 elements regardless of what any caller
+    --- supplies.
+    --- @param source number
+    --- @param citizenid string?
+    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    lib.callback.register('qbx_k9unit:server:tabletAuditXp', function(source, citizenid)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'tabletAuditXp', 'n/a', 'denied')
+            return { ok = false, error = 'not_authorized', message = locale('admin.not_authorized') }
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'tabletAuditXp', 'n/a', 'rate_limited')
+            return { ok = false, error = 'rate_limited' }
+        end
+
+        if not IsValidCitizenId(citizenid) then
+            LogAuditInvocation(source, 'tabletAuditXp', 'n/a', 'invalid_args')
+            return { ok = false, error = 'invalid_args' }
+        end
+
+        local rows = QueryProgressionSnapshot(citizenid)
+        local label = locale('admin.xp_snapshot_label', citizenid)
+
+        LogAuditInvocation(source, 'tabletAuditXp', citizenid, 'ok')
+        return { ok = true, rows = rows, label = label }
+    end)
+
+    --- 'qbx_k9unit:server:tabletAuditDept' -- mirrors '/k9auditdept'. See
+    --- QueryDepartmentRoster above for the exact row shape returned
+    --- (active roster only, same three columns idx_job_active's own doc
+    --- comment names -- nothing wider).
+    --- @param source number
+    --- @param job string? -- must be a configured Config.Departments key
+    --- @param limit number?
+    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    lib.callback.register('qbx_k9unit:server:tabletAuditDept', function(source, job, limit)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'tabletAuditDept', 'n/a', 'denied')
+            return { ok = false, error = 'not_authorized', message = locale('admin.not_authorized') }
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'tabletAuditDept', 'n/a', 'rate_limited')
+            return { ok = false, error = 'rate_limited' }
+        end
+
+        if not IsValidDepartment(job) then
+            LogAuditInvocation(source, 'tabletAuditDept', 'n/a', 'invalid_args')
+            return { ok = false, error = 'invalid_args' }
+        end
+
+        local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
+        local rows = QueryDepartmentRoster(job, clampedLimit)
+        local label = locale('admin.dept_roster_label', job)
+
+        LogAuditInvocation(source, 'tabletAuditDept', job, 'ok')
+        return { ok = true, rows = rows, label = label }
+    end)
+
+    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept); audit callbacks registered (tabletAuditCert, tabletAuditPartner, tabletAuditSearch, tabletAuditXp, tabletAuditDept).')
 end)

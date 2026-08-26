@@ -232,6 +232,39 @@
         purpose -- see that file's own SCOPE note -- and this page never
         offers Move/Remove controls for one, only a note pointing at
         config.lua.
+      tablet:runtimeListFeatures {}                               -> cb({ok,features?,error?})   [high command -- server/runtimecontrol.lua]
+      tablet:runtimeSetFeature {name,value:boolean}               -> cb({ok,appliedLive?,restartRequired?,configEditRequired?,tier?,error?})
+      tablet:runtimeResetFeature {name}                           -> cb({ok,value?,restartRequired?,error?})
+      tablet:runtimeListTunables {}                                -> cb({ok,tunables?,error?})
+      tablet:runtimeSetTunable {key,value:number}                 -> cb({ok,appliedLive?,restartRequired?,value?,error?,min?,max?})
+      tablet:runtimeResetTunable {key}                            -> cb({ok,value?,restartRequired?,error?})
+        All six forwarded through the SAME TranslateReasonResult as the
+        theme/cert-tier/shop-location callbacks above --
+        server/runtimecontrol.lua's own callbacks return the identical
+        `{ ok, reason, ... }` outcome shape (that file's own header states
+        it explicitly). High command only (`CanManageRuntimeControl`
+        re-verified server-side on every one of the six calls regardless of
+        what this page shows) -- server/runtimecontrol.lua's own header:
+        "LOCALE KEYS THIS FILE NEEDS: none... outcome tags, never
+        player-facing prose" -- meaning the `tier`/`note` fields that file
+        returns are DELIBERATELY NOT forwarded to the player as-is by
+        html/tablet.js: that page derives its OWN locale-driven plain-
+        language explanation from the `tier` string alone (see that file's
+        own header on the five tiers: 'live'/'onstart'/'rawtoplevel'/
+        'clientonly'/'protected', plus the client-side-only 'unaudited'
+        fallback for a feature GetFeatureTier could not classify), never
+        the server's own raw English `note` prose. `reason='unaudited_feature'`
+        and `reason='protected_feature'` are REFUSALS ("cannot, and here is
+        why"), not generic failures, per this task's own instruction --
+        html/tablet.js's own runtimeFeatureErrorText() gives each its own
+        explanatory copy rather than a bare code. `reason='out_of_range'`
+        on a rejected tunable set carries the server's own real `min`/`max`
+        back (TUNABLE_REGISTRY's own bounds) -- forwarded verbatim so the
+        tablet can tell the operator the exact range, never a guess of its
+        own; this page does NOT independently enforce that range as if it
+        were authoritative (server/runtimecontrol.lua's own SetTunable is
+        the only real gate), only uses it as an `<input type="number">`
+        min/max HINT that does not block submission.
 
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
@@ -240,6 +273,7 @@
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
           themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
           shopLocationsEnabled = Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled just above -- shows a disabled-server-wide note on the Shop Locations screen rather than one that would always come back 'feature_disabled'; tablet:equipmentShopGetLocations/Add/Move/RemoveLocation all re-check this live, server-side, regardless of what this flag says
+          runtimeControlEnabled = Config.Features.RuntimeFeatureControl == true, -- UX hint only, SAME shape as themingEnabled/shopLocationsEnabled -- runtimeListFeatures/ListTunables have NO such gate server-side (open to any high-command caller regardless), only the four mutating runtimeSet*/Reset* calls actually refuse with `reason='feature_disabled'` when this is off; this page still shows the disabled note and the (read-only) current values regardless
           branding = Config.CommandTablet.branding,  -- shared config, no round trip -- { serverName: string, logo: string (relative to html/), theme: {primaryColor,accentColor,backgroundColor,textColor} }. Owner-supplied server identity (name/logo) PLUS the operator's chosen starting palette for a fresh install -- COSMETIC ONLY, same as tablet:getTheme's own theme, never consulted by any authorization check. html/tablet.js renders `logo` with a `serverName`-text fallback on load failure (never a broken-image icon -- the operator hand-swaps this file and may typo it) and seeds its OWN pre-fetch initial paint from `branding.theme`'s four colours ONLY until the real, authoritative tablet:getTheme response lands (which always wins once it does, same "config is the starting point, the runtime edit wins" precedence server/runtimecontrol.lua's own DEFAULT_THEME->k9_tablet_theme-DB-override chain already establishes for that file's own default).
       } }
       { action = 'tablet:close', data = {} }
@@ -349,7 +383,7 @@ end
 --- tests/tablet_strings_spec.lua both iterate the SAME set, and so a key
 --- added to html/tablet.js without a matching addition here/in
 --- locales/en.json's `tablet` group is caught by that spec instead of
---- silently falling back to English forever. 152 keys total.
+--- silently falling back to English forever. 197 keys total.
 local TABLET_STRING_KEYS = {
     'title', 'close_label', 'tab_console', 'tab_my_record', 'loading',
     'error_generic', 'error_not_authorized', 'error_timeout', 'error_network',
@@ -408,6 +442,33 @@ local TABLET_STRING_KEYS = {
     'shop_location_error_invalid_label', 'shop_location_error_invalid_key',
     'shop_location_error_invalid_payload', 'shop_location_error_db_error',
     'shop_location_error_feature_disabled',
+    -- Runtime feature control + tuning (its own tab, high command only) --
+    -- server/runtimecontrol.lua PART 1/1B. Owner's own words: "Lets high
+    -- command switch features on and off SERVER-WIDE from the tablet, and
+    -- tune numbers live." The five tier labels/descriptions below are this
+    -- page's OWN plain-language rendering of that file's `tier` field --
+    -- see this file's own NUI CONTRACT note on why the server's raw `note`
+    -- prose is never forwarded/rendered verbatim.
+    'tab_runtime_control', 'runtime_control_heading', 'runtime_control_intro',
+    'runtime_control_disabled_note', 'runtime_features_heading',
+    'runtime_features_empty', 'runtime_tunables_heading', 'runtime_tunables_empty',
+    'column_tier', 'column_current_value', 'column_range', 'column_type',
+    'runtime_tier_live', 'runtime_tier_live_desc',
+    'runtime_tier_onstart', 'runtime_tier_onstart_desc',
+    'runtime_tier_rawtoplevel', 'runtime_tier_rawtoplevel_desc',
+    'runtime_tier_clientonly', 'runtime_tier_clientonly_desc',
+    'runtime_tier_protected', 'runtime_tier_protected_desc',
+    'runtime_tier_unaudited', 'runtime_tier_unaudited_desc',
+    'runtime_value_on', 'runtime_value_off', 'runtime_overridden_by_at',
+    'runtime_feature_toggle_on_label', 'runtime_feature_toggle_off_label',
+    'runtime_feature_reset_label',
+    'runtime_error_denied', 'runtime_error_rate_limited', 'runtime_error_db_error',
+    'runtime_feature_error_invalid_feature', 'runtime_feature_error_invalid_value',
+    'runtime_tunable_edit_label', 'runtime_tunable_save_label',
+    'runtime_tunable_cancel_label', 'runtime_tunable_reset_label',
+    'runtime_tunable_type_integer', 'runtime_tunable_type_decimal',
+    'runtime_tunable_error_invalid_key', 'runtime_tunable_error_out_of_range',
+    'runtime_tunable_error_not_integer', 'runtime_tunable_error_not_a_number',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
