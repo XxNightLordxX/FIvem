@@ -354,15 +354,19 @@ end)
 -- OWN-DEATH RELEASE (lifecycle QA finding, this pass — the softlock this
 -- thread's death branch below exists to close): this was the only place in
 -- the codebase applying a persistent native ped state with no own-death
--- handling at all, unlike client/vision.lua (~line 165),
--- client/screenfx.lua (~line 297), client/propattachment.lua's "OWN-DEATH
--- AUTO-DETACH" (~line 384) and client/fetch.lua's "OWN-DEATH AUTO-DETACH/
--- DROP" (~line 558), all of which force-clear on IsEntityDead(PlayerPedId()).
--- That gap mattered here specifically because client/combat.lua's own
--- repeatedly-verified finding (its ActiveBiteHold/ActiveDragSpeedLimit/
--- ActiveForcedRagdoll death branches, ~lines 1435/1564/1611) is that the
--- standard FiveM respawn flow REUSES the same ped handle rather than
--- allocating a new one — none of collision-disabled, frozen, invisible or
+-- handling at all, unlike client/vision.lua's
+-- EnsureVisionMaintenanceThreadRunning() thread, client/screenfx.lua's
+-- EnsureScreenFxThreadRunning() thread, client/propattachment.lua's
+-- "OWN-DEATH AUTO-DETACH" section and client/fetch.lua's "OWN-DEATH
+-- AUTO-DETACH/DROP" section, all of which force-clear on
+-- IsEntityDead(PlayerPedId()) (named references, not line numbers, since
+-- those drift with unrelated edits elsewhere in each file). That gap
+-- mattered here specifically because client/combat.lua's own
+-- repeatedly-verified finding (its MaintenanceTick() function's
+-- ActiveBiteHold/ActiveDragSpeedLimit/ActiveForcedRagdoll death branches)
+-- is that the standard FiveM respawn flow REUSES the same ped handle
+-- rather than allocating a new one — none of collision-disabled, frozen,
+-- invisible or
 -- attached reset on death or respawn on their own, so a K9 who died while
 -- tucked would respawn frozen/invisible/collisionless/still-attached with
 -- no self-service recovery (no keybind for this, and the ox_target

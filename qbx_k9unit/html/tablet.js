@@ -1037,6 +1037,62 @@
         xp_tier_error_invalid_order: 'That XP threshold would put this rank out of order with the rank above or below it.',
         xp_tier_error_db_error: 'The rank could not be saved due to a database error. Try again.',
         xp_tier_error_invalid_payload: 'That request was malformed. Try again.',
+        // K9 SUPPLY SHOP ITEM CATALOG (this pass, coder-ui,
+        // server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM CATALOG"
+        // section) -- sits alongside the shop_location_*/tab_shop_locations
+        // keys above, same "K9 Supply Shop" domain. SAME disclosed-gap
+        // posture as the 'tab_audit'/'tier_label'/'tab_xp_tiers' blocks
+        // above: these 43 keys are NOT YET present in locales/en.json's
+        // `tablet` group as of this pass -- flagged to that file's owner
+        // (see this pass's own report for the exact key -> English-string
+        // list). BuildTabletStrings()'s own pcall-per-key guard means each
+        // is simply omitted from `strings` until added there, and this
+        // very DEFAULT_STRINGS table covers that exact gap in the
+        // meantime, same resilience-net role it already documents for
+        // every other key.
+        tab_shop_items: 'Shop Items',
+        shop_items_heading: 'K9 Supply Shop Items',
+        shop_items_add_label: 'Add New Item',
+        shop_items_empty: 'No shop items configured yet.',
+        column_price: 'Price',
+        column_currency: 'Currency',
+        column_required_tier: 'Required Tier',
+        column_required_specialization: 'Required Specialization',
+        shop_item_key_label: 'Item Key',
+        shop_item_key_placeholder: 'e.g. k9_medkit',
+        shop_item_price_label: 'Price',
+        shop_item_label_label: 'Display Label',
+        shop_item_label_placeholder: "Leave blank to use the item's own name",
+        shop_item_currency_label: 'Currency Item',
+        shop_item_currency_placeholder: 'Leave blank to use the shop default',
+        shop_item_required_tier_label: 'Required Certification Tier',
+        shop_item_required_specialization_label: 'Required Specialization',
+        shop_item_no_requirement: 'None',
+        shop_item_save_label: 'Save Item',
+        shop_item_cancel_label: 'Cancel',
+        shop_item_edit_label: 'Edit',
+        shop_item_delete_label: 'Delete',
+        shop_item_move_up_label: '↑',
+        shop_item_move_up_title: 'Move up (earlier in the shop)',
+        shop_item_move_down_label: '↓',
+        shop_item_move_down_title: 'Move down (later in the shop)',
+        shop_item_price_free_badge: 'Free',
+        shop_item_currency_default_note: 'Shop default',
+        shop_item_error_denied: 'You are not authorized to manage the K9 Supply Shop item catalog.',
+        shop_item_error_rate_limited: 'Please wait a moment before trying again.',
+        shop_item_error_invalid_payload: 'That request was malformed. Try again.',
+        shop_item_error_invalid_key: 'That item key is invalid -- use 1-50 lowercase letters, numbers, or underscores, starting with a letter.',
+        shop_item_error_invalid_price: 'That price is invalid -- enter a whole number from 0 up to 1,000,000,000. Zero is allowed for a free item.',
+        shop_item_error_invalid_label: 'That label is invalid or too long (max 60 characters, no special markup characters).',
+        shop_item_error_invalid_currency: 'That currency item key is invalid -- use 1-50 lowercase letters, numbers, or underscores, starting with a letter.',
+        shop_item_error_invalid_required_tier: 'That required certification tier does not exist.',
+        shop_item_error_invalid_required_specialization: 'That required specialization does not exist.',
+        shop_item_error_busy: 'This item is being edited elsewhere right now -- try again in a moment.',
+        shop_item_error_too_many_items: 'The maximum number of shop items has been reached.',
+        shop_item_error_unknown_item: 'That item no longer exists in the catalog.',
+        shop_item_error_must_include_every_item: 'The new order must include every existing item, with none missing or duplicated.',
+        shop_item_error_invalid_key_set: 'The new order must include every existing item, with none missing or duplicated.',
+        shop_item_error_db_error: 'A database error occurred. Try again.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -3473,6 +3529,580 @@
             case 'network_error': return S('error_network');
             default: return S('action_failed');
         }
+    }
+
+    // ---- K9 Supply Shop ITEM CATALOG editing screen (high command only) ----
+    // server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM CATALOG" section
+    // -- owner's own words: "give high command real control over the
+    // equipment shop." Sits alongside the Shop Locations screen above --
+    // same table + inline row actions + add/edit form below shape as the
+    // Certification Tier screen (this is the closest analogue: a
+    // DB-backed catalog with list/upsert/reorder/tombstone), reusing the
+    // SAME field/form/table CSS classes -- no new CSS introduced for this
+    // screen either.
+    //
+    // TOMBSTONE, HANDLED HONESTLY: server/equipmentshop.lua's own
+    // ListEquipmentShopItems (tablet:equipmentShopItemsList's response)
+    // NEVER includes a tombstoned item_key at all -- the server's own
+    // catalog merge excludes it entirely before this page ever sees it
+    // (see that file's own "TOMBSTONE, NOT HARD-DELETE" section: a
+    // tombstoned row is not a row with a flag, it is simply absent from
+    // the merged map). There is therefore no "retired" STATE this screen
+    // could render inline for a row still present in `state.shopItems` --
+    // a successful delete's own response (`result.items`) is the new,
+    // already-tombstone-filtered list, and this screen simply shows one
+    // fewer row afterward, exactly like server/certtiers.lua's own
+    // DeleteTier/certTiersDelete does for a tier. This is disclosed here
+    // rather than silently assumed: existing purchases/grants referencing
+    // a retired item key are NEVER affected by this (ox_inventory's own
+    // already-granted item stays in whatever bag it is in; nothing in
+    // this resource's own schema references an item_key at all -- see
+    // that file's header) -- the tombstone protects the SELLING side
+    // only, which is exactly the side this screen edits.
+    //
+    // REORDER VALIDITY BY CONSTRUCTION: moveShopItem() below, like
+    // moveCertTier() above, ALWAYS submits the full current key list (via
+    // state.shopItems, sortOrder-ascending) with two entries swapped --
+    // never a partial list -- so this UI is structurally incapable of
+    // sending anything server/equipmentshop.lua's own
+    // equipmentShopItemsReorder (which refuses any partial/duplicated
+    // permutation) would ever reject for that reason.
+
+    /**
+     * Renders the LIVE catalogue from state.shopItems (populated by
+     * loadEquipmentShopItems() -- NEVER hardcoded: an operator can
+     * add/retire/reprice/reorder items at runtime, and this page must
+     * reflect that with no UI change), a per-row Move Up/Move Down/Edit/
+     * Delete set of controls, and (when a draft is open) the add/edit
+     * form below the table. server/equipmentshop.lua's own
+     * CanManageShopItems is the real authorization gate, re-checked on
+     * every one of the four callbacks this screen calls -- see THE
+     * SECURITY RULE.
+     */
+    function buildShopItemsScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('shop_items_heading') }));
+
+        if (state.shopItemsLoading && !state.shopItems) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.shopItemsError && !state.shopItems) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: shopItemErrorText(state.shopItemsError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadEquipmentShopItems));
+            return wrap;
+        }
+        if (!state.shopItems) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildShopItemsTable());
+
+        if (state.shopItemDraft) {
+            wrap.appendChild(buildShopItemDraftForm());
+        } else {
+            wrap.appendChild(mkButton(S('shop_items_add_label'), 'k9tablet-btn', openNewShopItemDraft, { disabled: state.pendingAction }));
+        }
+
+        return wrap;
+    }
+
+    function buildShopItemsTable() {
+        if (state.shopItems.length === 0) {
+            var empty = mk('div', {});
+            empty.appendChild(mk('p', { class: 'k9tablet-muted', text: S('shop_items_empty') }));
+            return empty;
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_position'), S('column_key'), S('column_label'), S('column_price'), S('column_currency'),
+            S('column_required_tier'), S('column_required_specialization'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < state.shopItems.length; i++) {
+            tbody.appendChild(buildShopItemRow(state.shopItems[i], i));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /** @param {number|null|undefined} price @returns {string} */
+    function formatShopItemPrice(price) {
+        if (typeof price !== 'number' || !isFinite(price)) return '';
+        return String(price);
+    }
+
+    /** @param {object} item @param {number} index */
+    function buildShopItemRow(item, index) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: String(index + 1) }));
+        tr.appendChild(mk('td', { text: item.key }));
+        tr.appendChild(mk('td', { text: (typeof item.label === 'string') ? item.label : item.key }));
+
+        var priceTd = mk('td', { text: formatShopItemPrice(item.price) });
+        // ZERO IS A LEGAL, DELIBERATE PRICE (a free item) -- see
+        // server/equipmentshop.lua's own "PRICE VALIDATION" section. Never
+        // hidden or treated as a display bug -- called out with its own
+        // small badge so an operator sees at a glance that a 0 is
+        // intentional, not a blank/error.
+        if (item.price === 0) {
+            priceTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('shop_item_price_free_badge') + ')' }));
+        }
+        tr.appendChild(priceTd);
+
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof item.currency === 'string' && item.currency.length > 0) ? item.currency : S('shop_item_currency_default_note') }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof item.requiredTierKey === 'string' && item.requiredTierKey.length > 0) ? tierDisplayLabel(item.requiredTierKey) : S('shop_item_no_requirement') }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof item.requiredSpecialization === 'string' && item.requiredSpecialization.length > 0) ? specializationDisplayLabel(item.requiredSpecialization) : S('shop_item_no_requirement') }));
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        actionsTd.appendChild(mkButton(S('shop_item_move_up_label'), 'k9tablet-btn', function () {
+            moveShopItem(index, -1);
+        }, { disabled: state.pendingAction || index === 0, title: S('shop_item_move_up_title') }));
+        actionsTd.appendChild(mkButton(S('shop_item_move_down_label'), 'k9tablet-btn', function () {
+            moveShopItem(index, 1);
+        }, { disabled: state.pendingAction || index === state.shopItems.length - 1, title: S('shop_item_move_down_title') }));
+        actionsTd.appendChild(mkButton(S('shop_item_edit_label'), 'k9tablet-btn', function () {
+            openEditShopItemDraft(item);
+        }, { disabled: state.pendingAction }));
+        actionsTd.appendChild(mkConfirmButton(S('shop_item_delete_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+            deleteShopItem(item.key);
+        }, { disabled: state.pendingAction }));
+
+        // A delete/reorder REFUSAL renders INLINE on THIS specific row --
+        // "cannot, and here is why" -- same convention as
+        // certTierActionError/shopLocationActionError above.
+        if (state.shopItemActionError && state.shopItemActionError.key === item.key) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.shopItemActionError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** 1-50 chars, lowercase-start, lowercase/digit/underscore only -- a
+     * CLIENT-SIDE MIRROR of server/equipmentshop.lua's own
+     * IsValidShopItemKey, a UX convenience only (THE SECURITY RULE: the
+     * server re-validates this independently regardless of what this
+     * check does or does not catch first).
+     * @param {any} key @returns {boolean} */
+    function isValidShopItemKeyClient(key) {
+        return typeof key === 'string' && key.length >= 1 && key.length <= 50 && /^[a-z][a-z0-9_]*$/.test(key);
+    }
+
+    /** CLIENT-SIDE MIRROR of server/equipmentshop.lua's own
+     * IsSafeShortString -- same reasoning as isSafeShortStringForXpTier
+     * above (this codebase's own convention: each screen keeps its own
+     * tiny, self-contained copy rather than a shared cross-screen call).
+     * @param {any} value @param {number} maxLen @returns {boolean} */
+    function isSafeShortStringForShopItem(value, maxLen) {
+        if (typeof value !== 'string') return false;
+        var len = value.length;
+        if (len === 0 || len > maxLen) return false;
+        if (/[<>&"'`\r\n\t]/.test(value)) return false;
+        for (var i = 0; i < len; i++) {
+            var code = value.charCodeAt(i);
+            if (code < 0x20 || code === 0x7F) return false;
+        }
+        return true;
+    }
+
+    // Mirrors server/equipmentshop.lua's own MAX_SHOP_ITEM_PRICE exactly
+    // -- see that file's own "PRICE VALIDATION" section. ZERO IS
+    // DELIBERATELY NOT excluded by this check (a free item is a real,
+    // documented, legitimate price) -- only non-numbers, NaN,
+    // +/-infinity, negatives, fractions, and anything above this ceiling
+    // are rejected.
+    var SHOP_ITEM_MAX_PRICE = 1000000000;
+
+    /** @param {any} value @returns {boolean} */
+    function isValidShopItemPriceClient(value) {
+        return typeof value === 'number' && isFinite(value) && value >= 0 && value <= SHOP_ITEM_MAX_PRICE && value === Math.floor(value);
+    }
+
+    /** Opens a BLANK draft for a brand-new item. requiredTierKey/
+     * requiredSpecialization start at '' (the draft form's own "None"
+     * option) -- never null -- so a plain `.value` read on the <select>
+     * always works. @see buildShopItemDraftForm */
+    function openNewShopItemDraft() {
+        state.shopItemDraft = { key: '', price: '', label: '', currency: '', requiredTierKey: '', requiredSpecialization: '', isNew: true };
+        state.shopItemFieldError = null;
+        render();
+    }
+
+    /** Opens a draft pre-filled from an EXISTING item row -- a COPY of its
+     * fields, never the live object, so Cancel never mutates
+     * state.shopItems. Pre-filling EVERY field (not just the ones an
+     * operator intends to touch) matters here specifically:
+     * server/equipmentshop.lua's own equipmentShopItemsUpsert REPLACES
+     * label/currency/requiredTierKey/requiredSpecialization wholesale from
+     * whatever this ONE payload sends (never a partial merge with the
+     * existing row) -- an edit draft that started blank on, say, currency
+     * would silently CLEAR an existing currency override on Save, not
+     * leave it untouched. @param {object} item */
+    function openEditShopItemDraft(item) {
+        state.shopItemDraft = {
+            key: item.key,
+            price: formatShopItemPrice(item.price),
+            label: (typeof item.label === 'string' && item.label !== item.key) ? item.label : '',
+            currency: (typeof item.currency === 'string') ? item.currency : '',
+            requiredTierKey: (typeof item.requiredTierKey === 'string') ? item.requiredTierKey : '',
+            requiredSpecialization: (typeof item.requiredSpecialization === 'string') ? item.requiredSpecialization : '',
+            isNew: false,
+        };
+        state.shopItemFieldError = null;
+        render();
+    }
+
+    function closeShopItemDraft() {
+        state.shopItemDraft = null;
+        state.shopItemFieldError = null;
+        render();
+    }
+
+    /** Add/edit form -- see openNewShopItemDraft()/openEditShopItemDraft()
+     * for how state.shopItemDraft is populated. `key` is editable only for
+     * a BRAND NEW item: server/equipmentshop.lua's own
+     * equipmentShopItemsUpsert has no "rename" concept (submitting a
+     * DIFFERENT key while editing would create a second, separate item,
+     * not rename this one), same reasoning as the cert-tier/permission-key
+     * forms' own key input. */
+    function buildShopItemDraftForm() {
+        var draft = state.shopItemDraft;
+        var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
+
+        var keyRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'key' ? ' k9tablet-theme-field--invalid' : '') });
+        keyRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_key_label') }));
+        var keyInput = mk('input', { class: 'k9tablet-cert-tier-key-input', attrs: { type: 'text', placeholder: S('shop_item_key_placeholder'), maxlength: '50' } });
+        keyInput.value = draft.key;
+        if (draft.isNew) {
+            keyInput.addEventListener('input', function (e) { draft.key = e.target.value; });
+        } else {
+            keyInput.setAttribute('disabled', 'disabled');
+        }
+        keyRow.appendChild(keyInput);
+        wrap.appendChild(keyRow);
+
+        var priceRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'price' ? ' k9tablet-theme-field--invalid' : '') });
+        priceRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_price_label') }));
+        var priceInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: '1', min: '0', max: String(SHOP_ITEM_MAX_PRICE) } });
+        priceInput.value = draft.price;
+        priceInput.addEventListener('input', function (e) { draft.price = e.target.value; });
+        priceRow.appendChild(priceInput);
+        wrap.appendChild(priceRow);
+
+        var labelRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'label' ? ' k9tablet-theme-field--invalid' : '') });
+        labelRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_label_label') }));
+        var labelInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', placeholder: S('shop_item_label_placeholder'), maxlength: '60' } });
+        labelInput.value = draft.label;
+        labelInput.addEventListener('input', function (e) { draft.label = e.target.value; });
+        labelRow.appendChild(labelInput);
+        wrap.appendChild(labelRow);
+
+        var currencyRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'currency' ? ' k9tablet-theme-field--invalid' : '') });
+        currencyRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_currency_label') }));
+        var currencyInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', placeholder: S('shop_item_currency_placeholder'), maxlength: '50' } });
+        currencyInput.value = draft.currency;
+        currencyInput.addEventListener('input', function (e) { draft.currency = e.target.value; });
+        currencyRow.appendChild(currencyInput);
+        wrap.appendChild(currencyRow);
+
+        // Required Tier -- populated from state.certTiers (opportunistic,
+        // see the tab's own click handler comment) -- a "None" option is
+        // ALWAYS first, never omitted, since a purchase requirement is
+        // optional. Falls back to the raw stored key as plain, non-select
+        // text when the tier catalog itself never loaded (a caller who
+        // could open this screen but not certTiersList, or a request still
+        // in flight) -- never a broken/empty dropdown.
+        var tierRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'requiredTierKey' ? ' k9tablet-theme-field--invalid' : '') });
+        tierRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_required_tier_label') }));
+        if (Array.isArray(state.certTiers) && state.certTiers.length > 0) {
+            var tierSelect = mk('select', { class: 'k9tablet-role-select' });
+            var noneTierOption = mk('option', { text: S('shop_item_no_requirement') });
+            noneTierOption.setAttribute('value', '');
+            tierSelect.appendChild(noneTierOption);
+            for (var ti = 0; ti < state.certTiers.length; ti++) {
+                var tierEntry = state.certTiers[ti];
+                if (!tierEntry || typeof tierEntry.key !== 'string' || tierEntry.key.length === 0) continue;
+                var tierOption = mk('option', { text: (typeof tierEntry.label === 'string' && tierEntry.label.length > 0) ? tierEntry.label : tierEntry.key });
+                tierOption.setAttribute('value', tierEntry.key);
+                tierSelect.appendChild(tierOption);
+            }
+            tierSelect.value = draft.requiredTierKey;
+            tierSelect.addEventListener('input', function (e) { draft.requiredTierKey = e.target.value; });
+            tierRow.appendChild(tierSelect);
+        } else {
+            tierRow.appendChild(mk('p', { class: 'k9tablet-muted', text: draft.requiredTierKey.length > 0 ? tierDisplayLabel(draft.requiredTierKey) : S('shop_item_no_requirement') }));
+        }
+        wrap.appendChild(tierRow);
+
+        // Required Specialization -- SAME shape as Required Tier above,
+        // populated from state.specializations (Config.K9Specializations,
+        // sent verbatim at tablet:open -- always available with no
+        // separate fetch, unlike the tier catalog).
+        var specRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'requiredSpecialization' ? ' k9tablet-theme-field--invalid' : '') });
+        specRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_required_specialization_label') }));
+        var specCatalog = (state.specializations && typeof state.specializations === 'object') ? state.specializations : {};
+        var specKeys = [];
+        for (var specKey in specCatalog) {
+            if (Object.prototype.hasOwnProperty.call(specCatalog, specKey)) specKeys.push(specKey);
+        }
+        if (specKeys.length > 0) {
+            var specSelect = mk('select', { class: 'k9tablet-role-select' });
+            var noneSpecOption = mk('option', { text: S('shop_item_no_requirement') });
+            noneSpecOption.setAttribute('value', '');
+            specSelect.appendChild(noneSpecOption);
+            for (var si = 0; si < specKeys.length; si++) {
+                var specOption = mk('option', { text: specializationDisplayLabel(specKeys[si]) });
+                specOption.setAttribute('value', specKeys[si]);
+                specSelect.appendChild(specOption);
+            }
+            specSelect.value = draft.requiredSpecialization;
+            specSelect.addEventListener('input', function (e) { draft.requiredSpecialization = e.target.value; });
+            specRow.appendChild(specSelect);
+        } else {
+            specRow.appendChild(mk('p', { class: 'k9tablet-muted', text: draft.requiredSpecialization.length > 0 ? specializationDisplayLabel(draft.requiredSpecialization) : S('shop_item_no_requirement') }));
+        }
+        wrap.appendChild(specRow);
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('shop_item_save_label'), 'k9tablet-btn', saveShopItemDraft, { disabled: state.pendingAction }));
+        actions.appendChild(mkButton(S('shop_item_cancel_label'), 'k9tablet-link-btn', closeShopItemDraft));
+        wrap.appendChild(actions);
+
+        return wrap;
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function shopItemErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('shop_item_error_denied');
+            case 'rate_limited': return S('shop_item_error_rate_limited');
+            case 'invalid_payload': return S('shop_item_error_invalid_payload');
+            case 'invalid_key': return S('shop_item_error_invalid_key');
+            case 'invalid_price': return S('shop_item_error_invalid_price');
+            case 'invalid_label': return S('shop_item_error_invalid_label');
+            case 'invalid_currency': return S('shop_item_error_invalid_currency');
+            case 'invalid_required_tier': return S('shop_item_error_invalid_required_tier');
+            case 'invalid_required_specialization': return S('shop_item_error_invalid_required_specialization');
+            case 'busy': return S('shop_item_error_busy');
+            case 'too_many_items': return S('shop_item_error_too_many_items');
+            case 'unknown_item': return S('shop_item_error_unknown_item');
+            case 'must_include_every_item': return S('shop_item_error_must_include_every_item');
+            case 'invalid_key_set': return S('shop_item_error_invalid_key_set');
+            case 'db_error': return S('shop_item_error_db_error');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {string|undefined} errorCode @returns {string|null} */
+    function shopItemFieldFromError(errorCode) {
+        if (errorCode === 'invalid_key') return 'key';
+        if (errorCode === 'invalid_price') return 'price';
+        if (errorCode === 'invalid_label') return 'label';
+        if (errorCode === 'invalid_currency') return 'currency';
+        if (errorCode === 'invalid_required_tier') return 'requiredTierKey';
+        if (errorCode === 'invalid_required_specialization') return 'requiredSpecialization';
+        return null;
+    }
+
+    /**
+     * Fetched fresh every time the Shop Items tab is opened (see
+     * buildTabs()) -- NEVER a hardcoded list, same posture as
+     * loadCertTiers()/loadShopLocations() above. High command only
+     * (server-side gate -- server/equipmentshop.lua's own
+     * CanManageShopItems).
+     */
+    function loadEquipmentShopItems() {
+        state.shopItemsLoading = true;
+        state.shopItemsError = null;
+        render();
+
+        fetchNui('tablet:equipmentShopItemsList', {}).then(function (result) {
+            state.shopItemsLoading = false;
+            if (!result || result.ok !== true) {
+                state.shopItemsError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.shopItems = Array.isArray(result.items) ? result.items : [];
+            render();
+        });
+    }
+
+    /**
+     * Saves the shop-item draft form's current working copy. NOT the
+     * generic runMutation() helper: a rejected save carries a `field`
+     * naming which of the six inputs failed, which runMutation's own
+     * message-only handling has no slot for, same reasoning as
+     * saveCertTierDraft()/savePermissionKeyDraft() above. Every check
+     * below mirrors server/equipmentshop.lua's own validators
+     * (IsValidShopItemKey/IsValidShopItemPrice/IsSafeShortString) as a UX
+     * CONVENIENCE ONLY -- THE SECURITY RULE: the server independently
+     * re-validates every one of these fields regardless of what this
+     * function does or does not catch first. Blank
+     * label/currency/requiredTierKey/requiredSpecialization are sent as
+     * `undefined` (omitted), never `''` -- matching
+     * server/equipmentshop.lua's own "nil means no override" optional-field
+     * contract for every one of those four fields.
+     */
+    function saveShopItemDraft() {
+        if (state.pendingAction || !state.shopItemDraft) return;
+        var draft = state.shopItemDraft;
+
+        if (!isValidShopItemKeyClient(draft.key)) {
+            failShopItemDraft('key', S('shop_item_error_invalid_key'));
+            return;
+        }
+
+        var priceNum = Number(draft.price);
+        if (!isValidShopItemPriceClient(priceNum)) {
+            failShopItemDraft('price', S('shop_item_error_invalid_price'));
+            return;
+        }
+
+        var label;
+        if (typeof draft.label === 'string' && draft.label.trim().length > 0) {
+            if (!isSafeShortStringForShopItem(draft.label, 60)) {
+                failShopItemDraft('label', S('shop_item_error_invalid_label'));
+                return;
+            }
+            label = draft.label;
+        }
+
+        var currency;
+        if (typeof draft.currency === 'string' && draft.currency.trim().length > 0) {
+            if (!isValidShopItemKeyClient(draft.currency)) {
+                failShopItemDraft('currency', S('shop_item_error_invalid_currency'));
+                return;
+            }
+            currency = draft.currency;
+        }
+
+        var requiredTierKey;
+        if (typeof draft.requiredTierKey === 'string' && draft.requiredTierKey.length > 0) {
+            requiredTierKey = draft.requiredTierKey;
+        }
+
+        var requiredSpecialization;
+        if (typeof draft.requiredSpecialization === 'string' && draft.requiredSpecialization.length > 0) {
+            requiredSpecialization = draft.requiredSpecialization;
+        }
+
+        state.pendingAction = true;
+        state.shopItemFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        var payload = { key: draft.key, price: priceNum };
+        if (label !== undefined) payload.label = label;
+        if (currency !== undefined) payload.currency = currency;
+        if (requiredTierKey !== undefined) payload.requiredTierKey = requiredTierKey;
+        if (requiredSpecialization !== undefined) payload.requiredSpecialization = requiredSpecialization;
+
+        fetchNui('tablet:equipmentShopItemsUpsert', payload).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.shopItems = Array.isArray(result.items) ? result.items : state.shopItems;
+                state.shopItemDraft = null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.shopItemFieldError = shopItemFieldFromError(result && result.error);
+                state.actionNotice = { kind: 'error', text: shopItemErrorText(result) };
+            }
+            render();
+        });
+    }
+
+    /** Sets the field-highlight/top-banner error pair for the CURRENTLY
+     * open shop-item draft in one place -- shared by every client-side
+     * pre-check branch in saveShopItemDraft() above, so a pre-check
+     * failure and a server refusal for the SAME reason render
+     * byte-identically. @param {string} field @param {string} text */
+    function failShopItemDraft(field, text) {
+        state.shopItemFieldError = field;
+        state.actionNotice = { kind: 'error', text: text };
+        render();
+    }
+
+    /**
+     * Swaps item `index` with its immediate neighbour (`direction` is -1
+     * for up / +1 for down) and submits the FULL resulting key order --
+     * server/equipmentshop.lua's own equipmentShopItemsReorder REFUSES any
+     * partial reorder (must be an exact permutation of every currently-known
+     * item), so this always sends every key, never just the two that moved.
+     * A no-op past either end of the list -- also enforced by each row's
+     * own `disabled` state in buildShopItemRow, this is the real,
+     * server-call-blocking guard, that being a convenience only.
+     * @param {number} index @param {number} direction -1 | 1
+     */
+    function moveShopItem(index, direction) {
+        if (state.pendingAction || !state.shopItems) return;
+        var targetIndex = index + direction;
+        if (targetIndex < 0 || targetIndex >= state.shopItems.length) return;
+
+        var orderedKeys = [];
+        for (var i = 0; i < state.shopItems.length; i++) orderedKeys.push(state.shopItems[i].key);
+        var moved = orderedKeys[index];
+        orderedKeys[index] = orderedKeys[targetIndex];
+        orderedKeys[targetIndex] = moved;
+
+        state.pendingAction = true;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:equipmentShopItemsReorder', { orderedKeys: orderedKeys }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.shopItems = Array.isArray(result.items) ? result.items : state.shopItems;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.actionNotice = { kind: 'error', text: shopItemErrorText(result) };
+            }
+            render();
+        });
+    }
+
+    /**
+     * Deletes (tombstones) item `key`. server/equipmentshop.lua's own
+     * ShopItemsDelete carries NO reference-count refusal (unlike
+     * deleteCertTier()'s own tier_in_use -- see that file's own
+     * "TOMBSTONE, NOT HARD-DELETE" section for exactly why this schema has
+     * nothing an item_key delete could ever strand), so any failure here
+     * is a plain refusal/error, rendered INLINE on that item's own row
+     * (state.shopItemActionError), same "cannot, and here is why"
+     * convention as deleteCertTier()/deletePermissionKey() above.
+     * @param {string} key
+     */
+    function deleteShopItem(key) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.shopItemActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:equipmentShopItemsDelete', { key: key }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.shopItems = Array.isArray(result.items) ? result.items : state.shopItems;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                var text = shopItemErrorText(result);
+                state.shopItemActionError = { key: key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+            }
+            render();
+        });
     }
 
     // ---- Runtime feature control + tuning screen (high command only) ----

@@ -151,9 +151,11 @@
       own `MedkitCooldown.IsOnCooldown` call below is checked against,
       keyed on the TARGET's own citizenid (the K9 being healed), never the
       USING player's — see that call site's own comment for why. Falls back
-      to the plain `Config.K9Medkit.cooldownMs` value when
-      server/progression.lua hasn't defined the accessor, so this file works
-      identically whether or not XPProgression is enabled.
+      to `MedkitBaseCooldownMs` (Config.K9Medkit.cooldownMs, VALIDATED once
+      at file-load via ResolveConfiguredThresholdMs — see that local's own
+      doc comment for the footgun this closes) when server/progression.lua
+      hasn't defined the accessor, so this file works identically whether or
+      not XPProgression is enabled.
     - Exposes NO resource-global functions of its own.
 
     ======================================================================
@@ -571,16 +573,26 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- function's own header, "THE PER-TARGET COOLDOWN"). Soft dependency,
     -- this resource's established `type(...) == 'function'` convention
     -- (mirrors this file's own RestoreInjury call site below) -- falls back
-    -- to the plain configured value when server/progression.lua hasn't
-    -- defined the accessor. GetXPTierMedkitCooldownMs's own contract never
-    -- returns a non-positive number (it rejects an out-of-range multiplier
-    -- and floors the result at 1ms), which matters here specifically
-    -- because IsOnCooldown treats a non-positive threshold as PERMANENTLY
-    -- on cooldown -- the exact opposite of what this reward is supposed to
-    -- do.
-    local effectiveCooldownMs = Config.K9Medkit.cooldownMs
+    -- to the resolved `MedkitBaseCooldownMs` (see that local's own comment)
+    -- when server/progression.lua hasn't defined the accessor.
+    --
+    -- CORRECTED CLAIM (this pass): this comment used to assert
+    -- "GetXPTierMedkitCooldownMs's own contract never returns a
+    -- non-positive number" -- reading that function's real implementation
+    -- (server/progression.lua) shows this is only true when its OWN
+    -- `baseCooldownMs` argument is already positive to begin with: a
+    -- non-positive `baseCooldownMs` is returned UNCHANGED (that function's
+    -- own early-return guard), never clamped/floored. Passing the raw,
+    -- unvalidated `Config.K9Medkit.cooldownMs` in here would therefore have
+    -- let a misconfigured 0/negative value flow straight through this
+    -- accessor and into IsOnCooldown's own PERMANENTLY-on-cooldown fail
+    -- state regardless -- see `MedkitBaseCooldownMs`'s own doc comment
+    -- above for the real fix (validated ONCE, at file-load, via
+    -- ResolveConfiguredThresholdMs) that actually makes the "never
+    -- non-positive" property hold here.
+    local effectiveCooldownMs = MedkitBaseCooldownMs
     if type(GetXPTierMedkitCooldownMs) == 'function' then
-        effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, Config.K9Medkit.cooldownMs)
+        effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, MedkitBaseCooldownMs)
     end
 
     if MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs, requestedAt) then

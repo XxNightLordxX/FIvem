@@ -11,8 +11,8 @@
     CORRECTED THIS PASS (was stale): earlier drafts of this header described
     the one-line PlaySoundOnNetworkEntity -> PlayK9Sound delegate call as
     "STILL NEEDED" / not yet wired. That is no longer true and was found
-    stale on re-read: client/main.lua's PlaySoundOnNetworkEntity (around its
-    own line 315) already calls `if type(PlayK9Sound) == 'function' then
+    stale on re-read: client/main.lua's PlaySoundOnNetworkEntity function
+    body already calls `if type(PlayK9Sound) == 'function' then
     PlayK9Sound(netId, soundName) end` immediately after its existing
     PlaySoundFromEntity call, with exactly the runtime-existence guard this
     file's own "GATING" section below requires. This file itself was NOT

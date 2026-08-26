@@ -42,9 +42,9 @@
     documents). Folding the two together would violate the exact rule
     server/notify.lua's own header cites to justify its own existence.
 
-    LOAD ORDER -- CHECKED PER CALL SITE, NOT ASSUMED. All 14 existing
-    `FireOutboundEvent(...)` call sites (across the six files above) were
-    read directly before this extraction: every one is inside the body of
+    LOAD ORDER -- CHECKED PER CALL SITE, NOT ASSUMED. All 14 call sites that
+    existed AT EXTRACTION TIME (across the six files above) were read
+    directly before this extraction: every one is inside the body of
     an event handler, callback, or command handler -- never at any file's
     own top-level file-load time. That makes this file's own position in
     fxmanifest.lua a soft, not hard, ordering requirement, exactly like
@@ -63,14 +63,27 @@
     ZERO BEHAVIOR CHANGE. Unlike server/notify.lua's NotifyPlayer
     extraction (which deliberately fixed a wrong `'inform'` default and
     added a new target-validity guard neither of the 12 originals had),
-    this extraction changes NOTHING: the body below is byte-for-byte
-    identical to all six originals, and every one of the 14 call sites is
-    untouched -- same event name, same arguments, same order, same firing
-    condition. This is a pure structural move, not a behavior pass; the
-    `qbx_k9unit:events:*` names this backs are a documented, consumer-facing
-    contract (see server/exports.lua's EVENT CONTRACT section) and the
-    entire point of this extraction is that it keeps behaving identically,
-    just from one place instead of six.
+    this extraction changed NOTHING: the body below is byte-for-byte
+    identical to all six originals, and every one of the 14 call sites that
+    existed at extraction time was left untouched -- same event name, same
+    arguments, same order, same firing condition. This is a pure structural
+    move, not a behavior pass; the `qbx_k9unit:events:*` names this backs
+    are a documented, consumer-facing contract (see server/exports.lua's
+    EVENT CONTRACT section) and the entire point of this extraction is that
+    it keeps behaving identically, just from one place instead of six.
+    COUNT SINCE GROWN, NOT RE-CHECKED HERE EVERY PASS: "14" above is the
+    count this file's own extraction verified at the time, not a live
+    total this header maintains going forward -- new call sites are
+    expected to accumulate in existing and new consumer files as features
+    land, exactly as a shared helper should allow. Recounted directly this
+    pass (`grep -rn "^\s*FireOutboundEvent(" server/`, excluding this
+    file's own definition and one backtick-quoted mention in a comment in
+    server/integrations.lua): 23 real call sites across SEVEN files as of
+    this pass (the original six above, plus server/scentlineup.lua, which
+    added its own new call site after this extraction landed, calling the
+    shared global directly rather than ever having had its own duplicate
+    copy). Do not trust either number without recounting; this comment
+    will go stale again the next time a feature adds a call site.
     ======================================================================
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes ONE resource-global (no `local`) function:

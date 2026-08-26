@@ -786,15 +786,44 @@ local TUNABLE_REGISTRY = {
 
     -- server/medkit.lua (Config.Features.K9Medkit, live). range/
     -- healthRestore/injuryRestore are each read inline at their own call
-    -- sites. cooldownMs is read live too -- `MedkitCooldown = NewCooldown()`
-    -- has NO constructor default; both the sweep's staleAfterMs calculation
-    -- AND IsOnCooldown's own call pass Config.K9Medkit.cooldownMs as an
-    -- explicit per-call argument, the same genuinely-live shape as
-    -- PropAttachments.toggleCooldownMs above.
+    -- sites, genuinely fresh, confirmed by direct read.
+    --
+    -- cooldownMs is DELIBERATELY EXCLUDED, this pass -- a PRIOR version of
+    -- this entry claimed it was live ("both the sweep's staleAfterMs
+    -- calculation AND IsOnCooldown's own call pass Config.K9Medkit.cooldownMs
+    -- as an explicit per-call argument"). That claim was only HALF true, and
+    -- the wrong half is the load-bearing one: IsOnCooldown's own per-request
+    -- gate (useK9Medkit's `effectiveCooldownMs = Config.K9Medkit.cooldownMs`
+    -- ... `MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs,
+    -- ...)`) does read Config fresh -- but `MedkitBaseCooldownMs`, the value
+    -- MedkitCooldown's own StartSweep prune callback multiplies by 2 for its
+    -- staleAfterMs eviction window, is captured ONCE at that file's own
+    -- load time (`local MedkitBaseCooldownMs = ResolveConfiguredThresholdMs(
+    -- Config.K9Medkit.cooldownMs, ...)`) and never re-read afterward. RAISING
+    -- Config.K9Medkit.cooldownMs live through this registry would not merely
+    -- fail to apply -- it would open a genuine bypass: the sweep keeps
+    -- pruning a target's cooldown-tracker entry using the OLD, now-too-short
+    -- staleAfterMs window, so `store[key]` goes back to nil (IsOnCooldown
+    -- reads that as "never on cooldown") well before the NEWLY-RAISED
+    -- cooldown the operator just asked for would have elapsed -- a K9 medkit
+    -- usable MORE often than an operator just configured, silently, with no
+    -- error anywhere. (Lowering it live has no such bypass -- the sweep
+    -- would simply hold a now-stale-by-its-own-old-math entry a little
+    -- longer than strictly necessary, a memory-tidiness nit, not a
+    -- correctness one -- but this registry's own rule 3 excludes a tunable
+    -- the moment ANY direction of change cannot be confirmed safe, not only
+    -- when EVERY direction is unsafe.) Reported to server/medkit.lua's own
+    -- owner as a real bug independent of this registry (the sweep should
+    -- re-read Config.K9Medkit.cooldownMs on every prune pass, exactly like
+    -- its own per-request gate already does) -- not fixed here, since this
+    -- file does not own server/medkit.lua; excluding the tunable is the
+    -- correct, safe-by-default action on THIS file's own side regardless of
+    -- when/whether that fix lands. See tests/runtimecontrol_spec.lua's own
+    -- "K9Medkit.cooldownMs must never be exposed" case for the regression
+    -- guard.
     ['K9Medkit.range']                          = { path = { 'K9Medkit', 'range' },                              min = 0.5,   max = 10.0,      integer = false },
     ['K9Medkit.healthRestore']                  = { path = { 'K9Medkit', 'healthRestore' },                      min = 1,     max = 200,       integer = true },
     ['K9Medkit.injuryRestore']                  = { path = { 'K9Medkit', 'injuryRestore' },                      min = 0,     max = 100,       integer = true },
-    ['K9Medkit.cooldownMs']                     = { path = { 'K9Medkit', 'cooldownMs' },                         min = 5000,  max = 600000,    integer = true },
 
     -- server/inventory.lua (Config.Features.K9Inventory, live).
     -- interactRange is read live inline at the stash-open proximity check.

@@ -962,6 +962,22 @@ t.test('LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY path resolves against t
     t.isTrue(#listed.tunables >= 90, ('sanity: only saw %d tunable(s) registered -- expected at least 90 after this pass\'s expansion'):format(#listed.tunables))
 end)
 
+t.test('K9Medkit.cooldownMs must never be exposed as a tunable -- server/medkit.lua\'s own StartSweep prune window (staleAfterMs) is a captured-once-at-load local, not a fresh Config read, so a LIVE RAISE of this value would be silently undermined by the sweep evicting the tracker entry using the OLD, now-too-short window, letting the cooldown reset early', function()
+    local f = bootAgainstRealConfig()
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+    for _, row in ipairs(listed.tunables) do
+        t.isFalse(row.key == 'K9Medkit.cooldownMs', 'K9Medkit.cooldownMs must stay excluded from TUNABLE_REGISTRY -- see this file\'s own header comment on that exclusion for the full bypass this would otherwise open')
+    end
+
+    -- SetTunable must refuse it outright too, not merely omit it from the
+    -- list -- the exclusion has to hold end to end, not just in ListTunables'
+    -- own response.
+    local setResult = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'K9Medkit.cooldownMs', 120000)
+    t.isFalse(setResult.ok)
+    t.equals(setResult.reason, 'invalid_key')
+end)
+
 t.test('every out-of-range rejection for a newly-added tunable still names the exact configured bounds back to the caller (spot-check across the expansion, not just the original 20)', function()
     local f = bootAgainstRealConfig()
 

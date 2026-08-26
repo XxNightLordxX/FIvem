@@ -2419,15 +2419,25 @@ continued concurrent editing:**
   pure-logic globals (`IsEntityModelK9`, `IsOwnModelK9`, `HasK9Access`,
   `CanShowK9UI`, `DenyK9UIAccess`) — proving the existing sandbox pattern
   generalizes to `client/*.lua`, not just `server/*.lua`. Landed; see §20.
-- **Item 4 (medium-term).** `server/tenure.lua`'s `TenureFullyCollected`
-  cache header claims it avoids re-running a SELECT that, by construction
-  (it's keyed on a value only known *after* that same SELECT returns),
-  cannot actually be avoided. Bounded performance cost only (one extra
-  indexed SELECT per online, fully-tenured K9 per tick) — the real
-  double-grant protection is a separate, persisted, optimistic-UPDATE
-  guard, unaffected either way. Disclosed in `tests/README.md`/§20, not yet
-  fixed; either re-key the cache on `k9Citizenid` (known before the SELECT)
-  or correct the header to describe what it actually does.
+- **Item 4 (medium-term) — RESOLVED, dated 2026-08-25.** `server/tenure.lua`'s
+  `TenureFullyCollected` cache header used to claim it avoids re-running a
+  SELECT that, by construction (it's keyed on a value only known *after*
+  that same SELECT returns), cannot actually be avoided. That header has
+  since been corrected to describe what the cache actually short-circuits
+  (the cheaper post-SELECT work, not the SELECT itself), and
+  `server/tenure.lua` (its own "ITEM 4 CLOSURE" section, ~lines 377-511)
+  now carries a dated, fully worked decision: LEAVE IT, do not build a
+  `k9Citizenid`-keyed pre-query cache, because the coupling a correct
+  invalidation hook into `server/partnership.lua` would require is a
+  materially worse risk than one extra already-indexed point-lookup SELECT
+  per online, fully-tenured K9 per tick — the real double-grant protection
+  remains the separate, persisted, optimistic-UPDATE guard, unaffected
+  either way. No longer an open item; re-opening it should require new
+  evidence (a measured, reproduced DB load problem), per that section's own
+  closing note. (This bullet previously cited a `tests/README.md` file for
+  further detail — that file no longer exists, its coverage-table content
+  having been folded into this document per Item 2 above; see
+  `server/tenure.lua` directly instead.)
 
 **Explicitly not worth doing** (re-confirmed by both audits, still true):
 building a generic `ForEachPlayer(fn)` wrapper for the 6-file

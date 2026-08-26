@@ -707,6 +707,36 @@ local TABLET_STRING_KEYS = {
     'xp_tier_error_invalid_speed_multiplier', 'xp_tier_error_invalid_scent_range_multiplier',
     'xp_tier_error_invalid_medkit_cooldown_multiplier', 'xp_tier_error_invalid_badge',
     'xp_tier_error_invalid_order', 'xp_tier_error_db_error', 'xp_tier_error_invalid_payload',
+    -- K9 SUPPLY SHOP ITEM CATALOG (owner-directed "give high command real
+    -- control over the equipment shop" pass, server/equipmentshop.lua's
+    -- own "EQUIPMENT SHOP ITEM CATALOG" section) -- sits alongside the
+    -- shop_location_*/tab_shop_locations keys above, same "K9 Supply
+    -- Shop" domain, split into its own tab since WHICH items are sold is
+    -- a separate server-side authorization key from WHERE the shop ped
+    -- stands. SAME disclosed-gap posture as the 'tab_audit'/'audit_*' and
+    -- 'tab_xp_tiers'/'xp_tier_*' blocks above: these 43 keys are NOT YET
+    -- present in locales/en.json's `tablet` group as of this pass --
+    -- flagged to that file's owner (see this pass's own report for the
+    -- exact key -> English-string list). BuildTabletStrings()'s own
+    -- pcall-per-key guard means each is simply omitted from `strings`
+    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
+    -- that exact gap in the meantime.
+    'tab_shop_items', 'shop_items_heading', 'shop_items_add_label', 'shop_items_empty',
+    'column_price', 'column_currency', 'column_required_tier', 'column_required_specialization',
+    'shop_item_key_label', 'shop_item_key_placeholder', 'shop_item_price_label',
+    'shop_item_label_label', 'shop_item_label_placeholder', 'shop_item_currency_label',
+    'shop_item_currency_placeholder', 'shop_item_required_tier_label',
+    'shop_item_required_specialization_label', 'shop_item_no_requirement',
+    'shop_item_save_label', 'shop_item_cancel_label', 'shop_item_edit_label',
+    'shop_item_delete_label', 'shop_item_move_up_label', 'shop_item_move_up_title',
+    'shop_item_move_down_label', 'shop_item_move_down_title', 'shop_item_price_free_badge',
+    'shop_item_currency_default_note', 'shop_item_error_denied', 'shop_item_error_rate_limited',
+    'shop_item_error_invalid_payload', 'shop_item_error_invalid_key', 'shop_item_error_invalid_price',
+    'shop_item_error_invalid_label', 'shop_item_error_invalid_currency',
+    'shop_item_error_invalid_required_tier', 'shop_item_error_invalid_required_specialization',
+    'shop_item_error_busy', 'shop_item_error_too_many_items', 'shop_item_error_unknown_item',
+    'shop_item_error_must_include_every_item', 'shop_item_error_invalid_key_set',
+    'shop_item_error_db_error',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one

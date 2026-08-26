@@ -1193,6 +1193,92 @@ t.test('the per-target cooldown persists across the target\'s own reconnect (a f
 end)
 
 -- ========================================================================
+-- QUALITY FIX (this pass): Config.K9Medkit.cooldownMs used to be read raw,
+-- with no validation, at every call site -- server/cooldowns.lua's own
+-- IsOnCooldown treats a non-positive threshold as PERMANENTLY on cooldown,
+-- never "no cooldown". An operator typo'ing this to 0 would have every K9
+-- treatable exactly ONCE, ever, then permanently rejected for the rest of
+-- this resource's uptime -- the exact class of "non-positive threshold
+-- reading as permanently on" footgun this codebase has repeatedly had to
+-- close elsewhere (server/kennel.lua's DeployCooldown, server/fetch.lua's
+-- ThrowCooldown/PickupCooldown, etc., all via this same
+-- ResolveConfiguredThresholdMs helper). Now resolved once, at file-load,
+-- with a loud warning and a safe fallback -- these cases prove the fallback
+-- actually takes effect, not just that a warning gets printed.
+-- ========================================================================
+
+t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 does NOT permanently block a target after their first treat -- it falls back to a real, expiring cooldown instead', function()
+    local f = newMedkitFixture({ k9MedkitCfg = {
+        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        cooldownMs = 0, -- the footgun: operator meant "no cooldown"
+        emsJobs = { 'ambulance' },
+    } })
+    wireUsingPlayer(f, USER_SRC, { itemCount = 2 })
+    wireTargetK9(f, TARGET_SRC)
+
+    local first = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(first.ok, 'the first-ever treat against a fresh target must still succeed regardless')
+
+    -- BEFORE THE FIX: a raw cooldownMs = 0 makes server/cooldowns.lua's
+    -- IsOnCooldown return `true` forever once a key has been touched once --
+    -- advancing time by any amount, however large, would never clear it.
+    -- AFTER THE FIX: this resolves to the documented 60000ms fallback, so
+    -- advancing well past that must clear it exactly like an ordinary,
+    -- correctly-configured cooldown would.
+    f.advance(61000)
+    local second = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(second.ok, 'a misconfigured 0 must degrade to a real, eventually-expiring cooldown -- never a permanent lockout')
+end)
+
+t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 prints a loud, named warning at file-load, identifying the exact config key', function()
+    local f = newMedkitFixture({ k9MedkitCfg = {
+        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        cooldownMs = 0,
+        emsJobs = { 'ambulance' },
+    } })
+    local joined = table.concat(f.printedLines, '\n')
+    t.contains(joined, 'Config.K9Medkit.cooldownMs', 'the warning must name the exact misconfigured key, not a generic message')
+end)
+
+t.test('QUALITY FIX: a NEGATIVE Config.K9Medkit.cooldownMs is treated identically to 0 -- also falls back, never a permanent lockout', function()
+    local f = newMedkitFixture({ k9MedkitCfg = {
+        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        cooldownMs = -5000,
+        emsJobs = { 'ambulance' },
+    } })
+    wireUsingPlayer(f, USER_SRC, { itemCount = 2 })
+    wireTargetK9(f, TARGET_SRC)
+
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    f.advance(61000)
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok)
+end)
+
+t.test('QUALITY FIX: a normally-configured, positive Config.K9Medkit.cooldownMs is used EXACTLY as configured, with no warning at all', function()
+    local f = newMedkitFixture({ k9MedkitCfg = {
+        itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
+        cooldownMs = 12345,
+        emsJobs = { 'ambulance' },
+    } })
+    wireUsingPlayer(f, USER_SRC, { itemCount = 2 })
+    wireTargetK9(f, TARGET_SRC)
+
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    f.advance(12344)
+    local stillOnCooldown = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isFalse(stillOnCooldown.ok)
+    t.equals(stillOnCooldown.reason, 'on_cooldown')
+
+    f.advance(1) -- now at exactly 12345 elapsed
+    local nowOff = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(nowOff.ok, 'the configured value itself must be honored exactly, not silently substituted')
+
+    local joined = table.concat(f.printedLines, '\n')
+    t.notContains(joined, 'Config.K9Medkit.cooldownMs', 'a validly-configured value must never print the fallback warning')
+end)
+
+-- ========================================================================
 -- XP TIER UNLOCK -- GetXPTierMedkitCooldownMs (server/progression.lua),
 -- the documented soft dependency that resolves the Veteran-tier
 -- medkitCooldownMultiplier reward into the actual threshold this file's
