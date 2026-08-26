@@ -189,7 +189,19 @@
                     touch at all. Listed in ListFeatures' response as
                     `tier = 'clientonly'` so the tablet can grey these out
                     rather than silently omit them.
-      protected  -- HighCommand, PermissionGrants -- see above.
+      protected  -- NO ENTRIES USE THIS TIER as of the 2026-08-26 owner-
+                    directive pass -- HighCommand/PermissionGrants (the only
+                    two that ever did) are now tier = 'live' with
+                    `lockoutRisk = true, sessionOnly = true` instead -- see
+                    FEATURE_TIERS' own entries for both, and "LOCKOUT-RISK
+                    FEATURES" above GetFeatureTier, for the full mechanism
+                    that replaced outright refusal. This tier's mechanism
+                    (runtimeSetFeature/runtimeResetFeature both still refuse
+                    a 'protected' feature outright, unconditionally, before
+                    any write) is kept fully functional and undeleted, for
+                    defense in depth and for any future value that
+                    genuinely has no safe path to being opened at all --
+                    just currently unused.
 
     A NOTE ON Recall, specifically, because it is this resource's one
     termination/escape-hatch path and this file's own "no unbounded trap"
@@ -213,6 +225,28 @@
     something else the caller didn't ask for). Three exclusion rules,
     applied while building this list, stated here so the exclusion is a
     decision and not an oversight:
+
+    AMENDMENT (2026-08-26), READ THIS BEFORE TAKING RULES 1 AND 2 BELOW AT
+    FACE VALUE: the owner directed, in his own words, given twice, "High
+    command can grant anything they want to themselves xp promotions
+    permissions etc" / "If its high command they should have the ability to
+    grant whatever they want edit whatever they want etc." Rules 1 and 2
+    below are PRESERVED VERBATIM, unedited, because they remain an accurate
+    record of the RISK each exclusion was guarding against -- but they no
+    longer describe this file's actual behavior for every value they name.
+    Config.HighCommand.maxXpPerGrant/grantCooldownMs, every numeric key
+    under Config.XP, and Config.CertificationExpiryDays/WarningDays are now
+    OPEN -- see the TUNABLE_REGISTRY entries under "OWNER DIRECTIVE" further
+    below (after BoneSweepTool.MaxBoneIndex) for the actual current
+    entries, their bounds, and the reasoning for each, including one real
+    footgun (a server/progression.lua bare assert this pass's own bounds
+    exist specifically to keep unreachable) found while doing this. Rule 3
+    (read fresh at the point of use) is UNCHANGED and was re-verified,
+    file-by-file, for every newly-opened value before it was added -- this
+    amendment only ever widens rules 1/2, never rule 3. Config.Departments
+    and Config.HighCommand.allowSelfGrant remain excluded, on purpose, for
+    entirely different reasons stated in full at that same location -- this
+    amendment does not touch either.
       1. ECONOMY-AFFECTING VALUES ARE NOT TUNABLE AT ALL, UP OR DOWN, FROM
          THIS SURFACE. Every key under Config.XP (award amounts, the
          mint-budget cap referenced by server/progression.lua) and every
@@ -407,10 +441,12 @@ end
 
 -- ======================================================================
 -- FEATURE REGISTRY -- tier metadata for every Config.Features key this
--- file knows how to reason about. As of the 2026-08-26 pass, this table
--- has an entry for all 56 current Config.Features keys -- see
--- tests/runtimefeaturetiers_spec.lua, which fails the entire suite the
--- moment that stops being true again.
+-- file knows how to reason about. As of the 2026-08-26 owner-directive pass
+-- this table has an entry for all 57 current Config.Features keys (56 as
+-- of the audit further above in this header, +1 for ScentVision, landed
+-- concurrently with this pass by a different agent and classified here --
+-- see that entry's own comment) -- see tests/runtimefeaturetiers_spec.lua,
+-- which fails the entire suite the moment that stops being true again.
 --
 -- A name present in Config.Features but NOT in this table (a FUTURE
 -- feature this file's own audit has not yet covered -- there is

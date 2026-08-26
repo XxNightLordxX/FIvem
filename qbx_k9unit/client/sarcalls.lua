@@ -156,8 +156,7 @@
     every server->client push.
 
     ======================================================================
-    STALE-SESSION RACE -- ADDED A LATER PASS (found by a client-side sweep;
-    not present when this file was first written):
+    STALE-SESSION RACE:
 
     THE BUG: RequestAbandonSarCall() below clears the local `sarCallActive`
     flag and fires abandonSarCall, but a player who immediately starts a NEW
@@ -219,17 +218,16 @@
     rule, which this fix does not touch.
 
     ======================================================================
-    RESOURCE-STOP HYGIENE -- FIXED THIS PASS (found by a client-side sweep;
-    not present when this file was first written). client/pursuitsprint.lua
-    already resets its own state on `onResourceStop`; this file's own
-    `onResourceStop` handler used to call ONLY ClearReveal() -- purely
-    cosmetic cleanup of the local, never-networked reveal entity -- and
-    never told server/sarcalls.lua to release ActiveSarCalls[source]. A
-    client-side stop (this resource's own copy being independently
-    restarted, or the FXServer client runtime unilaterally stopping just
-    THIS client's copy after repeated script errors -- a real,
-    server-independent event) left that record behind, blocking a fresh
-    '/k9sarcall' with reason = 'already_active' until it cleared on its own.
+    RESOURCE-STOP HYGIENE: client/pursuitsprint.lua already resets its own
+    state on `onResourceStop`; this file's own `onResourceStop` handler
+    used to call ONLY ClearReveal() -- purely cosmetic cleanup of the
+    local, never-networked reveal entity -- and never told
+    server/sarcalls.lua to release ActiveSarCalls[source]. A client-side
+    stop (this resource's own copy being independently restarted, or the
+    FXServer client runtime unilaterally stopping just THIS client's copy
+    after repeated script errors -- a real, server-independent event) left
+    that record behind, blocking a fresh '/k9sarcall' with
+    reason = 'already_active' until it cleared on its own.
 
     LOWER SEVERITY THAN client/scenttrail.lua's OWN IDENTICAL GAP (see that
     file's own header "RESOURCE-STOP HYGIENE" for the contrast): unlike
@@ -250,7 +248,7 @@
     new caller of an existing, already-safe-to-call-anytime one. NEVER
     gated on CanShowK9UI()/access of any kind, per this file's own standing
     "no unbounded trap" rule (see RequestAbandonSarCall()'s own doc
-    comment). Moved to the bottom of this file, after both
+    comment). Placed at the bottom of this file, after both
     RequestAbandonSarCall() and ClearReveal() are defined, purely for
     readability -- Lua's own closure semantics mean the handler could have
     referenced either from its original position just as safely, since
@@ -266,24 +264,19 @@
         RequestAbandonSarCall() -- UNCONDITIONAL, never gated -- see its
             own doc comment for why, mirroring client/recall.lua's
             RequestRecall/client/scenttrail.lua's StopScentHunt exactly.
-        IsSarCallActive() -> boolean -- RESOLVED (this pass; was
-            unexposed): a pure, no-network read of the local `sarCallActive`
-            flag, same shape/precedent as client/combat.lua's
-            IsBiteHoldEngaged()/client/movement.lua's IsLeashed(). Added
-            specifically so client/radial.lua (this session, same owner as
-            this file) can offer a single context-sensitive "Search &
-            Rescue Call" toggle item exactly the way it already does for
-            Leash/Bite & Hold/Drag/Fetch, instead of leaving this feature
-            command-only. NOT itself gated on anything -- a pure state read,
-            like every other Is*Engaged() query in this resource.
-    RESOLVED (this pass): client/radial.lua now wires a "Search & Rescue
-    Call" toggle item calling RequestStartSarCall() when IsSarCallActive()
-    is false and RequestAbandonSarCall() when it is true -- see that file's
-    own comment on the item for the full writeup. This paragraph used to
-    read "neither is wired into client/radial.lua... owned by another
-    agent" -- no longer true now that both files are owned by the same pass;
-    left here, corrected rather than deleted, so a reader mid-diff isn't
-    left holding a stale claim. Both request functions remain fully
+        IsSarCallActive() -> boolean: a pure, no-network read of the local
+            `sarCallActive` flag, same shape/precedent as
+            client/combat.lua's IsBiteHoldEngaged()/client/movement.lua's
+            IsLeashed(). Added specifically so client/radial.lua can offer
+            a single context-sensitive "Search & Rescue Call" toggle item
+            exactly the way it already does for Leash/Bite & Hold/Drag/
+            Fetch, instead of leaving this feature command-only. NOT
+            itself gated on anything -- a pure state read, like every
+            other Is*Engaged() query in this resource.
+    client/radial.lua wires a "Search & Rescue Call" toggle item calling
+    RequestStartSarCall() when IsSarCallActive() is false and
+    RequestAbandonSarCall() when it is true -- see that file's own comment
+    on the item for the full writeup. Both request functions remain fully
     reachable via '/k9sarcall' (start) / '/k9sarcall stop' (abandon) too --
     the radial item is an ADDITIONAL entry point, not a replacement one,
     same command-with-a-stop-argument shape client/scenttrail.lua's
@@ -325,20 +318,20 @@ local tuning = Config.SARCalls or {}
 -- -- server/sarcalls.lua's own guard covers every other Config.SARCalls
 -- field, which THAT file reads and this one never touches).
 --
--- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
--- header ADDENDUM: "does an operator's config.lua edit alone... reach this
--- value? If yes it must be clamped and warned about, never asserted and
--- aborted"). This used to be three hard `assert`s here, correctly
--- diagnosing a real risk but with the wrong remedy: an uncaught error
--- thrown from THIS FILE's own top-level chunk (this guard sits directly
--- after the feature-flag early-return above, with no deferring
--- onResourceStart/RegisterNetEvent wrapper around it) aborts
--- client/sarcalls.lua's load from that line onward, silently un-registering
--- every SAR-call net event/callback handler this file defines below --
--- the entire client half of the feature, over one operator typo in a
--- cosmetic model name or a duration. Substituting a safe built-in default
--- and printing a loud, exact-key warning keeps this file's own registrations
--- intact while the config gets fixed.
+-- CLAMP AND WARN, NOT ASSERT (see server/cooldowns.lua's header ADDENDUM:
+-- "does an operator's config.lua edit alone... reach this value? If yes it
+-- must be clamped and warned about, never asserted and aborted"). This
+-- used to be three hard `assert`s here, correctly diagnosing a real risk
+-- but with the wrong remedy: an uncaught error thrown from THIS FILE's own
+-- top-level chunk (this guard sits directly after the feature-flag
+-- early-return above, with no deferring onResourceStart/RegisterNetEvent
+-- wrapper around it) aborts client/sarcalls.lua's load from that line
+-- onward, silently un-registering every SAR-call net event/callback
+-- handler this file defines below -- the entire client half of the
+-- feature, over one operator typo in a cosmetic model name or a duration.
+-- Substituting a safe built-in default and printing a loud, exact-key
+-- warning keeps this file's own registrations intact while the config
+-- gets fixed.
 -- ======================================================================
 if type(tuning.missingPersonPedModel) ~= 'string' or tuning.missingPersonPedModel == '' then
     print(
@@ -373,15 +366,14 @@ end
 -- helper is `local`, per this resource's established "private per-file
 -- state" convention for a small, single-purpose helper -- see this file's
 -- own LoadModelWithTimeout below, a deliberate independent copy, not a
--- shared extraction this pass does not own the authority to make).
+-- shared extraction).
 local REQUEST_MODEL_TIMEOUT_MS = 5000
 
 --- Loads `modelName`, waiting up to REQUEST_MODEL_TIMEOUT_MS. Returns the
 --- model hash on success, or nil (releasing any streaming reference it took
 --- along the way) on an invalid name or a load timeout -- mirrors
 --- client/kennel.lua's LoadModelWithTimeout byte-for-byte in shape (a
---- private copy, not a shared extraction this pass does not own the
---- authority to make).
+--- private copy, not a shared extraction).
 --- @param modelName string
 --- @return number? modelHash
 local function LoadModelWithTimeout(modelName)
@@ -406,11 +398,11 @@ end
 --- @type boolean -- true while a call THIS client started is active (not yet found/abandoned/expired)
 local sarCallActive = false
 
---- RESOLVED (this pass): read-only query, same shape/precedent as
---- client/combat.lua's IsBiteHoldEngaged()/client/movement.lua's
---- IsLeashed() -- see this file's header FILE-TO-FILE CONTRACT for why this
---- was added. A pure local-state read, no network cost, safe to call from a
---- hot site (e.g. a radial item's onSelect) as often as needed.
+--- Read-only query, same shape/precedent as client/combat.lua's
+--- IsBiteHoldEngaged()/client/movement.lua's IsLeashed() -- see this
+--- file's header FILE-TO-FILE CONTRACT for why this exists. A pure
+--- local-state read, no network cost, safe to call from a hot site (e.g.
+--- a radial item's onSelect) as often as needed.
 --- @return boolean
 function IsSarCallActive()
     return sarCallActive

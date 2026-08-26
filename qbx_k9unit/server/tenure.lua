@@ -1,22 +1,20 @@
 --[[
     qbx_k9unit/server/tenure.lua
 
-    Gives `server/partnership.lua`'s registry (landed this session, that
-    file's own header: "a FOUNDATION only... zero gameplay consequence
-    wired to it yet") a real, modest gameplay payoff: a handler+K9 pair who
-    STAY partnered accrue tenure, and crossing a tenure threshold grants a
-    one-time, flat XP bonus to the K9-role party -- DEVELOPER_REFERENCE.md Part B
-    §7 ("Partnership-tenure bonuses") -- formerly COMPLEMENTARY_FEATURES.md,
-    merged 2026-08-25, the #3 item in that pass's "Top 3"
-    specifically because the registry already carries everything this file
-    needs (`established_at`, `GetActivePartnerCitizenId`) with zero new
-    subsystem required.
+    Gives `server/partnership.lua`'s registry (that file's own header: "a
+    FOUNDATION only... zero gameplay consequence wired to it yet") a real,
+    modest gameplay payoff: a handler+K9 pair who STAY partnered accrue
+    tenure, and crossing a tenure threshold grants a one-time, flat XP bonus
+    to the K9-role party -- DEVELOPER_REFERENCE.md Part B §7
+    ("Partnership-tenure bonuses") -- specifically because the registry
+    already carries everything this file needs (`established_at`,
+    `GetActivePartnerCitizenId`) with zero new subsystem required.
 
     ======================================================================
-    STATUS UPDATE (follow-up pass, verified directly against each file
-    named below, not assumed): every schema/config/manifest item this
-    file's original header below describes as "PROPOSED" / "NOT applied by
-    this file" HAS SINCE LANDED, exactly as specified:
+    STATUS UPDATE: every schema/config/manifest item this file's original
+    header below describes as "PROPOSED" / "NOT applied by this file" HAS
+    SINCE LANDED, exactly as specified, verified directly against each file
+    named below:
       - sql/install.sql's `k9_partnerships` CREATE TABLE, and
         sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql,
         both carry `tenure_bonus_tier_granted TINYINT UNSIGNED NOT NULL
@@ -41,18 +39,17 @@
     unmet, and requires no change now that the dependency is met either.
 
     ======================================================================
-    SCOPE BOUNDARY THAT SHAPED EVERY DESIGN CHOICE BELOW: this file was
-    written under a hard constraint -- every OTHER existing `.lua` file in
-    this resource (server/partnership.lua, server/progression.lua,
-    server/wellbeing.lua, client/movement.lua included) is OFF LIMITS, not
-    just "prefer not to touch." DEVELOPER_REFERENCE.md Part B §7's own "Needs"
-    paragraph assumed a coder who COULD edit server/wellbeing.lua to add one
-    more key to the existing Mood-regen/K9MoveRateModifiers composer -- that
-    path is genuinely closed here, since `WellbeingStats` is `local` to that
-    file and `K9MoveRateModifiers` lives in client/movement.lua, off limits
-    for this pass. Every choice below routes only through the resource-global
-    functions those files ALREADY expose for exactly this kind of external
-    consumption (`GetActivePartnerCitizenId` from server/partnership.lua,
+    SCOPE BOUNDARY THAT SHAPED EVERY DESIGN CHOICE BELOW: this file does
+    not modify server/partnership.lua, server/progression.lua,
+    server/wellbeing.lua, or client/movement.lua. DEVELOPER_REFERENCE.md
+    Part B §7's own "Needs" paragraph assumed edit access to
+    server/wellbeing.lua to add one more key to the existing
+    Mood-regen/K9MoveRateModifiers composer -- that path is genuinely
+    closed here, since `WellbeingStats` is `local` to that file and
+    `K9MoveRateModifiers` lives in client/movement.lua. Every choice below
+    routes only through the resource-global functions those files ALREADY
+    expose for exactly this kind of external consumption
+    (`GetActivePartnerCitizenId` from server/partnership.lua,
     `AwardXP`/`HasK9Access` from server/progression.lua and
     server/certifications.lua respectively) plus a direct, read-only SELECT
     against `k9_partnerships` (a real table, not a `local` -- reading it here
@@ -60,14 +57,12 @@
     disclosed up front because it is the reason this file's actual mechanic
     (a milestone XP bonus) is narrower than §7's own "Mood regen bonus /
     raised Fatigue cap" suggestion -- not a downgrade chosen for its own
-    sake, a downgrade forced by the file-scope boundary this pass operates
-    under.
+    sake, a downgrade forced by which files this one can compose with.
 
     ======================================================================
     THE FOUR DESIGN QUESTIONS THIS FILE HAD TO ANSWER, ANSWERED EXPLICITLY
-    (per the review brief that produced this file -- restated here, not just
-    in a commit message, because a future editor of THIS file needs the same
-    reasoning this file's own author had):
+    (restated here, not just in a commit message, because a future editor
+    of THIS file needs the same reasoning this file's own author had):
 
     1. DERIVE FROM EXISTING COLUMNS, OR NEW TABLE? -- Neither, exactly: the
        TENURE VALUE itself needs no new schema at all -- it is
@@ -75,8 +70,8 @@
        sql/install.sql's `k9_partnerships` already carries, computed fresh
        on every check (see CheckTenureMilestonesForK9 below), never cached
        across a restart. The ONLY new schema this file needs -- and it is
-       NOT written here, only proposed, since sql/install.sql is not this
-       pass's file to edit -- is ONE new column on the EXISTING
+       NOT written here, only proposed, since sql/install.sql is a file
+       this one does not edit -- is ONE new column on the EXISTING
        `k9_partnerships` table (no new table): a small persisted counter
        recording which milestone tier has already been paid out for THIS
        partnership row. See "WHY ONE COLUMN IS UNAVOIDABLE" below for
@@ -89,25 +84,25 @@
        "categorically different" alternative DEVELOPER_REFERENCE.md Part B §7
        itself names (a Mood-regen bonus, a raised Fatigue cap) -- both of
        which require write access to server/wellbeing.lua's `local`
-       WellbeingStats / client/movement.lua's K9MoveRateModifiers, both off
-       limits per the SCOPE BOUNDARY above. server/progression.lua's
-       `AwardXP(citizenid, actionKey)` is the ONE resource-global mutation
-       hook this resource already ships specifically for an external file
-       to call without editing progression.lua itself (its own header:
-       "server/combat.lua, once built, should call this the same way" --
-       this file is exactly that kind of soft, guarded consumer, just for a
-       tenure milestone instead of a combat success). This is NOT a second
-       XP system: no new tier table, no new threshold curve independent of
-       Config.XPTiers, no new currency -- it is three new, flat, ONE-TIME
-       `Config.XP.awards` entries (proposed, not added here -- config.lua is
-       not this pass's file) feeding the exact same `k9_progression` total
-       and the exact same `Config.XPTiers` bracket walk every other award
-       already feeds. A K9 who reaches Elite tier via tenure XP got there
-       through literally the same accumulated-total mechanism as a K9 who
-       got there via contraband finds -- there is nothing tenure-specific
-       for a future editor to keep in sync with Config.XPTiers, because
-       there is nothing tenure-specific downstream of the AwardXP call at
-       all.
+       WellbeingStats / client/movement.lua's K9MoveRateModifiers, both
+       outside this file's scope per the SCOPE BOUNDARY above.
+       server/progression.lua's `AwardXP(citizenid, actionKey)` is the ONE
+       resource-global mutation hook this resource already ships
+       specifically for an external file to call without editing
+       progression.lua itself (its own header: "server/combat.lua, once
+       built, should call this the same way" -- this file is exactly that
+       kind of soft, guarded consumer, just for a tenure milestone instead
+       of a combat success). This is NOT a second XP system: no new tier
+       table, no new threshold curve independent of Config.XPTiers, no new
+       currency -- it is three new, flat, ONE-TIME `Config.XP.awards`
+       entries (proposed, not added here -- config.lua is a file this one
+       does not edit) feeding the exact same `k9_progression` total and the
+       exact same `Config.XPTiers` bracket walk every other award already
+       feeds. A K9 who reaches Elite tier via tenure XP got there through
+       literally the same accumulated-total mechanism as a K9 who got there
+       via contraband finds -- there is nothing tenure-specific for a
+       future editor to keep in sync with Config.XPTiers, because there is
+       nothing tenure-specific downstream of the AwardXP call at all.
 
     3. DOES TENURE REQUIRE ACTIVITY? -- Split answer, stated honestly rather
        than picked to sound stricter than it is:
@@ -141,8 +136,8 @@
              alts partnered once, left logged in unattended in separate
              corners of the map, or one logged off entirely) without
              requiring this file to hook into any real gameplay action
-             (a search, a track, a bite-hold) it cannot reach given the
-             SCOPE BOUNDARY above. Disclosed honestly: "stand near your
+             (a search, a track, a bite-hold) outside its own scope given
+             the SCOPE BOUNDARY above. Disclosed honestly: "stand near your
              partner" is a LIGHT activity bar, not "do something together"
              -- a pair that logs in, stands together for the seconds this
              file's tick takes to notice, and logs back off has cleared it.
@@ -150,11 +145,11 @@
              a stronger bar (e.g. "credit only after a joint search," per
              DEVELOPER_REFERENCE.md Part B §10's separate, NOT-built-here idea)
              would require hooking server/search.lua's own success path,
-             which is off limits this pass for the same SCOPE BOUNDARY
-             reason as wellbeing.lua/movement.lua above. Given the reward's
+             which is not touched here for the same SCOPE BOUNDARY reason
+             as wellbeing.lua/movement.lua above. Given the reward's
              hard-capped, modest total size (point (a)), a light activity
              bar was judged sufficient rather than worth reaching for a
-             file this pass cannot touch.
+             file outside this one's scope.
 
     4. RESET OR PERSIST ACROSS A BREAK + RE-FORM? -- RESET, and for FREE:
        this file never sums tenure across multiple `k9_partnerships` rows
@@ -214,8 +209,8 @@
     column (`tenure_bonus_tier_granted`, one small TINYINT UNSIGNED,
     default 0) is therefore the minimum viable durable state, NOT written
     here (see the closing comment block for the exact proposed DDL and why
-    it belongs to whoever owns sql/install.sql) -- this file's own queries
-    are pcall-wrapped exactly the way server/progression.lua's own
+    it belongs in sql/install.sql) -- this file's own queries are
+    pcall-wrapped exactly the way server/progression.lua's own
     `k9_progression` queries already are (that table's header: "schema
     landing behind its own implementation... every award silently no-op'd
     at the DB layer" -- same precedented, disclosed pattern applied here,
@@ -255,16 +250,15 @@
     global call), and is exactly what "read state fresh" means here.
 
     ======================================================================
-    NETWORK-FACING SURFACE, UPDATED (DEEPER PROGRESSION PASS) -- this file's
-    original design carried NO `RegisterNetEvent` and NO `lib.callback`;
-    every MUTATING check below is still purely server-initiated, on this
-    file's own timer, reading only server-held state (GetPlayers(),
-    exports.qbx_core player objects, this file's own SELECT against
-    `k9_partnerships`) -- there is no client-supplied payload anywhere in
-    THAT path to validate, type-check, or rate-limit, which is why
-    server/cooldowns.lua's constructors are NOT used for the tick loop
-    despite the resource-wide convention to reach for them for "any rate
-    limiting": this file's own poll interval
+    NETWORK-FACING SURFACE, UPDATED -- this file's original design carried
+    NO `RegisterNetEvent` and NO `lib.callback`; every MUTATING check below
+    is still purely server-initiated, on this file's own timer, reading
+    only server-held state (GetPlayers(), exports.qbx_core player objects,
+    this file's own SELECT against `k9_partnerships`) -- there is no
+    client-supplied payload anywhere in THAT path to validate, type-check,
+    or rate-limit, which is why server/cooldowns.lua's constructors are NOT
+    used for the tick loop despite the resource-wide convention to reach
+    for them for "any rate limiting": this file's own poll interval
     (`Config.Partnership.TenureBonus.checkIntervalMs`, proposed in the
     closing comment block) already IS the only rate limit that could mean
     anything for a purely server-driven, non-adversarial loop -- adding a
@@ -274,7 +268,7 @@
     adding a redundant uniqueness backstop to an append-log shape that does
     not need one.
 
-    THIS PASS ADDS EXACTLY ONE `lib.callback`
+    THIS FILE ADDS EXACTLY ONE `lib.callback`
     ('qbx_k9unit:server:getPartnershipTenureProgress', see EVENT/CALLBACK
     CONTRACT below) -- a client-triggerable, PURE READ. It takes no
     client-supplied argument beyond the implicit `source` (ox_lib callback
@@ -295,46 +289,45 @@
     CONFIDENCE GRADING:
     1. HIGH -- `established_at`/`active`/`k9_citizenid`/`handler_citizenid`
        shapes and `GetActivePartnerCitizenId`'s exact return contract are
-       read directly from server/partnership.lua and sql/install.sql this
-       session, not assumed.
+       read directly from server/partnership.lua and sql/install.sql, not
+       assumed.
     2. HIGH -- `AwardXP(citizenid, actionKey)`'s flat-amount-per-actionKey
        signature (no arbitrary delta parameter) is read directly from
-       server/progression.lua this session; this file's design (three named
-       milestone actionKeys, not one parameterized amount) follows directly
-       from that real signature, not a guessed one.
+       server/progression.lua; this file's design (three named milestone
+       actionKeys, not one parameterized amount) follows directly from that
+       real signature, not a guessed one.
     3. MEDIUM -- `TIMESTAMPDIFF(SECOND, established_at, NOW())` is standard
        ANSI-family SQL, supported identically by MySQL and MariaDB; not
-       independently re-verified against a live install this session (no
-       live server available), but it is a basic, extremely common function,
-       not an exotic one this resource has any history of getting wrong.
-    4. RESOLVED (follow-up pass -- see this file's own "STATUS UPDATE"
-       section near the top) -- the "one column" schema dependency this
-       file requires has LANDED: sql/install.sql's `k9_partnerships` CREATE
-       TABLE and sql/migrations/0003_*.sql both carry
-       `tenure_bonus_tier_granted`, verified directly against those files
-       this pass, not assumed. This file's own queries remain
-       pcall-wrapped regardless -- not because the column is expected to be
-       missing anymore on a current install, but because an OLDER,
-       not-yet-migrated database is still a real, ordinary case this file
-       must degrade safely against (same precedented gap sql/install.sql's
-       own `k9_progression` header already normalizes for this exact
-       resource) -- belt-and-suspenders, not a sign the dependency is still
-       unmet.
+       independently re-verified against a live install (no live server
+       available), but it is a basic, extremely common function, not an
+       exotic one this resource has any history of getting wrong.
+    4. RESOLVED (see this file's own "STATUS UPDATE" section near the top)
+       -- the "one column" schema dependency this file requires has LANDED:
+       sql/install.sql's `k9_partnerships` CREATE TABLE and
+       sql/migrations/0003_*.sql both carry `tenure_bonus_tier_granted`,
+       verified directly against those files, not assumed. This file's own
+       queries remain pcall-wrapped regardless -- not because the column is
+       expected to be missing anymore on a current install, but because an
+       OLDER, not-yet-migrated database is still a real, ordinary case this
+       file must degrade safely against (same precedented gap
+       sql/install.sql's own `k9_progression` header already normalizes for
+       this exact resource) -- belt-and-suspenders, not a sign the
+       dependency is still unmet.
     ======================================================================
 
     EVENT/CALLBACK CONTRACT:
     Callbacks (ox_lib lib.callback), THIS FILE:
     - 'qbx_k9unit:server:getPartnershipTenureProgress' () -> progress: table?
-      Added this pass (see "NETWORK-FACING SURFACE, UPDATED" above and the
-      "DEEPER PROGRESSION PASS" header section). Pure read, server-
+      See "NETWORK-FACING SURFACE, UPDATED" above and the "TENURE
+      PROGRESSION EXTENSIONS" header section. Pure read, server-
       authoritative, resolves the CALLER's own citizenid (never a
       client-supplied one) and, if they are either role of a currently
       active partnership, the K9-role party's own current milestone
       standing -- see the (local) GetPartnershipTenureProgress function's
       own doc comment for the exact returned shape. Built for a tablet
-      "partnership record" screen (server/tablet.lua is off limits to this
-      pass -- see closing comment block's "PROPOSED TABLET INTEGRATION"
-      for the exact wiring that file's owner would add).
+      "partnership record" screen (server/tablet.lua is not edited here --
+      see closing comment block's "PROPOSED TABLET INTEGRATION" for the
+      exact wiring that file would need).
     No `RegisterNetEvent` (unchanged from this file's original design --
     every MUTATING path stays purely server-initiated; see above).
 
@@ -362,21 +355,19 @@
     would contradict server/partnership.lua's own "frozen at establishment"
     design, which this file deliberately does not second-guess.
     THIS FILE still owns no resource-global (non-`local`) FUNCTION of its
-    own (unchanged by this pass -- see GetPartnershipTenureProgress's own
-    doc comment for exactly why it stays `local` and is reached only
-    through the new callback above, not as a bare global), so nothing here
-    needed adding to the repo's root `.luacheckrc` `globals` block (every
-    symbol this file READS from other files -- GetActivePartnerCitizenId,
-    HasK9Access, AwardXP -- is already listed there from those files' own
-    prior work).
+    own (see GetPartnershipTenureProgress's own doc comment for exactly why
+    it stays `local` and is reached only through the new callback above, not
+    as a bare global), so nothing here needed adding to the repo's root
+    `.luacheckrc` `globals` block (every symbol this file READS from other
+    files -- GetActivePartnerCitizenId, HasK9Access, AwardXP -- is already
+    listed there from those files' own prior work).
 ]]
 
 -- ======================================================================
--- DEEPER PROGRESSION PASS (this pass, coder-backend) -- three additions,
--- all schema-free and config-free (config.lua/locales/en.json/sql/*/
--- server/datastore.lua are off limits to this pass -- see the closing
--- comment block for the exact proposed additions to those files that
--- would extend this further):
+-- TENURE PROGRESSION EXTENSIONS -- three additions, all schema-free and
+-- config-free (config.lua/locales/en.json/sql/*/server/datastore.lua are
+-- not edited here -- see the closing comment block for the exact proposed
+-- additions to those files that would extend this further):
 --
 -- 1. TITLES, not just XP -- TENURE_MILESTONE_TITLE_FALLBACKS/
 --    ResolveMilestoneTitle below give each milestone tier a plain,
@@ -386,11 +377,11 @@
 --    -- forwarded to callers as DATA, not routed through locale(), since
 --    whichever surface renders it owns the localization decision). Checks
 --    milestone.title FIRST (so config.lua can carry real per-milestone
---    titles the moment its owner adds that field, with zero code change
---    here) and falls back to this file's own table only when absent --
---    same "soft dependency, prefer the real thing, degrade to a sane
---    default" shape this file already applies to every cross-file Lua
---    call, applied here to a CONFIG FIELD instead.
+--    titles the moment that field is added, with zero code change here)
+--    and falls back to this file's own table only when absent -- same
+--    "soft dependency, prefer the real thing, degrade to a sane default"
+--    shape this file already applies to every cross-file Lua call, applied
+--    here to a CONFIG FIELD instead.
 -- 2. VISIBILITY -- GetPartnershipTenureProgress (resource-global) and the
 --    'qbx_k9unit:server:getPartnershipTenureProgress' callback below are a
 --    pure, read-only, already-cheap (reuses the SAME Partner_GetTenureRow
@@ -399,8 +390,8 @@
 --    the next milestone give," for a tablet screen or any other UI to
 --    render -- see the closing comment block's "PROPOSED TABLET
 --    INTEGRATION" section for the exact consumer shape this was built for
---    (server/tablet.lua is off limits to this pass -- the callback exists
---    so that file's owner can wire it in without editing this one).
+--    (server/tablet.lua is not edited here -- the callback exists so that
+--    file can wire it in without editing this one).
 -- 3. ANTI-FARM GUARD EXTENSION -- see server/partnership.lua's own
 --    `CaptureTenureSeedForPair`/`TenurePairKey` (that file's DoBreakPartnership
 --    and respondPartnerUp) for the actual fix: a break-then-reform between
@@ -413,18 +404,18 @@
 --    lives entirely in server/partnership.lua, the only file that can
 --    create/end a row) -- documented here too because it directly answers
 --    this file's own header "RESET OR PERSIST ACROSS A BREAK + RE-FORM?"
---    design question 4, which this pass re-opened: reset is still correct
+--    design question 4, which is revisited here: reset is still correct
 --    for a DIFFERENT partner (unchanged), but a same-pair reform must not
 --    be a free re-roll of an already-earned milestone.
 --
--- NOT built this pass, and why (schema/config lockout, not a judgment call
--- that these are unwanted): MORE milestones (a config-only addition once
+-- NOT built here, and why (schema/config lockout, not a judgment call that
+-- these are unwanted): MORE milestones (a config-only addition once
 -- config.lua's own owner applies it -- this file's tier walk is already
 -- fully generic over an arbitrary-length, ascending milestones array, so
 -- zero code here needs to change for that), and WORK-based accrual
 -- (searches/finds/pursuits/treats together, not just wall-clock time) --
 -- both require hook points in server/search.lua/server/combat.lua/
--- server/sarcalls.lua this pass has no write access to. Full proposals for
+-- server/sarcalls.lua, none of which this file touches. Full proposals for
 -- both are in the closing comment block, for whoever picks this up next.
 -- ======================================================================
 
@@ -433,44 +424,46 @@
 -- milestone (a steady-state, extremely common case once a real partnership
 -- ages past the last threshold).
 --
--- CORRECTNESS-PASS CORRECTION (this pass -- tests/tenure_spec.lua's own
--- "DISCREPANCY" case locks this in): this does NOT skip the SELECT below on
--- a fully-collected partnership, despite an earlier revision of this comment
--- claiming it did. It CANNOT skip that SELECT: the only key this cache has
--- is `partnershipRowId`, and that id is itself a COLUMN OF THE ROW THE
--- SELECT RETURNS -- there is no way to know which row id to check this
--- cache against without already having run the query that names it. What
--- this cache actually short-circuits is the CHEAPER work strictly AFTER the
--- SELECT (the tier walk / optimistic UPDATE attempt below), which is a real,
--- if modest, saving once a partnership has nothing left to grant. A true
--- pre-query skip would need a SEPARATE cache keyed by `k9Citizenid` instead
--- (the value TickPartnershipTenure's loop actually has in hand before
--- calling this function) -- and that shape was deliberately NOT built here,
--- because it is only SAFE if it is invalidated the instant this citizenid's
--- active partnership row changes (a break, or a break-then-reform with a
--- fresh `established_at` and a fresh id resets tenure to zero, per this
--- file's own header design question 4). This file has no hook into
--- server/partnership.lua's teardown/establish paths to drive that
--- invalidation, and guessing wrong in that direction (serving a stale
--- "fully collected" verdict for a citizenid's BRAND NEW partnership) would
--- silently withhold every future milestone for that new partnership forever
--- -- a strictly worse bug than one extra cheap, already-indexed SELECT per
--- tick for an already-tenured K9 (config.lua's own comment on
--- `Config.Partnership.TenureBonus.checkIntervalMs` already prices this
--- query as "effectively free" at a 5-minute cadence). Never used to decide
--- WHETHER a grant is safe to make either way -- only the persisted
--- `tenure_bonus_tier_granted` column is authoritative for that; losing this
--- cache entirely on a restart is harmless and self-healing (the next tick's
--- SELECT simply reconfirms "already fully collected" from the DB and
--- repopulates this entry once). Bounded, cheap, unbounded-but-fine growth
--- profile, same accepted shape as server/certifications.lua's own
--- `Certifications` cache and server/progression.lua's own `K9XP` cache.
+-- CORRECTION (tests/tenure_spec.lua's own "DISCREPANCY" case locks this
+-- in): this does NOT skip the SELECT below on a fully-collected
+-- partnership, despite an earlier revision of this comment claiming it
+-- did. It CANNOT skip that SELECT: the only key this cache has is
+-- `partnershipRowId`, and that id is itself a COLUMN OF THE ROW THE SELECT
+-- RETURNS -- there is no way to know which row id to check this cache
+-- against without already having run the query that names it. What this
+-- cache actually short-circuits is the CHEAPER work strictly AFTER the
+-- SELECT (the tier walk / optimistic UPDATE attempt below), which is a
+-- real, if modest, saving once a partnership has nothing left to grant. A
+-- true pre-query skip would need a SEPARATE cache keyed by `k9Citizenid`
+-- instead (the value TickPartnershipTenure's loop actually has in hand
+-- before calling this function) -- and that shape was deliberately NOT
+-- built here, because it is only SAFE if it is invalidated the instant
+-- this citizenid's active partnership row changes (a break, or a
+-- break-then-reform with a fresh `established_at` and a fresh id resets
+-- tenure to zero, per this file's own header design question 4). This
+-- file has no hook into server/partnership.lua's teardown/establish paths
+-- to drive that invalidation, and guessing wrong in that direction
+-- (serving a stale "fully collected" verdict for a citizenid's BRAND NEW
+-- partnership) would silently withhold every future milestone for that
+-- new partnership forever -- a strictly worse bug than one extra cheap,
+-- already-indexed SELECT per tick for an already-tenured K9 (config.lua's
+-- own comment on `Config.Partnership.TenureBonus.checkIntervalMs` already
+-- prices this query as "effectively free" at a 5-minute cadence). Never
+-- used to decide WHETHER a grant is safe to make either way -- only the
+-- persisted `tenure_bonus_tier_granted` column is authoritative for that;
+-- losing this cache entirely on a restart is harmless and self-healing
+-- (the next tick's SELECT simply reconfirms "already fully collected" from
+-- the DB and repopulates this entry once). Bounded, cheap, unbounded-but-
+-- fine growth profile, same accepted shape as server/certifications.lua's
+-- own `Certifications` cache and server/progression.lua's own `K9XP`
+-- cache.
 --
--- ITEM 4 CLOSURE (DEVELOPER_REFERENCE.md Part B item 4 -- formerly
--- DEVELOPER_REFERENCE.md, merged 2026-08-25 / DEVELOPER_REFERENCE.md §20 "What's NOT
--- covered" / tests/tenure_spec.lua's own DISCREPANCY case -- this is the
--- fourth pass over this exact question; this section exists specifically so
--- there is no fifth. Dated: 2026-08-25.):
+-- ITEM 4 CLOSURE (DEVELOPER_REFERENCE.md Part B item 4 / DEVELOPER_REFERENCE.md
+-- §20 "What's NOT covered" / tests/tenure_spec.lua's own DISCREPANCY case):
+-- this section is the settled answer to whether `TenureFullyCollected`
+-- should also skip the pre-SELECT query -- re-derived from measurement,
+-- not merely re-asserted, so it should not need to be revisited without
+-- new evidence:
 --
 -- 1. DOES THE DISCREPANCY STILL HOLD? Yes, re-verified directly against the
 --    live code below, not assumed from the prior comment: `TenureFullyCollected`
@@ -479,8 +472,8 @@
 --    already returned it. There is no code path in this file where that
 --    cache is consulted before the SELECT runs. Confirmed unchanged.
 --
--- 2. MEASURED COST (numbers read directly from config.lua/sql/install.sql
---    this pass, not guessed):
+-- 2. MEASURED COST (numbers read directly from config.lua/sql/install.sql,
+--    not guessed):
 --      - Tick cadence: `Config.Partnership.TenureBonus.checkIntervalMs` =
 --        300000 (config.lua, Config.Partnership block) = one tick per 5
 --        real-world minutes, confirmed identical to this file's own
@@ -495,8 +488,8 @@
 --        WHERE clause is `active = 1 AND k9_citizenid = ?`, which is an
 --        exact-match on both leading columns of
 --        `KEY idx_k9_citizenid_active (k9_citizenid, active)`
---        (sql/install.sql, `k9_partnerships` CREATE TABLE, read directly
---        this pass). Further, `UNIQUE KEY uq_one_active_partnership_per_k9
+--        (sql/install.sql, `k9_partnerships` CREATE TABLE, read directly).
+--        Further, `UNIQUE KEY uq_one_active_partnership_per_k9
 --        (active_partner_k9_key)` on the same table makes it a DB-enforced
 --        invariant that at most ONE row can ever match that predicate pair
 --        -- this is not "an indexed scan," it is a unique-key-equivalent
@@ -538,9 +531,8 @@
 --        unique-index point lookup. That is not a load figure worth
 --        measuring against connection-pool or query-thread capacity --
 --        config.lua's own comment on this same `checkIntervalMs` value
---        already prices it as "effectively free," and this pass's
---        measurement confirms that framing rather than merely repeating
---        it.
+--        already prices it as "effectively free," and this measurement
+--        confirms that framing rather than merely repeating it.
 --
 -- 3. DECISION: LEAVE IT. Do not build a `k9Citizenid`-keyed pre-query
 --    cache. The cost this would remove (section 2 above) is not
@@ -599,20 +591,19 @@
 --    "DISCREPANCY" (between the ORIGINAL pre-correction header wording and
 --    the code) rather than a "closed, intentional design decision" -- that
 --    framing is now stale given this section, but updating that test's
---    name/comment (not its assertions) belongs to whoever owns
---    tests/tenure_spec.lua, not this file.
+--    name/comment (not its assertions) is a separate task, not done here.
 local TenureFullyCollected = {}
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
--- audit) -- the narrowest of the 12, with no `notifyType` parameter at all
--- (always `'inform'`). It is now server/notify.lua's single shared
--- resource-global implementation -- see that file's own header for the
--- extraction writeup. Both of this file's call sites below are unchanged:
--- each already only ever passed 2 arguments, which produces the identical
--- `type = 'inform', title = 'K9 Unit'` payload through the shared
--- function's own defaults -- confirmed against both call sites directly
--- before deleting this local copy, not assumed.
+-- independent hand-rolled copies across this resource) -- the narrowest of
+-- the 12, with no `notifyType` parameter at all (always `'inform'`). It is
+-- now server/notify.lua's single shared resource-global implementation --
+-- see that file's own header for the extraction writeup. Both of this
+-- file's call sites below are unchanged: each already only ever passed 2
+-- arguments, which produces the identical `type = 'inform', title = 'K9
+-- Unit'` payload through the shared function's own defaults -- confirmed
+-- against both call sites directly before deleting this local copy, not
+-- assumed.
 
 -- ======================================================================
 -- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
@@ -657,12 +648,13 @@ local function IsPartnershipTenureBonusPermittedForCitizenId(citizenid)
 end
 
 -- ======================================================================
--- TITLES -- see this file's own "DEEPER PROGRESSION PASS" header section
--- above for the full design writeup. Plain strings, ONE per configured
--- milestone tier, mirroring Config.XPTiers' own `label` field convention
--- exactly (not routed through locale() -- see closing comment block for
--- the exact new locale KEY this pass proposes for a tier-aware
--- notification, not shipped here since locales/en.json is off limits).
+-- TITLES -- see this file's own "TENURE PROGRESSION EXTENSIONS" header
+-- section above for the full design writeup. Plain strings, ONE per
+-- configured milestone tier, mirroring Config.XPTiers' own `label` field
+-- convention exactly (not routed through locale() -- see closing comment
+-- block for the exact new locale KEY this proposes for a tier-aware
+-- notification, not shipped here since locales/en.json is not edited by
+-- this file).
 -- ======================================================================
 local TENURE_MILESTONE_TITLE_FALLBACKS = {
     'Bonded Pair',           -- tier 1 (1 day, per the shipped default milestones table)
@@ -698,7 +690,7 @@ end
 --- already shipped" discipline this file already applies to every
 --- cross-file Lua function call (GetActivePartnerCitizenId/HasK9Access/
 --- AwardXP), applied here to a LOCALE KEY instead of a function, since
---- locales/en.json is off limits to this pass and the sandbox's own
+--- locales/en.json is not edited by this file and the sandbox's own
 --- `locale()` hard-asserts a missing key rather than returning nil (see
 --- tests/fixtures/sandbox.lua) -- pcall is the only way to probe for an
 --- optional key's existence without risking exactly that hard assert.
@@ -717,7 +709,7 @@ local function TenureMilestoneNotificationText(tierTitle)
 end
 
 -- ======================================================================
--- VISIBILITY -- see this file's own "DEEPER PROGRESSION PASS" header
+-- VISIBILITY -- see this file's own "TENURE PROGRESSION EXTENSIONS" header
 -- section above. Read-only, side-effect-free: never grants, never mutates
 -- tenure_bonus_tier_granted, never touches TenureFullyCollected. Safe to
 -- call as often as a UI wants -- reuses the SAME K9Store.Partner_GetTenureRow
@@ -731,11 +723,11 @@ end
 -- accessors: exposing it as a bare global would need a `.luacheckrc`
 -- `globals` entry (see that file's own header for why -- every resource-
 -- global cross-file function in this codebase is listed there, or
--- `luacheck qbx_k9unit` flags it), and `.luacheckrc` is off limits to this
--- pass. The ONE consumer this pass actually builds --
+-- `luacheck qbx_k9unit` flags it), and `.luacheckrc` is not edited by this
+-- file. The ONE consumer this file actually builds --
 -- 'qbx_k9unit:server:getPartnershipTenureProgress' immediately below --
 -- reaches it as a plain upvalue, which needs no global at all. If a future
--- pass wants a DIRECT Lua-level call from another file (not through the
+-- change wants a DIRECT Lua-level call from another file (not through the
 -- callback), promote this to a bare `function` and add it to
 -- `.luacheckrc`'s `globals` list in the SAME edit -- see the closing
 -- comment block's proposed addition for the exact entry.
@@ -938,11 +930,12 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     -- both directly, no "if online" branch needed (unlike
     -- server/partnership.lua's TellCitizenIdPartnershipEnded, which must
     -- tolerate an offline party; this code path cannot reach here with
-    -- either party offline). Named after the HIGHEST tier just crossed this
-    -- pass (targetTier -- plural crossings in one tick still get one
-    -- message naming the furthest milestone reached, not one per tier) --
-    -- see TenureMilestoneNotificationText's own doc comment for why this
-    -- degrades to the exact, unchanged, already-shipped generic text today.
+    -- either party offline). Named after the HIGHEST tier just crossed
+    -- (targetTier -- plural crossings in one tick still get one message
+    -- naming the furthest milestone reached, not one per tier) -- see
+    -- TenureMilestoneNotificationText's own doc comment for why this
+    -- degrades to the exact, unchanged, already-shipped generic text
+    -- today.
     local reachedTitle = ResolveMilestoneTitle(tenureCfg.milestones[targetTier], targetTier)
     local milestoneMessage = TenureMilestoneNotificationText(reachedTitle)
     NotifyPlayer(k9Src, milestoneMessage)
@@ -985,10 +978,10 @@ local function TickPartnershipTenure()
     end
 end
 
--- CHECKINTERVALMS VALIDATION (QA follow-up -- mirrors server/defense.lua's
--- own identical PollIntervalMs finding for the identical failure shape): a
--- raw, unchecked Config.Partnership.TenureBonus.checkIntervalMs value used
--- to feed a bare Wait() call below on EVERY loop iteration (this file
+-- CHECKINTERVALMS VALIDATION (mirrors server/defense.lua's own identical
+-- PollIntervalMs finding for the identical failure shape): a raw,
+-- unchecked Config.Partnership.TenureBonus.checkIntervalMs value used to
+-- feed a bare Wait() call below on EVERY loop iteration (this file
 -- re-reads tenureCfg fresh every pass, unlike server/defense.lua's own
 -- PollIntervalMs, which is captured once at file-load time and asserted
 -- there before its own thread is ever created). The OLD type check alone
@@ -1035,13 +1028,12 @@ end
 
 --[[
     ======================================================================
-    CONFIG/SCHEMA/MANIFEST ADDITIONS THIS FILE REQUIRES -- LANDED (follow-up
-    pass: verified directly against config.lua, fxmanifest.lua, and
-    sql/install.sql/sql/migrations this session; see this file's own
-    "STATUS UPDATE" section near the top). Originally written as a
-    PROPOSAL, since config.lua, fxmanifest.lua, and sql/install.sql were
-    each owned by another agent at the time this file was authored; kept
-    below verbatim as the exact reference shape those files now match, not
+    CONFIG/SCHEMA/MANIFEST ADDITIONS THIS FILE REQUIRES -- LANDED (verified
+    directly against config.lua, fxmanifest.lua, and sql/install.sql/
+    sql/migrations; see this file's own "STATUS UPDATE" section near the
+    top). Originally written as a PROPOSAL, since this file does not edit
+    config.lua, fxmanifest.lua, or sql/install.sql directly; kept below
+    verbatim as the exact reference shape those files now match, not
     rewritten as a changelog entry. This file still degrades to a total,
     silent no-op if any of it were ever missing again (every query is
     pcall-wrapped, both new-config reads are type-checked, and the
@@ -1140,19 +1132,18 @@ end
            companion `ALTER TABLE k9_partnerships ADD COLUMN
            tenure_bonus_tier_granted ...` migration statement instead of
            (or alongside) editing the CREATE TABLE definition directly --
-           that call belongs to whoever owns this file's migration
-           strategy, not asserted here.
+           that call is a migration-strategy decision, not asserted here.
     ======================================================================
 
     ======================================================================
-    DEEPER PROGRESSION PASS -- FURTHER PROPOSED ADDITIONS (this pass,
-    coder-backend). Everything ABOVE this section already landed. Everything
-    BELOW is NEW, proposed but NOT applied -- config.lua, locales/en.json,
-    sql/*, server/datastore.lua, .luacheckrc, and server/tablet.lua are all
-    off limits to this pass. What COULD be built without touching any of
-    them (titles, the progress-visibility callback, the anti-farm seed-on-
-    reform fix) is already live above/in server/partnership.lua -- this
-    section is for whoever owns the files this pass could not touch.
+    TENURE PROGRESSION EXTENSIONS -- FURTHER PROPOSED ADDITIONS. Everything
+    ABOVE this section already landed. Everything BELOW is NEW, proposed
+    but NOT applied -- config.lua, locales/en.json, sql/*,
+    server/datastore.lua, .luacheckrc, and server/tablet.lua are not edited
+    here. What COULD be built without touching any of them (titles, the
+    progress-visibility callback, the anti-farm seed-on-reform fix) is
+    already live above/in server/partnership.lua -- this section is a
+    proposal for the files not touched here.
 
     1. MORE MILESTONES (config.lua, Config.Partnership.TenureBonus.milestones
        + Config.XP.awards) -- CODE-READY TODAY, zero further change needed
@@ -1192,18 +1183,18 @@ end
        Lifetime total: 300 XP ever, per partnership (vs. 155 today) --
        still under 5 minutes of the shared hourly budget spent all at once,
        spread across a minimum of 90 real-world days. Final numbers are a
-       call for whoever owns config.lua/an economy-balance pass, not
-       asserted as tuned here.
+       call for a future economy-balance review, not asserted as tuned
+       here.
 
     2. WORK-BASED ACCRUAL (searches/finds/pursuits/treats together, not
        just wall-clock time -- the owner's own "reflect what the pair
-       actually did" ask). NOT built this pass: every candidate event
+       actually did" ask). NOT built here: every candidate event
        (server/search.lua's contraband-find success, server/combat.lua's
        bite-hold/takedown success, server/sarcalls.lua's call-completed
-       success) lives in a file this pass has no write access to. Proposed
-       hook shape, sized to need exactly ONE new line per site (mirrors how
-       those same three files already call `AwardXP` from their own success
-       paths, per server/progression.lua's own FILE-TO-FILE CONTRACT):
+       success) lives in a file not touched here. Proposed hook shape,
+       sized to need exactly ONE new line per site (mirrors how those same
+       three files already call `AwardXP` from their own success paths,
+       per server/progression.lua's own FILE-TO-FILE CONTRACT):
            if type(RecordPartnershipActivity) == 'function' then
                RecordPartnershipActivity(citizenid, 'search' | 'bite_hold' | 'takedown' | 'sar_call')
            end
@@ -1215,21 +1206,20 @@ end
        applies at grant time -- "shared" must mean the partner was actually
        there, not merely partnered on paper), incrementing a NEW persisted
        per-PAIR counter.
-       CRITICAL DESIGN CONSTRAINT, flagged explicitly because it is the
-       one this task's own brief warned about hardest: an activity COUNT,
-       unlike wall-clock tenure, CAN be re-earned by repeating the
-       activity -- so it must NOT reset on a break+reform the way
-       tenure_bonus_tier_granted does today, or "search together 5 times"
-       becomes farmable simply by breaking and reforming after every 5
-       searches. It must be persisted PER PAIR (not per partnership ROW),
-       surviving a break+reform the same way this pass's own
-       server/partnership.lua anti-farm seed now makes tenure tiers survive
-       one -- which argues for the SAME schema shape proposed in section 3
-       below (a `k9_partnership_pair_progress` table keyed by
-       (k9_citizenid, handler_citizenid), not a column on the per-instance
-       `k9_partnerships` row). Do not ship a work-based milestone gated on a
-       per-ROW counter -- that would reopen exactly the exploit this pass
-       closed for the wall-clock milestones.
+       CRITICAL DESIGN CONSTRAINT, flagged explicitly since it is the
+       easiest one to get wrong: an activity COUNT, unlike wall-clock
+       tenure, CAN be re-earned by repeating the activity -- so it must NOT
+       reset on a break+reform the way tenure_bonus_tier_granted does
+       today, or "search together 5 times" becomes farmable simply by
+       breaking and reforming after every 5 searches. It must be persisted
+       PER PAIR (not per partnership ROW), surviving a break+reform the
+       same way server/partnership.lua's own anti-farm seed now makes
+       tenure tiers survive one -- which argues for the SAME schema shape
+       proposed in section 3 below (a `k9_partnership_pair_progress` table
+       keyed by (k9_citizenid, handler_citizenid), not a column on the
+       per-instance `k9_partnerships` row). Do not ship a work-based
+       milestone gated on a per-ROW counter -- that would reopen exactly
+       the exploit already closed for the wall-clock milestones.
 
     3. FULLY DURABLE ANTI-FARM GUARD (schema; server/partnership.lua's own
        in-memory `PairTenureSeed` -- see that file's header -- is a REAL,
@@ -1319,6 +1309,6 @@ end
        `nextTierThresholdSeconds`, and the next milestone's own title as
        the bar's label -- exactly the "see where you stand and what's
        next" visibility the owner asked for. Not built here: html/app.js
-       and server/tablet.lua are both off limits to this pass.
+       and server/tablet.lua are both outside this file's scope.
     ======================================================================
 ]]
