@@ -222,6 +222,24 @@ local SOUND_NAME_TO_FILE_KEY = {
     ['Bark_Calm']       = 'bark_calm',       -- config.lua's Config.AdvancedBarkRadial
     ['DoorScratch']     = 'door_scratch',    -- client/movement.lua's DOOR_SCRATCH_SOUND_NAME
     ['DoorNudge']       = 'door_nudge',      -- client/movement.lua's DOOR_NUDGE_SOUND_NAME
+
+    -- CONTRABAND ALERT TIERS -- these were never mapped, so the
+    -- bystander-audible cue for a contraband find has never played on a
+    -- stock install. Config.ContrabandAlertTiers' own `alert` strings are
+    -- broadcast by server/search.lua and passed straight through as the
+    -- sound name by client/search.lua, so they have to resolve HERE.
+    -- 'aggressive_bark' is the same two words as the shipped
+    -- bark_aggressive.ogg in the opposite order, so the best-effort
+    -- lower-casing fallback produced a filename that does not exist.
+    ['aggressive_bark'] = 'bark_aggressive', -- large stash -- the real, shipped aggressive bark
+    -- 'whine' has NO shipped asset of its own. bark_alert is the nearest
+    -- honest stand-in: a short attention cue for a small find, audibly
+    -- distinct from the aggressive one above so the two tiers still differ.
+    -- If a real whine is ever recorded, add whine.ogg and change this line.
+    ['whine']           = 'bark_alert',
+    -- 'clean' is deliberately absent. Finding nothing should make no sound,
+    -- and an unmapped name is a harmless no-op, so leaving it out IS the
+    -- intended behaviour rather than an oversight.
 }
 
 --- Translates a RAGE-audio-style sound name into the base filename this

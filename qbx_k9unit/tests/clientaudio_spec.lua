@@ -397,4 +397,48 @@ t.test('loop: two concurrent loops get independent ids, independent threads, and
     t.isTrue(f.env.IsK9SoundActive(idB), 'stopping loop A must never affect loop B\'s independent tracking')
 end)
 
+
+-- EVERY CONFIGURED ALERT TIER MUST RESOLVE TO A SOUND FILE THAT EXISTS.
+--
+-- This is a drift guard, and it exists because the drift already happened:
+-- Config.ContrabandAlertTiers ships 'whine' and 'aggressive_bark', neither
+-- was in the mapping table, and 'aggressive_bark' is the same two words as
+-- the shipped bark_aggressive.ogg in the opposite order -- so the
+-- best-effort lower-casing fallback produced a filename that does not
+-- exist. The bystander cue for a contraband find had never played on a
+-- stock install, silently, because an unrecognised sound name is a no-op
+-- rather than an error.
+--
+-- Reads BOTH real files rather than restating either: the tier names come
+-- from config.lua, the shipped assets from the sounds directory. Adding a
+-- tier without a sound, or renaming a sound out from under a tier, fails
+-- here instead of going quiet in game.
+t.test('CONTRABAND ALERT AUDIO: every Config.ContrabandAlertTiers alert name resolves to a sound file that actually ships', function()
+    local configHandle = assert(io.open('../config.lua', 'r'))
+    local configText = configHandle:read('a')
+    configHandle:close()
+
+    local tiers = {}
+    for alertName in configText:gmatch("alert%s*=%s*'([%w_]+)'") do
+        tiers[#tiers + 1] = alertName
+    end
+    t.isTrue(#tiers > 0, 'sanity: this guard must actually find the configured alert tiers, or it proves nothing')
+
+    local audioHandle = assert(io.open('../client/audio.lua', 'r'))
+    local audioText = audioHandle:read('a')
+    audioHandle:close()
+
+    for _, alertName in ipairs(tiers) do
+        if alertName ~= 'clean' then -- 'clean' is deliberately silent; see audio.lua's own note
+            local mapped = audioText:match("%['" .. alertName .. "'%]%s*=%s*'([%w_]+)'")
+            t.isNotNil(mapped, ('alert tier %q has no entry in client/audio.lua SOUND_NAME_TO_FILE_KEY -- it would fall through to a best-effort filename and silently play nothing'):format(alertName))
+            if mapped then
+                local f = io.open('../html/sounds/' .. mapped .. '.ogg', 'r')
+                t.isNotNil(f, ('alert tier %q maps to %q but html/sounds/%s.ogg does not exist -- the cue would be silent in game with no error anywhere'):format(alertName, mapped, mapped))
+                if f then f:close() end
+            end
+        end
+    end
+end)
+
 os.exit(t.summary())

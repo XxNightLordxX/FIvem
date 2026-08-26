@@ -1798,7 +1798,7 @@
         help_tasks_heading: "How to Do the Common Things",
         help_task_get_certified_heading: "Get Certified",
         help_task_get_certified_1: "1. Find someone who can certify you: a supervisor at the right rank in your department, or anyone in High Command.",
-        help_task_get_certified_2: "2. Ask them in person or over the radio -- there is no way to request a certification yourself from the tablet.",
+        help_task_get_certified_2: "2. Ask them in person or over the radio. If YOU are a supervisor and your server allows it, you can also certify yourself from the Console tab, or with /k9certify and your own ID.",
         help_task_get_certified_3_template: "3. They open their own tablet's Console tab, find your name or citizen ID, open your record, and press {certifyLabel} for your department. You will see the change on your own Home tab the next time you open it.",
         help_task_partner_up_heading: "Partner Up With a Handler or K9",
         help_task_partner_up_1: "1. Stand close to the other player -- handler or K9, either side can start this.",

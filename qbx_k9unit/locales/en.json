@@ -37,7 +37,7 @@
         "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
     },
     "appearance": {
-        "apply_success_target": "Your K9 ped assignment has been applied.",
+        "apply_success_target": "You are now a K9. Open your tablet with /k9tablet and read the Help tab — it lists every key and command you now have.",
         "revert_success_target": "Your K9 ped assignment has been removed — you are back to your original character.",
         "apply_success_granter": "K9 ped role applied to that player.",
         "revert_success_granter": "That player's K9 ped role has been removed — they are back to their original character.",
@@ -75,7 +75,7 @@
         "expiry_warning": "Your K9 certification expires in %s day(s). Contact a certifying officer to renew it.",
         "grant_error": "An error occurred while certifying the target.",
         "grant_success_granter": "Target has been certified as a K9 handler.",
-        "grant_success_target": "You have been certified as a K9 handler.",
+        "grant_success_target": "You have been certified as a K9 handler. Open your tablet with /k9tablet and read the Help tab to see what you can now do.",
         "invalid_department": "'%s' is not a configured department.",
         "invalid_revoke_reason": "Invalid reason. Valid reasons: retired, reassigned, disciplinary, performance, other.",
         "invalid_specialization": "That is not a configured K9 specialization.",
@@ -1401,6 +1401,7 @@
         "not_owner": "You do not own that kennel.",
         "picked_up_success": "Kennel picked up.",
         "picked_up_success_occupant_released": "Kennel picked up — the K9 inside is coming along for the ride.",
+        "you_are_being_carried": "Someone has picked up your kennel — you are being carried. Press your Exit Kennel key to get out at any time.",
         "pickup_already_carried": "Someone is already carrying that kennel.",
         "pickup_not_authorized": "You are not authorized to pick up a K9 kennel.",
         "pickup_target_label": "Pick Up Kennel",

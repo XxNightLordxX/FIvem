@@ -1008,7 +1008,15 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupKennel', function(netId)
         end
     end
 
-    local hadOccupant = FindKennelOccupantByNetId(ownerKennel.netId, nil) ~= nil
+    -- Resolve the occupant ITSELF, not merely whether there is one: the
+    -- person inside needs telling. Being carried is the only thing in this
+    -- resource that moves a player across the map with no input from them
+    -- and, until now, no message either -- their view simply started
+    -- travelling. A player whose screen moves for no stated reason assumes
+    -- a bug or a cheat. Exiting was already unconditional (keybind, radial,
+    -- ox_target, and a watchdog), so this is about knowing, not escaping.
+    local occupant = FindKennelOccupantByNetId(ownerKennel.netId, nil)
+    local hadOccupant = occupant ~= nil
 
     CarriedKennels[citizenid] = {
         netId = ownerKennel.netId,
@@ -1021,6 +1029,11 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupKennel', function(netId)
 
     if hadOccupant then
         NotifyPlayer(src, locale('kennel.picked_up_success_occupant_released'), 'success')
+        -- The occupant's own side of the same event. Guarded because they
+        -- may have disconnected between the occupancy read and here.
+        if occupant.enteredSrc then
+            NotifyPlayer(occupant.enteredSrc, locale('kennel.you_are_being_carried'), 'inform')
+        end
     else
         NotifyPlayer(src, locale('kennel.picked_up_success'), 'success')
     end
