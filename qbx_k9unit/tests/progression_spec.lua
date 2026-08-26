@@ -626,7 +626,13 @@ local function newProgressionFixture(opts)
         Features = { XPProgression = true },
         XP = {
             scopePerCitizenidOrJob = 'citizenid',
-            awards = {
+            -- CONFIG-ABORT REGRESSION knob (this pass): opts.xpAwards lets a
+            -- test substitute a MALFORMED Config.XP.awards table (a value
+            -- above XP_MINT_BUDGET_CAP_XP, or negative) to prove
+            -- ValidateXPAwardAmount clamps and warns instead of throwing --
+            -- defaults to the real shipped award table for every other,
+            -- pre-existing test that never passes this option.
+            awards = opts.xpAwards or {
                 searchContrabandFound  = 25,
                 trackSourceResolved    = 10,
                 biteHoldSuccess        = 20,
@@ -636,7 +642,12 @@ local function newProgressionFixture(opts)
                 partnershipTenure30Day = 100,
             },
         },
-        XPTiers = {
+        -- CONFIG-ABORT REGRESSION knob (this pass): opts.xpTiers lets a test
+        -- substitute a MALFORMED Config.XPTiers table to prove
+        -- GetValidatedXPTiers clamps and warns instead of throwing --
+        -- defaults to the real shipped tier ladder for every other,
+        -- pre-existing test that never passes this option.
+        XPTiers = opts.xpTiers or {
             { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
             { xp = 1250, label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
             { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
@@ -1276,6 +1287,156 @@ t.test('GAP 1: without server/k9profiles.lua loaded at all, GetXPTierMedkitCoold
     capturedTriggerEvents = {}
     AwardXP('cid-no-k9profiles-b', 'exact100') -- crosses Recruit -> Trained
     t.equals(GetXPTier('cid-no-k9profiles-b').label, 'Trained', 'AwardXP/GetXPTier must keep working identically whether or not server/k9profiles.lua is present')
+end)
+
+-- ============================================================================
+-- CONFIG-ABORT REGRESSION (this pass): Config.XPTiers and Config.XP.awards
+-- both used to be validated via bare `assert`s inside their own
+-- onResourceStart handlers here. A malformed value must now warn and fall
+-- back instead of throwing -- and, the part a bare "does not throw" test
+-- would miss, GetXPTier/AwardXP must keep working correctly afterward, off
+-- the substituted safe values, exactly as if the malformed table had never
+-- existed. Each case needs its OWN fresh fixture (GetValidatedXPTiers is
+-- memoized on first use, so a pre-existing env that already resolved a
+-- valid table can never be used to observe the fallback path).
+-- ============================================================================
+
+t.test('CONFIG-ABORT REGRESSION: Config.XPTiers missing the mandatory xp=0 baseline warns and falls back to the built-in Recruit K9 tier, never throws', function()
+    local f = newProgressionFixture({
+        xpTiers = {
+            -- MALFORMED: no { xp = 0, ... } baseline entry at all -- the
+            -- exact plausible owner typo this regression guards against.
+            { xp = 100, label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
+        },
+    })
+
+    local ok, tier = pcall(f.GetXPTier, 'never-seen-before')
+    t.isTrue(ok, 'GetXPTier must not throw against a malformed Config.XPTiers: ' .. tostring(tier))
+    t.equals(tier.label, 'Recruit K9', 'must resolve to the built-in fallback base tier')
+    t.equals(tier.speedMultiplier, 1.00)
+    t.equals(tier.xp, 0)
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.XPTiers', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a malformed Config.XPTiers must print a warning naming it')
+
+    -- AwardXP must still actually WORK end to end off the fallback ladder --
+    -- clamp-and-warn means "still functions", not merely "does not crash".
+    f.AwardXP('cid-fallback-tiers', 'searchContrabandFound')
+    t.equals(f.GetXP('cid-fallback-tiers'), 25, 'AwardXP must still accumulate real XP even while the tier LADDER is unavailable')
+    t.equals(f.GetXPTier('cid-fallback-tiers').label, 'Recruit K9', 'every citizenid resolves to the single fallback tier while Config.XPTiers stays malformed')
+end)
+
+t.test('CONFIG-ABORT REGRESSION: an out-of-order Config.XPTiers warns and falls back, never throws', function()
+    local f = newProgressionFixture({
+        xpTiers = {
+            { xp = 0,   label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 50,  label = 'Backwards',  speedMultiplier = 1.20, scentRangeMultiplier = 1.20 },
+            { xp = 10,  label = 'OutOfOrder', speedMultiplier = 1.50, scentRangeMultiplier = 1.50 }, -- MALFORMED: lower xp than the entry before it
+        },
+    })
+
+    local ok, tier = pcall(f.GetXPTier, 'never-seen-before')
+    t.isTrue(ok, 'GetXPTier must not throw against an out-of-order Config.XPTiers: ' .. tostring(tier))
+    t.equals(tier.label, 'Recruit K9', 'must resolve to the built-in fallback base tier, not silently trust the out-of-order array')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('ascending', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'an out-of-order Config.XPTiers must print a warning naming the ascending-order requirement')
+end)
+
+t.test('CONFIG-ABORT REGRESSION: warns only ONCE for Config.XPTiers, no matter how many times GetXPTier/AwardXP are called against the malformed table', function()
+    local f = newProgressionFixture({
+        xpTiers = { { xp = 5, label = 'NoBaseline', speedMultiplier = 1.0, scentRangeMultiplier = 1.0 } }, -- MALFORMED: xp ~= 0
+    })
+
+    f.GetXPTier('a')
+    f.GetXPTier('b')
+    f.AwardXP('c', 'searchContrabandFound')
+    f.GetXPTier('d')
+
+    local warnCount = 0
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.XPTiers', 1, true) then warnCount = warnCount + 1 end
+    end
+    t.equals(warnCount, 1, 'must warn ONCE per resource lifetime, not once per call')
+end)
+
+t.test('CONFIG-ABORT REGRESSION: a Config.XP.awards value above XP_MINT_BUDGET_CAP_XP (3600) warns and treats that actionKey as unpayable, never throws, and every OTHER actionKey keeps working', function()
+    local f = newProgressionFixture({
+        xpAwards = {
+            searchContrabandFound = 25,     -- valid, unaffected
+            -- MALFORMED: larger than the shared budget could ever cover.
+            legendaryQuest = 5000,
+        },
+    })
+
+    local ok = pcall(f.AwardXP, 'cid-overcap', 'legendaryQuest')
+    t.isTrue(ok, 'AwardXP must not throw against an over-cap Config.XP.awards value')
+    t.equals(f.GetXP('cid-overcap'), 0, 'an unpayable award must never grant any XP at all')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('legendaryQuest', 1, true) and line:find('exceeds XP_MINT_BUDGET_CAP_XP', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'an over-cap award must print a warning naming the actionKey')
+
+    -- Every OTHER actionKey must be completely unaffected -- this is the
+    -- part a bare "does not throw" test would miss: the malformed key must
+    -- not take down the whole awards table.
+    f.AwardXP('cid-overcap', 'searchContrabandFound')
+    t.equals(f.GetXP('cid-overcap'), 25, 'an unrelated, validly-configured actionKey must still pay out normally')
+end)
+
+t.test('CONFIG-ABORT REGRESSION: a negative Config.XP.awards value warns and treats that actionKey as unpayable, never throws, and never deducts XP', function()
+    local f = newProgressionFixture({
+        xpAwards = {
+            searchContrabandFound = 25, -- valid, unaffected
+            -- MALFORMED: negative -- must never reach the direct
+            -- `K9XP[citizenid] = oldXp + amount` mutation and silently
+            -- subtract XP.
+            brokenPenalty = -500,
+        },
+    })
+
+    f.AwardXP('cid-negative', 'searchContrabandFound') -- establish a real, positive XP total first
+    t.equals(f.GetXP('cid-negative'), 25)
+
+    f.setNow(f.now() + 501) -- clear the per-(citizenid, actionKey) rate floor
+    local ok = pcall(f.AwardXP, 'cid-negative', 'brokenPenalty')
+    t.isTrue(ok, 'AwardXP must not throw against a negative Config.XP.awards value')
+    t.equals(f.GetXP('cid-negative'), 25, 'a negative award must be treated as unpayable -- the citizenid\'s real, already-earned XP must never be silently deducted')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('brokenPenalty', 1, true) and line:find('must not be negative', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a negative award must print a warning naming the actionKey')
+end)
+
+t.test('CONFIG-ABORT REGRESSION: a Config.XP.awards value of exactly XP_MINT_BUDGET_CAP_XP (the boundary) passes validation without warning -- the ceiling is inclusive', function()
+    -- NOTE: this only proves ValidateXPAwardAmount's own boundary check
+    -- (`amount <= XP_MINT_BUDGET_CAP_XP`) accepts 3600 without warning --
+    -- it deliberately does NOT assert the full 3600 is paid out in one
+    -- call, since a brand-new citizenid's bucket starts at
+    -- XP_MINT_BUDGET_STARTER_TOKENS (a fraction of the cap, by design --
+    -- see that constant's own declaration comment), not a full bucket; that
+    -- is a SEPARATE mechanism from the value-range validation this test
+    -- targets, and asserting on it here would conflate the two.
+    local f = newProgressionFixture({
+        xpAwards = { atCap = 3600 },
+    })
+    local ok = pcall(f.AwardXP, 'cid-atcap', 'atCap')
+    t.isTrue(ok)
+    local warnedAboutAwards = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.XP.awards', 1, true) then warnedAboutAwards = true end
+    end
+    t.isFalse(warnedAboutAwards, 'a valid boundary value must never warn about Config.XP.awards at all (unrelated boot-time datastore prints are expected and irrelevant here)')
 end)
 
 os.exit(t.summary())

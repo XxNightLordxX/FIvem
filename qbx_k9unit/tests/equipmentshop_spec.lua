@@ -264,28 +264,35 @@ local function newFixture(opts)
     -- (shared/compat/core.lua's ScheduleInitialDetection, the only other
     -- caller) keeps running synchronously, completely unchanged.
     --
-    -- WHY ORDER, NOT IDENTITY: fxmanifest.lua's own script load order
-    -- guarantees server/equipmentshop.lua's own top-level CreateThread call
-    -- fires DURING Sandbox.loadInto('../server/equipmentshop.lua', env)
-    -- below -- strictly before ANY test calls fireResourceStart(), which is
-    -- the only thing that ever triggers shared/compat/core.lua's own
-    -- CreateThread call (inside ITS OWN onResourceStart handler). The FIRST
-    -- CreateThread call this fixture ever sees is therefore always
-    -- equipmentshop.lua's own watcher, and every call after it is always
-    -- shared/compat/core.lua's (confirmed by reading modules/shops/server.lua's
-    -- OWN K9Compat.Get -- it lazily self-detects synchronously on first use
-    -- regardless of whether ScheduleInitialDetection's thread ever actually
-    -- runs, so capturing-not-running that second thread changes nothing any
-    -- test here observes).
+    -- EVERY CreateThread call captured, none run synchronously (boot-order-
+    -- race audit, this pass -- CORRECTS a stale "the first call is always
+    -- equipmentshop.lua's own watcher, order not identity" assumption this
+    -- comment used to make): that assumption broke the moment ANY earlier-
+    -- loaded dependency in this SAME fixture also calls CreateThread at ITS
+    -- OWN file-load time (server/cooldowns.lua, loaded above, is the
+    -- earliest one -- whether or not it does so today, a future change to
+    -- any earlier-loaded file legitimately could, silently shifting which
+    -- call is "first" again) -- running whichever call ends up in slot 2+
+    -- synchronously against a real `while true do Wait(...) ... end` body
+    -- either hangs this whole test process (a no-op Wait) or throws
+    -- "attempt to yield from outside a coroutine" (this fixture's real,
+    -- coroutine-backed WaitStub, needed once server/equipmentshop.lua's own
+    -- onResourceStart handlers started calling
+    -- K9Store.WaitForSchemaCheckToSettle -- see that function's own header
+    -- for why it must genuinely yield). fixtures/sandbox.lua's own
+    -- Sandbox.newThreadRunner already supports capturing MULTIPLE
+    -- independent threads and stepping all of them together (`runner.step()`
+    -- "resumes every still-alive captured thread once") -- there was never
+    -- a need for the count-based special case this replaces. Capturing
+    -- rather than running shared/compat/core.lua's own ScheduleInitialDetection
+    -- thread (if it is ever registered by a `fireResourceStart()` call
+    -- during a test) changes nothing any test here observes, per this
+    -- section's own next paragraph below (K9Compat.Get lazily self-detects
+    -- synchronously on first use regardless of whether that thread ever
+    -- actually runs).
     local equipmentShopThreadRunner = Sandbox.newThreadRunner()
-    local createThreadCallCount = 0
     local function CreateThreadStub(fn)
-        createThreadCallCount = createThreadCallCount + 1
-        if createThreadCallCount == 1 then
-            equipmentShopThreadRunner.CreateThread(fn)
-        else
-            fn()
-        end
+        equipmentShopThreadRunner.CreateThread(fn)
     end
     local function WaitStub(...) return equipmentShopThreadRunner.Wait(...) end
 
@@ -349,6 +356,35 @@ local function newFixture(opts)
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/inventory.lua', env)
 
+    -- SETTLE THE SCHEMA-COLLISION PROBE FIRST (boot-order-race audit, this
+    -- pass), BEFORE the print/handler discards below (not after -- its own
+    -- boot-line print and handler registration need to be swept up by
+    -- those SAME discards, not leak past them): server/datastore.lua's own
+    -- onResourceStart handler (just registered above) is what sets
+    -- SCHEMA_CHECK_SETTLED -- if it is wiped below WITHOUT ever having
+    -- fired, K9Store.WaitForSchemaCheckToSettle() (now called by
+    -- server/equipmentshop.lua's own onResourceStart handlers -- see that
+    -- file's own "WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST"
+    -- comments) would never settle for the life of this fixture, since
+    -- nothing else in this sandbox ever fires it again. This fixture's own
+    -- `Wait` (WaitStub, below) IS real and genuinely yields (coroutine-
+    -- backed, needed for the CreateThread capture fix directly below this
+    -- comment) -- so an unsettled probe would not merely report "not
+    -- settled" here, it would throw "attempt to yield from outside a
+    -- coroutine" the instant WaitForSchemaCheckToSettle tried to poll,
+    -- since this ONE firing call below runs as a plain synchronous
+    -- function call, never inside a coroutine. Never actually reached in
+    -- practice: server/datastore.lua's own onResourceStart handler settles
+    -- SCHEMA_CHECK_SETTLED unconditionally, synchronously, before its own
+    -- first (and only) yielding call ever happens (that yield lives inside
+    -- VerifyTableShapesAgainstKnownSchema's own MySQL.query.await, which
+    -- this fixture's makeQueryAwait stub above answers with a synchronous
+    -- `error(...)` for the unrecognized INFORMATION_SCHEMA query -- caught
+    -- by that function's own pcall, never actually yielding at all here) --
+    -- disclosed anyway, so a future change to either file does not
+    -- reintroduce this silently.
+    for _, fn in ipairs(eventHandlers['onResourceStart'] or {}) do fn('qbx_k9unit') end
+
     -- Discard anything server/datastore.lua printed on its way up before
     -- loading the file under test. That file legitimately prints ONE boot
     -- line saying which backend it is using -- useful in a real server,
@@ -370,12 +406,10 @@ local function newFixture(opts)
     -- discard above, and the "equipmentshop prints exactly zero when its
     -- flag is off" tests would fail against output that was never
     -- equipmentshop's -- exactly the failure the discard above exists to
-    -- prevent, arriving one step later in the lifecycle.
-    --
-    -- Dropping the handlers rather than filtering the prints keeps this
-    -- fixture measuring one thing: what the file under test does. Any
-    -- future dependency that registers a lifecycle handler is covered
-    -- automatically, with no new special case here.
+    -- prevent, arriving one step later in the lifecycle. (Already fired
+    -- and already discarded above, by this point -- this wipes its
+    -- HANDLER registration too, so it never fires a second time on a later
+    -- fireResourceStart() call made by an actual test.)
     for name in pairs(eventHandlers) do eventHandlers[name] = nil end
 
     Sandbox.loadInto('../server/equipmentshop.lua', env)

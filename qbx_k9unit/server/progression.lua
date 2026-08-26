@@ -2383,6 +2383,30 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- to close, for any server running HandlerXPProgression alone.
     if not (Config.Features.XPProgression or Config.Features.HandlerXPProgression) then return end
 
+    -- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (boot-order-race
+    -- audit, this pass -- same fix already shipped for
+    -- server/certtiers.lua/server/permissionkeycatalog.lua/server/xptiers.lua/
+    -- server/k9profiles.lua, simply missed here when it landed for those
+    -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
+    -- for the exact race this closes). LoadXPForCitizenid/LoadHandlerXPForCitizenid
+    -- below (K9Store.XP_Get/K9Store.HandlerXP_Get) each read a single
+    -- column from k9_progression -- narrower than the full column set that
+    -- table is checked against -- so without this, this loop could warm
+    -- K9XP/HandlerXP straight from a foreign table the full probe would
+    -- correctly reject as a collision, during the one window before that
+    -- probe's own yielding query has returned. On a `false` return (the
+    -- probe genuinely had not settled within the wait budget), this skips
+    -- every citizenid below rather than trust an unconfirmed database
+    -- state -- their cache entry simply stays at whatever default it
+    -- already had (0 XP, same as a never-warmed cache), identical to what
+    -- already happens today whenever LoadXPForCitizenid's own read fails --
+    -- the next PlayerLoaded, or a restart once the check has had time to
+    -- finish, re-syncs it as normal.
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] progression: the schema-collision check had not finished within its wait budget -- skipping this restart\'s XP-cache backfill for every already-connected officer (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next PlayerLoaded (or a restart once the check has had time to finish) re-syncs it as normal.')
+        return
+    end
+
     for _, playerIdStr in ipairs(GetPlayers()) do
         local src = tonumber(playerIdStr)
         if src then

@@ -2181,6 +2181,30 @@ end)
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (boot-order-race
+    -- audit, this pass -- same fix already shipped for
+    -- server/certtiers.lua/server/permissionkeycatalog.lua/server/xptiers.lua/
+    -- server/k9profiles.lua, simply missed here when it landed for those
+    -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
+    -- for the exact race this closes). RefreshPermissionCache below
+    -- (K9Store.Perm_GetActiveForCitizen) reads a single column from
+    -- k9_permissions -- narrower than the full column set that table is
+    -- checked against -- so without this, this loop could warm every
+    -- already-connected officer's permission/feature-block cache straight
+    -- from a foreign table the full probe would correctly reject as a
+    -- collision, during the one window before that probe's own yielding
+    -- query has returned. On a `false` return (the probe genuinely had not
+    -- settled within the wait budget), this skips every citizenid below
+    -- rather than trust an unconfirmed database state -- identical to
+    -- RefreshPermissionCache's own existing fail-closed posture on any
+    -- other read failure (an empty cache entry, never a stale/guessed one)
+    -- -- the next PlayerLoaded, or a restart once the check has had time to
+    -- finish, re-syncs it as normal.
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] permissions: the schema-collision check had not finished within its wait budget -- skipping this restart\'s permission-cache backfill for every already-connected officer (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next PlayerLoaded (or a restart once the check has had time to finish) re-syncs it as normal.')
+        return
+    end
+
     for _, playerId in ipairs(GetPlayers()) do
         local src = tonumber(playerId)
         if src then

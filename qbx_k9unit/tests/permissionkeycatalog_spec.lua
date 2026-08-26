@@ -1149,6 +1149,19 @@ t.test('BOOT-ORDER RACE (the actual bug, fixed): a foreign k9_permission_keys ta
     t.isFalse(f.env.K9Store.IsDatabaseEnabled(), 'the collision must have been detected')
     t.equals(f.permKeysQueryCallCount(), 0, 'still not read immediately after settling')
 
+    -- ONE EXTRA resumeNext() (boot-order-race audit, this pass):
+    -- server/permissions.lua's own onResourceStart backfill loop now ALSO
+    -- calls K9Store.WaitForSchemaCheckToSettle() before its own (here,
+    -- harmless -- GetPlayers() is stubbed empty) GetPlayers() loop, so it
+    -- is registered (and parks on its own Wait() poll) in between
+    -- datastore.lua's probe and this catalog's own handler -- one more
+    -- participant in this fixture's coroutine sequence than there used to
+    -- be, in strict registration order (permissions.lua loads before
+    -- permissionkeycatalog.lua, above). Drained here, before the catalog's
+    -- own wake-up below, rather than assumed away, so this test keeps
+    -- meaning exactly what its own name says.
+    t.isTrue(f.resumeNext(), 'server/permissions.lua\'s own backfill handler, parked inside its own bounded wait, wakes on its next poll -- a harmless no-op here (GetPlayers() is empty)')
+
     t.isTrue(f.resumeNext(), 'the catalog handler, parked inside its own bounded wait, wakes on its next poll')
     t.equals(f.permKeysQueryCallCount(), 0, 'DatabaseEnabled() is now false, so the catalog takes the MEMORY branch -- it must NEVER have issued its own narrower SELECT against the foreign table, before or after settling')
     t.isFalse(f.env.IsKnownPermissionCatalogKey('someone.elses.row'), 'the foreign row must never reach the live permission-key catalog')
@@ -1170,6 +1183,13 @@ t.test('BOOT-ORDER RACE control: once the probe settles with NO collision, the c
     -- own doc comment for why this must be the full set now).
     t.isTrue(f.resumeNext(AllK9TableColumnsForSchemaProbe()))
     t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision, nothing missing -- the real database stays live')
+
+    -- ONE EXTRA resumeNext() -- see the identically-named comment in the
+    -- "BOOT-ORDER RACE (the actual bug, fixed)" test above for the full
+    -- "why": server/permissions.lua's own onResourceStart backfill loop is
+    -- now a second participant in this fixture's coroutine sequence,
+    -- registered before this catalog's own handler.
+    t.isTrue(f.resumeNext(), 'server/permissions.lua\'s own backfill handler wakes on its next poll -- a harmless no-op here (GetPlayers() is empty)')
 
     t.isTrue(f.resumeNext(), 'the catalog handler wakes on its next poll')
     t.equals(f.permKeysQueryCallCount(), 1, 'now that settlement confirmed no collision, the catalog performs its real read exactly once')

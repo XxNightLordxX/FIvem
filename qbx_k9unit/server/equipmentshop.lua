@@ -845,6 +845,31 @@ EquipmentShopLocationActionCooldown.RegisterPlayerDropped()
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (boot-order-race
+    -- audit, this pass -- same fix already shipped for
+    -- server/certtiers.lua/server/permissionkeycatalog.lua/server/xptiers.lua/
+    -- server/k9profiles.lua, simply missed here when it landed for those
+    -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
+    -- for the exact race this closes). This handler is UNCONDITIONAL on
+    -- Config.Features.K9EquipmentShop (see this section's own header above
+    -- for why), so unlike the flag-gated activation handler elsewhere in
+    -- this file, it runs this read on EVERY boot, making it the single
+    -- most exposed instance of this race in this file. Without this,
+    -- K9Store.ShopLocation_GetAll() below (a narrower SELECT than the
+    -- columns k9_equipment_shop_locations is checked against) could run
+    -- against a foreign table the full probe would correctly reject as a
+    -- collision, during the one window before that probe's own yielding
+    -- query has returned. On a `false` return (the probe genuinely had not
+    -- settled within the wait budget), this skips the read entirely for
+    -- this boot -- RuntimeShopLocations simply stays empty, identical to
+    -- what a genuinely empty table would produce, and the next successful
+    -- location add/move/remove (or a restart once the check has had time
+    -- to finish) re-syncs it as normal.
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] equipmentshop: the schema-collision check had not finished within its wait budget -- no runtime shop locations loaded this session (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next successful location edit (or a restart once the check has had time to finish) will pick up any real persisted locations.')
+        return
+    end
+
     local rows = K9Store.ShopLocation_GetAll()
     for _, row in ipairs(rows) do
         RuntimeShopLocations['db:' .. row.id] = {
@@ -2297,7 +2322,38 @@ function ActivateEquipmentShopIfEnabled()
     -- has always had, now simply sequenced correctly behind the hooks
     -- above, never a third, competing implementation of either.
     local baseOk = RegisterEquipmentShopFromConfig()
-    local hasOverlay = RefreshEquipmentShopItemCatalog()
+
+    -- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (boot-order-race
+    -- audit, this pass -- same fix already shipped for
+    -- server/certtiers.lua/server/permissionkeycatalog.lua/server/xptiers.lua/
+    -- server/k9profiles.lua, simply missed here when it landed for those
+    -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
+    -- for the exact race this closes). This function is reached from BOTH
+    -- of this file's own onResourceStart handlers (this file's top
+    -- REGISTRATION section, and the later "BOOT" section) AND from a live
+    -- runtime toggle-on -- calling WaitForSchemaCheckToSettle() here,
+    -- rather than at each onResourceStart call site individually, covers
+    -- all three with one guard: a runtime-toggle caller reaches this well
+    -- after boot has settled, so it pays no real wait at all (the function
+    -- returns instantly true), while both onResourceStart callers get
+    -- correctly gated before RefreshEquipmentShopItemCatalog's own
+    -- narrower SELECT (a different column set than k9_equipment_shop_items
+    -- is checked against) can run against a foreign table the full probe
+    -- would correctly reject as a collision. On a `false` return (the
+    -- probe genuinely had not settled within the wait budget), this skips
+    -- ONLY the database overlay for this attempt -- RegisterEquipmentShopFromConfig
+    -- above (config.lua's own item list) already ran and is unaffected,
+    -- exactly like `Config.Database.enabled == false` already leaves this
+    -- shop fully usable on config alone. The next successful item-catalog
+    -- edit (or a restart once the check has had time to finish) picks up
+    -- any real persisted overlay as normal.
+    local hasOverlay
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] equipmentshop: the schema-collision check had not finished within its wait budget -- activating the K9 Supply shop from config.lua only for this session (no database overlay read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next successful item-catalog edit (or a restart once the check has had time to finish) will pick up any real persisted overlay.')
+        hasOverlay = false
+    else
+        hasOverlay = RefreshEquipmentShopItemCatalog()
+    end
     local overlayOk = hasOverlay and LiveRefreshRegisteredShop() or false
 
     if baseOk or overlayOk then

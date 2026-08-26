@@ -221,26 +221,29 @@ local function newFixture(opts)
 
     -- RUNTIME TOGGLE-ON WATCHER -- see tests/equipmentshop_spec.lua's own,
     -- much fuller comment on this exact fixture pattern (this file mirrors
-    -- it verbatim): server/equipmentshop.lua's own top-level CreateThread
+    -- it verbatim). server/equipmentshop.lua's own top-level CreateThread
     -- call (its runtime-toggle-on poll loop, a genuine
-    -- `while true do Wait(...) ... end`) is always the FIRST CreateThread
-    -- call this fixture ever sees (fxmanifest.lua's own load order --
-    -- fired during Sandbox.loadInto('../server/equipmentshop.lua', env)
-    -- below, strictly before any test calls fireResourceStart(), which is
-    -- the only thing that triggers shared/compat/core.lua's own
-    -- CreateThread call). Captured (never auto-run) via the shared
-    -- cooperative thread runner instead of run to completion, which would
-    -- hang this entire test process forever against a no-op Wait. Every
-    -- OTHER CreateThread call keeps running synchronously, unchanged.
+    -- `while true do Wait(...) ... end`) and any OTHER CreateThread call
+    -- this fixture ever sees are ALL captured (never auto-run) via the
+    -- shared cooperative thread runner -- EVERY call, not just the first
+    -- (boot-order-race audit, this pass -- CORRECTS a stale "the first
+    -- call is always the watcher, order not identity" assumption: that
+    -- broke the moment any earlier-loaded dependency in this fixture also
+    -- calls CreateThread at its own file-load time, silently shifting
+    -- which call is "first" -- running whichever call landed in a later
+    -- slot synchronously against a real loop body either hangs this whole
+    -- test process, or throws "attempt to yield from outside a coroutine"
+    -- once this fixture's WaitStub is a real, coroutine-backed yield, which
+    -- it must be now that server/equipmentshop.lua's own onResourceStart
+    -- handlers call K9Store.WaitForSchemaCheckToSettle -- see that
+    -- function's own header for why it must genuinely yield.
+    -- fixtures/sandbox.lua's own Sandbox.newThreadRunner already supports
+    -- capturing MULTIPLE independent threads and stepping all of them
+    -- together, so there was never a need for the count-based special case
+    -- this replaces).
     local equipmentShopThreadRunner = Sandbox.newThreadRunner()
-    local createThreadCallCount = 0
     local function CreateThreadStub(fn)
-        createThreadCallCount = createThreadCallCount + 1
-        if createThreadCallCount == 1 then
-            equipmentShopThreadRunner.CreateThread(fn)
-        else
-            fn()
-        end
+        equipmentShopThreadRunner.CreateThread(fn)
     end
     local function WaitStub(...) return equipmentShopThreadRunner.Wait(...) end
 
@@ -291,6 +294,27 @@ local function newFixture(opts)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
+
+    -- SETTLE THE SCHEMA-COLLISION PROBE FIRST (boot-order-race audit, this
+    -- pass): unlike tests/equipmentshop_spec.lua's own fixture, this one
+    -- never wipes server/datastore.lua's own onResourceStart registration
+    -- -- but several tests below call the item-catalog upsert/reorder/
+    -- delete callbacks DIRECTLY, without ever calling fireResourceStart()
+    -- first, which reach EnsureEquipmentShopReflectsCurrentCatalog ->
+    -- ActivateEquipmentShopIfEnabled -> K9Store.WaitForSchemaCheckToSettle()
+    -- (server/equipmentshop.lua) as a plain synchronous call, never inside
+    -- a coroutine. Firing the probe here, once, up front, means
+    -- SCHEMA_CHECK_SETTLED is already true by the time any such call
+    -- happens, so that wait never actually polls (see
+    -- K9Store.WaitForSchemaCheckToSettle's own header: `if
+    -- SCHEMA_CHECK_SETTLED then return true end` is its very first check).
+    -- Safe to fire even though the handler stays registered for a LATER
+    -- real fireResourceStart() call too -- VerifyTableShapesAgainstKnownSchema
+    -- is idempotent (re-checking and re-settling is harmless), matching
+    -- this same fix's own reasoning in tests/equipmentshop_spec.lua and
+    -- tests/partnership_spec.lua.
+    for _, fn in ipairs(eventHandlers['onResourceStart'] or {}) do fn('qbx_k9unit') end
+
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/inventory.lua', env)
 
