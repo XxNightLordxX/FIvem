@@ -769,7 +769,26 @@ local function newSearchQbInventoryFixture()
             AddHook = function() return 1 end,
         },
         qbx_core = {
-            GetPlayer = function(_self, _source) return nil end,
+            -- UPDATED (per-person feature control pass, coder-backend):
+            -- used to return nil unconditionally -- harmless before this
+            -- pass, since nothing in server/search.lua's core search path
+            -- needed a resolvable citizenid to succeed (LogSearchAttempt/
+            -- AwardXP already tolerated a nil citizenid gracefully, and
+            -- this fixture's own Config3 has XPProgression/ContrabandAlerts
+            -- both off, so neither of those paths is exercised here
+            -- anyway). Now HANDLESearchTarget's own new
+            -- IsSearchFeaturePermittedForCitizenId gate (see server/search.lua's
+            -- header) genuinely NEEDS a resolvable citizenid for the core
+            -- search to proceed at all -- fails CLOSED on an unresolvable
+            -- one, matching server/pursuitsprint.lua's own established
+            -- precedent for the identical situation. A real, connected
+            -- player who has already passed HasK9Access (stubbed `true`
+            -- above for this whole fixture) always resolves a real
+            -- citizenid via this same export in production; returning one
+            -- here matches that reality instead of an untested-in-practice
+            -- "access granted but citizenid unresolvable" state this
+            -- fixture was never actually exercising.
+            GetPlayer = function(_self, source) return { PlayerData = { citizenid = 'CITIZEN' .. tostring(source), job = { name = 'police' } } } end,
             GetPlayerByCitizenId = function(_self, _citizenid) return nil end,
         },
     }

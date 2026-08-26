@@ -1,0 +1,592 @@
+/*
+    html/tests/tablet_runtime_control_spec.js
+
+    Covers the Runtime Control screen (its own tab, high command only) --
+    server/runtimecontrol.lua PART 1/1B. Owner's own words: "Lets high
+    command switch features on and off SERVER-WIDE from the tablet, and
+    tune numbers live."
+
+    Server contract verified against server/runtimecontrol.lua directly
+    (not assumed): runtimeListFeatures/runtimeListTunables each return
+    `{ok, features?/tunables?, reason?}`; runtimeSetFeature/ResetFeature/
+    SetTunable/ResetTunable each return `{ok, ..., reason?}` -- `reason`
+    renamed to `error` by client/tablet.lua's TranslateReasonResult before
+    it ever reaches this page, so every failure fixture below uses `error`,
+    never `reason`.
+
+    THE HONESTY REQUIREMENT is this file's main subject: a feature's `tier`
+    ('live'|'onstart'|'rawtoplevel'|'clientonly'|'protected'|'unaudited')
+    must render a plain-language explanation BEFORE any click, a
+    protected/unaudited feature must render NO toggle at all, and a
+    tunable's out-of-range refusal must echo the server's REAL min/max, not
+    a client-guessed one.
+
+    Every gate below is asserted as a CONVENIENCE, per html/tablet.js's own
+    THE SECURITY RULE -- covered server-side in
+    tests/runtimecontrol_spec.lua/tests/runtimefeaturetiers_spec.lua/
+    tests/clienttabletruntimecontrol_spec.lua.
+*/
+'use strict';
+
+const t = require('./testkit');
+const { createHarness, jsonResponse } = require('./tablet-sandbox');
+const { findByText, findAll } = require('./tablet-dom-stub');
+
+function routeFetch(handlers) {
+    return function (url, init) {
+        const name = url.split('/').pop();
+        const body = init && init.body ? JSON.parse(init.body) : undefined;
+        const h = handlers[name];
+        if (!h) return Promise.reject(new Error('tablet_runtime_control_spec: unhandled NUI callback ' + name));
+        return Promise.resolve(jsonResponse(h(body)));
+    };
+}
+
+const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false };
+const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false };
+
+async function settle(times) {
+    for (let i = 0; i < (times || 3); i++) await new Promise((r) => setImmediate(r));
+}
+
+function baseHandlers(overrides) {
+    return Object.assign({
+        'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+        'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' } }),
+    }, overrides || {});
+}
+
+async function openTablet(h, extraOpenData) {
+    h.postMessage('tablet:open', Object.assign({ runtimeControlEnabled: true }, extraOpenData || {}));
+    await settle();
+}
+
+function openRuntimeControlTab(h) {
+    return findByText(h.getRoot(), 'Runtime Control')[0].click();
+}
+
+// ======================================================================
+// GATING
+// ======================================================================
+
+t.test('a non-high-command console user never sees the Runtime Control tab', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: CONSOLE_ONLY_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+        })),
+    });
+    await openTablet(h);
+    t.equals(findByText(h.getRoot(), 'Runtime Control').length, 0);
+});
+
+t.test('runtimeControlEnabled=false shows the disabled note (lists still fetched/shown regardless)', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    h.postMessage('tablet:open', { runtimeControlEnabled: false });
+    await settle();
+    openRuntimeControlTab(h);
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Runtime feature control is disabled server-wide. Current values are shown for reference only; changes will not save until it is re-enabled.').length >= 1);
+});
+
+// ======================================================================
+// FEATURES -- DYNAMIC LIST + THE HONESTY REQUIREMENT
+// ======================================================================
+
+t.test('DYNAMIC LIST: features rendered come entirely from tablet:runtimeListFeatures, sorted by name', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [
+                    { name: 'ZzyzxInventedFeature', currentValue: true, tier: 'live', overridden: false, protected: false },
+                    { name: 'BiteAndHold', currentValue: false, tier: 'live', overridden: false, protected: false },
+                ],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'ZzyzxInventedFeature').length >= 1, 'a feature name this test invented on the fly renders correctly -- proves no hardcoded list');
+    t.isTrue(findByText(h.getRoot(), 'BiteAndHold').length >= 1);
+
+    // Sorted alphabetically -- BiteAndHold before ZzyzxInventedFeature.
+    const names = findAll(h.getRoot(), (n) => n.tagName === 'td').map((n) => n.textContent).filter((tx) => tx === 'BiteAndHold' || tx === 'ZzyzxInventedFeature');
+    t.equals(names[0], 'BiteAndHold');
+    t.equals(names[1], 'ZzyzxInventedFeature');
+});
+
+t.test('empty features/tunables lists show their own empty-state notes, not a crash', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'No features to show.').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'No tunables to show.').length >= 1);
+});
+
+t.test('a load failure shows the error and a Retry button that re-fetches', async () => {
+    let calls = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => {
+                calls++;
+                return calls === 1 ? { ok: false, error: 'denied' } : { ok: true, features: [] };
+            },
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'You are not authorized to manage runtime feature control.').length >= 1);
+    findByText(h.getRoot(), 'Retry')[0].click();
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'No features to show.').length >= 1);
+    t.equals(calls, 2);
+});
+
+// ---- THE HONESTY REQUIREMENT: every tier renders its own plain-language explanation, BEFORE any click ----
+
+t.test('a "live" feature shows the Live badge + its own honest description, and a toggle button', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BiteAndHold', currentValue: true, tier: 'live', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Live').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Takes effect immediately for every player, and can be switched back at any time.').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'On').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Disable').length >= 1, 'currently on -- offers Disable');
+});
+
+t.test('an "onstart" feature is honestly labelled Restart Required with its own explanation', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'AdminAuditCommands', currentValue: true, tier: 'onstart', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Restart Required').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Saved now, but only takes effect after this resource is restarted. Nothing changes for players in this session.').length >= 1);
+});
+
+t.test('a "rawtoplevel" feature is honestly labelled Config Edit + Restart Required', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'FetchMechanic', currentValue: true, tier: 'rawtoplevel', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Config Edit + Restart Required').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Saved, but a restart of this resource alone is NOT enough -- config.lua itself must also be edited to match, and the server restarted, for this to actually take effect.').length >= 1);
+});
+
+t.test('a "clientonly" feature is honestly labelled Client-Side Only', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'RadialMenu', currentValue: true, tier: 'clientonly', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Client-Side Only').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'This feature has no confirmed server-side effect. Saving this value cannot be confirmed to change anything for a connected player.').length >= 1);
+});
+
+t.test('a "protected" feature renders NO toggle/reset at all -- only the explanation', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'HighCommand', currentValue: true, tier: 'protected', overridden: false, protected: true }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Protected').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'This feature protects the authorization system this panel itself depends on, and can never be toggled from here. Change it in config.lua and restart if you are certain.').length >= 1);
+    t.equals(findByText(h.getRoot(), 'Enable').length, 0);
+    t.equals(findByText(h.getRoot(), 'Disable').length, 0);
+});
+
+t.test('an "unaudited" feature (a future 57th feature) renders NO toggle either -- shown, but refused for safety', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BrandNewFeature', currentValue: false, tier: 'unaudited', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Not Yet Classified').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'This feature has not yet been classified for runtime control, and is refused for safety. Ask a developer to audit it before it can be toggled here.').length >= 1);
+    t.equals(findByText(h.getRoot(), 'Enable').length, 0);
+});
+
+t.test('a per-feature server-authored `note` (e.g. ScentTracking\'s drop-hook caveat) is shown as supplementary text, alongside the tier explanation', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({
+                ok: true,
+                features: [{ name: 'ScentTracking', currentValue: true, tier: 'live', note: 'A very specific caveat about the drop hook.', overridden: false, protected: false }],
+            }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Takes effect immediately for every player, and can be switched back at any time.').length >= 1, 'primary, locale-driven tier explanation still shown');
+    t.isTrue(findByText(h.getRoot(), 'A very specific caveat about the drop hook.').length >= 1, 'server-authored per-feature note shown as supplementary text');
+});
+
+// ======================================================================
+// FEATURE TOGGLE / RESET
+// ======================================================================
+
+t.test('Enable/Disable requires two clicks (confirm), sends {name, value}', async () => {
+    let setBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BiteAndHold', currentValue: false, tier: 'live', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': (body) => { setBody = body; return { ok: true, appliedLive: true, restartRequired: false, tier: 'live' }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const enableBtn = findByText(h.getRoot(), 'Enable')[0];
+    enableBtn.click(); // arm confirm
+    t.isNull(setBody, 'the first click only arms the confirm -- no request sent yet');
+    enableBtn.click(); // confirm
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(setBody.name, 'BiteAndHold');
+    t.equals(setBody.value, true);
+});
+
+t.test('a rejected toggle (protected_feature/unaudited_feature refusal) renders inline on that row using the SAME tier explanation, not a generic failure', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'SomeFeature', currentValue: false, tier: 'live', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': () => ({ ok: false, error: 'unaudited_feature' }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const enableBtn = findByText(h.getRoot(), 'Enable')[0];
+    enableBtn.click();
+    enableBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.isTrue(findByText(h.getRoot(), 'This feature has not yet been classified for runtime control, and is refused for safety. Ask a developer to audit it before it can be toggled here.').length >= 1);
+});
+
+t.test('Reset to config.lua default only appears when overridden, requires two clicks, sends {name}', async () => {
+    let resetBody = null;
+    let listCalls = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => {
+                listCalls++;
+                return { ok: true, features: [{ name: 'BiteAndHold', currentValue: false, tier: 'live', overridden: true, overriddenBy: 'CIT1', overriddenAt: '2026-01-01 00:00:00', protected: false }] };
+            },
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeResetFeature': (body) => { resetBody = body; return { ok: true, value: true, restartRequired: false }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Overridden by CIT1 at 2026-01-01 00:00:00').length >= 1);
+
+    const resetBtn = findByText(h.getRoot(), 'Reset to config.lua default')[0];
+    resetBtn.click();
+    t.isNull(resetBody);
+    resetBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(resetBody.name, 'BiteAndHold');
+    t.isTrue(listCalls >= 2, 'a successful reset re-pulls the authoritative list rather than optimistically mutating locally');
+});
+
+t.test('a non-overridden feature shows no Reset button at all', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BiteAndHold', currentValue: true, tier: 'live', overridden: false, protected: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+    t.equals(findByText(h.getRoot(), 'Reset to config.lua default').length, 0);
+});
+
+// ======================================================================
+// TUNABLES -- EDIT / SAVE / RESET, SERVER IS THE ONLY AUTHORITATIVE RANGE CHECK
+// ======================================================================
+
+t.test('DYNAMIC LIST: tunables rendered come entirely from tablet:runtimeListTunables, with range and type shown', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'LeashMaxDistance').length >= 1);
+    t.isTrue(findByText(h.getRoot(), '8.5').length >= 1);
+    t.isTrue(findByText(h.getRoot(), '3 – 20').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Decimal').length >= 1);
+});
+
+t.test('an integer tunable shows "Whole number"', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'Tracking.Scent.maxAgeSeconds', currentValue: 300, min: 30, max: 3600, integer: true, overridden: false }],
+            }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Whole number').length >= 1);
+});
+
+function findInput(root, predicate) {
+    return findAll(root, (n) => n.tagName === 'input' && predicate(n))[0];
+}
+
+t.test('Edit opens an inline number editor pre-filled with the current value; Save sends {key, value}', async () => {
+    let setBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+            'tablet:runtimeSetTunable': (body) => { setBody = body; return { ok: true, appliedLive: true, restartRequired: false, value: 12 }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    findByText(h.getRoot(), 'Edit')[0].click();
+    await settle();
+
+    const input = findInput(h.getRoot(), (n) => n.getAttribute('type') === 'number');
+    t.isDefined(input);
+    t.equals(input.value, '8.5', 'pre-filled from the current value');
+    input.typeValue('12');
+
+    findByText(h.getRoot(), 'Save Value')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(setBody.key, 'LeashMaxDistance');
+    t.equals(setBody.value, 12);
+});
+
+t.test('Save with a non-numeric value shows a client-side "enter a valid number" note WITHOUT any server round trip', async () => {
+    let setCalled = false;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+            'tablet:runtimeSetTunable': () => { setCalled = true; return { ok: true, value: 1 }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    findByText(h.getRoot(), 'Edit')[0].click();
+    await settle();
+    const input = findInput(h.getRoot(), (n) => n.getAttribute('type') === 'number');
+    input.typeValue('not-a-number');
+    findByText(h.getRoot(), 'Save Value')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.isFalse(setCalled, 'a non-numeric value never reaches the server at all');
+    t.isTrue(findByText(h.getRoot(), 'Enter a valid number.').length >= 1);
+});
+
+t.test('an out-of-range value IS sent to the server unclamped, and the server\'s REAL min/max is echoed back on refusal', async () => {
+    let setBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+            'tablet:runtimeSetTunable': (body) => { setBody = body; return { ok: false, error: 'out_of_range', min: 3.0, max: 20.0 }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    findByText(h.getRoot(), 'Edit')[0].click();
+    await settle();
+    const input = findInput(h.getRoot(), (n) => n.getAttribute('type') === 'number');
+    input.typeValue('999999');
+    findByText(h.getRoot(), 'Save Value')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(setBody.value, 999999, 'this page never clamps a tunable value before sending it -- the server is the only authoritative gate');
+    t.isTrue(findByText(h.getRoot(), 'That value must be between 3 and 20.').length >= 1, 'the server\'s own real bounds are shown, not a client-guessed range');
+});
+
+t.test('Cancel discards the edit without saving', async () => {
+    let setCalled = false;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+            'tablet:runtimeSetTunable': () => { setCalled = true; return { ok: true, value: 1 }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    findByText(h.getRoot(), 'Edit')[0].click();
+    await settle();
+    findInput(h.getRoot(), (n) => n.getAttribute('type') === 'number').typeValue('15');
+    findByText(h.getRoot(), 'Cancel')[0].click();
+    await settle();
+
+    t.isFalse(setCalled);
+    t.isTrue(findByText(h.getRoot(), '8.5').length >= 1, 'the original value is shown again, unchanged');
+});
+
+t.test('Reset (tunable) only appears when overridden, requires two clicks, sends {key}', async () => {
+    let resetBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 12, min: 3.0, max: 20.0, integer: false, overridden: true, overriddenBy: 'CIT9', overriddenAt: '2026-02-02 00:00:00' }],
+            }),
+            'tablet:runtimeResetTunable': (body) => { resetBody = body; return { ok: true, value: 8, restartRequired: false }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Overridden by CIT9 at 2026-02-02 00:00:00').length >= 1);
+
+    const resetBtn = findByText(h.getRoot(), 'Reset to config.lua default')[0];
+    resetBtn.click();
+    resetBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(resetBody.key, 'LeashMaxDistance');
+});
+
+// ======================================================================
+// STALE-RESPONSE GUARD -- same class of race as tests/tablet_stale_response_spec.js
+// and tablet_shop_locations_spec.js's own equivalent, applied here via a
+// request-generation counter (this list has no per-request identity like a
+// citizenid/query to compare against arrival order).
+// ======================================================================
+
+t.test('a late tablet:runtimeListFeatures response for an OLDER request never overwrites what a NEWER request already resolved', async () => {
+    let resolveStale = null;
+    let callNumber = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeListFeatures': () => {
+                callNumber++;
+                if (callNumber === 1) {
+                    return new Promise((resolve) => {
+                        resolveStale = () => resolve({ ok: true, features: [{ name: 'STALE_FIRST_RESULT', currentValue: true, tier: 'live', overridden: false, protected: false }] });
+                    });
+                }
+                return { ok: true, features: [{ name: 'FRESH_SECOND_RESULT', currentValue: true, tier: 'live', overridden: false, protected: false }] };
+            },
+        })),
+    });
+    await openTablet(h);
+
+    openRuntimeControlTab(h);
+    await settle();
+    t.isDefined(resolveStale, 'the first request was sent and is being held unresolved');
+
+    findByText(h.getRoot(), 'My Record')[0].click();
+    await settle();
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'FRESH_SECOND_RESULT').length >= 1, 'the second (current) request\'s result is showing');
+    t.equals(findByText(h.getRoot(), 'STALE_FIRST_RESULT').length, 0, 'the first request has not (yet) resolved at all');
+
+    resolveStale();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'FRESH_SECOND_RESULT').length >= 1, 'the fresh result is still showing after the late first response arrives');
+    t.equals(findByText(h.getRoot(), 'STALE_FIRST_RESULT').length, 0, 'the late, OLDER response never replaces the current, NEWER one');
+});
+
+t.run();

@@ -274,6 +274,51 @@ local function ResolveCitizenId(src)
     return player and player.PlayerData and player.PlayerData.citizenid
 end
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.FetchMechanic
+--- flag) is already checked by the top-of-file gate above, before this
+--- function is ever reached. Consulted at BOTH of this feature's two
+--- "opening" actions -- requestThrowFetchBall (the thrower starting a new
+--- cycle) and requestPickupFetchBall (a K9 starting to carry one) -- never
+--- at a termination/continuation step (confirm handlers, cancel handlers,
+--- releaseFetchBall, requestDeliverFetchBall, requestRecallFetchBall,
+--- reportFetchCarrierDown): those either merely confirm/complete an
+--- already-approved action or are the "let go" half of this file's own "no
+--- unbounded trap" guarantee and must keep working exactly as
+--- server/recall.lua's own header documents for the identical reason.
+---   2. an explicit block.FetchMechanic grant -> DENY
+---   3. FetchMechanic listed in RequireGrant -> ALLOW only with an active
+---      feature.FetchMechanic grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsFetchMechanicPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.FetchMechanic') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.FetchMechanic == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.FetchMechanic') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- @param netId number
 --- @return string? citizenid
 --- @return table? ball
@@ -360,14 +405,24 @@ RegisterNetEvent('qbx_k9unit:server:requestThrowFetchBall', function()
         return
     end
 
-    if not ThrowCooldown.Consume(src) then
-        return -- silent no-op: rate-limited, matches this resource's bark/leash-request/certify-action convention
-    end
-
     local citizenid = ResolveCitizenId(src)
     if not citizenid then
         NotifyPlayer(src, locale('common.unable_to_resolve_citizenid'), 'error')
         return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsFetchMechanicPermittedForCitizenId
+    -- above. Checked BEFORE ThrowCooldown.Consume below, matching
+    -- server/pursuitsprint.lua's own "cheapest/no-side-effect checks first"
+    -- discipline, so a blocked handler never burns their own throw cooldown
+    -- for a request that was always going to be refused.
+    if not IsFetchMechanicPermittedForCitizenId(citizenid) then
+        NotifyPlayer(src, locale('fetch.not_authorized_equipment'), 'error')
+        return
+    end
+
+    if not ThrowCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, matches this resource's bark/leash-request/certify-action convention
     end
 
     if FetchBalls[citizenid] then
@@ -636,6 +691,19 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
         return
     end
 
+    local citizenid = ResolveCitizenId(src)
+    if not citizenid then return end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsFetchMechanicPermittedForCitizenId
+    -- above. Checked BEFORE PickupCooldown.Consume below, same "cheapest/
+    -- no-side-effect checks first" discipline as requestThrowFetchBall
+    -- above, so a blocked K9 never burns their own pickup cooldown for a
+    -- request that was always going to be refused.
+    if not IsFetchMechanicPermittedForCitizenId(citizenid) then
+        NotifyPlayer(src, locale('fetch.not_authorized_equipment'), 'error')
+        return
+    end
+
     if not PickupCooldown.Consume(src) then
         return -- silent no-op: rate-limited, matches ThrowCooldown's own convention
     end
@@ -686,9 +754,6 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
         NotifyPlayer(src, locale('fetch.too_far_to_pickup'), 'error')
         return
     end
-
-    local citizenid = ResolveCitizenId(src)
-    if not citizenid then return end
 
     local mode = Config.FetchMechanic.mouthCarryMode == 'attach' and 'attach' or 'fake'
 

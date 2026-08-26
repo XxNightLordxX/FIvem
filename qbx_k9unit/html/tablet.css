@@ -572,3 +572,61 @@ body {
 .k9tablet-table .k9tablet-muted {
     font-variant-numeric: tabular-nums;
 }
+
+/*
+    RUNTIME FEATURE CONTROL + TUNING (its own tab, high command only) --
+    server/runtimecontrol.lua PART 1/1B. Deliberately introduces almost no
+    new form/action classes of its own -- html/tablet.js's
+    buildRuntimeControlScreen() reuses the SAME .k9tablet-table/
+    .k9tablet-cert-tier-actions/.k9tablet-cert-tier-label-input/
+    .k9tablet-cert-tier-row-error/.k9tablet-muted/.k9tablet-hint rules
+    already defined above for the certification tier and shop location
+    screens -- one visual language, not a fourth one. The two rules below
+    are the only genuinely new ones this screen needs: a colour-coded tier
+    badge (THE HONESTY REQUIREMENT this whole screen exists to satisfy --
+    see that file's own header) and an on/off value indicator.
+*/
+.k9tablet-runtime-tier {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.k9tablet-runtime-tier--live {
+    background: rgba(155, 209, 127, 0.18);
+    color: #9bd17f;
+}
+
+.k9tablet-runtime-tier--onstart,
+.k9tablet-runtime-tier--rawtoplevel {
+    background: rgba(209, 179, 127, 0.18);
+    color: #d1b37f;
+}
+
+.k9tablet-runtime-tier--clientonly {
+    background: rgba(154, 160, 171, 0.18);
+    color: #9aa0ab;
+}
+
+.k9tablet-runtime-tier--protected,
+.k9tablet-runtime-tier--unaudited {
+    background: rgba(224, 138, 138, 0.18);
+    color: #e08a8a;
+}
+
+.k9tablet-runtime-value {
+    font-weight: 600;
+}
+
+.k9tablet-runtime-value--on {
+    color: #9bd17f;
+}
+
+.k9tablet-runtime-value--off {
+    color: #9aa0ab;
+}

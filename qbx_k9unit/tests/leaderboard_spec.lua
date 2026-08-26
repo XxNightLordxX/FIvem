@@ -56,6 +56,43 @@ local function AddEventHandler(eventName, handler)
     eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
 end
 
+-- PER-PERSON FEATURE CONTROL (this pass) -- server/leaderboard.lua's
+-- IsK9LeaderboardPermittedForCitizenId now resolves the caller's own
+-- citizenid via exports.qbx_core:GetPlayer(source) before running the
+-- query, mirroring every other migrated file's fixture shape
+-- (tests/pursuitsprint_spec.lua's own `exportsTable`/`grantPermission`
+-- convention). `playerCitizenidBySource` auto-assigns a stable, unique
+-- citizenid per source the first time it's asked for -- every existing
+-- test in this file drives HasK9Access/the query/cooldown paths through
+-- freshSource() without ever needing to know or care about a specific
+-- citizenid, so this must never require a test to opt in just to keep
+-- passing.
+local playerCitizenidBySource = {}
+local function citizenidFor(src)
+    if not playerCitizenidBySource[src] then
+        playerCitizenidBySource[src] = 'CIT' .. tostring(src)
+    end
+    return playerCitizenidBySource[src]
+end
+local exportsStub = {
+    qbx_core = {
+        GetPlayer = function(_self, src)
+            return { PlayerData = { source = src, citizenid = citizenidFor(src) } }
+        end,
+    },
+}
+
+local permissionGrants = {} -- [citizenid][key] = true/false
+local permissionCalls = {}
+local function defaultHasPermission(citizenid, key)
+    permissionCalls[#permissionCalls + 1] = { citizenid = citizenid, key = key }
+    return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+end
+local function grantPermission(citizenid, key, value)
+    permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+    permissionGrants[citizenid][key] = value
+end
+
 local capturedQueries = {}
 local fixtureRows = nil -- nil => real stub returns {}; set per-test
 local fixtureShouldThrow = false
@@ -74,6 +111,7 @@ local MySQLStub = {
 local Config = {
     Features = { K9Leaderboard = true },
     Leaderboard = { MaxRows = 20, CommandCooldownMs = 5000 },
+    FeatureControl = { RequireGrant = {} },
 }
 
 local env = Sandbox.newEnv({
@@ -84,6 +122,8 @@ local env = Sandbox.newEnv({
     NotifyPlayer = NotifyPlayer,
     MySQL = MySQLStub,
     Config = Config,
+    exports = exportsStub,
+    HasPermission = defaultHasPermission,
 })
 
 -- server/datastore.lua -- REAL, unmodified, loaded alongside (this file's
@@ -112,6 +152,7 @@ local function resetCaptures()
     notifyCalls = {}
     capturedQueries = {}
     hasAccessCallLog = {}
+    permissionCalls = {}
 end
 
 local function lastNotify() return notifyCalls[#notifyCalls] end
@@ -227,6 +268,59 @@ t.test('a DIFFERENT source is never blocked by another source\'s cooldown', func
     local queriesAfterFirst = #capturedQueries
     registeredCommands.k9stats(freshSource(), {})
     t.equals(#capturedQueries, queriesAfterFirst + 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- Per-person feature control (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsK9LeaderboardPermittedForCitizenId. Mirrors
+-- tests/pursuitsprint_spec.lua's own section of the same name.
+-- ----------------------------------------------------------------------
+
+t.test('BLOCK: an explicit block.K9Leaderboard grant denies even though HasK9Access is true, and burns NO cooldown', function()
+    resetCaptures()
+    local src = freshSource()
+    grantPermission(citizenidFor(src), 'block.K9Leaderboard', true)
+
+    registeredCommands.k9stats(src, {})
+    t.equals(#capturedQueries, 0, 'a blocked caller must never reach the database')
+    t.equals(lastNotify().notifyType, 'error')
+
+    -- Unblock and retry IMMEDIATELY (same instant, fakeNow unchanged) -- if
+    -- the block above had consumed StatsCooldown, this would now be
+    -- rejected as rate-limited instead of succeeding.
+    permissionGrants[citizenidFor(src)]['block.K9Leaderboard'] = false
+    fixtureRows = { { citizenid = 'ABCD1234', xp = 100 } }
+    registeredCommands.k9stats(src, {})
+    t.equals(#capturedQueries, 1, 'a block must never burn the cooldown a legitimate follow-up request still needs')
+end)
+
+t.test('not blocked: an ordinary caller with no grant/block row at all still works (default allow, step 4)', function()
+    resetCaptures()
+    fixtureRows = { { citizenid = 'ABCD1234', xp = 100 } }
+    registeredCommands.k9stats(freshSource(), {})
+    t.equals(#capturedQueries, 1)
+end)
+
+t.test('RequireGrant listed + no grant held -- denied even though HasK9Access is true', function()
+    resetCaptures()
+    Config.FeatureControl.RequireGrant.K9Leaderboard = true
+    local src = freshSource()
+    -- deliberately NOT granted
+    registeredCommands.k9stats(src, {})
+    t.equals(#capturedQueries, 0)
+    t.equals(lastNotify().notifyType, 'error')
+    Config.FeatureControl.RequireGrant.K9Leaderboard = nil -- restore for every test below
+end)
+
+t.test('RequireGrant listed + an active feature.K9Leaderboard grant -- allowed', function()
+    resetCaptures()
+    Config.FeatureControl.RequireGrant.K9Leaderboard = true
+    local src = freshSource()
+    grantPermission(citizenidFor(src), 'feature.K9Leaderboard', true)
+    fixtureRows = { { citizenid = 'ABCD1234', xp = 100 } }
+    registeredCommands.k9stats(src, {})
+    t.equals(#capturedQueries, 1)
+    Config.FeatureControl.RequireGrant.K9Leaderboard = nil -- restore for every test below
 end)
 
 -- ----------------------------------------------------------------------

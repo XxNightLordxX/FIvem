@@ -875,6 +875,13 @@ t.test('requestPickupFetchBall: a non-K9 ped model is rejected', function()
     local f = newFetchFixture()
     local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
     f.setAccess(2, true)
+    -- PER-PERSON FEATURE CONTROL (this pass): requestPickupFetchBall now
+    -- resolves the caller's own citizenid immediately after HasK9Access
+    -- (before IsFetchMechanicPermittedForCitizenId), not only right before
+    -- the eventual mutation the way it used to -- a real connected caller
+    -- that already passed HasK9Access always has a resolvable citizenid in
+    -- production, so every test past this point needs setPlayer too.
+    f.setPlayer(2, 'BBB222')
     f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, NON_K9_PED_HASH)
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.carry_requires_k9_model'))
@@ -912,6 +919,9 @@ end)
 t.test('requestPickupFetchBall: no ball at that netId, or a ball not in a pickup-able state, notifies "not available"', function()
     local f = newFetchFixture()
     f.setAccess(1, true)
+    -- PER-PERSON FEATURE CONTROL (this pass): see the "a non-K9 ped model is
+    -- rejected" test above for why this now needs setPlayer too.
+    f.setPlayer(1, 'AAA111')
     f.setPed(1, 5001, { x = 0, y = 0, z = 0 }, 0.0, K9_PED_HASH)
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 1, 123456)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.not_available_to_pickup'))

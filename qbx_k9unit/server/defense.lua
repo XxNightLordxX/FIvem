@@ -406,6 +406,46 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL (Config.FeatureControl -- config.lua's own
+-- header documents the 4-step resolution; step 1, Config.Features.
+-- HandlerDownDefense, is already checked at the top of this file before
+-- this function is ever reached). Mirrors server/pursuitsprint.lua's
+-- IsPursuitSprintPermittedForCitizenId shape verbatim (that file's own
+-- header says to read it before writing another variant). This is the
+-- notification-sending entry point (TryNotifyPartnerK9 below) -- NOT
+-- reportHandlerAttacker's own low-trust hint ingestion, which is left
+-- ungated for the same reason gunpowder/blood CAPTURE is left ungated in
+-- server/tracking.lua: recording a candidate attacker hint is not itself a
+-- restricted action, and gating it would only mean a later, correctly
+-- suppressed notification has a stale/empty hint instead of a fresh one --
+-- no capability, message, or effect is granted by the hint alone.
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsHandlerDownDefensePermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.HandlerDownDefense') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.HandlerDownDefense == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.HandlerDownDefense') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Combined "is this specific connected player currently down" signal --
 --- see this file's header for the full reasoning on reusing
 --- `Config.Combat.PropDragging.IsPlayerDownedOverride` rather than adding a
@@ -642,6 +682,18 @@ local function TryNotifyPartnerK9(handlerSrc, handlerPed)
         if ResolveNetworkEntity(hostile.attackerNetId, 1) then
             suggestedTargetNetId = hostile.attackerNetId
         end
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see
+    -- IsHandlerDownDefensePermittedForCitizenId above. Checked against BOTH
+    -- parties (either one being blocked/ungranted silently suppresses this
+    -- specific notification) and, critically, BEFORE the cooldown stamp
+    -- immediately below -- a block must never burn this anti-spam budget,
+    -- matching this function's own RETRY-WHILE-DOWN discipline of only
+    -- consuming state once every other check has already passed.
+    if not IsHandlerDownDefensePermittedForCitizenId(handlerCitizenid)
+        or not IsHandlerDownDefensePermittedForCitizenId(partnerCitizenid) then
+        return
     end
 
     -- Every real precondition has now passed -- stamp the anti-spam

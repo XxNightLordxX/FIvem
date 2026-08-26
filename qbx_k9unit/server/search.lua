@@ -266,6 +266,51 @@ AddEventHandler('onResourceStart', function(resourceName)
     )
 end)
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL (Config.FeatureControl -- config.lua's own
+-- header documents the 4-step resolution; step 1, Config.Features.SearchZones,
+-- is checked separately in the callback registration below before this
+-- function is ever reached). Mirrors server/pursuitsprint.lua's
+-- IsPursuitSprintPermittedForCitizenId shape verbatim (that file's own
+-- header says to read it before writing another variant).
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsSearchFeaturePermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.SearchZones') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.SearchZones == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.SearchZones') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
+--- Resolves the CALLING searcher's own citizenid -- shared by both
+--- IsSearchFeaturePermittedForCitizenId call sites below (request-time and
+--- the mid-flight re-check) so there is exactly one place this resolution
+--- is written. Never anything client-supplied -- `source` is ox_lib's own
+--- callback-verified value both times this is called.
+--- @param source number
+--- @return string? citizenid
+local function ResolveSearcherCitizenidForPermission(source)
+    local player = exports.qbx_core:GetPlayer(source)
+    return player and player.PlayerData and player.PlayerData.citizenid or nil
+end
+
 -- In-flight mutex per source (DEVELOPER_REFERENCE.md#contraband-search §4A). Set
 -- synchronously, BEFORE any yielding work, checked immediately after the
 -- cheap validation steps (payload shape, feature flag, access) and before
@@ -1342,6 +1387,22 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         return { ok = false, reason = 'access_revoked' }
     end
 
+    -- PER-PERSON FEATURE CONTROL, RE-CHECKED (same race window as the
+    -- HasK9Access re-check immediately above, same reasoning): high command
+    -- can grant/revoke a block/grant mid-flight during the exact same
+    -- genuinely-yielding ox_inventory await this file's own header already
+    -- flags for HasK9Access. Reported as 'access_revoked' too -- from the
+    -- searcher's point of view both mean the same thing ("something about my
+    -- authorization changed while this was in flight"), and this file's own
+    -- established posture (PursuitSprintRejectMessage's identical framing)
+    -- is that a blocked handler does not need a message that reads
+    -- differently from a revoked one.
+    local searcherCitizenidMidFlight = ResolveSearcherCitizenidForPermission(source)
+    if not searcherCitizenidMidFlight or not IsSearchFeaturePermittedForCitizenId(searcherCitizenidMidFlight) then
+        LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
+        return { ok = false, reason = 'access_revoked' }
+    end
+
     if not queryOk or items == nil then
         -- k9_search_log audit row — regression-tester correction: this
         -- MUST be wired at THIS specific pcall boundary (the one strictly
@@ -1517,6 +1578,19 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
 
     if not HasK9Access(source) then
         return { ok = false, reason = 'no_access' } -- reuse the global from server/certifications.lua, do not re-derive
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsSearchFeaturePermittedForCitizenId
+    -- above. Deliberately BEFORE the mutex/cooldown below -- a block must
+    -- never burn a cooldown slot or occupy the in-flight mutex for a request
+    -- that was always going to be refused. 'not_granted' is a new reason
+    -- value; client/search.lua's own reason-handling `else` branch already
+    -- treats any unrecognized reason as a plain error notify (confirmed by
+    -- that file's own comment on 'access_revoked'), so no client-side change
+    -- is required for this one either.
+    local searcherCitizenidAtRequest = ResolveSearcherCitizenidForPermission(source)
+    if not searcherCitizenidAtRequest or not IsSearchFeaturePermittedForCitizenId(searcherCitizenidAtRequest) then
+        return { ok = false, reason = 'not_granted' }
     end
 
     -- Set the in-flight mutex synchronously, BEFORE any further work that

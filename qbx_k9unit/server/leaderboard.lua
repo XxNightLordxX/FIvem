@@ -247,11 +247,62 @@ end
 -- constant/reasoning as server/admin.lua's own ROWS_PER_NOTIFY_CHUNK.
 local ROWS_PER_NOTIFY_CHUNK = 5
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.K9Leaderboard
+--- flag) is already checked at file-load time above, before this function
+--- can ever be reached:
+---   2. an explicit block.K9Leaderboard grant -> DENY
+---   3. K9Leaderboard listed in RequireGrant -> ALLOW only with an active
+---      feature.K9Leaderboard grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsK9LeaderboardPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.K9Leaderboard') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.K9Leaderboard == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.K9Leaderboard') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 RegisterCommand('k9stats', function(source, args)
     if type(HasK9Access) ~= 'function' or not HasK9Access(source) then
         if source ~= 0 then
             NotifyPlayer(source, locale('leaderboard.no_access'), 'error')
         end
+        return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsK9LeaderboardPermittedForCitizenId
+    -- above. Checked BEFORE StatsCooldown.Consume below, matching
+    -- server/pursuitsprint.lua's own "cheapest/no-side-effect checks first,
+    -- mutation last" discipline, so a blocked handler never burns their own
+    -- cooldown window for a request that was always going to be refused.
+    -- `source == 0` (console) already fails HasK9Access above and never
+    -- reaches here, so GetPlayer is only ever called for a real client.
+    local player = exports.qbx_core:GetPlayer(source)
+    local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+    if not citizenid or not IsK9LeaderboardPermittedForCitizenId(citizenid) then
+        NotifyPlayer(source, locale('leaderboard.no_access'), 'error')
         return
     end
 

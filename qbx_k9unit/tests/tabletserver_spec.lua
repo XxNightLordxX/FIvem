@@ -182,6 +182,19 @@ local function newFixture(opts)
         GetXPTier = opts.getXPTier,
         ApplyK9PedRole = opts.applyK9PedRole,
         ForceRevertK9Appearance = opts.forceRevertK9Appearance,
+        -- CERTIFICATION DEPTH READ-SIDE (this pass) -- server/certifications.lua's
+        -- own DB-authoritative, already-exposed accessor. Deliberately nil by
+        -- default (like HasPermission above): BuildCertificationsArray's own
+        -- `type(QueryCertificationRecord) == 'function'` guard must tolerate
+        -- its absence and degrade to no tier/expiry/specializations data
+        -- rather than erroring.
+        QueryCertificationRecord = opts.queryCertificationRecord,
+        -- osTime lets a test pin "now" for expiry-boundary assertions without
+        -- depending on real wall-clock time -- see NowUnixOrNil in
+        -- server/tablet.lua. Omitted entirely (not even set to nil) when
+        -- opts.osTime is absent, so env.os stays the REAL os table
+        -- Sandbox.newEnv already shallow-copied from _G.
+        os = opts.osTime and { time = opts.osTime } or nil,
     })
 
     -- K9Store migration (this pass): server/tablet.lua's QueryHasAnyActiveCertification/
@@ -340,6 +353,129 @@ t.test('tabletRequestMyRecord: certifications array has ONE ROW PER CONFIGURED D
     t.equals(byDept.police.grantedBy, 'GRANTER1')
     t.isFalse(byDept.sheriff.active)
     t.isNil(byDept.sheriff.grantedBy)
+end)
+
+-- ============================================================================
+-- CERTIFICATION DEPTH READ-SIDE (this pass) -- BuildCertificationsArray now
+-- carries tier/expiresAtUnix/expired/specializations per department, sourced
+-- from server/certifications.lua's DB-authoritative QueryCertificationRecord.
+-- See that helper's own doc comment in server/tablet.lua for the full
+-- reasoning (offline-safe, bounded per configured department, guarded soft
+-- dependency).
+-- ============================================================================
+
+t.test('tabletRequestMyRecord: certifications array carries tier/expiry/specializations for an actively-held department', function()
+    local f = newFixture({
+        queryCertificationRecord = function(citizenid, jobName)
+            if citizenid == 'CIT1' and jobName == 'police' then
+                return { tier = 'senior', expiresAtUnix = 9999999999, specializations = { 'narcotics', 'explosives' } }
+            end
+            return nil
+        end,
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+
+    t.equals(byDept.police.tier, 'senior')
+    t.equals(byDept.police.expiresAtUnix, 9999999999)
+    t.isFalse(byDept.police.expired)
+    t.equals(#byDept.police.specializations, 2)
+
+    -- A department this citizen has never held must carry NO tier/expiry/
+    -- specialization data at all -- see this function's own doc comment on
+    -- why that read is skipped entirely for an inactive row.
+    t.isNil(byDept.sheriff.tier)
+    t.isNil(byDept.sheriff.expiresAtUnix)
+    t.isFalse(byDept.sheriff.expired)
+    t.equals(#byDept.sheriff.specializations, 0)
+end)
+
+t.test('tabletRequestMyRecord: certifications array marks expired = true once now has reached expiresAtUnix', function()
+    local f = newFixture({
+        osTime = function() return 2000 end,
+        queryCertificationRecord = function() return { tier = 'certified', expiresAtUnix = 1000, specializations = {} } end,
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.isTrue(byDept.police.expired)
+end)
+
+t.test('tabletRequestMyRecord: certifications array does NOT mark expired before expiresAtUnix is reached', function()
+    local f = newFixture({
+        osTime = function() return 500 end,
+        queryCertificationRecord = function() return { tier = 'certified', expiresAtUnix = 1000, specializations = {} } end,
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.isFalse(byDept.police.expired)
+end)
+
+t.test('tabletRequestMyRecord: certifications array never marks expired when expiresAtUnix is nil (never expires)', function()
+    local f = newFixture({
+        osTime = function() return 999999999999 end, -- an absurdly large "now" -- must still not flip expired
+        queryCertificationRecord = function() return { tier = 'certified', expiresAtUnix = nil, specializations = {} } end,
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.isFalse(byDept.police.expired)
+    t.isNil(byDept.police.expiresAtUnix)
+end)
+
+t.test('tabletRequestMyRecord: certifications array degrades cleanly (no crash, no data) when QueryCertificationRecord is unavailable', function()
+    local f = newFixture() -- queryCertificationRecord omitted -- stays nil, matching every other soft dependency default
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.isTrue(byDept.police.active)
+    t.isNil(byDept.police.tier)
+    t.isNil(byDept.police.expiresAtUnix)
+    t.isFalse(byDept.police.expired)
+    t.equals(#byDept.police.specializations, 0)
+end)
+
+t.test('tabletRequestMyRecord: certifications array degrades cleanly when QueryCertificationRecord itself returns nil for an active row', function()
+    -- A genuine race (the row was revoked between the two reads) or any
+    -- other reason the DB-authoritative read comes back empty must never
+    -- crash this callback -- see BuildCertificationsArray's own doc comment.
+    local f = newFixture({ queryCertificationRecord = function() return nil end })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(result.ok)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.isTrue(byDept.police.active)
+    t.isNil(byDept.police.tier)
+end)
+
+t.test('tabletRequestMyRecord: certifications array never queries QueryCertificationRecord for a department not actively held', function()
+    local queriedJobs = {}
+    local f = newFixture({
+        queryCertificationRecord = function(_citizenid, jobName)
+            queriedJobs[#queriedJobs + 1] = jobName
+            return { tier = 'certified', expiresAtUnix = nil, specializations = {} }
+        end,
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.addCertRow('CIT1', 'police', 'GRANTER1', true) -- sheriff left unheld
+    cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.equals(#queriedJobs, 1)
+    t.equals(queriedJobs[1], 'police')
 end)
 
 t.test('tabletRequestMyRecord: xp/tierLabel are nil when XPProgression is off', function()
@@ -658,6 +794,32 @@ t.test('tabletRequestPersonSummary: works for a genuinely OFFLINE target citizen
     local found = false
     for _, key in ipairs(result.permissions) do if key == 'k9.access' then found = true end end
     t.isTrue(found)
+end)
+
+t.test('tabletRequestPersonSummary: certifications array carries tier/expiry/specializations for a genuinely OFFLINE target', function()
+    -- The whole point of QueryCertificationRecord being DB-authoritative
+    -- (not the online-only in-memory cert cache) is that a high-command
+    -- lookup on a disconnected handler must still show their tier -- this
+    -- is the read-side gap the owner's task named explicitly.
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        queryCertificationRecord = function(citizenid, jobName)
+            if citizenid == 'OFFLINE-K9' and jobName == 'police' then
+                return { tier = 'trainee', expiresAtUnix = nil, specializations = { 'patrol' } }
+            end
+            return nil
+        end,
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addCertRow('OFFLINE-K9', 'police', 'HC1', true)
+
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'OFFLINE-K9')
+    t.isTrue(result.ok)
+    local byDept = {}
+    for _, row in ipairs(result.certifications) do byDept[row.departmentKey] = row end
+    t.equals(byDept.police.tier, 'trainee')
+    t.equals(#byDept.police.specializations, 1)
+    t.equals(byDept.police.specializations[1], 'patrol')
 end)
 
 -- ============================================================================

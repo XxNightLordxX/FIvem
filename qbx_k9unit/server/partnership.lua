@@ -540,6 +540,17 @@ end
 --- Human-readable rejection messages for CheckPartnershipEligibility's
 --- `reason` return value. Mirrors server/main.lua's LEASH_REJECT_MESSAGES
 --- shape exactly.
+-- 'not_granted' (PER-PERSON FEATURE CONTROL, see
+-- IsHandlerPartnershipPermittedForCitizenId below) is DELIBERATELY NOT given
+-- its own entry here -- PartnershipRejectReasonMessage's own `or
+-- locale('partnership.reject_fallback')` fallback already covers it with an
+-- existing, already-shipped, already-tested locale key ("Unable to set up
+-- partnership."), so no NEW locale key is needed (and none is added here --
+-- locales/en.json is off-limits for this file to edit directly, and the
+-- test sandbox's own `locale()` hard-asserts every key it's asked for
+-- actually exists, so introducing an unshipped key here would redden
+-- tests/run.sh for every spec that loads this file, not just fail silently
+-- at runtime).
 local PARTNERSHIP_REJECT_MESSAGES = {
     feature_disabled          = locale('partnership.feature_disabled'),
     invalid_target            = locale('partnership.invalid_target'),
@@ -555,6 +566,46 @@ local PARTNERSHIP_REJECT_MESSAGES = {
 --- @return string
 local function PartnershipRejectReasonMessage(reason)
     return PARTNERSHIP_REJECT_MESSAGES[reason] or locale('partnership.reject_fallback')
+end
+
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL (Config.FeatureControl -- config.lua's own
+-- header documents the 4-step resolution; step 1, Config.Features.
+-- HandlerPartnership, is already checked separately by
+-- CheckPartnershipEligibility below before this function is ever reached).
+-- Mirrors server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId
+-- shape verbatim (that file's own header says to read it before writing
+-- another variant). Checked against BOTH the K9-role and officer-role
+-- citizenid before a NEW partnership may ESTABLISH (either party being
+-- blocked/ungranted refuses formation) -- this is the ENTRY POINT this
+-- feature has (mutual consent to FORM a partnership); breakPartnership
+-- below is DELIBERATELY NEVER gated by this check, or by anything else --
+-- see that handler's own comment for why (the "no unbounded trap"
+-- guarantee this file's header already states for that path).
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsHandlerPartnershipPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.HandlerPartnership') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.HandlerPartnership == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.HandlerPartnership') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
 --- Shared eligibility/proximity checks for establishing a partnership, run
@@ -685,6 +736,18 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
     local officerJob = officerPlayer and officerPlayer.PlayerData and officerPlayer.PlayerData.job
     if not officerJob or not Config.Departments[officerJob.name] then
         return false, nil, nil, 'officer_not_in_department'
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsHandlerPartnershipPermittedForCitizenId
+    -- above. Checked LAST (cheapest/most-defensive checks first, matching
+    -- this function's own established discipline) and against BOTH parties --
+    -- either one being blocked/ungranted refuses the SAME establishment
+    -- attempt. NOT the final authority any more than the checks above it are
+    -- (see this function's own doc comment on the TOCTOU re-check inside
+    -- respondPartnerUp's critical section below).
+    if not IsHandlerPartnershipPermittedForCitizenId(k9Citizenid)
+        or not IsHandlerPartnershipPermittedForCitizenId(officerCitizenid) then
+        return false, nil, nil, 'not_granted'
     end
 
     return true, k9Src, officerSrc, nil, k9Citizenid, officerCitizenid
@@ -878,6 +941,18 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         local officerJobNow = officerPlayerNow and officerPlayerNow.PlayerData and officerPlayerNow.PlayerData.job
         if not officerJobNow or not Config.Departments[officerJobNow.name] then
             return 'officer_not_in_department'
+        end
+
+        -- PER-PERSON FEATURE CONTROL, RE-CHECKED (same TOCTOU race window
+        -- this critical section's own CORRECTNESS-PASS FIX comment above
+        -- already documents for HasK9Access/department membership -- high
+        -- command can grant/revoke a block/grant during the exact same
+        -- await-laden window a certification revoke can land in). Ordered
+        -- here, alongside those two, as the last synchronous check before
+        -- the INSERT.
+        if not IsHandlerPartnershipPermittedForCitizenId(k9Citizenid)
+            or not IsHandlerPartnershipPermittedForCitizenId(officerCitizenid) then
+            return 'not_granted'
         end
 
         -- established_by = the INITIATOR's own citizenid (whoever's client

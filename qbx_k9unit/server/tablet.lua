@@ -422,6 +422,22 @@ local function QueryActivePermissionSet(citizenid)
     return set
 end
 
+--- Real, current Unix time in whole seconds, or nil if unavailable --
+--- mirrors server/certifications.lua's own NowUnix "fails toward
+--- availability" posture (see that file's IsExpiredUnix doc comment): an
+--- unreadable `os.time` must make `expired` resolve to false, never crash
+--- this read entirely, since a broken clock says nothing about whether a
+--- real certification has actually lapsed. Not itself a cross-file call --
+--- os.time is plain Lua 5.4 stdlib, not a resource-global -- so this is a
+--- small local duplicate of that file's own guard, not a new dependency.
+--- @return number?
+local function NowUnixOrNil()
+    if type(os) == 'table' and type(os.time) == 'function' then
+        return os.time()
+    end
+    return nil
+end
+
 --- ONE ROW PER CONFIGURED DEPARTMENT for `citizenid` -- including
 --- departments they have never held (active = false, grantedBy = nil), so
 --- the tablet can offer "Certify" for a brand-new department per
@@ -433,14 +449,45 @@ end
 --- SQL/index, now behind the DatabaseEnabled() switch) -- see that
 --- accessor's own doc comment in server/datastore.lua for why it needed to
 --- be added rather than reused from an existing one.
+---
+--- CERTIFICATION DEPTH READ-SIDE (this pass) -- tier/expiry/specializations
+--- were entirely absent from this array until now: a handler's tier and
+--- specializations did not display anywhere on the tablet, not even
+--- read-only, for the handler themselves or for high command looking them
+--- up. For each department this citizenid ACTUALLY holds (active == true
+--- only -- a department they've never held has no tier/expiry/specializations
+--- to report, matching this row's own existing active=false/grantedBy=nil
+--- shape for that case), this now calls server/certifications.lua's
+--- DB-authoritative, already-exposed QueryCertificationRecord(citizenid,
+--- jobKey) -- the SAME accessor that file's own header names as built "for
+--- tablet/roster/admin reads" and already used by an OFFLINE-safe caller
+--- (works for a disconnected citizenid too, exactly what
+--- tabletRequestPersonSummary needs for someone who is not online right
+--- now). One extra pair of queries (QueryCertificationRecord's own
+--- Cert_GetActiveRecord + Spec_GetActiveKeys reads) PER DEPARTMENT THIS
+--- CITIZENID ACTUALLY HOLDS -- bounded by the same small, fixed
+--- Config.Departments count this function's own existing loop is already
+--- bounded by (2-4 in every shipped config), not by roster size: this
+--- function runs once per tabletRequestMyRecord/tabletRequestPersonSummary
+--- call, never once per roster row. `expired` is computed HERE, in Lua,
+--- rather than by calling into server/certifications.lua's own (local,
+--- unexported) IsExpiredUnix -- see NowUnixOrNil above for why that is a
+--- small, deliberate, same-logic local duplicate rather than a new
+--- cross-file call. Guarded with `type(QueryCertificationRecord) ==
+--- 'function'`, this resource's established soft-dependency convention --
+--- degrades to no tier/expiry/specializations data (never a crash) if
+--- server/certifications.lua is ever unavailable, exactly like every other
+--- guarded cross-file read in this file.
 --- @param citizenid string
---- @return table -- array of { departmentKey, departmentLabel, active, grantedBy }
+--- @return table -- array of { departmentKey, departmentLabel, active, grantedBy, tier, expiresAtUnix, expired, specializations }
 local function BuildCertificationsArray(citizenid)
     local rows = SafeStoreCall(K9Store.Cert_GetActiveJobsForCitizen, citizenid) or {}
     local grantedByJob = {}
     for _, row in ipairs(rows) do
         grantedByJob[row.job] = row.granted_by
     end
+
+    local now = NowUnixOrNil()
 
     local out = {}
     if type(Config.Departments) == 'table' then
@@ -455,11 +502,34 @@ local function BuildCertificationsArray(citizenid)
 
         for _, jobKey in ipairs(jobKeys) do
             local dept = Config.Departments[jobKey]
+            local isActive = grantedByJob[jobKey] ~= nil
+
+            -- Only an ACTIVE department has a tier/expiry/specializations to
+            -- report at all -- see this function's own doc comment above.
+            local tier, expiresAtUnix, specializations = nil, nil, {}
+            if isActive and type(QueryCertificationRecord) == 'function' then
+                local record = QueryCertificationRecord(citizenid, jobKey)
+                if record then
+                    tier = record.tier
+                    expiresAtUnix = record.expiresAtUnix
+                    specializations = record.specializations or {}
+                end
+            end
+
+            local expired = false
+            if type(expiresAtUnix) == 'number' and type(now) == 'number' and now >= expiresAtUnix then
+                expired = true
+            end
+
             out[#out + 1] = {
                 departmentKey = jobKey,
                 departmentLabel = (type(dept) == 'table' and type(dept.label) == 'string') and dept.label or jobKey,
-                active = grantedByJob[jobKey] ~= nil,
+                active = isActive,
                 grantedBy = grantedByJob[jobKey],
+                tier = tier,
+                expiresAtUnix = expiresAtUnix,
+                expired = expired,
+                specializations = specializations,
             }
         end
     end

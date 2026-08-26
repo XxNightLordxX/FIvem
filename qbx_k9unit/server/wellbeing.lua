@@ -821,6 +821,68 @@ local function ResolveK9Ped(source)
 end
 
 -- ======================================================================
+-- PER-PERSON FEATURE CONTROL (Config.FeatureControl -- config.lua's own
+-- header documents the 4-step resolution; step 1, Config.Features.<Name>,
+-- is checked separately by each call site below before this function is
+-- ever reached). Mirrors server/pursuitsprint.lua's
+-- IsPursuitSprintPermittedForCitizenId shape verbatim (that file's own
+-- header says to read it before writing another variant) -- parameterized
+-- by featureName here since this file gates FIVE independent
+-- Config.Features flags (FatigueSystem/MoodSystem/FearStressSystem/
+-- DistractionSystem/InjuryLimping) through the identical shape.
+--
+-- THE CALL MADE HERE, STATED PLAINLY (this pass's own explicit instruction
+-- to be careful in this file, and to say what was decided): a block on a
+-- wellbeing sub-feature for a specific citizenid is implemented as IMMUNITY
+-- FROM THAT STAT'S NEGATIVE EFFECTS, never as a freeze of the stat itself.
+-- Concretely, every call site below gates only the HARMFUL direction (sprint
+-- fatigue decay, damage-triggered mood/injury decay, gunfire-triggered
+-- fear-stress rise and the hesitation it can force, being distracted by
+-- another player's item) -- it never gates passive regen, the
+-- death/respawn injury restore, or any of the self-service/other-initiated
+-- RELIEF actions below (calmDownK9, petK9, feedK9, RestoreInjury). This is
+-- the one available design that satisfies BOTH halves of what "turn this
+-- feature off for one person" has to mean at once: a K9 who is blocked
+-- experiences no NEW harm from that stat, and a K9 who was ALREADY
+-- exhausted/miserable/stressed/injured at the moment they got blocked keeps
+-- recovering normally rather than being frozen at whatever value the block
+-- happened to catch them at -- freezing the stat outright (the more literal
+-- "the feature no longer exists for them" reading) was rejected specifically
+-- because it would strand an already-injured/already-exhausted K9 exactly at
+-- their worst moment, the "stuck in a bad state" trap this task named
+-- explicitly. IsHesitating/IsDistracted below additionally fail closed on a
+-- block directly (belt-and-suspenders on top of the escalation gate at each
+-- stat's own tick/event site), which also means high command can use a block
+-- to immediately neutralize the disclosed forged-gunfire hesitation-griefing
+-- risk (this file's own header, "SECURITY FINDING B") against one specific
+-- victim, without needing to wait for that K9's own fearStress to decay.
+--- @param citizenid string
+--- @param featureName string -- exact Config.Features key: 'FatigueSystem' | 'MoodSystem' | 'FearStressSystem' | 'DistractionSystem' | 'InjuryLimping'
+--- @return boolean allowed
+local function IsWellbeingFeaturePermittedForCitizenId(citizenid, featureName)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.' .. featureName) == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant[featureName] == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.' .. featureName) == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
+-- ======================================================================
 -- MOOD / INJURY — damage-event decay. Reuses server/tracking.lua's
 -- ALREADY-REGISTERED 'qbx_k9unit:server:relayDamageEvent' (see this file's
 -- header, EVENT/CALLBACK CONTRACT item 6). RegisterNetEvent is idempotent —
@@ -850,10 +912,15 @@ AddEventHandler('qbx_k9unit:server:relayDamageEvent', function()
     if not citizenid then return end
 
     local stats = EnsureStats(citizenid)
-    if Config.Features.MoodSystem then
+    -- PER-PERSON FEATURE CONTROL -- see IsWellbeingFeaturePermittedForCitizenId's
+    -- own header for the full "immunity from harm, never a freeze" design.
+    -- Gates ONLY the decrement (the harmful direction) -- passive regen in
+    -- TickWellbeing below is never gated, so a blocked K9's mood/injury can
+    -- only ever recover, never worsen, from this event.
+    if Config.Features.MoodSystem and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'MoodSystem') then
         stats.mood = Clamp(stats.mood - Config.Wellbeing.Mood.damageDecayAmount, 0, Config.Wellbeing.Mood.max)
     end
-    if Config.Features.InjuryLimping then
+    if Config.Features.InjuryLimping and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'InjuryLimping') then
         stats.injury = Clamp(stats.injury - Config.Wellbeing.Injury.damageDecayAmount, 0, Config.Wellbeing.Injury.max)
     end
 end)
@@ -1247,7 +1314,14 @@ lib.callback.register('qbx_k9unit:server:applyK9Distraction', function(source, i
                 local dist = #(GetEntityCoords(targetPed) - originCoords)
                 if dist <= radius then
                     local targetCitizenid = ResolveCitizenid(targetSrc)
-                    if targetCitizenid and not DistractionCooldown.IsOnCooldown(targetCitizenid, D.perTargetCooldownMs, now) then
+                    -- PER-PERSON FEATURE CONTROL -- checked BEFORE the
+                    -- per-target cooldown below, so a blocked K9's own
+                    -- cooldown slot is never spent on an attempt that was
+                    -- always going to be refused (matches this file's own
+                    -- "immunity from harm" design -- see
+                    -- IsWellbeingFeaturePermittedForCitizenId's header).
+                    if targetCitizenid and IsWellbeingFeaturePermittedForCitizenId(targetCitizenid, 'DistractionSystem')
+                        and not DistractionCooldown.IsOnCooldown(targetCitizenid, D.perTargetCooldownMs, now) then
                         DistractionCooldown.Touch(targetCitizenid, now)
                         local stats = EnsureStats(targetCitizenid)
                         stats.distractedUntil = now + durationMs
@@ -1286,6 +1360,16 @@ function IsHesitating(citizenid)
     if not Config.Features.FearStressSystem then return false end
     if type(citizenid) ~= 'string' then return false end
 
+    -- PER-PERSON FEATURE CONTROL, belt-and-suspenders on top of the
+    -- escalation gate at this file's own relayWeaponFire/TickWellbeing call
+    -- sites: fails closed to "not hesitating" for a blocked citizenid
+    -- regardless of whatever `hesitatingUntil` currently holds -- see
+    -- IsWellbeingFeaturePermittedForCitizenId's own header for why this also
+    -- gives high command a real, immediate tool against the disclosed
+    -- forged-gunfire hesitation risk (SECURITY FINDING B, this file's
+    -- header) for one specific victim.
+    if not IsWellbeingFeaturePermittedForCitizenId(citizenid, 'FearStressSystem') then return false end
+
     local stats = WellbeingStats[citizenid]
     return stats ~= nil and stats.hesitatingUntil > GetGameTimer()
 end
@@ -1295,6 +1379,11 @@ end
 function IsDistracted(citizenid)
     if not Config.Features.DistractionSystem then return false end
     if type(citizenid) ~= 'string' then return false end
+
+    -- PER-PERSON FEATURE CONTROL, belt-and-suspenders on top of the
+    -- per-target gate in applyK9Distraction above -- same reasoning as
+    -- IsHesitating's identical guard just above.
+    if not IsWellbeingFeaturePermittedForCitizenId(citizenid, 'DistractionSystem') then return false end
 
     local stats = WellbeingStats[citizenid]
     return stats ~= nil and stats.distractedUntil > GetGameTimer()
@@ -1440,7 +1529,17 @@ local function TickWellbeing()
                     if Config.Features.FatigueSystem then
                         if stats.lastCoords then
                             local speed = #(coords - stats.lastCoords) / dtSeconds
-                            if speed >= Config.Wellbeing.Fatigue.sprintSpeedThreshold then
+                            -- PER-PERSON FEATURE CONTROL -- see
+                            -- IsWellbeingFeaturePermittedForCitizenId's own
+                            -- header for the "immunity from harm" design. A
+                            -- blocked citizenid is treated as never-sprinting
+                            -- here (falls through to the regen branch below
+                            -- unconditionally, regardless of their real
+                            -- speed this tick) -- sprint decay is the only
+                            -- harmful direction Fatigue has; rest/idle regen
+                            -- is never gated.
+                            if speed >= Config.Wellbeing.Fatigue.sprintSpeedThreshold
+                                and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'FatigueSystem') then
                                 stats.fatigue = Clamp(stats.fatigue - Config.Wellbeing.Fatigue.sprintDecayPerTick, 0, Config.Wellbeing.Fatigue.max)
                             else
                                 -- REST-SOURCE REGEN, THIS PASS: a stationary/
@@ -1564,7 +1663,18 @@ local function TickWellbeing()
                             end
                         end
 
-                        if nearbyShots > 0 then
+                        -- PER-PERSON FEATURE CONTROL -- see
+                        -- IsWellbeingFeaturePermittedForCitizenId's own
+                        -- header. A blocked citizenid never accumulates
+                        -- fearStress from nearby gunfire (real or forged --
+                        -- see this section's own SECURITY FINDING B writeup
+                        -- above), and therefore always takes the passive
+                        -- DECAY branch instead -- IsHesitating() below
+                        -- additionally fails closed for a blocked citizenid
+                        -- regardless of this stat's current value, so a
+                        -- block takes effect immediately even before
+                        -- fearStress has had time to decay back down.
+                        if nearbyShots > 0 and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'FearStressSystem') then
                             stats.fearStress = Clamp(stats.fearStress + Config.Wellbeing.FearStress.risePerNearbyShotPerTick * nearbyShots, 0, Config.Wellbeing.FearStress.max)
                         else
                             stats.fearStress = Clamp(stats.fearStress - Config.Wellbeing.FearStress.passiveDecayPerTick, 0, Config.Wellbeing.FearStress.max)
