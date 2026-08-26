@@ -996,6 +996,71 @@ t.test('resetting a tunable restores the config.lua default and removes the over
 end)
 
 -- ============================================================================
+-- SECTION 5B -- LOAD-BEARING: the stamina-duration tunable (owner directive:
+-- "make sure high command can edit the ability to make stamina last longer
+-- or even permanently"). defaultConfig above has no Wellbeing table at all,
+-- so this section supplies its own minimal config -- same shape convention
+-- the very first test in this file (SECTION 1, "registration:...") already
+-- establishes for a sparse custom `opts.config`.
+-- ============================================================================
+
+t.test('Wellbeing.Fatigue.sprintDecayPerTick is registered (min=0 -- the "permanent stamina" sentinel -- max=20.0, matching every sibling per-tick Wellbeing field), and a live edit reaches the real Config table with 0 treated as a genuine value, never a missing one', function()
+    local f = boot({ config = {
+        Features = { RuntimeFeatureControl = true, HighCommand = true },
+        AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} },
+        Wellbeing = { Fatigue = { sprintDecayPerTick = 2.0 } },
+    } })
+    f.env.IsHighCommand = function() return true end
+
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+    local found
+    for _, row in ipairs(listed.tunables) do
+        if row.key == 'Wellbeing.Fatigue.sprintDecayPerTick' then found = row end
+    end
+    t.isNotNil(found, 'Wellbeing.Fatigue.sprintDecayPerTick must be registered')
+    t.equals(found.min, 0, '0 must be reachable -- it is this tunable\'s own exact "permanent stamina" value, not merely a low number')
+    t.equals(found.max, 20.0)
+    t.equals(found.configLuaDefault, 2.0)
+
+    -- RuntimeControlActionCooldown (server/runtimecontrol.lua, 1000ms) gates
+    -- every mutating call by source -- advanced past between calls below,
+    -- same convention this file's own "resetting a tunable..." test already
+    -- uses (`f.fakeNow.value = f.fakeNow.value + 2000`), so each assertion
+    -- below is exercising the [min,max]/zero-value logic, not accidentally
+    -- tripping over the unrelated rate limit.
+    local setToPermanent = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Wellbeing.Fatigue.sprintDecayPerTick', 0)
+    t.isTrue(setToPermanent.ok, 'setting to exactly 0 ("permanent") must be accepted -- the zero-is-truthy trap must not make this look like a missing/refused value')
+    t.equals(f.env.Config.Wellbeing.Fatigue.sprintDecayPerTick, 0)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local belowMin = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Wellbeing.Fatigue.sprintDecayPerTick', -1)
+    t.isFalse(belowMin.ok)
+    t.equals(belowMin.reason, 'out_of_range')
+    t.equals(f.env.Config.Wellbeing.Fatigue.sprintDecayPerTick, 0, 'a refused value must leave the current (permanent) value completely unchanged')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local aboveMax = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Wellbeing.Fatigue.sprintDecayPerTick', 20.1)
+    t.isFalse(aboveMax.ok)
+    t.equals(aboveMax.reason, 'out_of_range')
+    t.equals(aboveMax.max, 20.0)
+
+    -- Live edit back to finite, reads back via ListTunables -- mirrors this
+    -- file's own "value inside range is accepted... reads back" test above.
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local setToFinite = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Wellbeing.Fatigue.sprintDecayPerTick', 1.5)
+    t.isTrue(setToFinite.ok)
+    t.equals(f.env.Config.Wellbeing.Fatigue.sprintDecayPerTick, 1.5)
+    local listedAgain = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    for _, row in ipairs(listedAgain.tunables) do
+        if row.key == 'Wellbeing.Fatigue.sprintDecayPerTick' then
+            t.equals(row.currentValue, 1.5)
+            t.isTrue(row.overridden)
+        end
+    end
+end)
+
+-- ============================================================================
 -- SECTION 6 -- theme GET is open to anyone (no authorization check).
 -- ============================================================================
 

@@ -165,6 +165,17 @@ local function newWellbeingFixture(opts)
     local function PlayerPedId() return myPed end
     local function IsEntityDead(entity) return pedDead end
 
+    -- NATIVE SPRINT STAMINA ASSIST (client/wellbeing.lua) -- PlayerId() is a
+    -- distinct native from PlayerPedId() above (a Player handle, not a Ped
+    -- handle); a fixed sentinel is sufficient since these tests only need to
+    -- prove it is the value RestorePlayerStamina is actually called with.
+    local myPlayerId = 7
+    local function PlayerId() return myPlayerId end
+    local restorePlayerStaminaCalls = {}
+    local function RestorePlayerStamina(player, percentage)
+        restorePlayerStaminaCalls[#restorePlayerStaminaCalls + 1] = { player = player, percentage = percentage }
+    end
+
     local disableControlActionCalls = {}
     local function DisableControlAction(inputGroup, control, disable)
         disableControlActionCalls[#disableControlActionCalls + 1] = { inputGroup = inputGroup, control = control, disable = disable }
@@ -275,6 +286,8 @@ local function newWellbeingFixture(opts)
         GetGameTimer = GetGameTimer,
         PlayerPedId = PlayerPedId,
         IsEntityDead = IsEntityDead,
+        PlayerId = PlayerId,
+        RestorePlayerStamina = RestorePlayerStamina,
         DisableControlAction = DisableControlAction,
         lib = lib,
         K9MoveRateModifiers = k9MoveRateModifiers,
@@ -337,6 +350,9 @@ local function newWellbeingFixture(opts)
         disableControlActionCalls = disableControlActionCalls,
         k9MoveRateModifiers = k9MoveRateModifiers,
         recomputeCallCount = function() return recomputeCallCount end,
+
+        restorePlayerStaminaCalls = restorePlayerStaminaCalls,
+        myPlayerId = myPlayerId,
 
         setCanShowK9UI = function(v) canShowK9UI = v end,
         canShowK9UICallCount = function() return canShowK9UICallCount end,
@@ -421,7 +437,7 @@ end)
 
 t.test('every wellbeing flag off: the InjuryLimping thread and all commands/ox_target options still REGISTER, but do/gate nothing -- only the on-demand snapshot thread stays load-time-gated', function()
     local f = newWellbeingFixture() -- all five flags false by default
-    t.equals(#f.threads, 1, 'the InjuryLimping thread now ALWAYS registers (idling, per its own LiveFeatureFlags gate) -- only the on-demand snapshot thread (a disclosed, bounded staleness optimization, not a correctness path) stays load-time-gated and is absent here')
+    t.equals(#f.threads, 2, 'the InjuryLimping thread AND the native sprint stamina assist thread now ALWAYS register (idling, per their own LiveFeatureFlags gates) -- only the on-demand snapshot thread (a disclosed, bounded staleness optimization, not a correctness path) stays load-time-gated and is absent here')
     t.equals(f.addGlobalPlayerCallCount(), 1, 'Pet K9/Feed K9 now ALWAYS register -- canInteract itself refuses while LiveFeatureFlags.MoodSystem is false, proven in section F')
     -- k9meatbait/k9whistle/k9calmdown are ALL always registered now --
     -- each one's OWN body checks LiveFeatureFlags.<Name> first (proven in
@@ -436,13 +452,16 @@ end)
 -- PRIORITY. Thread order at file-load time with InjuryLimping=true (and
 -- every other flag false): the on-demand snapshot thread is created FIRST
 -- (its own gate ORs in InjuryLimping), the InjuryLimping control-block
--- thread SECOND -- threads[1] / threads[2] respectively, verified by
--- reading the file top-to-bottom.
+-- thread SECOND, and the (always-registering) native sprint stamina assist
+-- thread THIRD -- threads[1] / threads[2] / threads[3] respectively,
+-- verified by reading the file top-to-bottom. The third thread is a no-op
+-- here (FatigueSystem is false in this fixture), which is exactly what
+-- SECTION I below exercises directly.
 -- ----------------------------------------------------------------------
 
 t.test('InjuryLimping thread: below-threshold injury blocks sprint+jump every frame (Wait(0)) while alive and K9-modeled', function()
     local f = newWellbeingFixture({ features = { InjuryLimping = true } })
-    t.equals(#f.threads, 2, 'sanity: the on-demand snapshot thread (InjuryLimping ORs into its own gate) plus the InjuryLimping thread itself')
+    t.equals(#f.threads, 3, 'sanity: the on-demand snapshot thread (InjuryLimping ORs into its own gate), the InjuryLimping thread, and the always-registering native stamina assist thread')
 
     local sprintThreshold = f.env.Config.Wellbeing.Injury.sprintBlockThreshold
     local jumpThreshold = f.env.Config.Wellbeing.Injury.jumpBlockThreshold
@@ -956,6 +975,82 @@ t.test('on-demand snapshot thread: a thrown lib.callback.await (timeout) is caug
     f.stepOne(1)
     t.equals(f.callbackCallCount(), 2)
     t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier, 'the thread must still be alive and able to fetch successfully after the earlier throw')
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION I -- NATIVE SPRINT STAMINA ASSIST (owner directive: "make sure
+-- high command can edit the ability to make stamina last longer or even
+-- permanently"). This is the SECOND, separate "stamina" this task's own
+-- investigation found -- GTA/FiveM's own built-in player sprint-stamina
+-- limit (client/hud.lua's "Stamina" HUD row), distinct from this file's own
+-- Fatigue move-rate modifier already covered above. Thread index 3 in a
+-- fixture where the on-demand thread registers (any of the five flags
+-- true), index 2 where it does not (see SECTION A/B's own thread-count
+-- assertions).
+-- ----------------------------------------------------------------------
+
+t.test('NATIVE STAMINA ASSIST: percent = 0 (shipped config.lua default) never calls RestorePlayerStamina, even with FatigueSystem on and CanShowK9UI true -- no regression by default', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    t.equals(f.env.Config.Wellbeing.Fatigue.nativeStaminaRestorePercent, 0, 'sanity: shipped config.lua default is 0')
+    f.stepOne(3)
+    f.stepOne(3)
+    t.equals(#f.restorePlayerStaminaCalls, 0)
+end)
+
+t.test('NATIVE STAMINA ASSIST: percent = 1.0 (the tablet\'s "permanent" setting) calls RestorePlayerStamina(PlayerId(), 1.0) on every single check, not merely once', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
+    for _ = 1, 5 do f.stepOne(3) end
+    t.equals(#f.restorePlayerStaminaCalls, 5)
+    for i, call in ipairs(f.restorePlayerStaminaCalls) do
+        t.equals(call.player, f.myPlayerId, ('call %d must target PlayerId()'):format(i))
+        t.equals(call.percentage, 1.0, ('call %d must restore the FULL, configured percentage -- this is what makes the maximum setting genuinely mean permanent, not merely "usually full"'):format(i))
+    end
+end)
+
+t.test('NATIVE STAMINA ASSIST: a mid-range percentage (0.4, a live tablet edit) is passed through exactly, not rounded or reclamped a second time client-side', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 0.4 } })
+    f.stepOne(3)
+    t.equals(#f.restorePlayerStaminaCalls, 1)
+    t.equals(f.restorePlayerStaminaCalls[1].percentage, 0.4)
+end)
+
+t.test('NATIVE STAMINA ASSIST: FatigueSystem off means the assist never fires, even with a nonzero percentage already configured -- this resource makes no claim about managing stamina at all while the owning flag is off', function()
+    local f = newWellbeingFixture() -- FatigueSystem false (default)
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
+    f.stepOne(2) -- no flag is true here, so the on-demand thread never registers: 1 = InjuryLimping, 2 = stamina assist
+    t.equals(#f.restorePlayerStaminaCalls, 0)
+end)
+
+t.test('NATIVE STAMINA ASSIST: CanShowK9UI() false (not a currently-accessible K9) blocks the restore call even with FatigueSystem on and a nonzero percentage', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true }, canShowK9UI = false })
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
+    f.stepOne(3)
+    t.equals(#f.restorePlayerStaminaCalls, 0)
+end)
+
+t.test('NATIVE STAMINA ASSIST -- LIVE CHANGE TAKES EFFECT: a tablet edit from permanent (1.0) back down to off (0) stops the very next check from restoring anything, mid-session, no restart', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 1.0 } })
+    f.stepOne(3)
+    t.equals(f.restorePlayerStaminaCalls[1].percentage, 1.0)
+
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 0 } })
+    f.stepOne(3)
+    t.equals(#f.restorePlayerStaminaCalls, 1, 'turning the assist back down to 0 must stop the very next check from calling RestorePlayerStamina at all')
+end)
+
+t.test('NATIVE STAMINA ASSIST: a malformed/non-number wellbeingTunables value is ignored -- the last-known-good percentage keeps being used, never a crash or a coerced garbage value', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 0.6 } })
+    f.stepOne(3)
+    t.equals(f.restorePlayerStaminaCalls[1].percentage, 0.6)
+
+    f.triggerWellbeingUpdate(65535, { wellbeingTunables = { fatigueNativeStaminaRestorePercent = 'not-a-number' } })
+    f.stepOne(3)
+    t.equals(#f.restorePlayerStaminaCalls, 2)
+    t.equals(f.restorePlayerStaminaCalls[2].percentage, 0.6, 'a malformed incoming value must leave the last-known-good percentage in effect, not silently become 0/nil/garbage')
 end)
 
 os.exit(t.summary())

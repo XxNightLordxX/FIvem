@@ -1434,6 +1434,73 @@ local TUNABLE_REGISTRY = {
     -- forger.
     ['Wellbeing.Fatigue.speedPenaltyThreshold']  = { path = { 'Wellbeing', 'Fatigue', 'speedPenaltyThreshold' },  min = 1,     max = 99,        integer = false },
     ['Wellbeing.Fatigue.speedPenaltyMultiplier'] = { path = { 'Wellbeing', 'Fatigue', 'speedPenaltyMultiplier' }, min = 0.1,   max = 1.0,       integer = false },
+    -- STAMINA DURATION (OWNER DIRECTIVE, this pass: "make sure high command
+    -- can edit the ability to make stamina last longer or even
+    -- permanently"). Config.Wellbeing.Fatigue IS this resource's own
+    -- "stamina" system in its own already-established vocabulary -- see the
+    -- two entries immediately above, whose own comment already calls this
+    -- the "'make the speed boost and stamina numbers genuinely editable'
+    -- task", and client/wellbeing.lua's "LIVE WELLBEING TUNABLES" header,
+    -- which uses the identical phrase. That earlier pass wired WHAT HAPPENS
+    -- once a K9 is tired (speedPenaltyThreshold/speedPenaltyMultiplier,
+    -- immediately above) but never the one field that decides HOW LONG
+    -- stamina lasts before that penalty ever applies: sprintDecayPerTick,
+    -- the sole per-tick decrement server/wellbeing.lua's TickWellbeing ever
+    -- subtracts from `stats.fatigue` (its own FatigueSystem branch, `stats.fatigue
+    -- = Clamp(stats.fatigue - Config.Wellbeing.Fatigue.sprintDecayPerTick, 0,
+    -- max)`) -- confirmed READ FRESH at that exact call site, never captured
+    -- to a local, so this entry needs no client-side push of any kind
+    -- (unlike the two entries above, which DO reach client/wellbeing.lua's
+    -- move-rate composer and therefore ride the separate `wellbeingTunables`
+    -- snapshot channel): a live edit here changes what the SERVER'S OWN NEXT
+    -- TICK decrements by, full stop, no restart, no second wire-up.
+    --
+    -- MIN = 0, DELIBERATELY DIFFERENT FROM EVERY SIBLING PER-TICK FIELD
+    -- BELOW (Mood.passiveRegenPerTick / FearStress.passiveDecayPerTick /
+    -- Injury.passiveRegenPerTick all floor at 0.1, never 0): those three are
+    -- RECOVERY rates, where 0 would mean "this stat can never recover" --
+    -- never something an operator tuning recovery would want. This field is
+    -- the opposite direction, HARM, where 0 has a genuine, intended meaning
+    -- this task explicitly asked for: `stats.fatigue - 0` is an EXACT no-op
+    -- every single tick, forever -- fatigue can never fall below wherever it
+    -- already is, for as long as this stays 0, no matter how many ticks the
+    -- server runs. That is genuinely PERMANENT stamina, not merely a very
+    -- slow drain that eventually runs out (the exact failure mode this task
+    -- warned against) -- proven directly in tests/wellbeing_spec.lua by
+    -- running many simulated ticks of continuous sprinting and asserting
+    -- fatigue never moves. A "very large but finite" value (this file's own
+    -- fallback advice for a field with no natural zero) is deliberately NOT
+    -- used here: dividing by even an enormous finite multiplier still leaves
+    -- a nonzero decay that would eventually cross the threshold, which is
+    -- worse than an exact, provable zero when one is available.
+    -- MAX = 20.0 -- the SAME ceiling already reviewed and shipped for every
+    -- sibling per-tick field below, reused rather than picked fresh: more
+    -- than enough for an operator who wants stamina to drain almost
+    -- instantly (20/tick clears the shipped 70-point max-to-threshold gap in
+    -- 4 ticks), and small enough that Clamp's own [0, Fatigue.max] bound is
+    -- never at any real risk from one tick's subtraction.
+    ['Wellbeing.Fatigue.sprintDecayPerTick']     = { path = { 'Wellbeing', 'Fatigue', 'sprintDecayPerTick' },     min = 0,     max = 20.0,      integer = false },
+    -- NATIVE SPRINT STAMINA ASSIST -- see config.lua's own comment on this
+    -- exact field for the full "why this is separate from the Fatigue
+    -- fields above" writeup: this is GTA/FiveM's OWN built-in player
+    -- sprint-stamina limit (the same value client/hud.lua's "Stamina" HUD
+    -- row displays), not this resource's custom Fatigue stat. [0, 1.0] is
+    -- not a bound this pass invented -- it is RESTORE_PLAYER_STAMINA's own
+    -- documented parameter range (FiveM's natives.json: "seems to be a
+    -- percentage that ranges from 0.0 to 1.0 (1.0 being 100%)") -- a value
+    -- outside it has no documented meaning for the native this feeds,
+    -- exactly the "a number that... goes [somewhere undefined] must not be
+    -- [reachable]" risk this registry's own bounds exist to prevent. 0
+    -- (the shipped default) is a genuine, safe value here too: client/wellbeing.lua
+    -- never calls RestorePlayerStamina at all while this is 0, so a server
+    -- that never raises it sees byte-identical vanilla stamina behaviour to
+    -- before this pass -- no regression by default. Read fresh by
+    -- client/wellbeing.lua's own LiveWellbeingTunables mirror (piggybacked
+    -- on the SAME wellbeingUpdate/getWellbeingSnapshot channel the other
+    -- Wellbeing.* tunables above already use), not captured once -- a live
+    -- edit reaches an already-connected K9 within one
+    -- Config.Wellbeing.tickIntervalMs, same as every sibling entry below.
+    ['Wellbeing.Fatigue.nativeStaminaRestorePercent'] = { path = { 'Wellbeing', 'Fatigue', 'nativeStaminaRestorePercent' }, min = 0.0, max = 1.0, integer = false },
     ['Wellbeing.Mood.damageDecayAmount']        = { path = { 'Wellbeing', 'Mood', 'damageDecayAmount' },         min = 1,     max = 100,       integer = true },
     ['Wellbeing.Mood.petCooldownMs']            = { path = { 'Wellbeing', 'Mood', 'petCooldownMs' },             min = 1000,  max = 120000,    integer = true },
     ['Wellbeing.Mood.petRegenAmount']           = { path = { 'Wellbeing', 'Mood', 'petRegenAmount' },            min = 1,     max = 100,       integer = true },

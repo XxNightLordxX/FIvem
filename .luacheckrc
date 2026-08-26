@@ -270,6 +270,12 @@ read_globals = {
     "ClearPedTasksImmediately", "TaskStartScenarioInPlace", "IsPedShooting",
     "PlaySoundFromEntity", "SetFollowPedCamViewMode",
     "GetPlayerSprintStaminaRemaining",
+    -- NATIVE SPRINT STAMINA ASSIST (client/wellbeing.lua, owner directive:
+    -- "make sure high command can edit the ability to make stamina last
+    -- longer or even permanently") -- confirmed real against FiveM's own
+    -- natives.json (runtime.fivem.net/doc/natives.json), documented with an
+    -- official example ("Adds a percentage to a players stamina").
+    "RestorePlayerStamina",
     -- AgilityAdvanced capsule-sweep vault (client/agility.lua, extracted from
     -- client/movement.lua, Phase 3,
     -- PHASE3_SPEC.md §12.5.5/§12.0 item 3) -- confirmed real natives per

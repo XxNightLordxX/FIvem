@@ -867,6 +867,15 @@ local function SnapshotOf(stats)
             injurySprintBlockThreshold       = Config.Wellbeing.Injury.sprintBlockThreshold,
             injuryJumpBlockThreshold         = Config.Wellbeing.Injury.jumpBlockThreshold,
             injurySpeedPenaltyMultiplier     = Config.Wellbeing.Injury.speedPenaltyMultiplier,
+            -- NATIVE SPRINT STAMINA ASSIST -- see server/runtimecontrol.lua's
+            -- TUNABLE_REGISTRY entry of the same config path for the full
+            -- "why this is separate from sprintDecayPerTick" writeup.
+            -- sprintDecayPerTick is deliberately NOT in this table (it is a
+            -- pure server-internal decay rate TickWellbeing already reads
+            -- fresh -- it never needs to reach a client at all); this field
+            -- DOES, since client/wellbeing.lua is the one that actually
+            -- calls RestorePlayerStamina.
+            fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
         },
     }
 end

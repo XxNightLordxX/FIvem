@@ -1823,4 +1823,156 @@ t.test('STARTUP VALIDATION: all four placeholder items missing at once (a fresh,
     end
 end)
 
+-- ========================================================================
+-- STAMINA DURATION TUNABLE (owner directive, this pass: "make sure high
+-- command can edit the ability to make stamina last longer or even
+-- permanently"). Config.Wellbeing.Fatigue.sprintDecayPerTick is now exposed
+-- via server/runtimecontrol.lua's TUNABLE_REGISTRY (min = 0, max = 20.0--
+-- see that entry's own comment for the full "why 0, why no client push"
+-- writeup). This section proves the GAMEPLAY claim that registration alone
+-- cannot: that a live edit genuinely changes how long a sprinting K9's
+-- fatigue lasts, that 0 specifically means EXACTLY permanent (not merely a
+-- very slow drain), and that a live edit back to a finite value takes
+-- effect on the very next tick with no restart -- all driven through the
+-- exact same `Config.Wellbeing.Fatigue.sprintDecayPerTick` field
+-- server/runtimecontrol.lua's ApplyTunableOverride mutates in production
+-- (SetConfigByPath writes into this SAME table object; mutating
+-- f.config.Wellbeing.Fatigue.sprintDecayPerTick directly below is
+-- byte-for-byte what that call does).
+-- ========================================================================
+
+--- Moves the given ped `distanceMeters` further along +X than its current
+--- fixture coords and returns the new coords, so a caller can drive several
+--- consecutive "sprinting" ticks without hand-computing absolute positions
+--- each time. `distanceMeters` must exceed sprintSpeedThreshold(4.0) *
+--- dtSeconds(TICK_INTERVAL_MS/1000 = 5) = 20.0 meters for TickWellbeing to
+--- classify the tick as sprinting -- 30 meters (6 m/s) is used throughout
+--- this section, comfortably over that line.
+--- @param f table fixture returned by newWellbeingFixture
+--- @param ped number
+--- @param fromX number
+--- @param distanceMeters number
+--- @return number newX
+local function sprintTick(f, ped, fromX, distanceMeters)
+    local newX = fromX + distanceMeters
+    f.setCoords(ped, newX, 0, 0)
+    f.runOneTick()
+    return newX
+end
+
+t.test('SnapshotOf pushes nativeStaminaRestorePercent to the client, read fresh, alongside the other six wellbeingTunables fields -- this is the field client/wellbeing.lua actually calls RestorePlayerStamina with', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.config.Wellbeing.Fatigue.nativeStaminaRestorePercent = 0.75
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.wellbeingTunables.fatigueNativeStaminaRestorePercent, 0.75)
+
+    -- Read fresh, not captured once -- a live tablet edit reaches the very
+    -- next snapshot with no restart, same as every sibling field in this
+    -- table.
+    f.config.Wellbeing.Fatigue.nativeStaminaRestorePercent = 0
+    snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.wellbeingTunables.fatigueNativeStaminaRestorePercent, 0)
+end)
+
+t.test('PERMANENT STAMINA: sprintDecayPerTick = 0 (the tablet\'s "permanent" setting) means fatigue never drops below its starting value, even across many ticks of continuous sustained sprinting', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Fatigue.sprintDecayPerTick = 0
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.runOneTick() -- first sample: no prior lastCoords yet
+    local x = 0
+    for _ = 1, 50 do
+        x = sprintTick(f, 9001, x, 30) -- 30m/tick = 6 m/s, comfortably over the 4.0 m/s sprint threshold
+    end
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.fatigue, 100, 'fatigue must still be at max after 50 straight ticks of sustained sprinting -- not merely high, EXACTLY unchanged, proving this is a real zero-decay no-op rather than a very slow drain that would eventually cross the threshold')
+end)
+
+t.test('PROPORTIONALITY: halving sprintDecayPerTick exactly halves the fatigue lost over the same number of sustained-sprint ticks -- "last longer" is a real, graduated dial, not just an on/off switch', function()
+    local defaultCfg = baselineWellbeingConfig() -- sprintDecayPerTick = 2.0, the shipped default
+    local fDefault = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = defaultCfg })
+    fDefault.setOnline({ 1 }); fDefault.setPlayer(1, 'K9-CID'); fDefault.setPed(1, 9001)
+    fDefault.setModel(9001, 555); fDefault.setIsK9Model(555, true); fDefault.setCoords(9001, 0, 0, 0)
+    fDefault.runOneTick()
+    local xd = 0
+    for _ = 1, 10 do xd = sprintTick(fDefault, 9001, xd, 30) end
+    local snapDefault = fDefault.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snapDefault.fatigue, 80, 'sanity: shipped default (2.0/tick) loses 20 fatigue over 10 sprinting ticks')
+
+    local halvedCfg = baselineWellbeingConfig()
+    halvedCfg.Fatigue.sprintDecayPerTick = 1.0 -- a live "lasts longer" tablet edit -- half the shipped rate
+    local fHalved = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = halvedCfg })
+    fHalved.setOnline({ 1 }); fHalved.setPlayer(1, 'K9-CID'); fHalved.setPed(1, 9001)
+    fHalved.setModel(9001, 555); fHalved.setIsK9Model(555, true); fHalved.setCoords(9001, 0, 0, 0)
+    fHalved.runOneTick()
+    local xh = 0
+    for _ = 1, 10 do xh = sprintTick(fHalved, 9001, xh, 30) end
+    local snapHalved = fHalved.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snapHalved.fatigue, 90, 'halving the decay rate must exactly halve the fatigue lost over the identical 10-tick sprint (10 lost, not 20) -- a genuinely proportional "lasts longer", not a step change')
+end)
+
+t.test('LIVE CHANGE TAKES EFFECT: a tablet edit from permanent (0) back to a finite decay rate resumes real decay on the very next tick, mid-session, with no restart -- the "gate the start, never strand the stop" rule applies in reverse here too: raising the drain back up must actually reach an already-running K9', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Fatigue.sprintDecayPerTick = 0 -- starts "permanent"
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.runOneTick()
+    local x = 0
+    for _ = 1, 5 do x = sprintTick(f, 9001, x, 30) end
+    local snapBefore = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snapBefore.fatigue, 100, 'sanity: still permanent after 5 sprinting ticks')
+
+    -- Mutates the SAME Config.Wellbeing.Fatigue table server/runtimecontrol.lua's
+    -- ApplyTunableOverride/SetConfigByPath writes into in production -- this
+    -- IS what a live 'qbx_k9unit:server:runtimeSetTunable' call does to this
+    -- exact field.
+    f.config.Wellbeing.Fatigue.sprintDecayPerTick = 2.0
+
+    sprintTick(f, 9001, x, 30)
+    local snapAfter = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snapAfter.fatigue, 98, 'decay must resume IMMEDIATELY on the very next tick after the live edit -- TickWellbeing reads Config.Wellbeing.Fatigue.sprintDecayPerTick fresh every pass, never a value captured once at file-load time')
+end)
+
+t.test('NO NEGATIVE/WRAPPED FATIGUE: even at the tunable\'s own maximum (20.0/tick), repeated sustained sprinting clamps at 0 and never goes negative', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Fatigue.sprintDecayPerTick = 20.0 -- the registry's own declared max
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.runOneTick()
+    local x = 0
+    for i = 1, 8 do
+        x = sprintTick(f, 9001, x, 30)
+        local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+        t.isTrue(snap.fatigue >= 0, ('fatigue must never go negative (tick %d): got %s'):format(i, tostring(snap.fatigue)))
+    end
+    local final = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(final.fatigue, 0, 'after enough ticks at the maximum decay rate, fatigue settles at exactly 0, clamped -- never negative')
+end)
+
 os.exit(t.summary())

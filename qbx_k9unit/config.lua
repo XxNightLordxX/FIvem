@@ -3038,6 +3038,35 @@ Config.Wellbeing = {
         -- Phase 3 lands, if the two ever need to agree exactly). Unreviewed
         -- placeholder like every other numeric value in this table.
         sprintSpeedThreshold    = 4.0,  -- meters/second, averaged over one tick interval
+
+        -- NATIVE SPRINT STAMINA ASSIST (owner directive: "make sure high
+        -- command can edit the ability to make stamina last longer or even
+        -- permanently"). This is DELIBERATELY SEPARATE from the
+        -- sprintDecayPerTick/speedPenaltyThreshold/speedPenaltyMultiplier
+        -- fields above, which govern ONLY this resource's own custom
+        -- Fatigue stat/speed-penalty. There is a SECOND, independent thing
+        -- that limits how long a K9 can keep running: GTA/FiveM's own
+        -- built-in player sprint-stamina mechanic (the same value
+        -- client/hud.lua's "Stamina" HUD row displays via
+        -- GetPlayerSprintStaminaRemaining) -- a real engine limit on the
+        -- underlying Player, independent of ped model, that this resource
+        -- previously never touched at all (confirmed: client/hud.lua only
+        -- ever READ that native, nowhere in this resource was it ever
+        -- restored/extended). Left at 0 (below), nothing about this changes
+        -- -- vanilla stamina behaves exactly as it always has.
+        -- Above 0, client/wellbeing.lua periodically calls the official
+        -- RESTORE_PLAYER_STAMINA native (`RestorePlayerStamina(PlayerId(),
+        -- percentage)` -- confirmed against FiveM's own natives.json,
+        -- "Adds a percentage to a players stamina", officially documented
+        -- with an example that calls it on a repeating timer for exactly
+        -- this "keep it topped up" purpose) at this fraction, while the
+        -- local player is an accessible K9. [0.0, 1.0] is this native's OWN
+        -- documented valid range (1.0 = 100%) -- not an arbitrary ceiling
+        -- picked for this task, the native's own contract. At 1.0, stamina
+        -- is restored to full on every check interval, fast enough that it
+        -- never has a real chance to visibly deplete -- effectively
+        -- unlimited sprint for as long as this stays 1.0.
+        nativeStaminaRestorePercent = 0.0,
     },
     Mood = {
         max                          = 100,

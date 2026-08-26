@@ -239,6 +239,13 @@ local LiveWellbeingTunables = {
     injurySprintBlockThreshold       = Config.Wellbeing.Injury.sprintBlockThreshold,
     injuryJumpBlockThreshold         = Config.Wellbeing.Injury.jumpBlockThreshold,
     injurySpeedPenaltyMultiplier     = Config.Wellbeing.Injury.speedPenaltyMultiplier,
+    -- NATIVE SPRINT STAMINA ASSIST -- see the "NATIVE SPRINT STAMINA ASSIST"
+    -- section further below (right after the Injury sprint/jump block) for
+    -- the consumer of this field. Same ingest/default-value rules as the
+    -- seven fields above -- read fresh by that section every check, seeded
+    -- from this client's own static config copy until the first snapshot
+    -- arrives, same safety argument (nothing here is a security boundary).
+    fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
 }
 
 --- Recomputes this file's three owned `K9MoveRateModifiers` slots from
@@ -566,6 +573,79 @@ do
         end
     end)
 end
+
+-- ======================================================================
+-- NATIVE SPRINT STAMINA ASSIST (owner directive, this pass: "make sure high
+-- command can edit the ability to make stamina last longer or even
+-- permanently"). DELIBERATELY SEPARATE from this file's own Fatigue
+-- move-rate modifier above -- see config.lua's own comment on
+-- Config.Wellbeing.Fatigue.nativeStaminaRestorePercent for the full "two
+-- different things called stamina" writeup. This section is the client-side
+-- half of the SECOND one: GTA/FiveM's own built-in player sprint-stamina
+-- limit (the same value client/hud.lua's "Stamina" HUD row displays via
+-- GetPlayerSprintStaminaRemaining), a real engine limit this resource
+-- previously never touched at all -- confirmed by reading client/hud.lua in
+-- full: that file only ever READS the native, never restores it.
+--
+-- MECHANISM: PLAYER::RESTORE_PLAYER_STAMINA(player, percentage) -- confirmed
+-- against FiveM's own natives.json (runtime.fivem.net/doc/natives.json),
+-- documented as "Adds a percentage to a players stamina", `percentage`
+-- documented as "a percentage that ranges from 0.0 to 1.0 (1.0 being
+-- 100%)", with an OFFICIAL example that calls it on a plain repeating timer
+-- for exactly this "keep it topped up" purpose
+-- (`RestorePlayerStamina(PlayerId(), 0.3)` every 15s). Same `Player`-typed
+-- first argument client/hud.lua's own GetPlayerSprintStaminaRemaining(PlayerId())
+-- already calls unguarded a few files up this exact same call chain --
+-- CONFIDENCE: MEDIUM-HIGH that this is the correct, working native for this
+-- purpose (an official, documented example matching this exact use case,
+-- not merely community folklore); MEDIUM, honestly, on "restoring on a
+-- 1-second cadence reads as literally, continuously full rather than a
+-- very-fast-but-still-real sawtooth" -- this codebase has no live FiveM
+-- client available to verify the exact depletion-vs-restore timing against,
+-- and unlike this file's own Fatigue decay (a plain server-side number this
+-- resource fully owns and can subtract exactly zero from), the underlying
+-- engine's own depletion rate is not something this file controls or has
+-- documented numbers for. At the tunable's max (1.0), this section
+-- unconditionally restores to 100% every single check -- the strongest,
+-- most frequent assist this native's own contract allows -- which is the
+-- honest, provable claim tests/clientwellbeing_spec.lua makes for this
+-- section: "every check calls RestorePlayerStamina with exactly the
+-- configured percentage", not "the HUD bar visually never moves in a live
+-- game" (untestable here).
+--
+-- GATE: CanShowK9UI() (client/main.lua's own IsOwnModelK9() AND
+-- HasK9Access() combinator) -- the SAME self-only-ability gate this exact
+-- file already uses for RequestK9CalmDown above, reused rather than
+-- inventing a second one. LiveFeatureFlags.FatigueSystem is checked FIRST,
+-- cheap and local, before CanShowK9UI()'s own native calls -- same "cheap
+-- local flag first" discipline the Injury block above already established.
+-- FatigueSystem off means this resource makes NO claim about managing a
+-- K9's stamina at all (this file's own established "read at the point of
+-- activation" discipline, applied here to a second stamina system, not just
+-- the first) -- vanilla behaviour, unmodified, exactly as if this section
+-- did not exist.
+--
+-- ZERO IS THE SAFE, INTENDED DEFAULT, NOT A FOOTGUN: at
+-- LiveWellbeingTunables.fatigueNativeStaminaRestorePercent == 0 (the shipped
+-- config.lua default), this loop never calls RestorePlayerStamina at all --
+-- a server that never raises this tunable sees byte-identical vanilla
+-- stamina behaviour to before this pass, no regression by default.
+--
+-- ALWAYS STARTS, regardless of Config.Features.FatigueSystem's boot-time
+-- value -- same "gate at the point it acts, never merely at registration"
+-- rule this file's header states for every other section, so a live
+-- tablet toggle-ON reaches an already-connected client with no restart.
+-- ======================================================================
+CreateThread(function()
+    while true do
+        if LiveFeatureFlags.FatigueSystem
+            and LiveWellbeingTunables.fatigueNativeStaminaRestorePercent > 0
+            and CanShowK9UI() then
+            RestorePlayerStamina(PlayerId(), LiveWellbeingTunables.fatigueNativeStaminaRestorePercent)
+        end
+        Wait(1000) -- coarse, cheap cadence -- see this section's own header for why 1s is frequent enough for this native's own documented purpose
+    end
+end)
 
 -- ======================================================================
 -- MOOD — "Pet K9" / "Feed K9" ox_target world interactions.
