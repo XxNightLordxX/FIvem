@@ -142,6 +142,18 @@
     - Owns `MedkitCooldown` and `MedkitMutex` below as file-local state,
       each a server/cooldowns.lua tracker instance (NewCooldown/NewMutex)
       — DEVELOPER_REFERENCE.md item 1's convention, no hand-rolled table.
+    - Calls `GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)`,
+      resource-global from server/progression.lua, ONLY IF THAT FUNCTION
+      EXISTS (`type(...) == 'function'` guard, same soft-dependency
+      convention as the `RestoreInjury` call site above) — resolves the
+      Veteran-tier `medkitCooldownMultiplier` unlock (config.lua's own
+      Config.XPTiers row) into the actual threshold RunUseK9MedkitMutation's
+      own `MedkitCooldown.IsOnCooldown` call below is checked against,
+      keyed on the TARGET's own citizenid (the K9 being healed), never the
+      USING player's — see that call site's own comment for why. Falls back
+      to the plain `Config.K9Medkit.cooldownMs` value when
+      server/progression.lua hasn't defined the accessor, so this file works
+      identically whether or not XPProgression is enabled.
     - Exposes NO resource-global functions of its own.
 
     ======================================================================
@@ -527,7 +539,26 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
         return { ok = false, reason = 'too_far' }
     end
 
-    if MedkitCooldown.IsOnCooldown(targetCitizenid, Config.K9Medkit.cooldownMs, requestedAt) then
+    -- XP TIER UNLOCK (server/progression.lua's GetXPTierMedkitCooldownMs):
+    -- keyed on the TARGET's own citizenid, not the using player's -- the
+    -- tier that shortens this cooldown is the tier of the K9 being healed,
+    -- since MedkitCooldown itself is a per-TARGET cooldown (see this
+    -- function's own header, "THE PER-TARGET COOLDOWN"). Soft dependency,
+    -- this resource's established `type(...) == 'function'` convention
+    -- (mirrors this file's own RestoreInjury call site below) -- falls back
+    -- to the plain configured value when server/progression.lua hasn't
+    -- defined the accessor. GetXPTierMedkitCooldownMs's own contract never
+    -- returns a non-positive number (it rejects an out-of-range multiplier
+    -- and floors the result at 1ms), which matters here specifically
+    -- because IsOnCooldown treats a non-positive threshold as PERMANENTLY
+    -- on cooldown -- the exact opposite of what this reward is supposed to
+    -- do.
+    local effectiveCooldownMs = Config.K9Medkit.cooldownMs
+    if type(GetXPTierMedkitCooldownMs) == 'function' then
+        effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, Config.K9Medkit.cooldownMs)
+    end
+
+    if MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs, requestedAt) then
         return { ok = false, reason = 'on_cooldown' }
     end
 

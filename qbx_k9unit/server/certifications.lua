@@ -2313,7 +2313,21 @@ local function GrantSpecialization(granterSrc, targetServerId, specializationKey
     local targetCitizenid = targetPlayer.PlayerData.citizenid
     local jobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
     local cached = jobName and Certifications[targetCitizenid]
-    if not (cached and cached.active and cached.job == jobName) then
+    -- SECURITY FIX (coder-security, tier-bypass-on-expiry review): this
+    -- precondition used to omit `not cached.expired`, unlike
+    -- GetCertificationTier a few hundred lines below (which this same
+    -- file's own header already documents as requiring it). An
+    -- EXPIRED-but-still-`active`-in-the-DB row (see RefreshCertificationCache's
+    -- doc comment: `active` tracks "not manually revoked", `expired` is a
+    -- SEPARATE, independent time-based flag) used to pass this check, so a
+    -- certifier could hand a target a brand-new specialization at the exact
+    -- moment enforcement should be STRICTER than normal -- the target's base
+    -- certification has already lapsed -- not absent. Matches
+    -- GetCertificationTier's own `not cached.expired` term exactly, so a
+    -- target whose tier is unresolvable for this reason is refused here for
+    -- the same, pre-existing "requires an active certification" reason,
+    -- not a new one.
+    if not (cached and cached.active and cached.job == jobName and not cached.expired) then
         NotifyPlayer(granterSrc, locale('certifications.specialization_requires_active_cert'), 'error')
         return
     end
@@ -2561,13 +2575,46 @@ end
 --- or nil if not actively/matchingly certified (regardless of whether
 --- that's because they were never certified, were revoked, or their
 --- certification has lapsed — same "just say no capability" shape
---- HasK9Access already uses, not a 3-way distinction).
+--- HasK9Access already uses, not a 3-way distinction, for every caller that
+--- omits `includeExpired`).
+---
+--- SECURITY FIX (coder-security, tier-bypass-on-expiry review) — added the
+--- optional 3rd parameter `includeExpired` (does NOT change this function's
+--- name or its existing 2-argument callers' behavior at all — every one of
+--- them keeps getting exactly the collapsed "expired counts as no tier"
+--- answer above): server/certtiers.lua's TierCapabilityPermits needs a
+--- DIFFERENT answer than every other consumer. That function's own contract
+--- is fail-PERMISSIVE when a citizenid's tier "cannot be resolved" —
+--- deliberately, because HasK9Access grants access through THREE routes
+--- this file cannot express as a tier at all (a 'k9.access' permission
+--- grant, an autoAccessGrade job grade, or high command), and none of those
+--- citizenids should ever be denied a capability just because this file has
+--- no tier to name them by. But the 2-argument form ALSO returns nil for a
+--- citizenid who very much DOES have a tier assignment — one whose
+--- certification has simply EXPIRED — and folding that case into
+--- "unresolvable" let an expired handler who still holds K9 access via one
+--- of the other three routes silently regain any capability an operator
+--- explicitly withheld from their assigned tier, on every ordinary
+--- certification lapse, with no action from anyone. That is a STALE tier,
+--- not an absent one — the underlying cache can tell the two apart because
+--- `active` (a real, non-revoked k9_certifications row exists) and
+--- `expired` (that row's expires_at has passed) are independent flags (see
+--- RefreshCertificationCache's own doc comment). `includeExpired = true`
+--- returns that real, assigned tier EVEN IF it has expired; nil, even with
+--- `includeExpired = true`, means there truly is no active/job-matching row
+--- at all (never certified for this job, or a manually revoked one) — the
+--- ONLY population TierCapabilityPermits should still treat as
+--- unresolvable-and-allowed. A non-nil result — stale or not — is what
+--- TierCapabilityPermits must evaluate for real, never skip.
 --- @param citizenid string
 --- @param jobName string
+--- @param includeExpired boolean? -- default false/nil: unchanged, original
+--- behavior. true: also return an EXPIRED tier rather than folding it into
+--- nil (see SECURITY FIX above).
 --- @return string?
-function GetCertificationTier(citizenid, jobName)
+function GetCertificationTier(citizenid, jobName, includeExpired)
     local cached = Certifications[citizenid]
-    if cached and cached.active and cached.job == jobName and not cached.expired then
+    if cached and cached.active and cached.job == jobName and (includeExpired or not cached.expired) then
         return cached.tier
     end
     return nil

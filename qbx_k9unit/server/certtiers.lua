@@ -378,17 +378,34 @@
     grants capabilityKey to at least one tier, that key goes ACTIVE
     resource-wide: from then on, a citizenid whose OWN resolved tier does
     not carry it is denied wherever a real consumer checks it. A
-    citizenid whose tier CANNOT be resolved at all — no active matching
-    certification record (GetCertificationTier returns nil), or K9 access
-    reached through the 'k9.access' permission grant / high-command
-    bypass / autoAccessGrade job-grade path, all of which HasK9Access
-    itself already treats as independent of tier — is ALSO allowed, never
-    denied: an inability to classify someone is treated exactly like the
-    dormant case, never as a reason to restrict them. An unrecognized
-    capabilityKey (a typo, or a key later removed from CAPABILITY_CATALOG)
-    can never be "active" in the first place — that internal check itself
-    returns false for anything outside the closed catalog — so it always
-    resolves to allow, structurally, not by convention.
+    citizenid with NO certification-assigned tier AT ALL for this job —
+    no active k9_certifications row ever existed, or it was manually
+    revoked (GetCertificationTier(citizenid, jobName, true) returns nil —
+    see that accessor's own doc comment, server/certifications.lua) — is
+    ALSO allowed, never denied: their K9 access, if any, necessarily comes
+    through the 'k9.access' permission grant / high-command bypass /
+    autoAccessGrade job-grade path, none of which HasK9Access treats as
+    tier-dependent, and an inability to classify someone this way is
+    treated exactly like the dormant case, never as a reason to restrict
+    them.
+    SECURITY FIX (coder-security, tier-bypass-on-expiry review): this used
+    to ALSO cover a citizenid whose certification-assigned tier had merely
+    EXPIRED (the 2-argument GetCertificationTier(citizenid, jobName), which
+    folds expiry into "no tier" for every OTHER consumer, used to be the
+    ONLY signal this function consulted). That let a capability an operator
+    explicitly withheld from a tier silently come back the instant that
+    handler's certification lapsed, for as long as they kept K9 access
+    through one of the other three routes above — no exploitation needed,
+    ordinary certification lifecycle produced it. FIXED: this function now
+    calls the 3-argument form, GetCertificationTier(citizenid, jobName,
+    true), which does NOT fold expiry into "no tier" — an EXPIRED-but-real
+    tier assignment is now evaluated for real, and only a citizenid with NO
+    certification row at all for this job is treated as unresolvable now.
+    An unrecognized capabilityKey (a typo, or
+    a key later removed from CAPABILITY_CATALOG) can never be "active" in
+    the first place — that internal check itself returns false for
+    anything outside the closed catalog — so it always resolves to allow,
+    structurally, not by convention.
 
     NO UNBOUNDED TRAP, RESTATED AS A RULE FOR FUTURE CONSUMERS, NOT MERELY
     AN OBSERVATION ABOUT TODAY'S CODE (see HAZARD 5 immediately below,
@@ -822,17 +839,34 @@ end
 ---   - GetCertificationTier is unavailable (soft dependency,
 ---     server/certifications.lua absent) or citizenid/jobName are not
 ---     both strings.
----   - GetCertificationTier(citizenid, jobName) returns nil -- no active,
----     job-matching certification record for this citizenid. This is NOT
----     assumed to mean "no K9 access" -- HasK9Access can independently be
----     true via a 'k9.access' permission grant, a high-command bypass, or
----     an autoAccessGrade job grade, none of which this file can express
----     as a tier at all. An unresolvable tier is treated exactly like the
----     dormant case: this function only ever narrows access for a
----     citizenid it can affirmatively PLACE outside an ACTIVE capability,
----     never for one it cannot classify.
+---   - GetCertificationTier(citizenid, jobName, true) returns nil -- NO
+---     active, job-matching certification ROW exists for this citizenid at
+---     all (never certified for this job, or a manually revoked row). This
+---     is NOT assumed to mean "no K9 access" -- HasK9Access can
+---     independently be true via a 'k9.access' permission grant, a
+---     high-command bypass, or an autoAccessGrade job grade, none of which
+---     this file can express as a tier at all. This is the ONLY case
+---     treated as unresolvable-and-allowed: this function only ever
+---     narrows access for a citizenid it can affirmatively PLACE outside an
+---     ACTIVE capability, never for one it cannot classify.
+---   - Note what is deliberately NOT in this list any more (SECURITY FIX,
+---     coder-security, tier-bypass-on-expiry review): "the certification is
+---     expired" used to ALSO be folded into "unresolvable" here, because
+---     this function used to call the 2-argument GetCertificationTier(citizenid,
+---     jobName), which folds expiry into "no tier" for every consumer. That
+---     let a capability an operator explicitly withheld from a tier
+---     silently come back the instant that handler's certification lapsed,
+---     for as long as they kept K9 access through one of the other three
+---     routes above -- no exploitation needed, ordinary certification
+---     lifecycle produced it. FIXED: this function now passes
+---     `includeExpired = true`, so a citizenid whose certification-assigned
+---     tier is merely STALE (a real, active, job-matching row exists, but
+---     has expired) has THAT tier evaluated for real below, never silently
+---     treated as if no certification had ever existed. Only a citizenid
+---     with NO certification row at all for this job is still unresolvable.
 --- Returns false ONLY when `capabilityKey` is ACTIVE (>=1 tier grants it)
---- AND citizenid's own resolved tier is not among the tiers granting it.
+--- AND citizenid's own resolved tier (STALE or not) is not among the tiers
+--- granting it.
 --- @param citizenid any
 --- @param jobName any
 --- @param capabilityKey any
@@ -842,7 +876,24 @@ function TierCapabilityPermits(citizenid, jobName, capabilityKey)
     if type(GetCertificationTier) ~= 'function' then return true end
     if type(citizenid) ~= 'string' or type(jobName) ~= 'string' then return true end
 
-    local tierKey = GetCertificationTier(citizenid, jobName)
+    -- `includeExpired = true` (SECURITY FIX, coder-security,
+    -- tier-bypass-on-expiry review): the ordinary 2-argument
+    -- GetCertificationTier(citizenid, jobName) folds an EXPIRED
+    -- certification into "no tier", which is correct for every OTHER
+    -- consumer but WRONG here -- it let a capability an operator explicitly
+    -- withheld from a tier silently unlock the moment that handler's
+    -- certification lapsed, for as long as they kept K9 access through a
+    -- 'k9.access' permission grant, an autoAccessGrade job grade, or high
+    -- command (HasK9Access's other three routes). Passing `true` here
+    -- resolves a STALE (expired) tier assignment for real, while still
+    -- returning nil for a citizenid with NO certification row at all for
+    -- this job (never certified, or manually revoked) -- exactly the
+    -- population that remains genuinely unresolvable and must stay
+    -- allowed. See GetCertificationTier's own doc comment for the full
+    -- "why the data can tell these two apart" writeup (the underlying
+    -- cache's `active` and `expired` flags are independent, so "stale" is
+    -- not the same bit as "absent").
+    local tierKey = GetCertificationTier(citizenid, jobName, true)
     if not tierKey then return true end
 
     return TierHasCapability(tierKey, capabilityKey)

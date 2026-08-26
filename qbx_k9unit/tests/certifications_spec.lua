@@ -1905,6 +1905,70 @@ t.test('GetCertificationTier: nil for a citizenid with no active/matching cert',
     t.isNil(f.env.GetCertificationTier('NOBODY', 'police'))
 end)
 
+-- ----------------------------------------------------------------------
+-- GetCertificationTier's `includeExpired` 3rd parameter (coder-security,
+-- tier-bypass-on-expiry fix): server/certtiers.lua's TierCapabilityPermits'
+-- own escape hatch for distinguishing a STALE tier assignment (a real,
+-- active, job-matching row exists, but has expired) from NO tier
+-- assignment at all (never certified for this job, or manually revoked).
+-- Every 2-argument call site (every test above this block, and every real
+-- consumer other than TierCapabilityPermits) is completely unaffected --
+-- `includeExpired` defaults to nil/falsy, which is byte-for-byte the
+-- original behavior.
+-- ----------------------------------------------------------------------
+
+t.test('GetCertificationTier(includeExpired=true): nil for a citizenid with no active/matching cert at all -- same as the 2-arg form', function()
+    local f = newFixture()
+    t.isNil(f.env.GetCertificationTier('NOBODY', 'police', true))
+end)
+
+t.test('GetCertificationTier(includeExpired=true): returns the real tier for an active, unexpired cert -- same as the 2-arg form', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'senior', expires_at_unix = 9999999999 } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.equals(f.env.GetCertificationTier('CIT1', 'police', true), 'senior')
+    t.equals(f.env.GetCertificationTier('CIT1', 'police'), 'senior', 'sanity: both agree while unexpired')
+end)
+
+t.test('GetCertificationTier(includeExpired=true): STILL returns the assigned tier once EXPIRED, unlike the 2-arg form -- this is the whole point of the fix', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'trainee', expires_at_unix = 1699999999 } end -- long since expired
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.isNil(f.env.GetCertificationTier('CIT1', 'police'), 'the 2-arg form folds expiry into "no tier" for every OTHER consumer -- unchanged')
+    t.equals(f.env.GetCertificationTier('CIT1', 'police', true), 'trainee',
+        'but the underlying row DID assign a real tier -- `includeExpired = true` must not report it as unresolvable')
+end)
+
+t.test('GetCertificationTier(includeExpired=true): nil for a MANUALLY REVOKED cert (active = false) -- genuinely no tier, distinct from stale', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'senior', expires_at_unix = 9999999999 } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.equals(f.env.GetCertificationTier('CIT1', 'police', true), 'senior', 'sanity: assigned while active')
+
+    f.mysql.scalar.await = function() return nil end -- no active row any more -- revoked
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isNil(f.env.GetCertificationTier('CIT1', 'police', true),
+        'a revoked (no longer active) row must be treated as no tier at all, never as "stale"')
+end)
+
+t.test('GetCertificationTier(includeExpired=true): nil when the cached job does not match the requested job', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'senior', expires_at_unix = 9999999999 } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.isNil(f.env.GetCertificationTier('CIT1', 'ambulance', true), 'scoped to whichever job was last refreshed, exactly like the 2-arg form')
+end)
+
 t.test('MeetsTierRequirement: senior meets a certified requirement; trainee does not; an unrecognized minTier fails closed', function()
     local f = newFixture()
     f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
@@ -2209,6 +2273,28 @@ t.test('GrantSpecialization: FAIL-CLOSED -- a target with no active base certifi
     f.setSource(1)
     f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_requires_active_cert'), 'error'))
+end)
+
+t.test('GrantSpecialization: SECURITY FIX -- a target whose base certification is EXPIRED (active=true in the DB, but past expires_at) is also rejected, matching GetCertificationTier', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    f.setPed(2, 200, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- active=true in the DB (never revoked)...
+    f.mysql.single.await = function() return { tier = 'trainee', expires_at_unix = 1699999999 } end -- ...but long since expired
+    f.env.RefreshCertificationCache('T1', 'police')
+    t.isNil(f.env.GetCertificationTier('T1', 'police'), 'sanity: GetCertificationTier already treats this as no tier')
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.setSource(1)
+    f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
+
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_requires_active_cert'), 'error'),
+        'this precondition used to omit `not cached.expired`, unlike GetCertificationTier -- an expired-but-not-revoked row must be refused here too, not treated as still-active')
+    t.isFalse(insertCalled, 'must never reach the INSERT for an expired base certification')
 end)
 
 t.test('GrantSpecialization: full success path -- INSERT fires, cache reflects the grant, both parties notified, outbound event fired', function()

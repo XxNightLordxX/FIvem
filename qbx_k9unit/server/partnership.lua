@@ -509,6 +509,64 @@ local function IsAlreadyPartnered(citizenid)
     return cached ~= nil and cached.active == true
 end
 
+--- Deliberately NARROWER than the model-OR-role widened check
+--- (initiatorIsK9/targetIsK9) CheckPartnershipEligibility computes below --
+--- used ONLY to decide the "both parties are a K9" rejection, never the
+--- "neither party is a K9" one. See that function's own "BOTH-ARE-K9 CASE"
+--- comment for the exact gap this closes (owner-directed, this pass: two
+--- K9s could partner with each other, with one silently cast as the
+--- handler, since the widened check only ever rejects "neither").
+---
+--- WHY ROLE, NOT MODEL, NOT THE SAME WIDENED OR THIS FUNCTION USES
+--- ELSEWHERE: server/appearance.lua's own header defines "HOLDS THE K9
+--- ROLE" precisely as HasK9Role's own OR (an active cert for the CURRENT
+--- job, or an active k9.access grant) -- deliberately EXCLUDING both ped
+--- model AND the autoAccessGrade/High-Command bypasses baked into
+--- HasK9Access, "since those grant broad, blanket access to K9
+--- *features*... without making that officer's own character *be* the
+--- K9." That is exactly the distinction this rejection needs:
+---   - Ped MODEL is NOT evidence of "genuinely a K9" here. A
+---     Config.Peds-listed species can be worn by an ordinary department
+---     officer for reasons that have nothing to do with K9 access -- a
+---     legitimate HANDLER can be standing on a dog model (this resource's
+---     own K9 role/model decoupling: "everything works on any ped" is a
+---     two-way guarantee, not just "a K9 can look human"). Folding model
+---     into this specific check would misclassify that officer as a
+---     second K9 and wrongly refuse an otherwise-legitimate pairing --
+---     exactly the "strict direction" mistake that is worse than the bug
+---     this check exists to close.
+---   - HasK9Access is NOT evidence either, for the opposite reason: it is
+---     deliberately WIDER than "is the K9" (a High Command or
+---     autoAccessGrade bypass can make it true for a citizenid who has
+---     never held the K9 role at all). Using it here would flag a High
+---     Command officer merely anchoring/overseeing as a second K9 and,
+---     again, wrongly refuse the pairing.
+--- HasK9Role is this resource's own existing, documented answer to "does
+--- this citizenid actually hold the K9 identity" -- independent of
+--- current appearance and independent of any blanket access bypass -- so
+--- it is the one primitive that is neither too narrow nor too wide for
+--- this specific question.
+---
+--- FALLBACK, mirroring this file's own established soft-dependency
+--- discipline for HasK9Role (see initiatorIsK9/targetIsK9's identical
+--- `type(...) == 'function'` guard below): if server/appearance.lua is
+--- ever removed, "the K9 role" does not exist as a model-independent
+--- concept in that world either -- IsConfiguredK9Model was this
+--- resource's ONLY signal for "is this citizenid a K9" pre-decoupling, so
+--- that is what this degrades to, rather than unconditionally returning
+--- `false` (which would silently disable the both-are-K9 rejection
+--- entirely instead of degrading to the same pre-decoupling behavior
+--- every other check in this file already degrades to).
+--- @param src number
+--- @param ped number
+--- @return boolean
+local function IsGenuinelyK9Party(src, ped)
+    if type(HasK9Role) == 'function' then
+        return HasK9Role(src)
+    end
+    return IsConfiguredK9Model(GetEntityModel(ped))
+end
+
 --- Returns true if `err` (the value pcall caught around the establishing
 --- INSERT) represents a MySQL/MariaDB duplicate-key error (1062) on either
 --- of this table's two UNIQUE KEYs. Duplicated from
@@ -551,6 +609,22 @@ end
 -- actually exists, so introducing an unshipped key here would redden
 -- tests/run.sh for every spec that loads this file, not just fail silently
 -- at runtime).
+--
+-- 'both_k9' (see CheckPartnershipEligibility's own "BOTH-ARE-K9 CASE"
+-- comment, and IsGenuinelyK9Party's doc comment, above) is the SAME
+-- situation, for the SAME reason -- it is NOT given its own entry here
+-- either, for now, purely because locales/en.json is off-limits to this
+-- file and no shipped key for it exists yet. Deliberately NOT reusing
+-- 'no_k9_party's message for it either, unlike a plain fallback would
+-- suggest: "neither of you is a K9" and "you are both K9s" are different
+-- problems with different remedies, so a NEW locale key has been
+-- requested from the file's owner (common.both_k9, proposed English text:
+-- "Both of you are playing K9s -- one of you needs to be the handler
+-- instead.") -- until that key ships, this reason falls through to
+-- PartnershipRejectReasonMessage's `or locale('partnership.reject_fallback')`
+-- fallback ("Unable to set up partnership.") rather than being silently
+-- misreported as 'no_k9_party'. Add `both_k9 = locale('common.both_k9')`
+-- to this table once the key exists.
 local PARTNERSHIP_REJECT_MESSAGES = {
     feature_disabled          = locale('partnership.feature_disabled'),
     invalid_target            = locale('partnership.invalid_target'),
@@ -669,6 +743,26 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'offline'
     end
 
+    -- SAME-IDENTITY GUARD, BY CITIZENID (owner-directed, this pass): the
+    -- `initiatorSrc == targetSrc` check above only rejects self-targeting
+    -- by SERVER ID -- but a server id is a per-connection number FiveM
+    -- recycles, not a stable identity (see e.g. the playerDropped handler
+    -- below scanning PendingPartnershipRequests specifically because a
+    -- freed id can be reassigned to an unrelated citizenid before a
+    -- pending request's own TTL expires). The citizenid, resolved above
+    -- from each party's OWN current session, is this resource's actual
+    -- identity boundary (every persisted row, every cache entry, every
+    -- per-person feature-control check in this file is keyed by it, never
+    -- by source) -- so this is the check that actually matters if a
+    -- reconnect, a stale pending request resolving against a NEW session
+    -- for the citizenid it used to name, or any other path ever produces
+    -- two distinct server ids that both resolve to the same citizenid at
+    -- once. Checked here, after both citizenids are already resolved,
+    -- rather than duplicating the resolution just to check it earlier.
+    if initiatorCitizenid == targetCitizenid then
+        return false, nil, nil, 'invalid_target'
+    end
+
     -- Cache-based pre-check only -- a fast, early, honest rejection before
     -- either party goes through a consent prompt for a request that could
     -- never complete. NOT the final authority: the establish flow itself
@@ -700,6 +794,30 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
 
     if not initiatorIsK9 and not targetIsK9 then
         return false, nil, nil, 'no_k9_party'
+    end
+
+    -- BOTH-ARE-K9 CASE (owner-reported gap, this pass): the check above
+    -- only ever rejects "NEITHER party is a K9" -- when initiatorIsK9 AND
+    -- targetIsK9 are both true, the tie-break just below silently assigns
+    -- one of two genuine K9s the OFFICER/handler role instead of rejecting
+    -- outright, and that establishment then actually SUCCEEDS, since a K9
+    -- role-holder is typically ALSO a department member and so trivially
+    -- clears officer_not_in_department too -- there is nothing downstream
+    -- that would otherwise catch this. "Neither of you is a K9" and "you
+    -- are both K9s" are different problems with different remedies, so
+    -- this gets its own reason rather than being folded into either
+    -- 'no_k9_party' or the ordinary success path.
+    --
+    -- Deliberately does NOT reuse initiatorIsK9/targetIsK9 (the widened
+    -- model-OR-role check immediately above) for THIS decision -- see
+    -- IsGenuinelyK9Party's own doc comment for exactly why model must not
+    -- be read as proof the OTHER party can't legitimately be the handler
+    -- (a real handler's ped can coincidentally be a Config.Peds-listed
+    -- species for reasons that have nothing to do with them holding K9
+    -- access) and why HasK9Access alone is too WIDE for this question in
+    -- the opposite direction (High Command / autoAccessGrade bypasses).
+    if IsGenuinelyK9Party(initiatorSrc, initiatorPed) and IsGenuinelyK9Party(targetSrc, targetPed) then
+        return false, nil, nil, 'both_k9'
     end
 
     -- Same tie-break as server/main.lua's CheckLeashEligibility when BOTH

@@ -380,6 +380,26 @@ local function newMedkitFixture(opts)
         end
     end
 
+    -- XP TIER UNLOCK (this pass) -- server/progression.lua's real
+    -- GetXPTierMedkitCooldownMs is NOT loaded into this sandbox (that
+    -- function's own numeric contract is tests/xptierunlocks_spec.lua's
+    -- job, not this file's) -- this is a small, test-controlled stand-in
+    -- so RunUseK9MedkitMutation's own consultation of it (soft dependency,
+    -- `type(...) == 'function'` guard) can be proven from THIS file's own
+    -- callback path. `opts.medkitCooldownMsByCitizenid` maps a citizenid to
+    -- the exact effective cooldown this stub returns for it; any other
+    -- citizenid falls through to the real baseCooldownMs argument
+    -- unchanged, matching the real accessor's own "unlock not yet earned"
+    -- default.
+    local xpTierCooldownCalls = {}
+    if opts.withXPTierMedkitCooldown then
+        envOverrides.GetXPTierMedkitCooldownMs = function(citizenid, baseCooldownMs)
+            xpTierCooldownCalls[#xpTierCooldownCalls + 1] = { citizenid = citizenid, baseCooldownMs = baseCooldownMs }
+            local override = opts.medkitCooldownMsByCitizenid and opts.medkitCooldownMsByCitizenid[citizenid]
+            return override or baseCooldownMs
+        end
+    end
+
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -421,6 +441,7 @@ local function newMedkitFixture(opts)
         notifyCalls = notifyCalls,
         printedLines = printedLines,
         restoreInjuryCalls = restoreInjuryCalls,
+        xpTierCooldownCalls = xpTierCooldownCalls,
         createThreadCallCount = function() return createThreadCallCount end,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setNow = function(ms) fakeNow = ms end,
@@ -1158,6 +1179,62 @@ t.test('the per-target cooldown persists across the target\'s own reconnect (a f
     local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, NEW_TARGET_SRC)
     t.isFalse(result.ok)
     t.equals(result.reason, 'on_cooldown', 'the cooldown is keyed by citizenid, which must survive a reconnect under a new source id')
+end)
+
+-- ========================================================================
+-- XP TIER UNLOCK -- GetXPTierMedkitCooldownMs (server/progression.lua),
+-- the documented soft dependency that resolves the Veteran-tier
+-- medkitCooldownMultiplier reward into the actual threshold this file's
+-- own MedkitCooldown.IsOnCooldown call is checked against. Keyed on the
+-- TARGET's own citizenid, never the using player's -- see this file's
+-- FILE-TO-FILE CONTRACT for the full reasoning. GetXPTierMedkitCooldownMs's
+-- own numeric contract (multiplier bounds, the 1ms floor) is
+-- tests/xptierunlocks_spec.lua's job, not this file's -- this section only
+-- proves server/medkit.lua actually CONSULTS it and USES its result.
+-- ========================================================================
+
+t.test('XP TIER UNLOCK: a Veteran-tier target (accessor returns a shortened cooldown) is treatable again sooner than the base Config.K9Medkit.cooldownMs would allow', function()
+    local f = newMedkitFixture({
+        withXPTierMedkitCooldown = true,
+        medkitCooldownMsByCitizenid = { ['K9-VETERAN'] = 15000 }, -- e.g. baseCooldownMs(60000) * 0.75 tier multiplier, pre-resolved by the (stubbed) accessor
+    })
+    wireUsingPlayer(f, USER_SRC, { itemCount = 2 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-VETERAN' })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+
+    -- Past the REDUCED threshold, but still well short of the base 60000ms
+    -- cooldown -- only passes if server/medkit.lua actually used the
+    -- accessor's shortened value, not the raw Config.K9Medkit.cooldownMs.
+    f.advance(15001)
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok, 'a Veteran-tier target must be treatable again after its OWN shortened cooldown elapses, not the base one')
+    t.equals(#f.xpTierCooldownCalls, 2, 'the accessor is consulted on every treat attempt against this target')
+    t.equals(f.xpTierCooldownCalls[1].citizenid, 'K9-VETERAN')
+    t.equals(f.xpTierCooldownCalls[1].baseCooldownMs, f.config.K9Medkit.cooldownMs, 'the accessor must be given the real configured base, never a hardcoded number')
+end)
+
+t.test('XP TIER UNLOCK: a base-tier target (accessor returns baseCooldownMs unchanged) still gets the full configured cooldown, not the Veteran-tier reduction', function()
+    local f = newMedkitFixture({ withXPTierMedkitCooldown = true }) -- no override for this citizenid -- the stub falls through to baseCooldownMs
+    wireUsingPlayer(f, USER_SRC, { itemCount = 2 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-BASE-TIER' })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+
+    f.advance(15001) -- past the Veteran-tier threshold, but NOT the full base cooldown
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isFalse(result.ok, 'a base-tier target must still honor the full configured cooldown')
+    t.equals(result.reason, 'on_cooldown')
+end)
+
+t.test('XP TIER UNLOCK: GetXPTierMedkitCooldownMs entirely absent (server/progression.lua not loaded, or XPProgression off) falls back cleanly to the plain configured cooldown', function()
+    local f = newMedkitFixture() -- withXPTierMedkitCooldown deliberately omitted -- the global is simply undefined
+    wireUsingPlayer(f, USER_SRC, { itemCount = 2 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-NO-ACCESSOR' })
+    local r1 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r1.ok)
+
+    f.advance(f.config.K9Medkit.cooldownMs)
+    local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r2.ok, 'a missing accessor must never error, and must behave exactly like the plain configured cooldown')
 end)
 
 -- ========================================================================

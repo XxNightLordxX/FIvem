@@ -155,6 +155,13 @@ local function boot(opts)
     -- `type(GetCertificationTier) == 'function'` inside the production
     -- file genuinely sees it as absent, exactly like a real server
     -- running this file without server/certifications.lua loaded.
+    -- TIER-BYPASS-ON-EXPIRY FIX: TierCapabilityPermits now calls
+    -- GetCertificationTier(citizenid, jobName, true) (the 3-argument form)
+    -- rather than adding a second global -- opts.getCertificationTier's own
+    -- stub is free to inspect that 3rd argument itself (see SECTION 10
+    -- below) to distinguish a STALE (expired) tier assignment from a
+    -- NEVER-TIERED one within a single stub function, exactly like the
+    -- real production accessor does.
     if opts.getCertificationTier then
         envOverrides.GetCertificationTier = opts.getCertificationTier
     end
@@ -642,6 +649,107 @@ t.test('COMPOSITION: activating one capability never affects a DIFFERENT, still-
     f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
     t.isTrue(f.env.TierCapabilityPermits('CIT1', 'police', 'specializations_eligible'),
         'a sibling capability nobody has touched stays dormant independently, so it still permits unconditionally')
+end)
+
+-- ============================================================================
+-- SECTION 10 -- TIER-BYPASS-ON-EXPIRY FIX (coder-security, red-team finding):
+-- GetCertificationTier(citizenid, jobName) folds "expired" into "no tier"
+-- for every OTHER consumer (correctly). TierCapabilityPermits used to be
+-- the ONE place that collapse was WRONG: it called that same 2-argument
+-- form, so it treated "expired" exactly like "genuinely never tiered" --
+-- a citizenid who kept K9 access via the 'k9.access' permission grant /
+-- autoAccessGrade / high-command bypass (HasK9Access's other three routes)
+-- silently regained any capability withheld from their now-stale tier the
+-- instant their certification lapsed -- no exploitation needed, ordinary
+-- certification lifecycle produced it. FIXED: TierCapabilityPermits now
+-- calls the 3-argument form, GetCertificationTier(citizenid, jobName,
+-- true), which distinguishes "a real, active, job-matching row exists but
+-- is stale" from "no such row exists at all" using the underlying cache's
+-- own independent `active`/`expired` flags (see that accessor's own doc
+-- comment, server/certifications.lua). These tests drive
+-- TierCapabilityPermits with a SINGLE getCertificationTier stub that
+-- itself branches on the 3rd argument, exactly mirroring what the real
+-- production accessor does for an expired-but-still-K9-accessible handler.
+-- ============================================================================
+
+t.test('EXPIRY FIX: a STALE (expired) tier assignment is evaluated for real -- denied when the active capability excludes it', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        -- A real, active, job-matching row assigned 'trainee' -- it has
+        -- simply expired. The 2-arg form (every OTHER consumer) folds that
+        -- into nil; only `includeExpired = true` still resolves it.
+        getCertificationTier = function(_citizenid, _jobName, includeExpired)
+            if includeExpired then return 'trainee' end
+            return nil
+        end,
+    })
+    -- High command withholds bite-and-hold from trainee (grants it to
+    -- certified/senior only) -- the exact scenario the red-team finding
+    -- names: a rookie's certification expires while their K9 access is kept
+    -- alive by some other route, and they must NOT silently regain this.
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'certified', label = 'Certified', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isFalse(f.env.TierCapabilityPermits('EXPIRED_TRAINEE_CIT', 'police', 'bite_hold_and_takedown'),
+        'an expired trainee-tier assignment must still be denied a capability trainee never held -- expiry must not silently unlock it')
+end)
+
+t.test('EXPIRY FIX: a STALE (expired) tier assignment that DOES hold the active capability is still allowed', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(_citizenid, _jobName, includeExpired)
+            if includeExpired then return 'senior' end
+            return nil
+        end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isTrue(f.env.TierCapabilityPermits('EXPIRED_SENIOR_CIT', 'police', 'bite_hold_and_takedown'),
+        'a stale tier that DOES hold the capability must still be allowed -- expiry only narrows, it never invents a NEW denial')
+end)
+
+t.test('EXPIRY FIX: NEVER-TIERED (no certification row at all -- never certified for this job, or manually revoked) stays allowed, distinct from STALE', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        -- No certification row for this citizenid/job at all, regardless of
+        -- `includeExpired` -- there is nothing to be "stale". This is the
+        -- population reached via a 'k9.access' permission grant, an
+        -- autoAccessGrade job grade, or high command, with no certification
+        -- record of their own ever -- HasK9Access's other three routes.
+        getCertificationTier = function(_citizenid, _jobName, _includeExpired) return nil end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isTrue(f.env.TierCapabilityPermits('NEVER_CERTIFIED_CIT', 'police', 'bite_hold_and_takedown'),
+        'someone who never held a certification (or was manually revoked) for this job has nothing to resolve a tier from -- must stay allowed, unlike the stale case above')
+end)
+
+t.test('EXPIRY FIX: GetCertificationTier is called with includeExpired=true, not the bare 2-argument form', function()
+    local capturedArgs
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function(citizenid, jobName, includeExpired)
+            capturedArgs = { citizenid, jobName, includeExpired }
+            return nil
+        end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    f.env.TierCapabilityPermits('CIT1', 'police', 'bite_hold_and_takedown')
+
+    t.equals(capturedArgs[1], 'CIT1')
+    t.equals(capturedArgs[2], 'police')
+    t.isTrue(capturedArgs[3], 'must pass includeExpired=true so a stale (expired) tier assignment is still resolved, never folded into "no tier"')
+end)
+
+t.test('EXPIRY FIX: GetCertificationTier is never called at all for a malformed citizenid/jobName, includeExpired or not', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        getCertificationTier = function() error('must never be reached for a bad-shaped input') end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+
+    t.isTrue(f.env.TierCapabilityPermits(nil, 'police', 'bite_hold_and_takedown'))
+    t.isTrue(f.env.TierCapabilityPermits('CIT1', nil, 'bite_hold_and_takedown'))
 end)
 
 os.exit(t.summary())
