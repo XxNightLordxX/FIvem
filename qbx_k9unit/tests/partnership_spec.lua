@@ -595,6 +595,84 @@ t.test('requestPartnerUp: when BOTH are K9-modeled, the REQUEST TARGET defaults 
 end)
 
 -- ========================================================================
+-- BOTH-ARE-K9 REJECTION (owner-reported gap, this pass): CheckPartnershipEligibility
+-- previously only ever rejected "NEITHER party is a K9" -- when BOTH
+-- genuinely hold the K9 role, the tie-break above used to silently cast
+-- one of them as the handler instead of refusing outright, since a K9
+-- role-holder is typically ALSO a department member and so trivially
+-- clears officer_not_in_department too. See server/partnership.lua's own
+-- "BOTH-ARE-K9 CASE" comment and IsGenuinelyK9Party's doc comment for the
+-- full "role, not model, not HasK9Access" reasoning this section pins.
+-- ========================================================================
+
+t.test('requestPartnerUp: both parties genuinely holding the K9 role (HasK9Role) is rejected as both_k9, not silently assigning one of them the handler role', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'REAL-K9-A', { name = 'police' })
+    f.registerPlayer(2, 'REAL-K9-B', { name = 'police' })
+    f.setPed(1, 100, vec3(0, 0, 0), false) -- neither is even on a K9 MODEL -- role alone must be enough to catch this
+    f.setPed(2, 200, vec3(0, 0, 0), false)
+    f.setK9Role(1, true)
+    f.setK9Role(2, true)
+    f.setAccess(1, true)
+    f.setAccess(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    -- No dedicated locale key ships yet for this reason (see
+    -- PARTNERSHIP_REJECT_MESSAGES's own comment on 'both_k9') -- falls
+    -- through to the generic partnership fallback message, but this MUST
+    -- NOT be reported as no_k9_party (the wrong diagnosis for this
+    -- problem) and MUST NOT silently succeed (the bug itself).
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.reject_fallback'), 'error'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnerUpRequest'), 0, 'no consent prompt may ever be sent when both parties are genuinely K9s')
+end)
+
+t.test('requestPartnerUp: both on a CONFIGURED K9 MODEL but only ONE genuinely holds the K9 role still succeeds -- ped model alone must never trigger both_k9 (preserves "a handler can visually be on a dog model")', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'MODEL-ONLY-HANDLER', { name = 'police' })
+    f.registerPlayer(2, 'REAL-K9', { name = 'police' })
+    f.setPed(1, 100, vec3(0, 0, 0), true) -- on the configured K9 model, but...
+    f.setPed(2, 200, vec3(0, 0, 0), true)
+    -- ...holds no K9 role/access at all -- an ordinary department officer
+    -- who merely happens to be modeled as the configured K9 species.
+    f.setAccess(2, true) -- only the actual K9 (2) is certified
+    f.setK9Role(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.partner_request_sent'), 'inform'), 'a department officer merely modeled as a K9, holding no real K9 role, must still be able to become the handler for a real K9')
+end)
+
+t.test('requestPartnerUp: a HasK9Access bypass (e.g. High Command/autoAccessGrade) with no actual K9 role must not be misread as "genuinely a K9" for the both_k9 check', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'BYPASS-OFFICER', { name = 'police' })
+    f.registerPlayer(2, 'REAL-K9', { name = 'police' })
+    f.setPed(1, 100, vec3(0, 0, 0), false)
+    f.setPed(2, 200, vec3(0, 0, 0), false)
+    f.setAccess(1, true) -- HasK9Access true (bypass) but no HasK9Role -- see IsGenuinelyK9Party's own doc comment for why HasK9Access alone is deliberately too WIDE a signal for this check
+    f.setAccess(2, true)
+    f.setK9Role(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.partner_request_sent'), 'inform'), 'HasK9Access alone must not count as "genuinely a K9" here, or a bypass-holding officer could never anchor a real K9 at all')
+end)
+
+-- ========================================================================
+-- SAME-IDENTITY GUARD, BY CITIZENID (owner-directed, this pass): a server
+-- id is a per-connection number, not a stable identity -- the citizenid is.
+-- ========================================================================
+
+t.test('requestPartnerUp: two different server ids that resolve to the SAME citizenid are rejected as invalid_target, not treated as two distinct parties', function()
+    local f = newFixture()
+    -- Simulates a stale pending request (or any other path) resolving
+    -- against a NEW session for the same citizenid: two live server ids,
+    -- one underlying person.
+    f.registerPlayer(1, 'SAME-CID', { name = 'police' })
+    f.registerPlayer(2, 'SAME-CID', { name = 'police' })
+    f.setPed(1, 100, vec3(0, 0, 0), false)
+    f.setPed(2, 200, vec3(0, 0, 0), true)
+    f.setAccess(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.invalid_target'), 'error'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnerUpRequest'), 0)
+end)
+
+-- ========================================================================
 -- requestPartnerUp: pending-request discipline (single slot per TARGET,
 -- rate limit, TTL).
 -- ========================================================================
