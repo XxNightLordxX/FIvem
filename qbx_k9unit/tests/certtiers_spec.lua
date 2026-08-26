@@ -981,6 +981,36 @@ t.test('SELF-TIER CAPABILITY EDIT: a REVOKE from the officer\'s own tier is exac
     t.contains(world.audit[2].detail, 'SELF-TIER CAPABILITY EDIT')
 end)
 
+t.test('SELF-TIER CAPABILITY EDIT: still flagged when the request PARTIALLY fails -- the marker reflects what actually succeeded, not the full request', function()
+    local world = newWorld()
+    world.throwOnCapabilityInsert = { specializations_eligible = true }
+    local f = boot({
+        world = world,
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        playersBySource = {
+            [HC_SOURCE] = { PlayerData = { citizenid = 'CHIEF1', job = { name = 'police' } } },
+        },
+        getCertificationTier = function(_citizenid, _jobName) return 'senior' end,
+    })
+
+    -- advanced_tracking succeeds; specializations_eligible is rigged to
+    -- throw -- both targeted at 'senior', the officer's own tier.
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'senior', label = 'Senior', capabilities = { 'advanced_tracking', 'specializations_eligible' },
+    })
+    t.isFalse(result.ok, 'a mid-loop capability write failure must still be reported as a failure, self-tier or not')
+    t.equals(result.reason, 'capability_write_failed')
+    t.isNotNil(result.warning, 'the self-tier warning must still be surfaced on a partial failure -- what DID succeed still affected the officer\'s own tier')
+
+    -- The audit record is written on this partial failure (not skipped),
+    -- names only what actually succeeded, and still carries the SELF-TIER
+    -- marker because advanced_tracking's grant to 'senior' genuinely landed.
+    t.equals(#world.audit, 1, 'an audit row must be written even when the request partially fails')
+    t.contains(world.audit[1].detail, 'SELF-TIER CAPABILITY EDIT')
+    t.contains(world.audit[1].detail, 'capabilities_added=[advanced_tracking]')
+    t.notContains(world.audit[1].detail, 'specializations_eligible', 'the audit must not claim a capability that never actually landed')
+end)
+
 t.test('SELF-TIER CAPABILITY EDIT: never flagged when the acting officer\'s own tier cannot be resolved (soft dependency, no GetCertificationTier loaded)', function()
     local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
     -- No getCertificationTier stub supplied at all -- production code must

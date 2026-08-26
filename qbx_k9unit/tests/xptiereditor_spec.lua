@@ -771,4 +771,208 @@ t.test('AUDIT: a rejected edit (denied, rate-limited, or invalid) writes NOTHING
     t.equals(#f.world.audit, 0)
 end)
 
+-- ============================================================================
+-- SECTION 9 -- BOOT-ORDER RACE against server/datastore.lua's schema-
+-- collision probe (interaction review + fix, db-schema boot-order pass).
+--
+-- server/datastore.lua loads before this file and registers its own
+-- onResourceStart handler FIRST -- but that handler's own MySQL.query.await
+-- is a real, YIELDING call, and a yielding handler does not block FXServer's
+-- event dispatch from moving straight on to the NEXT registered handler
+-- (this file's own, below) while the probe is still in flight. The `boot()`
+-- helper above uses a synchronous `makeQueryAwait(world)` stub (a plain Lua
+-- function -- never yields), so it cannot exercise this, same disclosed
+-- limitation this file's own header already states for the SEPARATE
+-- mutex-busy race. This section builds its own small, separate,
+-- coroutine-based dispatcher instead, reproducing that ONE real FXServer
+-- property precisely: every onResourceStart handler registered for the same
+-- event runs in its OWN coroutine, in registration order, and a handler
+-- that yields hands control back immediately rather than blocking the next
+-- one. See server/datastore.lua's own K9Store.WaitForSchemaCheckToSettle
+-- for the fix this proves.
+-- ============================================================================
+
+--- @param opts table? -- { foreignXpTierRows: table? -- canned response for
+---   this file's own `SELECT ordinal, xp_threshold, label, speed_multiplier,
+---   scent_range_multiplier, medkit_cooldown_multiplier, badge FROM
+---   k9_xp_tiers` if it is ever actually issued }
+--- @return table fixture -- { env, printedLines, coros, fireResourceStart,
+---   resumeNext, xpTierQueryCallCount }
+local function bootWithRacingMySQL(opts)
+    opts = opts or {}
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, fn)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = fn
+    end
+
+    -- The probe's own INFORMATION_SCHEMA query YIELDS and is resumed only
+    -- when the test explicitly resumes that coroutine -- modelling a real,
+    -- in-flight oxmysql promise precisely, never returning on its own
+    -- schedule. `xpTierQueryCalls` counts how many times this file's OWN
+    -- SELECT actually ran -- the exact thing every test below proves must
+    -- never happen before the probe has settled.
+    local xpTierQueryCalls = 0
+    local queryStub = {
+        await = function(sql, _params)
+            if sql:find('SELECT ordinal, xp_threshold, label, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, badge FROM k9_xp_tiers', 1, true) then
+                xpTierQueryCalls = xpTierQueryCalls + 1
+                return opts.foreignXpTierRows or {}
+            end
+            if sql:find('INFORMATION_SCHEMA.COLUMNS', 1, true) then
+                return coroutine.yield()
+            end
+            error('bootWithRacingMySQL: unexpected query, no stub behavior defined: ' .. tostring(sql))
+        end,
+    }
+
+    local env = Sandbox.newEnv({
+        Config = {
+            Database = { enabled = true },
+            XPTiers = defaultXpTiers(),
+            Features = { HighCommand = true, XPProgression = true },
+        },
+        AddEventHandler = AddEventHandlerStub,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        GetPlayers = function() return {} end,
+        GetGameTimer = function() return 0 end,
+        -- Yields, mirroring the real FXServer scheduler closely enough for
+        -- K9Store.WaitForSchemaCheckToSettle's own bounded poll loop to
+        -- actually suspend this file's handler between polls -- exactly
+        -- what every test below drives explicitly via `resumeNext`.
+        Wait = function(_ms) coroutine.yield() end,
+        lib = { callback = { register = function() end } },
+        MySQL = { query = queryStub },
+        print = printStub,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/xptiers.lua', env)
+
+    local coros = {}
+
+    local function fireResourceStart()
+        for i, fn in ipairs(eventHandlers['onResourceStart']) do
+            local co = coroutine.create(fn)
+            coros[i] = co
+            local ok, err = coroutine.resume(co, 'qbx_k9unit')
+            if not ok then error(('onResourceStart handler #%d errored: %s'):format(i, tostring(err))) end
+        end
+    end
+
+    --- Resumes the FIRST currently-suspended coroutine (registration
+    --- order), passing `value` through as whatever that coroutine's own
+    --- `coroutine.yield()` call is waiting on. Returns `false`, resuming
+    --- nothing, once every handler has already run to completion.
+    local function resumeNext(value)
+        for _, co in ipairs(coros) do
+            if coroutine.status(co) == 'suspended' then
+                local ok, err = coroutine.resume(co, value)
+                if not ok then error('resumeNext: handler errored on resume: ' .. tostring(err)) end
+                return true
+            end
+        end
+        return false
+    end
+
+    return {
+        env = env, printedLines = printedLines, coros = coros,
+        fireResourceStart = fireResourceStart, resumeNext = resumeNext,
+        xpTierQueryCallCount = function() return xpTierQueryCalls end,
+    }
+end
+
+t.test('BOOT-ORDER RACE (the actual bug, fixed): a foreign k9_xp_tiers table that satisfies this file\'s own SELECT but fails the FULL schema probe must never reach a live rank', function()
+    local f = bootWithRacingMySQL({
+        foreignXpTierRows = { { ordinal = 1, xp_threshold = 999999, label = 'NOT OURS', speed_multiplier = 9, scent_range_multiplier = 9, medkit_cooldown_multiplier = nil, badge = nil } },
+    })
+
+    f.fireResourceStart()
+    t.equals(f.xpTierQueryCallCount(), 0, 'this file must not issue its own SELECT before the schema probe has settled')
+
+    -- Resolve the probe with a schema response missing updated_by/updated_at
+    -- (2 of the 7 columns k9_xp_tiers is checked against) -- exactly what a
+    -- foreign table sharing this name, but shaped for THIS file's own
+    -- SELECT instead, would look like -- a genuine collision.
+    t.isTrue(f.resumeNext({
+        { tbl = 'k9_xp_tiers', col = 'ordinal' },
+        { tbl = 'k9_xp_tiers', col = 'xp_threshold' },
+        { tbl = 'k9_xp_tiers', col = 'label' },
+        { tbl = 'k9_xp_tiers', col = 'speed_multiplier' },
+        { tbl = 'k9_xp_tiers', col = 'scent_range_multiplier' },
+    }), 'the probe must still be suspended, waiting to be resolved')
+    t.isFalse(f.env.K9Store.IsDatabaseEnabled(), 'the collision must have been detected')
+    t.equals(f.xpTierQueryCallCount(), 0, 'still not read immediately after settling')
+
+    t.isTrue(f.resumeNext(), 'this file\'s handler, parked inside its own bounded wait, wakes on its next poll')
+    t.equals(f.xpTierQueryCallCount(), 0, 'DatabaseEnabled() is now false, so K9Store.XPTier_GetAllRows takes the MEMORY branch -- it must NEVER have issued its own SELECT against the foreign table, before or after settling')
+    t.equals(f.env.Config.XPTiers[1].xp, 0, 'rank 1 must still be the config.lua default (0), never overwritten by the foreign row\'s 999999')
+    t.equals(f.env.Config.XPTiers[1].label, 'Recruit K9', 'falls back to config-shipped defaults exactly like Config.Database.enabled = false, never to a foreign value')
+    t.isFalse(f.resumeNext(), 'every handler has now run to completion')
+end)
+
+t.test('BOOT-ORDER RACE control: once the probe settles with NO collision, this file performs its real read and picks up a legitimate persisted override -- the fix must not break the ordinary, non-colliding path', function()
+    local f = bootWithRacingMySQL({
+        foreignXpTierRows = { { ordinal = 1, xp_threshold = 0, label = 'Recruit K9 (renamed)', speed_multiplier = 1.0, scent_range_multiplier = 1.0, medkit_cooldown_multiplier = nil, badge = nil } },
+    })
+
+    f.fireResourceStart()
+    t.equals(f.xpTierQueryCallCount(), 0)
+
+    -- A schema response naming every column k9_xp_tiers is checked against
+    -- -- a clean, non-colliding table.
+    t.isTrue(f.resumeNext({
+        { tbl = 'k9_xp_tiers', col = 'ordinal' },
+        { tbl = 'k9_xp_tiers', col = 'xp_threshold' },
+        { tbl = 'k9_xp_tiers', col = 'label' },
+        { tbl = 'k9_xp_tiers', col = 'speed_multiplier' },
+        { tbl = 'k9_xp_tiers', col = 'scent_range_multiplier' },
+        { tbl = 'k9_xp_tiers', col = 'updated_by' },
+        { tbl = 'k9_xp_tiers', col = 'updated_at' },
+    }))
+    t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision -- the real database stays live')
+
+    t.isTrue(f.resumeNext(), 'this file\'s handler wakes on its next poll')
+    t.equals(f.xpTierQueryCallCount(), 1, 'now that settlement confirmed no collision, this file performs its real read exactly once')
+    t.equals(f.env.Config.XPTiers[1].label, 'Recruit K9 (renamed)', 'the legitimate persisted override must be applied')
+    t.isFalse(f.resumeNext())
+end)
+
+t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this file gives up after a bounded number of polls and boots every rank to its config.lua default -- it must never hang and never read the unconfirmed table', function()
+    local f = bootWithRacingMySQL({
+        foreignXpTierRows = { { ordinal = 1, xp_threshold = 0, label = 'Recruit K9 (renamed)', speed_multiplier = 1.0, scent_range_multiplier = 1.0, medkit_cooldown_multiplier = nil, badge = nil } },
+    })
+    f.fireResourceStart()
+    t.equals(f.xpTierQueryCallCount(), 0)
+
+    -- Never resume coros[1] (the probe) at all -- a hung query that never
+    -- comes back, not merely a slow one. Keep waking ONLY this file's own
+    -- handler (coros[2] -- xptiers.lua does not load permissions.lua, so it
+    -- is the very next handler registered after datastore.lua's own) on
+    -- its own bounded poll loop until it either gives up (dies) or this
+    -- test's own generous ceiling is hit -- the ceiling exists purely so a
+    -- regression that makes the production wait loop genuinely infinite
+    -- fails this test instead of hanging the whole suite.
+    local resumes = 0
+    while coroutine.status(f.coros[2]) == 'suspended' and resumes < 200 do
+        coroutine.resume(f.coros[2])
+        resumes = resumes + 1
+    end
+
+    t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
+    t.isTrue(coroutine.status(f.coros[2]) == 'dead', 'this file\'s own onResourceStart handler must finish (give up), not remain permanently suspended')
+    t.equals(f.xpTierQueryCallCount(), 0, 'must never issue its own SELECT while the collision state is genuinely unknown -- fail-closed, exactly like Config.Database.enabled = false')
+    t.equals(f.env.Config.XPTiers[1].label, 'Recruit K9', 'config-shipped defaults remain in effect -- no DB row, real or foreign, reaches this file while unsettled')
+    t.contains(table.concat(f.printedLines, '\n'), 'schema-collision check had not finished', 'the fallback must be logged clearly, never silent')
+end)
+
 os.exit(t.summary())

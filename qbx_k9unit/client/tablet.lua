@@ -714,7 +714,7 @@ local TABLET_STRING_KEYS = {
     -- Shop" domain, split into its own tab since WHICH items are sold is
     -- a separate server-side authorization key from WHERE the shop ped
     -- stands. SAME disclosed-gap posture as the 'tab_audit'/'audit_*' and
-    -- 'tab_xp_tiers'/'xp_tier_*' blocks above: these 43 keys are NOT YET
+    -- 'tab_xp_tiers'/'xp_tier_*' blocks above: these 44 keys are NOT YET
     -- present in locales/en.json's `tablet` group as of this pass --
     -- flagged to that file's owner (see this pass's own report for the
     -- exact key -> English-string list). BuildTabletStrings()'s own

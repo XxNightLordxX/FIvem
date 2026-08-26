@@ -1042,7 +1042,7 @@
         // section) -- sits alongside the shop_location_*/tab_shop_locations
         // keys above, same "K9 Supply Shop" domain. SAME disclosed-gap
         // posture as the 'tab_audit'/'tier_label'/'tab_xp_tiers' blocks
-        // above: these 43 keys are NOT YET present in locales/en.json's
+        // above: these 44 keys are NOT YET present in locales/en.json's
         // `tablet` group as of this pass -- flagged to that file's owner
         // (see this pass's own report for the exact key -> English-string
         // list). BuildTabletStrings()'s own pcall-per-key guard means each
