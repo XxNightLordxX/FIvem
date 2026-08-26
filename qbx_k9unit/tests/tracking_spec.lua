@@ -70,6 +70,7 @@ local TRACK_TYPES_ORDERED = { 'scent', 'blood', 'gunpowder' }
 ---   withHasPermission: boolean (default true)
 ---   hasPermissionFn: function
 ---   xpProgression: boolean (default false)
+---   maxLoggedEntries: table? -- e.g. { blood = 3 } -- per-type Config.Tracking.<Type>.maxLoggedEntries override
 --- }
 --- @return table fixture
 local function newTrackingFixture(opts)
@@ -126,6 +127,13 @@ local function newTrackingFixture(opts)
     local requireGrant = {}
     for k, v in pairs(opts.requireGrantListed or {}) do requireGrant[k] = v end
 
+    -- ENTRY-COUNT CEILING (performance audit at 128 players, this pass) --
+    -- lets a test override any/all of Config.Tracking.<Type>.maxLoggedEntries
+    -- (e.g. `{ blood = 3 }`) without needing its own bespoke fixture; any
+    -- type not named here falls back to a generous default no existing test
+    -- in this file could ever realistically hit.
+    local maxLoggedEntriesOverrides = opts.maxLoggedEntries or {}
+
     local Config = {
         Features = {
             ScentTracking = true,
@@ -134,9 +142,9 @@ local function newTrackingFixture(opts)
             XPProgression = opts.xpProgression == true,
         },
         Tracking = {
-            Scent     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 500 },
-            Blood     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 500 },
-            Gunpowder = { maxAgeSeconds = 120, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 300 },
+            Scent     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 500, maxLoggedEntries = maxLoggedEntriesOverrides.scent or 6000 },
+            Blood     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 500, maxLoggedEntries = maxLoggedEntriesOverrides.blood or 8000 },
+            Gunpowder = { maxAgeSeconds = 120, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 300, maxLoggedEntries = maxLoggedEntriesOverrides.gunpowder or 6000 },
         },
         WaterTrackingDecay = { breaksTrail = false },
         FeatureControl = { RequireGrant = requireGrant },
@@ -1196,6 +1204,109 @@ t.test('MODE: "off" does NOT change the capture threads own cost -- population-w
     f.Config.Tracking.ScentVision.mode = 'keybind'
     local result = f.getScentVisionPoints(1)
     t.isTrue(#result.points >= 2, ('capture must be unaffected by mode == "off" -- expected at least 2 points, got %d'):format(#result.points))
+end)
+
+-- ========================================================================
+-- ENTRY-COUNT CEILING (performance audit at 128 players, this pass --
+-- coder-backend). Proves TrackableLog.<type> never grows past
+-- Config.Tracking.<Type>.maxLoggedEntries no matter how many entries are
+-- logged, and that eviction always takes the OLDEST entry first (never the
+-- newest -- see server/tracking.lua's own AppendTrackableLogEntry doc
+-- comment for why). Exercised entirely through the real, public
+-- relayDamageEvent/relayWeaponFire/findTrackableSource surface -- TrackableLog
+-- itself is file-local and deliberately not exposed to this suite, matching
+-- this file's own "exposes NO resource-global functions" contract.
+-- ========================================================================
+
+t.test('ENTRY-COUNT CEILING: exceeding the cap evicts the two OLDEST entries, keeping the boundary entry and everything newer reachable', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { blood = 3 } })
+    f.registerPlayer(1, 'K9-CID', 100) -- the searching K9
+
+    -- Five distinct victims, each 100 units apart on the X axis -- far
+    -- enough that only an entry ACTUALLY STILL PRESENT in the log (within
+    -- maxRange=40.0 of the K9's own search position) can ever match.
+    for i = 1, 5 do
+        local victimSrc = 100 + i
+        local ped = 200 + i
+        f.registerPlayer(victimSrc, 'VICTIM-' .. i, ped)
+        f.setPedCoords(ped, i * 100, 0, 0)
+        f.relayDamageEvent(victimSrc) -- appends one TrackableLog.blood entry at (i*100, 0, 0)
+    end
+    -- Cap is 3, 5 entries were logged in order 1..5 -- entries 1 and 2 (the
+    -- two OLDEST) must have been evicted; 3, 4, 5 (the three NEWEST) must
+    -- remain, exactly matching AppendTrackableLogEntry's documented
+    -- discard-on-write, oldest-first shape.
+
+    local function searchFrom(x)
+        f.setPedCoords(100, x, 0, 0) -- move the K9's OWN ped to stand exactly where victim i bled
+        local result = f.findTrackableSource(1, 'blood')
+        f.advance(6000) -- clear the K9's own per-(source, trackType) query cooldown (5000ms) before the next search
+        return result.found
+    end
+
+    t.isFalse(searchFrom(1 * 100), 'entry 1 (the oldest) must have been evicted')
+    t.isFalse(searchFrom(2 * 100), 'entry 2 must also have been evicted -- the cap of 3 only leaves room for 3, 4, 5')
+    t.isTrue(searchFrom(3 * 100), 'entry 3 is the oldest SURVIVING entry -- exactly at the cap boundary -- and must still be found')
+    t.isTrue(searchFrom(4 * 100), 'entry 4 must still be found')
+    t.isTrue(searchFrom(5 * 100), 'entry 5 (the newest) must never be the one evicted to make room for an older entry')
+end)
+
+t.test('ENTRY-COUNT CEILING: the cap holds under MANY repeated writes -- only the newest N (cap) entries are ever findable, no matter how many total entries were logged', function()
+    local CAP = 5
+    local TOTAL_WRITES = 40
+    local f = newTrackingFixture({ maxLoggedEntries = { gunpowder = CAP } })
+    f.registerPlayer(1, 'K9-CID', 100) -- the searching K9
+
+    for i = 1, TOTAL_WRITES do
+        local shooterSrc = 1000 + i
+        local ped = 2000 + i
+        f.registerPlayer(shooterSrc, 'SHOOTER-' .. i, ped)
+        f.setPedCoords(ped, i * 100, 0, 0)
+        f.relayWeaponFire(shooterSrc) -- appends one TrackableLog.gunpowder entry at (i*100, 0, 0)
+    end
+
+    -- Only the LAST `CAP` entries (indices TOTAL_WRITES-CAP+1 .. TOTAL_WRITES,
+    -- i.e. the 5 most recently logged out of 40 total) can still be found --
+    -- every earlier one, no matter how much earlier, must have been evicted.
+    --
+    -- A FRESH searcher source per check (never the same K9 twice), rather
+    -- than advancing the clock between checks: Gunpowder's own
+    -- maxAgeSeconds (120s in this fixture) is short enough that advancing
+    -- the clock 40 times in a row to dodge TrackQueryCooldown's
+    -- per-(source, trackType) 5000ms gate would itself age every entry out
+    -- by AGE well before reaching the end of the loop -- an unrelated
+    -- expiry, not the CAP eviction this test exists to isolate. A fresh
+    -- source has no query-cooldown history at all, so `now` never needs to
+    -- move, and only maxLoggedEntries can be responsible for any `found`
+    -- result below.
+    for i = 1, TOTAL_WRITES do
+        local searcherSrc = 5000 + i
+        local searcherPed = 6000 + i
+        f.registerPlayer(searcherSrc, 'SEARCHER-' .. i, searcherPed)
+        f.setPedCoords(searcherPed, i * 100, 0, 0)
+        local result = f.findTrackableSource(searcherSrc, 'gunpowder')
+        local shouldSurvive = i > (TOTAL_WRITES - CAP)
+        t.equals(result.found, shouldSurvive,
+            ('entry %d of %d (cap %d) should %s survive'):format(i, TOTAL_WRITES, CAP, shouldSurvive and '' or 'NOT'))
+    end
+end)
+
+t.test('ENTRY-COUNT CEILING: an invalid Config.Tracking.<Type>.maxLoggedEntries clamps to the built-in fallback and warns, rather than breaking the feature', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { blood = 'not-a-number' } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Tracking.Blood.maxLoggedEntries', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'an invalid maxLoggedEntries value must print a warning naming the exact key')
+
+    local result = f.findTrackableSource(1, 'blood')
+    t.isTrue(result.found, 'the feature must keep working off the built-in fallback -- an invalid cap must never collapse to something that evicts every entry on arrival')
 end)
 
 os.exit(t.summary())

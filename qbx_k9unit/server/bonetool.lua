@@ -470,10 +470,41 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     assert(type(Config.BoneSweepTool) == 'table', '[qbx_k9unit] Config.Features.BoneSweepDevTool is true but Config.BoneSweepTool is missing.')
     assert(type(Config.Departments) == 'table', '[qbx_k9unit] Config.Features.BoneSweepDevTool is true but Config.Departments is missing -- IsAuthorizedBoneSweepDevTool requires it to resolve the caller\'s own job.')
-    assert(type(Config.BoneSweepTool.TestPropModel) == 'string' and Config.BoneSweepTool.TestPropModel ~= '', '[qbx_k9unit] Config.BoneSweepTool.TestPropModel must be a non-empty string.')
-    assert(type(Config.BoneSweepTool.MaxBoneIndex) == 'number' and Config.BoneSweepTool.MaxBoneIndex >= 0, '[qbx_k9unit] Config.BoneSweepTool.MaxBoneIndex must be a number >= 0.')
+
+    -- CLAMP AND WARN, DELIBERATELY NEVER THROW -- this used to be six bare
+    -- per-field `assert`s in a row (the two structural checks just above --
+    -- Config.BoneSweepTool/Config.Departments entirely missing -- are kept
+    -- as hard asserts; those are a far more severe misconfiguration than
+    -- one malformed field, and this dev-only tool is opt-in twice over
+    -- already, layer 1 and layer 2 above, so an operator who reaches this
+    -- point has already deliberately turned it on). A throw from ANY ONE of
+    -- these used to abort this entire handler on the spot -- and
+    -- RegisterCommand('k9bonetool') sits AFTER every one of them, in this
+    -- SAME handler, below -- so one operator typo in a section config.lua's
+    -- own comment invites tuning of ("replace after a dev-server sweep")
+    -- would silently remove the command entirely for the rest of this
+    -- resource's uptime, with nothing in the console to explain why.
+    --- @param key string
+    --- @param predicate fun(value: any): boolean
+    --- @param fallback any
+    --- @param description string -- plain-English requirement, used only in the printed warning
+    local function ResolveBoneSweepToolField(key, predicate, fallback, description)
+        local value = Config.BoneSweepTool[key]
+        if not predicate(value) then
+            print(
+                ('[qbx_k9unit] WARNING: Config.BoneSweepTool.%s %s (found: %s) -- using the built-in fallback ' ..
+                 '%s instead of aborting registration of /k9bonetool over one field. Fix ' ..
+                 'Config.BoneSweepTool.%s in config.lua to silence this warning.'
+                ):format(key, description, tostring(value), tostring(fallback), key)
+            )
+            Config.BoneSweepTool[key] = fallback
+        end
+    end
+
+    ResolveBoneSweepToolField('TestPropModel', function(v) return type(v) == 'string' and v ~= '' end, 'prop_tennis_ball', 'must be a non-empty string')
+    ResolveBoneSweepToolField('MaxBoneIndex', function(v) return type(v) == 'number' and v >= 0 end, 200, 'must be a number >= 0')
     for _, key in ipairs({ 'TestOffsetX', 'TestOffsetY', 'TestOffsetZ' }) do
-        assert(type(Config.BoneSweepTool[key]) == 'number', ('[qbx_k9unit] Config.BoneSweepTool.%s must be a number.'):format(key))
+        ResolveBoneSweepToolField(key, function(v) return type(v) == 'number' end, 0.0, 'must be a number')
     end
     -- MUST be strictly > 0, not >= 0: BoneToolCooldown below is a
     -- server/cooldowns.lua NewCooldown() instance with no constructor
@@ -488,7 +519,9 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- requirement on its own CommandCooldownMs, applied here at the
     -- call-time-threshold call shape instead of the constructor-default
     -- shape.
-    assert(type(Config.BoneSweepTool.CommandCooldownMs) == 'number' and Config.BoneSweepTool.CommandCooldownMs > 0, '[qbx_k9unit] Config.BoneSweepTool.CommandCooldownMs must be a number > 0 -- 0 or negative does NOT mean "no cooldown" here, it means this tool fails closed (permanently blocked) after one use. See server/cooldowns.lua\'s fail-closed threshold handling.')
+    ResolveBoneSweepToolField('CommandCooldownMs', function(v) return type(v) == 'number' and v > 0 end, 500,
+        'must be a number > 0 -- 0 or negative does NOT mean "no cooldown" here, it means this tool fails closed ' ..
+        '(permanently blocked) after one use; see server/cooldowns.lua\'s fail-closed threshold handling')
 
     RegisterCommand('k9bonetool', function(src, args)
         if src == 0 then

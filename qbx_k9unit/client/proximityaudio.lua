@@ -205,12 +205,32 @@ local ProximityAudioFXConfig = Config.ProximityAudioFX or {}
 -- this whole file's registration down with it, matching client/agility.lua's
 -- own vaultCooldownMs clamp-and-warn precedent for the identical bug
 -- class) -- clamped to the shipped default and warned instead.
+-- MINIMUM (performance audit at 128 players, this pass -- CLIENT-SIDE
+-- equivalent of server/cooldowns.lua's MIN_CONFIGURED_INTERVAL_MS; see that
+-- constant's own declaration comment for the full "why 250ms, not 100ms"
+-- reasoning, which applies identically here). A bare `> 0` check (the
+-- ORIGINAL guard here) accepts a hand-edited `1` exactly as happily as a
+-- sane `2500` -- and unlike a server-side population/world scan, THIS
+-- thread's cost lands on every connected player's OWN client frame time,
+-- not the server's single Lua VM, so a too-tight value here hurts everyone
+-- connected at once rather than the server alone. Cannot reuse
+-- server/cooldowns.lua's ResolveConfiguredThresholdMs directly -- that file
+-- is server-only (fxmanifest.lua server_scripts), never loaded on the
+-- client -- so this is its own small, client-local floor check, same value,
+-- same reasoning, independently applied.
+local PROXIMITY_SCAN_INTERVAL_MS_MIN = 250
 local PROXIMITY_SCAN_INTERVAL_MS_DEFAULT = 2500
 local PROXIMITY_SCAN_INTERVAL_MS = PROXIMITY_SCAN_INTERVAL_MS_DEFAULT
 if ProximityAudioFXConfig.scanIntervalMs ~= nil then
     local configured = ProximityAudioFXConfig.scanIntervalMs
-    if type(configured) == 'number' and configured == configured and configured > 0 then
+    if type(configured) == 'number' and configured == configured and configured >= PROXIMITY_SCAN_INTERVAL_MS_MIN then
         PROXIMITY_SCAN_INTERVAL_MS = configured
+    elseif type(configured) == 'number' and configured == configured and configured > 0 then
+        -- Valid, POSITIVE, just too small to be safe -- NOT the same
+        -- footgun as a non-positive/invalid value below (see that branch's
+        -- own message for the "no cooldown" mistake this is NOT), so it
+        -- gets its own, differently-worded warning naming the actual floor.
+        print(('[qbx_k9unit] ProximityAudioFX: Config.ProximityAudioFX.scanIntervalMs (%s) is below the %dms minimum this resource enforces for this setting -- a full GetGamePool(\'CPed\') sweep that often would run on every connected player\'s own client, hurting everyone\'s frame time at once, not just the server. Falling back to the shipped default of %dms -- set it to at least %dms in config.lua if you genuinely want a tighter scan cadence.'):format(tostring(configured), PROXIMITY_SCAN_INTERVAL_MS_MIN, PROXIMITY_SCAN_INTERVAL_MS_DEFAULT, PROXIMITY_SCAN_INTERVAL_MS_MIN))
     else
         print(('[qbx_k9unit] ProximityAudioFX: Config.ProximityAudioFX.scanIntervalMs must be a positive number of milliseconds (got %s) -- falling back to the shipped default of %dms. A non-positive/invalid value here would otherwise remove this thread\'s own throttle entirely, running a full ped-pool scan every single frame instead of once per interval.'):format(tostring(configured), PROXIMITY_SCAN_INTERVAL_MS_DEFAULT))
     end

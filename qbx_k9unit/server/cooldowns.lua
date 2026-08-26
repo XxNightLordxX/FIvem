@@ -294,6 +294,79 @@ local function IsValidThreshold(value)
     return type(value) == 'number' and value == value and value > 0
 end
 
+--- ======================================================================
+--- MINIMUM CONFIGURED INTERVAL (performance audit at 128 players, this
+--- pass). IsValidThreshold above only ever checked "is this a usable
+--- positive number at all" -- true for a sane `5000` and exactly as true
+--- for a hand-edited `1`. That gap is invisible for a normal per-action
+--- COOLDOWN (its cost scales with how often the guarded action actually
+--- fires, which a cooldown itself already throttles) but genuinely
+--- dangerous for the different shape ResolveConfiguredThresholdMs below
+--- ALSO resolves: a Config-sourced INTERVAL read once into a background
+--- thread's own `Wait(...)` argument, independent of any per-key cooldown
+--- gate. Config.Wellbeing.tickIntervalMs is the worst real example:
+--- resolved through this exact function into server/wellbeing.lua's
+--- TICK_INTERVAL_MS, then used as `Wait(TICK_INTERVAL_MS)` in a loop that
+--- reads every connected player's own ped position on every pass -- and, if
+--- FatigueSystem's rest-source scan is also on, calls
+--- GetAllObjects()/GetAllVehicles() (a full world-entity scan) on every
+--- pass too. A hand-edited `Config.Wellbeing.tickIntervalMs = 1` passes
+--- IsValidThreshold's `> 0` check without a flicker, and turns that loop
+--- into roughly 1,000 passes/second instead of one every 5 seconds -- on
+--- the order of 128,000 GetPlayerPed calls/sec at 128 players, plus up to
+--- 1,000 full world-entity scans/sec if FatigueSystem is on, easily enough
+--- to pin a single FXServer core and stall the one Lua VM every other
+--- script on the server also shares. The tablet
+--- (server/runtimecontrol.lua) cannot reach this field at all -- by design,
+--- since it is resolved once at THIS file-load time, never re-read live --
+--- so a direct config.lua hand-edit is the ONLY way to reach this value,
+--- and this floor is the only thing that can catch it.
+---
+--- 250ms, deliberately, over the other number on the table (100ms). Every
+--- field ResolveConfiguredThresholdMs currently protects that ships with a
+--- small default already sits comfortably above this line -- the smallest
+--- is Config.Combat.NonComplianceDetection.positionSampleWindowMs's own
+--- 500ms default -- so 250ms leaves every current shipped default
+--- untouched, with real headroom to spare, while still meaningfully
+--- bounding the worst case this exists for: even every interval this
+--- function protects pinned to the floor AT ONCE caps the single most
+--- expensive path named above (Wellbeing's optional world-object scan) at 4
+--- full sweeps/second rather than up to 1,000, comfortably inside a single
+--- Lua VM's per-tick budget at 128 players. 100ms would still have closed
+--- the `1`/`5`/`10`ms typo cases this exists for, but 250ms buys a
+--- materially bigger safety margin against that specific worst-blast-radius
+--- consequence (a population-and-world-scanning tick, not a lightweight
+--- per-source rate limit) for a cost of essentially zero real tuning room --
+--- nothing in this resource is documented as ever wanting sub-250ms
+--- granularity for a population-wide scan interval.
+---
+--- SCOPE, DELIBERATE: this floor is enforced inside ResolveConfiguredThresholdMs
+--- below, on the `configuredValue` it validates -- it is NOT folded into
+--- IsValidThreshold itself. IsValidThreshold is also the call-time gate
+--- NewCooldown/NewNestedCooldown's own :IsOnCooldown uses for a PER-CALL
+--- threshold read fresh from Config on every invocation (e.g.
+--- Config.Tracking.Gunpowder.relayCooldownMs, 300ms shipped, passed
+--- straight into .Consume() rather than pre-resolved through this
+--- function) -- a genuinely different risk shape: a small per-SOURCE rate
+--- limit's cost scales with how often that ONE source actually acts, never
+--- with total population or a world-entity scan, so a deliberately tight
+--- value there is not the failure mode this floor exists to catch. Folding
+--- this floor into IsValidThreshold instead would have silently turned a
+--- legitimate, already-shipped 300ms relayCooldownMs -- or any operator's
+--- own deliberate sub-250ms rate-limit choice on a field like it -- into a
+--- PERMANENTLY-STUCK cooldown (IsOnCooldown's own fail-closed branch), a
+--- real regression this gap's own brief never asked for and has nothing to
+--- do with the population/world-scan blast radius this constant targets.
+---
+--- NOT applied to `fallbackMs` either, deliberately: that argument is "a
+--- positive, hardcoded call-site literal... never itself read from Config"
+--- (see ResolveConfiguredThresholdMs's own parameter doc below) -- a
+--- PROGRAMMER's choice, not the operator hand-edit this gap is about, and
+--- every real fallbackMs literal in this resource today already ships at
+--- 500ms or higher regardless.
+--- ======================================================================
+local MIN_CONFIGURED_INTERVAL_MS = 250
+
 --- Fails loudly (error, not a silent accept) if `defaultThresholdMs` was
 --- supplied (non-nil) and is not a valid threshold per IsValidThreshold
 --- above. A nil default is always fine — it just means every call to this
@@ -367,22 +440,45 @@ function ResolveConfiguredThresholdMs(configuredValue, fallbackMs, configKeyName
         )
     end
 
-    if IsValidThreshold(configuredValue) then
+    if IsValidThreshold(configuredValue) and configuredValue >= MIN_CONFIGURED_INTERVAL_MS then
         return configuredValue
     end
 
     -- LOUD, but never fatal: names the exact key, the value found, and
     -- what was substituted -- "invalid cooldown" helps nobody find one bad
-    -- field in a 2,000+ line config.
-    print(
-        ('[qbx_k9unit] cooldowns.lua: %s is missing or not a positive number (found: %s). 0/negative/nil/NaN ' ..
-         'here does NOT mean "no cooldown" in this resource\'s cooldown API -- it would otherwise permanently ' ..
-         'block the guarded action instead (this file\'s own documented FAIL-CLOSED behavior; see ' ..
-         'IsValidThreshold above). Using the built-in fallback of %dms for %s instead so this feature keeps ' ..
-         'working while the config is fixed -- find %s in config.lua and set it to a positive number of ' ..
-         'milliseconds.')
-            :format(configKeyName, tostring(configuredValue), fallbackMs, configKeyName, configKeyName)
-    )
+    -- field in a 2,000+ line config. Two distinct bad shapes land here now
+    -- (see MIN_CONFIGURED_INTERVAL_MS's own declaration comment above for
+    -- the full reasoning behind the second one, added this pass):
+    --   1. not a valid threshold at all (missing/non-number/non-positive/NaN) --
+    --      the original case this warning always covered.
+    --   2. a valid, POSITIVE number that is simply too small to be safe for
+    --      this kind of setting (e.g. a hand-edited `1`) -- NEW this pass.
+    -- Both produce the exact same "falls back, keeps working, one clear
+    -- warning" outcome; the message below names whichever is true so an
+    -- operator isn't left guessing which rule their value tripped.
+    if IsValidThreshold(configuredValue) then
+        -- Case 2: a valid, positive number, just below the floor.
+        print(
+            ('[qbx_k9unit] cooldowns.lua: %s (%s) is below the %dms minimum this resource enforces for a ' ..
+             'setting of this kind -- a small POSITIVE number here is not a "no cooldown" mistake (see ' ..
+             'IsValidThreshold above for that separate footgun), it is a value too tight to be safe at real ' ..
+             'player counts for a population/world-scanning interval. Using the built-in fallback of %dms for ' ..
+             '%s instead so this feature keeps working while the config is fixed -- find %s in config.lua and ' ..
+             'set it to at least %dms.')
+                :format(configKeyName, tostring(configuredValue), MIN_CONFIGURED_INTERVAL_MS, fallbackMs, configKeyName, configKeyName, MIN_CONFIGURED_INTERVAL_MS)
+        )
+    else
+        -- Case 1: not a valid threshold at all (original wording, unchanged).
+        print(
+            ('[qbx_k9unit] cooldowns.lua: %s is missing or not a positive number (found: %s). 0/negative/nil/NaN ' ..
+             'here does NOT mean "no cooldown" in this resource\'s cooldown API -- it would otherwise permanently ' ..
+             'block the guarded action instead (this file\'s own documented FAIL-CLOSED behavior; see ' ..
+             'IsValidThreshold above). Using the built-in fallback of %dms for %s instead so this feature keeps ' ..
+             'working while the config is fixed -- find %s in config.lua and set it to a positive number of ' ..
+             'milliseconds.')
+                :format(configKeyName, tostring(configuredValue), fallbackMs, configKeyName, configKeyName)
+        )
+    end
     return fallbackMs
 end
 

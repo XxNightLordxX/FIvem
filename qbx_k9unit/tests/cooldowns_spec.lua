@@ -494,6 +494,71 @@ t.test('ResolveConfiguredThresholdMs: called once per bad value (not deduplicate
 end)
 
 -- ----------------------------------------------------------------------
+-- MIN_CONFIGURED_INTERVAL_MS (performance audit at 128 players, this pass).
+-- See that constant's own declaration comment in server/cooldowns.lua for
+-- the full "why 250ms, not 100ms, and why scoped to ResolveConfiguredThresholdMs
+-- rather than folded into IsValidThreshold" reasoning. GAP-2's own worked
+-- example: a hand-edited Config.Wellbeing.tickIntervalMs = 1 used to pass
+-- straight through (1 > 0), silently turning a 5-second background tick
+-- into a ~1,000-times/second one.
+-- ----------------------------------------------------------------------
+
+t.test('ResolveConfiguredThresholdMs: a too-small POSITIVE value (the GAP-2 "tickIntervalMs = 1" case) warns ONCE and falls back rather than being used', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs(1, 5000, 'Config.Wellbeing.tickIntervalMs')
+    t.equals(resolved, 5000, 'a value below the floor must never be used as-is, even though it is a genuine positive number')
+    t.equals(#capturedPrints, 1, 'exactly one warning for this bad value')
+    t.contains(capturedPrints[1], 'Config.Wellbeing.tickIntervalMs')
+    t.contains(capturedPrints[1], '250')
+    t.contains(capturedPrints[1], '5000')
+end)
+
+t.test('ResolveConfiguredThresholdMs: a too-small value warning is worded DIFFERENTLY from the "not a valid threshold at all" warning', function()
+    capturedPrints = {}
+    ResolveConfiguredThresholdMs(100, 5000, 'Config.Test.tooSmall')
+    ResolveConfiguredThresholdMs(0, 5000, 'Config.Test.invalid')
+    t.equals(#capturedPrints, 2)
+    t.contains(capturedPrints[1], 'below the')
+    t.isNil(capturedPrints[1]:find('does NOT mean "no cooldown"', 1, true), 'a too-small-but-positive value is a different mistake than the "0 = no cooldown" footgun, and should not borrow that footgun\'s own wording')
+    t.contains(capturedPrints[2], 'does NOT mean "no cooldown"')
+end)
+
+t.test('ResolveConfiguredThresholdMs: exactly AT the floor (250) is accepted unchanged, not clamped', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs(250, 5000, 'Config.Test.atFloor')
+    t.equals(resolved, 250)
+    t.equals(#capturedPrints, 0, 'a value exactly at the floor must pass through silently, no warning')
+end)
+
+t.test('ResolveConfiguredThresholdMs: a legitimate small-but-sane value (500ms, this resource\'s own smallest real shipped default) is left alone', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs(500, 500, 'Config.Combat.NonComplianceDetection.positionSampleWindowMs')
+    t.equals(resolved, 500)
+    t.equals(#capturedPrints, 0, 'a real, already-shipped default must never trigger a spurious warning')
+end)
+
+t.test('ResolveConfiguredThresholdMs: 1ms (the literal GAP-2 worked example, Config.Wellbeing.tickIntervalMs = 1) falls back to the real shipped default, never used as-is', function()
+    local resolved = ResolveConfiguredThresholdMs(1, 5000, 'Config.Wellbeing.tickIntervalMs')
+    t.equals(resolved, 5000, 'must never let a 1ms tick interval reach a caller -- ~1,000 passes/sec at 128 players is the exact CPU-pinning risk this floor exists to close')
+end)
+
+t.test('ResolveConfiguredThresholdMs: the zero-is-truthy documented behaviour is unchanged by the new floor -- 0 still falls back and warns, exactly as before', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs(0, 5000, 'Config.Test.zero')
+    t.equals(resolved, 5000)
+    t.contains(capturedPrints[1], 'found: 0')
+end)
+
+t.test('ResolveConfiguredThresholdMs: the floor is never applied to fallbackMs -- a call-site literal below 250 (but still a valid threshold) is still accepted, matching this file\'s own "programmer literal, not an operator value" scoping', function()
+    -- Mirrors this file's own pre-existing test just above ("called once per
+    -- bad value") which already relies on fallbacks of 100/200 -- proves
+    -- this pass did not retroactively break that documented scoping.
+    local ok, resolved = pcall(ResolveConfiguredThresholdMs, 0, 100, 'Config.Test.smallFallback')
+    t.isTrue(ok, 'a small (but valid) fallbackMs literal must never error -- the floor is scoped to configuredValue only')
+    t.equals(resolved, 100)
+end)
+
+-- ----------------------------------------------------------------------
 -- REGRESSION: the bug existed precisely because nothing tested "does a
 -- non-positive Config-sourced cooldown still let the REST OF THE FILE load"
 -- -- this section proves it at the level cooldowns.lua itself can prove it
