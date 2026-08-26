@@ -691,6 +691,52 @@ local GUNPOWDER_POLL_MS = 200 -- debounce poll interval, per
     -- case too as a reasonable default (100-250ms range).
 local GUNPOWDER_IDLE_POLL_MS = 1000
 
+-- PERF-AUDIT FINDING, THIS PASS (coder-frontend) — a role/model/access gate
+-- was CONSIDERED and REJECTED here, not overlooked. A performance audit
+-- flagged this thread as polling IsPedShooting() on every connected client
+-- forever "for a mechanic only on-duty K9 handlers can ever act on," and
+-- suggested gating the active branch below behind CanShowK9UI() or
+-- IsOwnModelK9() so only K9 handlers pay the 200ms tick (mirroring
+-- client/hud.lua's CanShowK9UI()-gated poll).
+--
+-- That premise does not hold for THIS specific thread. Confirmed by
+-- reading server/tracking.lua directly rather than inheriting the audit's
+-- framing (per this pass's own instruction to verify, not assume):
+--   1. relayWeaponFire's own handler (server/tracking.lua) has NO
+--      HasK9Access(source) check on the SENDER — only
+--      Config.Features.GunpowderSniffing and its relayCooldownMs. The
+--      sibling relayDamageEvent (blood) is identically ungated on the
+--      sender. Neither trail type's CAPTURE path checks the reporting
+--      player's K9 status — only the SEARCH path does.
+--   2. server/tracking.lua's own header "FORGED TRAIL DECISION" names the
+--      threat model for this exact event as "a griefer" who can "plant a
+--      decoy at their own current position" — i.e. the file's own author
+--      builds it assuming ANY connected player, not a K9 handler, is a
+--      legitimate (if occasionally adversarial) caller of this relay.
+--   3. findTrackableSource — the SEARCH side, what "Track Gunpowder"
+--      actually invokes (gated by StartTrack()'s CanShowK9UI() call above
+--      in this file, and by HasK9Access(source) server-side) — is the
+--      ONLY point in this mechanic where K9-handler status is meant to
+--      matter. Capture (this thread, blood's relayDamageEvent, and
+--      scent's ox_inventory swapItems hook) is deliberately population-
+--      wide: any player's fired shot / taken damage / dropped item
+--      becomes a source a K9 handler can LATER search for. That is the
+--      entire point of the mechanic — tracking a suspect who is, by
+--      construction, essentially never the K9 handler doing the tracking.
+--
+-- Gating this thread's poll behind CanShowK9UI()/IsOwnModelK9() would
+-- therefore not be a perf fix — it would silently stop logging shots
+-- fired by every non-handler player (the actual suspects this mechanic
+-- exists to make trackable) while leaving K9 handlers, who rarely need to
+-- track each other, as the only population still generating entries. That
+-- gates the wrong side of the feature. Config.Features.GunpowderSniffing
+-- (checked below, unchanged) remains the ONLY correct gate for this
+-- thread: when it is on, every connected client legitimately needs to be
+-- able to report its own shot. If a future pass revisits this, re-read
+-- server/tracking.lua's relayWeaponFire/relayDamageEvent/
+-- findTrackableSource before "fixing" it again — see
+-- tests/clienttracking_spec.lua's own regression test asserting a
+-- CanShowK9UI() == false caller still relays.
 CreateThread(function()
     local wasShooting = false
 

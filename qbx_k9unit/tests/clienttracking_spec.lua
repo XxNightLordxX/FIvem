@@ -658,6 +658,40 @@ t.test('gunpowder capture: GunpowderSniffing == false never relays regardless of
     t.equals(f.waitLog[3], 1000, 'must idle at GUNPOWDER_IDLE_POLL_MS while the feature is off')
 end)
 
+-- PERF-AUDIT FINDING (coder-frontend, this pass) -- see client/tracking.lua's
+-- own comment directly above its gunpowder CreateThread for the full
+-- writeup. A role/model gate on this thread's poll (CanShowK9UI() or
+-- IsOwnModelK9()) was considered and REJECTED: server/tracking.lua's
+-- relayWeaponFire handler has NO HasK9Access(source) check on the sender --
+-- ANY connected player, not just a K9 handler, is expected to relay their
+-- own shot so a K9 handler can LATER search for it via findTrackableSource
+-- (the ONLY point in this mechanic actually gated on K9 status). The two
+-- tests below exercise the REAL condition this thread branches on
+-- (Config.Features.GunpowderSniffing only) with CanShowK9UI() pinned to
+-- FALSE for the whole test -- per this task's own instruction not to stub
+-- away the very thing under test -- proving the poll/relay path keeps
+-- working for a non-handler. A fixture that only ever ran this thread with
+-- the fixture's canShowK9UI default (true) would not catch a future
+-- regression that wrongly wires this thread's population to that check.
+t.test('gunpowder capture: CanShowK9UI() == false does NOT gate this thread -- still polls at the active rate (population-wide capture by design, not a role/access check)', function()
+    local f = newTrackingFixture({ gunpowderSniffing = true, canShowK9UI = false })
+    f.stepOne(3) -- prime: not shooting yet
+    t.equals(f.waitLog[3], 200, 'must poll at GUNPOWDER_POLL_MS for a non-handler too -- Config.Features.GunpowderSniffing alone gates this thread')
+    t.equals(#f.triggerServerEventCalls, 0)
+end)
+
+t.test('gunpowder capture: CanShowK9UI() == false still relays a non-handler\'s own false->true shooting transition', function()
+    local f = newTrackingFixture({ gunpowderSniffing = true, canShowK9UI = false })
+    f.stepOne(3) -- prime: not shooting yet
+    t.equals(#f.triggerServerEventCalls, 0)
+
+    f.setPedShooting(true)
+    f.stepOne(3) -- false -> true transition
+    t.equals(#f.triggerServerEventCalls, 1, 'a non-handler\'s own shot must still be relayed -- this is exactly the population the mechanic exists to make trackable')
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:relayWeaponFire')
+    t.equals(#f.triggerServerEventCalls[1].args, 0, 'no payload, same as the handler-eligible case')
+end)
+
 -- ----------------------------------------------------------------------
 -- SECTION H -- PHASE 4 XP arrival trigger (Config.Features.XPProgression).
 -- Bonus coverage: cheap given the existing fixture, real previously-
