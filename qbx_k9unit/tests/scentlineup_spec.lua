@@ -278,6 +278,7 @@ local function newFixture(opts)
 
     local env = Sandbox.newEnv(overrides)
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not. scentlineup.lua's own scentLineupResolved fire is the fifteenth call site onto this shared helper (see server/scentlineup.lua's own comment at that call site).
     Sandbox.loadInto('../server/scentlineup.lua', env)
 
     -- Prime the sweep thread (see fixtures/sandbox.lua's own doc comment:
@@ -658,6 +659,62 @@ t.test('a session can only ever be resolved once -- a second pick after resoluti
 
     t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.not_in_lineup'))
     t.equals(#f.outboundEvents, 1, 'the second pick must not fire a second resolution event')
+end)
+
+-- ----------------------------------------------------------------------
+-- OUTBOUND EVENT FAILURE ISOLATION -- the bug this spec exists to pin: a
+-- throwing external listener on 'qbx_k9unit:events:scentLineupResolved'
+-- must never be able to unwind back into /k9lineuppick's own handler and
+-- abort the CleanupSession call that follows it. See server/scentlineup.lua
+-- ~L780's own comment and server/events.lua's FireOutboundEvent doc comment
+-- for the full reasoning.
+-- ----------------------------------------------------------------------
+
+t.test('a throwing external handler on the outbound scentLineupResolved event never prevents CleanupSession from running', function()
+    local f = newFixture()
+    local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
+    startLineup(f, conductorSrc, { aliceSrc, bobSrc })
+    acceptAll(f, conductorSrc, { aliceSrc, bobSrc })
+    local matchIndex = lastRosterEntry(lastNotifyFor(f, conductorSrc).message)
+
+    -- Simulate a misbehaving external resource's AddEventHandler callback on
+    -- this event throwing. In the real game, TriggerEvent runs every
+    -- registered handler from every OTHER resource synchronously on this
+    -- same call stack -- this stub stands in for that whole mechanism
+    -- throwing, exactly like tests/integrations_spec.lua's own precedent for
+    -- proving FireOutboundEvent's pcall boundary.
+    f.env.TriggerEvent = function(_eventName, ...)
+        error('boom: a misbehaving external resource handler threw')
+    end
+
+    -- Must NOT raise here. If server/scentlineup.lua ever regresses back to
+    -- a bare TriggerEvent instead of FireOutboundEvent, this line throws and
+    -- the test fails loudly -- exactly the regression this spec pins.
+    f.runCommand('k9lineuppick', conductorSrc, { tostring(matchIndex) })
+
+    -- The error was logged, never silently dropped -- FireOutboundEvent
+    -- prints, never re-throws.
+    local loggedError = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('scentLineupResolved', 1, true) and line:find('boom', 1, true) then
+            loggedError = true
+        end
+    end
+    t.isTrue(loggedError, 'FireOutboundEvent must log the swallowed error naming the event')
+
+    -- The real proof: CleanupSession ran regardless of the throw above --
+    -- the session is genuinely gone from BOTH Sessions and
+    -- ParticipantSession, not merely "the pick resolved." Same observable
+    -- proof the 'resolved once' test above uses for the no-throw path,
+    -- exercised here from both a conductor's and a participant's angle.
+    f.runCommand('k9lineuppick', conductorSrc, { tostring(matchIndex) })
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.not_in_lineup'))
+
+    f.runCommand('k9lineupcancel', conductorSrc)
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.not_in_lineup'), 'Sessions bookkeeping is fully cleared, not left half torn-down')
+
+    f.runCommand('k9lineupcancel', aliceSrc)
+    t.equals(lastNotifyFor(f, aliceSrc).message, locale('scentlineup.not_in_lineup'), 'ParticipantSession bookkeeping is fully cleared too -- Alice is not stuck referencing a dead session')
 end)
 
 -- ----------------------------------------------------------------------
