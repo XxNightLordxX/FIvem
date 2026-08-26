@@ -768,6 +768,131 @@ t.test('GrantCertification: full success path -- INSERT fires once, cache reflec
     t.isTrue(firedGrant, 'the outbound integration event must fire only after the INSERT + cache refresh already committed')
 end)
 
+-- ----------------------------------------------------------------------
+-- CertificationExpiry (Config.Features.CertificationExpiry) -- traced
+-- end-to-end from GrantCertification's own INSERT through to the cache,
+-- since this feature's own header claims "a brand-new grant starts its own
+-- expiry clock immediately, but ONLY when an operator has explicitly opted
+-- in", and (prior to this pass) NOTHING in this file's own test suite ever
+-- exercised GrantCertification with the flag on at all -- every existing
+-- EXPIRY-tagged test above drives RefreshCertificationCache/
+-- TickCertificationExpiryWarnings/RenewCertification directly, never a real
+-- grant through the flag. A grep for "CertificationExpiry" finding 40+
+-- hits in this file is not evidence this path was ever actually run.
+-- ----------------------------------------------------------------------
+
+t.test('GrantCertification: EXPIRY -- when the feature is enabled, a brand-new grant INSERT carries Config.CertificationExpiryDays, and the resulting cache reflects a real expiresAtUnix', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 88 end
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end -- pre-check: nothing active yet
+        return 88 -- post-insert refresh: the row this INSERT just created
+    end
+    -- Models what a real DATE_ADD(NOW(), INTERVAL 90 DAY) INSERT would read
+    -- back as, through RefreshCertificationCache's own follow-up metadata
+    -- query -- this file never computes the expiry date itself in Lua (see
+    -- header "EXPIRY" item 3), so this test does not either.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 + 90 * 86400 } end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.equals(insertParams[1], 'TARGET')
+    t.equals(insertParams[2], 'police')
+    t.equals(insertParams[3], 'GRANTER')
+    t.equals(insertParams[4], 90, 'the INSERT must carry the configured expiry window so the DB computes DATE_ADD(NOW(), INTERVAL ? DAY), never a Lua-computed date')
+    t.isTrue(f.env.HasK9Access(20), 'a freshly-granted, not-yet-expired certification must still grant access')
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.grant_success_target'), 'success'))
+end)
+
+t.test('GrantCertification: EXPIRY -- with the feature OFF (default, unset Config.Features), a brand-new grant INSERT carries no fourth (expiry-days) argument at all', function()
+    local f = newFixture() -- Config.Features absent -- the shipped default
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 89 end
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end
+        return 89
+    end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.equals(#insertParams, 3, 'the pre-expiry 3-argument INSERT shape must stay byte-identical on a server that has not opted in')
+end)
+
+t.test('GrantCertification: EXPIRY BUGFIX -- re-certifying a citizenid whose PREVIOUS certification already lapsed this session re-arms the warned/lapsed flags for the brand-new certification', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+
+    -- TARGET already holds an active certification that has already lapsed
+    -- (a real, ordinary paperwork lapse this feature's own header describes
+    -- as a normal, non-disciplinary event).
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- lapsed
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.threadRunner.step()
+    f.threadRunner.step()
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_lapsed_notice'), 'error'), 'sanity: lapsed notice sent once for the OLD certification')
+
+    -- The lapsed certification is manually revoked, freeing (TARGET,
+    -- police) for a brand-new grant -- exactly the ordinary "paperwork
+    -- lapsed, so decertify and recertify" sequence a real department would
+    -- follow rather than leaving a permanently-lapsed row active forever.
+    f.mysql.update.await = function() return 1 end
+    f.setSource(10)
+    f.events['qbx_k9unit:server:revokeHandler'](20)
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_success'), 'success'), 'sanity: revoke succeeded')
+
+    f.advanceTime(COOLDOWN_MS + 1) -- clear CERTIFY_ACTION_COOLDOWN_MS before the next certify action from the same granter
+
+    -- Brand-new grant, with its own brand-new far-future expiry.
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end -- pre-check: the revoke above freed this row
+        return 99 -- post-insert refresh: the row this INSERT just created
+    end
+    f.mysql.insert.await = function() return 99 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- new cert, ~90 days out
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.grant_success_target'), 'success'), 'sanity: re-grant succeeded')
+
+    -- Simulate the NEW certification eventually lapsing too, in this SAME
+    -- session. WITHOUT the fix, ExpiryLapsedNotified['TARGET'] would still
+    -- be true from the OLD (now-revoked) certification's own lapse above,
+    -- and this genuinely NEW lapse -- under a completely different
+    -- certification row -- would be silently swallowed until TARGET
+    -- disconnects and reconnects.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+    f.threadRunner.step()
+
+    local lapsedCount = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 and e.message == Sandbox.locale('certifications.expiry_lapsed_notice') then lapsedCount = lapsedCount + 1 end
+    end
+    t.equals(lapsedCount, 2, 'a brand-new certification must be able to announce its OWN lapse even though the same citizenid was already lapsed-notified once this session under a DIFFERENT, now-revoked certification')
+end)
+
 t.test('GrantCertification: a duplicate-key error thrown by the INSERT (DB backstop, uq_one_active_cert_per_job) is treated as the same "already certified" no-op, not a hard error', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })

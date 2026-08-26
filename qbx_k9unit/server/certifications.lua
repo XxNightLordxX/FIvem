@@ -1466,6 +1466,29 @@ local function GrantCertification(granterSrc, targetServerId)
 
         RefreshCertificationCache(targetCitizenid, jobName)
 
+        -- BUGFIX (this pass, found while tracing the EXPIRY chain
+        -- end-to-end): a brand-new grant re-arms the one-per-session
+        -- warn/lapsed flags -- mirrors RenewCertification's own identical
+        -- reset a few functions below (see that call site's comment).
+        -- Without this, a citizenid whose PREVIOUS certification already
+        -- triggered ExpiryWarned/ExpiryLapsedNotified this session (they
+        -- were warned, or their cert fully lapsed), then got revoked and
+        -- certified again — a real, ordinary sequence, not a corner case:
+        -- exactly the citizenid who just lived through a lapse is the one
+        -- most likely to be re-certified afterward — would keep those
+        -- stale flags set against their CITIZENID (not their old cert row),
+        -- so CheckAndNotifyExpiry would silently refuse to warn/announce
+        -- for the NEW certification's own, entirely separate expiry clock
+        -- until they disconnect and reconnect (playerDropped is the only
+        -- other place these are cleared). That silently breaks this file's
+        -- own header promise ("nobody should find out by an ability
+        -- silently refusing to work") for the one citizenid it matters most
+        -- for. Harmless no-op the overwhelmingly common way this runs: a
+        -- citizenid's first-ever certification, or a re-grant that never
+        -- triggered either notice, already has both flags nil/false.
+        ExpiryWarned[targetCitizenid] = nil
+        ExpiryLapsedNotified[targetCitizenid] = nil
+
         -- Outbound integration event (server/exports.lua's EVENT CONTRACT §1) —
         -- fired here, after the cache refresh that itself follows the committed
         -- INSERT, so any consumer reacting to this has already-committed,

@@ -215,6 +215,29 @@ local function newCombatFixture(opts)
         return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
     end
 
+    -- CERTIFICATION TIER CAPABILITY (server/certtiers.lua's
+    -- TierCapabilityPermits, wired into ValidateCombatRequest's
+    -- BiteAndHold/NonLethalTakedown branch this pass) -- OMITTED FROM THE
+    -- SANDBOX ENTIRELY BY DEFAULT, same convention as HasPermission/
+    -- IsHesitating/IsDistracted/AwardXP above: proves the real
+    -- `type(TierCapabilityPermits) == 'function'` guard degrades cleanly
+    -- (allow) when server/certtiers.lua is absent, and means every one of
+    -- this file's other tests (none of which opt in via
+    -- opts.withTierCapabilityPermits) exercises that exact
+    -- absent-dependency path for free. server/certtiers.lua's own
+    -- resolution logic (tier lookup, dormant-capability default-allow,
+    -- unresolvable-tier default-allow) is fully covered by its own spec --
+    -- this stub only needs to prove server/combat.lua calls it with the
+    -- right arguments, at the right place, and honors its answer.
+    local tierCapabilityCalls = {}
+    local function defaultTierCapabilityPermits(citizenid, jobName, capabilityKey)
+        tierCapabilityCalls[#tierCapabilityCalls + 1] = { citizenid = citizenid, jobName = jobName, capabilityKey = capabilityKey }
+        if type(opts.tierCapabilityPermitsFn) == 'function' then
+            return opts.tierCapabilityPermitsFn(citizenid, jobName, capabilityKey)
+        end
+        return true -- real TierCapabilityPermits' own default-allow posture
+    end
+
     local playersBySource = {} -- src -> { citizenid=, metadata={wanted=,iswanted=,isdead=,inlaststand=} }
     local function qbxGetPlayer(_self, src)
         local p = playersBySource[src]
@@ -356,6 +379,9 @@ local function newCombatFixture(opts)
     if opts.withHasPermission then
         envOverrides.HasPermission = opts.hasPermissionFn or defaultHasPermission
     end
+    if opts.withTierCapabilityPermits then
+        envOverrides.TierCapabilityPermits = defaultTierCapabilityPermits
+    end
 
     local env = Sandbox.newEnv(envOverrides)
 
@@ -407,6 +433,7 @@ local function newCombatFixture(opts)
         notifyCalls = notifyCalls,
         printedLines = printedLines,
         awardCalls = awardCalls,
+        tierCapabilityCalls = tierCapabilityCalls,
         ambulanceIsDownedCalls = ambulanceIsDownedCalls,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
@@ -527,7 +554,14 @@ local function wireK9(f, src, opts)
     opts = opts or {}
     local ped = opts.ped or (src * 100)
     f.setAccess(src, opts.access ~= false)
-    f.setPlayer(src, { citizenid = opts.citizenid or ('K9-CID-' .. src) })
+    -- job defaults to nil (omitted) unless a test explicitly supplies one --
+    -- same "no job at all" default every OTHER test in this file already
+    -- relies on (see setPlayer's own comment on this field) -- opts.job is
+    -- read only by the CERTIFICATION TIER CAPABILITY tests below, which
+    -- need a real { name = ... } shape since ValidateCombatRequest's own
+    -- tier-capability gate reads PlayerData.job.name, same as
+    -- IsAuthorizedForNonComplianceAlert already does.
+    f.setPlayer(src, { citizenid = opts.citizenid or ('K9-CID-' .. src), job = opts.job })
     f.setPed(src, ped)
     f.setCoords(ped, opts.x or 0, opts.y or 0, opts.z or 0)
     f.setHealth(ped, opts.health or 200)
@@ -1943,6 +1977,123 @@ t.test('requestDrag: BLOCK ALWAYS WINS, same as BiteAndHold/NonLethalTakedown', 
     f.grantPermission('K9-CID-' .. K9_SRC, 'block.PropDragging', true)
     f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
     t.equals(#f.clientEvents, 0)
+end)
+
+-- ========================================================================
+-- CERTIFICATION TIER CAPABILITY -- server/certtiers.lua's
+-- TierCapabilityPermits, wired into ValidateCombatRequest's BiteAndHold/
+-- NonLethalTakedown branch this pass -- the owner's own worked example
+-- (ticking bite-and-hold off for the trainee tier must actually stop a
+-- trainee from biting). TierCapabilityPermits' OWN resolution logic (tier
+-- lookup, dormant-capability default-allow, unresolvable-tier
+-- default-allow) is fully covered by that file's own spec -- these tests
+-- only prove server/combat.lua calls it at the right place, with the
+-- right arguments, honors both answers, excludes PropDragging (no
+-- capability names it), and never lets a release/termination path
+-- re-consult it (NO UNBOUNDED TRAP). TierCapabilityPermits is OMITTED FROM
+-- THE SANDBOX BY DEFAULT (see newCombatFixture's own comment on
+-- defaultTierCapabilityPermits) -- every test in this section opts in via
+-- opts.withTierCapabilityPermits explicitly.
+-- ========================================================================
+
+t.test('requestBiteHold: TierCapabilityPermits denies -- refused even though HasK9Access/FeatureControl both allow, and called with the right arguments', function()
+    local f = newCombatFixture({ withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return false end })
+    wireK9(f, K9_SRC, { job = { name = 'police' } })
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'error')
+    t.equals(#f.tierCapabilityCalls, 1)
+    t.equals(f.tierCapabilityCalls[1].citizenid, 'K9-CID-' .. K9_SRC)
+    t.equals(f.tierCapabilityCalls[1].jobName, 'police')
+    t.equals(f.tierCapabilityCalls[1].capabilityKey, 'bite_hold_and_takedown')
+end)
+
+t.test('requestBiteHold: TierCapabilityPermits allows -- request proceeds normally', function()
+    local f = newCombatFixture({ withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return true end })
+    wireK9(f, K9_SRC, { job = { name = 'police' } })
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+    t.equals(#f.tierCapabilityCalls, 1)
+end)
+
+t.test('requestBiteHold: unresolvable tier at this call site (K9 has no job on record) -- allowed, TierCapabilityPermits never even called', function()
+    local f = newCombatFixture({ withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return false end })
+    wireK9(f, K9_SRC) -- deliberately no job -- see wireK9's own comment
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'an unresolvable jobName must never be treated as a denial')
+    t.equals(#f.tierCapabilityCalls, 0, 'TierCapabilityPermits must not be called at all without a resolvable jobName')
+end)
+
+t.test('requestBiteHold: server/certtiers.lua entirely absent (TierCapabilityPermits not even defined) -- allowed, same fail-permissive posture as every other soft dependency in this file', function()
+    local f = newCombatFixture() -- withTierCapabilityPermits omitted -- TierCapabilityPermits undefined in this sandbox
+    wireK9(f, K9_SRC, { job = { name = 'police' } })
+    wireNpcTarget(f, 500)
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.isTrue(ok, 'a missing TierCapabilityPermits must never error the request handler')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('requestTakedown: TierCapabilityPermits denies -- refused (checked at the PRE-yield ValidateCombatRequest call, before the speed-sample Wait())', function()
+    local f = newCombatFixture({ withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return false end })
+    wireK9(f, K9_SRC, { job = { name = 'police' } })
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestTakedown', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestTakedown: TierCapabilityPermits allows -- request proceeds normally', function()
+    local f = newCombatFixture({ withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return true end })
+    wireK9(f, K9_SRC, { job = { name = 'police' }, x = 0, y = 0, z = 0 })
+    wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    -- Drive a genuine fleeing-target speed sample during the mid-handler
+    -- Wait() -- same proven displacement technique this file's own
+    -- passing requestTakedown tests already use (see e.g. the
+    -- Config.Combat.NonLethalTakedown.cooldownMs = 0 regression test's own
+    -- attemptTakedown helper above) -- required because the POST-yield
+    -- ValidateCombatRequest call (and the speed gate in between) must ALSO
+    -- pass for this request to actually reach the TierCapabilityPermits
+    -- gate's allow path and fire a client event.
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(500 + 100000, 0, 1.2, 0)
+    end)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcTakedown'), 1)
+end)
+
+t.test('requestDrag: PropDragging is NOT gated by bite_hold_and_takedown -- no capability names it, so TierCapabilityPermits is never even consulted', function()
+    local f = newCombatFixture({ propDragging = true, withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return false end })
+    wireK9(f, K9_SRC, { job = { name = 'police' } })
+    wireNpcTarget(f, 500, { health = 50 }) -- downed (<= PED_DEAD_HEALTH_THRESHOLD)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'PropDragging must be unaffected by bite_hold_and_takedown')
+    t.equals(#f.tierCapabilityCalls, 0, 'TierCapabilityPermits must never be consulted for PropDragging')
+end)
+
+t.test('requestBiteHold: a tier capability revoked AFTER an already-open hold does NOT terminate it, and the release path never re-consults TierCapabilityPermits -- NO UNBOUNDED TRAP', function()
+    local allowed = true
+    local f = newCombatFixture({ withTierCapabilityPermits = true, tierCapabilityPermitsFn = function() return allowed end })
+    wireK9(f, K9_SRC, { job = { name = 'police' } })
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+
+    -- High command unticks the capability for this handler's tier, mid-hold.
+    allowed = false
+
+    -- The ALREADY-OPEN hold must still be releasable -- EndHold/releaseBiteHold
+    -- never call ValidateCombatRequest (and so never call
+    -- TierCapabilityPermits) at all.
+    local callsBeforeRelease = #f.tierCapabilityCalls
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 1, 'a mid-hold capability revoke must never strand an already-open hold')
+    t.equals(#f.tierCapabilityCalls, callsBeforeRelease, 'releaseBiteHold must never consult TierCapabilityPermits')
+
+    -- The revoke DOES correctly stop a brand-new request from the same K9.
+    wireNpcTarget(f, 501)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'still exactly 1 -- the new request against 501 must be denied')
 end)
 
 os.exit(t.summary())

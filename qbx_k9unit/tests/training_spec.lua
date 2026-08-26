@@ -468,4 +468,163 @@ t.test('playerDropped clears TrainingMode for the disconnecting citizenid -- a r
     t.equals(result.reason, 'not_training', 'a disconnect must clear the old session -- the reconnected citizenid must not silently still be "in training"')
 end)
 
+-- ----------------------------------------------------------------------
+-- Config.TrainingZones VALIDATION -- malformed coordinates, radius clamp,
+-- overlapping zones, an all-malformed table. Each of these needs its own
+-- Config.TrainingZones (fixed at THIS file's load time inside
+-- server/training.lua), so each gets its own fresh sandbox environment --
+-- same convention tests/search_spec.lua's own env2/env3 already establish
+-- for a config-shape-specific scenario, rather than reusing the single
+-- shared `env` above.
+-- ----------------------------------------------------------------------
+
+--- Builds a fresh, fully self-contained server/training.lua sandbox with
+--- the given raw Config.TrainingZones/Config.Training, independent of the
+--- shared `env` above. Returns just enough surface for this section's own
+--- assertions: the captured print() lines (to assert on the exact loud
+--- warning text a malformed/clamped zone must produce), and helpers to
+--- register a player and drive the toggle-ON event.
+--- @param trainingZones table -- raw Config.TrainingZones for this scenario
+--- @return table
+local function buildZoneValidationEnv(trainingZones)
+    local zFakeNow = 0
+    local zEventHandlers = {}
+    local zNetEvents = {}
+    local zClientEvents = {}
+    local zCapturedPrints = {}
+    local zPlayersBySource = {}
+    local zCoordsBySource = {}
+
+    local function zGetGameTimer() return zFakeNow end
+    local function zAddEventHandler(eventName, handler)
+        zEventHandlers[eventName] = zEventHandlers[eventName] or {}
+        zEventHandlers[eventName][#zEventHandlers[eventName] + 1] = handler
+    end
+    local function zGetCurrentResourceName() return RESOURCE_NAME end
+    local function zRegisterNetEvent(eventName, handler) zNetEvents[eventName] = handler end
+    local function zTriggerClientEvent(eventName, target, ...)
+        zClientEvents[#zClientEvents + 1] = { event = eventName, target = target, args = { ... } }
+    end
+    local function zNotifyPlayer(_target, _description, _notifyType) end
+    local function zGetPlayer(_self, src) return zPlayersBySource[src] end
+    local zExportsStub = { qbx_core = { GetPlayer = zGetPlayer } }
+    local function zHasK9Access(src) return zPlayersBySource[src] ~= nil end
+    local function zGetPlayerPed(src)
+        if zPlayersBySource[src] == nil then return 0 end
+        return src
+    end
+    local function zGetEntityCoords(ped) return zCoordsBySource[ped] or { x = 0.0, y = 0.0, z = 0.0 } end
+    local function zPrint(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        zCapturedPrints[#zCapturedPrints + 1] = table.concat(parts, '\t')
+    end
+    local zLibStub = { callback = { register = function() end } }
+
+    local zEnv = Sandbox.newEnv({
+        GetGameTimer = zGetGameTimer,
+        AddEventHandler = zAddEventHandler,
+        GetCurrentResourceName = zGetCurrentResourceName,
+        RegisterNetEvent = zRegisterNetEvent,
+        TriggerClientEvent = zTriggerClientEvent,
+        NotifyPlayer = zNotifyPlayer,
+        exports = zExportsStub,
+        HasK9Access = zHasK9Access,
+        GetPlayerPed = zGetPlayerPed,
+        GetEntityCoords = zGetEntityCoords,
+        print = zPrint,
+        lib = zLibStub,
+        Config = {
+            Features = { TrainingMode = true },
+            TrainingZones = trainingZones,
+            Training = { ToggleCooldownMs = 1000, ActionCooldownMs = 2000, ContrabandFoundChance = 0.5 },
+        },
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', zEnv)
+    Sandbox.loadInto('../server/training.lua', zEnv)
+
+    return {
+        capturedPrints = zCapturedPrints,
+        --- Registers `src` as a connected, always-access-granted player at
+        --- `coords`, then attempts to toggle Training Mode ON, returning
+        --- whether the transition was accepted (a trainingModeChanged(true)
+        --- reached this src).
+        --- @param src number
+        --- @param citizenid string
+        --- @param coords table
+        --- @return boolean accepted
+        tryToggleOnAt = function(src, citizenid, coords)
+            zPlayersBySource[src] = { PlayerData = { source = src, citizenid = citizenid } }
+            zCoordsBySource[src] = coords
+            zEnv.source = src
+            zNetEvents['qbx_k9unit:server:setTrainingMode'](true)
+            for i = #zClientEvents, 1, -1 do
+                if zClientEvents[i].target == src then return zClientEvents[i].args[1] == true end
+            end
+            return false
+        end,
+    }
+end
+
+t.test('a zone with malformed coordinates (missing z) is dropped with a loud, named warning -- a separate well-formed zone still works', function()
+    local f = buildZoneValidationEnv({
+        { label = 'Broken Yard', x = 0.0, y = 0.0 }, -- no z at all
+        { label = 'Good Yard', x = 500.0, y = 500.0, z = 30.0, radius = 10.0 },
+    })
+
+    local droppedFound = false
+    for _, line in ipairs(f.capturedPrints) do
+        if line:find('Broken Yard', 1, true) and line:find('cannot be used', 1, true) then droppedFound = true end
+    end
+    t.isTrue(droppedFound, 'the malformed entry must be named in a loud warning explaining exactly why it was dropped')
+
+    t.isFalse(f.tryToggleOnAt(1, 'CITBROKEN', { x = 0.0, y = 0.0, z = 0.0 }), 'standing where the broken zone WOULD have been must not grant training -- it never validated')
+    t.isTrue(f.tryToggleOnAt(2, 'CITGOOD', { x = 502.0, y = 502.0, z = 30.0 }), 'the other, well-formed zone must be completely unaffected by its broken sibling')
+end)
+
+t.test('a zone with a non-positive radius is NOT dropped -- it is clamped to a safe built-in default with a loud warning', function()
+    local f = buildZoneValidationEnv({
+        { label = 'Zero Radius Yard', x = 1000.0, y = 1000.0, z = 30.0, radius = 0 },
+    })
+
+    local clampedFound = false
+    for _, line in ipairs(f.capturedPrints) do
+        if line:find('Zero Radius Yard', 1, true) and line:find('default instead', 1, true) then clampedFound = true end
+    end
+    t.isTrue(clampedFound, 'a non-positive radius must be clamped with a loud, named warning, never silently accepted or dropped')
+
+    -- The built-in fallback is 20.0m -- 15m away must still be inside it,
+    -- proving the zone survived with a REAL usable radius, not a
+    -- zero/negative one that could never match anything.
+    t.isTrue(f.tryToggleOnAt(1, 'CITCLAMP', { x = 1015.0, y = 1000.0, z = 30.0 }), 'the clamped fallback radius must actually be usable, not a cosmetic no-op default')
+end)
+
+t.test('overlapping zones: a coordinate inside the overlap of two configured zones still grants training (first match wins, no double-counting bug)', function()
+    local f = buildZoneValidationEnv({
+        { label = 'Zone A', x = 0.0, y = 0.0, z = 0.0, radius = 30.0 },
+        { label = 'Zone B', x = 20.0, y = 0.0, z = 0.0, radius = 30.0 },
+    })
+
+    -- (10, 0, 0) is inside BOTH zone A (distance 10 <= 30) and zone B
+    -- (distance 10 <= 30).
+    t.isTrue(f.tryToggleOnAt(1, 'CITOVERLAP', { x = 10.0, y = 0.0, z = 0.0 }))
+end)
+
+t.test('a Config.TrainingZones table whose every entry is malformed behaves exactly like an empty one -- ON is denied everywhere, with a named reason per rejected entry', function()
+    local f = buildZoneValidationEnv({
+        { label = 'All Broken', x = 'not a number', y = 0.0, z = 0.0, radius = 10.0 },
+    })
+
+    local namedReasonFound, noValidZonesFound = false, false
+    for _, line in ipairs(f.capturedPrints) do
+        if line:find('All Broken', 1, true) then namedReasonFound = true end
+        if line:find('no valid zones', 1, true) then noValidZonesFound = true end
+    end
+    t.isTrue(namedReasonFound, 'the single malformed entry must still be named in its own warning')
+    t.isTrue(noValidZonesFound, 'an all-malformed table must print the SAME "no valid zones" notice as a genuinely empty one, never a silent 0-zones dead end')
+
+    t.isFalse(f.tryToggleOnAt(1, 'CITNOVALID', { x = 0.0, y = 0.0, z = 0.0 }))
+end)
+
 os.exit(t.summary())
