@@ -429,4 +429,85 @@ t.test('SAFETY: with no FiveM natives available at all (plain Lua), loading the 
     t.isNotNil(env.K9SelfCheck)
 end)
 
+
+-- ======================================================================
+-- SPECIALIZATION GATE WARNING. Blood and gunpowder tracking used to work
+-- for every certified dog and now need a specialization. An existing
+-- server therefore loses two capabilities on update, silently -- the
+-- radial entry is still there and the answer is just "nothing found",
+-- forever, with no explanation anywhere. These pin the boot line that
+-- stops that being a mystery.
+-- ======================================================================
+
+local FLAGS = { scent = 'ScentTracking', blood = 'BloodTracking', gunpowder = 'GunpowderSniffing' }
+
+t.test('SPECIALIZATION GATE: an enabled trail that needs a specialization is named, with the specialization that unlocks it', function()
+    local gated = K9SelfCheck.FindSpecializationGatedTrackTypes(
+        { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true },
+        { explosives = { 'gunpowder' }, patrol = { 'blood' } },
+        FLAGS)
+    t.equals(#gated, 2, 'both blood and gunpowder are gated and switched on')
+    -- Sorted, so the warning reads identically every boot rather than
+    -- reordering run to run and looking like something changed.
+    t.equals(gated[1].trackType, 'blood')
+    t.equals(gated[1].specialization, 'patrol')
+    t.equals(gated[2].trackType, 'gunpowder')
+    t.equals(gated[2].specialization, 'explosives')
+end)
+
+t.test('SPECIALIZATION GATE: a trail the owner has switched OFF is never warned about -- they lost nothing', function()
+    local gated = K9SelfCheck.FindSpecializationGatedTrackTypes(
+        { ScentTracking = true, BloodTracking = false, GunpowderSniffing = true },
+        { explosives = { 'gunpowder' }, patrol = { 'blood' } },
+        FLAGS)
+    t.equals(#gated, 1, 'only the enabled one is named')
+    t.equals(gated[1].trackType, 'gunpowder')
+end)
+
+t.test('SPECIALIZATION GATE: scent is never gated, so a scent-only config warns about nothing at all', function()
+    local gated = K9SelfCheck.FindSpecializationGatedTrackTypes(
+        { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true },
+        {}, -- an owner who cleared Config.SpecializationTracking entirely
+        FLAGS)
+    t.equals(#gated, 0, 'nothing is gated, so nothing is warned about')
+end)
+
+t.test('SPECIALIZATION GATE: a missing or malformed Config.SpecializationTracking degrades to silence, never an error', function()
+    t.equals(#K9SelfCheck.FindSpecializationGatedTrackTypes({ BloodTracking = true }, nil, FLAGS), 0)
+    t.equals(#K9SelfCheck.FindSpecializationGatedTrackTypes({ BloodTracking = true }, 'not a table', FLAGS), 0)
+    t.equals(#K9SelfCheck.FindSpecializationGatedTrackTypes({ BloodTracking = true }, { patrol = 'not a list' }, FLAGS), 0)
+    t.equals(#K9SelfCheck.FindSpecializationGatedTrackTypes(nil, { patrol = { 'blood' } }, FLAGS), 0)
+end)
+
+t.test('SPECIALIZATION GATE: a trail listed under two specializations is reported once, not twice', function()
+    local gated = K9SelfCheck.FindSpecializationGatedTrackTypes(
+        { BloodTracking = true },
+        { patrol = { 'blood' }, explosives = { 'blood' } },
+        FLAGS)
+    t.equals(#gated, 1, 'one trail, one line -- never duplicated per specialization that unlocks it')
+    t.equals(gated[1].trackType, 'blood')
+    -- WHICH specialization is named here is deliberately NOT asserted:
+    -- pairs() order is implementation-defined, so either answer is correct
+    -- and pinning one would make this test a coin toss. See the production
+    -- function's own comment.
+end)
+
+t.test('SPECIALIZATION GATE: the result is always in ascending trail order, so the boot line never reshuffles between restarts', function()
+    -- PROPERTY ASSERTION, NOT A RED-GREEN PROOF, and deliberately labelled
+    -- as such: deleting the sort in the production function cannot be made
+    -- to fail reliably, because pairs() may happen to yield sorted order
+    -- anyway. This pins the property that matters -- an owner comparing two
+    -- boot logs must not see the same facts in a different order and think
+    -- something changed.
+    local gated = K9SelfCheck.FindSpecializationGatedTrackTypes(
+        { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true },
+        { explosives = { 'gunpowder' }, patrol = { 'blood' }, narcotics = { 'scent' } },
+        FLAGS)
+    t.isTrue(#gated >= 2, 'need at least two entries for order to mean anything')
+    for i = 2, #gated do
+        t.isTrue(gated[i - 1].trackType < gated[i].trackType,
+            'entry ' .. i .. ' must sort after entry ' .. (i - 1))
+    end
+end)
+
 os.exit(t.summary())

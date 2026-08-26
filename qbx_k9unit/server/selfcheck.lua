@@ -319,6 +319,85 @@ end
 --- edited here), this line can be extended to use it.
 --- ======================================================================
 
+--- Which trail types are BOTH switched on AND now gated behind a
+--- specialization nobody may have granted yet.
+---
+--- WHY THIS CHECK EXISTS. Blood and gunpowder tracking used to work for
+--- every certified dog. The owner-directed decluttering pass
+--- (Config.SpecializationTracking, config.lua) made each of them require a
+--- specialization instead. That is the change that was asked for, but it
+--- means an existing server SILENTLY LOSES two capabilities the moment it
+--- updates: the radial entry is still there, the dog still walks up, and
+--- the answer is simply "nothing found" forever, with nothing anywhere
+--- saying why. A capability that stops existing without a word is the
+--- worst outcome this resource can produce, so it gets a line at boot.
+---
+--- Deliberately CONFIG-ONLY -- it never asks the database whether anybody
+--- actually holds the specialization. A boot-time query would let this say
+--- "and nobody has one yet", but it would also make a startup line depend
+--- on the database being up, and this file's whole contract is that it
+--- never blocks or fails a boot. Naming the requirement unconditionally is
+--- less precise and cannot be wrong.
+--- @param configFeatures table -- Config.Features
+--- @param specializationTracking table|nil -- Config.SpecializationTracking
+--- @param trackTypeFeatureFlags table -- trackType -> Config.Features key
+--- @return { trackType: string, feature: string, specialization: string }[]
+function K9SelfCheck.FindSpecializationGatedTrackTypes(configFeatures, specializationTracking, trackTypeFeatureFlags)
+    local out = {}
+    if type(configFeatures) ~= 'table' or type(specializationTracking) ~= 'table'
+        or type(trackTypeFeatureFlags) ~= 'table' then
+        return out
+    end
+
+    -- Invert the config's specialization -> {trackType, ...} shape into
+    -- trackType -> specialization. A trail listed under SEVERAL
+    -- specializations collapses to one key here, and which specialization
+    -- is reported for it is arbitrary -- pairs() order is
+    -- implementation-defined, so no ordering guard could make it otherwise.
+    -- Deliberately accepted: this warning's job is to say the requirement
+    -- now EXISTS, so naming one specialization that unlocks the trail is
+    -- enough. It does not claim to name the only one.
+    local requiredBy = {}
+    for specialization, trackTypes in pairs(specializationTracking) do
+        if type(trackTypes) == 'table' then
+            for _, trackType in ipairs(trackTypes) do
+                if type(trackType) == 'string' then
+                    requiredBy[trackType] = specialization
+                end
+            end
+        end
+    end
+
+    -- Sorted so the warning reads identically across boots -- pairs() over
+    -- either table would otherwise reorder it run to run and look like
+    -- something changed when nothing did. NOTE FOR ANYONE EDITING: deleting
+    -- this sort cannot be caught by a test that reliably goes red, because
+    -- Lua's pairs() order is implementation-defined and may happen to come
+    -- out sorted anyway. tests/selfcheck_spec.lua asserts the RESULT is in
+    -- ascending order rather than pretending to prove the sort by deleting
+    -- it -- an honest property assertion, not a red-green proof.
+    local trackTypes = {}
+    for trackType in pairs(requiredBy) do trackTypes[#trackTypes + 1] = trackType end
+    table.sort(trackTypes)
+
+    for _, trackType in ipairs(trackTypes) do
+        local featureKey = trackTypeFeatureFlags[trackType]
+        -- Only warn about a trail the owner actually has switched ON. A
+        -- server running with blood tracking off has lost nothing and does
+        -- not need telling about a requirement it will never reach.
+        if type(featureKey) == 'string' and configFeatures[featureKey] then
+            out[#out + 1] = {
+                trackType = trackType,
+                feature = featureKey,
+                specialization = requiredBy[trackType],
+            }
+        end
+    end
+
+    return out
+end
+
+
 --- @param info table {
 ---   version = string?,                                    -- this resource's own fxmanifest.lua version, or nil if unknown
 ---   deps = { total, ok, unverified, problems }?,           -- from the dependency check, or nil if it could not run
@@ -471,6 +550,34 @@ local function RunFeatureKeyCheck()
     return { total = total, unrecognized = #unrecognized }
 end
 
+--- Prints the specialization-gate warning. See
+--- K9SelfCheck.FindSpecializationGatedTrackTypes above for why this exists.
+--- @return number -- how many gated-and-enabled trail types were named
+local function RunSpecializationGateCheck()
+    if type(Config) ~= 'table' or type(Config.Features) ~= 'table' then return 0 end
+
+    local gated = K9SelfCheck.FindSpecializationGatedTrackTypes(
+        Config.Features,
+        Config.SpecializationTracking,
+        { scent = 'ScentTracking', blood = 'BloodTracking', gunpowder = 'GunpowderSniffing' }
+    )
+    if #gated == 0 then return 0 end
+
+    local parts = {}
+    for _, entry in ipairs(gated) do
+        parts[#parts + 1] = ("%s tracking needs the '%s' specialization"):format(entry.trackType, entry.specialization)
+    end
+
+    print(("[qbx_k9unit] selfcheck: %d trail type(s) now require a specialization before any dog can follow them: %s. " ..
+           "This changed deliberately -- following a person's scent is still something every certified dog can do, " ..
+           "but these ones are now specialist skills. A dog without the specialization finds NOTHING on these trails " ..
+           "and is told nothing, which looks exactly like the feature being broken. Grant them with /k9specialize, " ..
+           "or switch the trail off in config.lua if you do not want it. Change which specialization unlocks what " ..
+           "under Config.SpecializationTracking in config.lua."):format(#gated, table.concat(parts, '; ')))
+
+    return #gated
+end
+
 --- Short, honest phrase for the final summary line's database clause.
 --- Waits (bounded) for server/datastore.lua's own schema-collision probe
 --- to settle first -- the same K9Store.WaitForSchemaCheckToSettle() every
@@ -505,6 +612,7 @@ if type(AddEventHandler) == 'function' then
         -- announcement ahead of them.
         local depResult = RunDependencyCheck()
         local featureResult = RunFeatureKeyCheck()
+        RunSpecializationGateCheck()
         local databaseState = BuildDatabaseStatePhrase()
 
         local ownVersion = nil
