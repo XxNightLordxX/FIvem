@@ -369,7 +369,11 @@ t.test('WORKFLOW AUDIT #2: an empty roster search explains that a brand-new (nev
     await settle(h);
 
     t.isTrue(findByTextContaining(h.getRoot(), 'This list only ever shows people who already hold a certification').length >= 1, 'explains WHY the search came up empty');
-    t.isTrue(findByTextContaining(h.getRoot(), 'Use "Open by exact citizen ID" for them instead').length >= 1, 'and tells the operator exactly what to do about it');
+    // Wording updated this pass (Online Players list): still tells the
+    // operator exactly what to do, now preferring the new list for an
+    // ONLINE target and falling back to the citizen-ID box otherwise --
+    // see locales/en.json's own 'tablet.empty_roster' for the full text.
+    t.isTrue(findByTextContaining(h.getRoot(), 'otherwise use "Open by exact citizen ID"').length >= 1, 'and tells the operator exactly what to do about it');
 });
 
 t.test('WORKFLOW AUDIT #2: the "open by exact citizen ID" box always carries its own hint that it works even for someone never certified, for a full-access viewer', async () => {
