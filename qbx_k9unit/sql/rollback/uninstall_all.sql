@@ -21,6 +21,11 @@
 -- #  (STEP 1 below) before it will delete anything. That is           #
 -- #  deliberate: it means you cannot destroy your server's K9 data by #
 -- #  pasting the wrong file into HeidiSQL or phpMyAdmin.              #
+-- #                                                                   #
+-- #  It also refuses -- armed or not -- if any of the 24 table names  #
+-- #  it wants to drop is currently a table (or view) whose columns    #
+-- #  do not look like qbx_k9unit's own, or blocked by another table's #
+-- #  foreign key. It only ever drops a table it can verify is ours.   #
 -- #####################################################################
 --
 -- WHAT YOU LOSE, permanently, when you arm and run this:
@@ -249,6 +254,7 @@ BEGIN
     -- be dropped.
     -- =================================================================
     DECLARE fk_blockers INT DEFAULT 0;
+    DECLARE shape_blockers INT DEFAULT 0;
 
     -- OWNED TABLE LIST -- named out in full, byte-identical, in FOUR places
     -- in this procedure: this COUNT, every branch of the dependency report
@@ -312,6 +318,232 @@ BEGIN
                              'k9_xp_tiers','k9_xp_tier_audit',
                              'k9_individual_overrides','k9_individual_override_audit');
 
+
+    -- =================================================================
+    -- SHAPE GATE, SECOND SAFETY GATE -- also runs BEFORE anything is
+    -- dropped, armed or not, same as the FK-blocker gate above.
+    --
+    -- WHY THIS EXISTS: the FK-blocker gate above only refuses if some
+    -- OTHER table references one of our 24 names via a real foreign key.
+    -- It says nothing about whether the table CURRENTLY sitting under one
+    -- of those 24 names is actually ours. `DROP TABLE IF EXISTS` drops
+    -- whatever object has that name, full stop -- it does not check that
+    -- the object's columns look like something qbx_k9unit created. On a
+    -- shared database (the exact case this resource's own comments
+    -- elsewhere already treat as real and expected -- a sibling K9
+    -- resource, e.g. `k9_units`, sharing this same database), a foreign
+    -- resource happening to use one of these 24 exact table names would
+    -- otherwise be silently, permanently destroyed by an armed run of
+    -- this file, with no warning -- the single worst outcome this
+    -- resource's own design principle rules out everywhere else
+    -- (`sql/preflight_check.sql` CHECK 1 and `server/datastore.lua`'s own
+    -- boot-time schema-collision probe both exist specifically so this
+    -- resource never treats a same-named foreign table as its own; the
+    -- boot check goes as far as refusing to use the database at all
+    -- rather than risk a single write into one). This uninstall path had
+    -- no equivalent check before this pass -- fixed here the same way.
+    --
+    -- Reuses the identical per-table "does this table have OUR expected
+    -- columns" signature `sql/preflight_check.sql`'s own CHECK 1 uses
+    -- (itself kept in sync with `server/datastore.lua`'s
+    -- `EXPECTED_TABLE_COLUMNS`, per that file's own comment) rather than
+    -- inventing a third, independently-drifting list. HONEST LIMIT OF
+    -- THIS APPROACH: SQL has no way to `require()` a Lua table or another
+    -- .sql file at runtime, so this is necessarily a THIRD hand-typed copy
+    -- of the same 24 signatures, not a shared reference to one -- exactly
+    -- the same hand-maintained-list tradeoff this procedure's own OWNED
+    -- TABLE LIST comment above already accepts for the DROP list itself.
+    -- If you change a table's identifying columns in ANY of the three
+    -- places (this block, `sql/preflight_check.sql` CHECK 1,
+    -- `server/datastore.lua`'s `EXPECTED_TABLE_COLUMNS`), change all three
+    -- in the same commit -- that is the honest process for keeping three
+    -- independently-maintained-but-must-agree lists from drifting apart
+    -- again, not a promise that they cannot.
+    --
+    -- A table that does not exist at all is NOT a shape blocker (nothing
+    -- for `DROP TABLE IF EXISTS` to hurt); a table that exists but is a
+    -- VIEW rather than a real table, or is missing our expected columns,
+    -- IS one -- either would make `DROP TABLE` itself throw a real error
+    -- majority of the way through the DROP list below (views cannot be
+    -- dropped by `DROP TABLE` at all) or silently destroy a foreign
+    -- table's real data, so both are caught here, before anything runs.
+    -- =================================================================
+    SELECT COUNT(*) INTO shape_blockers
+    FROM (
+            SELECT 'k9_certifications' AS table_name, 7 AS cols_expected,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications') AS tbl_exists,
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications') AS obj_type,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications'
+                 AND COLUMN_NAME IN ('citizenid','job','granted_by','granted_at','revoked_by','revoked_at','active')) AS cols_found
+            UNION ALL SELECT 'k9_search_log', 9,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'
+                 AND COLUMN_NAME IN ('searcher_citizenid','searcher_job','target_type','target_plate','target_citizenid','result','total_weight','alert_tier','searched_at'))
+            UNION ALL SELECT 'k9_partnerships', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'
+                 AND COLUMN_NAME IN ('k9_citizenid','handler_citizenid','established_by','established_at','ended_by','ended_at','active'))
+            UNION ALL SELECT 'k9_progression', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'
+                 AND COLUMN_NAME IN ('citizenid','xp','created_at','updated_at'))
+            UNION ALL SELECT 'k9_permissions', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'
+                 AND COLUMN_NAME IN ('citizenid','permission','granted_by','granted_at','revoked_by','revoked_at','active'))
+            UNION ALL SELECT 'k9_certification_specializations', 8,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'
+                 AND COLUMN_NAME IN ('citizenid','job','specialization','granted_by','granted_at','revoked_by','revoked_at','active'))
+            UNION ALL SELECT 'k9_runtime_feature_overrides', 5,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'
+                 AND COLUMN_NAME IN ('override_key','kind','value','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_runtime_override_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'
+                 AND COLUMN_NAME IN ('override_key','kind','old_value','new_value','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_tablet_theme', 8,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'
+                 AND COLUMN_NAME IN ('primary_color','accent_color','background_color','text_color','density','header_title','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_tablet_theme_audit', 8,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'
+                 AND COLUMN_NAME IN ('primary_color','accent_color','background_color','text_color','density','header_title','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_ped_assignments', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'
+                 AND COLUMN_NAME IN ('citizenid','model','original_model_hash','active','applied_by','applied_at','revoked_at'))
+            UNION ALL SELECT 'k9_certification_tiers', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'
+                 AND COLUMN_NAME IN ('tier_key','label','ordinal','deleted','created_at','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_certification_tier_capabilities', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'
+                 AND COLUMN_NAME IN ('tier_key','capability_key','granted_by','granted_at'))
+            UNION ALL SELECT 'k9_certification_tier_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'
+                 AND COLUMN_NAME IN ('id','action','tier_key','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_equipment_shop_locations', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations'
+                 AND COLUMN_NAME IN ('x','y','z','created_by'))
+            UNION ALL SELECT 'k9_equipment_shop_locations_audit', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit'
+                 AND COLUMN_NAME IN ('location_id','action','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_permission_keys', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys'
+                 AND COLUMN_NAME IN ('permission_key','label','description','deleted','created_at','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_permission_key_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit'
+                 AND COLUMN_NAME IN ('id','action','permission_key','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_equipment_shop_items', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'
+                 AND COLUMN_NAME IN ('item_key','price','sort_order','required_tier_key','required_specialization','deleted','updated_by'))
+            UNION ALL SELECT 'k9_equipment_shop_item_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'
+                 AND COLUMN_NAME IN ('id','action','item_key','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_xp_tiers', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'
+                 AND COLUMN_NAME IN ('ordinal','xp_threshold','label','speed_multiplier','scent_range_multiplier','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_xp_tier_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'
+                 AND COLUMN_NAME IN ('id','action','ordinal','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_individual_overrides', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'
+                 AND COLUMN_NAME IN ('citizenid','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','note','deleted','updated_by'))
+            UNION ALL SELECT 'k9_individual_override_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'
+                 AND COLUMN_NAME IN ('id','action','citizenid','detail','changed_by','changed_at'))
+    ) shp
+    WHERE shp.tbl_exists = 1
+      AND (shp.obj_type <> 'BASE TABLE' OR shp.cols_found <> shp.cols_expected);
+
+
+    -- -----------------------------------------------------------------
+    -- WHAT THIS DELETES, IN PLAIN ENGLISH -- runs UNCONDITIONALLY, before
+    -- the dependency report and before the arm check, so it is the FIRST
+    -- real content an operator running this file (armed or not) actually
+    -- sees on screen. It exists because everything above this point in
+    -- this file's own HEADER already explains, table by table, exactly
+    -- what is lost and what is/is not recomputable -- but that header is
+    -- a block of SQL COMMENTS, and neither the plain `mysql` CLI nor
+    -- `sql/rollback/uninstall.sh` echoes comments back to the operator.
+    -- Someone running this the documented way (piped into `mysql`, or via
+    -- uninstall.sh) previously never saw that breakdown at all unless they
+    -- separately opened this .sql file in a text editor -- exactly
+    -- backwards for the single most consequential file in this resource.
+    -- Only lists a table if it actually EXISTS in this database right now
+    -- (a table that was never installed has nothing to lose), and includes
+    -- its current row count so "not recomputable" is not just an abstract
+    -- warning -- it is attached to a real number for THIS database.
+    -- -----------------------------------------------------------------
+    SELECT w.table_name, t.TABLE_ROWS AS approx_rows_right_now, w.what_you_would_lose
+    FROM (
+        SELECT 'k9_certifications' AS table_name, 'Every K9-handler certification ever granted or revoked, and by whom -- your access-control record.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_search_log' AS table_name, 'THE ONE THAT MATTERS MOST: every contraband search ever performed (who, what, when, what was found). A privacy/accountability record, reconstructible from NOTHING once gone.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_partnerships' AS table_name, 'The full history of every K9/handler partnership: who, with whom, when formed, who ended it and when.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_progression' AS table_name, 'Every player''s accumulated K9 XP and handler XP, earned over weeks of play. Not recomputable.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_permissions' AS table_name, 'Every named permission ever granted or revoked, and by whom. Also silently strips every CURRENTLY-ACTIVE grant, not just the history.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_certification_specializations' AS table_name, 'Every K9 specialization ever granted or revoked, and by whom. Also silently strips every CURRENTLY-ACTIVE specialization.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_runtime_feature_overrides' AS table_name, 'Every currently-active runtime override to a feature flag/tuning value. Dropping this silently reverts every live override to its config.lua default on the next restart -- a real behavior change.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_runtime_override_audit' AS table_name, 'The full ''who changed what, from what, to what'' history of every runtime override ever set or reset. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_tablet_theme' AS table_name, 'The current K9 tablet theme every connected player''s tablet renders. Dropping this silently reverts every tablet to its hardcoded default on the next read.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_tablet_theme_audit' AS table_name, 'The full history of every tablet theme change ever made. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_ped_assignments' AS table_name, 'Every citizenid''s currently-applied K9 ped model override, and the original model needed to restore it. Not recomputable.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_certification_tiers' AS table_name, 'The high-command-editable certification tier catalog. Dropping this (with the two below) silently reverts EVERY tier to config.lua''s three defaults with NO capabilities granted -- a real behavior change, including un-deleting a tombstoned tier.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_certification_tier_capabilities' AS table_name, 'Exactly which capabilities each certification tier currently grants. See k9_certification_tiers above for the full effect of dropping it.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_certification_tier_audit' AS table_name, 'The full history of every tier create/rename/reorder/delete ever made. Not recomputable from the two tables above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_equipment_shop_locations' AS table_name, 'Every K9 equipment shop location added/moved from the tablet at runtime. Dropping this silently removes every tablet-added location from every connected client on the next broadcast.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_equipment_shop_locations_audit' AS table_name, 'The full history of every shop-location add/move/remove ever made. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_permission_keys' AS table_name, 'The high-command-editable permission-key catalog (defaults plus any custom key). Dropping this silently reverts every permission key to config.lua''s defaults on the next restart, including un-deleting a tombstoned key.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_permission_key_audit' AS table_name, 'The full history of every permission-key create/relabel/restore/delete ever made. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_equipment_shop_items' AS table_name, 'The high-command-editable equipment shop item catalog (price/label/order/purchase requirements). Dropping this silently reverts every item to config.lua''s defaults, including silently DROPPING the certification-tier/specialization gate protecting a restricted item.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_equipment_shop_item_audit' AS table_name, 'The full history of every shop-item create/edit/reorder/delete ever made. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_xp_tiers' AS table_name, 'Every high-command-edited field override for an XP rank (threshold/label/speed/scent/badge). Dropping this silently reverts every edited rank to config.lua''s defaults on the next restart -- every K9''s real movement/scent bonus for a re-tuned rank snaps back.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_xp_tier_audit' AS table_name, 'The full history of every XP-rank edit ever made. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_individual_overrides' AS table_name, 'Every per-citizenid speed/scent/medkit-cooldown override (the per-K9 ''god mode'' layer). Dropping this silently reverts every hand-tuned K9 to its plain XP-tier values on the next restart.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_individual_override_audit' AS table_name, 'The full history of every per-citizenid override create/edit/reset ever made. Not recomputable from the table above.' AS what_you_would_lose
+    ) w
+    JOIN INFORMATION_SCHEMA.TABLES t
+      ON t.TABLE_SCHEMA = DATABASE() AND t.TABLE_NAME = w.table_name
+    ORDER BY w.table_name;
+
     -- -----------------------------------------------------------------
     -- DEPENDENCY REPORT -- always printed, whether or not this file is
     -- armed. Running it UNARMED is therefore a free dry run: it tells you
@@ -330,6 +562,142 @@ BEGIN
         WHERE CONSTRAINT_SCHEMA = DATABASE()
           AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)$'
           AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit)$'
+        UNION ALL
+        SELECT 1,
+               'BLOCKS UNINSTALL - table name is not ours (columns do not match)',
+               shp2.table_name,
+               CONCAT('A table named `', shp2.table_name, '` exists in this database, but its columns ',
+                      'do not match what qbx_k9unit created (reported type: ', IFNULL(shp2.obj_type, 'MISSING'),
+                      ', matched ', shp2.cols_found, ' of ', shp2.cols_expected, ' expected identifying columns). ',
+                      'This uninstall will NOT drop it -- dropping a table just because the NAME matches would ',
+                      'risk permanently destroying a DIFFERENT resource''s data (e.g. a sibling K9 resource ',
+                      'sharing this same database). If this is genuinely an old/renamed shape of our own table, ',
+                      'migrate it to match sql/install.sql by hand first; if it belongs to another resource, ',
+                      'that resource -- not this file -- needs a different table name.')
+        FROM (
+            SELECT 'k9_certifications' AS table_name, 7 AS cols_expected,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications') AS tbl_exists,
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications') AS obj_type,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications'
+                 AND COLUMN_NAME IN ('citizenid','job','granted_by','granted_at','revoked_by','revoked_at','active')) AS cols_found
+            UNION ALL SELECT 'k9_search_log', 9,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'
+                 AND COLUMN_NAME IN ('searcher_citizenid','searcher_job','target_type','target_plate','target_citizenid','result','total_weight','alert_tier','searched_at'))
+            UNION ALL SELECT 'k9_partnerships', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'
+                 AND COLUMN_NAME IN ('k9_citizenid','handler_citizenid','established_by','established_at','ended_by','ended_at','active'))
+            UNION ALL SELECT 'k9_progression', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'
+                 AND COLUMN_NAME IN ('citizenid','xp','created_at','updated_at'))
+            UNION ALL SELECT 'k9_permissions', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'
+                 AND COLUMN_NAME IN ('citizenid','permission','granted_by','granted_at','revoked_by','revoked_at','active'))
+            UNION ALL SELECT 'k9_certification_specializations', 8,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'
+                 AND COLUMN_NAME IN ('citizenid','job','specialization','granted_by','granted_at','revoked_by','revoked_at','active'))
+            UNION ALL SELECT 'k9_runtime_feature_overrides', 5,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'
+                 AND COLUMN_NAME IN ('override_key','kind','value','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_runtime_override_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'
+                 AND COLUMN_NAME IN ('override_key','kind','old_value','new_value','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_tablet_theme', 8,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'
+                 AND COLUMN_NAME IN ('primary_color','accent_color','background_color','text_color','density','header_title','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_tablet_theme_audit', 8,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'
+                 AND COLUMN_NAME IN ('primary_color','accent_color','background_color','text_color','density','header_title','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_ped_assignments', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'
+                 AND COLUMN_NAME IN ('citizenid','model','original_model_hash','active','applied_by','applied_at','revoked_at'))
+            UNION ALL SELECT 'k9_certification_tiers', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'
+                 AND COLUMN_NAME IN ('tier_key','label','ordinal','deleted','created_at','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_certification_tier_capabilities', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'
+                 AND COLUMN_NAME IN ('tier_key','capability_key','granted_by','granted_at'))
+            UNION ALL SELECT 'k9_certification_tier_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'
+                 AND COLUMN_NAME IN ('id','action','tier_key','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_equipment_shop_locations', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations'
+                 AND COLUMN_NAME IN ('x','y','z','created_by'))
+            UNION ALL SELECT 'k9_equipment_shop_locations_audit', 4,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit'
+                 AND COLUMN_NAME IN ('location_id','action','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_permission_keys', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys'
+                 AND COLUMN_NAME IN ('permission_key','label','description','deleted','created_at','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_permission_key_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit'
+                 AND COLUMN_NAME IN ('id','action','permission_key','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_equipment_shop_items', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'
+                 AND COLUMN_NAME IN ('item_key','price','sort_order','required_tier_key','required_specialization','deleted','updated_by'))
+            UNION ALL SELECT 'k9_equipment_shop_item_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'
+                 AND COLUMN_NAME IN ('id','action','item_key','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_xp_tiers', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'
+                 AND COLUMN_NAME IN ('ordinal','xp_threshold','label','speed_multiplier','scent_range_multiplier','updated_by','updated_at'))
+            UNION ALL SELECT 'k9_xp_tier_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'
+                 AND COLUMN_NAME IN ('id','action','ordinal','detail','changed_by','changed_at'))
+            UNION ALL SELECT 'k9_individual_overrides', 7,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'
+                 AND COLUMN_NAME IN ('citizenid','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','note','deleted','updated_by'))
+            UNION ALL SELECT 'k9_individual_override_audit', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'
+                 AND COLUMN_NAME IN ('id','action','citizenid','detail','changed_by','changed_at'))
+        ) shp2
+        WHERE shp2.tbl_exists = 1
+          AND (shp2.obj_type <> 'BASE TABLE' OR shp2.cols_found <> shp2.cols_expected)
         UNION ALL
         SELECT 2,
                'WILL BREAK - view reads one of our tables',
@@ -409,6 +777,17 @@ BEGIN
         SELECT 'REFUSED - NOTHING WAS DELETED' AS status,
                CONCAT('Another table in this database has ', fk_blockers,
                       ' foreign key column(s) pointing at our tables (listed above). MySQL will not let those tables be dropped while those constraints exist, and dropping only SOME of our tables would leave you half-uninstalled -- so nothing was touched at all. Remove the listed constraint(s) with the ALTER TABLE command shown above, then run this file again.') AS detail;
+
+    ELSEIF shape_blockers > 0 THEN
+        SELECT 'REFUSED - NOTHING WAS DELETED' AS status,
+               CONCAT(shape_blockers,
+                      ' of our 24 table name(s) are used in this database by something whose columns do not ',
+                      'match qbx_k9unit (listed above as "BLOCKS UNINSTALL - table name is not ours"). ',
+                      'Dropping a table just because its NAME matches ours would risk destroying a DIFFERENT ',
+                      'resource''s data -- so nothing was touched at all, exactly like the foreign-key case ',
+                      'above. Rename or fix the foreign table (or, if it is genuinely an old shape of our own ',
+                      'table, bring it up to sql/install.sql''s current shape by hand), then run this file ',
+                      'again.') AS detail;
 
     ELSE
         DROP TABLE IF EXISTS `k9_search_log`;

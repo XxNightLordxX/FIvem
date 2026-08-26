@@ -176,11 +176,22 @@ FROM (
     -- entirely -- the exact same class of silent gap migrations
     -- 0010/0011/0013's tables had here before being fixed (see the
     -- comments on those rows above).
+    -- BOOT-CHECK SYNC (db-schema convergence pass, 2026-08-26): the column
+    -- subset named below (`item_key`, `price`, `sort_order`,
+    -- `required_tier_key`, `required_specialization`, `deleted`,
+    -- `updated_by`) is deliberately the SAME 7 names server/datastore.lua's
+    -- own EXPECTED_TABLE_COLUMNS uses for this table, not the `label`/
+    -- `currency` pair this row used to check instead -- see the sync note
+    -- on the `k9_individual_overrides` row further down for why the two
+    -- files disagreeing on which columns identify "ours" is a real hazard
+    -- (a different verdict on a genuine name collision), not a cosmetic
+    -- detail. The real table has all 9 columns either way (both subsets
+    -- pass for a genuine install); only the collision case differs.
     UNION ALL SELECT 'k9_equipment_shop_items', 7,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items'
-         AND COLUMN_NAME IN ('item_key','label','price','currency','sort_order','required_tier_key','required_specialization'))
+         AND COLUMN_NAME IN ('item_key','price','sort_order','required_tier_key','required_specialization','deleted','updated_by'))
     UNION ALL SELECT 'k9_equipment_shop_item_audit', 6,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit'),
@@ -191,11 +202,19 @@ FROM (
     -- -- the exact same class of silent gap migrations 0010/0011/0013's
     -- tables had here before being fixed (see the comments on those rows
     -- above).
-    UNION ALL SELECT 'k9_xp_tiers', 9,
+    -- BOOT-CHECK SYNC (db-schema convergence pass, 2026-08-26): the column
+    -- subset below (7 names, no `medkit_cooldown_multiplier`/`badge`) is
+    -- deliberately the SAME list server/datastore.lua's own
+    -- EXPECTED_TABLE_COLUMNS uses for this table -- see the sync note on
+    -- the `k9_individual_overrides` row further down for why keeping these
+    -- two hand-maintained lists identical matters (a real-collision case
+    -- can otherwise get a different verdict from preflight than from the
+    -- boot check). The real table has all 9 columns either way.
+    UNION ALL SELECT 'k9_xp_tiers', 7,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers'
-         AND COLUMN_NAME IN ('ordinal','xp_threshold','label','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','badge','updated_by','updated_at'))
+         AND COLUMN_NAME IN ('ordinal','xp_threshold','label','speed_multiplier','scent_range_multiplier','updated_by','updated_at'))
     UNION ALL SELECT 'k9_xp_tier_audit', 6,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit'),
@@ -207,24 +226,36 @@ FROM (
     -- from this check entirely -- the exact same class of silent gap
     -- migrations 0010/0011/0013/0014/0015's tables had here before being
     -- fixed (see the comments on those rows above).
-    -- FIX (db-schema idempotency-verification pass, 2026-08-26): this row's
-    -- own column list was missing `created_at` -- the real k9_individual_overrides
-    -- table (sql/install.sql) has 9 columns and this row already correctly
-    -- said "9 expected", but the list of names to look for only ever listed
-    -- 8 of them. That meant this check could NEVER match all 9 columns, even
-    -- against a table this same install.sql had just created moments earlier
-    -- -- so it reported a false "!! CONFLICT" on this resource's OWN table on
-    -- every single run after the very first install, which makes
-    -- k9_setup.sh (which refuses to proceed on any "!!" line) permanently
-    -- refuse to ever upgrade this database again. Caught by actually running
-    -- install.sql twice in a row against a real database, not by inspection
-    -- -- the exact "run it twice" check this resource's own migrations are
-    -- held to. `created_at` added below to match the real table.
-    UNION ALL SELECT 'k9_individual_overrides', 9,
+    -- BOOT-CHECK SYNC FIX (db-schema convergence pass, 2026-08-26):
+    -- server/datastore.lua's own runtime schema-collision probe
+    -- (EXPECTED_TABLE_COLUMNS, checked at boot) and this file are supposed
+    -- to be the SAME hand-maintained-list convention checking the SAME
+    -- thing -- datastore.lua's own comment says so in as many words ("THE
+    -- COLUMN LIST BELOW MUST STAY IN SYNC WITH sql/preflight_check.sql's
+    -- CHECK 1"). They had drifted: this row previously expected 9 columns
+    -- including `created_at`/`updated_at`, while datastore.lua's own list
+    -- for this same table names only 7 and does not include either. Both
+    -- lists happened to still say "OK" for a genuine, fully-formed install
+    -- of this resource's OWN table (which has all 9 real columns and
+    -- therefore satisfies either subset) -- but the two lists disagreeing
+    -- on WHICH columns identify "ours" is exactly the scenario that can
+    -- make preflight and the boot check give different verdicts on a real
+    -- NAME COLLISION with some other resource's table (one whose columns
+    -- happen to overlap one list's picks but not the other's) -- the "owner
+    -- gets a clean preflight, then a boot-time refusal, or the reverse"
+    -- failure this pair of checks exists to prevent. Reconciled by making
+    -- this row match server/datastore.lua's own 7-column list exactly
+    -- (`citizenid`, `speed_multiplier`, `scent_range_multiplier`,
+    -- `medkit_cooldown_multiplier`, `note`, `deleted`, `updated_by`) rather
+    -- than the other way around, since this SQL-side file could be edited
+    -- directly in this pass and the Lua-side one could not -- if
+    -- datastore.lua's own list is ever widened to the table's full 9
+    -- columns, widen this row to match in the same change.
+    UNION ALL SELECT 'k9_individual_overrides', 7,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'
-         AND COLUMN_NAME IN ('citizenid','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','note','deleted','created_at','updated_by','updated_at'))
+         AND COLUMN_NAME IN ('citizenid','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','note','deleted','updated_by'))
     UNION ALL SELECT 'k9_individual_override_audit', 6,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
