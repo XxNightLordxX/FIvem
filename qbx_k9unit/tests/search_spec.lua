@@ -563,6 +563,32 @@ t.test('SearchMutex: a second request from the SAME source while the first is ge
     t.isTrue(thirdResult.ok, 'the mutex must be fully released after the first request completes, not left stuck held')
 end)
 
+t.test('IsSearchInProgressForSource: read-only accessor exposed for a future server/combat.lua consumer -- true only while a real search for that source is genuinely mid-flight', function()
+    t.isNotNil(env.IsSearchInProgressForSource, 'must be a real resource-global, not merely documented')
+    fakeNow = 310000
+    local netId = 9101
+    currentItemsByInvId['trunkPLATE' .. tostring(netId)] = {}
+
+    t.isFalse(env.IsSearchInProgressForSource(910), 'false before any search has ever started for this source')
+
+    local originalGetInventoryItems = exportsStub.ox_inventory.GetInventoryItems
+    exportsStub.ox_inventory.GetInventoryItems = function(_self, invOrId)
+        coroutine.yield()
+        local invId2 = type(invOrId) == 'table' and invOrId.id or invOrId
+        return currentItemsByInvId[invId2] or {}
+    end
+
+    local co = coroutine.create(function()
+        searchTargetCallback(910, 'vehicle', netId)
+    end)
+    coroutine.resume(co)
+    t.isTrue(env.IsSearchInProgressForSource(910), 'true while genuinely mid-flight (yielded on the inventory read)')
+
+    coroutine.resume(co) -- let it finish
+    exportsStub.ox_inventory.GetInventoryItems = originalGetInventoryItems
+    t.isFalse(env.IsSearchInProgressForSource(910), 'false again once the search has completed and the mutex released')
+end)
+
 t.test('GetContrabandAlertTier: never leaks a mutable reference that corrupts Config.ContrabandAlertTiers on write', function()
     -- Unlike server/progression.lua's AwardXP (which defensively copies the
     -- outbound event payload via CopyTier), this wrapper returns the SAME

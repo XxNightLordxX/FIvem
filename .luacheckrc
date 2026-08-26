@@ -991,6 +991,17 @@ globals = {
     -- missing function stops being visible, which is the failure class this
     -- project keeps finding.
     "IsK9CurrentlyHolding",
+    -- IsSearchInProgressForSource -- server/search.lua, exposed for a
+    -- FUTURE server/combat.lua consumer, same "expose now, wire up later"
+    -- precedent as FindNearestLeashCandidate/FindNearestPartnerCandidate
+    -- above. Read-only accessor over that file's own file-local
+    -- SearchMutex -- answers "is this source's own searchTarget call
+    -- genuinely in flight right now", the read half of closing the reverse
+    -- direction of the search/combat MUTUAL GUARD (a bite/takedown/drag
+    -- starting while a search's progress bar is already running
+    -- server-side) -- NOT yet wired into server/combat.lua's
+    -- ValidateCombatRequest, which is that file's own call to make.
+    "IsSearchInProgressForSource",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the
