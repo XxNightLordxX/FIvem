@@ -1230,12 +1230,23 @@ t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 does NOT permanently block a
     t.isTrue(second.ok, 'a misconfigured 0 must degrade to a real, eventually-expiring cooldown -- never a permanent lockout')
 end)
 
-t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 prints a loud, named warning at file-load, identifying the exact config key', function()
+t.test('QUALITY FIX: Config.K9Medkit.cooldownMs = 0 prints a loud, named warning identifying the exact config key, resolved FRESH on first actual use -- not cached from file-load', function()
     local f = newMedkitFixture({ k9MedkitCfg = {
         itemName = 'k9_medkit', healthRestore = 50, injuryRestore = 40, range = 2.0,
         cooldownMs = 0,
         emsJobs = { 'ambulance' },
     } })
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC)
+
+    -- Merely LOADING this file no longer prints anything -- see
+    -- ResolveMedkitBaseCooldownMs's own doc comment for why the resolution
+    -- is deliberately deferred to every actual call (never cached once at
+    -- file-load), so a live Config change is always honored. The warning
+    -- only appears once the value is actually consulted.
+    t.equals(table.concat(f.printedLines, '\n'), '', 'nothing is resolved, and therefore nothing warned, purely from loading this file')
+
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     local joined = table.concat(f.printedLines, '\n')
     t.contains(joined, 'Config.K9Medkit.cooldownMs', 'the warning must name the exact misconfigured key, not a generic message')
 end)

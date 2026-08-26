@@ -639,20 +639,158 @@ local function MeetsDepartmentRank(source, gradeField)
     return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept[gradeField]
 end
 
---- Full 4-step resolution (config.lua's own documented order) for EVERY
---- Config.Permissions key, from `source`'s own perspective. Used for
---- viewer.effectivePermissions (MyRecordResult) and the "console access"
---- gate (roster / person summary). `activePermSet` is the CALLER's own
---- active k9_permissions rows (QueryActivePermissionSet(callerCitizenid)).
+-- ======================================================================
+-- PERMISSION-KEY CATALOG AWARENESS (this pass -- cross-layer contract audit
+-- finding: "a custom permission key can be created and granted, and never
+-- shows as held"). server/permissionkeycatalog.lua lets high command create
+-- a permission key entirely at runtime; server/permissions.lua's own
+-- IsValidPermissionKey/HasPermission are already catalog-aware, so granting
+-- one genuinely works. Until this pass, BOTH aggregation sites below this
+-- section (ResolveEffectivePermissions, and tabletRequestPersonSummary's
+-- own inline `permissions` builder further down this file) instead iterated
+-- `pairs(Config.Permissions)` -- the static, four-key, config-only table --
+-- so a purely-runtime key was never even a CANDIDATE in either response,
+-- regardless of whether the person asking (or being asked about) actually
+-- held it: html/tablet.js's own resolveCapabilityRows() already merges the
+-- live catalog in and renders a row for a custom key, but that row's
+-- `held` flag is read directly from whichever of these two fields this bug
+-- broke, so it read "not held" forever, and the operator could never
+-- confirm or revoke a custom permission from the tablet.
+-- ======================================================================
+
+--- The four capability keys with a HARDCODED legacy-rank/high-command
+--- resolution branch in ResolveEffectivePermissions below (mirrors
+--- server/permissions.lua's own LegacyOrHighCommandStillQualifies -- a
+--- literal string comparison, never a catalog lookup). ALWAYS treated as
+--- candidates, regardless of what the permission-key catalog currently
+--- reports for that literal string, deliberately: certifications.lua's
+--- IsEligibleCertifier / admin.lua's IsAuthorizedAdmin / HasK9Access's other
+--- three routes (certification, autoAccessGrade, high command) are each
+--- COMPLETELY INDEPENDENT of the permission-key catalog -- tombstoning
+--- 'k9.certify' from the tablet's Permission Keys screen only turns off the
+--- ABILITY TO GRANT/HOLD that one capability BY THAT ROUTE (see
+--- server/permissionkeycatalog.lua's own header "NO PROTECTED KEY" for the
+--- exact, disclosed reasoning this mirrors); it does not, and must not,
+--- revoke a rank-qualified officer's real, independent certify/audit
+--- authority. If this file instead derived its candidate set PURELY from
+--- the live catalog, tombstoning one of these four would silently drop it
+--- from a rank-qualified caller's own effectivePermissions -- which
+--- html/tablet.js reads directly to decide whether to show that caller
+--- their OWN "Certify"/"Give XP" buttons at all (CAPABILITY_ORDER /
+--- canCertify/canGiveXp) -- hiding a real ability the tablet's own
+--- documented contract says it has, the exact opposite-direction "tablet
+--- reports something that is not true" bug this pass exists to close.
+--- Only a CUSTOM key (anything outside this table) has no such independent
+--- route, so only a custom key's candidacy is allowed to depend on the
+--- catalog/held-state below.
+local LEGACY_PERMISSION_KEYS = { ['k9.access'] = true, ['k9.certify'] = true, ['k9.audit'] = true, ['k9.givexp'] = true }
+
+--- Every permission-key catalog key server/tablet.lua's own two
+--- admin-capability aggregations (ResolveEffectivePermissions,
+--- tabletRequestPersonSummary's inline `permissions` builder) must consider
+--- as a candidate, given one specific citizenid's own `activePermSet`
+--- (QueryActivePermissionSet's own live, DB-authoritative row set -- ALWAYS
+--- the real ground truth for "is this actually held" in both callers,
+--- independent of this function). THREE sources, unioned:
+---   1. LEGACY_PERMISSION_KEYS above -- always, unconditionally (see that
+---      table's own doc comment for why these four cannot be allowed to
+---      depend on catalog/tombstone state at all).
+---   2. server/permissionkeycatalog.lua's own live ListPermissionCatalogKeys
+---      (soft dependency, `type(...) == 'function'`-guarded, matching
+---      server/permissions.lua's own IsValidPermissionKey/PermissionLabelFor
+---      established shape exactly -- read that file's doc comments before
+---      changing this one). Falls back to Config.Permissions directly ONLY
+---      when the catalog function is absent OR its own call throws --
+---      NEVER to an empty set: a catalog failure must degrade to "the four
+---      shipped keys", the original pre-catalog behavior, not to "no
+---      capabilities at all", which would read as a false, alarming "this
+---      person has no permissions" on an authorized screen.
+---   3. Every key `activePermSet` itself names, EXCLUDING the
+---      'feature.<Name>'/'block.<Name>' per-person-feature namespace
+---      (server/permissionkeycatalog.lua's own catalog never represents
+---      that namespace at all -- see that file's header "NAMESPACE
+---      PROTECTION" -- so neither must this admin-capability aggregation,
+---      or a feature grant/block would render disguised as an admin
+---      capability). THIS is what surfaces a TOMBSTONED custom key someone
+---      still actively holds: ListPermissionCatalogKeys() excludes a
+---      tombstoned key entirely by design (that file's own header
+---      "TOMBSTONE, NOT REFERENCE-COUNTED"), so without this union a
+---      still-granted, retired custom key would vanish from every response
+---      the instant it is tombstoned -- a permission nobody could ever
+---      revoke again from the tablet. html/tablet.js's own
+---      resolveCapabilityRows() already has a third bucket specifically
+---      built to render exactly this case (retired, revoke-only, no Grant
+---      button) -- but only if the key actually reaches its `heldKeys`
+---      argument in the first place, which is this union's own job to
+---      guarantee.
+--- NEVER widens what a CALLER can see on its own: this only decides which
+--- KEY STRINGS are considered, never which citizenid's activePermSet is
+--- read -- both call sites below still re-verify their own authorization
+--- gate (IsHighCommand / CallerHasConsoleAccess) BEFORE ever calling this,
+--- exactly as before this pass.
+--- @param activePermSet table<string, boolean>
+--- @return table<string, boolean>
+local function AdminCapabilityCandidateKeys(activePermSet)
+    local candidates = {}
+    for key in pairs(LEGACY_PERMISSION_KEYS) do
+        candidates[key] = true
+    end
+
+    local haveCatalog = false
+    if type(ListPermissionCatalogKeys) == 'function' then
+        local ok, rowsOrErr = pcall(ListPermissionCatalogKeys)
+        if ok and type(rowsOrErr) == 'table' then
+            haveCatalog = true
+            for _, entry in ipairs(rowsOrErr) do
+                if type(entry) == 'table' and type(entry.key) == 'string' then
+                    candidates[entry.key] = true
+                end
+            end
+        else
+            print(('[qbx_k9unit] tablet.lua AdminCapabilityCandidateKeys: ListPermissionCatalogKeys() failed (%s) -- falling back to Config.Permissions for the non-legacy portion of this candidate set.'):format(tostring(rowsOrErr)))
+        end
+    end
+
+    -- FALLBACK, catalog absent or thrown ONLY -- never applied on top of a
+    -- successful catalog read (that would resurrect a deliberately
+    -- tombstoned DEFAULT key as a still-grantable candidate purely because
+    -- it is a Config.Permissions literal, defeating the whole point of
+    -- tombstoning it -- see server/permissionkeycatalog.lua's header
+    -- "TOMBSTONE, NOT REFERENCE-COUNTED"). A tombstoned key someone still
+    -- holds is already covered by source 3 below regardless.
+    if not haveCatalog and type(Config.Permissions) == 'table' then
+        for key in pairs(Config.Permissions) do
+            candidates[key] = true
+        end
+    end
+
+    if type(activePermSet) == 'table' then
+        for key, active in pairs(activePermSet) do
+            if active == true and type(key) == 'string'
+                and not key:match('^feature%.') and not key:match('^block%.') then
+                candidates[key] = true
+            end
+        end
+    end
+
+    return candidates
+end
+
+--- Full 4-step resolution (config.lua's own documented order) for every
+--- CATALOG-AWARE candidate key (AdminCapabilityCandidateKeys above -- the
+--- four shipped keys ALWAYS, plus any live/held custom key), from `source`'s
+--- own perspective. Used for viewer.effectivePermissions (MyRecordResult)
+--- and the "console access" gate (roster / person summary). `activePermSet`
+--- is the CALLER's own active k9_permissions rows
+--- (QueryActivePermissionSet(callerCitizenid)).
 --- @param source number
 --- @param activePermSet table<string, boolean>
 --- @param isHighCommandCaller boolean
---- @return table -- sorted array of qualifying Config.Permissions keys
+--- @return table -- sorted array of qualifying permission-catalog keys
 local function ResolveEffectivePermissions(source, activePermSet, isHighCommandCaller)
     local out = {}
-    if type(Config.Permissions) ~= 'table' then return out end
 
-    for key in pairs(Config.Permissions) do
+    for key in pairs(AdminCapabilityCandidateKeys(activePermSet)) do
         local qualifies = false
         if isHighCommandCaller or activePermSet[key] == true then
             qualifies = true
@@ -666,7 +804,12 @@ local function ResolveEffectivePermissions(source, activePermSet, isHighCommandC
             qualifies = MeetsDepartmentRank(source, 'auditGrade')
         end
         -- 'k9.givexp' has no legacy tier below high command/grant (both
-        -- already checked above) -- no further branch needed.
+        -- already checked above), and neither does any CUSTOM key (no
+        -- branch above matches it) -- no further branch needed for either:
+        -- both fall through to the plain `isHighCommandCaller or
+        -- activePermSet[key]` check already performed above, matching
+        -- server/permissions.lua's own LegacyOrHighCommandStillQualifies
+        -- fallback reasoning for the identical namespace.
         if qualifies then out[#out + 1] = key end
     end
 
@@ -1187,13 +1330,23 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
     local activePermSet = QueryActivePermissionSet(targetCitizenId)
     local xp, tierLabel = ResolveXpAndTierLabel(targetCitizenId)
 
+    -- CATALOG-AWARE (this pass -- see "PERMISSION-KEY CATALOG AWARENESS"
+    -- section above ResolveEffectivePermissions for the full writeup this
+    -- mirrors): candidate keys now come from AdminCapabilityCandidateKeys
+    -- (the four shipped keys, always, UNION the live catalog's current
+    -- keys, UNION anything `activePermSet` itself names outside the
+    -- feature./block. namespace -- the last of which is what keeps a
+    -- TOMBSTONED-but-still-held custom key from vanishing here the instant
+    -- high command retires it, so it remains revocable). This builder
+    -- itself is unchanged in one respect that matters: it still only ever
+    -- reports a key TARGET holds an ACTUAL, active k9_permissions row for
+    -- (`activePermSet[key] == true`) -- never a rank-qualification guess --
+    -- exactly like before this pass, for every key, shipped or custom.
     local permissions = {}
-    if type(Config.Permissions) == 'table' then
-        for key in pairs(Config.Permissions) do
-            if activePermSet[key] == true then permissions[#permissions + 1] = key end
-        end
-        table.sort(permissions)
+    for key in pairs(AdminCapabilityCandidateKeys(activePermSet)) do
+        if activePermSet[key] == true then permissions[#permissions + 1] = key end
     end
+    table.sort(permissions)
 
     return {
         ok = true,

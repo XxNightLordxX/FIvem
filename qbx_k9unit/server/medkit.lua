@@ -151,10 +151,11 @@
       own `MedkitCooldown.IsOnCooldown` call below is checked against,
       keyed on the TARGET's own citizenid (the K9 being healed), never the
       USING player's — see that call site's own comment for why. Falls back
-      to `MedkitBaseCooldownMs` (Config.K9Medkit.cooldownMs, VALIDATED once
-      at file-load via ResolveConfiguredThresholdMs — see that local's own
-      doc comment for the footgun this closes) when server/progression.lua
-      hasn't defined the accessor, so this file works identically whether or
+      to `ResolveMedkitBaseCooldownMs()` (Config.K9Medkit.cooldownMs,
+      VALIDATED FRESH on every call via ResolveConfiguredThresholdMs — see
+      that function's own doc comment for the footgun this closes and why
+      it must never be cached) when server/progression.lua hasn't defined
+      the accessor, so this file works identically whether or
       not XPProgression is enabled.
     - Exposes NO resource-global functions of its own.
 
@@ -376,8 +377,13 @@ for _, jobName in ipairs(Config.K9Medkit.emsJobs or {}) do
     EmsJobSet[jobName] = true
 end
 
--- QUALITY FIX (this pass): Config.K9Medkit.cooldownMs used to be read raw,
--- directly, at every call site below (RunUseK9MedkitMutation's
+-- QUALITY FIX (this pass), REVISED after a cross-file follow-up finding
+-- (server/runtimecontrol.lua's owner, reported against this file's own
+-- first version of this fix — see that file's own "K9Medkit.cooldownMs is
+-- DELIBERATELY EXCLUDED" comment for their independent trace of the exact
+-- same regression, and tests/runtimecontrol_spec.lua's "K9Medkit.cooldownMs
+-- must never be exposed" case): Config.K9Medkit.cooldownMs used to be read
+-- raw, directly, at every call site below (RunUseK9MedkitMutation's
 -- `effectiveCooldownMs`, and this sweep's own `staleAfterMs`) — the ONE
 -- cooldown-backing config value in this file with no validation at all,
 -- unlike every sibling file's identical-shaped config read
@@ -392,14 +398,39 @@ end
 -- silently rejected forever with reason 'on_cooldown' (the FIRST use per K9
 -- always succeeds regardless, since `IsOnCooldown` returns `false` for a key
 -- that has never been `Touch`ed at all — see that function's own doc
--- comment) — a real, live footgun this file shared with every other
--- cooldown consumer before each of them adopted this same fix. Resolved
--- ONCE here, at file-load time, and reused by every call site below instead
--- of re-reading Config.K9Medkit.cooldownMs raw. Fallback matches config.lua's
--- own shipped default (60000ms).
+-- comment).
+--
+-- FIRST ATTEMPT, WRONG (this pass, self-corrected): resolving this ONCE, at
+-- file-load, into a frozen local and reusing that local everywhere would
+-- have closed the above footgun but silently reopened a DIFFERENT one —
+-- both this file's own header (RunUseK9MedkitMutation's own comment) and
+-- server/runtimecontrol.lua's live-tunable registry already document that
+-- `Config.K9Medkit.cooldownMs` is read GENUINELY FRESH on every call by
+-- design, matching Config.DoorInteraction.scratchCooldownMs's identical
+-- "live, no restart required" contract (server/main.lua). A frozen local
+-- would silently stop reflecting a live edit (whether via a future
+-- runtime-tunable registration, or simply an operator editing config.lua
+-- and the resource picking it up some other live-reload path) — worse, the
+-- SWEEP's own staleAfterMs would then diverge from whatever the per-request
+-- gate is ACTUALLY enforcing, which server/runtimecontrol.lua's own trace
+-- shows can open a genuine bypass (a target's cooldown entry gets pruned
+-- using a STALE, shorter window than the currently-configured one, letting
+-- it be used again before the real, current cooldown has actually elapsed).
+--
+-- ACTUAL FIX: resolve the value FRESH, every time, via this tiny function —
+-- never cached — so both the per-request gate and the sweep's staleAfterMs
+-- always agree with each other AND with whatever Config.K9Medkit.cooldownMs
+-- currently holds, while still degrading a non-positive/NaN/missing value to
+-- a safe, working fallback instead of cooldowns.lua's own fail-closed
+-- "permanently on" behavior. `ResolveConfiguredThresholdMs` is a cheap,
+-- non-yielding, plain numeric check — safe to call on every request and
+-- every sweep tick, not just once. Fallback matches config.lua's own
+-- shipped default (60000ms).
 local MEDKIT_COOLDOWN_FALLBACK_MS = 60000
-local MedkitBaseCooldownMs = ResolveConfiguredThresholdMs(
-    Config.K9Medkit.cooldownMs, MEDKIT_COOLDOWN_FALLBACK_MS, 'Config.K9Medkit.cooldownMs')
+local function ResolveMedkitBaseCooldownMs()
+    return ResolveConfiguredThresholdMs(
+        Config.K9Medkit.cooldownMs, MEDKIT_COOLDOWN_FALLBACK_MS, 'Config.K9Medkit.cooldownMs')
+end
 
 -- Per-target (K9 citizenid) cooldown backing Config.K9Medkit.cooldownMs —
 -- keyed on the TARGET'S resolved, stable citizenid (never the raw,
@@ -414,7 +445,12 @@ local MedkitCooldown = NewCooldown()
 
 local MEDKIT_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 MedkitCooldown.StartSweep(MEDKIT_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
-    local staleAfterMs = MedkitBaseCooldownMs * 2
+    -- Resolved FRESH on every sweep tick, exactly like RunUseK9MedkitMutation's
+    -- own effectiveCooldownMs below -- see ResolveMedkitBaseCooldownMs's own
+    -- doc comment for why a frozen, file-load-time value here would let this
+    -- prune window silently drift out of sync with whatever cooldown is
+    -- actually being enforced right now.
+    local staleAfterMs = ResolveMedkitBaseCooldownMs() * 2
     return (now - loggedAt) > staleAfterMs
 end)
 
@@ -573,8 +609,10 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- function's own header, "THE PER-TARGET COOLDOWN"). Soft dependency,
     -- this resource's established `type(...) == 'function'` convention
     -- (mirrors this file's own RestoreInjury call site below) -- falls back
-    -- to the resolved `MedkitBaseCooldownMs` (see that local's own comment)
-    -- when server/progression.lua hasn't defined the accessor.
+    -- to the FRESHLY-resolved base cooldown (ResolveMedkitBaseCooldownMs,
+    -- see that function's own doc comment for why this must be re-resolved
+    -- on every call, never cached) when server/progression.lua hasn't
+    -- defined the accessor.
     --
     -- CORRECTED CLAIM (this pass): this comment used to assert
     -- "GetXPTierMedkitCooldownMs's own contract never returns a
@@ -586,13 +624,14 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- unvalidated `Config.K9Medkit.cooldownMs` in here would therefore have
     -- let a misconfigured 0/negative value flow straight through this
     -- accessor and into IsOnCooldown's own PERMANENTLY-on-cooldown fail
-    -- state regardless -- see `MedkitBaseCooldownMs`'s own doc comment
-    -- above for the real fix (validated ONCE, at file-load, via
+    -- state regardless -- see `ResolveMedkitBaseCooldownMs`'s own doc
+    -- comment above for the real fix (validated fresh, on every call, via
     -- ResolveConfiguredThresholdMs) that actually makes the "never
     -- non-positive" property hold here.
-    local effectiveCooldownMs = MedkitBaseCooldownMs
+    local baseCooldownMs = ResolveMedkitBaseCooldownMs()
+    local effectiveCooldownMs = baseCooldownMs
     if type(GetXPTierMedkitCooldownMs) == 'function' then
-        effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, MedkitBaseCooldownMs)
+        effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, baseCooldownMs)
     end
 
     if MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs, requestedAt) then

@@ -900,4 +900,155 @@ t.test('Memory branch: a non-numeric/negative/NaN limit never throws against a >
     t.equals(#rowsInf, 2, 'capped at the backstop ceiling, far above the 2 real matching rows here -- not an unbounded read of the whole log')
 end)
 
+-- ----------------------------------------------------------------------
+-- PART 4 -- SCHEMA COLLISION SAFETY NET + K9Store.WaitForSchemaCheckToSettle
+-- (interaction review + fix, db-schema boot-order pass).
+--
+-- This part proves the SHARED PRIMITIVE in isolation -- every one of this
+-- resource's own onResourceStart-driven boot reads (permissionkeycatalog.lua,
+-- xptiers.lua, equipmentshop.lua) is expected to call
+-- K9Store.WaitForSchemaCheckToSettle() before its own first read; the
+-- REAL, end-to-end proof that two of those three files actually do so
+-- correctly (including the exact "a foreign table satisfies a catalog's
+-- narrower SELECT but fails the full probe" bug) lives in
+-- tests/permissionkeycatalog_spec.lua and tests/xptiereditor_spec.lua's own
+-- "BOOT-ORDER RACE" sections instead (this file does not load those two
+-- files at all) -- this part only needs to prove the mechanism THEY both
+-- depend on.
+-- ----------------------------------------------------------------------
+
+t.test('SETTLEMENT: Config.Database.enabled = false settles instantly, with zero Wait() calls -- there was never a probe to run', function()
+    local waitCalls = 0
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = false } },
+        Wait = function() waitCalls = waitCalls + 1 end,
+        print = function(...) end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+
+    t.isFalse(env.K9Store.IsDatabaseEnabled())
+    t.isTrue(env.K9Store.WaitForSchemaCheckToSettle(), 'nothing to wait for when the database is off by config')
+    t.equals(waitCalls, 0, 'must not poll at all -- the probe never even attempts to run when the database is off by config')
+end)
+
+t.test('SETTLEMENT: no AddEventHandler at all (a sandbox with no FXServer natives) never registers the probe -- WaitForSchemaCheckToSettle degrades to "not settled" rather than erroring or spinning', function()
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        print = function(...) end,
+        -- Deliberately no AddEventHandler, no Wait -- models
+        -- tests/*_spec.lua's own plain sandbox loads that never fire
+        -- onResourceStart at all.
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+
+    local ok, settled = pcall(env.K9Store.WaitForSchemaCheckToSettle)
+    t.isTrue(ok, 'must never throw just because no scheduler/dispatcher exists in this sandbox')
+    t.isFalse(settled, 'honest "cannot confirm" answer, never a false positive "yes, settled"')
+end)
+
+t.test('SETTLEMENT: a clean database (every table absent -- fresh install, nothing to collide with) settles true after the probe runs, DatabaseEnabled stays true', function()
+    local eventHandlers = {}
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function() return {} end } }, -- no rows at all -- no table this resource owns exists yet
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = function(...) end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
+
+    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'no table exists yet at all -- vacuously no collision')
+    t.isTrue(env.K9Store.WaitForSchemaCheckToSettle())
+end)
+
+t.test('SETTLEMENT: a real collision (a foreign table sharing one of our names) settles true, forces DatabaseEnabled false, and names the offending table', function()
+    local eventHandlers = {}
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function()
+            -- A foreign `k9_certifications` with only 2 of the 7 columns
+            -- this resource's own EXPECTED_TABLE_COLUMNS checks for it.
+            return {
+                { tbl = 'k9_certifications', col = 'citizenid' },
+                { tbl = 'k9_certifications', col = 'active' },
+            }
+        end } },
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = function(...) end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
+
+    t.isFalse(env.K9Store.IsDatabaseEnabled(), 'a real collision must force memory-only mode for the rest of this process')
+    t.isTrue(env.K9Store.WaitForSchemaCheckToSettle())
+end)
+
+t.test('SETTLEMENT: the probe query throwing synchronously still settles (the probe\'s own pre-existing "degrade to no collision found" policy is unchanged by this pass) -- DatabaseEnabled stays true', function()
+    local eventHandlers = {}
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function() error('simulated: restricted DB user, no SELECT on INFORMATION_SCHEMA') end } },
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = function(...) end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
+
+    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'a probe that cannot run at all degrades to "no collision found" -- unchanged, pre-existing policy')
+    t.isTrue(env.K9Store.WaitForSchemaCheckToSettle(), 'settled is still true -- the probe reached its own end via its internal pcall, it just could not determine anything')
+end)
+
+t.test('SETTLEMENT: a probe that never resumes (a hung query, not an error) makes WaitForSchemaCheckToSettle give up after a BOUNDED number of polls, never spin forever', function()
+    local eventHandlers = {}
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function() return coroutine.yield() end } }, -- yields, never resumed by this test
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        Wait = function(_ms) coroutine.yield() end,
+        print = function(...) end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+
+    -- Fire the probe's own onResourceStart handler in its own coroutine --
+    -- it suspends immediately (inside MySQL.query.await) and this test
+    -- deliberately never resumes it, modelling a database that is
+    -- reachable but never answers.
+    local probeCo = coroutine.create(eventHandlers['onResourceStart'][1])
+    local ok = coroutine.resume(probeCo, 'qbx_k9unit')
+    t.isTrue(ok)
+    t.equals(coroutine.status(probeCo), 'suspended')
+
+    -- A SEPARATE coroutine, standing in for any real catalog's own boot
+    -- read, calling the exact same shared primitive every real caller uses.
+    local settled
+    local waiterCo = coroutine.create(function() settled = env.K9Store.WaitForSchemaCheckToSettle() end)
+
+    local resumes = 0
+    while coroutine.status(waiterCo) ~= 'dead' and resumes < 200 do
+        local resumeOk, err = coroutine.resume(waiterCo)
+        if not resumeOk then error('waiter coroutine errored: ' .. tostring(err)) end
+        resumes = resumes + 1
+    end
+
+    t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
+    t.equals(coroutine.status(waiterCo), 'dead', 'the waiting coroutine must finish (give up), not remain permanently suspended')
+    t.isFalse(settled, 'unknown must be reported honestly as unknown -- callers are responsible for treating this as "assume collision" for their own boot-time read')
+end)
+
 os.exit(t.summary())
