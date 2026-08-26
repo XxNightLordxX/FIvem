@@ -971,25 +971,16 @@ globals = {
     -- Config.Features check) -- every caller applies its own gating before
     -- or inside the callback it passes in.
     "ForEachNearbyPlayer",
-    -- IsK9CurrentlyHolding -- PENDING, same precedent as
-    -- ForceRevertK9Appearance/IsBiteHoldTargetEngaged above, listed here
-    -- deliberately rather than left to redden lint for everyone:
-    -- server/search.lua's new SEARCHER-BUSY GUARD (server-side half of
-    -- client/search.lua's own IsBusyWithSomethingElse(), commit a32a554 --
-    -- see that file's own IsSearcherBusyElsewhere doc comment) already calls
-    -- it behind a `type(fn) == 'function'` guard so a K9 mid-bite/
-    -- mid-takedown/mid-drag cannot simultaneously start a contraband search
-    -- against a second target, but server/combat.lua has not defined it yet
-    -- (a proposed READ-ONLY accessor over that file's own file-local
-    -- K9ActiveEffect table, same "global helper, private per-file state"
-    -- shape as CountActiveHoldsByEffectType directly above -- expected
-    -- shape: `function IsK9CurrentlyHolding(holderSrc) return
-    -- K9ActiveEffect[holderSrc] ~= nil end`). The call site guards with
-    -- `type(fn) == 'function'` and is a clean no-op today (this one check
-    -- simply never fires), not an error. REMOVE THIS ENTRY if the function
-    -- is ever abandoned -- an allowlisted name that nothing defines is how a
-    -- missing function stops being visible, which is the failure class this
-    -- project keeps finding.
+    -- server/combat.lua -- READ-ONLY: is this K9 currently the active holder
+    -- of a bite, a takedown or a drag. NO LONGER PENDING (2026-08-26) -- it
+    -- was allowlisted ahead of being written, and is now genuinely defined
+    -- in that file, right after CountActiveHoldsByEffectType.
+    --
+    -- Consumed by server/search.lua, which needed to refuse a search from a
+    -- dog that already has hold of somebody. The client half of that guard
+    -- already existed and was worth nothing against a modified game, because
+    -- it ran on the player's own machine; the server had no way to ask the
+    -- question at all until this.
     "IsK9CurrentlyHolding",
     -- IsSearchInProgressForSource -- server/search.lua, exposed for a
     -- FUTURE server/combat.lua consumer, same "expose now, wire up later"

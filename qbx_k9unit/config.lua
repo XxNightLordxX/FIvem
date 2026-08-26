@@ -1985,7 +1985,19 @@ Config.HandlerXP = {
 Config.ContrabandAlertTiers = {
     { minWeight = 0,   alert = 'clean' },           -- nothing found / below any threshold
     { minWeight = 1,   alert = 'whine' },           -- small personal-use amount
-    { minWeight = 250, alert = 'aggressive_bark' }, -- large stash
+    -- RAISED 250 -> 3000. At 250 this tier was below a SINGLE handgun or a
+    -- single kilo brick (each roughly 1000 in ox_inventory's own weight
+    -- units, which are grams -- its own shipped examples put a bulletproof
+    -- vest at 3000 and a bottle of water at 500). So one gun found on one
+    -- person, and a car boot with five kilos in it, produced the identical
+    -- loudest alert. The top tier carried no information about how big the
+    -- find actually was, which is the entire point of having tiers.
+    -- 3000 is a genuinely large haul -- roughly three kilo bricks, or
+    -- several weapons together -- so a single item no longer maxes it out.
+    -- These item weights come from YOUR server's own inventory, read live,
+    -- never copied here; if your contraband items weigh very differently,
+    -- this is the number to move.
+    { minWeight = 3000, alert = 'aggressive_bark' }, -- large stash
 }
 
 -- ======================================================================

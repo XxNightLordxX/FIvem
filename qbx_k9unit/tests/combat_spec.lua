@@ -410,6 +410,14 @@ local function newCombatFixture(opts)
     if opts.withTierCapabilityPermits then
         envOverrides.TierCapabilityPermits = defaultTierCapabilityPermits
     end
+    -- server/search.lua's own accessor, for the MUTUAL GUARD tests below.
+    -- OMITTED from envOverrides entirely (not merely nil) unless a test
+    -- supplies it, so the production file's own `type(fn) == 'function'`
+    -- guard genuinely sees it as absent -- exactly like a server running
+    -- with Config.Features.SearchZones off, which never loads that file.
+    if opts.searchInProgressFn then
+        envOverrides.IsSearchInProgressForSource = opts.searchInProgressFn
+    end
 
     local env = Sandbox.newEnv(envOverrides)
 
@@ -985,6 +993,80 @@ end)
 -- ========================================================================
 -- ValidateCombatRequest -- the shared prefix, exercised via requestBiteHold.
 -- ========================================================================
+
+-- ========================================================================
+-- MUTUAL GUARD vs. CONTRABAND SEARCH, SERVER SIDE.
+--
+-- Both halves already existed on the CLIENT (client/combat.lua refuses a
+-- bite/drag while searching, client/search.lua refuses a search while
+-- holding). Both run on the player's own machine, so a modified game runs
+-- neither. Server-side the two were asymmetric: server/search.lua refuses a
+-- search from a dog already holding somebody, and nothing refused the
+-- reverse.
+--
+-- NOTE ON EVENT NAMES: these tests use NPC targets, so they assert on
+-- `biteHoldStarted`/`dragStarted` (sent to the HOLDER's own client). An NPC
+-- has no client of its own, so `applyBiteHold` -- the target-side relay the
+-- player-target tests further down assert on -- is correctly never sent
+-- here, and asserting on it would pass for the wrong reason.
+-- ========================================================================
+
+t.test('IsK9CurrentlyHolding: the accessor server/search.lua needs actually exists, and answers for a holder, a non-holder, and a src nobody has ever seen', function()
+    local f = newCombatFixture()
+    t.equals(type(f.env.IsK9CurrentlyHolding), 'function',
+        'server/search.lua calls this behind a soft guard -- if it silently stopped existing, that guard would skip forever and nothing would say so')
+
+    t.isFalse(f.env.IsK9CurrentlyHolding(K9_SRC), 'a K9 holding nothing')
+    t.isFalse(f.env.IsK9CurrentlyHolding(999999), 'a src never seen at all -- false, never nil, never an error')
+
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 200 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.isTrue(f.env.IsK9CurrentlyHolding(K9_SRC), 'now holding')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.isFalse(f.env.IsK9CurrentlyHolding(K9_SRC),
+        'and false again once released -- a latched true would refuse this K9 every search for the rest of its session')
+end)
+
+t.test('MUTUAL GUARD: a bite is refused while this K9 has a search genuinely in flight on the SERVER', function()
+    local f = newCombatFixture({ searchInProgressFn = function(src) return src == K9_SRC end })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 200 })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldStarted'), 0,
+        'the client half of this guard runs on the player\'s own machine, so it is worth nothing against a modified game')
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'error',
+        'and the K9 is told, rather than the request vanishing with no explanation')
+end)
+
+t.test('MUTUAL GUARD: a drag is refused the same way -- the guard lives in the shared validator, not bolted onto one mechanic', function()
+    local f = newCombatFixture({ propDragging = true, searchInProgressFn = function() return true end })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 100 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 0)
+end)
+
+t.test('MUTUAL GUARD: a DIFFERENT K9\'s search never blocks this one -- the check is per source, not global', function()
+    local f = newCombatFixture({ searchInProgressFn = function(src) return src == K9_SRC + 40 end })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 200 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldStarted'), 1,
+        'one dog searching must not stop every other dog on the server from working')
+end)
+
+t.test('MUTUAL GUARD: server/search.lua not loaded at all (SearchZones off) is a SKIPPED check, never a refusal', function()
+    local f = newCombatFixture() -- IsSearchInProgressForSource deliberately absent
+    t.isNil(f.env.IsSearchInProgressForSource)
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 200 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldStarted'), 1,
+        'an absent optional global is a skipped check here -- never an outage for every K9 on a server that simply has searching switched off')
+end)
 
 t.test('requestBiteHold: feature disabled is a silent-to-client no-op (only a NotifyPlayer, no hold created)', function()
     local f = newCombatFixture({ biteAndHold = false })

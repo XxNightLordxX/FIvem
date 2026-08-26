@@ -1202,6 +1202,12 @@ local COMBAT_REJECT_MESSAGES = {
     -- than minted as a new combat.invalid_target duplicate.
     invalid_target     = locale('certifications.invalid_target'),
     no_access          = locale('combat.no_access'),
+    -- Reuses client/search.lua's own half of the same mutual guard, rather
+    -- than minting a second sentence for the identical situation seen from
+    -- the other side. That file refuses a SEARCH while a bite/drag is
+    -- running; this refuses a bite/drag while a SEARCH is running, and the
+    -- dog is equally busy either way.
+    busy_searching     = locale('combat.blocked_while_searching'),
     -- Byte-identical to client/defense.lua's own already_engaged rejection
     -- (confirmed by reading both texts before reusing) — reused rather than
     -- minted as a new combat.already_engaged duplicate.
@@ -1421,6 +1427,30 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
 
     if not HasK9Access(src) then
         return false, nil, nil, nil, nil, 'no_access'
+    end
+
+    -- MUTUAL GUARD vs. a contraband search, SERVER SIDE.
+    --
+    -- client/combat.lua and client/search.lua already refuse each other in
+    -- both directions, but both of those run on the player's own machine and
+    -- a modified game simply does not run them. Server-side the two halves
+    -- were asymmetric: server/search.lua refuses a search from a dog that is
+    -- already holding somebody (via IsK9CurrentlyHolding, further up this
+    -- file), and nothing refused the reverse -- a bite, takedown or drag
+    -- could still be started while a search was genuinely in flight on the
+    -- server, tearing the dog out of its own search.
+    --
+    -- Placed after HasK9Access (an uncertified caller is not owed a "you are
+    -- busy" message about something they could not do anyway) and before
+    -- every other state read, matching this validator's own established
+    -- cheapest-checks-first ordering.
+    --
+    -- Guarded call: server/search.lua defines this, and a server running
+    -- with Config.Features.SearchZones off never loads it. An absent
+    -- optional global is a skipped check here, never an error -- the same
+    -- rule every other cross-file call in this resource follows.
+    if type(IsSearchInProgressForSource) == 'function' and IsSearchInProgressForSource(src) then
+        return false, nil, nil, nil, nil, 'busy_searching'
     end
 
     -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl, steps
@@ -2024,6 +2054,35 @@ function CountActiveHoldsByEffectType(effectType)
         end
     end
     return count
+end
+
+--- Is `holderSrc` currently the active holder of ANY combat effect -- a bite
+--- hold, a non-lethal takedown, or a drag?
+---
+--- Read-only over this file's own K9ActiveEffect table. Never mutates
+--- ActiveHolds or K9ActiveEffect, same posture as
+--- CountActiveHoldsByEffectType immediately above.
+---
+--- WHY IT EXISTS. server/search.lua needs to refuse a search from a dog that
+--- is already holding somebody, and until now the only thing that refused it
+--- ran on the player's own machine (client/search.lua's
+--- IsBusyWithSomethingElse), which a modified game simply does not run. The
+--- server had no way to ask the question at all.
+---
+--- ALL THREE EFFECTS, deliberately, not just bite and drag. K9ActiveEffect
+--- already enforces "one hold at a time per K9" across all three by design,
+--- so answering for a subset would need extra iteration over ActiveHolds for
+--- no benefit, and would arbitrarily exempt takedown -- a dog mid-takedown
+--- is exactly as occupied as a dog mid-bite.
+---
+--- Three inputs, two answers: a holder is true; a non-holder is false; an
+--- unknown or never-seen src is false. There is no third state to get wrong,
+--- because K9ActiveEffect[src] is simply nil in both of the latter cases.
+---
+--- @param holderSrc number
+--- @return boolean
+function IsK9CurrentlyHolding(holderSrc)
+    return K9ActiveEffect[holderSrc] ~= nil
 end
 
 --- LIFECYCLE QA FIX (this pass) — closes the gap a lifecycle QA pass found:

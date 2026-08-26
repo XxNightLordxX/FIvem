@@ -227,9 +227,15 @@
 -- constant (rather than inlined) so both the warning text and the
 -- substitution below stay obviously in sync.
 local FALLBACK_CONTRABAND_ALERT_TIERS = {
-    { minWeight = 0,   alert = 'clean' },
-    { minWeight = 1,   alert = 'whine' },
-    { minWeight = 250, alert = 'aggressive_bark' },
+    { minWeight = 0,    alert = 'clean' },
+    { minWeight = 1,    alert = 'whine' },
+    -- KEEP IN STEP WITH config.lua's own Config.ContrabandAlertTiers. This
+    -- table is documented as byte-identical to what config.lua ships, and it
+    -- is only ever reached when an operator's own table fails validation --
+    -- so a drift here would mean the safety net quietly restores a threshold
+    -- nobody uses any more. Raised 250 -> 3000 alongside it; see that key's
+    -- own comment in config.lua for the arithmetic.
+    { minWeight = 3000, alert = 'aggressive_bark' },
 }
 
 --- Validates the shape Finding 1 (below) documents: a mandatory
