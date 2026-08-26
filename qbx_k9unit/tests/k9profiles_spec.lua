@@ -56,23 +56,31 @@ end
 --- @param world table
 local function makeQueryAwait(world)
     return function(sql, params)
-        if sql:find('SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted FROM k9_individual_overrides', 1, true) then
+        if sql:find('SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, sprint_decay_per_tick, note, deleted FROM k9_individual_overrides', 1, true) then
             local out = {}
             for citizenid, row in pairs(world.overrides) do
                 out[#out + 1] = {
                     citizenid = citizenid, speed_multiplier = row.speed_multiplier,
                     scent_range_multiplier = row.scent_range_multiplier,
                     medkit_cooldown_multiplier = row.medkit_cooldown_multiplier,
+                    sprint_decay_per_tick = row.sprint_decay_per_tick,
                     note = row.note, deleted = row.deleted,
                 }
             end
             return out
         elseif sql:find('INSERT INTO k9_individual_overrides (citizenid, speed_multiplier', 1, true) then
-            local citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, note, updatedBy =
-                params[1], params[2], params[3], params[4], params[5], params[6]
+            -- Column order matches migration 0021: sprint_decay_per_tick sits
+            -- between medkit_cooldown_multiplier and note, so params[5] is
+            -- stamina and note/updatedBy shift right by one. Getting this
+            -- order wrong does not error -- it silently writes stamina into
+            -- the note column and the whole override reads back wrong.
+            local citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, sprintDecayPerTick, note, updatedBy =
+                params[1], params[2], params[3], params[4], params[5], params[6], params[7]
             world.overrides[citizenid] = {
                 speed_multiplier = speedMultiplier, scent_range_multiplier = scentRangeMultiplier,
-                medkit_cooldown_multiplier = medkitCooldownMultiplier, note = note, deleted = 0, updated_by = updatedBy,
+                medkit_cooldown_multiplier = medkitCooldownMultiplier,
+                sprint_decay_per_tick = sprintDecayPerTick,
+                note = note, deleted = 0, updated_by = updatedBy,
             }
             return {}
         elseif sql:find('INSERT INTO k9_individual_overrides (citizenid, deleted, updated_by)', 1, true) then
@@ -664,7 +672,7 @@ local function bootWithRacingMySQL(opts)
     local overrideQueryCalls = 0
     local queryStub = {
         await = function(sql, _params)
-            if sql:find('SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted FROM k9_individual_overrides', 1, true) then
+            if sql:find('SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, sprint_decay_per_tick, note, deleted FROM k9_individual_overrides', 1, true) then
                 overrideQueryCalls = overrideQueryCalls + 1
                 return opts.foreignOverrideRows or {}
             end
@@ -980,20 +988,74 @@ t.test('STAMINA AUTHORIZATION: a non-high-command caller is refused a stamina ch
     t.equals(f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'SELF_CIT').effective.overridden.sprintDecayPerTick, false, 'a denied caller must never be able to write a stamina override, even for themselves')
 end)
 
-t.test('STAMINA: a high-command caller CAN set stamina on somebody ELSE, and the response carries staminaPersistenceWarning', function()
+t.test('STAMINA: a high-command caller CAN set stamina on somebody ELSE, and on a server WITH a database it now persists, so no warning is carried', function()
     local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
     local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'SOMEONE_ELSE', sprintDecayPerTick = 5.0 })
     t.isTrue(result.ok)
     t.equals(result.effective.sprintDecayPerTick, 5.0)
-    t.isNotNil(result.staminaPersistenceWarning, 'the response must carry staminaPersistenceWarning whenever a stamina override is live')
-    t.isTrue(result.staminaPersistenceWarning:find('restart', 1, true) ~= nil, 'the warning text must actually say this resets on restart, not just be present')
+    -- CHANGED BY MIGRATION 0021. This used to assert the warning was
+    -- ALWAYS present, because stamina was held in memory only and really did
+    -- vanish on restart. It now has a real column alongside speed and scent
+    -- range, so on any server with a database there is nothing to warn
+    -- about, and carrying the warning anyway would be telling the operator
+    -- something untrue. The memory-only case is pinned separately below.
+    t.isNil(result.staminaPersistenceWarning, 'with a database, stamina persists like every other override -- no warning belongs here')
 end)
 
-t.test('STAMINA: k9ProfileGet ALSO carries staminaPersistenceWarning for a citizenid with a live stamina override, on a later read', function()
+t.test('STAMINA: on a MEMORY-ONLY server the warning IS still carried, because nothing on this table survives a restart there', function()
+    local f = boot({ isHighCommand = function() return true end })
+    -- Force the memory-only branch the same way this file's own boot-race
+    -- section does: the whole table is unavailable, so K9Store falls back.
+    f.env.K9Store.IsDatabaseEnabled = function() return false end
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT2', sprintDecayPerTick = 5.0 })
+    t.isTrue(result.ok)
+    t.isNotNil(result.staminaPersistenceWarning, 'without a database this genuinely does reset, and the operator must be told')
+    t.isTrue(result.staminaPersistenceWarning:find('restart', 1, true) ~= nil, 'the warning must actually say it resets on restart, not merely exist')
+end)
+
+t.test('STAMINA PERSISTENCE (migration 0021): a stamina override set before a restart is still there after one, including the 0 that means PERMANENT', function()
+    -- THE WHOLE POINT OF MIGRATION 0021. Before it, stamina lived in a
+    -- file-local table and every one of these came back nil after a
+    -- restart, silently, and the dog quietly got tired again.
+    --
+    -- `world` is the fake database and deliberately OUTLIVES the boot, so
+    -- booting a second time against the same world is exactly what a
+    -- resource restart does: same rows on disk, everything in memory gone.
+    local first = boot({ isHighCommand = function() return true end })
+
+    -- 0 is the sentinel for stamina that NEVER runs out, and it is the
+    -- value most likely to be chosen deliberately -- so it is the one that
+    -- must survive. It is also the one a truthiness test would silently
+    -- drop, which is why the production cache rebuild uses tonumber().
+    local zeroRes = first.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 0 })
+    t.isTrue(zeroRes.ok, 'setting stamina to 0 (PERMANENT) must be accepted; got reason=' .. tostring(zeroRes.reason))
+    -- Past the per-caller edit cooldown, the same way this file's own RATE
+    -- LIMIT test establishes -- two edits in the same millisecond are
+    -- correctly refused and that is not what this test is about.
+    first.fakeNow.value = first.fakeNow.value + 1100
+    local r2 = first.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT2', sprintDecayPerTick = 7.5 })
+    t.isTrue(r2.ok, 'CIT2 stamina upsert must succeed; reason=' .. tostring(r2.reason))
+    t.equals(first.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1').effective.sprintDecayPerTick, 0)
+
+    -- The restart.
+    local second = boot({ isHighCommand = function() return true end, world = first.world })
+
+    local permanent = second.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1')
+    t.equals(permanent.effective.sprintDecayPerTick, 0, 'PERMANENT stamina must survive a restart -- 0 is a real value here, not "unset"')
+    t.isTrue(permanent.effective.overridden.sprintDecayPerTick, 'and must still read as overridden, not as an inherited default that happens to match')
+
+    local ordinary = second.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT2')
+    t.equals(ordinary.effective.sprintDecayPerTick, 7.5, 'an ordinary stamina override must survive too')
+
+    -- And a dog that never had one must not acquire one from the rebuild.
+    t.isFalse(second.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT3').effective.overridden.sprintDecayPerTick)
+end)
+
+t.test('STAMINA: a stamina override SURVIVES a cache rebuild -- the thing migration 0021 exists to make true', function()
     local f = boot({ isHighCommand = function() return true end })
     t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 3.0 }).ok)
     local getResult = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1')
-    t.isNotNil(getResult.staminaPersistenceWarning)
+    t.isNil(getResult.staminaPersistenceWarning, 'with a database there is nothing to warn about')
     t.equals(getResult.override.sprintDecayPerTick, 3.0)
 end)
 
@@ -1025,7 +1087,13 @@ t.test('STAMINA: reset on a citizenid with ONLY a stamina override (no speed/sce
     local resetResult = f.callbacks['qbx_k9unit:server:k9ProfileReset'](HC_SOURCE, 'STAMINA_ONLY')
     t.isTrue(resetResult.ok)
     t.isNil(resetResult.reason, 'a real reset, not the no_override_existed no-op path')
-    t.isFalse(f.world.overrides['STAMINA_ONLY'] ~= nil, 'a stamina-only override must never have written a k9_individual_overrides row at all')
+    -- CHANGED BY MIGRATION 0021, deliberately. This used to assert the
+    -- OPPOSITE -- that a stamina-only override never wrote a row -- which
+    -- was correct while the schema had no column for it, and was exactly
+    -- why such an override vanished on restart. Now it writes a real row,
+    -- and the reset tombstones it like any other.
+    t.isNotNil(f.world.overrides['STAMINA_ONLY'], 'a stamina-only override now writes a real row, so it can survive a restart')
+    t.equals(f.world.overrides['STAMINA_ONLY'].deleted, 1, 'and the reset must tombstone that row, not leave it live')
 end)
 
 t.test('STAMINA: a partial edit that touches ONLY a persisted field (e.g. speedMultiplier) leaves an existing stamina override untouched', function()

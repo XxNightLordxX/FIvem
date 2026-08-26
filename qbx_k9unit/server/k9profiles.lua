@@ -448,22 +448,39 @@ end
 local OverrideByCitizenId = {}
 
 -- ======================================================================
--- STAMINA OVERRIDE -- SESSION-ONLY, DISCLOSED, NOT HIDDEN. `sprintDecayPerTick`
--- (mirrors Config.Wellbeing.Fatigue.sprintDecayPerTick, server/wellbeing.lua's
--- TickWellbeing Fatigue branch) has NO column in `k9_individual_overrides`
--- (migration 0016) -- adding one is sql/* work, owned by a different agent
--- this pass, not this file. Rather than silently drop the owner's "make
--- stamina permanent" request or invent a second, parallel persistence
--- mechanism, this is held in its OWN file-local, in-memory table --
--- DELIBERATELY SEPARATE from OverrideByCitizenId above, so
--- RefreshOverrideCache's own wholesale DB-driven rebuild (which knows
--- nothing about stamina) can never clobber it. EVERY write path that
--- touches this (k9ProfileUpsert/k9ProfileReset below) surfaces
--- `staminaPersistenceWarning` in its own response so a high-command caller
--- is told PLAINLY, every time, that this one field resets to
--- Config.Wellbeing.Fatigue.sprintDecayPerTick on the next resource
--- restart -- never hidden behind a response that looks identical to a
--- fully-persisted speed/scent/medkit edit.
+-- STAMINA OVERRIDE -- NOW PERSISTED, AS OF MIGRATION 0021.
+-- `sprintDecayPerTick` mirrors Config.Wellbeing.Fatigue.sprintDecayPerTick
+-- (server/wellbeing.lua's TickWellbeing Fatigue branch). It has a real
+-- `sprint_decay_per_tick` column on `k9_individual_overrides` and is
+-- written, read and tombstoned exactly like speed, scent range and the
+-- medkit cooldown beside it.
+--
+-- HISTORY, KEPT BECAUSE IT EXPLAINS THE SHAPE: this used to be SESSION-ONLY.
+-- Migration 0016 created the table with no stamina column, so an override
+-- lived only in this in-memory table and silently reverted on every
+-- resource restart -- disclosed in the response rather than hidden, but not
+-- fixed. Migration 0021 added the column. THREE THINGS HAD TO CHANGE
+-- TOGETHER for that to actually work, and a future edit that undoes any one
+-- of them reintroduces the silent revert: RefreshOverrideCache must rebuild
+-- this table from the column; k9ProfileUpsert's `hasPersistedFieldChange`
+-- must include stamina, or a stamina-ONLY edit skips the database
+-- entirely; and the rebuild must use tonumber() rather than a truthiness
+-- test, because 0 is a real value here.
+--
+-- ZERO MEANS PERMANENT -- stamina that never runs out. It is the value an
+-- operator is most likely to have chosen deliberately, and the one every
+-- `x and y or z` idiom and every `if value then` guard silently discards.
+-- Treat it as data, never as "unset".
+--
+-- STILL SEPARATE from OverrideByCitizenId above, deliberately: that table
+-- holds the three multipliers as one record per citizenid, this one holds a
+-- bare number, and merging them would mean rewriting every reader for no
+-- gain. Both are rebuilt from the same row in the same pass.
+--
+-- `staminaPersistenceWarning` is now conditional rather than unconditional
+-- -- see ResolveStaminaPersistenceWarning below. It fires only on a
+-- memory-only server, where nothing on this table persists and the warning
+-- is still true.
 -- StaminaOverrideByCitizenId[citizenid] = number (sprintDecayPerTick, >= 0)
 -- ======================================================================
 local StaminaOverrideByCitizenId = {}
@@ -478,6 +495,7 @@ local StaminaOverrideByCitizenId = {}
 --- RefreshCertificationTierCatalog.
 local function RefreshOverrideCache()
     local fresh = {}
+    local freshStamina = {}
     local rows = K9Store.IndividualOverride_GetAllRows()
     for _, row in ipairs(rows) do
         if not (row.deleted == 1 or row.deleted == true) then
@@ -487,9 +505,20 @@ local function RefreshOverrideCache()
                 medkitCooldownMultiplier = tonumber(row.medkit_cooldown_multiplier),
                 note = type(row.note) == 'string' and row.note or nil,
             }
+            -- Stamina is rebuilt from the SAME row as the other three, now
+            -- that migration 0021 gives it a real column. tonumber() is
+            -- deliberate rather than a truthiness test: 0 is the sentinel
+            -- for PERMANENT stamina and must survive this rebuild, where a
+            -- plain `row.sprint_decay_per_tick or nil` would keep it but a
+            -- `if row.sprint_decay_per_tick then` guard would silently drop
+            -- it in some drivers. A NULL column returns nil and correctly
+            -- means "no override for this dog".
+            local stamina = tonumber(row.sprint_decay_per_tick)
+            if stamina then freshStamina[row.citizenid] = stamina end
         end
     end
     OverrideByCitizenId = fresh
+    StaminaOverrideByCitizenId = freshStamina
 end
 
 -- ======================================================================
@@ -518,6 +547,26 @@ end
 -- GetK9IndividualOverride/ListK9IndividualOverrides immediately below stay
 -- `local` -- still no consumer outside this file's own callbacks.
 -- ======================================================================
+--- Is a per-dog stamina override actually going to survive a restart?
+---
+--- It does now, on any server with a database: migration 0021 gave
+--- `k9_individual_overrides` a real `sprint_decay_per_tick` column, so
+--- stamina persists exactly like speed, scent range and the medkit
+--- cooldown alongside it. It does NOT survive on a server running
+--- memory-only (Config.Database.enabled = false), where nothing on this
+--- table persists -- and on those servers the caller is still told, in the
+--- same field and the same shape as before, because a setting that
+--- silently reverts on restart is exactly the kind of thing that gets
+--- reported as a bug months later.
+--- @return string|nil -- the warning to surface, or nil when it persists
+local function ResolveStaminaPersistenceWarning()
+    if type(K9Store) == 'table' and type(K9Store.IsDatabaseEnabled) == 'function' then
+        local ok, enabled = pcall(K9Store.IsDatabaseEnabled)
+        if ok and enabled then return nil end
+    end
+    return "This server is running without a database, so this K9's stamina setting lasts only until the resource restarts. Every other per-dog setting behaves the same way here. Nothing is wrong -- turn a database on in config.lua if you want these to stick."
+end
+
 
 --- @param citizenid any
 --- @return table effective -- { speedMultiplier: number, scentRangeMultiplier: number, medkitCooldownMultiplier: number?, overridden: { speedMultiplier: boolean, scentRangeMultiplier: boolean, medkitCooldownMultiplier: boolean } }
@@ -748,7 +797,7 @@ lib.callback.register('qbx_k9unit:server:k9ProfileGet', function(source, citizen
         -- already restarted once) must not be misled by a `get` that looks
         -- identical to a fully-persisted override.
         staminaPersistenceWarning = (override and override.sprintDecayPerTick ~= nil)
-            and 'This K9\'s stamina drain-per-tick is a SESSION-ONLY override -- it is not saved to the database and will reset to the server default the next time this resource restarts.'
+            and ResolveStaminaPersistenceWarning()
             or nil,
     }
 end)
@@ -855,15 +904,18 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     local finalNote = hasNote and payload.note or (existingBefore and existingBefore.note or nil)
     local finalStamina = hasStamina and sprintDecayPerTick or existingStaminaBefore
 
-    -- PERSISTED FIELDS ONLY -- a payload that touches NOTHING but
-    -- sprintDecayPerTick (and never touched speed/scent/medkit/note before
-    -- either) has nothing to write to `k9_individual_overrides` at all;
-    -- skipping the DB round-trip avoids leaving a phantom all-NULL row
-    -- behind for a field this schema does not even have a column for yet.
-    local hasPersistedFieldChange = hasSpeed or hasScent or hasMedkit or hasNote
+    -- EVERY FIELD IS PERSISTED NOW. This used to exclude sprintDecayPerTick
+    -- and skip the database entirely for a stamina-only edit, because the
+    -- schema genuinely had no column for it and the write would have left a
+    -- phantom all-NULL row behind. Migration 0021 added
+    -- `sprint_decay_per_tick`, so stamina is written like the other three
+    -- and a stamina-only edit is a real write, not a memory-only one --
+    -- which is the entire point of that migration. Leaving stamina out here
+    -- was what made a stamina-only override vanish on the next restart.
+    local hasPersistedFieldChange = hasSpeed or hasScent or hasMedkit or hasNote or hasStamina
     local wrote = true
     if hasPersistedFieldChange then
-        wrote = K9Store.IndividualOverride_Upsert(citizenid, finalSpeed, finalScent, finalMedkit, finalNote, actingCitizenid or 'unknown')
+        wrote = K9Store.IndividualOverride_Upsert(citizenid, finalSpeed, finalScent, finalMedkit, finalStamina, finalNote, actingCitizenid or 'unknown')
     end
     if not wrote then
         K9ProfileEditMutex.Release(citizenid)
@@ -873,7 +925,10 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     if hasPersistedFieldChange then
         RefreshOverrideCache()
     end
-    -- SESSION-ONLY. `t[k] = nil` is a plain delete, so a citizenid that
+    -- The in-memory copy is now a CACHE of the column, not the only record
+    -- of it -- kept in step with the write above so a caller's own response
+    -- reflects the new value immediately rather than waiting for the next
+    -- cache rebuild. `t[k] = nil` is a plain delete, so a citizenid that
     -- never had (and still does not have) a stamina override simply never
     -- gains a key here -- no clutter, no phantom entry.
     StaminaOverrideByCitizenId[citizenid] = finalStamina
@@ -925,7 +980,7 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     -- whether THIS specific call is what set it.
     local staminaPersistenceWarning
     if finalStamina ~= nil then
-        staminaPersistenceWarning = 'This K9\'s stamina drain-per-tick is a SESSION-ONLY override -- it is not saved to the database and will reset to the server default the next time this resource restarts.'
+        staminaPersistenceWarning = ResolveStaminaPersistenceWarning()
     end
 
     return {

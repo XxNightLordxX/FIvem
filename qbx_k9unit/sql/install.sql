@@ -1443,6 +1443,13 @@ CREATE TABLE IF NOT EXISTS `k9_individual_overrides` (
   `speed_multiplier`           DOUBLE       DEFAULT NULL,
   `scent_range_multiplier`     DOUBLE       DEFAULT NULL,
   `medkit_cooldown_multiplier` DOUBLE       DEFAULT NULL,
+  -- How fast this one dog's stamina drains. BIGGER = runs out sooner,
+  -- SMALLER = lasts longer, exactly 0 = never runs out at all. NULL means
+  -- no override: this dog uses the server-wide setting. Range is enforced
+  -- in server/k9profiles.lua, not by a CHECK here -- MySQL 5.7 parses
+  -- CHECK and silently ignores it, so one written here would read as a
+  -- guarantee it does not actually give.
+  `sprint_decay_per_tick`      DOUBLE       DEFAULT NULL,
   `note`                       VARCHAR(120) DEFAULT NULL,
   `deleted`                    TINYINT(1)   NOT NULL DEFAULT 0,
   `created_at`                 DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,

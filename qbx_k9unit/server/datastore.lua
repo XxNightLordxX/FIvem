@@ -2867,7 +2867,7 @@ local IndividualOverrideAuditRows = {}
 function K9Store.IndividualOverride_GetAllRows()
     if DatabaseEnabled('k9_individual_overrides') then
         local ok, rowsOrErr = pcall(MySQL.query.await,
-            'SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted FROM k9_individual_overrides', {})
+            'SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, sprint_decay_per_tick, note, deleted FROM k9_individual_overrides', {})
         if not ok then
             print(('[qbx_k9unit] datastore: IndividualOverride_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
             return {}
@@ -2880,6 +2880,7 @@ function K9Store.IndividualOverride_GetAllRows()
             citizenid = citizenid, speed_multiplier = row.speed_multiplier,
             scent_range_multiplier = row.scent_range_multiplier,
             medkit_cooldown_multiplier = row.medkit_cooldown_multiplier,
+            sprint_decay_per_tick = row.sprint_decay_per_tick,
             note = row.note, deleted = row.deleted,
         }
     end
@@ -2897,20 +2898,21 @@ end
 --- always UN-tombstones the row (`deleted = 0`) and sets every field,
 --- whether this is a brand-new citizenid, a restore, or a plain re-edit of
 --- an already-live override. Every one of `speedMultiplier`/
---- `scentRangeMultiplier`/`medkitCooldownMultiplier`/`note` may
+--- `scentRangeMultiplier`/`medkitCooldownMultiplier`/`sprintDecayPerTick`/`note` may
 --- legitimately be `nil` (an intentionally-unset, per-field-optional
 --- override -- see migration 0016's own header) -- passed straight through
 --- to oxmysql as SQL NULL, the same nullable-middle-parameter shape this
 --- file's own XPTier_Upsert/ShopLocation_Insert already rely on.
 --- @return boolean ok
-function K9Store.IndividualOverride_Upsert(citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, note, updatedBy)
+function K9Store.IndividualOverride_Upsert(citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, sprintDecayPerTick, note, updatedBy)
     if DatabaseEnabled('k9_individual_overrides') then
         local ok, err = pcall(MySQL.query.await,
-            'INSERT INTO k9_individual_overrides (citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted, updated_by) ' ..
-            'VALUES (?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE speed_multiplier = VALUES(speed_multiplier), ' ..
+            'INSERT INTO k9_individual_overrides (citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, sprint_decay_per_tick, note, deleted, updated_by) ' ..
+            'VALUES (?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE speed_multiplier = VALUES(speed_multiplier), ' ..
             'scent_range_multiplier = VALUES(scent_range_multiplier), medkit_cooldown_multiplier = VALUES(medkit_cooldown_multiplier), ' ..
+            'sprint_decay_per_tick = VALUES(sprint_decay_per_tick), ' ..
             'note = VALUES(note), deleted = 0, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-            { citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, note, updatedBy })
+            { citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, sprintDecayPerTick, note, updatedBy })
         if not ok then
             print(('[qbx_k9unit] datastore: IndividualOverride_Upsert write failed for %s: %s'):format(tostring(citizenid), tostring(err)))
             return false
@@ -2920,7 +2922,8 @@ function K9Store.IndividualOverride_Upsert(citizenid, speedMultiplier, scentRang
     local existing = IndividualOverrideRows[citizenid]
     IndividualOverrideRows[citizenid] = {
         speed_multiplier = speedMultiplier, scent_range_multiplier = scentRangeMultiplier,
-        medkit_cooldown_multiplier = medkitCooldownMultiplier, note = note, deleted = 0,
+        medkit_cooldown_multiplier = medkitCooldownMultiplier,
+        sprint_decay_per_tick = sprintDecayPerTick, note = note, deleted = 0,
         updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()),
         created_at_unix = existing and existing.created_at_unix or NowUnix(),
     }
