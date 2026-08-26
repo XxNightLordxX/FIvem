@@ -319,3 +319,29 @@ without. The original research notes (real K9 procedure, other "play as
 an animal" games, and the specific natives involved) cited a number of
 external sources; they're preserved in this project's git history if
 anyone wants to revisit them, rather than reproduced here.
+
+## Watchdog passes
+
+A scheduled check runs over this resource periodically, looking for
+regressions in things already fixed and for claims in the documentation
+that have quietly stopped being true. Each pass is one line here, so the
+next one knows what was already covered. There is deliberately no
+separate log file — this is the one place project history lives.
+
+- **2026-08-26** — Clean, with two findings, neither a regression. All
+  185 Lua files pass a syntax check; all three gates green. Re-checked
+  five previously-fixed items and all five are still in place: the basic
+  jump setting is still read in client/movement.lua, leash pairings still
+  record which side is the dog, revoking an offline handler's
+  certification still refreshes the cache, the vehicle cleanup on
+  resource stop still exists, and the radial menu still registers its
+  menus and its opener item separately. Dependencies re-checked because
+  an earlier audit had flagged their maintenance status as an open
+  question: ox_lib is confirmed actively maintained (last change
+  2026-08-17, not archived); oxmysql and ox_target show no archive
+  notice and normal issue activity. The two findings: the bark audio
+  files are real audio now, so html/sounds/CREDITS.md claiming none were
+  ever written is stale; and the uninstall script drops this resource's
+  tables by name without checking they are actually ours first, which is
+  the one place in this resource where a mistake destroys data instead
+  of refusing. Both assigned.
