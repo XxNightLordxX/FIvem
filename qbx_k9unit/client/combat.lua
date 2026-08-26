@@ -876,6 +876,34 @@ function IsDragEngaged()
     return ActiveDragAsHolder ~= nil
 end
 
+--- Am I the one BEING dragged right now? A DIFFERENT question from
+--- IsDragEngaged() above, which answers "am I the K9 doing the dragging."
+---
+--- WHY THIS EXISTS. server/combat.lua's releaseDrag handler has always
+--- accepted the TARGET as well as the holder -- deliberately, and unlike
+--- bite and takedown, whose targets have no self-release at all. But
+--- nothing on the target's side could ever reach it. Every caller of
+--- ReleaseDrag() (client/keybinds.lua's k9dragtoggle, client/radial.lua's
+--- k9_drag item, client/tablet.lua's own drag control) asked
+--- IsDragEngaged() -- holder-only -- and, getting `false` from it for a
+--- target, fell through to the REQUEST branch, where CanShowK9UI() then
+--- denied them because a dragged suspect is not a K9. So the person being
+--- dragged pressed their Drag / Release key and got told they are not
+--- allowed to use K9 controls, while the server sat there ready to free
+--- them. The self-release the design promised was unreachable in practice.
+---
+--- ActiveDragSpeedLimit is the right state to read for this: it is set
+--- exactly for the duration the server considers this client a dragged
+--- player target (applyDragSpeedLimit on grant, cleared by
+--- endDragSpeedLimit, by the maintenance thread's own local deadline, and
+--- by onResourceStop), and it is set on NOBODY else -- an NPC target has no
+--- client of its own, and the holder gets dragStarted instead.
+---
+--- @return boolean
+function IsDragTargetEngaged()
+    return ActiveDragSpeedLimit ~= nil
+end
+
 -- ======================================================================
 -- PER-MECHANIC GATING — coordinator/QA follow-up on the top-level gate
 -- above (this session): a single file-level OR correctly restores

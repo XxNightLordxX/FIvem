@@ -1769,8 +1769,15 @@ local FEATURE_TRIGGERS = {
         if type(RequestTakedown) == 'function' then RequestTakedown() end
         return true
     end,
-    -- radial.lua 'k9_drag': Release UNGATED, Attempt gated.
+    -- radial.lua 'k9_drag': Release UNGATED, Attempt gated. TWO release
+    -- branches -- being dragged is asked first, being the dragger second --
+    -- see client/combat.lua's IsDragTargetEngaged() for why the target's own
+    -- release was previously unreachable from every one of its call sites.
     PropDragging = function()
+        if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
+            if type(ReleaseDrag) == 'function' then ReleaseDrag() end
+            return true
+        end
         if type(IsDragEngaged) == 'function' and IsDragEngaged() then
             if type(ReleaseDrag) == 'function' then ReleaseDrag() end
             return true

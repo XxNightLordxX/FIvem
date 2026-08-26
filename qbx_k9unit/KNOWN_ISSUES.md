@@ -172,8 +172,10 @@ designed but have an edge worth knowing about before you rely on them.
   server-side position history, live server-measured proximity, target
   liveness, a vehicle-seated exclusion (checked at grant time AND
   re-checked continuously for the life of the hold), the target's wanted
-  status, and every cooldown (per-K9, per-target, and a separate flat
-  XP-mint cooldown) — is decided and re-verified by the server alone;
+  status, and every cooldown (per-K9 and per-target on all three, plus a
+  separate flat XP-mint cooldown on the two that actually pay XP — dragging
+  awards none, so it has none) — is decided and re-verified by the server
+  alone;
   none of it is ever taken on a client's word. The one piece that genuinely
   is client-relayed is the *mechanical* effect on a PLAYER target's own
   screen (`DisableControlAction` during a bite hold, `SetPedToRagdollWithFall`/

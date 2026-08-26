@@ -88,9 +88,11 @@ local function newKeybindsFixture(opts)
     local function RequestBiteHold() requestBiteHoldCalls = requestBiteHoldCalls + 1 end
 
     local dragEngaged = false
+    local dragTargetEngaged = false
     local releaseDragCalls = 0
     local requestDragCalls = 0
     local function IsDragEngaged() return dragEngaged end
+    local function IsDragTargetEngaged() return dragTargetEngaged end
     local function ReleaseDrag() releaseDragCalls = releaseDragCalls + 1 end
     local function RequestDrag() requestDragCalls = requestDragCalls + 1 end
 
@@ -172,6 +174,11 @@ local function newKeybindsFixture(opts)
         overrides.IsDragEngaged = IsDragEngaged
         overrides.ReleaseDrag = ReleaseDrag
         overrides.RequestDrag = RequestDrag
+        -- Deliberately supplied under the SAME opts flag as its three
+        -- siblings, so the "tolerates the whole drag surface being
+        -- undefined" test below covers this one too rather than leaving a
+        -- brand-new soft dependency untested.
+        overrides.IsDragTargetEngaged = IsDragTargetEngaged
     end
     if opts.provideTakedown ~= false then
         overrides.RequestTakedown = RequestTakedown
@@ -195,6 +202,7 @@ local function newKeybindsFixture(opts)
         setCanShowK9UI = function(v) canShowK9UI = v end,
         setBiteHoldEngaged = function(v) biteHoldEngaged = v end,
         setDragEngaged = function(v) dragEngaged = v end,
+        setDragTargetEngaged = function(v) dragTargetEngaged = v end,
         releaseBiteHoldCallCount = function() return releaseBiteHoldCalls end,
         requestBiteHoldCallCount = function() return requestBiteHoldCalls end,
         releaseDragCallCount = function() return releaseDragCalls end,
@@ -384,10 +392,52 @@ t.test('k9dragtoggle: engaged -> calls ReleaseDrag(), never RequestDrag()', func
     t.equals(f.requestDragCallCount(), 0)
 end)
 
-t.test('k9dragtoggle: tolerates IsDragEngaged/ReleaseDrag/RequestDrag being entirely undefined (soft dependency) -- must not error', function()
+t.test('k9dragtoggle: tolerates IsDragEngaged/IsDragTargetEngaged/ReleaseDrag/RequestDrag being entirely undefined (soft dependency) -- must not error', function()
     local f = newKeybindsFixture({ provideDragGlobals = false })
     t.isNil(f.env.IsDragEngaged)
+    t.isNil(f.env.IsDragTargetEngaged)
     f.runCommand('k9dragtoggle') -- must not error
+end)
+
+-- ------------------------------------------------------------------
+-- UNREACHABLE-SELF-RELEASE FIX. server/combat.lua's releaseDrag handler
+-- has always accepted a release from the TARGET as well as the holder --
+-- deliberately, and unlike bite and takedown, whose targets have no
+-- self-release at all. Nothing on the target's side could ever reach it:
+-- this command asked IsDragEngaged() (holder-only), got false for a
+-- target, and fell through to RequestDrag(), which denies anyone who is
+-- not a K9. So the person being dragged pressed their Drag / Release key
+-- and were told they may not use K9 controls.
+-- ------------------------------------------------------------------
+
+t.test('k9dragtoggle: UNREACHABLE-SELF-RELEASE FIX -- the person BEING dragged releases themselves, and never falls through to the request path', function()
+    local f = newKeybindsFixture()
+    f.setDragEngaged(false)       -- not the holder...
+    f.setDragTargetEngaged(true)  -- ...the one being dragged
+    f.setCanShowK9UI(false)       -- a dragged suspect is not a K9, and never was
+
+    f.runCommand('k9dragtoggle')
+    t.equals(f.releaseDragCallCount(), 1, 'the key they were told frees them must actually free them')
+    t.equals(f.requestDragCallCount(), 0, 'never the request path -- that is what used to deny them')
+    t.equals(f.denyCallCount(), 0, 'and never the "you are not allowed to use K9 controls" denial')
+end)
+
+t.test('k9dragtoggle: UNREACHABLE-SELF-RELEASE FIX -- neither dragging nor being dragged still falls through to RequestDrag() as before', function()
+    local f = newKeybindsFixture()
+    f.setDragEngaged(false)
+    f.setDragTargetEngaged(false)
+    f.runCommand('k9dragtoggle')
+    t.equals(f.requestDragCallCount(), 1, 'the ordinary "start a drag" path must be untouched by the fix')
+    t.equals(f.releaseDragCallCount(), 0)
+end)
+
+t.test('k9dragtoggle: UNREACHABLE-SELF-RELEASE FIX -- a holder is still a holder: one release, not two', function()
+    local f = newKeybindsFixture()
+    f.setDragEngaged(true)
+    f.setDragTargetEngaged(false)
+    f.runCommand('k9dragtoggle')
+    t.equals(f.releaseDragCallCount(), 1, 'two release branches must never mean two server events for one keypress')
+    t.equals(f.requestDragCallCount(), 0)
 end)
 
 t.test('k9takedown: calls RequestTakedown() exactly once, unconditionally (no toggle -- see client/combat.lua own header on why this mechanic has no release counterpart)', function()

@@ -1406,6 +1406,7 @@
         "pickup_not_authorized": "You are not authorized to pick up a K9 kennel.",
         "pickup_target_label": "Pick Up Kennel",
         "pickup_too_far": "You need to be closer to the kennel to pick it up.",
+        "pickup_occupied_too_far": "There is a K9 resting inside that kennel. You have to walk over to it before you can carry it — you cannot pick up an occupied kennel from a distance.",
         "placement_already_in_progress": "A kennel placement is already in progress.",
         "put_down_success": "You set the kennel back down.",
         "placement_failed": "Kennel placement failed.",

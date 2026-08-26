@@ -241,6 +241,27 @@ end
 -- ======================================================================
 if Config.Features.PropDragging then
     RegisterCommand('k9dragtoggle', function()
+        -- TWO release branches, not one. IsDragEngaged() asks "am I the dog
+        -- doing the dragging"; IsDragTargetEngaged() asks "am I the one
+        -- being dragged". The server has always accepted a release from
+        -- either party, but only the first question was ever asked here --
+        -- so the person being dragged pressed this key, fell through to the
+        -- request branch below, and got RequestDrag()'s "you are not allowed
+        -- to use K9 controls" denial instead of being let go. See
+        -- client/combat.lua's IsDragTargetEngaged() for the full writeup.
+        --
+        -- Checked BEFORE the holder branch on purpose: the two states are
+        -- mutually exclusive in practice (the holder is never also the
+        -- target), so the order is not load-bearing for correctness, but
+        -- putting the person with the least agency first matches this
+        -- resource's "getting out is never gated" posture everywhere else.
+        if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
+            if type(ReleaseDrag) == 'function' then
+                ReleaseDrag()
+            end
+            return
+        end
+
         if type(IsDragEngaged) == 'function' and IsDragEngaged() then
             if type(ReleaseDrag) == 'function' then
                 ReleaseDrag()

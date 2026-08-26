@@ -139,7 +139,10 @@ local function baselineTakedownConfig()
 end
 
 local function baselinePropDraggingConfig(downedOverride)
-    return { range = 2.5, maxDragDistance = 30.0, maxDragDurationMs = 20000, dragSpeedMultiplier = 0.4, IsPlayerDownedOverride = downedOverride }
+    -- cooldownMs/targetCooldownMs mirror config.lua's own shipped defaults
+    -- exactly -- see the MISSING-COOLDOWN FIX tests near the end of the
+    -- PropDragging section below.
+    return { range = 2.5, maxDragDistance = 30.0, maxDragDurationMs = 20000, dragSpeedMultiplier = 0.4, cooldownMs = 8000, targetCooldownMs = 20000, IsPlayerDownedOverride = downedOverride }
 end
 
 local function baselineNonComplianceDetectionConfig()
@@ -679,9 +682,15 @@ t.test('server/combat.lua registers exactly its 8 documented server net events',
     end
 end)
 
-t.test('server/combat.lua registers exactly 6 playerDropped handlers (its own, plus BiteHoldCooldown/TakedownCooldown/TakedownMutex, and the BiteHoldXpMintCooldown/TakedownXpMintCooldown anti-farm trackers added when the seventh XP farm was closed)', function()
+t.test('server/combat.lua registers exactly 7 playerDropped handlers (its own, plus BiteHoldCooldown/TakedownCooldown/TakedownMutex, the BiteHoldXpMintCooldown/TakedownXpMintCooldown anti-farm trackers added when the seventh XP farm was closed, and DragCooldown added when PropDragging finally got the cooldowns it had always been documented as having)', function()
     local f = newCombatFixture()
-    t.equals(f.eventHandlerCount('playerDropped'), 6)
+    -- Deliberately an exact count rather than a floor: each of these is a
+    -- per-source table that leaks an entry per disconnect without one, so a
+    -- new source-keyed tracker arriving with no cleanup hook should make
+    -- this test fail and be noticed. DragTargetCooldown is correctly NOT in
+    -- this count -- it is keyed by targetNetId, which has no connection to
+    -- clean up on, and is bounded by its own TTL sweep instead.
+    t.equals(f.eventHandlerCount('playerDropped'), 7)
 end)
 
 t.test('server/combat.lua registers exactly 1 onResourceStart handler (the PropDragging override warning)', function()
@@ -720,7 +729,7 @@ t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 (exact QA repro) no
     for _ in pairs(f.netEventNames) do count = count + 1 end
     t.equals(count, 8, 'every net event this file documents must still register, not just the ones textually above the bad value')
     t.equals(f.eventHandlerCount('onResourceStart'), 1)
-    t.equals(f.eventHandlerCount('playerDropped'), 6)
+    t.equals(f.eventHandlerCount('playerDropped'), 7)
 
     local warned = false
     for _, line in ipairs(f.printedLines) do
@@ -2186,6 +2195,127 @@ t.test('releaseDrag from the PLAYER TARGET (not the holder) also ends it, with z
     f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
     f.dispatchNetEvent('qbx_k9unit:server:releaseDrag', TARGET_SRC)
     t.equals(countClientEvents(f, 'qbx_k9unit:client:dragEnded'), 1)
+end)
+
+-- ------------------------------------------------------------------
+-- MISSING-COOLDOWN FIX -- PropDragging shipped with NO cooldown of any
+-- kind, per-K9 or per-target, while KNOWN_ISSUES.md claimed every mechanic
+-- carried both. The per-target half is the one that matters: drag is the
+-- only mechanic whose target can release itself, and without a per-target
+-- cooldown that release was worthless -- the K9 simply re-grabbed the same
+-- already-downed player the same tick, forever.
+-- ------------------------------------------------------------------
+
+t.test('requestDrag: MISSING-COOLDOWN FIX -- the SAME K9 is refused a second drag until its own per-K9 cooldown clears', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 100 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseDrag', K9_SRC)
+
+    -- A DIFFERENT target, so only the per-K9 cooldown can be what refuses this.
+    wireNpcTarget(f, 502, { health = 100 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 502)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'still just the first drag -- the second was refused')
+
+    f.advance(7999) -- 1ms short of the configured 8000ms
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 502)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'still refused right up to the boundary')
+
+    f.advance(2)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 502)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 2, 'and granted once it clears -- a cooldown, not a ban')
+end)
+
+t.test('requestDrag: MISSING-COOLDOWN FIX -- a player who releases themselves cannot be re-grabbed instantly, by the SAME K9 or a DIFFERENT one', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1)
+
+    -- The target uses the self-release the design promises them, two
+    -- seconds in.
+    f.advance(2000)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseDrag', TARGET_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragEnded'), 1)
+
+    -- The whole point: getting free has to MEAN something. Wait out the
+    -- per-K9 cooldown so the only thing that can refuse the re-grab is the
+    -- per-TARGET one, then hammer it.
+    f.advance(8001)
+    for _ = 1, 10 do
+        f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    end
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1,
+        'the escape is worthless if the same dog can grab them again the moment its own cooldown clears')
+
+    -- And it is genuinely per-TARGET, not per-K9: a second K9 with a
+    -- completely clean cooldown of its own is refused this person too.
+    local OTHER_K9_SRC = K9_SRC + 40
+    wireK9(f, OTHER_K9_SRC)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', OTHER_K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1,
+        'otherwise two dogs take turns and the person is dragged continuously anyway')
+
+    -- Stamped at drag START (mirroring bite/takedown), so 20000ms after the
+    -- drag began -- 18 seconds after they got free -- it is available again.
+    f.advance(20000 - 2000 - 8001 + 2)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 2)
+end)
+
+t.test('requestDrag: MISSING-COOLDOWN FIX -- a drag REFUSED on the per-target cooldown must not also burn the requester\'s own per-K9 cooldown', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseDrag', TARGET_SRC)
+
+    -- A SECOND K9, never used a drag in its life, is refused this target.
+    local OTHER_K9_SRC = K9_SRC + 40
+    wireK9(f, OTHER_K9_SRC)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', OTHER_K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'refused, as it should be')
+
+    -- That refusal must have cost it nothing: a different, freely
+    -- draggable target is available to it immediately.
+    wireNpcTarget(f, 503, { health = 100 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', OTHER_K9_SRC, 503)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 2,
+        'a request that was never granted must never stamp either cooldown')
+end)
+
+t.test('requestDrag: MISSING-COOLDOWN FIX -- a not-downed target is told THAT, not told to wait -- the cooldown check sits after the real precondition', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 200, ragdoll = false })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+
+    -- Nothing was stamped, so a genuinely draggable target right next to
+    -- them works immediately -- proving the rejected attempt did not
+    -- silently start a cooldown for a drag that never happened.
+    wireNpcTarget(f, 504, { health = 100 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 504)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1)
+end)
+
+t.test('requestDrag: MISSING-COOLDOWN FIX -- a zero/garbage cooldown in the config is clamped to the safe default, never left permanently fail-closed or wide open', function()
+    local cfg = baselinePropDraggingConfig(nil)
+    cfg.cooldownMs = 0            -- the classic footgun: 0 is truthy in Lua
+    cfg.targetCooldownMs = 'soon' -- and the other classic: a string
+    local f = newCombatFixture({ propDragging = true, propDraggingCfg = cfg })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 100 })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'a bad number must never take the whole mechanic out')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseDrag', K9_SRC)
+    wireNpcTarget(f, 505, { health = 100 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 505)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1,
+        'and must never mean "no cooldown at all" either -- the 8000ms fallback applies')
 end)
 
 t.test('DragExceedsMaxDistance safety valve: the maintenance thread force-ends a drag once the holder/target gap exceeds maxDragDistance, unconditionally', function()

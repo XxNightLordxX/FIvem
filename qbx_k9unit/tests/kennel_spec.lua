@@ -1797,6 +1797,120 @@ t.test('requestPickupKennel: picking up an occupied kennel succeeds and reports 
 end)
 
 -- ----------------------------------------------------------------------
+-- RED-TEAM FIX -- FORCED-TELEPORT VIA AN OCCUPIED KENNEL.
+--
+-- The ride-along feature turned "pick up your own kennel" into a way to
+-- move another player: an attached entity is re-clamped to its parent
+-- every tick by the engine, so picking up an OCCUPIED kennel drags the
+-- occupant along. The owner's own pickup path had never needed a proximity
+-- check (nothing but their own object was ever affected by it), which made
+-- that a map-wide, repeatable, cooldown-free "teleport that player to me"
+-- primitive: stand anywhere, pick up, and the occupant arrives. Anyone may
+-- climb into a deployed kennel voluntarily, so the victim need not have
+-- done anything but accept a ride.
+--
+-- The fix requires proximity for ANY pickup of an OCCUPIED kennel,
+-- including the owner's own. The tests below pin both halves: the exploit
+-- is refused, and none of the paths that must never be gated became gated.
+-- ----------------------------------------------------------------------
+
+t.test('requestPickupKennel: RED-TEAM FIX -- the OWNER cannot pick up their OWN kennel from across the map while a K9 is riding inside it (the forced-teleport primitive)', function()
+    local f = newKennelFixture()
+    local netId, handle = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'precondition: the victim really is inside')
+
+    -- The owner walks to the far side of the map and pulls the trigger.
+    f.setPed(1, 5001, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_occupied_too_far'),
+        'and the refusal must SAY it is because someone is inside -- not the generic too-far text, which would read as a bug on your own kennel')
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'),
+        'no attach instruction may be sent -- that instruction IS the teleport')
+    t.isNil(f.deletedEntities[handle])
+
+    -- Repeatable-abuse check: there is no cooldown on pickup, so a single
+    -- refusal proves nothing unless the refusal itself is stable.
+    for _ = 1, 5 do
+        f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    end
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'), 'still refused however many times it is retried')
+end)
+
+t.test('requestPickupKennel: RED-TEAM FIX -- a DIFFERENT certified handler is likewise refused an occupied kennel from across the map (the same primitive by the other route)', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.setAccess(3, true)
+    f.setPlayer(3, 'HANDLER03')
+    f.setPed(3, 5003, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 3, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.pickup_occupied_too_far'))
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+end)
+
+t.test('requestPickupKennel: RED-TEAM FIX -- walking over to it still works: the owner standing next to their own OCCUPIED kennel carries it, occupant and all', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    -- Deliberately NOT the deploy position: moved away and back, so this
+    -- proves the distance is really re-read at pickup time rather than the
+    -- test passing because nothing ever moved.
+    f.setPed(1, 5001, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+
+    f.setPed(1, 5001, { x = 1.0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success_occupant_released'),
+        'carrying a resting dog is a legitimate, intended feature -- the fix must cost it nothing except walking over')
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: RED-TEAM FIX -- reclaiming an EMPTY kennel from across the map is still instant, so nobody is ever stuck at their one-kennel limit', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    -- The whole point of the owner's ungated fast path: a kennel left
+    -- somewhere unreachable must still be reclaimable, or the one-kennel
+    -- limit becomes a permanent trap. Nobody is inside, so nobody is moved.
+    f.setPed(1, 5001, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:pickupKennelConfirmed'))
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: RED-TEAM FIX -- the occupant\'s OWN way out is untouched by the new proximity gate', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    -- The gate is on MOVING a kennel someone is in, never on LEAVING one.
+    -- Exiting stays unconditional -- including from far away, which is
+    -- exactly where a client that had already been dragged somewhere would
+    -- be calling it from.
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    local notifiesBeforeExit = #f.notifyCalls
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+    t.equals(#f.notifyCalls, notifiesBeforeExit,
+        'getting out must never be refused, and never even complain -- that is this file\'s oldest rule')
+
+    -- Proof the exit really took: the owner's far-away reclaim, refused a
+    -- moment ago, works again -- so the gate tracks LIVE occupancy rather
+    -- than latching on once and never clearing.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+-- ----------------------------------------------------------------------
 -- Lifecycle: playerDropped
 -- ----------------------------------------------------------------------
 

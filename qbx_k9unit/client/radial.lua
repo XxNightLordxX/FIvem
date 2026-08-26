@@ -949,6 +949,20 @@ local function RegisterK9RadialMenu()
                 -- header comment above ("RELEASE ORDERING") for why.
                 -- type(...) == 'function' guards -- see k9_sit's identical
                 -- note above for the full HEADER/CODE DRIFT FIX writeup.
+                -- Being dragged is its own release branch, asked FIRST --
+                -- see client/keybinds.lua's k9dragtoggle for the full
+                -- reasoning. It matters slightly less here than on the
+                -- keybind (a dragged human suspect has no radial menu at
+                -- all), but a K9 can itself be downed and dragged, and for
+                -- that K9 this menu is the obvious place to look for the
+                -- way out.
+                if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
+                    if type(ReleaseDrag) == 'function' then
+                        ReleaseDrag()
+                    end
+                    return
+                end
+
                 if type(IsDragEngaged) == 'function' and IsDragEngaged() then
                     if type(ReleaseDrag) == 'function' then
                         ReleaseDrag()

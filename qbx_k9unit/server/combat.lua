@@ -672,6 +672,38 @@ local TakedownTargetCooldown = NewCooldown(ResolveConfiguredThresholdMs(
 local BiteHoldTargetCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     Config.Combat.BiteAndHold.targetCooldownMs, 35000, 'Config.Combat.BiteAndHold.targetCooldownMs'))
 
+-- PROPDRAGGING HAD NO COOLDOWN OF ANY KIND -- neither per-K9 nor
+-- per-target -- while KNOWN_ISSUES.md's own combat section claimed "every
+-- cooldown (per-K9, per-target...)" applied uniformly across all three
+-- mechanics. It did not; drag was simply never given any, and the prose
+-- was written from the other two. (KNOWN_ISSUES.md corrected in the same
+-- pass as this.)
+--
+-- Why it matters more here than the missing-cooldown shape usually does.
+-- Drag is the one mechanic whose TARGET has a self-release of their own
+-- (releaseDrag accepts the target as well as the holder -- see that
+-- handler below). That escape is only worth anything if the K9 cannot
+-- immediately re-grab: with no per-target cooldown, "let go, grab again"
+-- was an unbounded loop against an already-downed player who, by the
+-- mechanic's own precondition, cannot stand up and walk away from it.
+-- Bite and takedown do not have this problem, not because they are gentler
+-- but because their targets never had a self-release to render useless in
+-- the first place, and both already carry a per-target cooldown regardless.
+--
+-- Construction mirrors the two pairs above exactly: per-K9 keyed by `src`
+-- with RegisterPlayerDropped, per-target keyed by targetNetId (an NPC
+-- target has no source, and a player target's cooldown must outlive any
+-- one connection) with a periodic TTL sweep below instead. Both stamp at
+-- drag START, same as their siblings -- see config.lua's own comment on
+-- Config.Combat.PropDragging.targetCooldownMs for why stamping at the
+-- start (rather than at release) is what makes the escape meaningful.
+local DragCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.PropDragging.cooldownMs, 8000, 'Config.Combat.PropDragging.cooldownMs'))
+DragCooldown.RegisterPlayerDropped()
+
+local DragTargetCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.PropDragging.targetCooldownMs, 20000, 'Config.Combat.PropDragging.targetCooldownMs'))
+
 -- Guards the SHORT yield inside HandleTakedownRequest (the server-computed
 -- speed-sample window) against the SAME K9 firing a second overlapping
 -- requestTakedown before the first one's wait resolves -- mirrors
@@ -839,6 +871,23 @@ end)
 -- does immediately above.
 BiteHoldTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
     return (now - loggedAt) > (Config.Combat.BiteAndHold.targetCooldownMs * 2)
+end)
+
+-- Same sweep shape again, for DragTargetCooldown (the missing-cooldown fix
+-- above) -- keyed by targetNetId, no per-connection cleanup hook, so it
+-- needs its own independent TTL sweep exactly like the two above.
+--
+-- The multiplicand is read defensively rather than straight out of Config
+-- the way its two siblings do: this predicate runs inside a bare thread, so
+-- a Config value that is nil or a string would throw INSIDE the sweep and
+-- kill it silently and permanently, leaving the very table it exists to
+-- bound growing for the rest of the session. The siblings have the same
+-- shape and are flagged elsewhere; this one is written the safe way rather
+-- than copying a known-sharp edge into new code.
+DragTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    local configured = Config.Combat.PropDragging.targetCooldownMs
+    local ttlMs = (type(configured) == 'number' and configured > 0) and (configured * 2) or 40000
+    return (now - loggedAt) > ttlMs
 end)
 
 -- SEVENTH XP-FARM FIX (this pass, coder-security, economy-audit follow-up --
@@ -3264,6 +3313,39 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
         NotifyPlayer(src, CombatRejectMessage('target_not_downed'), 'error')
         return
     end
+
+    -- MISSING-COOLDOWN FIX -- see DragCooldown/DragTargetCooldown's own
+    -- declaration comment above for what was wrong and why it mattered here
+    -- more than the shape usually does.
+    --
+    -- BOTH are CHECKED before EITHER is stamped, for the same reason spelled
+    -- out at requestBiteHold's own identical pair below: a request rejected
+    -- because of ONE cooldown must never burn the OTHER -- stamping the
+    -- per-target one for a drag that never happened would penalise the next
+    -- K9 to reach this same person, and stamping the per-K9 one would cost
+    -- this K9 its own next drag for nothing.
+    --
+    -- Deliberately placed AFTER IsTargetDowned rather than before it, unlike
+    -- bite/takedown, whose pairs sit immediately after ValidateCombatRequest.
+    -- IsTargetDowned is this mechanic's real precondition and the one most
+    -- likely to fail on an honest attempt (the suspect got back up, the
+    -- laststand override says otherwise); rejecting on the cooldown first
+    -- would answer "wait 8 seconds" to a K9 whose actual problem is that
+    -- there is nothing here to drag.
+    --
+    -- No explicit thresholdMs argument -- each tracker's constructor default
+    -- above is already the ResolveConfiguredThresholdMs-checked value, and
+    -- passing the raw Config number here would silently shadow it (0 is
+    -- truthy in Lua). Same trap, same reasoning, as documented at length on
+    -- requestBiteHold's own pair.
+    if DragCooldown.IsOnCooldown(src)
+        or DragTargetCooldown.IsOnCooldown(targetNetId) then
+        NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
+        return
+    end
+
+    DragCooldown.Touch(src)
+    DragTargetCooldown.Touch(targetNetId)
 
     local now = GetGameTimer()
     -- maxDragDurationMs: a defensive hard-duration backstop ADDED beyond

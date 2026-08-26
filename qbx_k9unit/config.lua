@@ -2371,6 +2371,34 @@ Config.Combat = {
     -- balance pass, same status as every other Phase 3 tuning number here.
     PropDragging = {
         range              = 2.5,    -- meters, self-initiated trigger range (matches BiteAndHold's)
+        -- HOW LONG THIS K9 MUST WAIT BEFORE STARTING ANOTHER DRAG, in
+        -- milliseconds (1000 = one second). Counts from the moment a drag
+        -- STARTS. Deliberately shorter than Bite & Hold's 20 seconds or a
+        -- Takedown's 25: moving several downed people at one scene is the
+        -- normal, intended use of this, and a long wait between bodies
+        -- would punish exactly the thing the feature is for. What this
+        -- number stops is a K9 firing the same request over and over.
+        -- LOWER = the dog can start drags more often. HIGHER = less often.
+        cooldownMs         = 8000,
+        -- HOW LONG THE SAME PERSON IS LEFT ALONE, in milliseconds, counted
+        -- from the moment a drag on them starts. This is the one that
+        -- matters for fairness rather than spam.
+        --
+        -- A dragged person can let go themselves at any time (their own
+        -- Drag / Release key). Without this number that escape would be
+        -- worthless: the dog could simply grab them again the same second,
+        -- forever, and a downed player would have no way out of the loop
+        -- short of disconnecting. Set to the same 20 seconds as
+        -- maxDragDurationMs below, so a drag that is allowed to run its
+        -- full length can be followed straight away by another one (the
+        -- legitimate "keep moving them further" case), while a drag the
+        -- person escaped from two seconds in buys them the remaining
+        -- eighteen.
+        --
+        -- LOWER = the same person can be re-grabbed sooner. HIGHER = they
+        -- get longer between drags. Setting this to 0 or a negative number
+        -- is refused and this default is used instead, with a warning.
+        targetCooldownMs   = 20000,
         maxDragDistance    = 30.0,   -- meters from the drag's start point before the server force-ends it. THIS is the real "no unbounded trap" enforcement — checked unconditionally in the maintenance loop, never gated behind NonComplianceDetection.enabled.
         maxDragDurationMs  = 20000,  -- hard timeout if never manually released, same role as BiteAndHold's maxDurationMs
         dragSpeedMultiplier = 0.4,   -- Category B: applied to the TARGET's move rate while dragged. A modified client may ignore this; that is disclosed, not solved.

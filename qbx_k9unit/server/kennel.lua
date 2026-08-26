@@ -994,29 +994,63 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupKennel', function(netId)
         return
     end
 
-    -- Proximity is only independently re-verified for the NEW (non-owner)
-    -- path above -- the recorded owner's own fast path has never had, and
-    -- still does not have, a proximity check (unchanged, existing, tested
-    -- behavior -- see this handler's own doc comment).
-    if ownerCitizenId ~= citizenid then
+    -- Resolve the occupant ITSELF, not merely whether there is one: the
+    -- person inside needs telling, and -- since the RIDE-ALONG pass -- the
+    -- answer also decides whether the owner's own fast path is gated at
+    -- all (see the proximity block immediately below). Being carried is the
+    -- only thing in this resource that moves a player across the map with
+    -- no input from them and, until this pass, no message either -- their
+    -- view simply started travelling. A player whose screen moves for no
+    -- stated reason assumes a bug or a cheat. Exiting was already
+    -- unconditional (keybind, radial, ox_target, and a watchdog), so the
+    -- notify is about knowing, not escaping.
+    local occupant = FindKennelOccupantByNetId(ownerKennel.netId, nil)
+    local hadOccupant = occupant ~= nil
+
+    -- PROXIMITY.
+    --
+    -- Two independent reasons to require it, and the owner's own fast path
+    -- is subject to the SECOND one only:
+    --
+    -- (a) A DIFFERENT handler acting on someone else's object -- always
+    --     gated, unchanged from the pass that introduced it.
+    --
+    -- (b) ANY pickup of a kennel that currently has a live occupant riding
+    --     inside it -- INCLUDING the recorded owner's own. This one is new,
+    --     and it closes a real exploit that the ride-along feature created
+    --     without anyone noticing: an attached entity has its transform
+    --     re-clamped to its parent every tick by the engine, so picking up
+    --     an OCCUPIED kennel snaps the person inside to the carrier. With
+    --     the owner's path ungated that was a map-wide, repeatable,
+    --     cooldown-free "teleport that player to me" primitive -- walk
+    --     anywhere, pick up, and the occupant arrives. Anyone may enter a
+    --     deployed kennel voluntarily, so the victim need not have done
+    --     anything but accept a ride.
+    --
+    -- Note carefully what (b) does NOT do. It does not gate an exit, and it
+    -- is not the "exit a kennel must never be gated" doctrine being
+    -- softened: the OCCUPANT's own way out (keybind, radial, ox_target,
+    -- watchdog) is untouched and still unconditional, and the OWNER's own
+    -- reclaim of an EMPTY kennel -- the actual termination path, the one
+    -- that un-sticks a stray object and frees their one-kennel limit -- is
+    -- still instant from any distance, still ungated by HasK9Access,
+    -- blocks, or feature flags, exactly as its TERMINATION PATH UNAFFECTED
+    -- test pins it. The only thing now refused is moving a kennel that
+    -- someone else is inside, from across the map, which was never a
+    -- termination path for anybody: the owner can always walk to it, and
+    -- the occupant can always simply step out.
+    local mustBeClose = (ownerCitizenId ~= citizenid) or hadOccupant
+    if mustBeClose then
         local ped = GetPlayerPed(src)
         if ped == 0 then return end -- defensive: src disconnected between the event firing and this line
         local dist = #(GetEntityCoords(ped) - GetEntityCoords(entity))
         if dist > (Config.DeployableKennel.interactDistanceMeters + KENNEL_INTERACT_DISTANCE_TOLERANCE) then
-            NotifyPlayer(src, locale('kennel.pickup_too_far'), 'error')
+            NotifyPlayer(src, hadOccupant
+                and locale('kennel.pickup_occupied_too_far')
+                or locale('kennel.pickup_too_far'), 'error')
             return
         end
     end
-
-    -- Resolve the occupant ITSELF, not merely whether there is one: the
-    -- person inside needs telling. Being carried is the only thing in this
-    -- resource that moves a player across the map with no input from them
-    -- and, until now, no message either -- their view simply started
-    -- travelling. A player whose screen moves for no stated reason assumes
-    -- a bug or a cheat. Exiting was already unconditional (keybind, radial,
-    -- ox_target, and a watchdog), so this is about knowing, not escaping.
-    local occupant = FindKennelOccupantByNetId(ownerKennel.netId, nil)
-    local hadOccupant = occupant ~= nil
 
     CarriedKennels[citizenid] = {
         netId = ownerKennel.netId,

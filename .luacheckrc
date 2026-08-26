@@ -861,6 +861,17 @@ globals = {
     -- zero-consent-release shape as RequestBiteHold/ReleaseBiteHold above.
     -- Not yet wired into client/radial.lua; exposed for that future entry.
     "RequestDrag", "ReleaseDrag", "IsDragEngaged",
+    -- IsDragTargetEngaged answers the OTHER half of the same question --
+    -- "am I the one BEING dragged", as opposed to IsDragEngaged()'s "am I
+    -- the one dragging". server/combat.lua's releaseDrag handler has always
+    -- accepted a release from the target as well as the holder, but every
+    -- client call site asked only the holder-side question and so fell
+    -- through to the REQUEST branch for a target, where CanShowK9UI()
+    -- denied them -- making the documented self-release unreachable in
+    -- practice. Consumed by client/keybinds.lua, client/radial.lua and
+    -- client/tablet.lua, each with the same `type(fn) == 'function'` guard
+    -- its siblings above use.
+    "IsDragTargetEngaged",
     -- server/combat.lua / server/kennel.lua -- READ-ONLY live headcount
     -- accessors for server/runtimecontrol.lua's own "ACTIVE-USAGE
     -- CONFIRMATION FEATURES" gate (that file's own header section): "how
