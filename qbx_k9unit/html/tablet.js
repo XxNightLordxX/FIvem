@@ -2454,36 +2454,129 @@
         return wrap;
     }
 
-    function buildCapabilityList(heldKeys) {
-        heldKeys = heldKeys || [];
-        var wrap = mk('div', { class: 'k9tablet-capability-list' });
+    /**
+     * Merges the four always-present shipped capabilities with whatever
+     * server/permissionkeycatalog.lua's live catalog (state.permissionKeys,
+     * populated by loadPermissionKeys() -- see openPerson()'s own
+     * opportunistic call) currently reports, plus anything `heldKeys`
+     * names that neither source accounts for. THREE buckets, in this
+     * fixed order, each key appearing exactly once (first bucket wins):
+     *
+     *   1. CAPABILITY_ORDER's own four keys, ALWAYS present, in their
+     *      existing fixed order, labelled via capabilityInfo() exactly as
+     *      before this pass -- an operator who never touches the
+     *      Permission Keys tab sees byte-identical output to today.
+     *   2. Every OTHER catalog entry from a SUCCESSFUL state.permissionKeys
+     *      fetch, in the order the server sent (alphabetical -- see that
+     *      file's own ListPermissionCatalogKeys doc comment). A key only
+     *      ever reaches this bucket when the catalog fetch actually
+     *      confirmed it is currently known and non-tombstoned, so Grant is
+     *      never offered for a key this page cannot confirm is real --
+     *      state.permissionKeys stays null (or unrelated to this shape) on
+     *      a failed/not-yet-run fetch, which simply yields zero rows here,
+     *      never a synthesized "maybe grantable" guess.
+     *   3. Any `heldKeys` entry bucket 1/2 didn't already cover. The ONLY
+     *      way a currently-ACTIVE grant can name a key absent from a
+     *      successful catalog fetch is server/permissionkeycatalog.lua's
+     *      own tombstone behavior (ListPermissionCatalogKeys/
+     *      IsKnownPermissionCatalogKey both exclude a tombstoned key
+     *      entirely -- see that file's header "TOMBSTONE, NOT
+     *      REFERENCE-COUNTED") -- so this bucket is rendered RETIRED and
+     *      revoke-only, never offered a Grant button: a retired key that
+     *      became invisible while still granted would otherwise be a
+     *      permission nobody could take away. (The same bucket also
+     *      quietly covers a held key while the catalog fetch simply
+     *      hasn't resolved yet -- indistinguishable from "retired" from
+     *      here, and the right action is the same either way: let the
+     *      operator revoke it.)
+     * @param {string[]} heldKeys
+     * @returns {Array<{key:string,label:string,description:string,held:boolean,retired:boolean,grantable:boolean}>}
+     */
+    function resolveCapabilityRows(heldKeys) {
+        heldKeys = Array.isArray(heldKeys) ? heldKeys : [];
+        var rows = [];
+        var seen = {};
+
         for (var i = 0; i < CAPABILITY_ORDER.length; i++) {
-            var key = CAPABILITY_ORDER[i];
-            var held = heldKeys.indexOf(key) !== -1;
-            var info = capabilityInfo(key);
+            var defaultKey = CAPABILITY_ORDER[i];
+            seen[defaultKey] = true;
+            var defaultInfo = capabilityInfo(defaultKey);
+            rows.push({
+                key: defaultKey,
+                label: defaultInfo.label,
+                description: defaultInfo.description || '',
+                held: heldKeys.indexOf(defaultKey) !== -1,
+                retired: false,
+                grantable: true,
+            });
+        }
+
+        if (Array.isArray(state.permissionKeys)) {
+            for (var j = 0; j < state.permissionKeys.length; j++) {
+                var entry = state.permissionKeys[j];
+                if (!entry || typeof entry.key !== 'string' || seen[entry.key]) continue;
+                seen[entry.key] = true;
+                rows.push({
+                    key: entry.key,
+                    label: (typeof entry.label === 'string' && entry.label.length > 0) ? entry.label : entry.key,
+                    description: (typeof entry.description === 'string') ? entry.description : '',
+                    held: heldKeys.indexOf(entry.key) !== -1,
+                    retired: false,
+                    grantable: true,
+                });
+            }
+        }
+
+        for (var k = 0; k < heldKeys.length; k++) {
+            var heldKey = heldKeys[k];
+            if (typeof heldKey !== 'string' || heldKey.length === 0 || seen[heldKey]) continue;
+            seen[heldKey] = true;
+            var retiredInfo = capabilityInfo(heldKey);
+            rows.push({
+                key: heldKey,
+                label: retiredInfo.label,
+                description: retiredInfo.description || '',
+                held: true,
+                retired: true,
+                grantable: false,
+            });
+        }
+
+        return rows;
+    }
+
+    function buildCapabilityList(heldKeys) {
+        var rows = resolveCapabilityRows(heldKeys);
+        var wrap = mk('div', { class: 'k9tablet-capability-list' });
+        var citizenid = state.person.citizenid;
+
+        for (var i = 0; i < rows.length; i++) {
+            var rowData = rows[i];
 
             var row = mk('div', { class: 'k9tablet-capability-row' });
-            var labelWrap = mk('span', { class: 'k9tablet-capability-label', text: info.label, title: info.description });
+            var labelWrap = mk('span', { class: 'k9tablet-capability-label', text: rowData.label, title: rowData.description });
+            if (rowData.retired) {
+                labelWrap.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('permission_key_retired_badge') + ')' }));
+            }
             row.appendChild(labelWrap);
-            row.appendChild(mk('span', { class: 'k9tablet-capability-state', text: held ? S('certified_yes') : S('certified_no') }));
+            row.appendChild(mk('span', { class: 'k9tablet-capability-state', text: rowData.held ? S('certified_yes') : S('certified_no') }));
 
-            var citizenid = state.person.citizenid;
-            if (held) {
+            if (rowData.held) {
                 row.appendChild(mkConfirmButton(S('revoke_label'), 'k9tablet-btn k9tablet-btn--danger', function (k) {
                     return function () {
                         runMutation('tablet:revokePermission', { targetCitizenId: citizenid, permission: k }, function () {
                             loadPersonSummary(citizenid);
                         });
                     };
-                }(key), { disabled: state.pendingAction }));
-            } else {
+                }(rowData.key), { disabled: state.pendingAction }));
+            } else if (rowData.grantable) {
                 row.appendChild(mkButton(S('grant_label'), 'k9tablet-btn', function (k) {
                     return function () {
                         runMutation('tablet:grantPermission', { targetCitizenId: citizenid, permission: k }, function () {
                             loadPersonSummary(citizenid);
                         });
                     };
-                }(key), { disabled: state.pendingAction }));
+                }(rowData.key), { disabled: state.pendingAction }));
             }
             wrap.appendChild(row);
         }

@@ -6,13 +6,17 @@
     Owns the "K9 partnership" registry -- a persistent, DB-backed,
     mutually-consented "who is my ongoing handler/K9 partner" relationship,
     independent of momentary leash state (server/main.lua's `LeashPairs`).
-    This file is a FOUNDATION ONLY: it establishes/persists/tears down a
-    partnership and exposes read accessors for a future consumer, but wires
-    NO combat consequence of its own. `BiteAndHold`'s Recall actor and
-    `HandlerDownDefense` (the two features DEVELOPER_REFERENCE.md §12.0 item 7 names
-    as blocked on this file existing) are explicitly OUT OF SCOPE here and
-    remain unimplemented -- see "FUTURE CONSUMERS" below for the exact
-    accessor functions either should call once built.
+    This file was originally a FOUNDATION ONLY: it established/persisted/
+    tore down a partnership and exposed read accessors, wiring no combat
+    consequence of its own. At that point `BiteAndHold`'s Recall actor and
+    `HandlerDownDefense` (the two features DEVELOPER_REFERENCE.md §12.0 item 7
+    names as blocked on this file existing) were explicitly OUT OF SCOPE
+    and unimplemented. Both are now built and consuming this file's
+    accessors for real: server/recall.lua's Recall actor and
+    server/defense.lua's HandlerDownDefense trigger both call
+    GetActivePartnerCitizenId directly (confirmed by direct read of both
+    files) -- see "FUTURE CONSUMERS" below, and each accessor's own doc
+    comment, for the exact current wiring.
 
     ======================================================================
     WHY OPTION B (THIS FILE), NOT LeashPairs -- one-paragraph restatement,
@@ -140,9 +144,15 @@
     staleness, not a new one invented here.
 
     ======================================================================
-    FUTURE CONSUMERS (both explicitly OUT OF SCOPE for this file/pass --
-    read DEVELOPER_REFERENCE.md §12.0 item 7's "Consumers, made concrete" block
-    before wiring either):
+    FUTURE CONSUMERS, AS ORIGINALLY WRITTEN (both explicitly OUT OF SCOPE
+    for this file/pass at the time this section was written -- read
+    DEVELOPER_REFERENCE.md §12.0 item 7's "Consumers, made concrete" block for
+    the original design). Both are now LANDED -- see
+    GetActivePartnerCitizenId's and IsActivePartnerOf's own doc comments
+    below for exactly how each is consumed today, which diverges in one
+    place from the plan below (Recall derives its target directly via
+    GetActivePartnerCitizenId rather than validating an alleged partner
+    through IsActivePartnerOf):
     - BiteAndHold's Recall actor should call
         IsActivePartnerOf(recallerCitizenid, heldK9Citizenid)
       which returns exactly the boolean expression DEVELOPER_REFERENCE.md §12.0

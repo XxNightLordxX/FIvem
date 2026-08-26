@@ -299,7 +299,29 @@ end
 -- hunt-area size even if this client never learns the real config value
 -- (Config is a shared_script, so in practice it does -- this fallback only
 -- matters if ScentHuntConfig itself is missing).
-local PULSE_MAX_DISTANCE_METERS = ScentHuntConfig.maxRadius or 30.0
+--
+-- CLAMP AND WARN (bug found + fixed this pass, same audit as
+-- PULSE_MAX_INTERVAL_MS immediately above): a bare `ScentHuntConfig.maxRadius
+-- or 30.0` let a configured `maxRadius = 0` divide-by-zero this file's own
+-- IntervalForDistance() below (`t = clamped / PULSE_MAX_DISTANCE_METERS`,
+-- i.e. `0 / 0`) -- producing NaN, which then propagates through
+-- `PULSE_MIN_INTERVAL_MS + t * (...)` into a NaN passed straight to
+-- `Wait(...)` at this file's own poll loop, an unvalidated native argument
+-- with no established, verified behavior in this codebase. A negative
+-- maxRadius does not crash but silently collapses the whole distance curve
+-- to always-closest, defeating the feature. Clamped to a positive number,
+-- never asserted at file scope, mirroring PULSE_MAX_INTERVAL_MS_DEFAULT's
+-- own reasoning immediately above.
+local PULSE_MAX_DISTANCE_METERS_DEFAULT = 30.0
+local PULSE_MAX_DISTANCE_METERS = PULSE_MAX_DISTANCE_METERS_DEFAULT
+if ScentHuntConfig.maxRadius ~= nil then
+    local configuredRadius = ScentHuntConfig.maxRadius
+    if type(configuredRadius) == 'number' and configuredRadius == configuredRadius and configuredRadius > 0 then
+        PULSE_MAX_DISTANCE_METERS = configuredRadius
+    else
+        print(('[qbx_k9unit] ScentTrailHunt: Config.ScentTrailHunt.maxRadius must be a positive number of meters (got %s) -- falling back to the shipped default of %.1fm. A non-positive/invalid value here would divide-by-zero this file\'s own distance/cadence curve (NaN fed straight into Wait()).'):format(tostring(configuredRadius), PULSE_MAX_DISTANCE_METERS_DEFAULT))
+    end
+end
 
 -- Already-shipped, already-mapped ambient growl asset -- see this file's
 -- header for the full "why this needs zero new audio assets" writeup.

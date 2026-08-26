@@ -924,7 +924,7 @@ local function newClientFixture(opts)
     local env = Sandbox.newEnv(overrides)
     env.Config = {
         Features = { ScentTrailHunt = true, BasicBarkSounds = opts.basicBarkSounds ~= false },
-        ScentTrailHunt = { pollIntervalMs = opts.pollIntervalMs or 2000, maxRadius = 30.0 },
+        ScentTrailHunt = { pollIntervalMs = opts.pollIntervalMs or 2000, maxRadius = opts.maxRadius or 30.0 },
     }
 
     -- CLAMP-AND-WARN CAPTURE -- proves a bad pollIntervalMs actually warns
