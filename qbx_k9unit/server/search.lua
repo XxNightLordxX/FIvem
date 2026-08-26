@@ -1,16 +1,14 @@
 --[[
     qbx_k9unit/server/search.lua
 
-    Phase 2 implementation (coder-backend). THIS IS THE SECURITY-CRITICAL
-    FILE OF PHASE 2, per DEVELOPER_REFERENCE.md §11.1 sub-phase 2b ("this is also the
-    piece coder-security should review first, per the task's explicit
-    direction to confirm search results can't be client-claimed") and per
+    THIS IS THE SECURITY-CRITICAL FILE OF PHASE 2, per DEVELOPER_REFERENCE.md
+    §11.1 sub-phase 2b (the piece that should be reviewed first, to confirm
+    search results can't be client-claimed) and per
     DEVELOPER_REFERENCE.md#contraband-search's own framing ("designing
     early because the trust boundary doesn't move even if config field
-    names do"). Get an explicit coder-security sign-off on this
-    implementation before it ships, the same standard
-    server/certifications.lua's header already sets for §4's grant/revoke
-    flow.
+    names do"). This implementation requires an explicit security review
+    before it ships, the same standard server/certifications.lua's header
+    already sets for §4's grant/revoke flow.
 
     Owns (DEVELOPER_REFERENCE.md §11.3's `server/search.lua` row): the
     `qbx_k9unit:server:searchTarget` callback — server-authoritative
@@ -46,8 +44,8 @@
          - Blocking: broadcast payload carries `netId` + `alertTier` ONLY —
            never `totalWeight`/`contrabandFound` (§1).
          - Flat per-source cooldown on `searchTarget` (ANY target),
-           independent of the existing per-TARGET cooldown (§2). CORRECTION
-           (config audit, this pass): TargetSearchCooldown below is keyed
+           independent of the existing per-TARGET cooldown (§2). CORRECTION:
+           TargetSearchCooldown below is keyed
            purely on the resolved target identity (plate/citizenid) — it
            carries NO searcher dimension at all, so this is genuinely a
            per-target lock shared across every searcher, not a per-(source,
@@ -66,7 +64,7 @@
          - citizenid, not raw ped netId, keys the person-search cooldown
            (§7).
 
-    Coordinator amendment (2026-08-23, this pass): Config.SearchZones.alertBroadcastRadius
+    Config.SearchZones.alertBroadcastRadius
     is the max distance from the SEARCHED TARGET's own live coordinates
     for a bystander to receive the alert broadcast — never a global
     broadcast, per the security review above.
@@ -149,7 +147,7 @@
       targetType-vs-GetEntityType cross-check is NOT delegated to that
       helper and stays local to this file — see HandleSearchTarget's own
       comment for why.
-    - PHASE 4 ADDITION (QA fix, this pass): THIS FILE also calls
+    - PHASE 4 ADDITION: THIS FILE also calls
       `AwardXP(citizenid, actionKey)`, resource-global from
       server/progression.lua, from inside HandleSearchTarget once
       `contrabandFound == true` is known — via a
@@ -159,15 +157,15 @@
       establish. No load-order assumption on server/progression.lua either
       way. See config.lua's `Config.XP.awards.searchContrabandFound` comment
       for the award's own design rationale.
-    - ECONOMY-AUDIT FIX (this pass): THIS FILE also owns `ContrabandXpState`
+    - ECONOMY-AUDIT FIX: THIS FILE also owns `ContrabandXpState`
       below (per-resolved-target last-awarded contraband weight cache) —
       see that table's own declaration comment, right after
       TargetSearchCooldown, for the XP-farm hole it closes and why it is
       deliberately NOT a server/cooldowns.lua tracker instance despite the
       "always use NewCooldown" convention every OTHER piece of file-local
       state in this file follows.
-    - FIFTH XP-FARM FIX (coder-backend, this pass — solo weight-toggle farm
-      closure): THIS FILE also owns `ContrabandXpMintCooldown` below — a
+    - FIFTH XP-FARM FIX (solo weight-toggle farm closure): THIS FILE also
+      owns `ContrabandXpMintCooldown` below — a
       real server/cooldowns.lua NewCooldown() instance this time (unlike
       ContrabandXpState just above), ported from server/tracking.lua's own
       `TrackTicketMintCooldown`. A flat, per-SEARCHER cooldown on the XP
@@ -178,8 +176,8 @@
       declaration comment, for the exact farm this closes and why
       TargetSearchCooldown's per-target-only, no-searcher-dimension shape
       could never have closed it alone.
-    - COOPERATIVE SEARCH BONUS (coder-backend, this pass, DEVELOPER_REFERENCE.md
-      Part B §10): THIS FILE also owns `CoopSearchXpMintCooldown` (see its
+    - COOPERATIVE SEARCH BONUS (DEVELOPER_REFERENCE.md Part B §10): THIS FILE
+      also owns `CoopSearchXpMintCooldown` (see its
       own declaration comment, right after the EIGHTH-XP-FARM-FIX
       cross-file pointer above, for the full spec/arithmetic) and calls two
       MORE resource-globals via `type(...) == 'function'` runtime existence
@@ -273,7 +271,7 @@ end)
 -- ever reached). Mirrors server/pursuitsprint.lua's
 -- IsPursuitSprintPermittedForCitizenId shape verbatim (that file's own
 -- header says to read it before writing another variant) -- GENERALIZED
--- this pass (was hardcoded to 'SearchZones' only) to accept a `featureName`
+-- (was hardcoded to 'SearchZones' only) to accept a `featureName`
 -- parameter, same "one file, several independently-gated flags through the
 -- identical shape" pattern server/tracking.lua's own
 -- IsTrackingFeaturePermittedForCitizenId and server/wellbeing.lua's own
@@ -418,14 +416,14 @@ local function SumContrabandWeight(inventoryId, items, depth)
             -- A non-container slot simply resolves to nil/false here —
             -- pcall-wrapped since a mid-scan entity/inventory change could
             -- make this error rather than cleanly return nil. ROUTED THROUGH
-            -- K9Compat.Get('inventory') (this pass, coder-backend) --
+            -- K9Compat.Get('inventory') --
             -- shared/compat/core.lua's
             -- RequiredMethods.inventory.server.GetContainerFromSlot -- never
             -- a direct `exports.ox_inventory:GetContainerFromSlot` call. The
             -- adapter itself never throws (BuildSafeAdapter, shared/compat/
             -- core.lua) so this outer pcall is now pure defense-in-depth,
             -- kept unchanged rather than removed -- it cost nothing before
-            -- this pass and costs nothing now.
+            -- and costs nothing now.
             local containerOk, containerInv = pcall(function()
                 return K9Compat.Get('inventory').GetContainerFromSlot(inventoryId, slot.slot)
             end)
@@ -439,7 +437,7 @@ local function SumContrabandWeight(inventoryId, items, depth)
 end
 
 --- Resolves `totalWeight` to a tier from Config.ContrabandAlertTiers.
---- Coordinator amendment (2026-08-23): the config's baseline
+--- The config's baseline
 --- `{ minWeight = 0, alert = 'clean' }` entry is mandatory and sorted
 --- first (ascending by minWeight) — walk the whole list and keep the LAST
 --- tier whose minWeight the total meets or exceeds, so a zero-contraband
@@ -526,8 +524,8 @@ TargetSearchCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, functi
     return (now - loggedAt) > staleAfterMs
 end)
 
--- ECONOMY-AUDIT FIX (this pass): Config.SearchZones.searchCooldownMs (the
--- per-TARGET-ONLY cooldown above — CORRECTION, config audit this pass: no
+-- ECONOMY-AUDIT FIX: Config.SearchZones.searchCooldownMs (the
+-- per-TARGET-ONLY cooldown above — CORRECTION: no
 -- searcher dimension at all, shared across every source) and
 -- Config.SearchZones.sniffAnimDurationMs
 -- (the flat per-source cooldown at HandleSearchTarget's own callback
@@ -542,11 +540,11 @@ end)
 -- stashes that is ~15 searches/min * Config.XP.awards.searchContrabandFound
 -- (25) = ~22,500 XP/hr, reaching the top XP tier in well under ten minutes.
 --
--- FIX, per this pass's explicit instruction to fix the XP side, not the
+-- FIX: the XP side needed fixing here, not the
 -- search side (search itself must stay fully responsive — HandleSearchTarget's
 -- own doc comment above already documents multiple distinct legitimate K9
 -- officers each searching the same target as intended behavior, and that
--- must keep working unchanged): XP for a given resolved target identity
+-- must keep working unchanged). XP for a given resolved target identity
 -- (`cooldownKey` below — the exact same stable 'vehicle:<plate>' |
 -- 'person:<citizenid>' string TargetSearchCooldown already keys on, never
 -- anything client-supplied) is only ever paid the FIRST time contraband is
@@ -561,13 +559,13 @@ end)
 -- touches their own planted stash cannot re-earn from it no matter how many
 -- stashes they rotate across or how tight the request cadence is.
 --
--- CORRECTION (economy-audit finding, this pass — the paragraph above
+-- CORRECTION (the paragraph above
 -- overstated what a weight-changed check alone can guarantee): "no matter
 -- how tight the request cadence is" was never true for a farmer who DOES
 -- touch their own stash — a profile the paragraph's own final clause
 -- ("a farmer who never actually touches...") already implicitly excluded,
--- but the surrounding sentence reads as a blanket cadence-proof guarantee
--- and was fed into a review brief as exactly that. A farmer who moves one
+-- but the surrounding sentence reads as a blanket cadence-proof guarantee,
+-- which is misleading. A farmer who moves one
 -- contraband item in or out of their own controlled vehicle trunk/stash
 -- BETWEEN searches changes totalWeight on every single cycle, satisfying
 -- `contrabandChangedSinceLastAward` below every time — and
@@ -584,7 +582,7 @@ end)
 -- (its TrackTicketMintCooldown, 30s @ 10 XP = 1,200 XP/hr) — solo, with no
 -- collusion and no risk, at any cadence the officer cared to use.
 --
--- FIFTH XP-FARM FIX (coder-backend, this pass): closed by
+-- FIFTH XP-FARM FIX: closed by
 -- `ContrabandXpMintCooldown` below, ported from tracking.lua's own
 -- TrackTicketMintCooldown shape — a flat, per-SEARCHER cooldown on the MINT
 -- itself, required IN ADDITION TO (never instead of) this table's own
@@ -608,7 +606,7 @@ end)
 -- header already gives, almost verbatim, for server/tracking.lua's
 -- TrackableLog (an aged/scanned log, not a `key -> lastTouchedAtMs` map).
 --
--- FOURTH XP-FARM FIX (coder-backend, this pass — the "assume a fourth
+-- FOURTH XP-FARM FIX (the "assume a fourth
 -- farm exists" audit): this table used to be pruned by its own periodic
 -- sweep, evicting any entry whose `awardedAt` was more than
 -- CONTRABAND_XP_STATE_TTL_MS (30 minutes) old. That sweep silently
@@ -649,7 +647,7 @@ end)
 -- on this server, not by how many times any of them is re-checked.
 local ContrabandXpState = {} -- [cooldownKey] = { weight = number, awardedAt = <GetGameTimer() ms> } — permanent for this resource's uptime, see comment above for why it must never be time-evicted
 
--- FIFTH XP-FARM FIX (coder-backend, this pass) — see the CORRECTION note on
+-- FIFTH XP-FARM FIX — see the CORRECTION note on
 -- ContrabandXpState's own declaration comment immediately above for the
 -- full exploit writeup this closes. Ported from server/tracking.lua's
 -- TrackTicketMintCooldown (see that file's own declaration comment for the
@@ -693,7 +691,7 @@ local ContrabandXpState = {} -- [cooldownKey] = { weight = number, awardedAt = <
 -- exactly the farm this constant exists to close, with no assertion able to
 -- catch a merely-too-low-but-still-positive value the way
 -- AssertValidDefaultThreshold catches a non-positive one. Sized at 60000
--- (60s) per this pass's own balance recommendation: at
+-- (60s): at
 -- Config.XP.awards.searchContrabandFound's shipped value of 25, this caps
 -- the award at 1,500 XP/hr per searcher — the same order of magnitude as
 -- server/tracking.lua's own trackSourceResolved ceiling (TrackTicketMintCooldown
@@ -706,8 +704,8 @@ local ContrabandXpMintCooldown = NewCooldown()
 ContrabandXpMintCooldown.RegisterPlayerDropped()
 local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 
--- EIGHTH XP-FARM FIX, CROSS-FILE POINTER (red-team-flagged compound-farm
--- follow-up, this pass): this cooldown's own 1,500 XP/hr ceiling is real and
+-- EIGHTH XP-FARM FIX, CROSS-FILE POINTER (compound farm across mechanics):
+-- this cooldown's own 1,500 XP/hr ceiling is real and
 -- unchanged, but it was never summed against server/tracking.lua's
 -- TrackTicketMintCooldown (1,200 XP/hr) or server/combat.lua's
 -- BiteHoldXpMintCooldown/TakedownXpMintCooldown (1,200 + 1,800 XP/hr) --
@@ -722,8 +720,8 @@ local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 -- server/progression.lua caps the TOTAL across mechanics.
 
 -- ==========================================================================
--- COOPERATIVE SEARCH BONUS -- DEVELOPER_REFERENCE.md Part B §10 (coder-backend,
--- this pass). When a search's own AwardXP('searchContrabandFound') actually
+-- COOPERATIVE SEARCH BONUS -- DEVELOPER_REFERENCE.md Part B §10.
+-- When a search's own AwardXP('searchContrabandFound') actually
 -- fires (i.e. already passed every existing gate below: HasK9Access,
 -- proximity, TargetSearchCooldown, the weight-changed check, and
 -- ContrabandXpMintCooldown), and the searcher currently has an ACTIVE
@@ -752,21 +750,20 @@ local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 --      (Config.XPTiers[1].xp == 0 is the mandatory base-tier baseline per
 --      server/progression.lua's own onResourceStart guard, so `tier.xp > 0`
 --      correctly means "at or above the second tier" without hardcoding a
---      label or index) -- this pass's own Part B §8 Trained-tier unlock
+--      label or index) -- Part B §8's Trained-tier unlock
 --      (server/progression.lua's own "XP TIER UNLOCKS" section), reserving
 --      cooperative work for K9 teams who have each independently earned
 --      past the base tier, not brand-new accounts.
--- Deliberately NOT extended to server/tracking.lua's own award (out of
--- scope for this pass's ownership and for the doc's own narrower "Needs"
--- text, which names server/search.lua specifically) -- no edit needed
+-- Deliberately NOT extended to server/tracking.lua's own award -- out of
+-- scope here (the doc's own narrower "Needs"
+-- text names server/search.lua specifically) -- no edit needed
 -- there.
 --
--- WHY THIS CANNOT BECOME A NEW, EASIER-TO-HIDE FARM (this task's own
--- explicit risk, restated and answered with the arithmetic it asked for):
+-- WHY THIS CANNOT BECOME A NEW, EASIER-TO-HIDE FARM (the arithmetic that
+-- rules it out):
 --
 --   UNCAPPED TAP RATE, if this bonus existed OUTSIDE the shared budget:
---     Config.XP.awards.coopSearchBonus (10 XP, reported to config.lua's
---     owner -- see this pass's own report) is paid at most once per
+--     Config.XP.awards.coopSearchBonus (10 XP) is paid at most once per
 --     CoopSearchXpMintCooldown's own 60,000ms window, PER RECEIVING
 --     PARTNER (keyed by the partner's own citizenid, independent of which
 --     partner is doing the searching) -- an uncapped ceiling of
@@ -779,8 +776,8 @@ local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 --     600 XP/hr tap (e.g. by having their partner search on their behalf
 --     while they themselves grind everything else) reaches
 --     5,700 + 600 = 6,300 XP/hr UNCAPPED -- comfortably over the existing
---     3,600 XP/hr shared budget ceiling. Per this task's own instruction,
---     that means it MUST be routed through the same budget, not around it.
+--     3,600 XP/hr shared budget ceiling. That means it MUST be routed
+--     through the same budget, not around it.
 --   ROUTED THROUGH THE SAME BUDGET, NOT AROUND IT: the payout below is
 --     minted via AwardXP(partnerCitizenid, 'coopSearchBonus') -- the exact
 --     same, single, resource-wide chokepoint every other actionKey already
@@ -807,7 +804,7 @@ local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 --     asserted on reasoning alone.
 --   QUALITATIVE HARDENING, on top of the numeric ceiling above, specifically
 --     against "a two-player farm is harder to detect than a solo one"
---     (this task's own stated concern -- the numeric ceiling alone answers
+--     (the numeric ceiling alone answers
 --     "does it exceed the budget," not "is it as easy to run/hide as a
 --     solo farm," which needs its own answer): the physical-proximity
 --     requirement (item 3 above) means the receiving partner cannot farm
@@ -924,7 +921,7 @@ end
 -- now calls that shared global below (HandleSearchTarget's 'person'
 -- branch) instead of defining its own.
 
---- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- MOVED to server/events.lua: this
 --- file's own `FireOutboundEvent` copy — byte-for-byte identical to the
 --- five other copies that existed alongside it — is now the single shared
 --- resource-global implementation in that file. See server/events.lua's
@@ -933,7 +930,7 @@ end
 
 --- Fire-and-forget audit log write to `k9_search_log`
 --- (sql/install.sql — see that table's own header comment for the full
---- db-schema rationale and integration note this function implements).
+--- schema rationale and integration note this function implements).
 --- Non-blocking so a slow/contended DB write never delays or risks the
 --- searchTarget callback's own response to the requesting officer — but
 --- non-blocking via `CreateThread` + `MySQL.insert.await`, NOT via a bare
@@ -1087,19 +1084,20 @@ end
 ---      ONLY — this is the one place totalWeight is allowed to appear.
 ---
 --- EXPLICIT DECISION, not a silent default (security review §5) — CORRECTED
---- this pass (config audit finding): TargetSearchCooldown above IS the
+--- (config audit finding): TargetSearchCooldown above IS the
 --- per-target-ONLY backstop cooldown security review §5 asked about — it is
 --- keyed purely on the resolved target identity (plate/citizenid), with NO
 --- searcher dimension folded in, so it is shared across EVERY source, not a
---- per-(source, target) pair. An earlier pass of this comment claimed the
---- opposite (that this file deliberately did NOT add such a backstop, and
---- that "multiple distinct K9 officers can each search the same target once
---- their own per-pair cooldown allows") — that was never true of the code
---- actually shipped here: there is no separate per-pair cooldown at all,
+--- per-(source, target) pair. This file's own documentation previously
+--- claimed the opposite (that this file deliberately did NOT add such a
+--- backstop, and that "multiple distinct K9 officers can each search the
+--- same target once their own per-pair cooldown allows") — that was never
+--- true of the code actually shipped here: there is no separate per-pair
+--- cooldown at all,
 --- so a SECOND officer searching the SAME target within searchCooldownMs of
 --- a FIRST officer's search gets `on_cooldown` too, same as the first
 --- officer would on their own repeat. Kept this way deliberately (not
---- re-opened this pass): it is the simpler of the two designs security
+--- reopened): it is the simpler of the two designs security
 --- review §5 flagged as defensible, it closes the exact "rotate several
 --- officers against one target to fish for a different roll" harassment
 --- vector §5 raised without needing a second cooldown layer, and — now that
@@ -1107,13 +1105,13 @@ end
 --- search never leaks more information to bystanders than a single search
 --- already did — a second officer being briefly unable to independently
 --- re-confirm the same target costs nothing operationally beyond a short
---- wait. Flagged here explicitly for coder-security to confirm or override,
---- same as before.
+--- wait. This remains open for an explicit security review to confirm or
+--- override, same as before.
 ---
 --- Search-action audit logging (contract doc §6's last bullet: who
---- searched what/whom, when, result) is NOT an open question — db-schema
---- already decided YES and shipped `k9_search_log` in sql/install.sql with
---- a full integration note. Wired here via LogSearchAttempt (see its own
+--- searched what/whom, when, result) is NOT an open question — this was
+--- already decided as YES and `k9_search_log` already shipped in sql/install.sql
+--- with a full integration note. Wired here via LogSearchAttempt (see its own
 --- doc comment above and its two call sites below, for 'search_failed' and
 --- for 'found'/'clean').
 --- @param source number
@@ -1210,7 +1208,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         -- source, DEVELOPER_REFERENCE.md#contraband-search §1): a vehicle
         -- trunk's inventory id is literally 'trunk' .. plate (no separator).
         --
-        -- qb-inventory (CONFIRMED this pass, fetched and read directly from
+        -- qb-inventory (CONFIRMED, fetched and read directly from
         -- qbcore-framework/qb-inventory branch `main`: client/vehicles.lua's
         -- own `qb-inventory:client:vehicleCheck` callback builds
         -- `local inventory = 'trunk-' .. plate` — HYPHENATED, a different
@@ -1285,7 +1283,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- therefore stay inside this callback's own execution context (the one
     -- FiveM already set `source` to = the requesting K9 player) so the
     -- lazy-load asks the correct client, not an arbitrary/unpredictable one.
-    -- SECURITY FIX (this pass): confirmed against the real
+    -- SECURITY FIX: confirmed against the real
     -- overextended/ox_inventory source (modules/inventory/server.lua) that
     -- `GetInventoryItems(inv, owner)` forwards `inv` straight to
     -- `Inventory(inv)` WITHOUT collapsing it to `{id, owner}` when `inv` is
@@ -1315,14 +1313,14 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- `inventoryBackendName` above) -- qb-inventory's own real vehicle
     -- lookup is a plain scalar, no netid-pinning mechanism exists or is
     -- needed for it (see `inventoryId`'s own derivation comment above).
-    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- ROUTED THROUGH K9Compat.Get('inventory') --
     -- shared/compat/core.lua's
     -- RequiredMethods.inventory.server.GetInventoryItems -- never a direct
     -- `exports.ox_inventory:GetInventoryItems` call. The adapter never
     -- throws (BuildSafeAdapter, shared/compat/core.lua) so this outer pcall
     -- is now pure defense-in-depth (kept unchanged -- costs nothing).
     --
-    -- STUB-DEGRADE ANALYSIS (this task's own explicit question): on the
+    -- STUB-DEGRADE ANALYSIS: on the
     -- no-op stub (nothing detected), `GetInventoryItems` returns `nil` for
     -- every branch -- `items == nil` below already reports `search_failed`
     -- (a genuine "the search could not be performed" outcome, correctly
@@ -1330,8 +1328,8 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- function's own established discipline) rather than crashing or
     -- silently reporting a false clean bill.
     --
-    -- qb-inventory specifically (the other CONFIRMED backend) -- UPDATED
-    -- this pass, previously a real functional gap: the PERSON branch
+    -- qb-inventory specifically (the other CONFIRMED backend) --
+    -- previously a real functional gap: the PERSON branch
     -- (`inventoryId` is a plain numeric server id) was already real --
     -- shared/compat/inventory.lua's qb-inventory GetInventoryItems is
     -- composed onto its own confirmed `GetInventory` export for a scalar id
@@ -1493,13 +1491,13 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         end
     end
 
-    -- k9_search_log audit row (sql/install.sql — db-schema's Phase 2
+    -- k9_search_log audit row (sql/install.sql's own Phase 2
     -- addition, wired here per that table's own integration note): one row
     -- per completed search attempt, fire-and-forget, never delays this
     -- return.
     LogSearchAttempt(source, targetType, plate, citizenid, contrabandFound and 'found' or 'clean', totalWeight, alertTier.alert)
 
-    -- PHASE 4 ADDITION (QA fix, this pass): Config.XP.awards.searchContrabandFound
+    -- PHASE 4 ADDITION: Config.XP.awards.searchContrabandFound
     -- (DEVELOPER_REFERENCE.md §13.4.1). config.lua's own comment on this award key
     -- already documented this exact call site ("at the point
     -- contrabandFound == true is already known") but the actual AwardXP
@@ -1517,9 +1515,9 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- GetXPTier/AwardXP call sites and server/medkit.lua's RestoreInjury —
     -- no load-order assumption on server/progression.lua either way.
     if contrabandFound and Config.Features.XPProgression and type(AwardXP) == 'function' then
-        -- ECONOMY-AUDIT FIX (this pass) — see ContrabandXpState's own
+        -- ECONOMY-AUDIT FIX — see ContrabandXpState's own
         -- declaration comment above for the full writeup, INCLUDING the
-        -- FOURTH XP-FARM FIX (coder-backend, this pass) correcting this
+        -- FOURTH XP-FARM FIX correcting this
         -- table's earlier time-based eviction: an entry created below is
         -- never evicted by age, only ever left in place or overwritten by a
         -- later genuine weight change, so this "differs from last paid
@@ -1533,7 +1531,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         local priorAwardState = ContrabandXpState[cooldownKey]
         local contrabandChangedSinceLastAward = not priorAwardState or priorAwardState.weight ~= totalWeight
 
-        -- FIFTH XP-FARM FIX (coder-backend, this pass) — see
+        -- FIFTH XP-FARM FIX — see
         -- ContrabandXpMintCooldown's own declaration comment above for the
         -- full writeup this closes. Checked, and (iff BOTH conditions hold)
         -- CONSUMED, only once `contrabandChangedSinceLastAward` is already
@@ -1634,11 +1632,11 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     -- Flat per-source cooldown (ANY target) — BLOCKING per
     -- DEVELOPER_REFERENCE.md#contraband-search §2, not present in DEVELOPER_REFERENCE.md
     -- §11.4's original text (which describes a per-(source, target)
-    -- cooldown — CORRECTION, config audit this pass: what actually shipped
+    -- cooldown — CORRECTION: what actually shipped
     -- as TargetSearchCooldown below is per-TARGET ONLY, no searcher
-    -- dimension at all, a divergence from that original spec text worth
-    -- flagging to whoever owns DEVELOPER_REFERENCE.md, not something this file's comments
-    -- should keep restating as fact). Closes the "sweep every vehicle in a
+    -- dimension at all, a divergence from that original spec text that
+    -- DEVELOPER_REFERENCE.md should be updated to reflect, not something
+    -- this file's comments should keep restating as fact). Closes the "sweep every vehicle in a
     -- parking lot with zero delay" flood vector a per-target-only cooldown
     -- leaves open, since TargetSearchCooldown alone never limits how many
     -- DIFFERENT targets one source can hit back-to-back.

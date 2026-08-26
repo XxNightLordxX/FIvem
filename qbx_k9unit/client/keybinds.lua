@@ -153,22 +153,17 @@
     DISCOVERABILITY -- the K9 Command Tablet's Commands page
     (html/tablet.js's COMMAND_REFERENCE, guarded by
     tests/commandreferenceregistry_spec.lua) is this resource's answer to
-    "how does a player find out this exists at all." This file's FIVE new
+    "how does a player find out this exists at all." CORRECTED (this pass,
+    coder-backend): this section used to say this file's five new
     RegisterCommand names (k9bitehold, k9takedown, k9dragtoggle, k9sit,
-    k9bark -- k9recall already has an entry, see below) are NOT added to
-    that page by this pass: html/tablet.js is owned by other agents this
-    session and is out of this file's edit scope. The exact five-entry
-    payload (command/category/usageKey/doesKey/needsKey/gate shape, plus
-    each command's own default key for a NEW "default key" display this
-    pass is proposing) was handed to the tablet UI owner directly (see this
-    pass's own report for the verbatim message) rather than guessed at
-    here. Until that lands, these five commands are real and working but
-    NOT listed on the tablet's Commands page -- a genuine, disclosed gap,
-    not a silent one. tests/commandreferenceregistry_spec.lua's own
-    hand-maintained CLIENT_LUA_FILES list also does not yet include
-    'keybinds.lua' (that spec is not owned by this file either), so that
-    drift guard does not yet even scan this file for RegisterCommand names
-    -- also reported, not fixed here.
+    k9bark) were not yet added to that page, and that
+    tests/commandreferenceregistry_spec.lua's own CLIENT_LUA_FILES list did
+    not yet include 'keybinds.lua' -- both re-verified false by direct read.
+    All five now have COMMAND_REFERENCE entries in html/tablet.js (each
+    with its own usageKey/doesKey/needsKey/gate/defaultKeybind), and
+    'keybinds.lua' is now present in
+    tests/commandreferenceregistry_spec.lua's CLIENT_LUA_FILES list, so that
+    drift guard does scan this file for RegisterCommand names.
     ======================================================================
 ]]
 

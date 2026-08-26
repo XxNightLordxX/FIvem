@@ -139,28 +139,24 @@
     feature summons named OTHER players into a scene and (at the very end)
     publicly identifies one of them as "the match" -- the same "acts on
     another player, not just on the K9 itself" shape config.lua's own
-    comment gives for BiteAndHold/NonLethalTakedown/PropDragging, so it is
-    reported to main to be added to that same RequireGrant table, gated
-    through the exact same generic HasPermission('feature.ScentLineup' /
-    'block.ScentLineup', ...) mechanism client/tablet.lua already drives
-    for those four -- see CanUseScentLineup() below for the 4-step
-    resolution this file implements from config.lua's own documented order.
+    comment gives for BiteAndHold/NonLethalTakedown/PropDragging.
+    'ScentLineup = true' has since been added to that same RequireGrant
+    table (confirmed by reading config.lua), gated through the exact same
+    generic HasPermission('feature.ScentLineup' / 'block.ScentLineup', ...)
+    mechanism client/tablet.lua already drives for the other entries -- see
+    CanUseScentLineup() below for the 4-step resolution this file
+    implements from config.lua's own documented order.
 
-    DISCLOSED GAP, NOT INTRODUCED BY THIS FILE: as of this pass,
-    server/permissions.lua's IsValidPermissionKey(value) accepts only a
-    value that is a literal key of Config.Permissions (the four
-    k9.access/k9.certify/k9.audit/k9.givexp capabilities) -- it does not
-    yet recognise the 'feature.<Name>'/'block.<Name>' key shape
-    client/tablet.lua's grantFeature/blockFeature already send. If that gap
-    is still open when this ships, HasPermission('feature.ScentLineup')
-    can never return true for anyone (GrantPermission itself would refuse
-    to write such a row), meaning ScentLineup fails CLOSED for every
-    citizenid until a high-command grant can actually land -- the safe
-    direction, but not a usable one. This is not new or specific to this
-    feature: it equally blocks the four EXISTING RequireGrant entries
-    today. Flagged for coder-security/coder-architect rather than "fixed"
-    here -- server/permissions.lua is outside this file's ownership this
-    pass.
+    CORRECTED (this pass, coder-backend): this section used to disclose a
+    gap where server/permissions.lua's IsValidPermissionKey(value) accepted
+    only a literal key of Config.Permissions, meaning 'feature.<Name>'/
+    'block.<Name>' could never validate and every RequireGrant entry
+    (including ScentLineup) would fail CLOSED forever -- re-verified false
+    by direct read. IsValidPermissionKey now accepts 'feature.<Name>'/
+    'block.<Name>' whenever `<Name>` is a real key of Config.Features (a
+    referential check against Config.Features directly, independent of
+    Config.Permissions membership) -- so HasPermission('feature.ScentLineup')
+    validates and can be granted today.
 
     DISCOVERABILITY FIX (this pass, no authorization logic touched):
     CanUseScentLineup() used to return a single boolean, and /k9lineup sent

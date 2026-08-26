@@ -1206,13 +1206,15 @@ K9MoveRateModifiers = {
 -- and relies entirely on RecomputeK9MoveRate()'s own single
 -- SetPedMoveRateOverride call and single [0.1, 2.0] clamp below.
 --
--- CONFIG FIELD, NOT YET IN config.lua (this pass does not own that file --
--- reported separately): `Config.Peds[n].speedMultiplier` (number, optional).
--- Read defensively below (`type(...) == 'number'` guard) so this is a
--- SAFE NO-OP (every breed resolves to the neutral 1.0 default) against
--- TODAY's real, unmodified config.lua, which has no such field on any
--- entry yet -- this composer slot only starts differentiating breeds once
--- that field is actually added.
+-- CONFIG FIELD: `Config.Peds[n].speedMultiplier` (number, optional).
+-- CORRECTED (this pass, coder-backend): this comment used to say the field
+-- was not yet in config.lua and was reported separately -- re-verified
+-- false by direct read. config.lua's own Config.Peds entries now carry
+-- this field (Shepherd 1.00, Rottweiler 0.98, Husky 1.03, Chop 1.00 --
+-- matching the values this section originally proposed). Still read
+-- defensively below (`type(...) == 'number'` guard), so a custom/streamed
+-- entry an operator adds WITHOUT this field still safely resolves to the
+-- neutral 1.0 default rather than erroring.
 --
 -- PRECOMPUTED ONCE AT FILE LOAD, keyed by GetHashKey(pedEntry.model) --
 -- mirrors client/main.lua's own K9ModelHashes construction loop exactly

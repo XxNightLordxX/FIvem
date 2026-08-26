@@ -123,11 +123,15 @@
     resource's own clients).
 
     Fired from server/certifications.lua, server/partnership.lua,
-    server/progression.lua, server/search.lua, server/sarcalls.lua, and
-    server/integrations.lua, each at the exact success points described
-    below, through one shared resource-global `FireOutboundEvent` helper
-    defined in server/events.lua (see that file's header) — this file only
-    documents the contract and does not fire anything directly; firing
+    server/progression.lua, server/search.lua, server/sarcalls.lua,
+    server/scentlineup.lua, and server/integrations.lua (CORRECTED this
+    pass, coder-backend: server/scentlineup.lua's own scentLineupResolved
+    firing was missing from this list -- confirmed by grepping every real
+    `FireOutboundEvent(` call site before writing this correction), each at
+    the exact success points described below, through one shared
+    resource-global `FireOutboundEvent` helper defined in server/events.lua
+    (see that file's header) — this file only documents the contract and
+    does not fire anything directly; firing
     happens at the owning files' own success points.
 
     Current full list (measured by grepping every `qbx_k9unit:events:`

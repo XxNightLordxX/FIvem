@@ -53,7 +53,10 @@
     resource's other shared-helper files -- to read in the same "shared
     primitive first" order those already established, so no
     `type(FireOutboundEvent) == 'function'` existence guard is needed at
-    any of the six consuming files' call sites.
+    any consuming file's call sites -- true for the original six and
+    unchanged for server/scentlineup.lua's own call site added afterward
+    (see "COUNT WILL DRIFT, NOT MAINTAINED LIVE HERE" below), for the
+    identical load-order reason.
 
     ZERO BEHAVIOR CHANGE. Unlike server/notify.lua's NotifyPlayer
     extraction (which deliberately fixed a wrong `'inform'` default and

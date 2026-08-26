@@ -27,24 +27,35 @@
          reduces it; a malformed baseCooldownMs itself is returned
          unchanged, never erroring.
       2. THE LOAD-BEARING PROOF this task requires: a tier unlock cannot
-         override a high-command block. server/permissions.lua's generic
-         per-feature block/grant resolution (config.lua's
-         Config.FeatureControl) has no shipped consumer function yet to
-         load and drive directly (see server/progression.lua's own "XP TIER
-         UNLOCKS" section for why none of this pass's three unlocks needed
-         one to compose safely). This section instead proves the property
-         the most concrete way currently possible against REAL, unmodified
-         code: it drives the REAL GetXPTierMedkitCooldownMs through a small,
-         explicitly-labelled local stand-in for server/medkit.lua's
-         REPORTED (not yet applied) call-site integration -- the exact
-         pattern this pass's own report gives that file's owner -- and
-         shows that a block check placed BEFORE the tier-multiplier
-         consultation (the only order GetXPTierMedkitCooldownMs's own
-         CALLER CONTRACT permits) denies outright, regardless of tier, and
-         never even reaches the tier read. This proves the INTEGRATION
-         PATTERN's correctness; it is not a claim that server/medkit.lua
-         already enforces it (that one-line wiring is reported, not
-         applied, this pass -- that file has a live owner this session).
+         override a high-command block. There is still no SINGLE shared,
+         exported Config.FeatureControl block/grant resolution function to
+         load and drive directly -- each consuming file (server/medkit.lua,
+         server/combat.lua, server/admin.lua, server/search.lua, and others)
+         implements its own local per-feature resolution function against
+         the same generic HasPermission('feature.<Name>'/'block.<Name>')
+         seam, copied rather than shared (see server/progression.lua's own
+         "XP TIER UNLOCKS" section for why none of this pass's three
+         unlocks needed one to compose safely). This section instead proves
+         the property the most concrete way currently possible against
+         REAL, unmodified code: it drives the REAL GetXPTierMedkitCooldownMs
+         through a small, explicitly-labelled local stand-in for the
+         block-before-tier-consultation shape, and shows that a block check
+         placed BEFORE the tier-multiplier consultation (the only order
+         GetXPTierMedkitCooldownMs's own CALLER CONTRACT permits) denies
+         outright, regardless of tier, and never even reaches the tier
+         read. This proves the INTEGRATION PATTERN's correctness in the
+         general case. CORRECTED (this pass, coder-backend): this used to
+         call the stand-in below a proxy for server/medkit.lua's own
+         "REPORTED (not yet applied)" call-site integration -- re-verified
+         false by direct read. server/medkit.lua's RunUseK9MedkitMutation
+         now genuinely calls GetXPTierMedkitCooldownMs (see that function's
+         own CALLER CONTRACT doc comment in server/progression.lua for the
+         exact call site) -- but its own per-person K9Medkit feature/block
+         check (IsK9MedkitPermittedForCitizenId) runs earlier in that
+         file's callback, before the mutex/cooldown resolution, not as a
+         check interleaved with the tier-multiplier read itself. The
+         stand-in below remains a generic proof of the ORDERING property,
+         not a literal mirror of server/medkit.lua's own current structure.
 ]]
 
 local t = dofile('testkit.lua')
@@ -238,15 +249,18 @@ end)
 -- and what it does not.
 -- ----------------------------------------------------------------------
 
---- Stand-in for server/medkit.lua's REPORTED (not yet applied) call-site
---- integration -- see server/progression.lua's own GetXPTierMedkitCooldownMs
---- doc comment, "CALLER CONTRACT", for the exact one-line snippet this
---- mirrors. `blocked` simulates whatever future generic
---- Config.FeatureControl block-resolution server/permissions.lua ends up
---- exposing (not yet shipped as of this pass) -- this test does not assume
---- its exact name/signature, only that SOME block check exists and runs
---- BEFORE this function is ever consulted, per GetXPTierMedkitCooldownMs's
---- own documented CALLER CONTRACT.
+--- Generic stand-in for the "block check runs before the tier-multiplier
+--- consultation" ordering -- see server/progression.lua's own
+--- GetXPTierMedkitCooldownMs doc comment, "CALLER CONTRACT", for the real
+--- call site this mirrors (that call site is genuinely applied in
+--- server/medkit.lua today -- see this file's own header for the full,
+--- corrected story). `blocked` simulates whatever per-file
+--- feature/block-resolution function ends up gating the real call (there is
+--- still no single shared, exported Config.FeatureControl block-resolution
+--- function -- each consuming file implements its own) -- this test does
+--- not assume its exact name/signature, only that SOME block check exists
+--- and runs BEFORE this function is ever consulted, per
+--- GetXPTierMedkitCooldownMs's own documented CALLER CONTRACT.
 --- @param citizenid string
 --- @param blocked boolean
 --- @param baseCooldownMs number

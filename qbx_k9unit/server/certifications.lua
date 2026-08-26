@@ -3115,12 +3115,72 @@ local function RenewCertification(granterSrc, targetServerId)
     local granterCitizenid = ResolveGranterCitizenId(granterSrc)
     if not granterCitizenid then return false, 'invalid_granter' end
 
-    local updateOk, err = pcall(K9Store.Cert_RenewExpiry, targetCitizenid, jobName, expiryDays)
+    -- AFFECTED-ROWS DEFECT FIX (data-truth audit pass, this pass,
+    -- coder-backend) — this function used to check only whether the pcall
+    -- ITSELF threw, never whether the UPDATE it wrapped actually matched a
+    -- row — the exact defect already fixed in SetCertificationTier/
+    -- SetCertificationTierOffline (see either's own identical doc comment
+    -- for the full writeup). Cert_RenewExpiry is a bare
+    -- `WHERE citizenid = ? AND job = ? AND active = 1` UPDATE (see
+    -- server/datastore.lua's own doc comment on K9Store.Cert_RenewExpiry),
+    -- so it throws NOTHING when the WHERE clause simply matches zero rows.
+    -- This entry gate above reads the in-memory `Certifications` cache, not
+    -- a fresh row, and the UPDATE itself yields across a coroutine boundary
+    -- — a concurrent decertify or job change landing in that exact window
+    -- makes this UPDATE affect zero rows with no error at all, which the
+    -- pre-fix code reported as an unconditional success to BOTH parties.
+    -- Mirrors RevokeCertification/SetCertificationTier's own identical
+    -- `updateOk`/affected-rows branch, byte-for-byte in shape.
+    --
+    -- `oldExpiresAtUnix` is snapshotted from the entry gate's own `cached`
+    -- read, BEFORE the write — the reconciliation read below (on a thrown
+    -- error only) compares the fresh, DB-authoritative expiry against this
+    -- baseline: a renewal is a `DATE_ADD(NOW(), ...)` extension, not a
+    -- fixed target value, so "does it now equal what I asked for" (this
+    -- file's SetCertificationTier/RevokeCertification shape) does not
+    -- apply verbatim — the closest genuine analog of "the invariant this
+    -- call was trying to establish now holds" is "the expiry is
+    -- confirmably LATER than it was before this call" (or newly set at
+    -- all, if it was nil/no-expiry before).
+    local oldExpiresAtUnix = cached.expiresAtUnix
+
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Cert_RenewExpiry, targetCitizenid, jobName, expiryDays)
 
     if not updateOk then
-        print(('[qbx_k9unit] RenewCertification UPDATE failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(err)))
-        NotifyPlayer(granterSrc, locale('certifications.renew_error'), 'error')
-        return false, 'db_error'
+        print(('[qbx_k9unit] RenewCertification UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(targetCitizenid, jobName, tostring(affectedRowsOrErr)))
+
+        local freshRecord = QueryCertificationRecord(targetCitizenid, jobName)
+        local reallyRenewed = freshRecord ~= nil and freshRecord.expiresAtUnix ~= nil
+            and (oldExpiresAtUnix == nil or freshRecord.expiresAtUnix > oldExpiresAtUnix)
+        if not reallyRenewed then
+            -- Either confirmed the expiry never actually moved (the UPDATE
+            -- genuinely never committed -- an honest failure, the target
+            -- keeps their current, correct expiry) or unreadable/
+            -- no-longer-active (outcome unknown or moot) -- in BOTH cases,
+            -- never claim a renewal succeeded that this code cannot
+            -- confirm, and never run the side effects below (outbound
+            -- event, success notices, clearing the expiry-warning flags)
+            -- against a guess. Mirrors SetCertificationTier's own
+            -- identical branch.
+            NotifyPlayer(granterSrc, locale('certifications.renew_error'), 'error')
+            return false, 'db_error'
+        end
+
+        -- Confirmed extended despite the client-side error (e.g. a success
+        -- acknowledgment lost after a real commit) -- fall through to the
+        -- normal success path below against this now-confirmed truth;
+        -- RefreshCertificationCache below will pick up the correct state.
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
+        -- Zero rows matched: WHERE ... AND active = 1 found nothing -- this
+        -- entry gate's own in-memory cache read was stale (a concurrent
+        -- decertify/job-change landed in the window between that read and
+        -- this UPDATE's own coroutine yield). Zero is a real, meaningful
+        -- outcome here, never swallowed by an `or` fallback -- checked
+        -- explicitly, same as RevokeCertification/SetCertificationTier's
+        -- own identical branch.
+        RefreshCertificationCache(targetCitizenid, jobName)
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified_needs_cert'), 'error')
+        return false, 'target_not_actively_certified'
     end
 
     RefreshCertificationCache(targetCitizenid, jobName)
@@ -3212,12 +3272,46 @@ local function RenewCertificationOffline(granterSrc, citizenid, jobName)
         return false, 'target_not_actively_certified'
     end
 
-    local updateOk, err = pcall(K9Store.Cert_RenewExpiry, citizenid, jobName, expiryDays)
+    -- AFFECTED-ROWS DEFECT FIX (data-truth audit pass) -- see
+    -- RenewCertification's own identical doc comment above (the online
+    -- twin) for the full "why this can affect zero rows with no thrown
+    -- error at all, and why the reconciliation compares the fresh expiry
+    -- against a pre-write baseline rather than a fixed target value"
+    -- writeup; applies here verbatim -- the entry gate's own `record` above
+    -- is a snapshot read that can go stale across this UPDATE's own
+    -- coroutine yield exactly the same way the online path's in-memory
+    -- cache read can.
+    local oldExpiresAtUnix = record.expiresAtUnix
+
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Cert_RenewExpiry, citizenid, jobName, expiryDays)
 
     if not updateOk then
-        print(('[qbx_k9unit] RenewCertificationOffline UPDATE failed for %s/%s: %s'):format(citizenid, jobName, tostring(err)))
-        NotifyPlayer(granterSrc, locale('certifications.renew_error'), 'error')
-        return false, 'db_error'
+        print(('[qbx_k9unit] RenewCertificationOffline UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(citizenid, jobName, tostring(affectedRowsOrErr)))
+
+        local freshRecord = QueryCertificationRecord(citizenid, jobName)
+        local reallyRenewed = freshRecord ~= nil and freshRecord.expiresAtUnix ~= nil
+            and (oldExpiresAtUnix == nil or freshRecord.expiresAtUnix > oldExpiresAtUnix)
+        if not reallyRenewed then
+            -- Either confirmed the expiry never actually moved, or
+            -- unreadable/no-longer-active -- never claim a renewal
+            -- succeeded that this code cannot confirm. See
+            -- RenewCertification's own identical branch for the full
+            -- reasoning.
+            NotifyPlayer(granterSrc, locale('certifications.renew_error'), 'error')
+            return false, 'db_error'
+        end
+
+        -- Confirmed extended despite the client-side error -- fall
+        -- through to the normal success path below against this
+        -- now-confirmed truth.
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
+        -- Zero rows matched -- a real, meaningful outcome, never
+        -- swallowed by an `or` fallback -- checked explicitly, same as
+        -- the online path's identical branch immediately above in this
+        -- file.
+        RefreshCertificationCache(citizenid, jobName)
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified_needs_cert'), 'error')
+        return false, 'target_not_actively_certified'
     end
 
     RefreshCertificationCache(citizenid, jobName)

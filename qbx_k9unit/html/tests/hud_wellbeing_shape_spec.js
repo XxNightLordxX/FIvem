@@ -111,6 +111,39 @@ t.test('FULL PRESENCE: every wellbeing key + xpTier.label present renders every 
     t.equals(xpTier.value.textContent, 'Veteran');
 });
 
+t.test('xpTier.badge: absent when the tier carries none -- label renders alone, no trailing separator/badge text', () => {
+    const h = freshHarnessNoAudio();
+    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: {}, xpTier: { label: 'Veteran' } }));
+    t.equals(h.getStatusRow('xpTier').value.textContent, 'Veteran');
+});
+
+t.test('xpTier.badge: present alongside label renders both -- the previously-disclosed "computed, forwarded, cached, but never rendered" gap (server/progression.lua) is closed', () => {
+    const h = freshHarnessNoAudio();
+    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: {}, xpTier: { label: 'Elite K9', badge: 'elite' } }));
+    const xpTier = h.getStatusRow('xpTier');
+    t.isFalse(xpTier.row.classList.contains('k9hud-row--hidden'));
+    t.isTrue(xpTier.value.textContent.indexOf('Elite K9') !== -1, 'label text is present');
+    t.isTrue(xpTier.value.textContent.indexOf('elite') !== -1, 'badge text is present');
+});
+
+t.test('TYPE STRICTNESS: xpTier.badge sent as an empty string renders label alone, same as an absent badge', () => {
+    const h = freshHarnessNoAudio();
+    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: {}, xpTier: { label: 'Elite K9', badge: '' } }));
+    t.equals(h.getStatusRow('xpTier').value.textContent, 'Elite K9');
+});
+
+t.test('TYPE STRICTNESS: xpTier.badge sent as a non-string (number) renders label alone, defensively', () => {
+    const h = freshHarnessNoAudio();
+    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: {}, xpTier: { label: 'Elite K9', badge: 7 } }));
+    t.equals(h.getStatusRow('xpTier').value.textContent, 'Elite K9');
+});
+
+t.test('xpTier.badge present but xpTier.label absent still hides the whole row -- a badge never renders on its own', () => {
+    const h = freshHarnessNoAudio();
+    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: {}, xpTier: { badge: 'elite' } }));
+    t.isTrue(h.getStatusRow('xpTier').row.classList.contains('k9hud-row--hidden'));
+});
+
 t.test('distracted:false renders "Clear" text and still shows the row (false is a valid present boolean, not an absence)', () => {
     const h = freshHarnessNoAudio();
     h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { distracted: false }, xpTier: {} }));

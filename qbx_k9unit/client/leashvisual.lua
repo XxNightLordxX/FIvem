@@ -662,16 +662,17 @@ CreateThread(function()
         Wait(MONITOR_TICK_MS)
 
         -- OWN-DEATH cleanup for whichever role THIS client is currently
-        -- playing. Task requirement: "either player dying" -- confirmed by
-        -- reading server/main.lua in full before writing this file that
-        -- LeashPairs has NO death-triggered auto-detach of its own (no
-        -- wasted/death handler touches it anywhere in that file) -- a real
-        -- gap in the underlying mechanic, reported separately, not fixed
-        -- here (out of this file's ownership). Without this poll, a dead
-        -- K9's own written statebag (or a dead officer's own handle prop)
-        -- would otherwise persist until a manual/cert-revoke detach
-        -- eventually fires leashDetached, which may never happen at all
-        -- for a corpse nobody bothers to detach.
+        -- playing. Task requirement: "either player dying" -- when this file
+        -- was written, server/main.lua's LeashPairs had NO death-triggered
+        -- auto-detach of its own; that gap has SINCE been closed there (a
+        -- dedicated death-poll thread, `IsLeashPartyDead`, now calls
+        -- ForceDetachLeashForSource -- confirmed by reading that file), so
+        -- a death today also fires leashDetached server-side. This poll is
+        -- kept regardless, not made redundant by that fix: it is this
+        -- client's own, purely local, zero-round-trip cleanup for its own
+        -- ped, and still the only thing that clears a dead K9's statebag
+        -- (or a dead officer's handle prop) instantly rather than waiting
+        -- on the server's own ~2s poll cadence and a network round trip.
         local myPed = PlayerPedId()
         if (myLeashVisualStateWritten or myHandleProp) and myPed and myPed ~= 0 and IsEntityDead(myPed) then
             ClearMyLeashVisualState()

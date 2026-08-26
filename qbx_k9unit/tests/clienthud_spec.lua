@@ -397,6 +397,61 @@ t.test('xpTier: XPProgression = true, GetCurrentXPTier returns a real tier -- la
 end)
 
 -- ----------------------------------------------------------------------
+-- xpTier.badge -- server/progression.lua's own disclosed "Elite -- SERVER
+-- HALF WIRED, DISPLAY NOT WIRED" gap, closed this pass. Same accessor as
+-- label above (GetCurrentXPTier()), just a second field off the same
+-- table -- so this deliberately reuses the exact same fixture shape as the
+-- label tests just above rather than a new one.
+-- ----------------------------------------------------------------------
+
+t.test('xpTier.badge: absent when the current tier has no badge configured (every shipped tier except Elite)', function()
+    local f = newHudFixture({ features = { XPProgression = true } })
+    f.env.GetCurrentXPTier = function() return { label = 'Rookie', xp = 0 } end
+    f.fireHudReady()
+    t.isNil(f.lastMessage().data.xpTier.badge)
+end)
+
+t.test('xpTier.badge: present and correct when the current tier carries one (config.lua\'s Elite row: badge = \'elite\')', function()
+    local f = newHudFixture({ features = { XPProgression = true } })
+    f.env.GetCurrentXPTier = function() return { label = 'Elite K9', xp = 9000, badge = 'elite' } end
+    f.fireHudReady()
+    t.equals(f.lastMessage().data.xpTier.label, 'Elite K9')
+    t.equals(f.lastMessage().data.xpTier.badge, 'elite')
+end)
+
+t.test('xpTier.badge: an empty-string badge is treated as absent, not rendered as a blank badge', function()
+    local f = newHudFixture({ features = { XPProgression = true } })
+    f.env.GetCurrentXPTier = function() return { label = 'Elite K9', xp = 9000, badge = '' } end
+    f.fireHudReady()
+    t.isNil(f.lastMessage().data.xpTier.badge)
+end)
+
+t.test('xpTier.badge: a non-string badge is treated as absent, defensively', function()
+    local f = newHudFixture({ features = { XPProgression = true } })
+    f.env.GetCurrentXPTier = function() return { label = 'Elite K9', xp = 9000, badge = 123 } end
+    f.fireHudReady()
+    t.isNil(f.lastMessage().data.xpTier.badge)
+end)
+
+t.test('xpTier.badge: XPProgression = false -- badge always absent too, same as label', function()
+    local f = newHudFixture({ features = { XPProgression = false } })
+    f.fireHudReady()
+    t.isNil(f.lastMessage().data.xpTier.badge)
+end)
+
+t.test('xpTier.badge: a badge CHANGE alone (label unchanged) is enough to trigger a poll-thread push', function()
+    local f = newHudFixture({ features = { XPProgression = true } })
+    f.env.GetCurrentXPTier = function() return { label = 'Elite K9', xp = 9000 } end
+    f.setCanShowK9UI(true)
+    f.fireHudReady()
+    t.isNil(f.lastMessage().data.xpTier.badge)
+
+    f.env.GetCurrentXPTier = function() return { label = 'Elite K9', xp = 9000, badge = 'elite' } end
+    f.step()
+    t.equals(f.lastMessage().data.xpTier.badge, 'elite', 'a badge appearing on an already-known label must still trigger a push, not be silently missed by the label-only change check')
+end)
+
+-- ----------------------------------------------------------------------
 -- Poll thread -- becameVisible / epsilon / heartbeat push decisions, and
 -- the true->false "resend last known values" rule. See this file's header
 -- for this thread's own, unique stepping semantics.

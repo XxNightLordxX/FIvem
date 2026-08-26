@@ -74,16 +74,31 @@
         data.xpTier = {
           label = <string>,  -- KEY ABSENT unless Config.Features.XPProgression AND a
                               -- tier snapshot has actually been received client-side
+          badge = <string>,  -- KEY ABSENT unless label above is also present AND the
+                              -- current tier's own Config.XPTiers[n].badge (or a live
+                              -- DB override -- server/xptiers.lua's own XPTiersUpsert)
+                              -- is a non-empty string. THIS FIELD IS THE FIX for the
+                              -- previously-disclosed gap in server/progression.lua's
+                              -- own "XP TIER UNLOCKS" section ("Elite -- SERVER HALF
+                              -- WIRED, DISPLAY NOT WIRED... client/hud.lua's PushVitals
+                              -- only ever sends xpTier.label... html/app.js has no
+                              -- badge handling at all"): that comment can now be
+                              -- flipped to WIRED (server/progression.lua is owned by
+                              -- coder-backend/coder-security, not touched by this
+                              -- pass — flagged to them separately rather than left
+                              -- silently stale). Purely cosmetic, same posture as
+                              -- config.lua's own Elite-row comment ("Display only, no
+                              -- mechanical effect") — grants nothing, gates nothing.
         }
 
     A key's ABSENCE (not a zeroed/false/empty-string value) is how a
-    disabled feature — or, for xpTier.label, a not-yet-known tier — is
-    signaled. html/app.js must render that element as genuinely gone from
-    the DOM (its row hidden), never as a blank/zero placeholder — must be
-    absent, not blank or zeroed. This mirrors the flag-gated inertness
-    client/wellbeing.lua and client/progression.lua already both apply to
-    their OWN gating (a disabled feature's section is inert, not merely
-    quiet).
+    disabled feature — or, for xpTier.label/xpTier.badge, a not-yet-known
+    tier or a tier with no configured badge — is signaled. html/app.js must
+    render that element as genuinely gone from the DOM (its row hidden),
+    never as a blank/zero placeholder — must be absent, not blank or
+    zeroed. This mirrors the flag-gated inertness client/wellbeing.lua and
+    client/progression.lua already both apply to their OWN gating (a
+    disabled feature's section is inert, not merely quiet).
 
     DATA SOURCE — NO NEW SERVER ROUND TRIP, EITHER FOR WELLBEING OR XP:
       - Wellbeing (fatigue/mood/fearStress/injury/distracted): this file
@@ -104,17 +119,20 @@
         first periodic tick broadcast lands — client/wellbeing.lua's own
         on-demand catch-up fetch for that moment is applied locally inside
         that file only, never re-broadcast as this same event).
-      - XP tier (xpTier.label): read via `GetCurrentXPTier()`, the
-        resource-global client/progression.lua already exposes for exactly
-        this "future HUD/display need" (see that file's own header) —
-        called behind a `type(GetCurrentXPTier) == 'function'` guard, this
-        codebase's established soft-dependency convention (mirrors
+      - XP tier (xpTier.label, xpTier.badge): both read off the SAME
+        `GetCurrentXPTier()` table, the resource-global client/progression.lua
+        already exposes for exactly this "future HUD/display need" (see
+        that file's own header) — called behind a
+        `type(GetCurrentXPTier) == 'function'` guard, this codebase's
+        established soft-dependency convention (mirrors
         client/progression.lua's own guard on RecomputeK9MoveRate), even
         though the symbol is already declared in .luacheckrc's `globals`
         list — the guard covers the real runtime case where
         Config.Features.XPProgression is false and client/progression.lua
         returns at its own top-of-file gate before ever defining the
-        function at all.
+        function at all. `badge` is read from the exact same cached tier
+        table `label` already was — no second accessor, no second
+        soft-dependency guard, no new server round trip.
 
     CROSS-FILE COORDINATION NOTE FOR WHOEVER NEXT TOUCHES
     client/wellbeing.lua: this file deliberately does NOT ask that file for
@@ -290,6 +308,7 @@ local hudState = {
     injury = 100.0,
     distracted = false,
     xpTierLabel = nil, -- string|nil; nil means "no tier known yet" (XPProgression disabled, or no snapshot received this session yet) — rendered as an absent row in that case, per the header's "absence, not blank" rule
+    xpTierBadge = nil, -- string|nil; nil means "no badge on the current tier" (same absent-row rule as xpTierLabel above) -- e.g. non-nil for config.lua's Elite row (`badge = 'elite'`), nil for every other shipped tier
     lastPushAt = -HUD_HEARTBEAT_MS, -- forces the very first real push to count as heartbeat-due
 }
 
@@ -435,21 +454,37 @@ local function ReadWellbeingForDisplay()
     return fatigue, mood, fearStress, injury, distracted
 end
 
---- Reads the current XP tier's label, or nil if XPProgression is off, the
---- client/progression.lua accessor doesn't exist (soft-dependency guard —
---- see this file's header), or no tier snapshot has been received this
---- session yet (GetCurrentXPTier() itself returning nil, which is its own
---- documented behavior before the first 'qbx_k9unit:client:xpTierChanged'
---- event lands).
---- @return string|nil
-local function ReadXPTierLabel()
-    if not XP_TIER_ELEMENT_ENABLED then return nil end
-    if type(GetCurrentXPTier) ~= 'function' then return nil end
+--- Reads the current XP tier's label and badge, or (nil, nil) if
+--- XPProgression is off, the client/progression.lua accessor doesn't exist
+--- (soft-dependency guard — see this file's header), or no tier snapshot
+--- has been received this session yet (GetCurrentXPTier() itself returning
+--- nil, which is its own documented behavior before the first
+--- 'qbx_k9unit:client:xpTierChanged' event lands).
+---
+--- BADGE, THIS PASS: closes the previously-disclosed gap in
+--- server/progression.lua's own "XP TIER UNLOCKS" section (Elite —
+--- "SERVER HALF WIRED, DISPLAY NOT WIRED") — the badge was already
+--- forwarded verbatim onto the SAME `GetCurrentXPTier()` table `label`
+--- was already being read from (CopyTier's own `for key, value in
+--- pairs(tier)`), so this is a one-field read added to an already-existing
+--- accessor, not a new one. `tier.badge` is deliberately allowed to be nil
+--- (most tiers configure none — only config.lua's Elite row ships with
+--- `badge = 'elite'` today) — that is a NORMAL, expected case, not an
+--- error, and is why this returns a second nil rather than failing the
+--- whole read.
+--- @return string|nil label
+--- @return string|nil badge
+local function ReadXPTierDisplay()
+    if not XP_TIER_ELEMENT_ENABLED then return nil, nil end
+    if type(GetCurrentXPTier) ~= 'function' then return nil, nil end
 
     local tier = GetCurrentXPTier()
-    if type(tier) ~= 'table' or type(tier.label) ~= 'string' then return nil end
+    if type(tier) ~= 'table' or type(tier.label) ~= 'string' then return nil, nil end
 
-    return tier.label
+    local badge = tier.badge
+    if type(badge) ~= 'string' or badge == '' then badge = nil end
+
+    return tier.label, badge
 end
 
 --- Sends one hud:updateVitals push and updates hudState to match — the
@@ -468,7 +503,8 @@ end
 --- @param injury number|nil
 --- @param distracted boolean|nil
 --- @param xpTierLabel string|nil
-local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
+--- @param xpTierBadge string|nil
+local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel, xpTierBadge)
     -- See this file's header "WELLBEING / XP TIER EXTENSION" — any of
     -- these five keys being nil above means it is simply ABSENT here (a
     -- Lua table never stores a nil-valued key), which is exactly the
@@ -507,6 +543,7 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, moo
     }
     local xpTier = {
         label = xpTierLabel,
+        badge = xpTierBadge,
     }
     setmetatable(wellbeing, JSON_FORCE_OBJECT_MT)
     setmetatable(xpTier, JSON_FORCE_OBJECT_MT)
@@ -535,6 +572,7 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, moo
     hudState.injury = injury
     hudState.distracted = distracted
     hudState.xpTierLabel = xpTierLabel
+    hudState.xpTierBadge = xpTierBadge
     hudState.lastPushAt = GetGameTimer()
 end
 
@@ -553,8 +591,8 @@ RegisterNUICallback('hud:ready', function(_, cb)
 
     local health, stamina, hunger, thirst = ReadVitals()
     local fatigue, mood, fearStress, injury, distracted = ReadWellbeingForDisplay()
-    local xpTierLabel = ReadXPTierLabel()
-    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
+    local xpTierLabel, xpTierBadge = ReadXPTierDisplay()
+    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel, xpTierBadge)
 end)
 
 -- ----------------------------------------------------------------------
@@ -601,14 +639,14 @@ CreateThread(function()
                 -- identical reason.
                 PushVitals(false, hudState.health, hudState.stamina, hudState.hunger, hudState.thirst,
                     hudState.fatigue, hudState.mood, hudState.fearStress, hudState.injury, hudState.distracted,
-                    hudState.xpTierLabel)
+                    hudState.xpTierLabel, hudState.xpTierBadge)
             end
 
             Wait(HUD_IDLE_TICK_MS) -- design note §5.4: idle backoff while not currently relevant
         else
             local health, stamina, hunger, thirst = ReadVitals()
             local fatigue, mood, fearStress, injury, distracted = ReadWellbeingForDisplay()
-            local xpTierLabel = ReadXPTierLabel()
+            local xpTierLabel, xpTierBadge = ReadXPTierDisplay()
             local becameVisible = not hudState.visible
             local now = GetGameTimer()
 
@@ -626,13 +664,14 @@ CreateThread(function()
                 or (WELLBEING_ELEMENT_ENABLED.injury and math.abs(injury - hudState.injury) > HUD_CHANGE_EPSILON)
                 or (WELLBEING_ELEMENT_ENABLED.distraction and distracted ~= hudState.distracted)
                 or xpTierLabel ~= hudState.xpTierLabel
+                or xpTierBadge ~= hudState.xpTierBadge
             local heartbeatDue = (now - hudState.lastPushAt) >= HUD_HEARTBEAT_MS
 
             -- becameVisible short-circuits straight to a push (design note
             -- §5.5's false -> true immediate-push rule), independent of
             -- both the epsilon check and the heartbeat ceiling.
             if becameVisible or changedEnough or heartbeatDue then
-                PushVitals(true, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
+                PushVitals(true, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel, xpTierBadge)
             end
 
             Wait(HUD_POLL_TICK_MS) -- design note §5.1: active poll cadence while visible

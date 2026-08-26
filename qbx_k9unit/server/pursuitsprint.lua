@@ -202,44 +202,39 @@
 
     ======================================================================
     PER-PERSON FEATURE CONTROL (Config.FeatureControl.RequireGrant --
-    reported to main to add 'PursuitSprint = true' alongside the four
-    existing entries, matching their exact shape). Implements the FULL
-    4-step resolution config.lua's own header documents (step 1,
+    'PursuitSprint = true' has since been added there alongside the other
+    entries, confirmed by reading config.lua, so this is no longer an open
+    request). Implements the FULL 4-step resolution config.lua's own header
+    documents (step 1,
     Config.Features.PursuitSprint, is checked first, below, before this
     function is ever reached):
       2. an explicit block.PursuitSprint grant -> DENY
       3. PursuitSprint listed in RequireGrant -> ALLOW only with an active
          feature.PursuitSprint grant
       4. otherwise -> ALLOW
-    HONEST DISCLOSURE, found while building this and reported separately to
-    coder-security/coder-backend/main (not fixed here -- server/permissions.lua
-    is not a file this pass owns): server/permissions.lua's own
-    IsValidPermissionKey only accepts a key already present in
-    Config.Permissions, and NEITHER Config.Permissions NOR any code path in
-    server/combat.lua or server/admin.lua currently defines or consults a
-    'feature.<Name>'/'block.<Name>' key for ANY of the four EXISTING
-    RequireGrant entries (BiteAndHold/NonLethalTakedown/PropDragging/
-    AdminAuditCommands) -- confirmed by reading both files; the grep for
-    'feature.'/'block.' inside either returns nothing. This means, as of
-    this pass, this exact 4-step resolution is not enforced anywhere else in
-    this codebase for the features that document it, even though
-    config.lua's own Config.FeatureControl header describes it as already
-    real. This file's own implementation below is written to be CORRECT
-    and to FAIL CLOSED against today's actual code (a citizenid with no
-    valid 'feature.PursuitSprint' key can never pass HasPermission, since
-    IsValidPermissionKey rejects the key shape entirely today -- so this
-    resolves to permanently DENIED, not permanently allowed, until
-    Config.Permissions gains 'feature.PursuitSprint'/'block.PursuitSprint'
-    entries) rather than silently matching the other four's current
-    (undocumented, unintended) "grant is never actually checked" behavior.
-    Requested from main in the same pass as this file's own config
-    additions: add 'feature.PursuitSprint'/'block.PursuitSprint' (and,
-    optionally, the four pre-existing pairs this finding also applies to)
-    to Config.Permissions with the same {label, description} shape as the
-    four existing k9.* entries -- once that lands, high command's existing,
-    already-wired tablet:grantFeature/blockFeature NUI callbacks
-    (client/tablet.lua) start working for this feature with no further code
-    change anywhere.
+    CORRECTED (this pass, coder-backend): this section used to be an HONEST
+    DISCLOSURE that server/permissions.lua's own IsValidPermissionKey only
+    accepted a key already present in Config.Permissions, and that neither
+    Config.Permissions nor server/combat.lua/server/admin.lua consulted a
+    'feature.<Name>'/'block.<Name>' key for any RequireGrant entry -- both
+    re-verified false by direct read. server/permissions.lua's
+    IsValidPermissionKey now accepts 'feature.<Name>'/'block.<Name>'
+    whenever `<Name>` is a real key of Config.Features (a referential check
+    against Config.Features directly, never requiring a matching
+    Config.Permissions entry -- see that function's own doc comment for the
+    full writeup), so 'feature.PursuitSprint'/'block.PursuitSprint' validate
+    today with no config addition needed. server/combat.lua (generic
+    `'feature.' .. featureKey` / `'block.' .. featureKey'`, covering
+    BiteAndHold/NonLethalTakedown/PropDragging) and server/admin.lua
+    ('feature.AdminAuditCommands'/'block.AdminAuditCommands') now both
+    consult this exact namespace too, confirmed by reading each file.
+    config.lua's own Config.FeatureControl.RequireGrant table has also
+    since grown well past the original four entries this section described
+    (FindAlerts/ScentTrailHunt/PursuitSprint/ScentLineup/SARCalls have all
+    been added). This file's own implementation below was written to FAIL
+    CLOSED against the older, narrower code and needed no change for any of
+    this -- high command's existing tablet:grantFeature/blockFeature NUI
+    callbacks (client/tablet.lua) already work for 'PursuitSprint' today.
 
     ======================================================================
     REFUSAL MESSAGE, CORRECTED (this pass -- discoverability fix, no

@@ -72,6 +72,14 @@
             },
             xpTier: {
               label: <string>,  // KEY ABSENT unless XPProgression is on AND a tier is known
+              badge: <string>,  // KEY ABSENT unless label above is also present AND the
+                                 // current tier has a non-empty badge configured
+                                 // (config.lua's Elite row: `badge = 'elite'`; most
+                                 // tiers configure none). WIRED THIS PASS — see
+                                 // applyXPTierStatus() below; this closes the gap
+                                 // server/progression.lua's own "XP TIER UNLOCKS"
+                                 // section previously disclosed ("computed, forwarded,
+                                 // and cached, but never rendered").
             },
           }
         }
@@ -382,12 +390,27 @@
      * Handles the XP tier status row. `xpTier` is always an object per
      * the contract, but `xpTier.label` (a string) is present only once
      * Config.Features.XPProgression is on AND a real tier snapshot has
-     * been received client-side (client/hud.lua's ReadXPTierLabel() own
+     * been received client-side (client/hud.lua's ReadXPTierDisplay() own
      * comment) -- absent otherwise, hiding this row exactly like every
      * other gated row above.
+     *
+     * `rawBadge` (WIRED THIS PASS -- see this file's own header contract
+     * block above): a cosmetic tag appended after the label whenever the
+     * current tier configures one (today, only config.lua's Elite row --
+     * `badge = 'elite'`). Independently gated on its OWN presence, not
+     * merely on `rawBadge` being non-empty while `rawLabel` is absent --
+     * `xpTier.badge` is documented to never arrive without `xpTier.label`
+     * (client/hud.lua's ReadXPTierDisplay() only ever reads badge off the
+     * SAME tier table label came from), but this function still never
+     * trusts that ordering blindly: badge is simply appended to whatever
+     * this call already decided about `present` below, so a
+     * badge-without-a-label payload (should one ever arrive) degrades to
+     * "row hidden" exactly like a label-without-a-badge payload degrades
+     * to "label shown, no badge" -- neither shape can crash or mis-render.
      * @param {*} rawLabel
+     * @param {*} [rawBadge]
      */
-    function applyXPTierStatus(rawLabel) {
+    function applyXPTierStatus(rawLabel, rawBadge) {
         var els = statusEls.xpTier;
         if (!els) return;
 
@@ -395,7 +418,16 @@
         els.row.classList.toggle('k9hud-row--hidden', !present);
         if (!present) return;
 
-        els.value.textContent = rawLabel; // textContent only -- see applyDistractionStatus's own note; this string DOES come from the network (server-authoritative Config.XPTiers label), which is exactly why textContent (never innerHTML) matters here
+        var badgePresent = typeof rawBadge === 'string' && rawBadge.length > 0;
+        // textContent only, both pieces -- see applyDistractionStatus's own
+        // note; both strings DO come from the network (server-authoritative
+        // Config.XPTiers label/badge, or a live XP Tier Editor override),
+        // which is exactly why textContent (never innerHTML) matters here.
+        // The " ★ " (star) separator is a decorative glyph, not
+        // translatable copy, so it does not need a hud_* string-table entry
+        // the way the Distraction row's two literal words already do (see
+        // HUD_DEFAULT_STRINGS' own comment on that file-wide convention).
+        els.value.textContent = badgePresent ? (rawLabel + ' ★ ' + rawBadge) : rawLabel;
     }
 
     /**
@@ -440,7 +472,7 @@
         applyDistractionStatus(wellbeing.distracted, data.strings);
 
         var xpTier = data.xpTier || {};
-        applyXPTierStatus(xpTier.label);
+        applyXPTierStatus(xpTier.label, xpTier.badge);
     }
 
     // ------------------------------------------------------------------
