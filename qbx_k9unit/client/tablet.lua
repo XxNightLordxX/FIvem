@@ -639,6 +639,7 @@ local TABLET_STRING_KEYS = {
     'state_available', 'feature_column', 'status_column',
     'person_features_heading', 'person_capabilities_heading',
     'capability_no_description', 'capability_self_grant_disabled_title',
+    'capability_rate_limited_wait_title',
     'person_certifications_heading', 'person_xp_heading', 'xp_tier_unknown',
     'use_label', 'not_available_short', 'opening_person',
     'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',

@@ -643,6 +643,28 @@
      * dialogs, so a real, in-DOM two-click confirm is used instead. */
     var CONFIRM_WINDOW_MS = 3000;
 
+    /** THE SHARED RATE LIMIT (owner-directed "roster panel: checkboxes that
+     * actually do something" pass) -- server/permissions.lua's
+     * GrantPermission/RevokePermission share ONE cooldown per granter
+     * (PERMISSION_ACTION_COOLDOWN_MS, currently 1500ms) -- ticking several
+     * permission checkboxes for the same person in quick succession is
+     * therefore a REAL, foreseeable way to trip it, since each checkbox
+     * change is its own separate grant/revoke call. state.pendingAction
+     * already guarantees at most one mutation is EVER in flight at a time
+     * (a second click while one is pending is a no-op, snapping back to
+     * the true state on the next render -- never a false tick); this
+     * constant additionally disables the capability checkboxes for a short
+     * window AFTER each one settles, with an honest reason shown via
+     * title, so a fast operator setting up several permissions in a row is
+     * told to slow down BEFORE firing a call the server would refuse,
+     * rather than discovering it only via a rate_limited failure. Set
+     * slightly above the server's own value (never below it) -- see
+     * buildCapabilityRow() below for where this is applied. Deliberately
+     * NOT a proposal to weaken or bypass the server's cooldown, which
+     * remains the sole real enforcement regardless of this client-side
+     * pacing (THE SECURITY RULE). */
+    var PERMISSION_ACTION_MIN_INTERVAL_MS = 1600;
+
     /** Floor this page enforces on every tabletAudit* `limit` input,
      * client-side, BEFORE it is ever sent. This is a UX convenience only,
      * same as every other client-side clamp on this page -- ClampLimit
@@ -746,6 +768,7 @@
         person_capabilities_heading: 'Capabilities',
         capability_no_description: 'No description on file for this permission.',
         capability_self_grant_disabled_title: 'You cannot grant a permission to yourself.',
+        capability_rate_limited_wait_title: 'Please wait a moment before changing another permission -- grants and revokes share one cooldown.',
         person_certifications_heading: 'Certifications',
         person_xp_heading: 'XP',
         xp_tier_unknown: 'No XP record yet.',
@@ -1974,6 +1997,12 @@
         personFeaturesError: null,
         personFeatures: null, // { features }
         personFeatureQuery: '',
+        // THE SHARED RATE LIMIT -- see PERMISSION_ACTION_MIN_INTERVAL_MS's
+        // own doc comment above. Timestamp (Date.now()) of the last
+        // tablet:grantPermission/revokePermission call THIS session fired,
+        // reset to 0 on every open (handleOpen()) same as every other
+        // per-session value here -- never persisted, never sent anywhere.
+        lastPermissionMutationAt: 0,
 
         // Tablet theming -- applied for EVERY viewer (theme itself is
         // fetched once per open and again live on every
@@ -4307,10 +4336,14 @@
 
     function buildPersonScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
-        wrap.appendChild(mkButton(S('back_label'), 'k9tablet-link-btn', function () {
-            state.screen = 'console';
-            render();
-        }));
+        // Reuses goToConsoleScreen() (not a fourth copy of the
+        // screen-swap+render+loadRoster sequence) specifically so Back never
+        // shows a stale roster after an edit made ON this Person screen
+        // (certify/tier/XP change) -- every OTHER route into the console
+        // (the Console tab, the high-command auto-redirect on open) already
+        // reloads via this same helper; Back must not be the one path that
+        // diverges from it.
+        wrap.appendChild(mkButton(S('back_label'), 'k9tablet-link-btn', goToConsoleScreen));
 
         if (!state.person) {
             wrap.appendChild(mk('p', { text: S('opening_person') }));
@@ -4683,13 +4716,29 @@
         row.appendChild(textWrap);
 
         var disallowSelfGrant = selfTarget && !rowData.held;
-        var checkboxDisabled = state.pendingAction || (!rowData.held && !rowData.grantable) || disallowSelfGrant;
+        // THE SHARED RATE LIMIT -- see PERMISSION_ACTION_MIN_INTERVAL_MS's
+        // own doc comment. Disables every capability checkbox for a short
+        // window after any one of them fires, so a fast operator ticking
+        // several in a row is told to slow down BEFORE the server would
+        // refuse the next one as rate_limited, not only after.
+        var msSinceLastMutation = Date.now() - (state.lastPermissionMutationAt || 0);
+        var onCooldown = msSinceLastMutation < PERMISSION_ACTION_MIN_INTERVAL_MS;
+        var checkboxDisabled = state.pendingAction || (!rowData.held && !rowData.grantable) || disallowSelfGrant || onCooldown;
+        var disabledTitle = disallowSelfGrant ? S('capability_self_grant_disabled_title')
+            : (onCooldown ? S('capability_rate_limited_wait_title') : undefined);
 
-        var toggle = mk('label', { class: 'k9tablet-capability-toggle', title: disallowSelfGrant ? S('capability_self_grant_disabled_title') : undefined });
+        var toggle = mk('label', { class: 'k9tablet-capability-toggle', title: disabledTitle });
         var checkbox = mk('input', { class: 'k9tablet-capability-checkbox', attrs: { type: 'checkbox' } });
         checkbox.checked = rowData.held === true;
         if (checkboxDisabled) checkbox.setAttribute('disabled', 'disabled');
         checkbox.addEventListener('change', function () {
+            // Marks the cooldown window as starting NOW, before the fetch
+            // even resolves -- this is a client-side PACING convenience
+            // only (THE SECURITY RULE), never a substitute for the
+            // server's own PermissionActionCooldown, which is re-checked
+            // regardless and remains the sole real enforcement.
+            state.lastPermissionMutationAt = Date.now();
+            setTimeout(render, PERMISSION_ACTION_MIN_INTERVAL_MS + 50);
             if (checkbox.checked) {
                 runMutation('tablet:grantPermission', { targetCitizenId: citizenid, permission: rowData.key }, function () {
                     refreshPersonAndSelf(citizenid);
@@ -5337,7 +5386,7 @@
         if (state.shopLocationDraft) {
             wrap.appendChild(buildShopLocationDraftForm());
         } else {
-            wrap.appendChild(mkButton(S('shop_location_add_here_label'), 'k9tablet-btn', openNewShopLocationDraft, { disabled: state.pendingAction }));
+            wrap.appendChild(mkButton(S('shop_location_add_here_label'), 'k9tablet-btn', openNewShopLocationDraft, { disabled: state.pendingAction || !state.shopLocationsEnabled }));
             wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('shop_location_add_hint') }));
         }
 
@@ -5421,7 +5470,7 @@
         if (isRuntime) {
             actionsTd.appendChild(mkButton(S('shop_location_edit_label'), 'k9tablet-btn', function () {
                 openEditShopLocationDraft(key, loc);
-            }, { disabled: state.pendingAction }));
+            }, { disabled: state.pendingAction || !state.shopLocationsEnabled }));
             // Two-click confirm (not styled `--danger`: repositioning is
             // reversible, but consequential enough -- it moves a live shop
             // ped to wherever the operator happens to be standing -- that a
@@ -5429,10 +5478,10 @@
             // other mkConfirmButton on this page).
             actionsTd.appendChild(mkConfirmButton(S('shop_location_move_here_label'), 'k9tablet-btn', function () {
                 moveShopLocationHere(key);
-            }, { disabled: state.pendingAction, title: S('shop_location_move_here_hint') }));
+            }, { disabled: state.pendingAction || !state.shopLocationsEnabled, title: S('shop_location_move_here_hint') }));
             actionsTd.appendChild(mkConfirmButton(S('shop_location_remove_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
                 removeShopLocation(key);
-            }, { disabled: state.pendingAction }));
+            }, { disabled: state.pendingAction || !state.shopLocationsEnabled }));
         } else {
             // config.lua entries are NEVER editable/removable from here --
             // see server/equipmentshop.lua's own SCOPE note: a stored
@@ -5517,7 +5566,7 @@
         wrap.appendChild(scenarioRow);
 
         var actions = mk('div', { class: 'k9tablet-theme-actions' });
-        actions.appendChild(mkButton(S('shop_location_save_label'), 'k9tablet-btn', saveShopLocationDraft, { disabled: state.pendingAction }));
+        actions.appendChild(mkButton(S('shop_location_save_label'), 'k9tablet-btn', saveShopLocationDraft, { disabled: state.pendingAction || !state.shopLocationsEnabled }));
         actions.appendChild(mkButton(S('shop_location_cancel_label'), 'k9tablet-link-btn', closeShopLocationDraft));
         wrap.appendChild(actions);
 
@@ -6675,6 +6724,31 @@
         return v ? S('audit_boolean_yes') : S('audit_boolean_no');
     }
 
+    /**
+     * Pairs a raw audit citizenid column with its resolved `_name` sibling
+     * (server/admin.lua's EnrichCertHistoryRows/EnrichPartnershipHistoryRows/
+     * EnrichSearchLogRows/EnrichDeptRosterRows). This is a forensic table --
+     * the id must stay on screen and traceable, but a bare id where a name
+     * belongs was the actual complaint, so both are shown together. Mirrors
+     * server/admin.lua's own NameWithCitizenId format EXACTLY so the tablet
+     * never disagrees with the '/k9auditcert' etc. chat-command output for
+     * the same row: id missing/blank -> auditText's S('audit_na'); name
+     * resolved to something OTHER than the id -> "Name (id)"; name nil OR
+     * (per ResolveAuditDisplayName's own documented "nothing resolved"
+     * fallback) identical to the id -> the bare id, same as before this
+     * pass. Never invents a name, never hides the id.
+     * @param {string|null|undefined} id
+     * @param {string|null|undefined} name
+     * @returns {string}
+     */
+    function auditIdWithName(id, name) {
+        if (typeof id !== 'string' || id.length === 0) return auditText(id);
+        if (typeof name === 'string' && name.length > 0 && name !== id) {
+            return name + ' (' + id + ')';
+        }
+        return id;
+    }
+
     /** @param {object|undefined} result @returns {string} */
     function auditErrorText(result) {
         if (!result) return S('action_failed');
@@ -6714,11 +6788,13 @@
     /**
      * Per-mode column definitions -- see this file's own NUI CONTRACT note
      * on tablet:auditCert/Partner/Search/Xp/Dept for the authoritative row
-     * shape each mode returns; this table renders EXACTLY those fields,
-     * nothing reshaped or renamed. `id` (partner/search rows' own sort key)
-     * is deliberately never a column here -- it is a MergeSortedByIdDesc
-     * implementation detail server-side, meaningless to an officer reading
-     * the table.
+     * shape each mode returns; every citizenid-identified column pairs its
+     * raw id with its resolved `_name` sibling via auditIdWithName() (see
+     * that function's own doc comment) -- the id is never dropped, a name
+     * is shown alongside it when one resolves. Nothing else is reshaped or
+     * renamed. `id` (partner/search rows' own sort key) is deliberately
+     * never a column here -- it is a MergeSortedByIdDesc implementation
+     * detail server-side, meaningless to an officer reading the table.
      * @param {'cert'|'partner'|'search'|'xp'|'dept'} mode
      * @returns {Array<{header:string, render:(row:object)=>string}>}
      */
@@ -6728,28 +6804,28 @@
                 return [
                     { header: S('column_department'), render: function (r) { return auditText(r.job); } },
                     { header: S('column_active'), render: function (r) { return auditBoolText(r.active); } },
-                    { header: S('column_granted_by'), render: function (r) { return auditText(r.granted_by); } },
+                    { header: S('column_granted_by'), render: function (r) { return auditIdWithName(r.granted_by, r.granted_by_name); } },
                     { header: S('column_granted_at'), render: function (r) { return auditText(r.granted_at); } },
-                    { header: S('column_revoked_by'), render: function (r) { return auditText(r.revoked_by); } },
+                    { header: S('column_revoked_by'), render: function (r) { return auditIdWithName(r.revoked_by, r.revoked_by_name); } },
                     { header: S('column_revoked_at'), render: function (r) { return auditText(r.revoked_at); } },
                 ];
             case 'partner':
                 return [
-                    { header: S('column_k9'), render: function (r) { return auditText(r.k9_citizenid); } },
-                    { header: S('column_handler'), render: function (r) { return auditText(r.handler_citizenid); } },
+                    { header: S('column_k9'), render: function (r) { return auditIdWithName(r.k9_citizenid, r.k9_citizenid_name); } },
+                    { header: S('column_handler'), render: function (r) { return auditIdWithName(r.handler_citizenid, r.handler_citizenid_name); } },
                     { header: S('column_active'), render: function (r) { return auditBoolText(r.active); } },
-                    { header: S('column_established_by'), render: function (r) { return auditText(r.established_by); } },
+                    { header: S('column_established_by'), render: function (r) { return auditIdWithName(r.established_by, r.established_by_name); } },
                     { header: S('column_established_at'), render: function (r) { return auditText(r.established_at); } },
-                    { header: S('column_ended_by'), render: function (r) { return auditText(r.ended_by); } },
+                    { header: S('column_ended_by'), render: function (r) { return auditIdWithName(r.ended_by, r.ended_by_name); } },
                     { header: S('column_ended_at'), render: function (r) { return auditText(r.ended_at); } },
                 ];
             case 'search':
                 return [
                     { header: S('column_searched_at'), render: function (r) { return auditText(r.searched_at); } },
-                    { header: S('column_searcher'), render: function (r) { return auditText(r.searcher_citizenid); } },
+                    { header: S('column_searcher'), render: function (r) { return auditIdWithName(r.searcher_citizenid, r.searcher_citizenid_name); } },
                     { header: S('column_searcher_job'), render: function (r) { return auditText(r.searcher_job); } },
                     { header: S('column_target_type'), render: function (r) { return auditText(r.target_type); } },
-                    { header: S('column_target'), render: function (r) { return auditText(r.target_type === 'vehicle' ? r.target_plate : r.target_citizenid); } },
+                    { header: S('column_target'), render: function (r) { return r.target_type === 'vehicle' ? auditText(r.target_plate) : auditIdWithName(r.target_citizenid, r.target_citizenid_name); } },
                     { header: S('column_result'), render: function (r) { return auditText(r.result); } },
                     { header: S('column_weight'), render: function (r) { return auditText(r.total_weight); } },
                     { header: S('column_alert_tier'), render: function (r) { return auditText(r.alert_tier); } },
@@ -6761,8 +6837,8 @@
                 ];
             case 'dept':
                 return [
-                    { header: S('column_citizenid'), render: function (r) { return auditText(r.citizenid); } },
-                    { header: S('column_granted_by'), render: function (r) { return auditText(r.granted_by); } },
+                    { header: S('column_citizenid'), render: function (r) { return auditIdWithName(r.citizenid, r.citizenid_name); } },
+                    { header: S('column_granted_by'), render: function (r) { return auditIdWithName(r.granted_by, r.granted_by_name); } },
                     { header: S('column_granted_at'), render: function (r) { return auditText(r.granted_at); } },
                 ];
             default:
@@ -10256,6 +10332,7 @@
         state.person = null;
         state.personSummary = null;
         state.personFeatures = null;
+        state.lastPermissionMutationAt = 0;
         state.actionNotice = null;
         state.auditMode = 'cert';
         state.auditCitizenId = '';

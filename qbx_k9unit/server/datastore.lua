@@ -848,7 +848,12 @@ function K9Store.Partner_EndById(id, endedBy)
     end
     local row = PartnerFindById(id)
     if not row or row.active ~= 1 then return 0 end
-    row.active, row.ended_by, row.ended_at = 0, endedBy, FormatDateTime(NowUnix())
+    local endedAtNow = NowUnix()
+    -- `ended_at_unix` ADDED this pass (Partners tab, coder-ui) alongside the
+    -- pre-existing `established_at_unix` Partner_Insert already stamps --
+    -- mirrors PartnerHistoryColumns' own new field below, so a memory-mode
+    -- history row can report a real elapsed duration without a date parser.
+    row.active, row.ended_by, row.ended_at, row.ended_at_unix = 0, endedBy, FormatDateTime(endedAtNow), endedAtNow
     return 1
 end
 
@@ -864,11 +869,20 @@ function K9Store.Partner_GetActiveFlagById(id)
     return row and row.active or nil
 end
 
+--- `established_at_unix`/`ended_at_unix`/`tenure_bonus_tier_granted` ADDED
+--- this pass (Partners tab, coder-ui) -- additive fields only, every
+--- existing consumer (server/admin.lua's QueryPartnershipHistory) already
+--- tolerates extra table keys it doesn't read. Mirrors the DB-mode SELECT's
+--- own new `UNIX_TIMESTAMP(...)`/`tenure_bonus_tier_granted` columns below
+--- so memory mode and DB mode return the identical shape, matching this
+--- file's own established mirroring discipline.
 local function PartnerHistoryColumns(row)
     return {
         id = row.id, k9_citizenid = row.k9_citizenid, handler_citizenid = row.handler_citizenid,
         established_by = row.established_by, established_at = row.established_at,
-        ended_by = row.ended_by, ended_at = row.ended_at, active = row.active,
+        established_at_unix = row.established_at_unix,
+        ended_by = row.ended_by, ended_at = row.ended_at, ended_at_unix = row.ended_at_unix,
+        active = row.active, tenure_bonus_tier_granted = row.tenure_bonus_tier_granted,
     }
 end
 
@@ -885,7 +899,12 @@ end
 function K9Store.Partner_GetHistoryByK9(citizenid, limit)
     limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
-        local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
+        -- `tenure_bonus_tier_granted`/`UNIX_TIMESTAMP(...)` ADDED this pass
+        -- (Partners tab, coder-ui) -- additive columns only, appended after
+        -- every pre-existing one so a positional consumer (none today) is
+        -- never affected; NULL for a never-established/still-active
+        -- `ended_at` exactly mirrors memory mode's own nil `ended_at_unix`.
+        local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active, tenure_bonus_tier_granted, UNIX_TIMESTAMP(established_at) AS established_at_unix, UNIX_TIMESTAMP(ended_at) AS ended_at_unix'
         local sql = ('SELECT %s FROM k9_partnerships WHERE k9_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
         if not ok then
@@ -912,7 +931,12 @@ end
 function K9Store.Partner_GetHistoryByHandler(citizenid, limit)
     limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
-        local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
+        -- `tenure_bonus_tier_granted`/`UNIX_TIMESTAMP(...)` ADDED this pass
+        -- (Partners tab, coder-ui) -- additive columns only, appended after
+        -- every pre-existing one so a positional consumer (none today) is
+        -- never affected; NULL for a never-established/still-active
+        -- `ended_at` exactly mirrors memory mode's own nil `ended_at_unix`.
+        local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active, tenure_bonus_tier_granted, UNIX_TIMESTAMP(established_at) AS established_at_unix, UNIX_TIMESTAMP(ended_at) AS ended_at_unix'
         local sql = ('SELECT %s FROM k9_partnerships WHERE handler_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
         if not ok then

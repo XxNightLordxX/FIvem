@@ -445,6 +445,7 @@
         "person_capabilities_heading": "Capabilities",
         "capability_no_description": "No description on file for this permission.",
         "capability_self_grant_disabled_title": "You cannot grant a permission to yourself.",
+        "capability_rate_limited_wait_title": "Please wait a moment before changing another permission -- grants and revokes share one cooldown.",
         "person_certifications_heading": "Certifications",
         "person_xp_heading": "XP",
         "xp_tier_unknown": "No XP record yet.",

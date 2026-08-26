@@ -9,13 +9,22 @@
     payload shapes this file must match).
 
     ======================================================================
-    ARCHITECTURE DECISION, STATED UP FRONT: this file registers FOUR of the
-    six callbacks the tablet needs -- the genuinely CROSS-FILE aggregations
+    ARCHITECTURE DECISION, STATED UP FRONT: this file registers FIVE of the
+    seven callbacks the tablet needs -- the genuinely CROSS-FILE aggregations
     that don't belong to any single owning subsystem:
       qbx_k9unit:server:tabletRequestMyRecord
       qbx_k9unit:server:tabletRequestRoster
       qbx_k9unit:server:tabletRequestPersonSummary
       qbx_k9unit:server:tabletRequestPersonFeatures
+      qbx_k9unit:server:tabletRequestMyPartnerships -- ADDED this pass
+        (Partners tab, coder-ui, owner-directed "both the k9 and handler
+        should be able to pull up a list of their partners and levels").
+        Joins K9Store.Partner_GetHistoryByK9/ByHandler (server/partnership.lua's
+        own DB-authoritative history accessors, already used by
+        server/admin.lua's high-command-only audit tool) with this file's
+        own ResolveDisplayName -- exactly the "no single owning file can
+        produce this alone" test the paragraph below already applies to
+        the other four.
     The other two are registered INSIDE the file that already owns the
     logic they wrap, mirroring server/permissions.lua's own established
     precedent (that file's "TABLET CALLBACKS" section registers
@@ -1306,6 +1315,37 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
     local xp, tierLabel = ResolveXpAndTierLabel(citizenid)
     local hasK9Access = type(HasK9Access) == 'function' and HasK9Access(source) == true
 
+    -- SERVER-TRUSTWORTHY ROLE SIGNAL (this pass, coder-ui, owner-directed
+    -- "a handler and the k9 are both separate and if not fix it" /
+    -- "if the server does not currently tell the page which role the
+    -- viewer is in a trustworthy way, that is the first thing to fix").
+    -- Previously the ONLY "is this viewer the K9" signal html/tablet.js
+    -- had was state.isK9Model, computed entirely client-side
+    -- (client/tablet.lua's ResolveLocalRoleFlags -> IsOwnModelK9(), "is my
+    -- own ped CURRENTLY this model") -- explicitly documented there as
+    -- cosmetic/framing-only, never authoritative. HasK9Role(source)
+    -- (server/appearance.lua) is the correct, already-existing,
+    -- MODEL-INDEPENDENT answer instead: "does this citizenid actually hold
+    -- the K9 identity" (an active k9_certifications row for their current
+    -- job, or an active k9.access grant), the SAME primitive
+    -- server/main.lua's own IsGenuinelyK9Party prefers over a model check
+    -- for exactly this "role, not appearance" reasoning. isPartnered is
+    -- likewise now resolved from GetActivePartnerCitizenId (server/partnership.lua's
+    -- own in-memory, online-authoritative cache -- correct here because
+    -- the caller of THIS callback is, by construction, online right now),
+    -- not the client-local IsPartnered() leash/appearance guess. Both
+    -- guarded with this file's established `type(...) == 'function'`
+    -- soft-dependency convention -- degrade to false, never a crash or a
+    -- stale guess, if either owning file is ever unavailable. Used ONLY
+    -- for html/tablet.js's role-driven LAYOUT (which landing body/tab
+    -- order/vocabulary to show) -- never a new authorization decision
+    -- here or on the client; every mutation this file/client/tablet.lua
+    -- exposes still re-derives its own authorization from scratch,
+    -- unrelated to these two fields (THE SECURITY RULE, html/tablet.js's
+    -- own header).
+    local isK9RoleCaller = type(HasK9Role) == 'function' and HasK9Role(source) == true
+    local isPartneredCaller = type(GetActivePartnerCitizenId) == 'function' and GetActivePartnerCitizenId(citizenid) ~= nil
+
     return {
         ok = true,
         viewer = {
@@ -1314,6 +1354,8 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
             isHighCommand = isHighCommandCaller,
             effectivePermissions = effectivePermissions,
             allowSelfGrant = type(Config.HighCommand) == 'table' and Config.HighCommand.allowSelfGrant == true,
+            isK9 = isK9RoleCaller,
+            isPartnered = isPartneredCaller,
         },
         certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(citizenid)),
         xp = xp,
@@ -1602,4 +1644,122 @@ lib.callback.register('qbx_k9unit:server:tabletRevertK9Ped', function(source, ta
     local ok, outcome = ForceRevertK9Appearance(source, targetCitizenId)
     if ok then return { ok = true } end
     return { ok = false, error = outcome }
+end)
+
+-- ======================================================================
+-- CALLBACK 7 (this pass, coder-ui) -- tabletRequestMyPartnerships. The
+-- Partners tab -- owner, verbatim: "both the k9 and handler should be
+-- able to pull up a list of there partners and levels etc in a tab...
+-- Past partnerships matter too, not just the active one." SAME
+-- everyoneCanViewOwnRecord gate as CALLBACK 1 (this is "my own history,"
+-- not an audit tool -- unlike server/admin.lua's high-command-only
+-- '/k9auditpartner', it never accepts a targetCitizenId at all, only ever
+-- reads the CALLER's own citizenid on either side of a row) and the SAME
+-- shared TabletReadCooldown budget every other read here already spends
+-- from (this file's own header "RATE LIMITING" -- this is the fifth
+-- caller of that one shared bucket).
+--
+-- MERGE, NOT A NEW QUERY SHAPE: K9Store.Partner_GetHistoryByK9/ByHandler
+-- (server/datastore.lua) are the SAME two accessors server/admin.lua's own
+-- QueryPartnershipHistory already uses for the high-command audit console
+-- -- one citizenid can never appear as BOTH k9_citizenid and
+-- handler_citizenid on the SAME row (role is frozen at establishment, see
+-- server/partnership.lua's own header), so a plain concat-then-sort-by-id
+-- here needs no de-dup, unlike a de-normalized join would. Deliberately a
+-- small, local, one-off sort (NOT server/admin.lua's own local
+-- MergeSortedByIdDesc) -- that helper is `local` to admin.lua, not a
+-- resource global, and promoting it purely to avoid four lines of
+-- duplication here was judged not worth touching that file this pass.
+--
+-- "LEVEL" IS `tenure_bonus_tier_granted` AS-IS, A PLAIN NUMBER, not a
+-- resolved title: server/tenure.lua's own milestone titles ("Bonded
+-- Pair", ...) live behind that file's `local` ResolveMilestoneTitle,
+-- reading Config.Partnership.TenureBonus.milestones -- reproducing that
+-- resolution here would be a second copy of the same config-reading logic
+-- to keep in sync. Instead, client/tablet.lua's own NUI callback handler
+-- for 'tablet:requestMyPartnerships' composes THIS result with the
+-- ALREADY-SHIPPED, ALREADY-CLIENT-TRIGGERABLE
+-- 'qbx_k9unit:server:getPartnershipTenureProgress' callback (server/tenure.lua)
+-- for the one active row's rich tier title/next-milestone countdown --
+-- see that file's own doc comment. A past (ended) row's frozen
+-- `tenure_bonus_tier_granted` is still reported here, verbatim, so a
+-- caller who lost a long-tenured partnership still sees what tier it
+-- reached; html/tablet.js renders it as a plain "Tier N" rather than
+-- inventing a title for a row this file cannot ask tenure.lua about
+-- (getPartnershipTenureProgress only ever answers for the CURRENTLY
+-- active row).
+--
+-- DURATION: `established_at_unix`/`ended_at_unix` (added to
+-- K9Store.Partner_GetHistoryByK9/ByHandler this same pass, DB-mode via
+-- UNIX_TIMESTAMP(), memory-mode via the pre-existing established_at_unix/
+-- new ended_at_unix stamps) let html/tablet.js compute "how long this ran"
+-- with plain arithmetic against Date.now()/1000 for a still-active row, or
+-- the two stamps directly for an ended one -- never a date-string parse.
+-- ======================================================================
+local PARTNERSHIP_HISTORY_LIMIT = 25 -- fixed, not caller-influenced (this callback takes no query argument at all) -- generous for "everyone this citizenid has ever been partnered with," matching this file's other small fixed caps (e.g. MAX_ROSTER_QUERY_LENGTH above)
+
+--- @param citizenid string -- THIS caller's own citizenid, never a client-supplied one
+--- @return table rows -- array of raw k9_partnerships history rows (K9Store.Partner_GetHistoryByK9/ByHandler's own shape), newest `id` first, capped at PARTNERSHIP_HISTORY_LIMIT total
+local function MergePartnershipHistoryForCitizenId(citizenid)
+    local asK9 = SafeStoreCall(K9Store.Partner_GetHistoryByK9, citizenid, PARTNERSHIP_HISTORY_LIMIT) or {}
+    local asHandler = SafeStoreCall(K9Store.Partner_GetHistoryByHandler, citizenid, PARTNERSHIP_HISTORY_LIMIT) or {}
+
+    local merged = {}
+    for _, row in ipairs(asK9) do merged[#merged + 1] = row end
+    for _, row in ipairs(asHandler) do merged[#merged + 1] = row end
+    table.sort(merged, function(a, b) return (tonumber(a.id) or 0) > (tonumber(b.id) or 0) end)
+
+    if #merged > PARTNERSHIP_HISTORY_LIMIT then
+        for i = #merged, PARTNERSHIP_HISTORY_LIMIT + 1, -1 do merged[i] = nil end
+    end
+    return merged
+end
+
+lib.callback.register('qbx_k9unit:server:tabletRequestMyPartnerships', function(source)
+    local Player = exports.qbx_core:GetPlayer(source)
+    local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if not citizenid then
+        return { ok = false, error = 'not_authorized', message = locale('common.unable_to_resolve_citizenid') }
+    end
+
+    local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
+    if not isHighCommandCaller then
+        local everyoneCanView = type(Config.FeatureControl) == 'table' and Config.FeatureControl.everyoneCanViewOwnRecord == true
+        if not everyoneCanView then
+            return { ok = false, error = 'not_authorized' }
+        end
+    end
+
+    if not TabletReadCooldown.Consume(source, TABLET_READ_COOLDOWN_MS) then
+        return { ok = false, error = 'rate_limited' }
+    end
+
+    local featureEnabled = type(Config.Features) == 'table' and Config.Features.HandlerPartnership == true
+    if not featureEnabled then
+        return { ok = true, featureEnabled = false, partnerships = {} }
+    end
+
+    local merged = MergePartnershipHistoryForCitizenId(citizenid)
+    local rows = {}
+    for _, row in ipairs(merged) do
+        local isK9Role = row.k9_citizenid == citizenid
+        local partnerCitizenid = isK9Role and row.handler_citizenid or row.k9_citizenid
+        rows[#rows + 1] = {
+            id = row.id,
+            partnerCitizenid = partnerCitizenid,
+            partnerName = ResolveDisplayName(partnerCitizenid),
+            role = isK9Role and 'k9' or 'handler',
+            active = row.active == 1 or row.active == true,
+            establishedAtUnix = tonumber(row.established_at_unix),
+            endedAtUnix = tonumber(row.ended_at_unix),
+            endedBy = row.ended_by,
+            tenureTierGranted = tonumber(row.tenure_bonus_tier_granted) or 0,
+        }
+    end
+
+    return {
+        ok = true,
+        featureEnabled = true,
+        partnerships = rows,
+    }
 end)
