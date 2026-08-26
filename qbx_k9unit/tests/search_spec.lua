@@ -925,4 +925,238 @@ t.test('qb-inventory VEHICLE SEARCH FIX: a trunk NOBODY has ever opened this ser
     t.equals(result.reason, 'search_failed')
 end)
 
+-- ========================================================================
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsSearchFeaturePermittedForCitizenId, generalized this
+-- pass (was hardcoded to 'SearchZones' only) to also gate ContrabandAlerts.
+-- Own self-contained fixture, mirroring newSearchQbInventoryFixture's own
+-- shape exactly, so nothing here can leak state into (or depend on
+-- leftover state from) the shared top-level `env`/`Config` sections above.
+-- ========================================================================
+
+--- @param opts table? { featureControl: table?, hasPermissionFn: function?, withHasPermission: boolean? }
+local function newSearchPermissionFixture(opts)
+    opts = opts or {}
+
+    local fakeNow4 = 0
+    local function GetGameTimer4() return fakeNow4 end
+
+    local threadRunner4 = Sandbox.newThreadRunner()
+
+    local eventHandlers4 = {}
+    local function AddEventHandler4(eventName, handler)
+        eventHandlers4[eventName] = eventHandlers4[eventName] or {}
+        eventHandlers4[eventName][#eventHandlers4[eventName] + 1] = handler
+    end
+
+    local function GetCurrentResourceName4() return 'qbx_k9unit' end
+
+    local function CreateThread4(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('search_spec.lua (permission fixture): a CreateThread body errored: %s'):format(tostring(err)))
+        end
+    end
+
+    local registeredCallbacks4 = {}
+    local libStub4 = { callback = { register = function(name, handler) registeredCallbacks4[name] = handler end } }
+
+    local itemsByInvId4 = {}
+    local triggerClientEventCount4 = 0
+    local exportsStub4 = {
+        ox_inventory = {
+            GetInventoryItems = function(_self, invOrId)
+                local invId = type(invOrId) == 'table' and invOrId.id or invOrId
+                return itemsByInvId4[invId] or {}
+            end,
+            GetContainerFromSlot = function() return nil end,
+            GetItemCount = function() return 0 end,
+            RemoveItem = function() return false end,
+            RegisterStash = function() return true end,
+            RegisterShop = function() return true end,
+            registerHook = function() return 1 end,
+        },
+        qbx_core = {
+            GetPlayer = function(_self, source) return { PlayerData = { citizenid = 'PCID' .. tostring(source), job = { name = 'police' } } } end,
+        },
+    }
+
+    local function defaultHasPermission(citizenid, key)
+        if type(opts.hasPermissionFn) == 'function' then
+            return opts.hasPermissionFn(citizenid, key)
+        end
+        return false
+    end
+
+    local Config4 = {
+        Features = { SearchZones = true, XPProgression = false, ContrabandAlerts = true },
+        SearchZones = {
+            alertBroadcastRadius = 50.0, searchCooldownMs = 10, sniffAnimDurationMs = 10,
+            vehicleSearchDistance = 100.0, personSearchDistance = 100.0,
+        },
+        SearchContrabandItems = { 'weed_baggy' },
+        ContrabandAlertTiers = {
+            { minWeight = 0, alert = 'clean' },
+            { minWeight = 1, alert = 'whine' },
+        },
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
+        FeatureControl = opts.featureControl,
+    }
+
+    local envOverrides4 = {
+        GetGameTimer = GetGameTimer4,
+        AddEventHandler = AddEventHandler4,
+        GetCurrentResourceName = GetCurrentResourceName4,
+        CreateThread = CreateThread4,
+        Wait = threadRunner4.Wait,
+        lib = libStub4,
+        exports = exportsStub4,
+        MySQL = { insert = { await = function() return 1 end } },
+        TriggerEvent = function() end,
+        TriggerClientEvent = function(eventName)
+            if eventName == 'qbx_k9unit:client:playContrabandAlert' then
+                triggerClientEventCount4 = triggerClientEventCount4 + 1
+            end
+        end,
+        HasK9Access = function() return true end,
+        NetworkGetEntityFromNetworkId = function(netId) return netId end,
+        DoesEntityExist = function(entity) return entity ~= 0 end,
+        GetEntityType = function() return 2 end, -- vehicle
+        GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end,
+        GetPlayerPed = function() return 42 end,
+        GetEntityCoords = function() return ZERO_VEC end,
+        GetPlayers = function() return { '501' } end,
+        Config = Config4,
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+    }
+    if opts.withHasPermission ~= false then
+        envOverrides4.HasPermission = defaultHasPermission
+    end
+
+    local env4 = Sandbox.newEnv(envOverrides4)
+
+    Sandbox.loadInto('../server/cooldowns.lua', env4)
+    Sandbox.loadInto('../server/entities.lua', env4)
+    Sandbox.loadInto('../server/datastore.lua', env4)
+    Sandbox.loadInto('../server/events.lua', env4)
+    Sandbox.loadInto('../shared/compat/core.lua', env4)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env4)
+    Sandbox.loadInto('../server/search.lua', env4)
+    for _, handler in ipairs(eventHandlers4['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    local searchCallback4 = registeredCallbacks4['qbx_k9unit:server:searchTarget']
+
+    return {
+        triggerClientEventCount = function() return triggerClientEventCount4 end,
+        --- @param source number
+        --- @param netId number
+        --- @param weight number
+        searchVehicle = function(source, netId, weight)
+            local invId = 'trunkPLATE' .. tostring(netId)
+            itemsByInvId4[invId] = weight and weight > 0 and { { name = 'weed_baggy', weight = weight, slot = 1 } } or {}
+            return searchCallback4(source, 'vehicle', netId)
+        end,
+    }
+end
+
+t.test('PER-PERSON SearchZones: block.SearchZones denies the search outright, even though HasK9Access is true', function()
+    local f = newSearchPermissionFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.SearchZones' and citizenid == 'PCID601' end,
+    })
+    local result = f.searchVehicle(601, 6001, 10)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'not_granted')
+end)
+
+t.test('PER-PERSON SearchZones: not blocked and not listed in RequireGrant -- default ALLOW (step 4)', function()
+    local f = newSearchPermissionFixture()
+    local result = f.searchVehicle(602, 6002, 10)
+    t.isTrue(result.ok)
+    t.isTrue(result.contrabandFound)
+end)
+
+t.test('PER-PERSON SearchZones: RequireGrant.SearchZones = true + no active feature.SearchZones grant -- denied', function()
+    local f = newSearchPermissionFixture({ featureControl = { RequireGrant = { SearchZones = true } } })
+    local result = f.searchVehicle(603, 6003, 10)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'not_granted')
+end)
+
+t.test('PER-PERSON SearchZones: RequireGrant.SearchZones = true + an active feature.SearchZones grant -- allowed', function()
+    local f = newSearchPermissionFixture({
+        featureControl = { RequireGrant = { SearchZones = true } },
+        hasPermissionFn = function(citizenid, key) return key == 'feature.SearchZones' and citizenid == 'PCID604' end,
+    })
+    local result = f.searchVehicle(604, 6004, 10)
+    t.isTrue(result.ok)
+end)
+
+t.test('PER-PERSON SearchZones: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local f = newSearchPermissionFixture({ withHasPermission = false, featureControl = { RequireGrant = { SearchZones = true } } })
+    local ok, result = pcall(f.searchVehicle, 605, 6005, 10)
+    t.isTrue(ok, 'a missing HasPermission must never error the callback')
+    t.isFalse(result.ok, 'RequireGrant-listed + unresolvable grant machinery must deny, not silently allow')
+end)
+
+t.test('PER-PERSON SearchZones: server/permissions.lua entirely absent + NOT listed in RequireGrant -- still allowed (falls through to step 4)', function()
+    local f = newSearchPermissionFixture({ withHasPermission = false })
+    local result = f.searchVehicle(606, 6006, 10)
+    t.isTrue(result.ok)
+end)
+
+t.test('PER-PERSON ContrabandAlerts: block.ContrabandAlerts suppresses ONLY the broadcast -- the search itself still succeeds, is logged, and still pays XP-eligible contrabandFound', function()
+    local f = newSearchPermissionFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.ContrabandAlerts' and citizenid == 'PCID607' end,
+    })
+    local before = f.triggerClientEventCount()
+    local result = f.searchVehicle(607, 6007, 10)
+    t.isTrue(result.ok, 'ContrabandAlerts is a broadcast-only feature -- a block on it must never affect the search result itself')
+    t.isTrue(result.contrabandFound)
+    t.equals(f.triggerClientEventCount(), before, 'a blocked searcher\'s find must never broadcast the alert to nearby players')
+end)
+
+t.test('PER-PERSON ContrabandAlerts: not blocked -- the alert still broadcasts normally on a real find', function()
+    local f = newSearchPermissionFixture()
+    local before = f.triggerClientEventCount()
+    f.searchVehicle(608, 6008, 10)
+    t.equals(f.triggerClientEventCount(), before + 1)
+end)
+
+t.test('PER-PERSON ContrabandAlerts: RequireGrant.ContrabandAlerts = true + no grant -- broadcast suppressed, search still succeeds', function()
+    local f = newSearchPermissionFixture({ featureControl = { RequireGrant = { ContrabandAlerts = true } } })
+    local before = f.triggerClientEventCount()
+    local result = f.searchVehicle(609, 6009, 10)
+    t.isTrue(result.ok)
+    t.equals(f.triggerClientEventCount(), before)
+end)
+
+t.test('PER-PERSON ContrabandAlerts: RequireGrant.ContrabandAlerts = true + an active grant -- broadcast fires', function()
+    local f = newSearchPermissionFixture({
+        featureControl = { RequireGrant = { ContrabandAlerts = true } },
+        hasPermissionFn = function(citizenid, key) return key == 'feature.ContrabandAlerts' and citizenid == 'PCID610' end,
+    })
+    local before = f.triggerClientEventCount()
+    f.searchVehicle(610, 6010, 10)
+    t.equals(f.triggerClientEventCount(), before + 1)
+end)
+
+t.test('PER-PERSON ContrabandAlerts: server/permissions.lua entirely absent + RequireGrant listed -- fails CLOSED (broadcast suppressed), search still succeeds', function()
+    local f = newSearchPermissionFixture({ withHasPermission = false, featureControl = { RequireGrant = { ContrabandAlerts = true } } })
+    local before = f.triggerClientEventCount()
+    local ok, result = pcall(f.searchVehicle, 611, 6011, 10)
+    t.isTrue(ok, 'a missing HasPermission must never error the callback')
+    t.isTrue(result.ok, 'ContrabandAlerts denial must never fail the search itself')
+    t.equals(f.triggerClientEventCount(), before)
+end)
+
 os.exit(t.summary())

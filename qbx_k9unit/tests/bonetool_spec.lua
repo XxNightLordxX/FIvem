@@ -122,9 +122,19 @@ local function buildEnv(opts)
         Departments = {
             police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4, autoAccessGrade = nil },
         },
+        -- PER-PERSON FEATURE CONTROL fixture knob (SCENARIO D, below) --
+        -- nil unless a test opts in, mirroring pursuitsprint_spec.lua's own
+        -- `opts.requireGrantListed` shape.
+        FeatureControl = opts.featureControl,
     }
 
-    local env = Sandbox.newEnv({
+    -- HasPermission is a GLOBAL in production (server/permissions.lua),
+    -- soft-dependency-guarded (`type(HasPermission) == 'function'`) by
+    -- server/bonetool.lua's own IsBoneSweepDevToolPermittedForCitizenId --
+    -- nil by default here (SCENARIO A/B/C above never define it, exactly
+    -- like production without server/permissions.lua installed), settable
+    -- per test for SCENARIO D.
+    local envOverrides = {
         RegisterCommand        = RegisterCommand,
         AddEventHandler        = AddEventHandler,
         GetCurrentResourceName = GetCurrentResourceName,
@@ -134,7 +144,12 @@ local function buildEnv(opts)
         exports                = exportsStub,
         print                  = printStub,
         Config                 = Config,
-    })
+    }
+    if opts.hasPermissionFn then
+        envOverrides.HasPermission = opts.hasPermissionFn
+    end
+
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/notify.lua', env)
@@ -229,7 +244,14 @@ end)
 -- plus the NO-UNBOUNDED-TRAP 'stop' exemption are exercised against it.
 -- ======================================================================
 
-local bossInConfiguredDept = { PlayerData = { job = { name = 'police', isboss = true,  grade = { level = 1 } } } }
+-- citizenid is required this pass for IsBoneSweepDevToolPermittedForCitizenId
+-- (server/bonetool.lua's own PER-PERSON FEATURE CONTROL check, mirroring
+-- every other block/grant-supporting file's own fixture convention, e.g.
+-- pursuitsprint_spec.lua's 'K9-CID') -- without one, an otherwise-authorized
+-- caller would be denied for failing to resolve a citizenid at all, never
+-- reaching the (correctly permissive, since HasPermission is not stubbed in
+-- this sandbox) block/grant resolution itself.
+local bossInConfiguredDept = { PlayerData = { citizenid = 'BONE-BOSS-CID', job = { name = 'police', isboss = true,  grade = { level = 1 } } } }
 local seniorNonBoss        = { PlayerData = { job = { name = 'police', isboss = false, grade = { level = 10 } } } } -- HIGH grade, NOT boss -- must still be denied (no numeric-grade branch)
 local bossInUnconfiguredJob = { PlayerData = { job = { name = 'mechanic', isboss = true, grade = { level = 1 } } } } -- boss of a job that isn't a configured K9 department
 local playerWithNoJob      = { PlayerData = {} } -- job entirely absent -- fail closed, never throw
@@ -393,6 +415,109 @@ t.test("'help' from an authorized caller returns the full usage text with type '
     t.equals(notify[2], SRC_BOSS)
     t.equals(notify[3].type, 'info')
     t.equals(countEventsNamed(ctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), beforeCommand, "'help' is handled entirely server-side, per this file's own EVENT CONTRACT")
+end)
+
+-- ======================================================================
+-- SCENARIO D: PER-PERSON FEATURE CONTROL (IsBoneSweepDevToolPermittedForCitizenId,
+-- server/bonetool.lua). Each test below builds its OWN fresh ctx (unlike
+-- SCENARIO C's single shared ctx) since HasPermission/Config.FeatureControl
+-- differ per test and this section does not need SCENARIO C's careful
+-- shared-cooldown-timing choreography.
+-- ======================================================================
+
+local SRC_D = 8001
+local D_CITIZENID = 'BONE-D-CID'
+local dBoss = { PlayerData = { citizenid = D_CITIZENID, job = { name = 'police', isboss = true, grade = { level = 1 } } } }
+
+--- @param opts table { featureControl: table?, hasPermissionFn: function? }
+--- @return table ctx
+local function buildScenarioDCtx(opts)
+    local dctx = buildEnv({
+        featureFlag = true,
+        convarValue = 1,
+        playersBySource = { [SRC_D] = dBoss },
+        featureControl = opts.featureControl,
+        hasPermissionFn = opts.hasPermissionFn,
+    })
+    startResource(dctx)
+    return dctx
+end
+
+t.test('PER-PERSON: block.BoneSweepDevTool denies an otherwise-authorized (boss) caller, and burns NO command cooldown', function()
+    local dctx = buildScenarioDCtx({
+        hasPermissionFn = function(citizenid, key) return key == 'block.BoneSweepDevTool' and citizenid == D_CITIZENID end,
+    })
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'goto', '5' })
+    local notify = lastEventNamed(dctx.capturedEvents, 'ox_lib:notify')
+    t.isNotNil(notify, 'a block must still produce the same not_authorized notify a rank failure would')
+    t.equals(notify[2], SRC_D)
+    t.equals(notify[3].type, 'error')
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 0)
+
+    -- Cooldown must never be burned by a denied request -- an immediate
+    -- retry (still blocked) proves nothing was consumed, only that the
+    -- block itself denies every time.
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'goto', '5' })
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 0)
+end)
+
+t.test('PER-PERSON: not blocked and not listed in RequireGrant -- default ALLOW (step 4), matching config.lua\'s documented default', function()
+    local dctx = buildScenarioDCtx({
+        hasPermissionFn = function() return false end,
+    })
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'goto', '5' })
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 1)
+end)
+
+t.test('PER-PERSON: RequireGrant.BoneSweepDevTool = true + no active feature.BoneSweepDevTool grant -- denied even though the rank check passes', function()
+    local dctx = buildScenarioDCtx({
+        featureControl = { RequireGrant = { BoneSweepDevTool = true } },
+        hasPermissionFn = function() return false end,
+    })
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'goto', '5' })
+    local notify = lastEventNamed(dctx.capturedEvents, 'ox_lib:notify')
+    t.isNotNil(notify)
+    t.equals(notify[3].type, 'error')
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 0)
+end)
+
+t.test('PER-PERSON: RequireGrant.BoneSweepDevTool = true + an active feature.BoneSweepDevTool grant -- allowed', function()
+    local dctx = buildScenarioDCtx({
+        featureControl = { RequireGrant = { BoneSweepDevTool = true } },
+        hasPermissionFn = function(citizenid, key) return key == 'feature.BoneSweepDevTool' and citizenid == D_CITIZENID end,
+    })
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'goto', '5' })
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 1)
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local dctx = buildScenarioDCtx({
+        featureControl = { RequireGrant = { BoneSweepDevTool = true } },
+        -- hasPermissionFn deliberately omitted -- HasPermission stays undefined in this env
+    })
+    local ok = pcall(dctx.registeredCommands.k9bonetool, SRC_D, { 'goto', '5' })
+    t.isTrue(ok, 'a missing HasPermission must never error the command handler')
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 0, 'RequireGrant-listed + unresolvable grant machinery must deny, not silently allow')
+end)
+
+t.test("PER-PERSON: NO UNBOUNDED TRAP -- 'stop' still works instantly for a caller who is now block.BoneSweepDevTool-blocked", function()
+    local dctx = buildScenarioDCtx({
+        hasPermissionFn = function(citizenid, key) return key == 'block.BoneSweepDevTool' and citizenid == D_CITIZENID end,
+    })
+    -- 'goto' is denied (proves the block is genuinely active for this caller)...
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'goto', '5' })
+    t.equals(countEventsNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand'), 0)
+
+    -- ...but 'stop' -- this tool's only termination/cleanup path -- must
+    -- still dispatch, exactly like SCENARIO C's identical proof against a
+    -- rank failure: a block on STARTING the tool must never strand someone
+    -- who already has a preview marker/test prop attached with no way to
+    -- remove it.
+    dctx.registeredCommands.k9bonetool(SRC_D, { 'stop' })
+    local dispatched = lastEventNamed(dctx.capturedEvents, 'qbx_k9unit:client:boneToolCommand')
+    t.isNotNil(dispatched)
+    t.equals(dispatched[2], SRC_D)
+    t.equals(dispatched[3], 'stop')
 end)
 
 os.exit(t.summary())

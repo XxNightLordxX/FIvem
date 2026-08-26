@@ -596,6 +596,43 @@ DoorScratchByDoorCooldown.StartSweep(DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS, fu
     return (now - loggedAt) >= Config.DoorInteraction.scratchCooldownMs
 end)
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes -- that file's own
+--- header says to read it before writing a variant, so this is a copy of
+--- its shape, not a new one. Step 1 (the global Config.Features.DoorInteraction
+--- flag) is already checked by relayDoorScratch below, before this function
+--- is ever reached.
+---   2. an explicit block.DoorInteraction grant -> DENY
+---   3. DoorInteraction listed in RequireGrant -> ALLOW only with an active
+---      feature.DoorInteraction grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsDoorInteractionPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.DoorInteraction') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.DoorInteraction == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.DoorInteraction') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Relays a door-scratch sound to every client so anyone with the door
 --- entity streamed in hears it. Gated by Config.Features.DoorInteraction AND
 --- HasK9Access(source) — both re-checked HERE, server-side, same standard as
@@ -608,6 +645,20 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
     if not Config.Features.DoorInteraction then return end -- silent no-op
     if type(doorNetId) ~= 'number' then return end -- defensive: never trust client payload shape
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+
+    -- PER-PERSON FEATURE CONTROL -- see IsDoorInteractionPermittedForCitizenId
+    -- above. Checked BEFORE either cooldown below is ever consumed, matching
+    -- relayBark's own "cheapest/no-side-effect checks first" discipline, so a
+    -- blocked K9 never burns their own scratch cooldown for a request that
+    -- was always going to be refused. Silent no-op on denial, matching every
+    -- other rejection branch in this handler. This is a one-shot relay with
+    -- no ongoing state of its own to strand -- nothing here is a
+    -- termination/cleanup path, so gating the whole action is safe.
+    do
+        local player = exports.qbx_core:GetPlayer(src)
+        local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+        if not citizenid or not IsDoorInteractionPermittedForCitizenId(citizenid) then return end
+    end
 
     -- Gap closed per DEVELOPER_REFERENCE.md §9 item 16 (see comment above this handler):
     -- resolve the claimed netId to a live entity and confirm it actually

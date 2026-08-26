@@ -406,6 +406,45 @@ end
 local BoneToolCooldown = NewCooldown()
 BoneToolCooldown.RegisterPlayerDropped()
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
+-- header documents the 4-step resolution; step 1,
+-- Config.Features.BoneSweepDevTool, is already this file's own
+-- onResourceStart registration-time gate (with the convar as a SECOND,
+-- independent opt-in on top of it -- see this file's header). Mirrors
+-- server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId shape
+-- verbatim. ONLY ever consulted for a subcommand that STARTS/CONTINUES the
+-- tool (goto/next/prev/test/known/help below) -- 'stop' is this tool's
+-- termination path and is handled, and dispatched, BEFORE this is ever
+-- reached (see the RegisterCommand handler's own "NO UNBOUNDED TRAP"
+-- comment) -- a per-person block must never be able to strand someone
+-- mid-sweep with an attached test prop and no way to remove it.
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsBoneSweepDevToolPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.BoneSweepDevTool') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.BoneSweepDevTool == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.BoneSweepDevTool') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
@@ -494,6 +533,21 @@ AddEventHandler('onResourceStart', function(resourceName)
         if not IsAuthorizedBoneSweepDevTool(src) then
             NotifyPlayer(src, locale('bonetool.not_authorized'), 'error')
             return
+        end
+
+        -- PER-PERSON FEATURE CONTROL -- see IsBoneSweepDevToolPermittedForCitizenId
+        -- above. Checked BEFORE BoneToolCooldown.Consume below, matching this
+        -- resource's own "a block must never burn a cooldown slot" discipline.
+        -- Reuses the same 'bonetool.not_authorized' locale as the rank check
+        -- immediately above -- a per-person block reads to the caller exactly
+        -- like "you are not authorized," which is true either way.
+        do
+            local player = exports.qbx_core:GetPlayer(src)
+            local citizenid = player and player.PlayerData and player.PlayerData.citizenid
+            if not citizenid or not IsBoneSweepDevToolPermittedForCitizenId(citizenid) then
+                NotifyPlayer(src, locale('bonetool.not_authorized'), 'error')
+                return
+            end
         end
 
         if not BoneToolCooldown.Consume(src, Config.BoneSweepTool.CommandCooldownMs) then

@@ -522,6 +522,48 @@ local TenureFullyCollected = {}
 -- function's own defaults -- confirmed against both call sites directly
 -- before deleting this local copy, not assumed.
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
+-- header documents the 4-step resolution; step 1,
+-- Config.Features.PartnershipTenureBonus, is already the three-flag
+-- CreateThread/TickPartnershipTenure gate above. Mirrors
+-- server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId shape
+-- verbatim (that file's own header says to read it before writing a
+-- variant). Gates the K9-ROLE party (the citizenid the milestone bonus is
+-- actually paid to, per this file's own header) -- a blocked K9 simply
+-- never crosses `if targetTier <= alreadyGranted` below, since
+-- CheckTenureMilestonesForK9 returns before the CAS UPDATE that would
+-- advance `tenure_bonus_tier_granted`; the milestone stays PENDING, not
+-- forfeited, exactly like every other "not yet" early return in this
+-- function (offline handler, out-of-proximity, decertified). Unblocking
+-- later lets the very next tick pay out normally -- a block here pauses
+-- the bonus, it never erases an already-earned one.
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsPartnershipTenureBonusPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.PartnershipTenureBonus') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.PartnershipTenureBonus == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.PartnershipTenureBonus') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Re-derives, from the DB row itself (never from the cheap cache
 --- pre-filter that got the caller here), whether `k9Citizenid` currently
 --- has a newly-payable tenure milestone, and pays it out if every fresh
@@ -536,6 +578,14 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     if type(tenureCfg) ~= 'table' or type(tenureCfg.milestones) ~= 'table' or #tenureCfg.milestones == 0 then
         -- Config additions this file depends on (see closing comment block)
         -- have not landed yet -- stay a total no-op rather than erroring.
+        return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsPartnershipTenureBonusPermittedForCitizenId
+    -- above. Checked before any DB read (cheapest-check-first, same
+    -- discipline as every other per-person gate in this resource) -- a
+    -- blocked K9's milestone stays pending, never paid, until unblocked.
+    if not IsPartnershipTenureBonusPermittedForCitizenId(k9Citizenid) then
         return
     end
 

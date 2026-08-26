@@ -268,32 +268,46 @@ end)
 
 -- ======================================================================
 -- PER-PERSON FEATURE CONTROL (Config.FeatureControl -- config.lua's own
--- header documents the 4-step resolution; step 1, Config.Features.SearchZones,
--- is checked separately in the callback registration below before this
--- function is ever reached). Mirrors server/pursuitsprint.lua's
+-- header documents the 4-step resolution; step 1, Config.Features.<Name>,
+-- is checked separately by each call site below before this function is
+-- ever reached). Mirrors server/pursuitsprint.lua's
 -- IsPursuitSprintPermittedForCitizenId shape verbatim (that file's own
--- header says to read it before writing another variant).
+-- header says to read it before writing another variant) -- GENERALIZED
+-- this pass (was hardcoded to 'SearchZones' only) to accept a `featureName`
+-- parameter, same "one file, several independently-gated flags through the
+-- identical shape" pattern server/tracking.lua's own
+-- IsTrackingFeaturePermittedForCitizenId and server/wellbeing.lua's own
+-- IsWellbeingFeaturePermittedForCitizenId already establish for exactly
+-- this reason: this file now gates TWO independent Config.Features flags
+-- (SearchZones, and ContrabandAlerts below) through one shared helper
+-- rather than a near-duplicate second copy. BEHAVIOR UNCHANGED for both
+-- existing SearchZones call sites below -- each now passes 'SearchZones'
+-- explicitly where the string used to be a hardcoded literal inside this
+-- function, so `HasPermission(citizenid, 'block.SearchZones')` /
+-- `'feature.SearchZones'` / `RequireGrant.SearchZones` are read identically
+-- to before this rename.
 -- ======================================================================
 --- @param citizenid string
+--- @param featureName string -- exact Config.Features key: 'SearchZones' | 'ContrabandAlerts'
 --- @return boolean allowed
-local function IsSearchFeaturePermittedForCitizenId(citizenid)
+local function IsSearchFeaturePermittedForCitizenId(citizenid, featureName)
     -- Soft dependency, this resource's established convention -- see
     -- server/pursuitsprint.lua's own identical comment on its own copy of
     -- this guard.
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
-    if hasPermissionAvailable and HasPermission(citizenid, 'block.SearchZones') == true then
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.' .. featureName) == true then
         return false -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
     local requiresGrant = type(featureControl) == 'table'
         and type(featureControl.RequireGrant) == 'table'
-        and featureControl.RequireGrant.SearchZones == true
+        and featureControl.RequireGrant[featureName] == true
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.SearchZones') == true
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.' .. featureName) == true
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
@@ -1398,7 +1412,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- is that a blocked handler does not need a message that reads
     -- differently from a revoked one.
     local searcherCitizenidMidFlight = ResolveSearcherCitizenidForPermission(source)
-    if not searcherCitizenidMidFlight or not IsSearchFeaturePermittedForCitizenId(searcherCitizenidMidFlight) then
+    if not searcherCitizenidMidFlight or not IsSearchFeaturePermittedForCitizenId(searcherCitizenidMidFlight, 'SearchZones') then
         LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
         return { ok = false, reason = 'access_revoked' }
     end
@@ -1445,7 +1459,19 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         return { ok = false, reason = 'search_failed' }
     end
 
-    if Config.Features.ContrabandAlerts and alertTier.alert ~= 'clean' then
+    -- PER-PERSON FEATURE CONTROL, ContrabandAlerts (IsSearchFeaturePermittedForCitizenId
+    -- above -- step 1, the global Config.Features.ContrabandAlerts flag, is
+    -- the `Config.Features.ContrabandAlerts and` clause immediately below,
+    -- unchanged). Gates the SEARCHING citizenid's own citizenid (reuses
+    -- searcherCitizenidMidFlight, already re-resolved fresh a few lines
+    -- above for the SearchZones permission re-check, rather than resolving
+    -- it a second time) -- a block here suppresses only the broadcast to
+    -- nearby players; it never affects whether the search itself succeeded,
+    -- the k9_search_log audit row above, or the contraband-find XP award
+    -- below, all of which are already independently governed by
+    -- SearchZones's own permission check earlier in this function.
+    if Config.Features.ContrabandAlerts and alertTier.alert ~= 'clean'
+        and IsSearchFeaturePermittedForCitizenId(searcherCitizenidMidFlight, 'ContrabandAlerts') then
         BroadcastContrabandAlert(GetEntityCoords(entity), targetNetId, alertTier.alert)
     end
 
@@ -1589,7 +1615,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     -- that file's own comment on 'access_revoked'), so no client-side change
     -- is required for this one either.
     local searcherCitizenidAtRequest = ResolveSearcherCitizenidForPermission(source)
-    if not searcherCitizenidAtRequest or not IsSearchFeaturePermittedForCitizenId(searcherCitizenidAtRequest) then
+    if not searcherCitizenidAtRequest or not IsSearchFeaturePermittedForCitizenId(searcherCitizenidAtRequest, 'SearchZones') then
         return { ok = false, reason = 'not_granted' }
     end
 

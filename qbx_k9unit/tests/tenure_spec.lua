@@ -206,9 +206,26 @@ local function newTenureFixture(opts)
                 },
             },
         },
+        -- PER-PERSON FEATURE CONTROL fixture knob (this pass) -- nil unless
+        -- a test opts in, mirroring pursuitsprint_spec.lua's own
+        -- `opts.requireGrantListed` shape.
+        FeatureControl = opts.featureControl,
     }
 
-    local env = Sandbox.newEnv({
+    -- HasPermission is a GLOBAL in production (server/permissions.lua),
+    -- soft-dependency-guarded (`type(HasPermission) == 'function'`) by
+    -- server/tenure.lua's own IsPartnershipTenureBonusPermittedForCitizenId
+    -- -- present by default here (returning false, i.e. "never blocked, no
+    -- grant held"), settable per test via opts.hasPermissionFn, and
+    -- omittable entirely via opts.withHasPermission = false.
+    local function defaultHasPermission(citizenid, key)
+        if type(opts.hasPermissionFn) == 'function' then
+            return opts.hasPermissionFn(citizenid, key)
+        end
+        return false
+    end
+
+    local envOverrides = {
         CreateThread = threadRunner.CreateThread,
         Wait = CapturingWait,
         GetPlayers = GetPlayers,
@@ -227,7 +244,12 @@ local function newTenureFixture(opts)
             },
         },
         Config = Config,
-    })
+    }
+    if opts.withHasPermission ~= false then
+        envOverrides.HasPermission = defaultHasPermission
+    end
+
+    local env = Sandbox.newEnv(envOverrides)
 
     -- server/datastore.lua -- REAL, unmodified, loaded alongside (this
     -- file's own header: "the ONLY place in this resource that may name a
@@ -684,6 +706,94 @@ t.test('The checkIntervalMs warning prints at most ONCE across many ticks, even 
     for i = 1, #fx.waitCalls do
         t.equals(fx.waitCalls[i], 300000, 'the fallback keeps applying on every single loop pass, not just the first')
     end
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsPartnershipTenureBonusPermittedForCitizenId, gating the
+-- K9-role party's own citizenid ('K9-CID' in wireHappyPath's baseline).
+-- ----------------------------------------------------------------------
+
+t.test('PER-PERSON: block.PartnershipTenureBonus denies the milestone even exactly AT the threshold, and does NOT advance the row', function()
+    local fx = newTenureFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.PartnershipTenureBonus' and citizenid == 'K9-CID' end,
+    })
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 0, 'a blocked K9 must never be paid the milestone')
+    t.equals(fx.rowTierGranted(1), 0, 'PENDING, not forfeited -- the row itself must stay unadvanced so unblocking later still pays out')
+end)
+
+t.test('PER-PERSON: unblocking later still pays the milestone that was pending while blocked -- a block pauses the bonus, it never erases it', function()
+    local fx = newTenureFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.PartnershipTenureBonus' and citizenid == 'K9-CID' end,
+    })
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 0)
+
+    -- Same tenure_seconds, same tick cadence -- ONLY the block lifts.
+    fx.env.HasPermission = function() return false end
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 1, 'the very next tick after unblocking must pay the milestone that was earned all along')
+    t.equals(fx.rowTierGranted(1), 1)
+end)
+
+t.test('PER-PERSON: not blocked and not listed in RequireGrant -- default ALLOW (step 4), matching config.lua\'s documented default', function()
+    local fx = newTenureFixture()
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 1)
+end)
+
+t.test('PER-PERSON: RequireGrant.PartnershipTenureBonus = true + no active feature.PartnershipTenureBonus grant -- denied even exactly at the threshold', function()
+    local fx = newTenureFixture({ featureControl = { RequireGrant = { PartnershipTenureBonus = true } } })
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 0)
+    t.equals(fx.rowTierGranted(1), 0)
+end)
+
+t.test('PER-PERSON: RequireGrant.PartnershipTenureBonus = true + an active feature.PartnershipTenureBonus grant -- allowed', function()
+    local fx = newTenureFixture({
+        featureControl = { RequireGrant = { PartnershipTenureBonus = true } },
+        hasPermissionFn = function(citizenid, key) return key == 'feature.PartnershipTenureBonus' and citizenid == 'K9-CID' end,
+    })
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 1)
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local fx = newTenureFixture({
+        withHasPermission = false,
+        featureControl = { RequireGrant = { PartnershipTenureBonus = true } },
+    })
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    local ok = pcall(runOneTick, fx)
+    t.isTrue(ok, 'a missing HasPermission must never error the tenure tick thread')
+    t.equals(#fx.awardXPCalls, 0, 'RequireGrant-listed + unresolvable grant machinery must deny, not silently allow')
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent + NOT listed in RequireGrant -- still allowed (step 2/3 both structurally unreachable, falls through to step 4)', function()
+    local fx = newTenureFixture({ withHasPermission = false })
+    wireHappyPath(fx)
+    fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)
+    fx.setNow(86400)
+    runOneTick(fx)
+    t.equals(#fx.awardXPCalls, 1)
 end)
 
 os.exit(t.summary())

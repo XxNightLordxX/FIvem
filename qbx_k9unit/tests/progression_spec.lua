@@ -437,7 +437,9 @@ end)
 --- declaration comment for the full writeup: a plain `fn()` call would
 --- infinite-loop on the sweep thread's `while true do Wait(...) ... end`).
 --- @return table fixture
-local function newProgressionFixture()
+--- @param opts table? { featureControl: table?, hasPermissionFn: function?, withHasPermission: boolean? } -- PER-PERSON FEATURE CONTROL knobs, this pass. Every existing call site passes no opts at all and is unaffected (opts defaults to {}, HasPermission defaults to present-but-always-false, matching this fixture's pre-existing behavior of never defining HasPermission at all -- see IsXPProgressionPermittedForCitizenId's own `type(HasPermission) == 'function'` soft-dependency guard, which treats "absent" and "present but returns false" identically for every existing test's own default-allow expectations).
+local function newProgressionFixture(opts)
+    opts = opts or {}
     local fakeNow2 = 0
     local function GetGameTimer2() return fakeNow2 end
 
@@ -532,7 +534,25 @@ local function newProgressionFixture()
         },
     }
 
-    local env2 = Sandbox.newEnv({
+    -- PER-PERSON FEATURE CONTROL fixture knob (this pass) -- nil unless a
+    -- test opts in, mirroring pursuitsprint_spec.lua's own
+    -- `opts.requireGrantListed` shape.
+    Config2.FeatureControl = opts.featureControl
+
+    -- HasPermission is a GLOBAL in production (server/permissions.lua),
+    -- soft-dependency-guarded (`type(HasPermission) == 'function'`) by
+    -- server/progression.lua's own IsXPProgressionPermittedForCitizenId --
+    -- present by default here (always returning false, i.e. "never
+    -- blocked, no grant held"), settable per test via opts.hasPermissionFn,
+    -- and omittable entirely via opts.withHasPermission = false.
+    local function defaultHasPermission2(citizenid, key)
+        if type(opts.hasPermissionFn) == 'function' then
+            return opts.hasPermissionFn(citizenid, key)
+        end
+        return false
+    end
+
+    local envOverrides2 = {
         GetGameTimer = GetGameTimer2,
         AddEventHandler = AddEventHandler2,
         GetCurrentResourceName = GetCurrentResourceName2,
@@ -545,7 +565,12 @@ local function newProgressionFixture()
         print = printStub2,
         MySQL = MySQLStub2,
         Config = Config2,
-    })
+    }
+    if opts.withHasPermission ~= false then
+        envOverrides2.HasPermission = defaultHasPermission2
+    end
+
+    local env2 = Sandbox.newEnv(envOverrides2)
 
     Sandbox.loadInto('../server/cooldowns.lua', env2)
     -- server/datastore.lua -- REAL, unmodified, loaded alongside (see this
@@ -562,7 +587,9 @@ local function newProgressionFixture()
     end
 
     return {
+        env = env2,
         AwardXP = env2.AwardXP,
+        AwardXPDirect = env2.AwardXPDirect,
         GetXP = env2.GetXP,
         GetXPTier = env2.GetXPTier,
         printedLines = printedLines2,
@@ -794,6 +821,98 @@ t.test('EIGHTH XP-FARM FIX: reconnecting with a fresh player source never resets
     -- no time has passed to refill any), it must be denied.
     f.AwardXP(citizenid, 'takedownSuccess')
     t.equals(f.GetXP(citizenid), 0, 'a reconnect must never grant a fresh starter allowance on top of an already-fully-spent budget -- XPMintBudget is deliberately never cleared on playerDropped')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsXPProgressionPermittedForCitizenId, gating AwardXP's own
+-- entry point. Uses newProgressionFixture (fresh env per test, real
+-- Config.XP.awards) -- same fixture the EIGHTH XP-FARM FIX section above
+-- already uses.
+-- ----------------------------------------------------------------------
+
+t.test('PER-PERSON: block.XPProgression denies the award outright, even for an otherwise-valid actionKey', function()
+    local f = newProgressionFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.XPProgression' and citizenid == 'cid-xpblock' end,
+    })
+    f.AwardXP('cid-xpblock', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpblock'), 0)
+end)
+
+t.test('PER-PERSON: block.XPProgression burns NO rate-floor/mint-budget state -- unblocking immediately after still pays in full', function()
+    local f = newProgressionFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.XPProgression' and citizenid == 'cid-xpblock2' end,
+    })
+    f.AwardXP('cid-xpblock2', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpblock2'), 0)
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed the 500ms rate floor for this (citizenid, actionKey)
+    -- pair, this would now be silently rate-limited instead of succeeding.
+    f.env.HasPermission = function() return false end
+    f.AwardXP('cid-xpblock2', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpblock2'), 30, 'a block must never burn the rate floor a legitimate follow-up award still needs')
+end)
+
+t.test('PER-PERSON: not blocked and not listed in RequireGrant -- default ALLOW (step 4), matching config.lua\'s documented default', function()
+    local f = newProgressionFixture()
+    f.AwardXP('cid-xpallow', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpallow'), 30)
+end)
+
+t.test('PER-PERSON: RequireGrant.XPProgression = true + no active feature.XPProgression grant -- denied', function()
+    local f = newProgressionFixture({ featureControl = { RequireGrant = { XPProgression = true } } })
+    f.AwardXP('cid-xpgrantreq', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpgrantreq'), 0)
+end)
+
+t.test('PER-PERSON: RequireGrant.XPProgression = true + an active feature.XPProgression grant -- allowed', function()
+    local f = newProgressionFixture({
+        featureControl = { RequireGrant = { XPProgression = true } },
+        hasPermissionFn = function(citizenid, key) return key == 'feature.XPProgression' and citizenid == 'cid-xpgranted' end,
+    })
+    f.AwardXP('cid-xpgranted', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpgranted'), 30)
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local f = newProgressionFixture({ withHasPermission = false, featureControl = { RequireGrant = { XPProgression = true } } })
+    local ok = pcall(f.AwardXP, 'cid-xpmissing', 'takedownSuccess')
+    t.isTrue(ok, 'a missing HasPermission must never error AwardXP')
+    t.equals(f.GetXP('cid-xpmissing'), 0, 'RequireGrant-listed + unresolvable grant machinery must deny, not silently allow')
+end)
+
+t.test('PER-PERSON: server/permissions.lua entirely absent + NOT listed in RequireGrant -- still allowed (step 2/3 both structurally unreachable, falls through to step 4)', function()
+    local f = newProgressionFixture({ withHasPermission = false })
+    f.AwardXP('cid-xpmissing2', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpmissing2'), 30)
+end)
+
+t.test('PER-PERSON: a block on ONE citizenid never affects a DIFFERENT citizenid\'s own award', function()
+    local f = newProgressionFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.XPProgression' and citizenid == 'cid-xpblocked-other' end,
+    })
+    f.AwardXP('cid-xpblocked-other', 'takedownSuccess')
+    f.AwardXP('cid-xpnotblocked-other', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpblocked-other'), 0)
+    t.equals(f.GetXP('cid-xpnotblocked-other'), 30)
+end)
+
+t.test('PER-PERSON: AwardXPDirect (/k9givexp, a deliberate high-command override) is DELIBERATELY NOT gated by block.XPProgression -- still pays a blocked citizenid', function()
+    local f = newProgressionFixture({
+        hasPermissionFn = function(citizenid, key) return key == 'block.XPProgression' and citizenid == 'cid-xpdirect' end,
+    })
+    -- The ordinary, farmable path is genuinely blocked...
+    f.AwardXP('cid-xpdirect', 'takedownSuccess')
+    t.equals(f.GetXP('cid-xpdirect'), 0)
+
+    -- ...but a deliberate, rank-gated, capped, fully-audited manual grant
+    -- still reaches the same citizenid -- see AwardXPDirect's own doc
+    -- comment in server/progression.lua for why this is a stated decision,
+    -- not an oversight matching AwardXP's own gap this pass closed.
+    local newTotal = f.AwardXPDirect('cid-xpdirect', 50, 'manual correction')
+    t.equals(newTotal, 50)
+    t.equals(f.GetXP('cid-xpdirect'), 50)
 end)
 
 os.exit(t.summary())

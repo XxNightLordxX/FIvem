@@ -1006,6 +1006,49 @@ end
 --- header for the full extraction writeup. Every call site below is
 --- unchanged: same event names, arguments, order, and firing conditions.
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
+-- header documents the 4-step resolution; step 1, Config.Features.XPProgression,
+-- is already AwardXP's own first line below. Mirrors
+-- server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId shape
+-- verbatim. NOT the same question as this file's own "COMPOSITION WITH THE
+-- PERMISSION/FEATURE-CONTROL LAYER" section further up (whether reaching an
+-- XP TIER should auto-grant a capability -- rejected there, unchanged by
+-- this) -- this is the plain step-2/3 admission gate on AwardXP itself,
+-- the one thing every other Config.Features entry in this resource already
+-- gets and this file's own AAward entry point did not yet have. A block
+-- here stops a specific citizenid from EARNING any further XP through this
+-- entry point; it never touches XP already on their row, never freezes
+-- their current tier display, and never affects any OTHER citizenid's
+-- award in the same call graph (e.g. server/tenure.lua's own milestone
+-- bonus already gates the K9-role party independently, before ever
+-- reaching this function, via its own IsPartnershipTenureBonusPermittedForCitizenId).
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsXPProgressionPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.XPProgression') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.XPProgression == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.XPProgression') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Resource-global — see FILE-TO-FILE CONTRACT above for the full contract.
 --- THE single server-authoritative XP-award entry point. Never trusts a
 --- client-claimed XP delta or tier — `actionKey` selects a flat, config-owned
@@ -1026,6 +1069,17 @@ function AwardXP(citizenid, actionKey)
         print(('[qbx_k9unit] progression: AwardXP called with unknown actionKey %q for citizenid %s'):format(tostring(actionKey), citizenid))
         return
     end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsXPProgressionPermittedForCitizenId
+    -- above. Checked here, BEFORE AwardXPCooldown.Consume below -- no state
+    -- has been touched yet at this point (same "pure entry guard" territory
+    -- the rate-floor comment immediately below already claims for itself),
+    -- so a blocked citizenid never burns so much as the 500ms rate-floor
+    -- slot for an award that was always going to be refused. Silent no-op,
+    -- matching every other AwardXP early-return above -- this is a
+    -- server-internal accounting entry point with no caller expecting a
+    -- response, not a player-facing request with a rejection message to show.
+    if not IsXPProgressionPermittedForCitizenId(citizenid) then return end
 
     -- CHOKEPOINT-LEVEL RATE FLOOR — see AwardXPCooldown's own declaration
     -- comment above for the full reasoning/threshold justification. Gated
@@ -1215,6 +1269,21 @@ end
 ---     caller's rank server-side on every invocation.
 ---   * the amount is clamped to Config.HighCommand.maxXpPerGrant there.
 ---   * every grant is logged with granter, target, amount and new total.
+---
+--- ALSO deliberately NOT subject to IsXPProgressionPermittedForCitizenId
+--- (AwardXP's own per-person block/grant gate, above) -- stated explicitly,
+--- per this task's own "a decision, not an accident" requirement, not an
+--- oversight matching AwardXP's own gap this pass closed. `block.XPProgression`
+--- exists to stop a citizenid from FARMING XP through ordinary gameplay;
+--- /k9givexp is the opposite of farming -- a deliberate, rank-gated, capped,
+--- fully-audited human decision to hand someone a specific amount. Gating it
+--- on the same block would mean high command could no longer manually
+--- correct/compensate the exact citizenid they most plausibly WANT to grant
+--- to (someone already flagged and restricted), which is a strictly worse
+--- outcome than today's "the manual override always works, and is always in
+--- the log" posture. If a future pass disagrees, that is a product decision
+--- for whoever owns server/highcommand.lua's own header, not a silent
+--- one-line addition here.
 ---
 --- Deliberately NOT subject to AwardXPCooldown or the shared XP mint budget.
 --- Those exist to bound how fast a PLAYER can farm XP through gameplay; a

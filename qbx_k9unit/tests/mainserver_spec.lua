@@ -317,7 +317,7 @@ local function newMainFixture(opts)
         for k, v in pairs(opts.features) do config.Features[k] = v end
     end
 
-    local env = Sandbox.newEnv({
+    local envOverrides = {
         GetGameTimer = GetGameTimer,
         AddEventHandler = AddEventHandler,
         RegisterNetEvent = RegisterNetEvent,
@@ -328,7 +328,12 @@ local function newMainFixture(opts)
         IsConfiguredK9Model = IsConfiguredK9Model,
         HasK9Role = HasK9Role,
         exports = exportsStub,
-        HasPermission = defaultHasPermission,
+        -- opts.withHasPermission = false (this pass) -- lets a
+        -- "server/permissions.lua entirely absent" test omit HasPermission
+        -- from the sandbox entirely, mirroring
+        -- tests/pursuitsprint_spec.lua's own `withHasPermission` knob.
+        -- Defaults to true (unchanged for every existing caller).
+        HasPermission = (opts.withHasPermission ~= false) and defaultHasPermission or nil,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
         GetEntityModel = GetEntityModel,
@@ -341,7 +346,9 @@ local function newMainFixture(opts)
         CreateThread = threadRunner.CreateThread,
         Wait = threadRunner.Wait,
         Config = config,
-    })
+    }
+
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
@@ -781,6 +788,84 @@ t.test('relayDoorScratch: success broadcasts doorNetId to -1 (global -- a door l
     t.isNotNil(ev)
     t.equals(ev.target, -1)
     t.equals(ev.args[1], 9001)
+end)
+
+-- ------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsDoorInteractionPermittedForCitizenId. Mirrors this same
+-- file's own relayBark/BasicBarkSounds section above verbatim -- relayDoorScratch
+-- is a one-shot relay with no ongoing state of its own (unlike leash), so
+-- there is no separate termination/cleanup path to pin here: gating the
+-- whole action is the correct, and only, decision for this feature.
+-- ------------------------------------------------------------------
+
+t.test('relayDoorScratch BLOCK: an explicit block.DoorInteraction grant is a silent no-op even though HasK9Access is true, and burns NO cooldown', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    f.grantPermission(f.citizenidFor(1), 'block.DoorInteraction', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 0)
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed either cooldown, this would now be silently rate-limited
+    -- instead of succeeding.
+    f.grantPermission(f.citizenidFor(1), 'block.DoorInteraction', false)
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 1, 'a block must never burn the cooldown a legitimate follow-up scratch still needs')
+end)
+
+t.test('relayDoorScratch not blocked: an ordinary K9 with no grant/block row at all still scratches (default allow, step 4)', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 1)
+end)
+
+t.test('relayDoorScratch RequireGrant listed + no grant held -- denied even though HasK9Access is true', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.DoorInteraction = true
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 0)
+end)
+
+t.test('relayDoorScratch RequireGrant listed + an active feature.DoorInteraction grant -- allowed', function()
+    local f = newMainFixture()
+    f.config.FeatureControl.RequireGrant.DoorInteraction = true
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    f.grantPermission(f.citizenidFor(1), 'feature.DoorInteraction', true)
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 1)
+end)
+
+t.test('relayDoorScratch: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local f = newMainFixture({ withHasPermission = false })
+    f.config.FeatureControl.RequireGrant.DoorInteraction = true
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.isTrue(ok, 'a missing HasPermission must never error the event handler')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 0, 'RequireGrant-listed + unresolvable grant machinery must deny, not silently allow')
+end)
+
+t.test('relayDoorScratch: server/permissions.lua entirely absent + NOT listed in RequireGrant -- still allowed (step 2/3 both structurally unreachable, falls through to step 4)', function()
+    local f = newMainFixture({ withHasPermission = false })
+    f.setPed(1, 10, ORIGIN)
+    f.setAccess(1, true)
+    f.registerDoorEntity(9001, 900, { coords = ORIGIN })
+    f.dispatchNetEvent('qbx_k9unit:server:relayDoorScratch', 1, 9001)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:playDoorScratch'), 1)
 end)
 
 -- ========================================================================
@@ -1756,11 +1841,14 @@ t.test('onResourceStart config-safety assert: ignores a DIFFERENT resource start
 end)
 
 print('')
-print('mainserver_spec.lua coverage summary (92 cases -- run this file, do not')
+print('mainserver_spec.lua coverage summary (98 cases -- run this file, do not')
 print('grep it, per DEVELOPER_REFERENCE.md §20\'s own "count you must run" note): relayBark')
 print('(8) + its own PER-PERSON FEATURE CONTROL section (4: block/no-cooldown-burn,')
-print('default-allow, RequireGrant-denied, RequireGrant-granted), relayDoorScratch (11),')
-print('CheckLeashEligibility\'s 8 reject reasons + happy')
+print('default-allow, RequireGrant-denied, RequireGrant-granted), relayDoorScratch (11)')
+print('+ its own PER-PERSON FEATURE CONTROL section (6: block/no-cooldown-burn,')
+print('default-allow, RequireGrant-denied, RequireGrant-granted, missing-HasPermission')
+print('fails closed when RequireGrant-listed, missing-HasPermission still allows when')
+print('not listed), CheckLeashEligibility\'s 8 reject reasons + happy')
 print('path + 3 K9 role/model decoupling widening cases (15), its own PER-PERSON')
 print('FEATURE CONTROL section (7: block on either party + no-cooldown-burn,')
 print('default-allow, RequireGrant-denied, RequireGrant-granted requiring BOTH')
