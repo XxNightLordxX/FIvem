@@ -368,8 +368,15 @@ server_scripts {
     -- server/cooldowns.lua. Registered after a security review cleared all
     -- four files: the arbitrary-entity delete is closed, registration is
     -- gated on the feature flag rather than the handler self-rejecting, and
-    -- the sweep tool is dual-gated (flag at command registration, ACE
-    -- re-checked per invocation, console explicitly rejected).
+    -- the sweep tool is triple-gated (feature flag AND the opt-in convar
+    -- qbx_k9unit_enable_bone_dev_tool, both checked once at onResourceStart
+    -- before '/k9bonetool' is ever registered; then job.isboss in a
+    -- configured K9 department re-checked per invocation; console
+    -- explicitly rejected at server/bonetool.lua's src == 0 branch).
+    -- NOT ACE-gated -- server/bonetool.lua stopped calling
+    -- IsPlayerAceAllowed entirely, and this comment said otherwise for
+    -- long enough that a reader auditing gating from the manifest would
+    -- have got the wrong answer.
     'server/propattachment.lua',
     'server/bonetool.lua',
     -- Phase 5 (FetchMechanic) server half. Loaded after cooldowns.lua

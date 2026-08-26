@@ -8,7 +8,8 @@
     onResourceStop safety net -- neither exists at all while the flag is
     off), the `source ~= 65535` origin guard (this file, unlike
     tests/clientvision_spec.lua's subject, IS one of the files
-    DECISIONS_NEEDED.md's D3 write-up names as actually reachable via a
+    DEVELOPER_REFERENCE.md's D3 write-up -- formerly DECISIONS_NEEDED.md --
+    names as actually reachable via a
     forged local trigger), the modifierName/durationMs config-vs-payload-vs-
     fallback precedence, the SCREENFX_MIN/MAX_DURATION_MS clamp (both
     directions), the maintenance thread's own-death force-clear, its natural
@@ -147,7 +148,8 @@ t.test('gating: ContrabandScreenFX = true (real shipped default) -- the event ha
 end)
 
 -- ----------------------------------------------------------------------
--- Origin guard -- THIS file IS on DECISIONS_NEEDED.md's D3 list (unlike
+-- Origin guard -- THIS file IS on DEVELOPER_REFERENCE.md's D3 list
+-- (formerly DECISIONS_NEEDED.md) (unlike
 -- tests/clientvision_spec.lua's subject -- see that file's own header for
 -- the contrast).
 -- ----------------------------------------------------------------------

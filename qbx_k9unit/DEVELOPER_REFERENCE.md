@@ -2904,34 +2904,61 @@ append-forever file, which is exactly the decision-history this
 consolidation cut. What a future pass needs is what was last covered, not
 every pass ever run. Overwrite this section; do not append to it.
 
-**2026-08-25 18:46 UTC — clean, plus the documentation consolidation
-finished.**
+**2026-08-26 00:45 UTC — three real fixes, everything else clean.**
 
-- 24 commits reviewed since the previous pass. All 146 Lua files parse;
-  luacheck 0 warnings / 0 errors across 145; all 63 spec files pass.
-- Five regression spot-checks, all still correct, verified by reading code
-  rather than comments: `Config.Features.AgilityBasicJump` is read at
-  client/movement.lua:1281; `LeashPairs` still records `isK9` in both
-  directions at server/main.lua:849-850; `RevokeCertificationOffline`
-  still calls `RefreshCertificationCache`; client/vehicle.lua still has its
-  `onResourceStop` cleanup; client/radial.lua still pairs
-  `lib.registerRadial` (5 sites) with `lib.addRadialItem` (3) — the
+- Six commits reviewed since the previous pass (the compat-layer work,
+  the any-ped verification, the README citation repoint). All 147 Lua
+  files parse; luacheck 0 warnings / 0 errors across 146; all 64 spec
+  files pass, 2550 assertions.
+- Five regression spot-checks, all still correct, and all read as code
+  rather than counted: `Config.Features.AgilityBasicJump` is still read at
+  client/movement.lua:1281 and registered `clientonly` at
+  server/runtimecontrol.lua:434; `LeashPairs` still writes `isK9` in both
+  directions at server/main.lua:849-850 and still branches on it at :913;
+  `RevokeCertificationOffline` still calls `RefreshCertificationCache`;
+  client/vehicle.lua still has its `onResourceStop` handler at :252;
+  client/radial.lua still registers submenu contents before the opener
+  item (lib.registerRadial at :1379, lib.addRadialItem at :1389) — the
   2026-08-23 hard-error fix is intact.
-- Bark audio: still resolved. All five `.ogg` files ship and all five are
+  *Note for the next pass: a raw grep of radial.lua reports 14/11 for
+  those two calls; the real code sites are 4 and 1. The rest is prose
+  inside `--[[ ]]` blocks, which single-line comment stripping does not
+  remove. Read the call sites; do not compare the counts to the 5/3 the
+  previous pass recorded.*
+- Bark audio: still resolved. Five `.ogg` files on disk, the same five
   listed in the manifest's `files{}` block.
-- Completion claims audited: no stale ones. The struck-through `**Resolved**`
-  items in §4 are recorded answers the code still depends on, not claims
-  about present state.
-- **The ox dependency question was deliberately NOT re-checked.** The
-  previous pass established the criterion for reassessing it: an archive
-  banner reappearing on one of the four repositories, or six months without
-  commits. Neither can have happened in the six hours since. Re-running a
-  check whose own stated trigger has not fired is theatre, not diligence.
-- **Documentation consolidation completed this pass.** 20 markdown files
-  down to 9. A previous agent merged fifteen documents into this file but
-  had no shell access, so it left redirect stubs and asked whoever did to
-  remove them. Done — but only after repointing **329 code citations**
-  across 51 files first, because deleting the stubs before that would have
-  turned every `SPEC.md §4.2`-style reference into a dead link. Verified
-  comment-only: every changed line in a `.lua` file sits inside a comment,
-  and the parse and lint results above confirm nothing structural moved.
+- Manifest coverage: every `.lua` under client/, server/ and shared/ is
+  registered in `fxmanifest.lua`. Zero unregistered — the footgun that
+  bit this project five times has not recurred.
+- Completion claims re-verified against code, not against other docs:
+  zero direct `MySQL.*` calls outside `server/datastore.lua`; exactly one
+  real read of `Config.Database.enabled`, at datastore.lua:147 (the two
+  other hits are print strings); zero direct `exports.ox_target` calls
+  outside `shared/compat/`; the two `ox_inventory:Items` exceptions are
+  where `ISSUES.md` says, both `pcall`-wrapped.
+- **The ox dependency question was again deliberately NOT re-checked.**
+  The criterion stands: an archive banner reappearing on one of the four
+  repositories, or six months without commits. Six hours have passed.
+
+**Three things were actually wrong, and were fixed this pass:**
+
+1. `fxmanifest.lua`'s `server/bonetool.lua` load-order comment claimed the
+   sweep tool was "ACE re-checked per invocation". It is not — that file
+   stopped calling `IsPlayerAceAllowed` entirely. Anyone auditing the
+   resource's gating from the manifest would have got the wrong answer
+   about a dev tool that spawns props. A documentation pass had already
+   spotted this and left it "for whoever owns that file"; nobody picked it
+   up. *Rule: a note that names no owner is a note nobody will action —
+   the pass that finds it either fixes it or files it in ISSUES.md.*
+2. `CHANGELOG.md`'s header told the reader to go read `PROJECT_STATUS.md`
+   first — a file the consolidation deleted. Repointed at `ISSUES.md`.
+   The historical entries below it still name deleted documents, and were
+   deliberately left alone: a changelog records what was true when the
+   change was made. A note now says so, so the next pass does not "fix"
+   them.
+3. Two citations in `tests/clientscreenfx_spec.lua` still named
+   `DECISIONS_NEEDED.md`. Same shape as the README miss recorded earlier:
+   the big sweep covered production `.lua` and the large documents, and
+   left a changelog header and a test file behind. *Rule: a citation sweep
+   is finished when it has run over every text file in the resource, not
+   every file the sweep's author was thinking about.*

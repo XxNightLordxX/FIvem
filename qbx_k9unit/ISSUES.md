@@ -4,7 +4,7 @@
 a decision waiting on you — goes here and nowhere else. If it is not in this
 file, it is not tracked.
 
-Last updated: 2026-08-25 (all four open decisions answered)
+Last updated: 2026-08-26 (watchdog pass; nothing new waiting on you)
 
 ---
 
@@ -150,6 +150,13 @@ that stops it recurring, not as a changelog.
   new file leaves the game working — the manifest loads it — but breaks
   sandboxes that load production files directly. *Rule: moving a function is
   not done until every spec that loads a caller also loads its new home.*
+- **A note that named no owner sat unactioned.** A documentation pass
+  found that `fxmanifest.lua` described a dev tool as ACE-gated when it had
+  stopped being ACE-gated, wrote "needs correcting by whoever owns that
+  file", and moved on. Nobody owned it, so nobody did. Anyone auditing who
+  can run that tool would have read the wrong answer off the manifest.
+  *Rule: the pass that finds a problem either fixes it or writes it in this
+  file — "someone should" is not a handoff.*
 - **A dependency was reported dead that was not.** Two archive banners on a
   fork led to the wrong conclusion about the real project. *Rule: read the
   repository the manifest actually names, and take dates from the feed, not

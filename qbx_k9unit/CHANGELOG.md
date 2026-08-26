@@ -4,12 +4,49 @@ All notable changes to `qbx_k9unit` are documented in this file, in the
 order they happened, in as much technical detail as the change needs. If
 you want a plain-language summary of where this project stands right now
 and what needs your decision instead of a commit-by-commit history, read
-`PROJECT_STATUS.md` first.
+`ISSUES.md` first. (Entries below still name documents that no longer
+exist -- `PROJECT_STATUS.md`, `SPEC.md`, the phase notes. That is on
+purpose: a changelog records what was true when the change was made, and
+those files existed then. Everything they held is now in
+`DEVELOPER_REFERENCE.md`.)
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+**Compat layer finished, plus a watchdog pass — 2026-08-26.** The
+resource now reaches every third-party script through one adapter instead
+of calling `ox_target`/`ox_inventory` by name:
+
+- **Targeting is fully routed.** Zero direct `exports.ox_target` calls
+  remain outside `shared/compat/`. The migration also turned up a real
+  `qtarget` bug: its `canInteract` receives three arguments where our call
+  sites passed four, so the fourth was silently dropped.
+- **Inventory is routed too**, across 14 call sites in seven server files,
+  with exactly two deliberate exceptions — the `ox_inventory:Items(...)`
+  metadata reads in `server/equipmentshop.lua` and `server/wellbeing.lua`.
+  Both are documented in place with why: the contract has no server-realm
+  equivalent, and both are `pcall`-wrapped.
+- **Two genuine gaps recorded rather than papered over** (see `ISSUES.md`):
+  on `qb-inventory`, scent tracking from ground drops never fires, and
+  vehicle search always returns empty. The first is the dangerous shape —
+  the hook registers successfully and then does nothing, because
+  qb-inventory never announces a ground drop, so nothing appears in the
+  console.
+- **Manifest comment corrected.** The `server/bonetool.lua` load-order note
+  claimed the sweep tool was "ACE re-checked per invocation". It is not —
+  `server/bonetool.lua` stopped calling `IsPlayerAceAllowed` entirely. The
+  real gate is the feature flag plus the `qbx_k9unit_enable_bone_dev_tool`
+  convar at registration, then `job.isboss` in a configured K9 department
+  per invocation, with the console rejected outright. A previous
+  documentation pass flagged this and left it for whoever owns the
+  manifest; this closes it.
+- **Three dangling citations repointed** at documents the consolidation
+  deleted — this file's own header, and two in
+  `tests/clientscreenfx_spec.lua`. The earlier sweep covered `.lua`
+  production files and the large documents; these three sat in a changelog
+  header and a test file.
 
 **Documentation accuracy pass — 2026-08-25 (later this session).** No code
 changed. This pass corrected several places where the docs had drifted
