@@ -256,4 +256,79 @@ t.test('an unknown message action is ignored -- no throw, no state change', asyn
     t.equals(h.getRoot().children.length, 0, 'still closed, no throw for any of the three');
 });
 
+// ======================================================================
+// REGRESSION (focus-and-state audit finding #3) -- closing the tablet
+// mid-action, then reopening it, must not leave state.pendingAction stuck
+// true forever. The existing double-submit coverage
+// (html/tests/tablet_keyboard_operability_spec.js, "DOUBLE-SUBMIT" section)
+// only proves a rapid SAME-SESSION second click is refused; it never closes
+// and reopens the tablet, so it could not have caught handleClose() setting
+// only state.open = false while handleOpen() left state.pendingAction
+// untouched from whatever a prior, now-abandoned mutation left it at.
+// ======================================================================
+
+t.test('closing the tablet while a mutation is still in flight, then reopening it, un-sticks every action button (state.pendingAction is reset on open)', async () => {
+    let triggerCalls = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'A', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
+                certifications: [], xp: null, tierLabel: null,
+                myFeatures: [{ key: 'Recall', label: 'Recall your K9', category: null, actionable: true, state: 'available' }],
+            }),
+            // Never resolves -- simulates a mutation whose promise outlives
+            // the tablet being closed and reopened (a slow/lagged server, or
+            // one the operator simply stopped waiting on).
+            'tablet:triggerFeature': () => { triggerCalls++; return new Promise(() => {}); },
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const findUseButton = () => findByText(h.getRoot(), 'Use')[0];
+
+    const useBtn = findUseButton();
+    t.isDefined(useBtn, 'Use button exists on the default Home screen');
+    useBtn.click();
+    // render() rebuilds every button from scratch synchronously inside the
+    // click handler -- `useBtn` itself is now a detached, stale node, so the
+    // NEWLY rendered one (carrying `disabled` from the now-true
+    // pendingAction) has to be looked up again, same as after any other
+    // render() cycle in this suite.
+    const disabledUseBtn = findUseButton();
+    t.equals(disabledUseBtn.getAttribute('disabled'), 'disabled', 'sanity: pendingAction disabled the button while the (never-resolving) fetch is in flight');
+    // fetchStub's own Promise.resolve().then(...) wrapper (tablet-sandbox.js)
+    // defers the actual fetchImpl call by one microtask -- await one before
+    // checking that it fired.
+    await Promise.resolve();
+    t.equals(triggerCalls, 1, 'the mutation fetch fired and is now hung, in flight');
+
+    // Close mid-action -- the hung tablet:triggerFeature promise is simply
+    // abandoned, exactly like html/tablet.js's own header describes for
+    // requestClose(): the local UI hides immediately, never waiting on any
+    // in-flight fetch's result.
+    h.postMessage('tablet:close', {});
+    t.equals(h.getRoot().children.length, 0, 'tablet is closed');
+
+    // Reopen -- a fresh session. Without this pass's fix, state.pendingAction
+    // would still be true from the abandoned click above, and every action
+    // button (including this same Use button) would render permanently
+    // disabled until the original hung promise eventually settled (it never
+    // does, in this test, by construction).
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const reopenedUseBtn = findUseButton();
+    t.isDefined(reopenedUseBtn, 'Use button exists again after reopening');
+    t.isNull(reopenedUseBtn.getAttribute('disabled'), 'the button is NOT disabled on a fresh open -- pendingAction was reset');
+
+    reopenedUseBtn.click();
+    await Promise.resolve();
+    t.equals(triggerCalls, 2, 'a fresh click after reopening fires the mutation again -- the control is genuinely usable, not just visually enabled');
+});
+
 t.run();

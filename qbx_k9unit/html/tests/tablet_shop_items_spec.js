@@ -2,7 +2,12 @@
     html/tests/tablet_shop_items_spec.js
 
     Covers the K9 Supply Shop ITEM CATALOG editing screen (its own tab, high
-    command only) -- server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM
+    command OR a delegated 'k9.equipmentshopitems' grant --
+    server/equipmentshop.lua's own CanManageShopItems(source):
+    IsHighCommand(source) OR HasPermission(citizenid,
+    'k9.equipmentshopitems') == true, tests/equipmentshopitems_spec.lua:616.
+    Client-side gate: html/tablet.js's canManageShopItems()) --
+    server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM
     CATALOG" section. Owner's own words: "give high command real control
     over the equipment shop" -- which items are sold, at what price, in
     what order, and under what certification-tier/specialization purchase
@@ -65,6 +70,10 @@ function routeFetch(handlers) {
 
 const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false };
 const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false };
+// Holds the delegated capability but is NOT high command -- server/
+// equipmentshop.lua's own CanManageShopItems admits this exact citizenid
+// (see this file's header). See canManageShopItems()'s own doc comment.
+const DELEGATED_SHOP_ITEMS_VIEWER = { citizenid: 'DELEGATE1', name: 'Delegate', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.equipmentshopitems'], allowSelfGrant: false };
 
 async function settle(times) {
     for (let i = 0; i < (times || 3); i++) await new Promise((r) => setImmediate(r));
@@ -103,6 +112,21 @@ t.test('a non-high-command console user never sees the Shop Items tab', async ()
     });
     await openTablet(h);
     t.equals(findByText(h.getRoot(), 'Shop Items').length, 0);
+});
+
+t.test('a non-high-command officer holding a delegated k9.equipmentshopitems grant DOES see the Shop Items tab, and can open it', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: DELEGATED_SHOP_ITEMS_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:equipmentShopItemsList': () => ({ ok: true, items: [] }),
+        })),
+    });
+    await openTablet(h);
+    const tab = findByText(h.getRoot(), 'Shop Items')[0];
+    t.isTrue(!!tab, 'the tab itself is visible to a delegated non-high-command officer');
+    tab.click();
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Add New Item').length >= 1, 'the real screen renders, not a dead end');
 });
 
 // ======================================================================

@@ -240,6 +240,28 @@
     already-wired tablet:grantFeature/blockFeature NUI callbacks
     (client/tablet.lua) start working for this feature with no further code
     change anywhere.
+
+    ======================================================================
+    REFUSAL MESSAGE, CORRECTED (this pass -- discoverability fix, no
+    authorization logic touched): IsPursuitSprintPermittedForCitizenId used
+    to return a single boolean, and the request handler collapsed BOTH step
+    2 (an explicit block.PursuitSprint) and step 3 (RequireGrant listed, no
+    feature.PursuitSprint held) into the SAME player-facing copy
+    ('denied_not_granted'). That was wrong: those are two different
+    problems with two different fixes -- "someone has explicitly blocked
+    you" (nothing to ask for; find out why) is not "you qualify, you just
+    need this one ability granted" (ask high command, by name, for this
+    exact grant). Collapsing them meant a blocked handler could be told to
+    go ask for a grant that would never be approved, and a merely-ungranted
+    one got no hint that a grant was even the mechanism in play.
+    IsPursuitSprintPermittedForCitizenId now returns a second value
+    (nil | 'blocked' | 'not_granted') alongside its boolean, and the
+    request handler below picks PURSUIT_SPRINT_REJECT_MESSAGES['blocked']
+    or ['grant_required'] accordingly -- feature.PursuitSprint is named
+    explicitly in the 'grant_required' copy, and high command is named as
+    who can grant it. Nothing about WHICH citizenids pass or fail changed --
+    this is a message-routing fix only, verified by re-reading every branch
+    below before shipping it.
     ======================================================================
 ]]
 
@@ -431,6 +453,9 @@ end
 -- ======================================================================
 --- @param citizenid string
 --- @return boolean allowed
+--- @return ('blocked'|'not_granted')? denyReason -- nil when allowed == true;
+---   see this file's header "REFUSAL MESSAGE, CORRECTED" for why the caller
+---   must route these two to different player-facing copy, not one.
 local function IsPursuitSprintPermittedForCitizenId(citizenid)
     -- Soft dependency, this resource's established convention
     -- (`type(...) == 'function'`) -- server/permissions.lua may be absent
@@ -442,7 +467,7 @@ local function IsPursuitSprintPermittedForCitizenId(citizenid)
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
     if hasPermissionAvailable and HasPermission(citizenid, 'block.PursuitSprint') == true then
-        return false -- step 2: an explicit block always wins, even over an active grant
+        return false, 'blocked' -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
@@ -452,7 +477,10 @@ local function IsPursuitSprintPermittedForCitizenId(citizenid)
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.PursuitSprint') == true
+        if hasPermissionAvailable and HasPermission(citizenid, 'feature.PursuitSprint') == true then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
@@ -476,18 +504,28 @@ RegisterNetEvent('qbx_k9unit:server:requestPursuitSprint', function(targetNetId)
 
     local k9Player = exports.qbx_core:GetPlayer(src)
     local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
-    if not k9Citizenid or not IsPursuitSprintPermittedForCitizenId(k9Citizenid) then
-        -- Distinguish "explicitly blocked" from "grant required but not
-        -- held" in the log only (LogAuditInvocation-style detail is out of
-        -- scope for this file -- server/admin.lua's own audit surface is
-        -- the read side for k9_permissions activity); the PLAYER-FACING
-        -- message is deliberately the SAME generic "not granted" copy
-        -- either way, matching this resource's own "best-effort,
-        -- non-restraint-implying rejection copy" posture
-        -- (server/combat.lua's COMBAT_REJECT_MESSAGES header) -- a blocked
-        -- handler does not need a message that reads differently from a
-        -- never-granted one.
+    if not k9Citizenid then
+        -- No resolvable identity at all -- cannot be attributed to either a
+        -- block or a missing grant, so this stays the generic grant_required
+        -- copy (the same direction this resource's fail-closed convention
+        -- already takes: "needs a grant" is the honest floor even when the
+        -- real cause is unknown).
         NotifyPlayer(src, PursuitSprintRejectMessage('grant_required'), 'error')
+        return
+    end
+    local citizenPermitted, denyReason = IsPursuitSprintPermittedForCitizenId(k9Citizenid)
+    if not citizenPermitted then
+        -- CORRECTED (see this file's header "REFUSAL MESSAGE, CORRECTED"):
+        -- this USED TO send the SAME 'grant_required' copy for both an
+        -- explicit block and a missing grant, on the theory that "a blocked
+        -- handler does not need a message that reads differently from a
+        -- never-granted one." That reasoning was wrong -- they are different
+        -- problems with different fixes (nothing to ask for vs. a specific
+        -- grant to request from high command), and collapsing them left a
+        -- blocked handler unable to tell the two apart from a merely
+        -- ungranted one. denyReason ('blocked' | 'not_granted') now routes to
+        -- the matching PURSUIT_SPRINT_REJECT_MESSAGES entry.
+        NotifyPlayer(src, PursuitSprintRejectMessage(denyReason == 'blocked' and 'blocked' or 'grant_required'), 'error')
         return
     end
 

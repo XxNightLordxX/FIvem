@@ -148,6 +148,9 @@
       tablet:requestRoster {query}                                -> cb(RosterResult)          [console audience]
       tablet:requestPersonSummary {targetCitizenId}               -> cb(PersonSummaryResult)    [console audience]
       tablet:requestPersonFeatures {targetCitizenId}               -> cb(PersonFeaturesResult)   [high command only]
+      tablet:requestMyPartnerships {}                             -> cb(PartnershipsResult)      [Partnerships tab, everyone -- server/tablet.lua's tabletRequestMyPartnerships, enriched here with the caller's own active row's getPartnershipTenureProgress]
+      tablet:requestPartnershipsForTarget {targetCitizenId}       -> cb(PartnershipsResult)      [Partnerships tab admin lookup, high command only]
+      tablet:forceEndPartnership {targetCitizenId}                -> cb({ok,error?})             [Partnerships tab admin control, high command only -- server/partnership.lua's existing ForceBreakPartnershipForCitizenId]
       tablet:triggerFeature {feature}                             -> cb({ok,error?})            [SECTION 2]
       tablet:certify {targetCitizenId, departmentKey}             -> cb({ok,error?,message?})   [server/certifications.lua's tabletCertify -- online OR offline, see GrantCertificationForTablet's own header]
       tablet:decertify {targetCitizenId, departmentKey}           -> cb({ok,error?,message?})   [SECTION 3, k9decertifyoffline]
@@ -433,6 +436,35 @@
         independently (to respawn/reposition shop peds) -- AddEventHandler
         supports any number of handlers per event name, so this is a
         second, additive listener, not a replacement for that one.
+      { action = 'tablet:featureBlocksSync', data = string[] }
+        THIS PASS (focus-and-state audit finding #4) -- Lua-INITIATED, NOT
+        tied to this player's own tablet being open, SAME registration
+        posture as tablet:themeUpdated -- relayed verbatim from
+        server/permissions.lua's own qbx_k9unit:client:featureBlocksSync
+        push (that file's own header "FEATURE-BLOCK PUSH": fires ONLY at
+        the one affected citizenid's own connection -- join/reconnect,
+        server-restart backfill, or a `block.<Name>` grant/revoke against
+        THAT citizenid -- never a broadcast). `data` is the raw array of
+        currently-blocked feature-name strings client/featureblocks.lua's
+        own twelve-feature CLIENT_ENFORCED_FEATURES catalog already
+        consumes independently (a SECOND, additive listener on the same
+        server event, not a replacement). html/tablet.js's own
+        handleFeatureBlocksSync() does not read this payload at all --
+        THE TABLET IS A VIEW, IT DECIDES NOTHING -- it only uses the
+        push's ARRIVAL as a cue to re-fetch tablet:requestMyRecord (the
+        SAME "re-pull the source of truth, never patch state from a
+        payload" posture refreshPersonAndSelf() already establishes), so a
+        viewer whose own block set just changed sees their Home/My Record
+        screens' abilities list catch up live instead of staying stale
+        until their next full close/reopen.
+        STILL OPEN, REPORTED, NOT BUILT THIS PASS: this closes the
+        FEATURE-BLOCK half of "the viewer's entitlements changed under an
+        open tablet" -- it does NOT address a JOB CHANGE (e.g. losing high
+        command mid-session), because no server-side push for that exists
+        yet. See this pass's own report for the proposed contract
+        (piggybacking on the existing, extensively-consumed
+        QBCore:Server:OnJobUpdate handler server/certifications.lua
+        already owns) rather than this file inventing one unilaterally.
 
     LOCALIZATION: `strings` ships the FULL, real, locale()-resolved set --
     EVERY key currently in html/tablet.js's own DEFAULT_STRINGS, one-for-
@@ -474,6 +506,112 @@
       4. onResourceStop (this resource only).
     CloseTablet() has NO access/state gate beyond "is it even open" -- the
     "no unbounded trap" rule this codebase applies to every release path.
+    ======================================================================
+
+    ======================================================================
+    CROSS-RESOURCE FOCUS INTEROP (this pass, focus-and-state audit finding
+    #1). PRIOR BEHAVIOUR: OpenTablet() called SetNuiFocus(true, true)
+    unconditionally, with no check for whether some OTHER resource already
+    held NUI focus (an inventory, a phone, another menu) -- silently
+    stealing it -- and CloseTablet() then called SetNuiFocus(false, false)
+    unconditionally on the way out, releasing focus GLOBALLY rather than
+    returning it to whoever held it before. This is a well-known FiveM
+    cross-resource hazard: SetNuiFocus is one flat, engine-global flag, not
+    a per-resource stack, so there is no native way to ask "whose focus is
+    this" or to hand it back to a specific other resource by name.
+
+    THE JUDGEMENT CALL, spelled out: refusing to open the tablet outright
+    whenever IsNuiFocused() is already true was considered and REJECTED as
+    the primary fix. It would have been the simpler answer, but it fails
+    this file's own "no unbounded trap" rule in spirit -- a player who
+    genuinely needs their tablet (the owner's own framing: "a player
+    mid-emergency should probably still reach their tablet") would get a
+    silent refusal instead, for a condition entirely outside this file's
+    control (some OTHER resource's menu, possibly one that never even
+    releases its own focus correctly). OpenTablet() therefore still ALWAYS
+    opens -- no new gate on the open path at all.
+
+    THE ACTUAL FIX is at CLOSE time, not open time: OpenTablet() now
+    captures `IsNuiFocused()` -- was focus ALREADY held by someone else --
+    the instant before it calls SetNuiFocus(true, true) itself, into
+    `tabletHadForeignFocusOnOpen`, the same single-owner-variable pattern
+    `tabletOpen` already establishes for this file's own lifecycle state.
+    CloseTablet() then calls SetNuiFocus(true, true) again (RESTORING the
+    pre-existing focus, never blanking it) when that was true, or
+    SetNuiFocus(false, false) (the original, full release) when it was not
+    -- see CloseTablet()'s own updated doc comment. This is the closest
+    approximation the engine's own API allows to "give it back": if focus
+    was already true before this file ever touched it, the global flag
+    simply ends up back at the SAME value it held before OpenTablet() ran,
+    rather than being forced to false out from under whoever set it. This
+    is NOT a full fix for the underlying ecosystem-wide hazard -- if the
+    ORIGINAL holder itself calls SetNuiFocus(false, false) while the K9
+    tablet is still open on top of it, that still clears focus for both
+    (there is still no real stack) -- but that failure mode already exists,
+    symmetrically, for ANY two focus-taking resources on this engine, is
+    not introduced by this file, and is not something a single resource
+    can fix unilaterally.
+
+    NON-NEGOTIABLE, unchanged: the close path stays completely
+    unconditional. `tabletHadForeignFocusOnOpen` only changes WHICH two
+    boolean arguments CloseTablet()'s one SetNuiFocus call passes -- it
+    never skips that call, never adds a new guard in front of it, and
+    every one of the four close paths above still funnels through the same
+    unconditional CloseTablet().
+
+    ANOTHER DISCLOSED RESIDUAL LIMITATION, named explicitly rather than
+    left implicit: if the ORIGINAL foreign focus-holder itself has since
+    STOPPED (crashed, was stopped, or otherwise went away) without ever
+    calling its own SetNuiFocus(false, false) while this file's tablet was
+    open on top of it, CloseTablet() restoring SetNuiFocus(true, true)
+    hands focus back to a resource that is no longer there to ever release
+    it -- there is no native that lets this file ask "is resource X still
+    running" without already knowing X's name, which SetNuiFocus's flat,
+    ownerless boolean never reveals. This is strictly no worse than the
+    PRE-EXISTING behavior for that same scenario (the original
+    SetNuiFocus(false, false) already left that stopped resource's own
+    focus-consuming page nowhere either way), and it is the deliberately
+    ACCEPTED trade-off against the alternative of guessing wrong the other
+    direction and stranding a player who legitimately still had a menu
+    open underneath.
+    ======================================================================
+
+    ======================================================================
+    DOWNED-BY-TAKEDOWN ALSO FORCE-CLOSES (this pass, focus-and-state audit
+    finding #2). PRIOR BEHAVIOUR: EnsureTabletWatchThreadRunning() below
+    force-closed the tablet on IsEntityDead(PlayerPedId()), but a
+    non-lethal K9 takedown (client/combat.lua's forceRagdoll, the
+    RegisterNetEvent('qbx_k9unit:client:forceRagdoll', ...) handler) never
+    kills the target -- SetPedToRagdollWithFall leaves them ragdolled, not
+    dead, by design (the whole point of a NON-lethal takedown) -- so
+    IsEntityDead stayed false throughout, and a K9-taken-down player kept
+    their tablet open (and NUI focus) while genuinely unable to act, the
+    exact same "cannot act" condition death already force-closes for.
+
+    DECISION: yes, this inconsistency is closed -- a player who cannot act
+    should not keep sitting on an open, focus-holding tablet either way,
+    death or takedown, and there is no reason the two should behave
+    differently. THE SIGNAL USED IS THE EXISTING ONE, not a new one:
+    client/combat.lua already tracks whether THIS client is currently the
+    TARGET of an active forced ragdoll in its own file-local
+    `ActiveForcedRagdoll` state (set the instant forceRagdoll's own
+    RegisterNetEvent handler fires, cleared on endForceRagdoll or its own
+    maintenance-thread deadline) -- exactly the "am I currently downed via
+    non-lethal takedown" signal server/combat.lua's own IsTargetDowned
+    header already reasons about from the SERVER side. Rather than this
+    file re-deriving that state a second way (a second, driftable source of
+    truth), client/combat.lua now exposes a narrow, read-only
+    IsLocalPlayerForceRagdolled() resource-global (see that function's own
+    doc comment) -- the SAME seam-opening precedent this file's own header
+    already cites for FindNearestLeashCandidate/FindNearestPartnerCandidate:
+    open a seam in the file that owns the state, never duplicate the check.
+    Guarded here with `type(fn) == 'function'` regardless (client/combat.lua
+    returns early, defining nothing, when NONE of BiteAndHold/
+    NonLethalTakedown/PropDragging are enabled -- this is not optional, same
+    reasoning as every other cross-file `type(fn) == 'function'` guard in
+    this file). NOT extended to ActiveBiteHold (being bitten-and-held) --
+    out of scope for this pass, flagged in this pass's own report, not
+    fixed here.
     ======================================================================
 
     ======================================================================
@@ -571,6 +709,15 @@ if not Config.Features.CommandTablet then return end
 -- ----------------------------------------------------------------------
 
 local tabletOpen = false -- single source of truth for CloseTablet()'s no-op guard and the watch thread's loop condition
+
+--- Whether some OTHER resource already held NUI focus the instant BEFORE
+--- OpenTablet() last grabbed it -- captured fresh on every real open (see
+--- OpenTablet() below), consulted ONLY by CloseTablet() to decide which
+--- two SetNuiFocus arguments to pass on the way out. See this file's
+--- header "CROSS-RESOURCE FOCUS INTEROP" for the full reasoning -- this is
+--- the "give it back rather than blank it" half of that fix, never a gate
+--- on whether the tablet opens or closes.
+local tabletHadForeignFocusOnOpen = false
 
 --- Pcall-wrapped, fail-closed wrapper around every server callback this
 --- file awaits. `lib.callback.await` THROWS (never returns nil) on a
@@ -998,6 +1145,49 @@ local TABLET_STRING_KEYS = {
     'mutation_error_tier_already_set', 'mutation_error_target_offline', 'mutation_error_target_no_department_cert', 'mutation_error_feature_disabled',
     'mutation_error_invalid_permission', 'mutation_error_invalid_model', 'mutation_error_not_available', 'mutation_error_no_active_assignment',
     'mutation_error_no_fallback_configured', 'mutation_error_invalid_granter', 'mutation_error_db_error', 'mutation_error_actions_disabled',
+    -- Help tab (owner-directed teaching guide) -- see
+    -- html/tablet.js's buildHelpScreen()/HELP_TAB_CATALOG for the full
+    -- design; kept in the SAME order as that file's own DEFAULT_STRINGS
+    -- addition so the two stay easy to diff against each other.
+    'tab_help', 'help_heading', 'help_intro_line1', 'help_role_note_k9',
+    'help_role_note_handler', 'help_role_note_uncertified', 'help_role_note_high_command_suffix', 'help_start_heading',
+    'help_start_k9_1', 'help_start_k9_2', 'help_start_k9_3', 'help_start_k9_4',
+    'help_start_k9_5', 'help_start_handler_1', 'help_start_handler_2', 'help_start_handler_3',
+    'help_start_handler_4', 'help_start_handler_5', 'help_start_handler_6', 'help_start_high_command_heading',
+    'help_start_high_command_intro', 'help_start_high_command_1', 'help_start_high_command_2', 'help_start_high_command_3',
+    'help_start_high_command_4', 'help_tabs_heading', 'help_tabs_intro', 'help_tab_home_desc',
+    'help_tab_my_record_desc', 'help_tab_commands_desc', 'help_tab_help_desc', 'help_tab_console_desc',
+    'help_tab_flows_desc', 'help_tab_theme_desc', 'help_tab_cert_tiers_desc', 'help_tab_permission_keys_desc',
+    'help_tab_shop_locations_desc', 'help_tab_shop_items_desc', 'help_tab_runtime_control_desc', 'help_tab_xp_tiers_desc',
+    'help_tab_k9_profiles_desc', 'help_tab_audit_desc', 'help_commands_heading', 'help_commands_intro',
+    'help_commands_admin_heading', 'help_commands_admin_intro', 'help_tasks_heading', 'help_task_get_certified_heading',
+    'help_task_get_certified_1', 'help_task_get_certified_2', 'help_task_get_certified_3_template', 'help_task_partner_up_heading',
+    'help_task_partner_up_1', 'help_task_partner_up_2', 'help_task_partner_up_3', 'help_task_partner_up_4',
+    'help_task_vehicle_heading', 'help_task_vehicle_1', 'help_task_vehicle_2', 'help_task_vehicle_3',
+    'help_task_search_heading', 'help_task_search_1', 'help_task_search_2', 'help_task_search_3',
+    'help_task_treat_heading', 'help_task_treat_1', 'help_task_treat_2', 'help_task_treat_3',
+    'help_task_hc_certify_someone_heading', 'help_task_hc_certify_someone_1', 'help_task_hc_certify_someone_2_template', 'help_task_hc_certify_someone_3',
+    'help_task_hc_flow_steps_template', 'help_task_hc_toggle_feature_heading', 'help_task_hc_toggle_feature_1', 'help_task_hc_toggle_feature_2',
+    'help_task_hc_toggle_feature_3', 'help_task_hc_assign_k9_heading', 'help_task_hc_assign_k9_1', 'help_task_hc_assign_k9_2_template',
+    'help_task_hc_assign_k9_3_template', 'help_task_hc_check_history_heading', 'help_task_hc_check_history_1', 'help_task_hc_check_history_2',
+    'help_task_hc_check_history_3', 'help_trouble_heading', 'help_trouble_intro', 'help_trouble_no_k9_access_title',
+    'help_trouble_no_k9_access_body', 'help_trouble_not_certified_title', 'help_trouble_not_certified_body', 'help_trouble_feature_off_title',
+    'help_trouble_feature_off_body', 'help_trouble_needs_grant_title', 'help_trouble_needs_grant_body', 'help_trouble_rate_limited_title',
+    'help_trouble_rate_limited_body', 'help_trouble_self_cert_disabled_title', 'help_trouble_self_cert_disabled_body', 'help_trouble_target_offline_title',
+    'help_trouble_target_offline_body', 'help_trouble_insufficient_authorization_title', 'help_trouble_insufficient_authorization_body',
+    'help_tab_partnerships_desc',
+
+    -- Partnerships tab (this pass, coder-ui) -- see html/tablet.js's own
+    -- "PARTNERSHIPS TAB" header comment for the full contract. Added here,
+    -- to locales/en.json's `tablet` group, and to html/tablet.js's
+    -- DEFAULT_STRINGS in the SAME change, per this file's own
+    -- BuildTabletStrings/tabletlocalization_spec.lua three-way contract.
+    'tab_partnerships', 'home_k9_progression_heading', 'home_view_partners_label', 'home_view_partners_hint',
+    'mutation_error_not_partnered', 'partnerships_feature_disabled', 'partnerships_history_heading', 'partnerships_history_empty',
+    'partnerships_count_summary_template', 'partnerships_truncated_notice_template', 'partnerships_state_active', 'partnerships_state_ended',
+    'partnerships_established_label', 'partnerships_ended_label', 'partnerships_ended_by_label', 'partnerships_ended_system_template',
+    'partnerships_tier_label', 'partnerships_tier_none', 'partnerships_tier_value_template', 'partnerships_next_tier_countdown_template',
+    'partnerships_admin_heading', 'partnerships_admin_hint', 'partnerships_admin_none', 'partnerships_force_end_label',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -1037,17 +1227,25 @@ local function BuildTabletStrings()
     return strings
 end
 
---- The ONE place this file ever calls SetNuiFocus(false, false) -- see
---- FOCUS/CLOSE DISCIPLINE. No access/state check beyond "is it open" --
---- a close/termination path must never be gated (this codebase's "no
---- unbounded trap" rule; see client/recall.lua's header). Idempotent --
+--- The ONE place this file ever calls SetNuiFocus -- see FOCUS/CLOSE
+--- DISCIPLINE and, for the two arguments themselves, "CROSS-RESOURCE FOCUS
+--- INTEROP" above. No access/state check beyond "is it open" -- a
+--- close/termination path must never be gated (this codebase's "no
+--- unbounded trap" rule; see client/recall.lua's header) -- that rule is
+--- unchanged and unconditional; only WHICH two booleans this one call
+--- passes depends on `tabletHadForeignFocusOnOpen`, captured once per open
+--- by OpenTablet() below. `true` -- another resource already held focus
+--- when this file opened over it -- RESTORES that pre-existing focus
+--- (SetNuiFocus(true, true)) rather than blanking it out from under
+--- whoever set it; `false` -- the common case, nobody else had focus --
+--- releases it fully, exactly as before this pass. Idempotent --
 --- html/tablet-bridge.js's own header documents firing tablet:close from
 --- more than one path and expects Lua to treat a repeat as a safe no-op.
 function CloseTablet()
     if not tabletOpen then return end
 
     tabletOpen = false
-    SetNuiFocus(false, false)
+    SetNuiFocus(tabletHadForeignFocusOnOpen, tabletHadForeignFocusOnOpen)
     SendNUIMessage({ action = 'tablet:close', data = {} })
 end
 
@@ -1083,6 +1281,18 @@ local function EnsureTabletWatchThreadRunning()
                 -- propattachment.lua/fetch.lua/vehicle.lua for "clean up
                 -- per-ped state on death, since respawn reuses the ped
                 -- handle" -- applied here to a focus grab.
+                CloseTablet()
+            elseif type(IsLocalPlayerForceRagdolled) == 'function' and IsLocalPlayerForceRagdolled() then
+                -- THIS PASS -- see this file's header "DOWNED-BY-TAKEDOWN
+                -- ALSO FORCE-CLOSES". A non-lethal K9 takedown never sets
+                -- IsEntityDead true, so without this branch a taken-down
+                -- player kept their tablet (and NUI focus) open while
+                -- genuinely unable to act. `type(fn) == 'function'` guard
+                -- because client/combat.lua defines nothing at all when
+                -- BiteAndHold/NonLethalTakedown/PropDragging are ALL off --
+                -- same non-optional guard convention this file's header
+                -- already documents for FindNearestLeashCandidate/
+                -- FindNearestPartnerCandidate.
                 CloseTablet()
             end
 
@@ -1121,6 +1331,31 @@ function OpenTablet(requestedView)
     if tabletOpen then return end
 
     tabletOpen = true
+    -- THIS PASS -- see header "CROSS-RESOURCE FOCUS INTEROP". Captured
+    -- BEFORE this file's own SetNuiFocus(true, true) call below touches
+    -- anything, so it reflects whatever some OTHER resource left the
+    -- engine-global flag at -- CloseTablet() reads this back to decide
+    -- whether to restore that pre-existing focus or release it fully.
+    --
+    -- Pcall-wrapped and normalized to a REAL boolean (`== true`, never a
+    -- bare truthy value, and never nil) -- same fail-safe posture as
+    -- AwaitServerCallback/BuildTabletStrings' own per-call pcall guards in
+    -- this file. If IS_NUI_FOCUSED ever throws, or returns anything other
+    -- than a clean boolean, this MUST collapse to `false` (nobody else had
+    -- it), never `nil` or a propagating error: `nil` reaching
+    -- CloseTablet()'s SetNuiFocus call below would either misbehave or
+    -- error against a native that expects a real boolean argument, and
+    -- letting the error propagate out of OpenTablet() at all would abort
+    -- the open entirely -- either outcome is strictly worse than the
+    -- "wrongly assume nobody else had focus" fallback this collapses to.
+    -- Concretely: `false` here means CloseTablet() later releases focus
+    -- fully (SetNuiFocus(false, false)), which is EXACTLY this file's
+    -- ENTIRE pre-existing behavior before this pass -- a failed capture
+    -- degrades to the old, always-safe posture, never to a new, untested
+    -- one. The close path itself is never skipped or gated by this value
+    -- either way -- see CloseTablet()'s own doc comment.
+    local nuiFocusCheckOk, nuiFocusCheckResult = pcall(IsNuiFocused)
+    tabletHadForeignFocusOnOpen = (nuiFocusCheckOk and nuiFocusCheckResult == true)
     SendNUIMessage({
         action = 'tablet:open',
         data = {
@@ -1689,6 +1924,59 @@ RegisterNUICallback('tablet:requestPersonFeatures', function(data, cb)
         return
     end
     cb(AwaitServerCallback('qbx_k9unit:server:tabletRequestPersonFeatures', data.targetCitizenId))
+end)
+
+--- THE PARTNERSHIPS TAB (this pass, coder-ui) -- see server/tablet.lua's
+--- own "CALLBACKS 7-9" doc comment for the full contract/reasoning; three
+--- thin forwards below, matching this file's own established shape for
+--- every other read (requestRoster/requestPersonSummary above).
+---
+--- tabletRequestMyPartnerships alone gets ONE extra step: tier richness
+--- for the caller's own ACTIVE row (if any) is composed in HERE from the
+--- ALREADY-SHIPPED 'qbx_k9unit:server:getPartnershipTenureProgress'
+--- (server/tenure.lua), a second, cheap, already-client-triggerable
+--- AwaitServerCallback -- never a new query shape on the server, and never
+--- attempted for tablet:requestPartnershipsForTarget's admin lookup below
+--- (that callback has no target argument, so it can only ever answer for
+--- THIS caller, exactly like every other self-only tenure read in this
+--- file).
+RegisterNUICallback('tablet:requestMyPartnerships', function(_, cb)
+    local result = AwaitServerCallback('qbx_k9unit:server:tabletRequestMyPartnerships')
+    if type(result) == 'table' and result.ok == true and type(result.partnerships) == 'table' then
+        for _, row in ipairs(result.partnerships) do
+            if row.active == true then
+                local progress = AwaitServerCallback('qbx_k9unit:server:getPartnershipTenureProgress')
+                if type(progress) == 'table' then
+                    row.tenureProgress = progress
+                end
+                break -- at most one active row -- server/partnership.lua's own verified one-active-partnership-per-citizenid invariant
+            end
+        end
+    end
+    cb(result)
+end)
+
+--- HIGH COMMAND ONLY (re-verified server-side, this page decides nothing
+--- -- see this file's own header). Owner: "high command... should have
+--- control over it also."
+RegisterNUICallback('tablet:requestPartnershipsForTarget', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletRequestPartnershipsForTarget', data.targetCitizenId))
+end)
+
+--- HIGH COMMAND ONLY -- the "control" write half, over server/partnership.lua's
+--- EXISTING ForceBreakPartnershipForCitizenId (server/tablet.lua's own
+--- CALLBACK 9 doc comment has the full "not a new teardown mechanism"
+--- writeup).
+RegisterNUICallback('tablet:forceEndPartnership', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletForceEndPartnership', data.targetCitizenId))
 end)
 
 RegisterNUICallback('tablet:certify', function(data, cb)
@@ -2465,6 +2753,44 @@ end)
 -- UI on the JS side either.
 RegisterNetEvent('qbx_k9unit:client:themeUpdated', function(theme)
     SendNUIMessage({ action = 'tablet:themeUpdated', data = theme })
+end)
+
+-- THIS PASS (focus-and-state audit finding #4) -- server/permissions.lua's
+-- own "FEATURE-BLOCK PUSH" section already fires
+-- TriggerClientEvent('qbx_k9unit:client:featureBlocksSync', targetSrc,
+-- blockedFeatureNames) at four points (PlayerLoaded, its own
+-- onResourceStart backfill, and the tails of GrantPermission/
+-- RevokePermission on the `block.<Name>` namespace), always at the ONE
+-- affected citizenid's own connection, never a broadcast -- so an arriving
+-- push always describes THIS client's own, current viewer's own
+-- entitlements changing, never someone else's. client/featureblocks.lua
+-- already owns the REAL consumer of this event (the twelve
+-- CLIENT_ENFORCED_FEATURES it gates) -- this is a SECOND, additive
+-- listener, same posture as qbx_k9unit:client:equipmentShopLocationsUpdated
+-- above, not a replacement for that one.
+--
+-- MUST be RegisterNetEvent, NOT AddEventHandler -- same reasoning as
+-- qbx_k9unit:client:themeUpdated's own note just above: this is a
+-- network-originated TriggerClientEvent, and FiveM only delivers one of
+-- those to a RegisterNetEvent-registered handler. No `source ~= 65535`
+-- origin guard is added here (unlike client/combat.lua's handlers) --
+-- deliberately: this handler applies zero side effects of its own beyond
+-- relaying into the SendNUIMessage channel below, which html/tablet.js's
+-- own handleFeatureBlocksSync() then uses ONLY as a cue to RE-FETCH the
+-- authoritative record (loadMyRecord(), never a local recomputation from
+-- this payload -- see that function's own doc comment for why: THE TABLET
+-- IS A VIEW, IT DECIDES NOTHING). A spoofed local TriggerEvent reaching
+-- this handler could, at most, cause one extra harmless re-fetch of the
+-- caller's own already-authoritative record -- the same "no origin guard
+-- needed, nothing here can be abused" posture this file's own two sibling
+-- push relays (themeUpdated/equipmentShopLocationsUpdated) already apply.
+--
+-- Forwarded VERBATIM (the raw blocked-feature-name array) even though
+-- html/tablet.js's own handler does not read it -- kept in the payload
+-- anyway so a future consumer never has to touch this Lua-side relay to
+-- gain access to it.
+RegisterNetEvent('qbx_k9unit:client:featureBlocksSync', function(blockedKeys)
+    SendNUIMessage({ action = 'tablet:featureBlocksSync', data = blockedKeys })
 end)
 
 -- ----------------------------------------------------------------------

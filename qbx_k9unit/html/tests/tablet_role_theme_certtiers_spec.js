@@ -8,8 +8,12 @@
          still be reached at all -- see html/tablet.js's own header note on
          tablet:revertK9Ped's NO-UNBOUNDED-TRAP contract.
       2. Tablet theming (its own tab) -- applied for every viewer, editable
-         only by high command, including the live qbx_k9unit:client:
-         themeUpdated push.
+         by high command OR a viewer holding a delegated 'k9.tablettheme'
+         grant (server/runtimecontrol.lua's own CanManageTabletTheme(source):
+         IsHighCommand(source) OR HasPermission(citizenid,
+         'k9.tablettheme') == true, tests/runtimecontrol_spec.lua:523;
+         client-side gate: html/tablet.js's canManageTabletTheme()),
+         including the live qbx_k9unit:client:themeUpdated push.
       3. Certification tier editing -- server/certtiers.lua. The catalogue
          is asserted to be genuinely DYNAMIC (driven entirely by the
          server's own tablet:certTiersList response, using tier
@@ -45,11 +49,19 @@ const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: tr
 // grant specifically -- a bare k9.certify no longer reaches the console
 // tab on its own. 'k9.audit' added here so this constant's own name
 // ("console only, not high command") stays true; every non-high-command
-// gate this file asserts against (Tablet Theme/Certification Tiers tabs,
-// the K9 Role section) is keyed on isHighCommand alone regardless, so
-// adding this does not change what any of those tests are actually
-// proving.
+// gate this file asserts against (Certification Tiers tab, the K9 Role
+// section) is keyed on isHighCommand alone regardless, so adding this does
+// not change what any of those tests are actually proving. Tablet Theme is
+// the one exception -- see canManageTabletTheme()'s own doc comment -- and
+// this viewer deliberately does NOT hold 'k9.tablettheme', so the existing
+// "never sees the Tablet Theme tab" test below still proves what its name
+// says.
 const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false };
+// Holds the delegated capability but is NOT high command -- server/
+// runtimecontrol.lua's own CanManageTabletTheme admits this exact
+// citizenid (see this file's header). See canManageTabletTheme()'s own
+// doc comment.
+const DELEGATED_THEME_VIEWER = { citizenid: 'DELEGATE1', name: 'Delegate', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.tablettheme'], allowSelfGrant: false };
 
 const DEFAULT_THEME_RESPONSE = { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' };
 
@@ -263,6 +275,20 @@ t.test('a non-high-command viewer never sees the Tablet Theme tab, but the fetch
     t.equals(findByText(h.getRoot(), 'Tablet Theme').length, 0, 'tab never constructed for a non-high-command viewer');
     await settle();
     t.isTrue(findByText(h.getRoot(), 'Bark Squad HQ').length >= 1, 'the custom header title still applies for a non-editing viewer');
+});
+
+t.test('a non-high-command officer holding a delegated k9.tablettheme grant DOES see the Tablet Theme tab, and can open it', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: DELEGATED_THEME_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+        })),
+    });
+    await openTablet(h);
+    const tab = findByText(h.getRoot(), 'Tablet Theme')[0];
+    t.isTrue(!!tab, 'the tab itself is visible to a delegated non-high-command officer');
+    tab.click();
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Tablet Appearance').length >= 1, 'the real editing screen renders, not a dead end');
 });
 
 t.test('high command opens the Theme tab, edits fields, and Save submits the working draft verbatim', async () => {

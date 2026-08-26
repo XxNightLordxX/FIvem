@@ -1,10 +1,14 @@
 /*
     html/tests/tablet_runtime_control_spec.js
 
-    Covers the Runtime Control screen (its own tab, high command only) --
-    server/runtimecontrol.lua PART 1/1B. Owner's own words: "Lets high
-    command switch features on and off SERVER-WIDE from the tablet, and
-    tune numbers live."
+    Covers the Runtime Control screen (its own tab, high command OR a
+    delegated 'k9.runtimecontrol' grant -- server/runtimecontrol.lua's own
+    CanManageRuntimeControl(source): IsHighCommand(source) OR
+    HasPermission(citizenid, 'k9.runtimecontrol') == true,
+    tests/runtimecontrol_spec.lua:523. Client-side gate: html/tablet.js's
+    canManageRuntimeControl()) -- server/runtimecontrol.lua PART 1/1B.
+    Owner's own words: "Lets high command switch features on and off
+    SERVER-WIDE from the tablet, and tune numbers live."
 
     Server contract verified against server/runtimecontrol.lua directly
     (not assumed): runtimeListFeatures/runtimeListTunables each return
@@ -44,6 +48,11 @@ function routeFetch(handlers) {
 
 const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false };
 const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false };
+// Holds the delegated capability but is NOT high command -- server/
+// runtimecontrol.lua's own CanManageRuntimeControl admits this exact
+// citizenid (see this file's header). See canManageRuntimeControl()'s own
+// doc comment.
+const DELEGATED_RUNTIME_CONTROL_VIEWER = { citizenid: 'DELEGATE1', name: 'Delegate', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.runtimecontrol'], allowSelfGrant: false };
 
 async function settle(times) {
     for (let i = 0; i < (times || 3); i++) await new Promise((r) => setImmediate(r));
@@ -77,6 +86,22 @@ t.test('a non-high-command console user never sees the Runtime Control tab', asy
     });
     await openTablet(h);
     t.equals(findByText(h.getRoot(), 'Runtime Control').length, 0);
+});
+
+t.test('a non-high-command officer holding a delegated k9.runtimecontrol grant DOES see the Runtime Control tab, and can open it', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: DELEGATED_RUNTIME_CONTROL_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+    await openTablet(h);
+    const tab = findByText(h.getRoot(), 'Runtime Control')[0];
+    t.isTrue(!!tab, 'the tab itself is visible to a delegated non-high-command officer');
+    tab.click();
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Runtime Feature Control').length >= 1, 'the real screen renders, not a dead end');
 });
 
 t.test('runtimeControlEnabled=false shows the disabled note (lists still fetched/shown regardless)', async () => {

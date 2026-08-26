@@ -1160,3 +1160,45 @@ body {
 .k9tablet-flow-step-body {
     margin-top: 8px;
 }
+
+/*
+    PARTNERSHIPS TAB (this pass, coder-ui) -- html/tablet.js's own
+    "PARTNERSHIPS TAB" header comment has the full contract. Reuses
+    .k9tablet-home-section/.k9tablet-partnership-line/.k9tablet-muted/
+    .k9tablet-feature-state wholesale (see those rules above) -- these are
+    only the classes that had no existing equivalent to reuse.
+*/
+.k9tablet-partnership-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.k9tablet-partnership-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    background: #1c1f26;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.k9tablet-partnership-row-name {
+    font-weight: 600;
+}
+
+.k9tablet-partnership-tier {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 6px;
+}
+
+.k9tablet-partnerships-admin {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 16px;
+}

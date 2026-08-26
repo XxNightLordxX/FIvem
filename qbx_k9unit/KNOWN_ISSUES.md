@@ -1,0 +1,231 @@
+# Known Issues
+
+This is the one place bugs, limitations, and open decisions for
+`qbx_k9unit` are recorded. Every item below has been checked against the
+current code, not carried over from an old note — where something couldn't
+be confirmed, that's said plainly instead of guessed at.
+
+This file is not the changelog (see `PROJECT_HISTORY.md` for what happened
+and when) and not the reference manual (see `README.md` for install/config,
+`DEVELOPER_REFERENCE.md` for internals). It's the honest "here's what's
+still rough" list.
+
+---
+
+## 1. Decisions that need the resource owner
+
+Three things genuinely need a decision from whoever runs this server,
+rather than more code. All three are about features that ship **on** in
+the default config, so they're live today, not hypothetical.
+
+### Is the bite/takedown trust boundary good enough?
+
+Three features — Bite & Hold, Non-Lethal Takedown, and Prop Dragging — are
+protected against a player running a modified game client by a guard that
+checks where the instruction came from (the server only honors an event
+that genuinely came from itself, never one a local client faked). The
+guard is written and has been reviewed, but nobody has ever actually
+attacked it on a running server, which is the only way to know for certain
+it holds. All three features ship **on**.
+
+Options: run a live test (someone deliberately trying to break it), accept
+the risk as-is, or switch these three off until it's been tested.
+
+### The fear/stress griefing tradeoff
+
+The K9 Fear/Stress system is on by default, and a player can repeatedly
+send a fake "there's gunfire nearby" signal to force someone else's K9
+into a temporary refusal state (it won't bite or take down a suspect for
+about a minute) — repeatably, at no cost to the person doing it. A single
+episode can no longer last forever (it resets after roughly a minute), but
+the *repeatable* part can't be closed in code: there's no way to verify
+who actually fired a shot, the same tradeoff already accepted for scent
+tracking.
+
+This is a call about the kind of server you want to run, not a bug: some
+servers want the emergent chaos of an unreliable K9 under fire, others
+don't. Leave it on, turn it off, or ask for the cooldowns to be tightened
+further.
+
+### The framework-conversion decision
+
+Auto-detection genuinely works for **inventory** and **targeting** — change
+either script on your server and this resource adapts. It does **not**
+work for the underlying framework, and that's worth being direct about:
+adapters exist for `qb-core` and ESX, but only one file in the entire
+resource actually uses them. Everything else — certifications,
+permissions, the tablet, XP, combat — calls Qbox (`qbx_core`) directly.
+The count of direct call sites depends on exactly how you count (grepping
+production files outside the compat layer gives numbers from the mid-160s
+to the mid-180s depending on what's excluded), but the substance is not in
+doubt: it's a large majority of the codebase. `qbx_core` is also a hard
+dependency in the manifest, so the resource will not start without it
+regardless of what's detected.
+
+If you run `qb-core` or ESX, detection will correctly identify it and the
+resource will still not work.
+
+Two honest options: **say so plainly** wherever this gets documented
+(cheap, and the current recommendation), or **commit to converting those
+call sites to go through the existing adapters** — a large job, not a
+quick fix.
+
+---
+
+## 2. Open bugs and limitations
+
+Things that are either genuinely broken in a narrow way, or work as
+designed but have an edge worth knowing about before you rely on them.
+
+- **The partnership tenure-bonus anti-farm fix is in-memory only.** Two K9s
+  partnering, breaking up, and re-partnering repeatedly used to farm XP.
+  That's fixed — but the fix lives in a table that resets every time the
+  resource restarts. A restart re-opens the exploit once, for any pair
+  that happens to break up and reform around that restart. Not a config
+  option; a resource-restart timing quirk. A fully restart-proof version
+  needs one more small database table, which hasn't been built.
+
+- **The tablet's "Commands" reference page can silently go out of date.**
+  A test compares every real, registered command against what the page
+  documents — but it does this by checking a hand-maintained list of
+  filenames, not by scanning the actual `server`/`client` folders. A new
+  file that registers a command and isn't added to that list will drift
+  silently: the command will work in-game but never show up on the
+  tablet, and nothing will fail to warn you.
+
+- **`RenewCertification` doesn't check whether its own database update
+  actually changed anything.** It checks whether the write *threw an
+  error*, but not whether it matched a row. If a certification is revoked
+  or changed in the moment between an officer starting a renewal and the
+  database write completing, the renewal can report success and notify
+  both people even though nothing was actually renewed. Same shape as a
+  bug already fixed elsewhere in the certification code (`SetCertificationTier`)
+  — this one hasn't been fixed yet.
+
+- **High command's self-service is narrower than it may become.** Today,
+  high command can grant themselves a feature-control permission (like the
+  one needed for the Audit tab — see "Fixed," below) but cannot grant
+  themselves an XP award or one of the four named capabilities
+  (`k9.access`/`k9.certify`/`k9.audit`/`k9.givexp`) — those always require
+  a second high-command officer, by design, so a self-grant always leaves
+  a second name in the audit trail. The owner has asked for this to be
+  loosened so high command can self-serve more broadly; if and when that
+  ships, check `config.lua`'s `Config.HighCommand.allowSelfGrant` and
+  `Config.FeatureControl.allowHighCommandSelfGrant` for the actual current
+  behavior rather than trusting this paragraph, since it may change.
+
+- **A K9/handler partnership's status can lag after a reconnect.** If a
+  player reconnects, or the resource restarts, while they're genuinely
+  still partnered, their own client can briefly report "not partnered"
+  until a fresh Partner Up/consent event reaches it. The server's own
+  record is correct the whole time; only the client-side read can be
+  behind.
+
+- **A dragged player can always let go by force.** Prop Dragging's attach
+  is real (it's re-applied every tick specifically so this can't be
+  trivially defeated), but nothing stops a dragged player's own client
+  from detaching itself at any moment — that's a property of how FiveM's
+  networking model works, not something this resource can close. There's
+  a hard maximum drag distance and duration as the real backstop.
+
+- **Client-relayed combat effects are detected, never enforced.** A K9 can
+  suppress or ragdoll a player target, but the target's own client has to
+  cooperate for the effect to actually apply — there is no way to force
+  it. Non-compliance is logged (and can trigger a staff notification), but
+  by design nothing server-authoritative (an arrest, evidence, XP) is ever
+  conditioned on the effect having visibly landed.
+
+- **Five of the eight inventory scripts this resource recognizes are paid
+  scripts with no readable source.** They're listed in the compatibility
+  layer but stay inert, and the console says why rather than pretending
+  to support them. Confirming any of the five would need a live install to
+  test against, not more reading.
+
+- **Search-and-rescue "found" reveal is visible only to the officer who
+  found it**, not to other officers nearby. Deliberate — it avoids a class
+  of ghost-entity bug — but worth knowing if you expect a whole team to
+  see the same marker.
+
+- **Pursuit sprint's cooldown resets on disconnect/reconnect.** It's a
+  short movement burst, not an XP exploit, and reconnecting mid-chase
+  already costs the player the chase — low-impact by design, not
+  overlooked.
+
+- **The tenure check runs a small database query every five minutes for
+  every fully-tenured partnership**, rather than skipping it entirely.
+  This is deliberate and tested — the alternative (a cache that could go
+  stale relative to a broken partnership) was judged the worse tradeoff.
+  Not something to "optimize" without re-reading why first.
+
+- **`Config.Features.BoneSweepDevTool` looks more alarming than it is.**
+  Its own comment says never to enable it on a production server, and it's
+  `true` in the shipped config — but that flag alone does nothing. The
+  `/k9bonetool` command only registers if you've *also* explicitly set
+  `qbx_k9unit_enable_bone_dev_tool 1` in your server config, which defaults
+  off. If you've never heard of that convar, this tool isn't running on
+  your server.
+
+---
+
+## 3. Fixed — worth remembering
+
+Kept short on purpose. These aren't a changelog entry each — they're here
+because each one taught a rule worth not re-learning.
+
+- **A file that isn't registered in `fxmanifest.lua` never loads, and
+  nothing in the toolchain catches it.** This has happened five separate
+  times — a file written, tested, and silently never running in-game.
+  Register a new file in the same change that adds it.
+- **Setting a cooldown to `0` used to disable the feature it belonged to,
+  permanently, instead of meaning "no cooldown."** Zero reads as "off" in
+  most other scripts, so it was the most likely value an operator would
+  try. Cooldown construction now warns loudly and falls back to a safe
+  default instead of silently bricking a feature.
+- **Decertifying someone mid-hold used to leave their dog still holding
+  the suspect** for up to twenty seconds — leash and partnership were both
+  released on revoke, the active hold wasn't. Fixed; the rule now is to
+  check every related state, not just the ones that come to mind first.
+- **The uninstall script had a one-character shell quoting bug that
+  stopped it from ever completing** (backups still ran fine, so nothing
+  was ever at risk, but the actual removal step never worked).
+- **Two things written off as "impossible" on a competing inventory script
+  were not.** qb-inventory's scent-tracking and vehicle-search support
+  were documented as permanent gaps; re-reading that project's actual
+  source found both were achievable, and both now work.
+- **A dependency was reported as abandoned that wasn't.** An archived fork
+  was mistaken for the real, actively-maintained project. Always check the
+  actual repository the manifest names, not a search result about it.
+- **Two K9s could partner with each other**, with one silently and
+  incorrectly treated as the "handler" side. Partnering now requires an
+  actual K9 and an actual handler on the two ends.
+- **A config comment said a contraband screen effect applied to the
+  searched person's screen.** It always applied to the searching officer's
+  own screen, as feedback — the code was right, the comment wasn't.
+- **Certification tier capabilities now actually gate something.** They
+  used to be a control panel wired to nothing; they now gate granting a
+  specialization and the three combat abilities. If the capability lookup
+  itself can't answer, the action is allowed rather than refused — a
+  deliberate choice, since a permission system that can lock out an entire
+  department because of a lookup hiccup is worse than one that occasionally
+  lets something through.
+- **Looking up another handler's record now requires high command, or an
+  explicit audit grant** — ordinary certification alone no longer lets a
+  handler enumerate everyone else's permissions. Everyone can still see
+  their own record.
+- **New installs get a consistent database character encoding**; existing
+  installs get an optional, non-mandatory migration for it, kept out of
+  the automatic upgrade path since it rewrites potentially very large
+  tables for a cosmetic fix.
+- **A K9 played on a human body (or any custom ped) now works properly.**
+  It keeps jump and crouch, and — as of a later fix — gets the same
+  fatigue penalty a dog-modeled K9 gets, closing a gap where "everything
+  works with any ped" quietly didn't apply to the wellbeing system.
+- **The Audit tab used to be permanently unreachable on the single most
+  common server setup: exactly one high-command officer, day one.** The
+  permission it needs could only be granted by high command, and
+  self-granting was blocked outright — so a lone owner had no path to it
+  at all. High command can now grant themselves that specific permission
+  (a feature-control grant, not one of the four named capabilities — see
+  "Open bugs," above), which is on by default. If you deliberately want a
+  second officer's sign-off before anyone gets that access, there's a
+  config switch to turn this back off.

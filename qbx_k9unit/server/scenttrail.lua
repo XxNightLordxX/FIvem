@@ -241,6 +241,26 @@
     still be able to stop it; gating cleanup on this check would be exactly
     the trap that rule exists to forbid).
     ======================================================================
+    DISCOVERABILITY FIX (this pass): IsScentTrailHuntPermittedForCitizenId
+    used to return a single boolean, and startScentHunt never sent any
+    NotifyPlayer of its own for ANY denial -- the caller's only signal was
+    `reason = 'denied'`, which client/scenttrail.lua collapses into the
+    same generic "you cannot use K9 features right now" copy for feature
+    off, no access, a block, AND a missing grant alike. That is wrong for
+    three of those four: "feature off" reads as a personal failing when it
+    is a global switch, and neither a block nor a missing grant ever told
+    the player a per-person grant was even the mechanism in play, let alone
+    which one to ask for or who could grant it. This file's own
+    startScentHunt now ALSO sends a direct NotifyPlayer for those three
+    cases (feature_disabled/blocked/not_granted), naming the specific cause
+    and, for not_granted, the exact feature and High Command by name.
+    HasK9Access failing and an unresolvable citizenid deliberately stay
+    silent -- see startScentHunt's own updated comments for why. The
+    `reason` field itself is UNCHANGED (still always 'denied' for these
+    branches) -- fixing client/scenttrail.lua's own collapse is a
+    client-side change outside this pass's file ownership; this is a
+    purely additive, server-side second notification.
+    ======================================================================
 
     STALE-SESSION RACE -- ADDED A LATER PASS (found by a client-side sweep;
     not present when this file was first written). See client/scenttrail.lua's
@@ -502,6 +522,9 @@ end
 ---   4. otherwise -> ALLOW
 --- @param citizenid string
 --- @return boolean allowed
+--- @return ('blocked'|'not_granted')? denyReason -- nil when allowed == true;
+---   see SCENT_HUNT_DENY_MESSAGES below and this file's header
+---   "DISCOVERABILITY FIX" for why these two now get different copy.
 local function IsScentTrailHuntPermittedForCitizenId(citizenid)
     -- Soft dependency, this resource's established convention -- see
     -- server/pursuitsprint.lua's own identical comment on its own copy of
@@ -509,7 +532,7 @@ local function IsScentTrailHuntPermittedForCitizenId(citizenid)
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
     if hasPermissionAvailable and HasPermission(citizenid, 'block.ScentTrailHunt') == true then
-        return false -- step 2: an explicit block always wins, even over an active grant
+        return false, 'blocked' -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
@@ -519,15 +542,47 @@ local function IsScentTrailHuntPermittedForCitizenId(citizenid)
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.ScentTrailHunt') == true
+        if hasPermissionAvailable and HasPermission(citizenid, 'feature.ScentTrailHunt') == true then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
+-- ======================================================================
+-- DISCOVERABILITY FIX (this pass) -- the `reason` field returned to the
+-- CALLER of startScentHunt stays exactly 'denied' for every branch below
+-- (client/scenttrail.lua's own collapse of any non-'already_active'/
+-- non-'cooldown' reason into ONE generic "you cannot use K9 features"
+-- notify is unchanged -- fixing that properly is a client-side change
+-- outside this pass's file ownership). What is NEW is a SEPARATE, ADDITIVE
+-- NotifyPlayer sent directly from this handler for the two cases where
+-- that generic client-side copy is actively wrong or unhelpful:
+-- 'feature disabled' reads as if it is about the caller personally when it
+-- is a global switch, and a block/not_granted denial gave no hint that a
+-- per-person grant was even the mechanism in play. HasK9Access failing and
+-- an unresolvable citizenid stay silent -- see each branch below for why
+-- (in short: client/scenttrail.lua already gates '/k9nosehunt' on
+-- CanShowK9UI() before ever reaching this callback for a real player, and
+-- an unresolvable identity cannot be attributed to a fixable cause).
+-- ======================================================================
+local SCENT_HUNT_DENY_MESSAGES = {
+    feature_disabled = locale('scenttrail.feature_disabled'),
+    blocked          = locale('scenttrail.blocked'),
+    not_granted      = locale('scenttrail.not_granted'),
+}
+
 lib.callback.register('qbx_k9unit:server:startScentHunt', function(source)
-    if not Config.Features.ScentTrailHunt then return { started = false, reason = 'denied' } end
-    if not HasK9Access(source) then return { started = false, reason = 'denied' } end
+    if not Config.Features.ScentTrailHunt then
+        -- Global off -- nothing the caller can do, and this must not read
+        -- as if it were about them personally (see this file's header
+        -- "DISCOVERABILITY FIX").
+        NotifyPlayer(source, SCENT_HUNT_DENY_MESSAGES.feature_disabled, 'error')
+        return { started = false, reason = 'denied' }
+    end
+    if not HasK9Access(source) then return { started = false, reason = 'denied' } end -- silent: client/scenttrail.lua already gates on CanShowK9UI() before a real player ever reaches this
 
     -- PER-PERSON FEATURE CONTROL -- see IsScentTrailHuntPermittedForCitizenId
     -- above. Keyed on `source`, the ONLY person this feature ever acts for
@@ -540,13 +595,22 @@ lib.callback.register('qbx_k9unit:server:startScentHunt', function(source)
     -- the client already collapses into the same generic denial as
     -- 'no_access' -- see this file's header EVENT/CALLBACK CONTRACT item 1)
     -- when the citizenid cannot be resolved at all -- a per-person check
-    -- with no resolvable person to check can never be answered "allow".
+    -- with no resolvable person to check can never be answered "allow", and
+    -- this stays silent server-side too (no confirmed identity to attribute
+    -- a "you need a grant" message to). A CONFIRMED block/not_granted
+    -- denial, below, is different -- see this file's header "DISCOVERABILITY
+    -- FIX" for why that gets a message this pass when it never had one.
     -- Deliberately placed only on this START path, not on pollScentHunt or
     -- stopScentHunt below -- see this file's header "PER-PERSON FEATURE
     -- CONTROL" section for why.
     local k9Player = exports.qbx_core:GetPlayer(source)
     local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
-    if not k9Citizenid or not IsScentTrailHuntPermittedForCitizenId(k9Citizenid) then
+    if not k9Citizenid then
+        return { started = false, reason = 'denied' }
+    end
+    local citizenPermitted, denyReason = IsScentTrailHuntPermittedForCitizenId(k9Citizenid)
+    if not citizenPermitted then
+        NotifyPlayer(source, SCENT_HUNT_DENY_MESSAGES[denyReason], 'error')
         return { started = false, reason = 'denied' }
     end
 

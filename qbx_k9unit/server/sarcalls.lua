@@ -395,11 +395,35 @@ local tuning = Config.SARCalls
 -- missingPersonPedModel/lostPropertyPropModel/revealDurationMs are read
 -- and validated by client/sarcalls.lua alone (this file never touches
 -- them), per this resource's own "validate what you consume" convention.
+--
+-- CLAMP AND WARN, NOT ASSERT (this pass -- closes a real instance of this
+-- task's own NON-NEGOTIABLE: "NEVER a bare assert on a config value"). This
+-- was a hard `assert(type(tuning) == 'table', ...)` -- correctly diagnosing
+-- a real risk (every field below is read unconditionally once the feature
+-- flag is on) but with the wrong remedy: an uncaught error thrown from
+-- THIS FILE's own top-level chunk aborts server/sarcalls.lua's load from
+-- this line onward -- silently un-registering the playerDropped handler,
+-- the tick loop, the requestSarCall callback, and the UNCONDITIONAL
+-- abandonSarCall event this file's own header calls a "NO UNBOUNDED TRAP"
+-- guarantee -- over an operator leaving Config.SARCalls out of config.lua
+-- entirely while flipping Config.Features.SARCalls on by hand. Mirrors
+-- server/scenttrail.lua's own identical fix for its "whole table missing"
+-- case: substituting an empty table lets every one of the per-field
+-- clamp-and-warn resolvers immediately below fall back to its own
+-- already-established default, exactly as if an operator had left each
+-- field individually blank, and the feature keeps working instead of never
+-- registering at all.
 -- ======================================================================
-assert(type(tuning) == 'table',
-    '[qbx_k9unit] Config.SARCalls must be a table when Config.Features.SARCalls is true -- this file reads ' ..
-    'minRadius/maxRadius/arrivalRadius/burningDistance/hotDistance/warmDistance/pollIntervalMs/' ..
-    'maxCallDurationMs/startCooldownMs from it unconditionally once the feature flag is on.')
+if type(tuning) ~= 'table' then
+    print(
+        '[qbx_k9unit] WARNING: Config.Features.SARCalls is true but Config.SARCalls is missing or not a table -- ' ..
+        'using this file\'s own built-in defaults for every field it would have set (minRadius=40.0, ' ..
+        'maxRadius=90.0, arrivalRadius=6.0, burningDistance=8.0, hotDistance=20.0, warmDistance=45.0, ' ..
+        'pollIntervalMs=2000, maxCallDurationMs=480000, startCooldownMs=600000). Add the settings table back to ' ..
+        'config.lua.'
+    )
+    tuning = {}
+end
 
 -- ======================================================================
 -- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
@@ -693,6 +717,10 @@ end)
 ---   4. otherwise -> ALLOW
 --- @param citizenid string
 --- @return boolean allowed
+--- @return ('blocked'|'not_granted')? denyReason -- nil when allowed == true;
+---   see SAR_DENY_MESSAGES below for the player-facing copy each maps to,
+---   and this file's header "DISCOVERABILITY FIX" for why these two now get
+---   different, actionable copy instead of one collapsed 'denied' reason.
 local function IsSarCallsPermittedForCitizenId(citizenid)
     -- Soft dependency, this resource's established convention -- see
     -- server/pursuitsprint.lua's own identical comment on its own copy of
@@ -700,7 +728,7 @@ local function IsSarCallsPermittedForCitizenId(citizenid)
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
     if hasPermissionAvailable and HasPermission(citizenid, 'block.SARCalls') == true then
-        return false -- step 2: an explicit block always wins, even over an active grant
+        return false, 'blocked' -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
@@ -710,15 +738,54 @@ local function IsSarCallsPermittedForCitizenId(citizenid)
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.SARCalls') == true
+        if hasPermissionAvailable and HasPermission(citizenid, 'feature.SARCalls') == true then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
+-- ======================================================================
+-- DISCOVERABILITY FIX (this pass) -- the `reason` field returned to the
+-- CALLER of this callback stays exactly 'denied' for every one of these
+-- cases below (see the REGRESSION-safety note at each call site) --
+-- client/sarcalls.lua's own collapse of every non-'already_active'/
+-- non-'cooldown' reason into one generic denial is UNCHANGED, since fixing
+-- that properly is a client-side change outside this pass's file
+-- ownership. What changes here is a SEPARATE, ADDITIVE NotifyPlayer sent
+-- directly from this handler for the cases where the generic client-side
+-- copy is actively wrong or unhelpful: 'feature disabled' reads as if it
+-- is about the caller personally when it is not, and a block/not_granted
+-- denial gave no hint that a per-person grant was even the mechanism in
+-- play, let alone which one to ask for or who can grant it. HasK9Access
+-- failing and an unresolvable citizenid stay silent (this handler's only
+-- side channel) -- see each branch below for why.
+-- ======================================================================
+local SAR_DENY_MESSAGES = {
+    feature_disabled = locale('sar.feature_disabled'),
+    blocked          = locale('sar.blocked'),
+    not_granted      = locale('sar.not_granted'),
+}
+
 lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
-    if not Config.Features.SARCalls then return { started = false, reason = 'denied' } end
-    if not HasK9Access(source) then return { started = false, reason = 'denied' } end
+    if not Config.Features.SARCalls then
+        -- Global off -- nothing the caller can do, and this must not read
+        -- as if it were about them personally (see this file's header
+        -- "DISCOVERABILITY FIX").
+        NotifyPlayer(source, SAR_DENY_MESSAGES.feature_disabled, 'error')
+        return { started = false, reason = 'denied' }
+    end
+    if not HasK9Access(source) then
+        -- Silent, on purpose: server/sarcalls.lua's task is a real K9
+        -- ability, and client/sarcalls.lua already gates '/k9sarcall' on
+        -- CanShowK9UI() before ever reaching this callback -- a real player
+        -- reaching this branch already saw the "you cannot use K9 features"
+        -- denial client-side; a modified client bypassing that check is not
+        -- owed a second, more detailed explanation server-side.
+        return { started = false, reason = 'denied' }
+    end
 
     if ActiveSarCalls[source] then
         return { started = false, reason = 'already_active' }
@@ -741,11 +808,17 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
     -- Checked BEFORE consuming the cooldown, same reasoning as the
     -- citizenid-resolution check immediately above: a denied request must
     -- never spend the cooldown budget it would otherwise have been charged
-    -- to. Collapsed into the same 'denied' reason as every other non-
-    -- cooldown/non-already_active rejection in this callback -- this file's
-    -- own documented "don't invent a distinction the server doesn't give
-    -- data for" precedent (see the reason enum's own doc comment above).
-    if not IsSarCallsPermittedForCitizenId(citizenid) then
+    -- to. The `reason` field returned to the caller stays the same generic
+    -- 'denied' as every other non-cooldown/non-already_active rejection in
+    -- this callback (client/sarcalls.lua's own collapse is unchanged -- see
+    -- this file's header "DISCOVERABILITY FIX"), but a blocked/not_granted
+    -- denial now ALSO gets a direct, distinct NotifyPlayer naming which of
+    -- the two it is -- collapsing them into one message would leave a
+    -- blocked handler unable to tell "nothing to ask for" apart from
+    -- "ask high command for this specific grant".
+    local citizenPermitted, denyReason = IsSarCallsPermittedForCitizenId(citizenid)
+    if not citizenPermitted then
+        NotifyPlayer(source, SAR_DENY_MESSAGES[denyReason], 'error')
         return { started = false, reason = 'denied' }
     end
 

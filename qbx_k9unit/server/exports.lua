@@ -230,9 +230,10 @@
     for its own internal purposes (a DB column just written, an existing
     TriggerClientEvent's own arguments, or — for #7 — a live, server-resolved
     read taken at the moment of firing). Wiring #1 through #6 required no new
-    logic beyond firing at an existing success point; #7 is genuinely new
-    detection logic, scoped to its own file rather than any existing one —
-    see server/integrations.lua's own header.
+    logic beyond firing at an existing success point, matching
+    DEVELOPER_REFERENCE.md Part B's own "Effort: small" assessment for that
+    item; #7 is genuinely new detection logic, scoped to its own file rather
+    than any existing one — see server/integrations.lua's own header.
     ======================================================================
 
     ======================================================================

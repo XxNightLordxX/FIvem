@@ -52,6 +52,7 @@
 
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
+local locale = Sandbox.locale
 
 -- ============================================================================
 -- SERVER: server/findalert.lua
@@ -77,6 +78,16 @@ local function newServerFixture(opts)
     local triggeredClientEvents = {}
     local function TriggerClientEvent(eventName, targetSrc, ...)
         triggeredClientEvents[#triggeredClientEvents + 1] = { eventName = eventName, targetSrc = targetSrc, args = { ... } }
+    end
+
+    -- DISCOVERABILITY FIX (this pass) -- server/findalert.lua now sends a
+    -- direct NotifyPlayer for a CONFIRMED block/not-granted denial (never
+    -- for the pre-existing silent branches -- see that file's own updated
+    -- comment). Not previously stubbed at all, since the production file
+    -- never called it before this pass.
+    local notifyCalls = {}
+    local function NotifyPlayer(target, description, notifyType)
+        notifyCalls[#notifyCalls + 1] = { target = target, description = description, notifyType = notifyType }
     end
 
     -- playerByCitizenId indexes by citizenid (existing, reverse-resolution
@@ -137,6 +148,7 @@ local function newServerFixture(opts)
         GetGameTimer = GetGameTimer,
         AddEventHandler = AddEventHandler,
         TriggerClientEvent = TriggerClientEvent,
+        NotifyPlayer = NotifyPlayer,
         exports = exportsStub,
         HasK9Access = HasK9Access,
         Config = Config,
@@ -154,6 +166,7 @@ local function newServerFixture(opts)
     return {
         Config = Config,
         triggeredClientEvents = triggeredClientEvents,
+        notifyCalls = notifyCalls,
         capturedPrints = capturedPrints,
         permissionCalls = permissionCalls,
         setNow = function(ms) fakeNow = ms end,
@@ -495,6 +508,75 @@ t.test('a BLOCKED/no-grant reaction never consumes the shared per-source cooldow
     f.setNow(100)
     f.fireSearchCompleted('CITIZEN-COOLDOWN-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
     t.equals(#f.triggeredClientEvents, 1, 'a denied attempt must never have spent the cooldown budget of the legitimate one right after it')
+end)
+
+-- ----------------------------------------------------------------------
+-- DISCOVERABILITY FIX (this pass) -- a CONFIRMED block/not-granted denial
+-- now sends a direct, distinct NotifyPlayer -- see IsFindAlertsPermittedForCitizenId's
+-- own doc comment and FIND_ALERT_DENY_MESSAGES' declaration comment in
+-- server/findalert.lua for why every OTHER silent branch (feature off, no
+-- HasK9Access, unresolvable citizenid, unmapped tier) is deliberately left
+-- untouched.
+-- ----------------------------------------------------------------------
+
+t.test('grant_required denial now also sends a distinct, actionable NotifyPlayer naming FindAlerts and High Command', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-NOTIFY-1', 901)
+    f.setAccess(901, true)
+    -- deliberately NOT granted
+
+    f.fireSearchCompleted('CITIZEN-NOTIFY-1', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.triggeredClientEvents, 0)
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].target, 901)
+    t.equals(f.notifyCalls[1].description, locale('findalert.not_granted'))
+    t.equals(f.notifyCalls[1].notifyType, 'error')
+end)
+
+t.test('an explicit block sends the DIFFERENT blocked message, never the not_granted one', function()
+    local f = newServerFixture({ requireGrantListed = false })
+    f.setPlayerOnline('CITIZEN-NOTIFY-2', 902)
+    f.setAccess(902, true)
+    f.grantPermission('CITIZEN-NOTIFY-2', 'block.FindAlerts', true)
+
+    f.fireSearchCompleted('CITIZEN-NOTIFY-2', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('findalert.blocked'))
+    t.isTrue(f.notifyCalls[1].description ~= locale('findalert.not_granted'), 'blocked and not_granted must read as two different, actionable messages, not one collapsed generic denial')
+end)
+
+t.test('the denial-notify reminder is throttled independently of the reaction cooldown -- repeated denied searches do not spam a notification every time', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-NOTIFY-3', 903)
+    f.setAccess(903, true)
+
+    f.setNow(0)
+    f.fireSearchCompleted('CITIZEN-NOTIFY-3', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+    t.equals(#f.notifyCalls, 1)
+
+    f.setNow(2000) -- past FindAlertReactionCooldown's 1500ms, but nowhere near the 5-minute denial-notify reminder
+    f.fireSearchCompleted('CITIZEN-NOTIFY-3', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+    t.equals(#f.notifyCalls, 1, 'a second denied attempt shortly after the first must not resend the reminder')
+
+    f.setNow(300001) -- past the 5-minute reminder throttle
+    f.fireSearchCompleted('CITIZEN-NOTIFY-3', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+    t.equals(#f.notifyCalls, 2, 'once the reminder throttle genuinely elapses, the player is reminded again')
+end)
+
+t.test('no HasK9Access and an unresolvable citizenid stay silent -- no NotifyPlayer at all, matching this file\'s established silent-no-op posture for those two cases', function()
+    local f = newServerFixture({ requireGrantListed = true })
+    f.setPlayerOnline('CITIZEN-NOTIFY-4', 904)
+    f.setAccess(904, false)
+
+    f.fireSearchCompleted('CITIZEN-NOTIFY-4', 'police', 'vehicle', 'found', 250, 'aggressive_bark')
+    t.equals(#f.notifyCalls, 0, 'no HasK9Access must stay silent')
+
+    f.setAccess(905, true)
+    -- deliberately no setPlayerOnline for 905 -- reportTrackSourceArrival's own `source` cannot resolve a citizenid
+    f.fireTrackArrival(905)
+    t.equals(#f.notifyCalls, 0, 'an unresolvable citizenid must stay silent, not guess a message')
 end)
 
 -- ============================================================================

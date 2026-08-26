@@ -790,6 +790,55 @@ t.test('biteHoldEnded: source guard rejects a forged local trigger -- no notify'
     t.equals(#f.notifyCalls, 1, 'only the start notice, no forged end-notify')
 end)
 
+-- ========================================================================
+-- CANCEL-PATH FIX (this pass, coder-frontend -- audit-flagged gap):
+-- takedownStarted/takedownEnded. Neither event existed before this pass --
+-- a takedown's holder previously had NO client-side state for its own
+-- takedown at all (client/combat.lua's own header used to say so
+-- explicitly), so IsTakedownEngaged() had nothing to report and
+-- ReleaseTakedown() had no state to clear. Mirrors biteHoldStarted/
+-- biteHoldEnded's own test shape immediately above -- same source-origin
+-- guard, same stale/foreign-targetNetId handling -- deliberately WITHOUT a
+-- lib.notify assertion: unlike biteHoldStarted/dragStarted, this handler
+-- adds no new holder-facing toast (the existing 'combat.takedown_attempted'
+-- notify at request time is unchanged, and server/combat.lua's own EndHold
+-- already owns the "ended early" notify for every non-manual reason) -- see
+-- client/combat.lua's own doc comment on the takedownStarted/takedownEnded
+-- handlers for why.
+-- ========================================================================
+
+t.test('takedownStarted: sets MyEngagedTakedownTargetNetId (IsTakedownEngaged), no notify', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:takedownStarted', 65535, 12345, 999)
+    t.isTrue(f.env.IsTakedownEngaged())
+    t.equals(#f.notifyCalls, 0, 'takedownStarted adds no new holder-facing toast -- unlike biteHoldStarted/dragStarted, see this test\'s own header note')
+end)
+
+t.test('takedownStarted: source guard rejects a forged local trigger -- no state change', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:takedownStarted', 1, 12345, 999)
+    t.isFalse(f.env.IsTakedownEngaged())
+end)
+
+t.test('takedownEnded: reason == "released_by_holder" clears state, source-guarded, ignores a stale/foreign targetNetId', function()
+    local f = newCombatFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:takedownStarted', 65535, 555, 999)
+    t.isTrue(f.env.IsTakedownEngaged())
+
+    -- forged end must not clear real state
+    f.dispatchNetEvent('qbx_k9unit:client:takedownEnded', 1, 555, 'released_by_holder')
+    t.isTrue(f.env.IsTakedownEngaged(), 'a forged end must not have cleared the takedown')
+
+    -- stale/foreign targetNetId must not clear a DIFFERENT takedown's state
+    f.dispatchNetEvent('qbx_k9unit:client:takedownEnded', 65535, 777, 'timeout')
+    t.isTrue(f.env.IsTakedownEngaged(), 'must still be engaged with 555 -- the stale event named 777')
+
+    -- the genuine end
+    f.dispatchNetEvent('qbx_k9unit:client:takedownEnded', 65535, 555, 'released_by_holder')
+    t.isFalse(f.env.IsTakedownEngaged())
+    t.equals(#f.notifyCalls, 0, 'no client-side notify for any takedownEnded reason -- see this section\'s own header note')
+end)
+
 t.test('dragStarted: notifies the holder with the configured drag duration, mirroring biteHoldStarted', function()
     local f = newCombatFixture({ propDraggingCfg = { range = 2.5, maxDragDurationMs = 8000, dragSpeedMultiplier = 0.4 } })
     f.registerNetworkEntity(900050, 50)

@@ -115,7 +115,19 @@ local function newTabletFixture(opts)
     local sendNuiMessageCalls = {}
     local function SendNUIMessage(payload) sendNuiMessageCalls[#sendNuiMessageCalls + 1] = payload end
 
-    -- ESC/death watch thread natives.
+    -- CROSS-RESOURCE FOCUS INTEROP (this pass) -- controllable stand-in for
+    -- whether some OTHER resource already holds NUI focus the instant
+    -- OpenTablet() checks -- default false (the common case: nobody else
+    -- has it), same "opt in to the interesting case" posture as every
+    -- other queryState field in this fixture.
+    local isNuiFocused = false
+    local isNuiFocusedThrows = false
+    local function IsNuiFocused()
+        if isNuiFocusedThrows then error('sandbox: IsNuiFocused unavailable', 0) end
+        return isNuiFocused
+    end
+
+    -- ESC/death/takedown watch thread natives.
     local disabledControlJustPressed = false
     local isEntityDead = false
     local disableControlActionCalls = {}
@@ -123,6 +135,16 @@ local function newTabletFixture(opts)
     local function IsDisabledControlJustPressed(_pad, _control) return disabledControlJustPressed end
     local function IsEntityDead(_ped) return isEntityDead end
     local function PlayerPedId() return 1 end
+
+    -- DOWNED-BY-TAKEDOWN (this pass, focus-and-state audit finding #2) --
+    -- controllable stand-in for client/combat.lua's own
+    -- IsLocalPlayerForceRagdolled() resource-global. OMITTED entirely
+    -- unless opts.withForceRagdollSeam (default true) -- proving the
+    -- `type(fn) == 'function'` soft-dependency guard degrades cleanly,
+    -- same "omit the seam, prove the guard" shape as
+    -- FindNearestLeashCandidate/FindNearestPartnerCandidate's own
+    -- opts.withSeams below.
+    local isLocalPlayerForceRagdolled = false
 
     -- CreateThread/Wait -- Sandbox.newThreadRunner() wrapped so this
     -- fixture can ALSO count how many threads were ever created (same
@@ -233,6 +255,7 @@ local function newTabletFixture(opts)
         lib = { notify = lib_notify, callback = { await = lib_callback_await } },
         print = customPrint,
         SetNuiFocus = SetNuiFocus, SendNUIMessage = SendNUIMessage,
+        IsNuiFocused = IsNuiFocused,
         DisableControlAction = DisableControlAction,
         IsDisabledControlJustPressed = IsDisabledControlJustPressed,
         IsEntityDead = IsEntityDead, PlayerPedId = PlayerPedId,
@@ -284,6 +307,11 @@ local function newTabletFixture(opts)
     if opts.withSeams ~= false then
         overrides.FindNearestLeashCandidate = function() return leashCandidate end
         overrides.FindNearestPartnerCandidate = function() return partnerCandidate end
+    end
+
+    -- See isLocalPlayerForceRagdolled's own declaration comment above.
+    if opts.withForceRagdollSeam ~= false then
+        overrides.IsLocalPlayerForceRagdolled = function() return isLocalPlayerForceRagdolled end
     end
 
     local env = Sandbox.newEnv(overrides)
@@ -340,6 +368,9 @@ local function newTabletFixture(opts)
         setPartnerCandidate = function(v) partnerCandidate = v end,
         setDisabledControlJustPressed = function(v) disabledControlJustPressed = v end,
         setIsEntityDead = function(v) isEntityDead = v end,
+        setIsNuiFocused = function(v) isNuiFocused = v end,
+        setIsNuiFocusedThrows = function(v) isNuiFocusedThrows = v end,
+        setIsLocalPlayerForceRagdolled = function(v) isLocalPlayerForceRagdolled = v end,
         setOxInventoryStarted = function(v) oxInventoryStarted = v end,
         setUseItemApproves = function(v) useItemApproves = v end,
         setServerCallback = function(name, result) callbackResponses[name] = { throws = false, result = result } end,
@@ -710,6 +741,85 @@ t.test('a re-open after a real close pushes a brand-new tablet:open (proves it w
 end)
 
 -- ----------------------------------------------------------------------
+-- CROSS-RESOURCE FOCUS INTEROP (this pass, focus-and-state audit finding
+-- #1) -- see client/tablet.lua's own header of the same name.
+-- ----------------------------------------------------------------------
+
+t.test('the common case: nobody else holds NUI focus -- OpenTablet() still grabs it, CloseTablet() releases it fully, exactly as before', function()
+    local f = newTabletFixture()
+    f.setIsNuiFocused(false)
+    f.env.OpenTablet()
+    t.equals(#f.setNuiFocusCalls, 1)
+    t.isTrue(f.setNuiFocusCalls[1][1])
+    t.isTrue(f.setNuiFocusCalls[1][2])
+
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isFalse(f.setNuiFocusCalls[2][1], 'no foreign focus to restore -- release fully')
+    t.isFalse(f.setNuiFocusCalls[2][2])
+end)
+
+t.test('another resource already holds NUI focus: OpenTablet() still opens unconditionally -- no refusal, same push, same focus grab', function()
+    local f = newTabletFixture()
+    f.setIsNuiFocused(true)
+    f.env.OpenTablet()
+    t.equals(#f.sendNuiMessageCalls, 1, 'opening is never gated on some other resource already holding focus')
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:open')
+    t.equals(#f.setNuiFocusCalls, 1, 'this file still grabs focus for its own NUI page regardless')
+    t.isTrue(f.setNuiFocusCalls[1][1])
+    t.isTrue(f.setNuiFocusCalls[1][2])
+end)
+
+t.test('another resource already holds NUI focus: CloseTablet() RESTORES it (SetNuiFocus(true, true)) instead of blanking it out from under them', function()
+    local f = newTabletFixture()
+    f.setIsNuiFocused(true) -- captured the instant BEFORE OpenTablet()'s own SetNuiFocus(true, true) call
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isTrue(f.setNuiFocusCalls[2][1], 'restores the pre-existing focus rather than SetNuiFocus(false, false)')
+    t.isTrue(f.setNuiFocusCalls[2][2])
+    t.equals(#f.sendNuiMessageCalls, 2, 'tablet:close is still pushed exactly as normal -- only the SetNuiFocus arguments differ')
+    t.equals(f.sendNuiMessageCalls[2].action, 'tablet:close')
+end)
+
+t.test('foreign-focus capture is PER-OPEN, not sticky: a later close/reopen cycle with nobody else holding focus releases fully again', function()
+    local f = newTabletFixture()
+    f.setIsNuiFocused(true)
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    t.isTrue(f.setNuiFocusCalls[2][1], 'sanity: restored the first time')
+
+    f.setIsNuiFocused(false) -- the other resource released its own focus in the meantime
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    t.isFalse(f.setNuiFocusCalls[4][1], 're-captured fresh on THIS open, not carried over from the previous session')
+    t.isFalse(f.setNuiFocusCalls[4][2])
+end)
+
+t.test('IsNuiFocused() throwing at open time never aborts OpenTablet() and never leaves CloseTablet() unable to release focus -- fails closed to the old, always-safe "release fully" behavior', function()
+    local f = newTabletFixture()
+    f.setIsNuiFocusedThrows(true)
+    local ok = pcall(f.env.OpenTablet)
+    t.isTrue(ok, 'a throwing IsNuiFocused() must never abort the open itself')
+    t.equals(#f.sendNuiMessageCalls, 1, 'the tablet genuinely opened')
+    t.equals(#f.setNuiFocusCalls, 1)
+
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2, 'the close path is NEVER skipped, even after a failed capture')
+    t.isFalse(f.setNuiFocusCalls[2][1], 'a failed capture collapses to the pre-existing "release fully" behavior, never nil, never "restore"')
+    t.isFalse(f.setNuiFocusCalls[2][2])
+end)
+
+t.test('foreign focus at open time never appears anywhere in the tablet:open/tablet:close NUI payloads -- Lua-side bookkeeping only', function()
+    local f = newTabletFixture()
+    f.setIsNuiFocused(true)
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    t.isNil(f.sendNuiMessageCalls[1].data.tabletHadForeignFocusOnOpen)
+    t.equals(next(f.sendNuiMessageCalls[2].data), nil, 'tablet:close payload stays the empty table it always was')
+end)
+
+-- ----------------------------------------------------------------------
 -- tablet:close / tablet:ready NUI callbacks.
 -- ----------------------------------------------------------------------
 
@@ -794,6 +904,53 @@ t.test('while still open (nothing tripped), continuing to step never creates a s
     f.step()
     f.step()
     t.equals(f.threadCreateCount(), 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- DOWNED-BY-TAKEDOWN ALSO FORCE-CLOSES (this pass, focus-and-state audit
+-- finding #2) -- see client/tablet.lua's own header of the same name.
+-- client/combat.lua's real IsLocalPlayerForceRagdolled() is stood in for
+-- by isLocalPlayerForceRagdolled's own controllable stub (see this file's
+-- header on this fixture's opts.withForceRagdollSeam).
+-- ----------------------------------------------------------------------
+
+t.test('a non-lethal K9 takedown (IsLocalPlayerForceRagdolled true) force-closes the tablet even though IsEntityDead stays false throughout', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step() -- pass 1: neither tripped yet
+    t.equals(#f.setNuiFocusCalls, 1)
+
+    f.setIsLocalPlayerForceRagdolled(true)
+    f.step() -- pass 2: detects the takedown, calls CloseTablet() -- note IsEntityDead was never touched/set true anywhere in this test, so this is exclusively the new branch firing
+    t.equals(#f.setNuiFocusCalls, 2, 'a taken-down player must not keep their tablet (and NUI focus) open')
+    t.isFalse(f.setNuiFocusCalls[2][1])
+end)
+
+t.test('the takedown branch is a genuine ADDITION, not a replacement -- own death still force-closes exactly as before', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step() -- pass 1
+    f.setIsEntityDead(true)
+    f.step() -- pass 2: death branch, unaffected by this pass
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isFalse(f.setNuiFocusCalls[2][1])
+end)
+
+t.test('IsLocalPlayerForceRagdolled entirely absent (client/combat.lua not loaded / all three combat features off): the watch thread degrades cleanly, never throws', function()
+    local f = newTabletFixture({ withForceRagdollSeam = false })
+    f.env.OpenTablet()
+    local ok = pcall(f.step) -- pass 1: must not error just because the seam is missing
+    t.isTrue(ok)
+    t.equals(#f.setNuiFocusCalls, 1, 'still open -- nothing tripped, and the missing seam alone must never force a close')
+end)
+
+t.test('IsLocalPlayerForceRagdolled = false: the tablet stays open exactly as it would with no combat activity at all', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step()
+    f.step()
+    f.step()
+    t.equals(#f.setNuiFocusCalls, 1, 'no false-positive close from a query that consistently returns false')
 end)
 
 -- ----------------------------------------------------------------------

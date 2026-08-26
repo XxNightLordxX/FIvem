@@ -9,7 +9,7 @@
     at the point it acts). Twelve cannot, at all, because they are purely
     client-rendered/client-local and have NO server-side registration point
     a block could ever be checked from -- confirmed by grep across every
-    server/*.lua file before this pass, not assumed from the name:
+    server/*.lua file, not assumed from the name:
         RadialMenu, VehicleEntryExit, AgilityBasicJump, AgilityAdvanced,
         ThermalVision, NightVision, HealthStaminaHUD, ContrabandScreenFX,
         AdvancedBarkRadial, ProximityAudioFX, WaterTrackingDecay,
@@ -25,47 +25,41 @@
     check this file's own IsK9FeatureBlocked() answers is a check the SAME
     modified client that hosts it could always choose to skip -- there is no
     client-side trick that changes that. This is not a reason to skip
-    building it (per this task's own framing): it is a reason to be precise
-    about what it buys. What it DOES do: it makes the block genuinely work
-    for every ordinary, unmodified client, exactly like every other
-    client-side check this resource already ships and already trusts for
-    the identical reason -- IsOwnModelK9() (client/main.lua), the
-    CanShowK9UI() gate every radial item already relies on, DenyK9UIAccess()
-    itself. None of those are "real" security boundaries either; all of them
-    are already load-bearing UX/policy gates this codebase treats as
-    legitimate. This file is the twelve-feature extension of that SAME
-    already-accepted trust model, not a new, weaker one invented for this
-    task. What it does NOT do, and cannot be made to do from the client
-    side no matter how it is written: stop a genuinely modified client
-    (memory-patched, a forged local event, a rewritten Lua chunk loaded in
-    place of this file) from ignoring a block entirely. That gap is
-    structural to every client-side check in this resource, not specific to
-    this file, and is reported as such rather than glossed over.
+    building it: it is a reason to be precise about what it buys. What it
+    DOES do: it makes the block genuinely work for every ordinary,
+    unmodified client, exactly like every other client-side check this
+    resource already ships and already trusts for the identical reason --
+    IsOwnModelK9() (client/main.lua), the CanShowK9UI() gate every radial
+    item already relies on, DenyK9UIAccess() itself. None of those are
+    "real" security boundaries either; all of them are already load-bearing
+    UX/policy gates this codebase treats as legitimate. This file is the
+    twelve-feature extension of that SAME already-accepted trust model, not
+    a new, weaker one. What it does NOT do, and cannot be made to do from
+    the client side no matter how it is written: stop a genuinely modified
+    client (memory-patched, a forged local event, a rewritten Lua chunk
+    loaded in place of this file) from ignoring a block entirely. That gap
+    is structural to every client-side check in this resource, not specific
+    to this file, and is reported as such rather than glossed over.
 
     ======================================================================
-    ONE MECHANISM, NOT TWELVE. These twelve features live in six client
-    files this pass owns (client/vision.lua x3, client/hud.lua,
-    client/screenfx.lua, client/radial.lua x3, client/agility.lua,
-    client/proximityaudio.lua, client/vehicle.lua) plus two more this pass
-    does NOT own and hands off instead (client/movement.lua's
-    AgilityBasicJump suppression thread, client/tracking.lua's
-    WaterTrackingDecay water-crossing check) -- see this pass's own hand-off
-    report for those two's exact, precise, one-line requested edits. Every
-    one of those eight call sites reads the SAME shared predicate below,
-    fed by the SAME single server push, rather than each inventing its own
-    poll/cache/event -- twelve independent mechanisms answering the same
-    question slightly differently is exactly how the per-person gap this
-    file closes was allowed to open in the first place (this task's own
-    framing, taken literally).
+    ONE MECHANISM, NOT TWELVE. These twelve features live across eight
+    client files: client/vision.lua (x3), client/hud.lua, client/screenfx.lua,
+    client/radial.lua (x3), client/agility.lua, client/proximityaudio.lua,
+    client/vehicle.lua, client/movement.lua (AgilityBasicJump's suppression
+    thread), and client/tracking.lua (WaterTrackingDecay's water-crossing
+    check). Every one of those eight call sites reads the SAME shared
+    predicate below, fed by the SAME single server push, rather than each
+    inventing its own poll/cache/event -- twelve independent mechanisms
+    answering the same question slightly differently is exactly how the
+    per-person gap this file closes was allowed to open in the first place.
 
     ======================================================================
     HOW THE CLIENT LEARNS IT IS BLOCKED -- PUSH, NOT POLL. The SERVER
     already knows (server/permissions.lua's `k9_permissions` table is the
     single source of truth for every 'block.<Name>' row); this file never
     re-derives that answer itself, it only caches whatever the server most
-    recently pushed. Two triggers, both server-owned, both REQUESTED (this
-    file does not, and structurally cannot, implement either side of the
-    push itself -- server/*.lua is off-limits to this pass):
+    recently pushed. Two triggers, both server-owned (implemented in
+    server/permissions.lua):
       1. ON JOIN / RECONNECT -- once, right after this citizenid's
          permission cache is warmed server-side (server/permissions.lua's
          own 'QBCore:Server:PlayerLoaded' warmup is the natural hook).
@@ -77,10 +71,6 @@
          again, never a delta -- see that file's header PART 2 for why a
          delta is not this resource's convention for a small, infrequently-
          changing set).
-    See this pass's own hand-off report for the exact requested event name,
-    payload shape, and the two call sites in server/permissions.lua this
-    would slot into -- NOT decided unilaterally here, reported for the
-    server owner to implement or push back on.
 
     FAILING SAFE ON UNKNOWN STATE -- THE DIRECTION MATTERS. Until the first
     sync arrives (a fresh connection, a resource restart, or simply because
@@ -110,15 +100,15 @@
     CanShowK9UI() gate, a continuous poll/maintenance thread's own per-tick
     condition) -- NEVER merely at registration, and NEVER on a
     termination/release/detach/stop branch (see the next section).
-    Client/movement.lua and client/tracking.lua's two hand-off sites follow
+    Client/movement.lua's and client/tracking.lua's own call sites follow
     the identical rule -- both are ALREADY-LIVE per-tick/per-frame checks,
     so adding this predicate to their existing condition is what makes a
     live block take effect on an ALREADY-ACTIVE effect (an ongoing
     night-vision view, an in-progress scent trail) within one polling
     interval of that check, not merely block the NEXT attempt to turn it
-    on -- satisfying this task's own "a block applied while someone is
-    already using it should take effect" requirement without this file
-    needing a second, bespoke push-triggered teardown mechanism of its own.
+    on -- satisfying the "a block applied while someone is already using it
+    should take effect" requirement without this file needing a second,
+    bespoke push-triggered teardown mechanism of its own.
 
     client/radial.lua is the ONE exception to "check at the point it acts,
     never at registration" -- and deliberately so, not an inconsistency:
@@ -143,21 +133,21 @@
     termination/release branches gained a new check at all.
 
     NEVER GATE A TERMINATION PATH -- restated here because it is this
-    resource's single most-repeated lesson (five separate prior bugs, per
-    this task's own framing) and because IsK9FeatureBlocked() is a NEW tool
-    an editor could reach for at the wrong call site: DetachLeash(),
-    ExitK9Vehicle(), StopTracking(), ReleaseBiteHold(), ReleaseDrag(),
-    RequestRecall(), BreakPartnership(), and every other release/stop/
-    detach path in this resource stay exactly as ungated as they already
-    are. A block on, say, NightVision or VehicleEntryExit only ever refuses
-    a NEW turn-on/entry; it is written, in every call site this pass adds,
-    to never be able to refuse turning the SAME thing off or getting back
-    out. This is why the maintenance-thread additions in client/vision.lua
-    call the existing SetSeethrough(false)/SetNightvision(false)/
-    StopCameraFeed() force-off paths when a live block arrives, rather than
-    ever routing a block through DenyK9UIAccess()/DenyK9FeatureBlocked() on
-    an exit path -- those two notify-and-refuse helpers are for an
-    INITIATION being refused, never for an effect being force-ended.
+    resource's single most-repeated lesson (five separate prior bugs) and
+    because IsK9FeatureBlocked() is a NEW tool an editor could reach for at
+    the wrong call site: DetachLeash(), ExitK9Vehicle(), StopTracking(),
+    ReleaseBiteHold(), ReleaseDrag(), RequestRecall(), BreakPartnership(),
+    and every other release/stop/detach path in this resource stay exactly
+    as ungated as they already are. A block on, say, NightVision or
+    VehicleEntryExit only ever refuses a NEW turn-on/entry; it is written,
+    in every call site here, to never be able to refuse turning the SAME
+    thing off or getting back out. This is why the maintenance-thread
+    additions in client/vision.lua call the existing
+    SetSeethrough(false)/SetNightvision(false)/StopCameraFeed() force-off
+    paths when a live block arrives, rather than ever routing a block
+    through DenyK9UIAccess()/DenyK9FeatureBlocked() on an exit path -- those
+    two notify-and-refuse helpers are for an INITIATION being refused,
+    never for an effect being force-ended.
 
     ======================================================================
     FILE-TO-FILE CONTRACT:
@@ -173,37 +163,30 @@
       existence guard, not a load-order assumption" convention) -- which
       also means: if this file is ever NOT loaded at all (fxmanifest.lua
       not yet updated, an operator's fork excludes it), every one of the
-      twelve features silently behaves exactly as it does TODAY, before
-      this pass -- fully unblockable per-person, but never erroring and
-      never freezing anyone. That is the correct degrade, not a bug to
-      "fix" by removing the guard.
+      twelve features silently behaves as fully unblockable per-person, but
+      never erroring and never freezing anyone. That is the correct
+      degrade, not a bug to "fix" by removing the guard.
     - THIS FILE requires ZERO new Config.Features entry and reads none --
       it is cross-cutting infrastructure in the same sense
       server/runtimecontrol.lua is (that file's own header: gated on
       nothing itself, so the SEPARATE features it manages can each be
       gated independently), not a feature of its own that could itself be
       switched off.
-    - THIS FILE registers exactly one RegisterNetEvent, requested to be
-      fired ONLY by the server (see TRUST BOUNDARY below) -- it triggers
-      no server event of its own, and calls no other file's global.
-    - FXMANIFEST PLACEMENT REQUESTED (client_scripts, not edited here --
-      the manifest owner owns this file; this file cannot be loaded at all
-      without this edit, and this pass was told explicitly not to make it
-      unilaterally): insert `'client/featureblocks.lua',` immediately after
-      `'client/main.lua',` -- i.e. BEFORE every other client_scripts entry,
-      including client/movement.lua, client/agility.lua, client/radial.lua,
-      client/vehicle.lua, client/tracking.lua, client/vision.lua,
-      client/hud.lua, client/screenfx.lua, client/audio.lua and
-      client/proximityaudio.lua, every one of which either calls into this
-      file directly (this pass's six owned files) or is asked to, by
-      hand-off, in this pass's own report (client/movement.lua,
-      client/tracking.lua). This file itself depends on nothing else in
-      this resource (no call into any other client file, no read of
-      Config beyond nothing at all), so there is no lower bound on its own
-      placement other than "as early as practical" -- directly after
-      client/main.lua satisfies every consumer's own ordering need in one
-      placement, the same reasoning server/runtimecontrol.lua's own
-      "FXMANIFEST PLACEMENT REQUESTED" section already used for an
+    - THIS FILE registers exactly one RegisterNetEvent, fired only by the
+      server (see TRUST BOUNDARY below) -- it triggers no server event of
+      its own, and calls no other file's global.
+    - FXMANIFEST PLACEMENT: client/featureblocks.lua loads early in
+      client_scripts (before client/movement.lua, client/agility.lua,
+      client/radial.lua, client/vehicle.lua, client/tracking.lua,
+      client/vision.lua, client/hud.lua, client/screenfx.lua,
+      client/audio.lua and client/proximityaudio.lua), since every one of
+      those either calls into this file directly or is one of its
+      consumers. This file itself depends on nothing else in this resource
+      (no call into any other client file, no read of Config beyond
+      nothing at all), so there is no lower bound on its own placement
+      other than "as early as practical" -- loading it early satisfies
+      every consumer's own ordering need in one placement, the same
+      reasoning server/runtimecontrol.lua's own header uses for an
       analogous cross-cutting file on the server side.
 
     TRUST BOUNDARY -- same discipline client/screenfx.lua's own header
@@ -222,16 +205,14 @@
     consistent with this resource's own stated convention, rather than an
     unexplained exception to it.
 
-    LOCALE KEYS THIS FILE NEEDS -- ONE new key, requested from the
-    locales/en.json owner (not added here -- off-limits to this pass),
-    reused verbatim by every one of the twelve features' own denial rather
-    than minting twelve near-identical strings (this resource's own
-    established "reuse a key when the English matches exactly" convention):
+    LOCALE KEYS THIS FILE USES -- ONE key, reused verbatim by every one of
+    the twelve features' own denial rather than minting twelve near-identical
+    strings (this resource's own established "reuse a key when the English
+    matches exactly" convention):
         common.k9_feature_blocked = "High Command has blocked this ability for you."
     Deliberately GENERIC (names no specific feature) -- the tablet is
     already the place an affected person can see WHICH feature and read
-    its plain-language block-effect explanation (see this pass's own
-    report on the new `blockEnforcement` tablet value); this notify exists
+    its plain-language block-effect explanation; this notify exists
     only to explain, in the moment, why an action that should have worked
     just silently didn't.
 ]]
@@ -292,11 +273,11 @@ end
 
 -- ======================================================================
 -- SERVER SYNC -- see this file's header "HOW THE CLIENT LEARNS IT IS
--- BLOCKED". `blockedKeys` is requested to be a plain array of feature-name
--- strings currently blocked for this citizenid (a full replacement of
--- this file's own state every time, never a delta -- see header). Every
--- entry not in CLIENT_ENFORCED_FEATURES above, and every non-string
--- entry, is silently dropped rather than stored.
+-- BLOCKED". `blockedKeys` is a plain array of feature-name strings
+-- currently blocked for this citizenid (a full replacement of this file's
+-- own state every time, never a delta -- see header). Every entry not in
+-- CLIENT_ENFORCED_FEATURES above, and every non-string entry, is silently
+-- dropped rather than stored.
 -- ======================================================================
 RegisterNetEvent('qbx_k9unit:client:featureBlocksSync', function(blockedKeys)
     -- TRUST BOUNDARY -- see this file's header. First statement, per
@@ -320,18 +301,17 @@ RegisterNetEvent('qbx_k9unit:client:featureBlocksSync', function(blockedKeys)
     -- TriggerServerEvent/TriggerClientEvent) re-broadcast for a consumer
     -- whose own client-side STRUCTURE depends on block state at
     -- REGISTRATION time, not only at the moment an ability acts --
-    -- client/radial.lua is the one consumer as of this pass (see that
-    -- file's own "K9 UNIT RADIAL -- PER-PERSON BLOCK" section): it already
-    -- rebuilds its entire menu tree from scratch on every
-    -- RegisterK9RadialMenu() call, and that file's own header separately
-    -- verifies (against ox_lib's actual source) that re-running its
-    -- registrations REPLACES them in place rather than duplicating
-    -- anything -- so reacting to this event by simply calling that
-    -- function again is cheap and safe, not a new risk. Fired
-    -- unconditionally on every sync (even one that changed nothing) --
-    -- simpler and safer than diffing old vs. new here, and a rebuild this
-    -- infrequent (join, reconnect, or a high-command block/unblock action)
-    -- costs nothing worth guarding against.
+    -- client/radial.lua is the one consumer (see that file's own "K9 UNIT
+    -- RADIAL -- PER-PERSON BLOCK" section): it already rebuilds its entire
+    -- menu tree from scratch on every RegisterK9RadialMenu() call, and
+    -- that file's own header separately verifies (against ox_lib's actual
+    -- source) that re-running its registrations REPLACES them in place
+    -- rather than duplicating anything -- so reacting to this event by
+    -- simply calling that function again is cheap and safe, not a new
+    -- risk. Fired unconditionally on every sync (even one that changed
+    -- nothing) -- simpler and safer than diffing old vs. new here, and a
+    -- rebuild this infrequent (join, reconnect, or a high-command
+    -- block/unblock action) costs nothing worth guarding against.
     TriggerEvent('qbx_k9unit:client:featureBlocksApplied')
 end)
 

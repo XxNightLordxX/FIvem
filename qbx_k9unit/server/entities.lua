@@ -4,7 +4,11 @@
     Consolidates two responsibilities shared across several files:
     resolving a client-claimed network id to a live entity defensively, and
     a cross-feature netId claim registry that stops one feature's confirm
-    handshake from hijacking another feature's already-claimed object.
+    handshake from hijacking another feature's already-claimed object. See
+    DEVELOPER_REFERENCE.md's near-term item 2 ("Extract the 'resolve network
+    entity defensively' helper — same call, now backed by several real
+    instances") for the origin of ResolveNetworkEntity below: a pure
+    structural extraction, not a redesign.
 
     WHY A SEPARATE FILE FROM server/cooldowns.lua: a shared file is scoped
     to ONE responsibility so it doesn't balloon into an everything-file --
@@ -37,15 +41,16 @@
       comment). Both call sites' existing entity-type/proximity checks are
       preserved exactly -- this file only consolidates the common
       "resolve + existence-guard" prefix both of them already did
-      independently. Also used by server/kennel.lua (3 call sites) and
-      server/inventory.lua (1 call site) -- see each call site's own
-      comment for exactly what moved here and what deliberately did not.
+      independently. Per DEVELOPER_REFERENCE.md item 2, also reused by
+      server/kennel.lua (3 call sites) and server/inventory.lua (1 call
+      site) -- see each call site's own comment for exactly what moved here
+      and what deliberately did not.
         ResolveConnectedPlayerFromPed(entity: number) -> number?
-      Scans connected players, matches by ped, and returns the server id --
-      same responsibility as ResolveNetworkEntity above, not a separate
-      shared-utility concern. Its own "DELIBERATE IMPLEMENTATION CHOICE"
-      doc comment below (reasoning about why this scans
-      GetPlayers()/GetPlayerPed() rather than the unverified
+      DEVELOPER_REFERENCE.md item 2b ("scan connected players, match by ped,
+      return the server id" -- same responsibility as ResolveNetworkEntity
+      above, not a new shared-utility concern). Its own "DELIBERATE
+      IMPLEMENTATION CHOICE" doc comment below (reasoning about why this
+      scans GetPlayers()/GetPlayerPed() rather than the unverified
       GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity)) combo) applies
       equally to every caller: server/search.lua's HandleSearchTarget
       ('person' branch), server/inventory.lua's HandleOpenK9Inventory, and
@@ -192,12 +197,13 @@ end
 --- belongs to, or nil if it doesn't belong to any currently-connected
 --- player (an NPC, or a stale/despawned handle).
 ---
---- Extracted from three independent, byte-identical hand-written copies of
---- this exact function: server/search.lua's original (the first-written,
---- most-documented copy, whose own doc comment is preserved below
---- verbatim), server/inventory.lua's `HandleOpenK9Inventory`, and
---- server/combat.lua's `ValidateCombatRequest` player-vs-NPC resolution.
---- All three now call this single function instead.
+--- DEVELOPER_REFERENCE.md item 2b. Extracted from three independent,
+--- byte-identical hand-written copies of this exact function:
+--- server/search.lua's original (the first-written, most-documented copy,
+--- whose own doc comment is preserved below verbatim), server/inventory.lua's
+--- `HandleOpenK9Inventory`, and server/combat.lua's `ValidateCombatRequest`
+--- player-vs-NPC resolution. All three now call this single function
+--- instead.
 ---
 --- DELIBERATE IMPLEMENTATION CHOICE (preserved from server/search.lua's
 --- original doc comment -- this reasoning applies equally to every caller,

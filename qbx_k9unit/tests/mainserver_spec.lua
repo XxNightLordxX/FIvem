@@ -249,6 +249,42 @@ local function newMainFixture(opts)
     }
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
+    -- DEATH-DETECTION FIX (this pass, coder-frontend) -- IsLeashPartyDead's
+    -- own final floor (GetEntityHealth <= 100). Defaults to 200 (a healthy
+    -- ped's real default max health) for any ped never explicitly set via
+    -- setHealth below -- every OTHER test in this file (none of which call
+    -- setHealth) therefore exercises the "not dead" path unchanged.
+    local healthByPed = {}
+    local function GetEntityHealth(ped) return healthByPed[ped] or 200 end
+
+    -- DEATH-DETECTION FIX (this pass) -- K9Compat.Get('ambulance').IsDowned,
+    -- the SAME hand-rolled stand-in shape tests/combat_spec.lua's/
+    -- tests/defense_spec.lua's own `fakeK9Compat` already establish (never
+    -- the real shared/compat/core.lua -- see combat_spec.lua's own comment
+    -- on why: loading that file would register its own onResourceStart
+    -- handlers/command, breaking this file's own handler-count assertions).
+    -- Defaults to always returning nil (adapter UNKNOWN/not detected) for
+    -- every test that never sets opts.ambulanceIsDowned -- every test
+    -- written BEFORE this pass keeps exercising IsLeashPartyDead's
+    -- pre-existing metadata/health fallback completely unchanged, zero
+    -- opt-in required.
+    local ambulanceIsDownedCalls = {}
+    local function ambulanceIsDownedFn(src)
+        ambulanceIsDownedCalls[#ambulanceIsDownedCalls + 1] = src
+        if type(opts.ambulanceIsDowned) == 'function' then
+            return opts.ambulanceIsDowned(src)
+        end
+        return nil
+    end
+    local fakeK9Compat = {
+        Get = function(system)
+            if system == 'ambulance' then
+                return { IsDowned = ambulanceIsDownedFn }
+            end
+            return {}
+        end,
+    }
+
     local coordsByHandle = {} -- handle (ped OR door entity) -> vec3
     local function GetEntityCoords(handle) return coordsByHandle[handle] or ORIGIN end
 
@@ -287,6 +323,21 @@ local function newMainFixture(opts)
 
     local threadRunner = Sandbox.newThreadRunner() -- DoorScratchByDoorCooldown.StartSweep() runs at main.lua's OWN file-load time, unconditionally (not gated on Config.Features.DoorInteraction) -- CreateThread/Wait must exist regardless of which feature this fixture is testing
 
+    -- DEATH-DETECTION FIX (this pass) -- server/main.lua now ALSO calls
+    -- CreateThread once for its own leash death-detection poll, gated behind
+    -- Config.Features.LeashMechanics (which defaults to true, both in real
+    -- config.lua and in this fixture). Counted here (a thin wrapper around
+    -- threadRunner.CreateThread, not a replacement) so a test can assert
+    -- exactly how many threads this file creates for a given Config shape,
+    -- the same "prove the gate, not just the behavior" discipline
+    -- combat_spec.lua's own maintenance-thread gating tests already
+    -- establish.
+    local threadCreateCount = 0
+    local function CountedCreateThread(fn)
+        threadCreateCount = threadCreateCount + 1
+        threadRunner.CreateThread(fn)
+    end
+
     -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
     -- tests/pursuitsprint_spec.lua's own `permissionGrants`/`defaultHasPermission`/
     -- `grantPermission` fixture shape exactly, for
@@ -312,6 +363,18 @@ local function newMainFixture(opts)
             nudgeRequiresUnlocked = true,
         },
         FeatureControl = { RequireGrant = {} },
+        -- DEATH-DETECTION FIX (this pass) -- IsLeashPartyDead reuses
+        -- Config.Combat.PropDragging.IsPlayerDownedOverride, the SAME
+        -- override server/combat.lua's own PropDragging and
+        -- server/defense.lua's own HandlerDownDefense already read (see
+        -- server/main.lua's own doc comment on IsLeashPartyDead for the
+        -- "one shared per-server integration point" rationale). nil by
+        -- default (opts.downedOverride, unset for every pre-existing test).
+        Combat = {
+            PropDragging = {
+                IsPlayerDownedOverride = opts.downedOverride,
+            },
+        },
     }
     if opts.features then
         for k, v in pairs(opts.features) do config.Features[k] = v end
@@ -343,9 +406,13 @@ local function newMainFixture(opts)
         GetEntityType = GetEntityType,
         GetPlayers = GetPlayers,
         RefreshCertificationCache = RefreshCertificationCache,
-        CreateThread = threadRunner.CreateThread,
+        CreateThread = CountedCreateThread,
         Wait = threadRunner.Wait,
         Config = config,
+        -- DEATH-DETECTION FIX (this pass) -- IsLeashPartyDead's own two new
+        -- dependencies.
+        GetEntityHealth = GetEntityHealth,
+        K9Compat = fakeK9Compat,
     }
 
     local env = Sandbox.newEnv(envOverrides)
@@ -363,6 +430,27 @@ local function newMainFixture(opts)
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         now = function() return fakeNow end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        -- DEATH-DETECTION FIX (this pass): setHealth (keyed by PED HANDLE,
+        -- same convention as combat_spec.lua's own identically-named
+        -- setter), threadCreateCount (proves the Config.Features.LeashMechanics
+        -- gate on the new thread), ambulanceIsDownedCalls (proves the
+        -- adapter is actually consulted, not just configured), and
+        -- runOneTick (steps every captured thread -- the door-scratch sweep
+        -- AND the new leash death-detection poll alike -- exactly one full
+        -- pass; mirrors combat_spec.lua's own identically-named helper's
+        -- documented priming discipline: the FIRST call only reaches each
+        -- thread's initial Wait() and primes it, every call after that runs
+        -- one real pass).
+        setHealth = function(ped, hp) healthByPed[ped] = hp end,
+        threadCreateCount = function() return threadCreateCount end,
+        ambulanceIsDownedCalls = ambulanceIsDownedCalls,
+        runOneTick = function()
+            if not threadRunner.primed then
+                threadRunner.step()
+                threadRunner.primed = true
+            end
+            threadRunner.step()
+        end,
         setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setJob = function(src, jobName) jobBySource[src] = jobName end,
         setPed = function(src, pedHandle, coords, modelHash)

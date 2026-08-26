@@ -401,11 +401,11 @@ t.test('no HasK9Access: /k9lineup is rejected with the shared common.no_k9_acces
     t.equals(lastNotifyFor(f, conductorSrc).message, locale('common.no_k9_access'))
 end)
 
-t.test('RequireGrant.ScentLineup=true with no grant: rejected no_grant; granting feature.ScentLineup then allows it', function()
+t.test('RequireGrant.ScentLineup=true with no grant: rejected with the DISTINCT not_granted message (naming Scent Lineup + High Command), never the generic no_grant/blocked copy; granting feature.ScentLineup then allows it', function()
     local f = newFixture({ requireGrant = true })
     local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f, { requireGrant = false })
     startLineup(f, conductorSrc, { aliceSrc, bobSrc })
-    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.no_grant'))
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.not_granted'))
     t.equals(#f.clientEvents, 0)
 
     f.grant('COND-1', 'feature.ScentLineup')
@@ -420,20 +420,21 @@ t.test('RequireGrant.ScentLineup=false (default): no grant needed at all', funct
     t.equals(#f.clientEvents, 2)
 end)
 
-t.test('a block.ScentLineup grant denies even with RequireGrant off', function()
+t.test('a block.ScentLineup grant denies even with RequireGrant off, with the DIFFERENT blocked message, never not_granted', function()
     local f = newFixture({ requireGrant = false })
     local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
     f.grant('COND-1', 'block.ScentLineup')
     startLineup(f, conductorSrc, { aliceSrc, bobSrc })
-    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.no_grant'))
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.blocked'))
+    t.isTrue(lastNotifyFor(f, conductorSrc).message ~= locale('scentlineup.not_granted'), 'blocked and not_granted must read as two different, actionable messages, not one collapsed generic denial')
 end)
 
-t.test('unresolvable citizenid (framework adapter not yet available) fails CLOSED', function()
+t.test('unresolvable citizenid (framework adapter not yet available) fails CLOSED, with its own distinct "could not be verified" message (never claiming a block or a missing grant that was never actually checked)', function()
     local f = newFixture({ requireGrant = false })
     local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
     f.setCitizenId(conductorSrc, nil) -- simulates shared/compat/framework.lua not having landed yet
     startLineup(f, conductorSrc, { aliceSrc, bobSrc })
-    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.no_grant'))
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.identity_unresolved'))
 end)
 
 t.test('starting a second lineup immediately is blocked by startCooldownMs; advancing past it allows a new one', function()

@@ -13,7 +13,12 @@
          required to reach it.
       2. Each viewer type gets the right ROLE BADGE and the right set of
          screens reachable from Home (progressive disclosure: High Command
-         Tools only ever appears for state.viewer.isHighCommand === true).
+         Tools appears for state.viewer.isHighCommand === true, OR for a
+         non-high-command viewer holding one of the four delegable
+         capabilities -- Theme/Shop Locations/Shop Items/Runtime Control,
+         see html/tablet.js's own canManageTabletTheme() doc comment --
+         in which case only THAT capability's own shortcut shows, never
+         the high-command-only ones alongside it).
       3. A viewer with ZERO active certifications gets a real, useful
          screen (an explicit guidance notice) instead of an empty shell,
          and still has a working path to their own (empty) record -- never
@@ -121,6 +126,34 @@ t.test('HIGH COMMAND: clicking a High Command Tools shortcut actually navigates 
 
     t.isTrue(findByText(h.getRoot(), 'Tablet Appearance').length >= 1, 'the Home shortcut opened the real Tablet Theme screen');
     t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:getTheme')), 'clicking the shortcut fired the SAME server round trip the real tab would');
+});
+
+t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command Tools section appears with ONLY that one shortcut, no others', async () => {
+    const h = await openTablet({
+        ok: true,
+        viewer: { citizenid: 'DELEGATE1', name: 'Delegate', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.certify', 'k9.runtimecontrol'], allowSelfGrant: false },
+        certifications: [{ departmentKey: 'police', departmentLabel: 'Police', active: true, grantedBy: 'X', tier: 'certified', expiresAtUnix: null, expired: false, specializations: [] }],
+        xp: 100, tierLabel: 'Trained K9', myFeatures: [],
+    }, {
+        'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+        'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+    });
+
+    t.equals(findByText(h.getRoot(), 'Certified Handler').length, 1, 'not high command, so the ordinary role badge shows');
+    t.equals(findByText(h.getRoot(), 'High Command').length, 0);
+    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'section now built for a delegated non-high-command viewer too');
+    t.equals(findByText(h.getRoot(), 'Runtime Control →').length, 1, 'the ONE capability this viewer actually holds gets its shortcut');
+
+    // Every high-command-only shortcut (no delegation exists for any of
+    // these) and every OTHER delegable one this viewer does NOT hold stays
+    // absent -- never a wider grid than this viewer's own real access.
+    for (const label of ['Guided Flows', 'Tablet Theme', 'Certification Tiers', 'Permission Keys', 'Shop Locations', 'Shop Items', 'XP Ranks', 'K9 Overrides', 'Audit Trail']) {
+        t.equals(findByText(h.getRoot(), label + ' →').length, 0, `"${label}" shortcut must NOT appear for this viewer`);
+    }
+
+    findByText(h.getRoot(), 'Runtime Control →')[0].click();
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Runtime Feature Control').length >= 1, 'the shortcut opens the real screen, not a dead end');
 });
 
 t.test('CERTIFIED HANDLER (not high command, not a K9 model, k9.access only): role badge reads "Certified Handler", NO console quick action, NO High Command Tools section', async () => {

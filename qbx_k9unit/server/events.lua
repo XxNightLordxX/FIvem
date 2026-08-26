@@ -6,20 +6,17 @@
     copies: server/certifications.lua, server/search.lua,
     server/partnership.lua, server/sarcalls.lua, server/progression.lua, and
     server/integrations.lua. Verified by direct grep of every one of those
-    six definitions before writing this file, not taken on a prior claim's
-    word alone -- all six were the exact same five-line
-    `pcall(TriggerEvent, eventName, ...)` wrapper.
+    six definitions before writing this file -- all six were the exact same
+    five-line `pcall(TriggerEvent, eventName, ...)` wrapper.
 
-    THIS IS THE "GENUINE CROSS-FILE CLEANUP PASS" SEVERAL OF THOSE SIX
-    FILES' OWN COMMENTS EXPLICITLY DEFERRED TO. server/integrations.lua's
-    and server/sarcalls.lua's copies each said, verbatim, that duplicating
-    this helper was deliberate for THEIR pass specifically because "that
-    decision belongs to whoever next does a genuine cross-file cleanup
-    pass, not to a single new-feature pass that does not own any of those
-    other existing files." This pass owns exactly that: all six call sites
-    repointed in the same edit, nothing added or removed from any payload,
-    name, argument list, order, or firing condition at any of them -- a
-    pure extraction.
+    server/integrations.lua's and server/sarcalls.lua's own copies of this
+    helper each said, verbatim, that duplicating it was a deliberate choice
+    at the time, since "that decision belongs to whoever next does a genuine
+    cross-file cleanup pass, not to a single new-feature change that does
+    not own any of those other existing files." This file is that cleanup:
+    all six call sites are repointed to one implementation, with nothing
+    added or removed from any payload, name, argument list, order, or
+    firing condition at any of them -- a pure extraction.
 
     THE PRECEDENT THIS FOLLOWS: this codebase already did this exact
     consolidation once, for NotifyPlayer (12 independent copies -> one
@@ -56,9 +53,7 @@
     resource's other shared-helper files -- to read in the same "shared
     primitive first" order those already established, so no
     `type(FireOutboundEvent) == 'function'` existence guard is needed at
-    any of the six consuming files' call sites. (fxmanifest.lua itself is
-    owned by a different agent this session; the exact placement line was
-    sent to them separately, not edited here.)
+    any of the six consuming files' call sites.
 
     ZERO BEHAVIOR CHANGE. Unlike server/notify.lua's NotifyPlayer
     extraction (which deliberately fixed a wrong `'inform'` default and
@@ -71,19 +66,19 @@
     are a documented, consumer-facing contract (see server/exports.lua's
     EVENT CONTRACT section) and the entire point of this extraction is that
     it keeps behaving identically, just from one place instead of six.
-    COUNT SINCE GROWN, NOT RE-CHECKED HERE EVERY PASS: "14" above is the
-    count this file's own extraction verified at the time, not a live
-    total this header maintains going forward -- new call sites are
-    expected to accumulate in existing and new consumer files as features
-    land, exactly as a shared helper should allow. Recounted directly this
-    pass (`grep -rn "^\s*FireOutboundEvent(" server/`, excluding this
-    file's own definition and one backtick-quoted mention in a comment in
-    server/integrations.lua): 23 real call sites across SEVEN files as of
-    this pass (the original six above, plus server/scentlineup.lua, which
-    added its own new call site after this extraction landed, calling the
-    shared global directly rather than ever having had its own duplicate
-    copy). Do not trust either number without recounting; this comment
-    will go stale again the next time a feature adds a call site.
+    COUNT WILL DRIFT, NOT MAINTAINED LIVE HERE: "14" above is the count
+    verified at the time of this file's own extraction, not a live total
+    this header maintains going forward -- new call sites are expected to
+    accumulate in existing and new consumer files as features land, exactly
+    as a shared helper should allow. A direct recount
+    (`grep -rn "^\s*FireOutboundEvent(" server/`, excluding this file's own
+    definition and one backtick-quoted mention in a comment in
+    server/integrations.lua) found 23 real call sites across SEVEN files
+    (the original six above, plus server/scentlineup.lua, which added its
+    own new call site after this extraction landed, calling the shared
+    global directly rather than ever having had its own duplicate copy). Do
+    not trust either number without recounting; this comment will go stale
+    again the next time a feature adds a call site.
     ======================================================================
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes ONE resource-global (no `local`) function:

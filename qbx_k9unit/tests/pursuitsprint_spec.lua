@@ -845,7 +845,7 @@ t.test('RequireGrant.PursuitSprint = true + an active feature.PursuitSprint gran
     t.equals(#f.triggerClientEventCalls, 1)
 end)
 
-t.test('BLOCK ALWAYS WINS: an explicit block.PursuitSprint denies even a citizenid who ALSO holds an active feature.PursuitSprint grant', function()
+t.test('BLOCK ALWAYS WINS: an explicit block.PursuitSprint denies even a citizenid who ALSO holds an active feature.PursuitSprint grant, and sends the DIFFERENT denied_blocked message, never denied_not_granted (CORRECTED this pass -- see server/pursuitsprint.lua header "REFUSAL MESSAGE, CORRECTED")', function()
     local f = newServerFixture({ requireGrantListed = true })
     f.registerPlayer(1, 'K9-CID', 100, nil)
     f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
@@ -858,7 +858,8 @@ t.test('BLOCK ALWAYS WINS: an explicit block.PursuitSprint denies even a citizen
     f.dispatch(1, 9001)
 
     t.equals(#f.triggerClientEventCalls, 0)
-    t.equals(lastNotifyFor(f, 1).message, locale('pursuitsprint.denied_not_granted'))
+    t.equals(lastNotifyFor(f, 1).message, locale('pursuitsprint.denied_blocked'))
+    t.isTrue(lastNotifyFor(f, 1).message ~= locale('pursuitsprint.denied_not_granted'), 'blocked and not_granted must read as two different, actionable messages, not one collapsed generic denial')
 end)
 
 t.test('RequireGrant.PursuitSprint = false (not listed) -- default ALLOW, no grant needed, matching config.lua\'s own documented step 4', function()

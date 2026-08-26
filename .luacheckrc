@@ -757,6 +757,16 @@ globals = {
     -- scope), same "exposed for a future entry" convention as
     -- RequestDrag/ReleaseDrag/IsDragEngaged below.
     "ReleaseTakedown", "IsTakedownEngaged",
+    -- client/combat.lua (focus-and-state audit finding #2, this pass) --
+    -- whether THIS client is currently the TARGET of an active forced
+    -- ragdoll (the non-lethal takedown above), consumed by
+    -- client/tablet.lua's own watch thread to force-close an open tablet
+    -- on the same "cannot act" condition it already force-closes on death
+    -- for -- see that file's own header "DOWNED-BY-TAKEDOWN ALSO
+    -- FORCE-CLOSES". Guarded with `type(fn) == 'function'` at its one call
+    -- site, same non-optional convention as FindNearestLeashCandidate/
+    -- FindNearestPartnerCandidate above.
+    "IsLocalPlayerForceRagdolled",
     -- server/partnership.lua (Phase 3, HandlerPartnership registry,
     -- PHASE3_SPEC.md §12.0 item 7/§12.3). RefreshPartnershipCache mirrors
     -- server/certifications.lua's RefreshCertificationCache reuse hook

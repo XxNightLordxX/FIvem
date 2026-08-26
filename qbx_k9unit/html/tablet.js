@@ -372,11 +372,14 @@
         must never depend on a round trip succeeding).
 
       tablet:equipmentShopGetLocations {} -> cb({ ok, locations?, error? })
-        HIGH COMMAND ONLY screen (server/equipmentshop.lua's own
-        GetLocations callback has no such gate -- open to any connected
-        player -- but this page only ever shows the management screen to
-        high command, per THE SECURITY RULE a convenience, not the real
-        gate). `locations` is a map keyed by location key
+        HIGH COMMAND OR A DELEGATED 'k9.equipmentshoplocations' GRANT
+        screen (server/equipmentshop.lua's own GetLocations callback has no
+        such gate -- open to any connected player -- but this page only
+        ever shows the management screen to a viewer who passes
+        canManageShopLocations(), per THE SECURITY RULE a convenience,
+        matching server/equipmentshop.lua's own real CanManageShopLocations
+        gate re-verified on every mutating call below regardless of what
+        this page shows). `locations` is a map keyed by location key
         (`cfg:<n>` -- defined in config.lua, read-only from here -- or
         `db:<id>` -- added via this screen, editable/removable) to
         `{ x, y, z, heading, model, scenario, label }`, ALL fields already
@@ -409,14 +412,18 @@
 
       tablet:equipmentShopRemoveLocation { locationKey: string } -> cb({ ok, locations?, error? })
         Only ever valid for a `db:<id>` locationKey, same reasoning as Move
-        above. HIGH COMMAND ONLY, re-verified server-side on every one of
-        these three mutating calls regardless of what this page shows.
+        above. CanManageShopLocations (high command OR a delegated
+        'k9.equipmentshoplocations' grant, see canManageShopLocations()'s
+        own doc comment), re-verified server-side on every one of these
+        three mutating calls regardless of what this page shows.
 
       tablet:runtimeListFeatures {} -> cb({ ok, features?, error? })
-        HIGH COMMAND ONLY screen (server/runtimecontrol.lua's own
-        runtimeListFeatures re-verifies CanManageRuntimeControl itself
-        regardless of what this page shows). `features` is an ARRAY (order
-        NOT guaranteed -- this page sorts it by `name` for a stable
+        HIGH COMMAND OR A DELEGATED 'k9.runtimecontrol' GRANT screen (this
+        page shows the management screen to a viewer who passes
+        canManageRuntimeControl(); server/runtimecontrol.lua's own
+        runtimeListFeatures re-verifies the real CanManageRuntimeControl
+        gate itself regardless of what this page shows). `features` is an
+        ARRAY (order NOT guaranteed -- this page sorts it by `name` for a stable
         display), one entry per Config.Features key:
           { name, currentValue: boolean, configLuaDefault: boolean,
             tier: 'live'|'onstart'|'rawtoplevel'|'clientonly'|'protected'|'unaudited',
@@ -454,7 +461,7 @@
         tablet:runtimeListFeatures load, same as a successful Set above.
 
       tablet:runtimeListTunables {} -> cb({ ok, tunables?, error? })
-        Same HIGH COMMAND ONLY posture as runtimeListFeatures above.
+        Same HIGH COMMAND OR A DELEGATED 'k9.runtimecontrol' GRANT posture as runtimeListFeatures above.
         `tunables` is an ARRAY (order not guaranteed -- sorted by `key`
         here), one entry per TUNABLE_REGISTRY key:
           { key, currentValue: number, configLuaDefault: number,
@@ -1591,6 +1598,161 @@
         mutation_error_invalid_granter: 'Your own account could not be resolved. Try again, or contact an administrator.',
         mutation_error_db_error: 'A database error occurred. Try again; if this persists, contact an administrator.',
         mutation_error_actions_disabled: 'Tablet actions are currently turned off on this server.',
+        mutation_error_not_partnered: 'That citizen is not currently partnered.',
+        // ---- Help tab (owner-directed: "a separate tab that teaches you how
+        // to use the entire tablet... super detailed but dumbed down") --
+        // see buildHelpScreen()'s own header for the full design. ----
+        tab_help: "Help",
+        help_heading: "How to Use This Tablet",
+        help_intro_line1: "This page walks you through using the tablet from scratch, in plain language. If you already know what you are doing and just need a quick lookup, use the Commands tab instead -- it lists every command with a live yes/no on whether you can use it right now.",
+        help_role_note_k9: "You are seeing the K9 version of this guide because you are currently playing as a dog.",
+        help_role_note_handler: "You are seeing the Handler version of this guide because you are not currently playing as a dog.",
+        help_role_note_uncertified: "You are seeing the Getting Started version of this guide because you do not hold an active certification yet.",
+        help_role_note_high_command_suffix: "Because you are also High Command, the extra admin sections below are showing too.",
+        help_start_heading: "Start Here",
+        help_start_k9_1: "1. You are playing as the dog. A separate player -- your handler -- plays the human half of the team.",
+        help_start_k9_2: "2. To actually use any K9 ability you need two things at once: an active K9 certification (or an access grant), and to currently be wearing a K9 model. Getting certified sometimes turns you into the model automatically. If it does not happen for you, a High Command officer can do it manually from the Console tab (open your record, then use \"Assign K9 Role\").",
+        help_start_k9_3: "3. Check the top of the Home tab. It shows \"Partnered\" or \"No Partner\" -- that tells you whether a handler is currently paired with you.",
+        help_start_k9_4: "4. If it says \"No Partner\", wait for a handler to walk up to you and choose \"Partner Up\" from their interact menu. You will get an accept-or-decline prompt -- accept it.",
+        help_start_k9_5: "5. Open the Commands tab and read \"Basic K9 Commands\" and \"Combat & Restraint\" first -- those are your everyday moves and the keys already bound to them. Learn Recall before anything else: it always calls you off, no matter what you are doing.",
+        help_start_handler_1: "1. Look at the top of the Home tab. It shows your name and, right under it, whether you are certified yet.",
+        help_start_handler_2: "2. If it says you are not certified, find a supervisor -- someone with the right rank in your department, or a High Command officer -- and ask them to certify you. They do this from their own tablet's Console tab.",
+        help_start_handler_3: "3. Once certified, the Home tab's \"Ready to use right now\" list shows exactly which abilities you can use today. That list changes as your certification, tier, and server settings change -- check back after anything changes.",
+        help_start_handler_4: "4. Open the Commands tab to see the exact command and key for everything on that list.",
+        help_start_handler_5: "5. If you want a K9 partner, find someone playing as a K9 and use \"Partner Up\" from your interact menu while standing near them. They get an accept-or-decline prompt.",
+        help_start_handler_6: "6. If you want to become the K9 yourself instead of staying the handler, that is a separate role change -- see \"Turn Someone Into a K9\" further down this page.",
+        help_start_high_command_heading: "Also: Because You Are High Command",
+        help_start_high_command_intro: "Everything above still applies to you -- High Command is not a separate job, it is a handler or K9 who also has admin tools. Here is where to start with those tools specifically.",
+        help_start_high_command_1: "1. Open the Guided Flows tab first. It walks you through the four most common admin jobs step by step instead of making you hunt across separate screens.",
+        help_start_high_command_2: "2. When someone needs to be set up as a new handler, use \"Set Up a New Handler\" inside Guided Flows -- it covers certifying them, setting a tier, and granting feature access in one pass.",
+        help_start_high_command_3: "3. If you need to know what someone has actually been doing, use the Audit Trail tab -- it is read-only and shows real history, not a guess.",
+        help_start_high_command_4: "4. Every other admin screen (theme, certification tiers, permission keys, the supply shop, feature switches, XP ranks, per-K9 overrides) has its own tab -- see \"Every Tab, Explained\" below for what each one actually does.",
+        help_tabs_heading: "Every Tab, Explained",
+        help_tabs_intro: "Only the tabs you can actually use are listed below -- if a tab is not shown here, you cannot see it on your own tablet either.",
+        help_tab_home_desc: "Your starting point every time you open the tablet. Shows who you are, whether you are certified and partnered, and the abilities you can use right now. Open it whenever you are not sure what to do next.",
+        help_tab_my_record_desc: "The full, detailed version of your own record: every certification (active or expired), your XP, and every single ability with its exact status, not just the ready-to-use ones Home shows. Open it to check something specific about yourself.",
+        help_tab_commands_desc: "A searchable list of every command this tablet's resource has, grouped by what you are trying to do, each with a live yes/no on whether you personally can use it right now and why. Open it when you know roughly what you want to do and need the exact command.",
+        help_tab_help_desc: "This page. Open it any time something else on the tablet does not make sense.",
+        help_tab_console_desc: "Look up any handler or K9 by name or citizen ID, and manage their certifications, tiers, XP, and permissions. Open it to check on or make a change to someone else's record.",
+        help_tab_flows_desc: "A guided, step-by-step version of the four admin jobs you will do most often: setting up a new handler, offboarding one, handling a problem player, and tuning server-wide settings. Open it instead of the individual screens below when you want to be walked through the whole job in order.",
+        help_tab_theme_desc: "Change the tablet's own colors and title for every player on the server. Open it to re-brand the tablet, not to fix anything broken.",
+        help_tab_cert_tiers_desc: "Add, rename, or remove certification tiers (like Trainee, Certified, Senior) and decide which extra abilities each tier unlocks. Open it before you certify anyone if the default tiers do not match how your server is organized.",
+        help_tab_permission_keys_desc: "Add or remove the permission keys this tablet can grant to a specific person (like the ability to certify others). Open it if a permission you need does not exist yet -- to grant an existing one to someone, use the Console tab's Person screen instead.",
+        help_tab_shop_locations_desc: "Decide where the K9 supply shop ped stands in the world, for each department. Open it to move or add a shop, not to change what it sells.",
+        help_tab_shop_items_desc: "Decide what the K9 supply shop sells, at what price, and which certification tier is required to buy each item. Open it to change the shop's catalog.",
+        help_tab_runtime_control_desc: "Turn individual features on or off for the whole server, and adjust the numeric settings behind them, without editing config files or restarting. Open it when a feature needs to change right now, or when you need to know whether one is currently on.",
+        help_tab_xp_tiers_desc: "Decide how much XP is needed to reach each rank. Open it to change the pace of progression.",
+        help_tab_k9_profiles_desc: "Give one specific K9 its own personal adjustments (speed, scent range, medkit cooldown) that are different from every other K9 on the server. Open it for a one-off exception, not a server-wide change.",
+        help_tab_audit_desc: "A read-only history of who certified whom, who partnered with whom, who searched whom, XP grants, and department-wide activity. This is privacy-sensitive -- it shows real names and real actions. Open it to investigate something that already happened.",
+        help_commands_heading: "Commands You Can Use",
+        help_commands_intro: "Every command below is real -- typing it does exactly what it says. Most of them only work while you are currently playing as the K9 (wearing a dog model); a few work from either side. If a default key is shown, that key runs the same command without you typing anything, unless you have already changed that key yourself in Settings > Key Bindings > FiveM.",
+        help_commands_admin_heading: "Admin Commands (High Command Only)",
+        help_commands_admin_intro: "These only work for High Command, or for someone specifically granted the matching permission. They are listed here because you are High Command -- an ordinary handler or K9 does not see this section.",
+        help_tasks_heading: "How to Do the Common Things",
+        help_task_get_certified_heading: "Get Certified",
+        help_task_get_certified_1: "1. Find someone who can certify you: a supervisor at the right rank in your department, or anyone in High Command.",
+        help_task_get_certified_2: "2. Ask them in person or over the radio -- there is no way to request a certification yourself from the tablet.",
+        help_task_get_certified_3_template: "3. They open their own tablet's Console tab, find your name or citizen ID, open your record, and press {certifyLabel} for your department. You will see the change on your own Home tab the next time you open it.",
+        help_task_partner_up_heading: "Partner Up With a Handler or K9",
+        help_task_partner_up_1: "1. Stand close to the other player -- handler or K9, either side can start this.",
+        help_task_partner_up_2: "2. Open your interact menu on them and choose \"Partner Up\" -- if you are the K9, your K9 Unit radial menu has the same option.",
+        help_task_partner_up_3: "3. The other player gets an accept-or-decline prompt. Once they accept, the Home tab for both of you shows \"Partnered\" instead of \"No Partner\".",
+        help_task_partner_up_4: "4. To split up later, open your K9 Unit radial menu and choose \"Break Partnership\" -- either side can end it, any time, even if the other player is offline.",
+        help_task_vehicle_heading: "Put Your K9 In the Car",
+        help_task_vehicle_1: "1. As the K9, walk up to the vehicle your handler is using. Only vehicles set up to carry a K9 will show this option -- ask High Command if you think one is missing it.",
+        help_task_vehicle_2: "2. Open your interact menu on the vehicle and choose \"Get in the Back Seat\".",
+        help_task_vehicle_3: "3. To let your K9 back out, open the interact menu on the vehicle again and choose \"Get Out of the Vehicle\".",
+        help_task_search_heading: "Search a Suspect or Vehicle",
+        help_task_search_1: "1. As the K9, walk up to a person or a vehicle.",
+        help_task_search_2: "2. Open your interact menu and choose \"Search Person for Contraband\" or \"Search Vehicle for Contraband\". Your K9 plays a sniffing animation while the server checks the result.",
+        help_task_search_3: "3. This only works while you are playing as the K9 -- a handler cannot search on the K9's behalf.",
+        help_task_treat_heading: "Treat an Injured K9",
+        help_task_treat_1: "1. This is not limited to handlers -- anyone whose job is set up for it (usually EMS) can do this, as long as they are carrying a K9 medkit item.",
+        help_task_treat_2: "2. Walk up to the injured K9 and open your interact menu on them. Choose \"Treat This K9's Injuries (Uses a K9 Medkit)\".",
+        help_task_treat_3: "3. The medkit item is used up. If the option is not there at all, either this feature is turned off on this server, or you do not have a K9 medkit.",
+        help_task_hc_certify_someone_heading: "Certify Someone",
+        help_task_hc_certify_someone_1: "1. Go to the Console tab and find them by name or citizen ID. Most certification actions require the target to be online.",
+        help_task_hc_certify_someone_2_template: "2. Open their record and press {certifyLabel} under their department. Pick a tier and any specializations if your server uses them.",
+        help_task_hc_certify_someone_3: "3. Prefer to be walked through it instead? Open the Guided Flows tab and use \"Set Up a New Handler\" -- it is the exact same actions, in order, with nothing skipped.",
+        help_task_hc_flow_steps_template: "That flow's steps, in order: {steps}.",
+        help_task_hc_toggle_feature_heading: "Turn a Feature On or Off",
+        help_task_hc_toggle_feature_1: "1. Open the Runtime Control tab and find the feature by name.",
+        help_task_hc_toggle_feature_2: "2. Flip its switch. Most features take effect immediately for every player -- but not all of them do. Read the small note under the switch: some only apply after a restart, and a few (protected or not-yet-audited features) cannot be changed from here at all.",
+        help_task_hc_toggle_feature_3: "3. Prefer to be walked through it alongside every other server-wide setting? Open the Guided Flows tab and use \"Tune the Server\".",
+        help_task_hc_assign_k9_heading: "Turn Someone Into a K9",
+        help_task_hc_assign_k9_1: "1. Go to the Console tab, find the person, and open their record.",
+        help_task_hc_assign_k9_2_template: "2. In the K9 Role section, pick a model from the list and press \"{assignLabel}\". This changes their character immediately and also grants them K9 access, so they can use K9 abilities right away.",
+        help_task_hc_assign_k9_3_template: "3. To undo it, press \"{revertLabel}\" -- this works even if they hold no certification or access at all, so it is always available as an emergency undo.",
+        help_task_hc_check_history_heading: "Check What Someone Did",
+        help_task_hc_check_history_1: "1. Open the Audit Trail tab.",
+        help_task_hc_check_history_2: "2. Pick what you are looking for -- certifications, partnerships, searches, XP grants, or department-wide activity -- and type the citizen ID.",
+        help_task_hc_check_history_3: "3. This is privacy-sensitive: it shows real names, real actions, and real timestamps. Only use it when you actually need to investigate something.",
+        help_trouble_heading: "When Something Doesn't Work",
+        help_trouble_intro: "Every refusal on this tablet tells you the real reason -- here is what the most common ones actually mean and what to do about them.",
+        help_trouble_no_k9_access_title: "\"You cannot use K9 features right now.\" (a red notification in the game, not on the tablet)",
+        help_trouble_no_k9_access_body: "This means one of two things: you are not currently wearing a K9 model, or you do not hold an active K9 certification (or access grant). Check the Home tab -- if it does not show you as certified, see \"Get Certified\" above. If it does, ask a High Command officer to check whether you are actually set as a K9 (\"Assign K9 Role\", Console tab).",
+        help_trouble_not_certified_title: "\"Not certified\"",
+        help_trouble_not_certified_body: "You do not hold an active certification for whatever this needs. See \"Get Certified\" above -- ask a supervisor or High Command.",
+        help_trouble_feature_off_title: "\"Disabled server-wide\" or \"This feature is turned off on this server\"",
+        help_trouble_feature_off_body: "A High Command officer switched this off for the whole server, from the Runtime Control tab. It can usually be turned back on the same way -- ask them. A small number of features are marked protected or not-yet-audited and genuinely cannot be turned on from the tablet at all; the Runtime Control tab says so directly when that is the case.",
+        help_trouble_needs_grant_title: "\"Requires a grant (not granted)\" or \"Requires higher authorization\"",
+        help_trouble_needs_grant_body: "The feature itself is on, and you are certified, but this specific extra permission has not been given to you personally. Only High Command can grant it, from the Console tab's Person screen (or the Permission Keys tab, if the permission itself does not exist yet).",
+        help_trouble_rate_limited_title: "\"You're doing that too quickly\"",
+        help_trouble_rate_limited_body: "Wait a few seconds and try again. This is a safety limit, not a permission problem -- nobody needs to grant you anything to fix it.",
+        help_trouble_self_cert_disabled_title: "\"Self-certification is turned off on this server\"",
+        help_trouble_self_cert_disabled_body: "You cannot certify yourself on this server. Ask someone else who can certify -- a supervisor or High Command.",
+        help_trouble_target_offline_title: "\"This target must be online\"",
+        help_trouble_target_offline_body: "The person you are trying to act on needs to be connected to the server. Ask them to log in, then try again.",
+        help_trouble_insufficient_authorization_title: "\"You are not authorized to do this. You need a High Command grant.\"",
+        help_trouble_insufficient_authorization_body: "This action is High Command only. If you believe you should have it, ask an existing High Command officer to raise your department rank, or grant you the specific permission it needs.",
+
+        // ---- Partnerships tab (this pass, coder-ui) -- owner, verbatim:
+        // "a partnership tab should be shown on all tablets as a tab...
+        // high command is a handler or a k9 and should have control over
+        // it also but the partnership tab should show whos there
+        // partners." ONE tab, shown to every viewer including high
+        // command (never gated on isHighCommand/canManageRoster) --
+        // see buildTabs()/buildPartnershipsScreen()'s own header comments.
+        tab_partnerships: 'Partnerships',
+        home_k9_progression_heading: 'Your Progression',
+        home_view_partners_label: 'View Partnerships',
+        home_view_partners_hint: 'See your current and past partners.',
+        partnerships_feature_disabled: 'Partnership tracking is turned off on this server.',
+        partnerships_history_heading: 'Partnership History',
+        partnerships_history_empty: 'You have never been partnered with anyone.',
+        // {count} -- HISTORICAL total (this citizenid's own row count across
+        // every partnership they have ever held, active or ended), NEVER a
+        // live concurrent count -- server/partnership.lua enforces at most
+        // one ACTIVE partnership per citizenid at a time (verified this
+        // pass), so "how many handlers has this k9 had" is always this
+        // historical number, never a simultaneous one.
+        partnerships_count_summary_template: 'You have had {count} partner(s) in total.',
+        partnerships_truncated_notice_template: 'Showing your {shown} most recent partnerships.',
+        partnerships_state_active: 'Active',
+        partnerships_state_ended: 'Ended',
+        partnerships_established_label: 'Partnered since',
+        partnerships_ended_label: 'Ended',
+        partnerships_ended_by_label: 'Ended by',
+        partnerships_ended_system_template: 'Automatically ({reason})',
+        // "Tenure Level," never "XP Tier" -- deliberately distinct
+        // vocabulary from the K9's own XP tier (my_xp_heading/xpLine
+        // elsewhere): this is server/tenure.lua's PARTNERSHIP tenure-bonus
+        // tier, a property of the PAIR, not of either individual's own K9
+        // progression -- see server/tablet.lua's CALLBACKS 7-9 header for
+        // why this file never presents it as tamper-proof (the anti-farm
+        // guard behind it is disclosed as in-memory-only).
+        partnerships_tier_label: 'Tenure Level',
+        partnerships_tier_none: 'No tenure milestone reached yet',
+        partnerships_tier_value_template: 'Tier {tier}',
+        partnerships_next_tier_countdown_template: '{days} day(s) until the next tenure milestone',
+        // ---- High command admin lookup, shown ON TOP of the personal
+        // section on this SAME tab (owner: "high command... should have
+        // control over it also... not a separate screen").
+        partnerships_admin_heading: "Look Up Someone's Partnerships",
+        partnerships_admin_hint: 'See who any citizen has been partnered with, and end an active partnership if needed.',
+        partnerships_admin_none: 'This citizen has never been partnered.',
+        partnerships_force_end_label: 'End Partnership',
+        help_tab_partnerships_desc: "Shows who you are currently partnered with, or that you have no partner right now. If you are High Command, this same tab also lets you look up anyone else's partnership. Open it to check a pairing -- partnering up and breaking up both happen out in the world (interact menu or K9 Unit radial menu), not on this screen.",
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -1936,7 +2098,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' | 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' | 'my_record' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         // Standalone block-enforcement badge/hint text -- see
         // clientEnforcedBadgeText()/clientEnforcedHintText()'s own doc
@@ -1973,6 +2135,20 @@
         // reset to false on every open, same as viewer/myRecord above.
         isK9Model: false,
         isPartnered: false,
+
+        // Partnerships tab (this pass) -- see buildPartnershipsScreen()'s
+        // own header comment. myPartnerships/myPartnershipsLoading/
+        // myPartnershipsError follow the SAME {loading, error, value}
+        // shape as myRecord above; partnershipsAdmin* is the SEPARATE,
+        // high-command-only lookup section rendered on top of the same
+        // screen, keyed by whichever citizenid the operator last submitted
+        // (never auto-populated, matching Console's own "open by ID" box).
+        myPartnershipsLoading: false,
+        myPartnershipsError: null, // { error, message }
+        myPartnerships: null, // { featureEnabled, partnerships: [...], truncated }
+        partnershipsAdminLoading: false,
+        partnershipsAdminError: null,
+        partnershipsAdminResult: null, // { target: {citizenid, name}, featureEnabled, partnerships: [...], truncated }
 
         // Command Reference screen's own search box -- see
         // buildCommandReferenceScreen() below. A plain client-side filter
@@ -2187,7 +2363,7 @@
         flowOnboardDepartment: null, // the department key chosen in the Onboarding flow's own Certify step -- lets the later Tier/Specializations step focus on that ONE department instead of re-listing every configured department
         flowOffboardAppearanceReverted: false, // set true ONLY after a real, server-confirmed tablet:revertK9Ped success during the Offboarding flow's own Appearance step -- never assumed from the click alone, see that step's own dedicated (non-runMutation) fetch wrapper
 
-        pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
+        pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit. Reset on every handleOpen() too (this pass) -- see that function's own comment on this exact field for why a stale true here must never survive a close/reopen
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
     };
 
@@ -2628,6 +2804,74 @@
         return canViewAudit();
     }
 
+    /**
+     * Shared body for the four capability-delegation gates immediately
+     * below (canManageTabletTheme/canManageShopLocations/canManageShopItems/
+     * canManageRuntimeControl) -- SAME isHighCommand-OR-specific-capability
+     * idiom as canViewAudit() above, just parameterized on which capability
+     * key to check, since all four server-side gates share the identical
+     * shape (coder-backend's audit, verified directly against source):
+     *   server/runtimecontrol.lua CanManageTabletTheme(source):    IsHighCommand(source) OR HasPermission(citizenid, 'k9.tablettheme') == true          (tests/runtimecontrol_spec.lua:523)
+     *   server/equipmentshop.lua  CanManageShopLocations(source):  IsHighCommand(source) OR HasPermission(citizenid, 'k9.equipmentshoplocations') == true (tests/equipmentshop_spec.lua:839)
+     *   server/equipmentshop.lua  CanManageShopItems(source):      IsHighCommand(source) OR HasPermission(citizenid, 'k9.equipmentshopitems') == true     (tests/equipmentshopitems_spec.lua:616)
+     *   server/runtimecontrol.lua CanManageRuntimeControl(source): IsHighCommand(source) OR HasPermission(citizenid, 'k9.runtimecontrol') == true          (tests/runtimecontrol_spec.lua:523)
+     * These are ordinary custom permission-catalog keys (server/
+     * permissionkeycatalog.lua) -- high command mints them via the
+     * Permission Keys screen and grants them via GrantPermission exactly
+     * like k9.certify/k9.audit, so ResolveEffectivePermissions already
+     * unions a held one into state.viewer.effectivePermissions today (no
+     * server change needed for this). None of these four capabilities has
+     * a `/k9...` chat-command fallback (unlike a Config.FeatureControl.
+     * RequireGrant entry) -- until this client-side gate matched the
+     * server's, a delegated officer had literally no way to reach any of
+     * these four screens at all: built, authorized server-side, and
+     * unreachable. Convenience only, per THE SECURITY RULE, same as
+     * canViewAudit(): every one of these four screens' own mutating
+     * callbacks re-verifies its real gate server-side regardless of
+     * whether this ever returns true.
+     * @param {string} capability
+     * @returns {boolean}
+     */
+    function hasDelegatedCapability(capability) {
+        return !!(state.viewer && (state.viewer.isHighCommand
+            || (Array.isArray(state.viewer.effectivePermissions) && state.viewer.effectivePermissions.indexOf(capability) !== -1)));
+    }
+
+    /** Gate for the Theme tab/screen -- mirrors server/runtimecontrol.lua's
+     * CanManageTabletTheme. See hasDelegatedCapability()'s own doc comment
+     * for the full verified server-side contract this matches.
+     * @returns {boolean} */
+    function canManageTabletTheme() {
+        return hasDelegatedCapability('k9.tablettheme');
+    }
+
+    /** Gate for the Shop Locations tab/screen -- mirrors server/
+     * equipmentshop.lua's CanManageShopLocations. See
+     * hasDelegatedCapability()'s own doc comment for the full verified
+     * server-side contract this matches.
+     * @returns {boolean} */
+    function canManageShopLocations() {
+        return hasDelegatedCapability('k9.equipmentshoplocations');
+    }
+
+    /** Gate for the Shop Items tab/screen -- mirrors server/
+     * equipmentshop.lua's CanManageShopItems. See hasDelegatedCapability()'s
+     * own doc comment for the full verified server-side contract this
+     * matches.
+     * @returns {boolean} */
+    function canManageShopItems() {
+        return hasDelegatedCapability('k9.equipmentshopitems');
+    }
+
+    /** Gate for the Runtime Control tab/screen -- mirrors server/
+     * runtimecontrol.lua's CanManageRuntimeControl. See
+     * hasDelegatedCapability()'s own doc comment for the full verified
+     * server-side contract this matches.
+     * @returns {boolean} */
+    function canManageRuntimeControl() {
+        return hasDelegatedCapability('k9.runtimecontrol');
+    }
+
     // ------------------------------------------------------------------
     // FOCUS + SCROLL CONTINUITY ACROSS render()'s full teardown/rebuild
     // ------------------------------------------------------------------
@@ -3017,21 +3261,25 @@
             panel.appendChild(buildHomeScreen());
         } else if (state.screen === 'commands') {
             panel.appendChild(buildCommandReferenceScreen());
+        } else if (state.screen === 'partnerships') {
+            panel.appendChild(buildPartnershipsScreen());
+        } else if (state.screen === 'help') {
+            panel.appendChild(buildHelpScreen());
         } else if (state.screen === 'console' && canAccessConsole()) {
             panel.appendChild(buildConsoleScreen());
         } else if (state.screen === 'person' && canAccessConsole()) {
             panel.appendChild(buildPersonScreen());
-        } else if (state.screen === 'theme' && state.viewer.isHighCommand) {
+        } else if (state.screen === 'theme' && canManageTabletTheme()) {
             panel.appendChild(buildThemeScreen());
         } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
             panel.appendChild(buildCertTiersScreen());
         } else if (state.screen === 'permission_keys' && state.viewer.isHighCommand) {
             panel.appendChild(buildPermissionKeysScreen());
-        } else if (state.screen === 'shop_locations' && state.viewer.isHighCommand) {
+        } else if (state.screen === 'shop_locations' && canManageShopLocations()) {
             panel.appendChild(buildShopLocationsScreen());
-        } else if (state.screen === 'shop_items' && state.viewer.isHighCommand) {
+        } else if (state.screen === 'shop_items' && canManageShopItems()) {
             panel.appendChild(buildShopItemsScreen());
-        } else if (state.screen === 'runtime_control' && state.viewer.isHighCommand) {
+        } else if (state.screen === 'runtime_control' && canManageRuntimeControl()) {
             panel.appendChild(buildRuntimeControlScreen());
         } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand) {
             panel.appendChild(buildXpTiersScreen());
@@ -3248,6 +3496,21 @@
         });
         tabs.appendChild(myTab);
 
+        // PARTNERSHIPS -- owner, verbatim: "a partnership tab should be
+        // shown on all tablets as a tab... high command is a handler or a
+        // k9 and should have control over it also but the partnership tab
+        // should show whos there partners." ALWAYS shown, same as Home/My
+        // Record/Commands -- UNCONDITIONAL, deliberately NOT gated on
+        // canManageRoster/isHighCommand the way Console below is: high
+        // command sees THIS SAME tab (their own partnerships, exactly like
+        // anyone else), plus an extra admin lookup section rendered ON TOP
+        // of that same screen body (buildPartnershipsScreen()'s own header
+        // comment) -- never a second, separate high-command-only screen.
+        var partnershipsTab = mkButton(S('tab_partnerships'), 'k9tablet-tab' + (state.screen === 'partnerships' ? ' k9tablet-tab--active' : ''), function () {
+            goToPartnershipsScreen();
+        });
+        tabs.appendChild(partnershipsTab);
+
         // COMMANDS -- the command reference (this pass, "36 commands, no
         // way for a player to discover them in-game"). ALWAYS shown, same
         // as Home/My Record immediately above and for the identical
@@ -3263,6 +3526,20 @@
             render();
         });
         tabs.appendChild(commandsTab);
+
+        // HELP -- owner-directed teaching guide (this pass, see
+        // buildHelpScreen()'s own header for the full design). ALWAYS
+        // shown, same reasoning and same "presentation over data every
+        // resolved viewer already has" posture as Home/Commands
+        // immediately above -- a brand-new uncertified arrival needs this
+        // tab MORE than anyone, never less, so it is never hidden behind
+        // any capability check.
+        var helpTab = mkButton(S('tab_help'), 'k9tablet-tab' + (state.screen === 'help' ? ' k9tablet-tab--active' : ''), function () {
+            state.screen = 'help';
+            render();
+            loadMyRecord();
+        });
+        tabs.appendChild(helpTab);
 
         // Command Console -- ONLY meaningful for a viewer who actually has
         // console access. Previously appended unconditionally (safe only
@@ -3288,12 +3565,12 @@
             tabs.appendChild(consoleTab);
         }
 
-        // High command only, matching the SAME gate the theme editor
-        // controls themselves use -- see buildThemeScreen(). GetTheme
-        // itself has no such gate (applied for every viewer regardless of
-        // which tab, or whether any tab, is even showing), so a non-high-
-        // command viewer still sees the current theme applied; they just
-        // never see a way to change it.
+        // High command only -- no server-side delegation exists for the
+        // guided-flow hub itself (it wraps four admin jobs, some of which
+        // ARE high-command-only underneath -- see canManageTabletTheme()'s
+        // own doc comment for the four capabilities that DO delegate, and
+        // Cert Tiers/Permission Keys/XP Tiers/K9 Profiles below, which do
+        // not).
         if (state.viewer.isHighCommand) {
             // GUIDED FLOWS (this pass) -- see buildFlowsHubScreen()'s own
             // header. Placed FIRST in this block, before every individual
@@ -3308,14 +3585,34 @@
                 goToFlowsScreen();
             });
             tabs.appendChild(flowsTab);
+        }
 
+        // Tablet theming -- NOT high-command-only: server/runtimecontrol.lua's
+        // own CanManageTabletTheme(source) is `IsHighCommand(source) OR
+        // HasPermission(citizenid, 'k9.tablettheme') == true` (verified
+        // directly against source, tests/runtimecontrol_spec.lua:523) -- an
+        // officer holding a delegated 'k9.tablettheme' grant (minted via
+        // the Permission Keys screen, granted like any other custom
+        // permission) can save/reset the theme just as validly as high
+        // command. canManageTabletTheme() mirrors canViewAudit()'s own
+        // isHighCommand-OR-capability idiom -- see that function's doc
+        // comment (this file's PREVIOUS comment here, "matching the SAME
+        // gate the theme editor controls themselves use", stated the real
+        // server-side gate incorrectly as high-command-only; corrected).
+        // GetTheme itself has no gate at all (applied for every viewer
+        // regardless of which tab, or whether any tab, is even showing),
+        // so a viewer who fails this check still sees the current theme
+        // applied; they just never see a way to change it.
+        if (canManageTabletTheme()) {
             var themeTab = mkButton(S('tab_theme'), 'k9tablet-tab' + (state.screen === 'theme' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'theme';
                 render();
                 loadTheme();
             });
             tabs.appendChild(themeTab);
+        }
 
+        if (state.viewer.isHighCommand) {
             // Certification tier editing -- SAME high-command gate (this
             // is a UX convenience only: CanManageCertTiers is re-verified
             // server-side on every one of the four callbacks regardless of
@@ -3353,13 +3650,19 @@
                 loadPermissionKeys();
             });
             tabs.appendChild(permissionKeysTab);
+        }
 
-            // K9 Supply Shop location management -- SAME high-command gate
-            // (server/equipmentshop.lua's own CanManageShopLocations is the
-            // real, re-verified-per-call gate; this tab hides the screen
-            // from everyone else as a convenience only). Fresh entry clears
-            // any leftover draft/refusal, same reset discipline as every
-            // other tab switch on this page.
+        // K9 Supply Shop location management -- NOT high-command-only:
+        // server/equipmentshop.lua's own CanManageShopLocations(source) is
+        // `IsHighCommand(source) OR HasPermission(citizenid,
+        // 'k9.equipmentshoplocations') == true` (verified directly against
+        // source, tests/equipmentshop_spec.lua:839). canManageShopLocations()
+        // mirrors canViewAudit()'s own isHighCommand-OR-capability idiom --
+        // see that function's doc comment. (This file's PREVIOUS comment
+        // here called this "SAME high-command gate" -- stated incorrectly;
+        // corrected.) Fresh entry clears any leftover draft/refusal, same
+        // reset discipline as every other tab switch on this page.
+        if (canManageShopLocations()) {
             var shopLocationsTab = mkButton(S('tab_shop_locations'), 'k9tablet-tab' + (state.screen === 'shop_locations' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'shop_locations';
                 state.shopLocationDraft = null;
@@ -3368,23 +3671,29 @@
                 loadShopLocations();
             });
             tabs.appendChild(shopLocationsTab);
+        }
 
-            // K9 Supply Shop ITEM CATALOG editing -- SAME high-command gate
-            // (server/equipmentshop.lua's own CanManageShopItems is the
-            // real, re-verified-per-call gate; this tab hides the screen
-            // from everyone else as a convenience only). Sits alongside
-            // the Shop Locations tab immediately above -- same "K9 Supply
-            // Shop" domain, split into two tabs because WHICH items are
-            // sold (this tab) vs. WHERE the shop ped stands (the tab
-            // above) are two independent server-side authorization keys.
-            // Fresh entry clears any leftover draft/refusal, same reset
-            // discipline as every other tab switch on this page. Also
-            // opportunistically loads the certification-tier catalog
-            // (needed for this screen's own "Required Tier" picker) --
-            // SAME best-effort posture as openPerson()'s own
-            // loadCertTiers() call: a caller who cannot list tiers simply
-            // sees the raw tier key as plain text instead of a labelled
-            // dropdown option, never a broken control.
+        // K9 Supply Shop ITEM CATALOG editing -- NOT high-command-only:
+        // server/equipmentshop.lua's own CanManageShopItems(source) is
+        // `IsHighCommand(source) OR HasPermission(citizenid,
+        // 'k9.equipmentshopitems') == true` (verified directly against
+        // source, tests/equipmentshopitems_spec.lua:616). canManageShopItems()
+        // mirrors canViewAudit()'s own isHighCommand-OR-capability idiom --
+        // see that function's doc comment. (This file's PREVIOUS comment
+        // here called this "SAME high-command gate" -- stated incorrectly;
+        // corrected.) Sits alongside the Shop Locations tab immediately
+        // above -- same "K9 Supply Shop" domain, split into two tabs
+        // because WHICH items are sold (this tab) vs. WHERE the shop ped
+        // stands (the tab above) are two independent server-side
+        // authorization keys, each independently delegable. Fresh entry
+        // clears any leftover draft/refusal, same reset discipline as
+        // every other tab switch on this page. Also opportunistically
+        // loads the certification-tier catalog (needed for this screen's
+        // own "Required Tier" picker) -- SAME best-effort posture as
+        // openPerson()'s own loadCertTiers() call: a caller who cannot
+        // list tiers simply sees the raw tier key as plain text instead of
+        // a labelled dropdown option, never a broken control.
+        if (canManageShopItems()) {
             var shopItemsTab = mkButton(S('tab_shop_items'), 'k9tablet-tab' + (state.screen === 'shop_items' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'shop_items';
                 state.shopItemDraft = null;
@@ -3395,13 +3704,20 @@
                 loadCertTiers();
             });
             tabs.appendChild(shopItemsTab);
+        }
 
-            // Runtime feature control + tuning -- SAME high-command gate
-            // (server/runtimecontrol.lua's own CanManageRuntimeControl is
-            // the real, re-verified-per-call gate; this tab hides the
-            // screen from everyone else as a convenience only). Fresh
-            // entry clears any leftover in-progress tunable edit/refusal,
-            // same reset discipline as every other tab switch on this page.
+        // Runtime feature control + tuning -- NOT high-command-only:
+        // server/runtimecontrol.lua's own CanManageRuntimeControl(source)
+        // is `IsHighCommand(source) OR HasPermission(citizenid,
+        // 'k9.runtimecontrol') == true` (verified directly against source,
+        // tests/runtimecontrol_spec.lua:523). canManageRuntimeControl()
+        // mirrors canViewAudit()'s own isHighCommand-OR-capability idiom --
+        // see that function's doc comment. (This file's PREVIOUS comment
+        // here called this "SAME high-command gate" -- stated incorrectly;
+        // corrected.) Fresh entry clears any leftover in-progress tunable
+        // edit/refusal, same reset discipline as every other tab switch on
+        // this page.
+        if (canManageRuntimeControl()) {
             var runtimeControlTab = mkButton(S('tab_runtime_control'), 'k9tablet-tab' + (state.screen === 'runtime_control' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'runtime_control';
                 state.runtimeFeatureActionError = null;
@@ -3412,7 +3728,9 @@
                 loadRuntimeTunables();
             });
             tabs.appendChild(runtimeControlTab);
+        }
 
+        if (state.viewer.isHighCommand) {
             // XP Rank Editor -- SAME high-command gate as every tab in this
             // block (a UX convenience only: CanManageXPTiers is re-verified
             // server-side on every one of the two callbacks this screen
@@ -3660,7 +3978,14 @@
     /** @returns {string} */
     function homeRoleLabel() {
         if (state.viewer.isHighCommand) return S('home_role_high_command');
-        if (state.isK9Model) return S('home_role_k9');
+        // SERVER-TRUSTWORTHY FIRST (this pass): state.viewer.isK9 comes from
+        // server/tablet.lua's HasK9Role(source) -- model-independent,
+        // DB-backed, re-verified every request (see that field's own doc
+        // comment in server/tablet.lua). state.isK9Model (client-local
+        // IsOwnModelK9(), "is my own ped CURRENTLY this model") is kept only
+        // as a fallback for the instant after open before viewer resolves,
+        // and never overrides a definite server answer.
+        if (state.viewer.isK9 === true || state.isK9Model) return S('home_role_k9');
         if (homeCertificationCounts().active > 0) return S('home_role_handler');
         return S('home_role_uncertified');
     }
@@ -3688,7 +4013,11 @@
         var badges = mk('div', { class: 'k9tablet-home-badges' });
         badges.appendChild(mk('span', { class: 'k9tablet-home-role-badge', text: homeRoleLabel() }));
 
-        if (state.isPartnered) {
+        // SERVER-TRUSTWORTHY FIRST -- see homeRoleLabel()'s identical
+        // preference note just above for why state.viewer.isPartnered
+        // (server/tablet.lua's GetActivePartnerCitizenId) leads over the
+        // client-local state.isPartnered fallback.
+        if (state.viewer.isPartnered === true || state.isPartnered) {
             badges.appendChild(mk('span', { class: 'k9tablet-feature-state k9tablet-feature-state--available', text: S('home_partnered_badge') }));
         } else {
             badges.appendChild(mk('span', { class: 'k9tablet-muted', text: S('home_not_partnered_badge') }));
@@ -3734,12 +4063,38 @@
 
         var grid = mk('div', { class: 'k9tablet-home-actions' });
         grid.appendChild(buildHomeActionCard(S('home_view_my_record_label'), S('home_view_my_record_hint'), goToMyRecordScreen));
+        grid.appendChild(buildHomeActionCard(S('home_view_partners_label'), S('home_view_partners_hint'), goToPartnershipsScreen));
 
         if (homeCanManageRoster()) {
             grid.appendChild(buildHomeActionCard(S('home_open_console_label'), S('home_open_console_hint'), goToConsoleScreen));
         }
 
         section.appendChild(grid);
+        return section;
+    }
+
+    /** K9-FLAVORED landing body -- see buildHomeScreen()'s own role-split
+     * comment for the full reasoning. Leads with progression (xpLine() --
+     * the SAME data/format buildMyRecordScreen() already renders, never a
+     * second XP presentation invented for this screen) and the
+     * Partnerships link, ahead of the shared quick-actions grid a
+     * non-K9 viewer sees instead -- "a K9 sees its own condition, its
+     * abilities, its partner, its progression" (owner). Console access is
+     * never offered here even for the rare K9 who also holds it -- the
+     * Command Console tab itself is still one click away in the tab bar
+     * regardless; this body is about being the dog, not about
+     * administering.
+     * @returns {Element} */
+    function buildK9HomeBody() {
+        var section = mk('div', { class: 'k9tablet-home-section k9tablet-home-k9' });
+        section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_k9_progression_heading') }));
+        section.appendChild(mk('p', { class: 'k9tablet-xp-line', text: xpLine(state.myRecord.xp, state.myRecord.tierLabel) }));
+
+        var grid = mk('div', { class: 'k9tablet-home-actions' });
+        grid.appendChild(buildHomeActionCard(S('home_view_partners_label'), S('home_view_partners_hint'), goToPartnershipsScreen));
+        grid.appendChild(buildHomeActionCard(S('home_view_my_record_label'), S('home_view_my_record_hint'), goToMyRecordScreen));
+        section.appendChild(grid);
+
         return section;
     }
 
@@ -3780,7 +4135,9 @@
         return mkButton(label + ' →', 'k9tablet-btn k9tablet-home-tool-link', onClick);
     }
 
-    /** HIGH COMMAND ONLY (see buildHomeScreen()'s own call site) -- the
+    /** HIGH-COMMAND-OR-DELEGATED (see buildHomeScreen()'s own call site,
+     * widened this pass to also call this for a non-high-command viewer
+     * holding one of the four delegable capabilities below) -- the
      * PROGRESSIVE-DISCLOSURE section: every admin screen this page has,
      * grouped under one heading, below the two or three actions an
      * ordinary viewer wants. Reuses the EXISTING tab_* labels
@@ -3790,7 +4147,18 @@
      * requirement. Each link is a plain S('tab_x')-labelled button, not a
      * hinted card like buildHomeActionCard() above -- deliberately
      * LOWER-EMPHASIS than the two common actions, never competing with
-     * them for attention. */
+     * them for attention.
+     *
+     * PER-LINK GATING (this pass, matching this section's own PRE-EXISTING
+     * Audit-link pattern immediately below): Flows/Cert Tiers/Permission
+     * Keys/XP Tiers/K9 Profiles have no server-side delegation at all and
+     * stay isHighCommand-only, exactly like buildTabs()'s own identical
+     * split (see that function's own comments for the same five names).
+     * Theme/Shop Locations/Shop Items/Runtime Control use their
+     * canManageX() capability gate instead, so a delegated non-high-command
+     * officer -- who this section is now BUILT for at all, per the call
+     * site above -- sees exactly the links buildTabs() would also show
+     * them, never a shortcut to a tab they do not have. */
     function buildHomeHighCommandTools() {
         var section = mk('div', { class: 'k9tablet-home-section k9tablet-home-highcommand' });
         section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_high_command_heading') }));
@@ -3799,16 +4167,35 @@
         var grid = mk('div', { class: 'k9tablet-home-tools' });
         // GUIDED FLOWS (this pass) -- see buildFlowsHubScreen()'s own
         // header. Listed FIRST, ahead of every individual screen below,
-        // as the RECOMMENDED path for the four jobs it covers.
-        grid.appendChild(buildHomeToolLink(S('tab_flows'), goToFlowsScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_theme'), goToThemeScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_cert_tiers'), goToCertTiersScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_permission_keys'), goToPermissionKeysScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_shop_locations'), goToShopLocationsScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_shop_items'), goToShopItemsScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_runtime_control'), goToRuntimeControlScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_xp_tiers'), goToXpTiersScreen));
-        grid.appendChild(buildHomeToolLink(S('tab_k9_profiles'), goToK9ProfilesScreen));
+        // as the RECOMMENDED path for the four jobs it covers. High-
+        // command-only -- no server-side delegation exists for this hub.
+        if (state.viewer.isHighCommand) {
+            grid.appendChild(buildHomeToolLink(S('tab_flows'), goToFlowsScreen));
+        }
+        // Theme/Shop Locations/Shop Items/Runtime Control -- NOT high-
+        // command-only, see canManageTabletTheme()'s own doc comment for
+        // the full verified server-side delegation contract each of these
+        // four mirrors.
+        if (canManageTabletTheme()) {
+            grid.appendChild(buildHomeToolLink(S('tab_theme'), goToThemeScreen));
+        }
+        if (state.viewer.isHighCommand) {
+            grid.appendChild(buildHomeToolLink(S('tab_cert_tiers'), goToCertTiersScreen));
+            grid.appendChild(buildHomeToolLink(S('tab_permission_keys'), goToPermissionKeysScreen));
+        }
+        if (canManageShopLocations()) {
+            grid.appendChild(buildHomeToolLink(S('tab_shop_locations'), goToShopLocationsScreen));
+        }
+        if (canManageShopItems()) {
+            grid.appendChild(buildHomeToolLink(S('tab_shop_items'), goToShopItemsScreen));
+        }
+        if (canManageRuntimeControl()) {
+            grid.appendChild(buildHomeToolLink(S('tab_runtime_control'), goToRuntimeControlScreen));
+        }
+        if (state.viewer.isHighCommand) {
+            grid.appendChild(buildHomeToolLink(S('tab_xp_tiers'), goToXpTiersScreen));
+            grid.appendChild(buildHomeToolLink(S('tab_k9_profiles'), goToK9ProfilesScreen));
+        }
         if (canViewAudit()) {
             grid.appendChild(buildHomeToolLink(S('tab_audit'), goToAuditScreen));
         }
@@ -3839,10 +4226,47 @@
         }
 
         wrap.appendChild(buildHomeIdentityCard());
-        wrap.appendChild(buildHomeQuickActions());
+
+        // ROLE-DRIVEN LANDING BODY (this pass, coder-ui) -- owner, verbatim,
+        // twice: "a handler and the k9 are both separate and if not fix
+        // it" / "one deals with the k9 and the other deals with the
+        // handler roles etc." SERVER-TRUSTWORTHY split
+        // (state.viewer.isK9 -- server/tablet.lua's HasK9Role(source),
+        // model-independent, re-verified every request -- see that field's
+        // own doc comment server-side), deliberately NEVER the client-local
+        // state.isK9Model cosmetic flag for this decision (homeRoleLabel()'s
+        // badge text still tolerates that as a same-instant fallback; this
+        // structural choice does not). Still ONE screen id ('home'), ONE
+        // tab, ONE set of server callbacks feeding both branches -- per
+        // this pass's own "no forked entry point" instruction, only the
+        // CONTENT differs: a K9 sees its progression and its partner
+        // emphasized first (buildK9HomeBody()); everyone else keeps the
+        // existing quick-actions body, now also carrying its own
+        // Partnerships link (buildHomeQuickActions()). buildHomeReadyAbilities()
+        // (the feature-ready list) is shared by both -- it is the same
+        // underlying data and heading for every viewer, not something this
+        // split has any reason to fork.
+        if (state.viewer.isK9 === true) {
+            wrap.appendChild(buildK9HomeBody());
+        } else {
+            wrap.appendChild(buildHomeQuickActions());
+        }
         wrap.appendChild(buildHomeReadyAbilities());
 
-        if (state.viewer.isHighCommand) {
+        // Widened this pass (was isHighCommand-only) -- a non-high-command
+        // officer holding any ONE of the four delegable capabilities
+        // (Theme/Shop Locations/Shop Items/Runtime Control -- see
+        // canManageTabletTheme()'s own doc comment) must still get this
+        // section built at all, or buildHomeHighCommandTools()'s own new
+        // per-link canManageX() checks are unreachable dead code: nobody
+        // who could pass one would ever have the section CALLED for them
+        // in the first place. Every link inside still gates itself
+        // individually (isHighCommand for the five non-delegable ones,
+        // canManageX()/canViewAudit() for the rest) -- this OR only
+        // decides whether the section is worth building at all for this
+        // viewer, never which links inside it show.
+        if (state.viewer.isHighCommand || canManageTabletTheme() || canManageShopLocations()
+            || canManageShopItems() || canManageRuntimeControl()) {
             wrap.appendChild(buildHomeHighCommandTools());
         }
 
@@ -3980,6 +4404,345 @@
         tr.appendChild(statusTd);
 
         return tr;
+    }
+
+    // ------------------------------------------------------------------
+    // HELP -- owner's own words, verbatim: "a separate tab that teaches
+    // you how to use the entire tablet, list all commands and what they
+    // do etc, it should be super detailed but dumbed down where if
+    // someone is an idiot they would easily be able to understand."
+    // DELIBERATELY NOT the Commands Reference screen above -- that page
+    // is a lookup table (command in, gate/status out). This page is a
+    // WALKTHROUGH: what to do first, what every tab you can see is for,
+    // what every command you personally can use actually does in plain
+    // English, how to do the handful of things almost everyone needs to
+    // do, and what a refusal message really means and who can fix it.
+    //
+    // ONE SCREEN, ROLE-FILTERED CONTENT -- never a different screen per
+    // role (the same "one consistent layout" posture buildHomeScreen()
+    // already established). A K9 (state.isK9Model) sees the K9 track;
+    // anyone else sees the Handler track. High command is NOT a fourth,
+    // separate track -- per this task's own framing, it is a handler or
+    // K9 who ALSO administers, so state.viewer.isHighCommand ADDS an
+    // extra section on top of whichever base track already applies, it
+    // never replaces one. Every visibility check below is the SAME
+    // read-only, display-only signal (state.isK9Model, certification
+    // count, canAccessConsole(), canViewAudit(), state.viewer.isHighCommand)
+    // every other screen on this page already uses to decide what to
+    // SHOW, never what to ALLOW -- see THE SECURITY RULE at the top of
+    // this file.
+    //
+    // DERIVE, DON'T RETYPE -- the two sections most likely to rot if
+    // hand-typed are instead built directly from data this file already
+    // verifies elsewhere, so they can never fall out of sync with the
+    // real tablet:
+    //   - "Commands You Can Use" (buildHelpCommandsSection()) reuses
+    //     COMMAND_REFERENCE and buildCommandReferenceRow() VERBATIM --
+    //     the exact same array and row renderer the Commands Reference
+    //     screen above uses -- filtered by `adminOnly`, never
+    //     re-described. A command added to COMMAND_REFERENCE
+    //     automatically appears here too, and
+    //     tests/commandreferenceregistry_spec.lua's own drift guard
+    //     against the real RegisterCommand(...) names protects this
+    //     section for free.
+    //   - The two Guided Flows step sequences quoted in
+    //     buildHelpTasksSection() (Certify Someone / Tune the Server)
+    //     are rendered by calling flowOnboardStepLabels()/
+    //     flowTuningStepLabels() live, never a second, hand-copied list
+    //     of their step names -- see that function's own header.
+    //   - Three quoted button labels ({certifyLabel}/{assignLabel}/
+    //     {revertLabel} below) are filled from S('certify_label')/
+    //     S('role_assign_label')/S('role_revert_label') at render time --
+    //     the SAME `tablet` locale group this whole page already
+    //     resolves everything else from -- rather than a second, hand-typed
+    //     copy of button text that already exists one screen over.
+    // "Every Tab, Explained" (HELP_TAB_CATALOG) and the handful of
+    // step-by-step task walkthroughs in buildHelpTasksSection() CANNOT be
+    // derived the same way (they are prose, not data):
+    //   - HELP_TAB_CATALOG's own header names the drift guard
+    //     (tests/helptabcoverage_spec.lua) that keeps ITS list honest
+    //     against buildTabs()'s own real tab_* labels instead.
+    //   - A handful of walkthrough steps below quote real, VERIFIED
+    //     button/menu text that lives in a DIFFERENT locale namespace
+    //     this page has no run-time access to (client/partnership.lua's
+    //     "Partner Up", client/radial.lua's "Break Partnership",
+    //     client/vehicle.lua's two vehicle labels, client/search.lua's
+    //     two search labels, client/medkit.lua's treat label, and
+    //     client/main.lua's DenyK9UIAccess() notify text) --
+    //     tests/helpquotedlabels_spec.lua guards those specific
+    //     quotes against locales/en.json's real values instead, so a
+    //     rename over there fails a named test here rather than quietly
+    //     leaving this page wrong. See this task's own report for the
+    //     full list.
+    // ------------------------------------------------------------------
+
+    function helpAlwaysVisible() { return true; }
+    /** @returns {boolean} -- same signal buildTabs() itself gates every
+     * high-command-only tab button on (state.viewer.isHighCommand), never
+     * a second, independently-derived copy. */
+    function helpHighCommandOnly() { return !!(state.viewer && state.viewer.isHighCommand === true); }
+
+    /** @type {Array<{tabLabelKey:string, descKey:string, visible:() => boolean}>}
+     * See this block's own header for the drift guard
+     * (tests/helptabcoverage_spec.lua) that keeps this list's `tabLabelKey`
+     * set matched against every real `tab_*` DEFAULT_STRINGS entry
+     * buildTabs() actually uses. */
+    var HELP_TAB_CATALOG = [
+        { tabLabelKey: 'tab_home', descKey: 'help_tab_home_desc', visible: helpAlwaysVisible },
+        { tabLabelKey: 'tab_my_record', descKey: 'help_tab_my_record_desc', visible: helpAlwaysVisible },
+        // Partnerships tab (sibling pass, landed concurrently with this
+        // one) -- ALWAYS shown, same as every other entry on this line,
+        // per that tab's own buildTabs() comment: "high command sees THIS
+        // SAME tab... plus an extra admin lookup section rendered ON TOP
+        // of that same screen body", the identical additive-not-replacement
+        // posture this Help screen already uses throughout.
+        { tabLabelKey: 'tab_partnerships', descKey: 'help_tab_partnerships_desc', visible: helpAlwaysVisible },
+        { tabLabelKey: 'tab_commands', descKey: 'help_tab_commands_desc', visible: helpAlwaysVisible },
+        { tabLabelKey: 'tab_help', descKey: 'help_tab_help_desc', visible: helpAlwaysVisible },
+        { tabLabelKey: 'tab_console', descKey: 'help_tab_console_desc', visible: canAccessConsole },
+        { tabLabelKey: 'tab_flows', descKey: 'help_tab_flows_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_theme', descKey: 'help_tab_theme_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_cert_tiers', descKey: 'help_tab_cert_tiers_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_permission_keys', descKey: 'help_tab_permission_keys_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_shop_locations', descKey: 'help_tab_shop_locations_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_shop_items', descKey: 'help_tab_shop_items_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_runtime_control', descKey: 'help_tab_runtime_control_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_xp_tiers', descKey: 'help_tab_xp_tiers_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_k9_profiles', descKey: 'help_tab_k9_profiles_desc', visible: helpHighCommandOnly },
+        { tabLabelKey: 'tab_audit', descKey: 'help_tab_audit_desc', visible: canViewAudit },
+    ];
+
+    function buildHelpStartHereSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_start_heading') }));
+
+        var stepKeys = state.isK9Model
+            ? ['help_start_k9_1', 'help_start_k9_2', 'help_start_k9_3', 'help_start_k9_4', 'help_start_k9_5']
+            : ['help_start_handler_1', 'help_start_handler_2', 'help_start_handler_3', 'help_start_handler_4', 'help_start_handler_5', 'help_start_handler_6'];
+        for (var i = 0; i < stepKeys.length; i++) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S(stepKeys[i]) }));
+        }
+
+        if (helpHighCommandOnly()) {
+            wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S('help_start_high_command_heading') }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_start_high_command_intro') }));
+            var hcKeys = ['help_start_high_command_1', 'help_start_high_command_2', 'help_start_high_command_3', 'help_start_high_command_4'];
+            for (var j = 0; j < hcKeys.length; j++) {
+                wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S(hcKeys[j]) }));
+            }
+        }
+
+        return wrap;
+    }
+
+    function buildHelpTabsSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_tabs_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_tabs_intro') }));
+
+        for (var i = 0; i < HELP_TAB_CATALOG.length; i++) {
+            var entry = HELP_TAB_CATALOG[i];
+            if (!entry.visible()) continue;
+            wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S(entry.tabLabelKey) }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S(entry.descKey) }));
+        }
+
+        return wrap;
+    }
+
+    /** @param {Array<{command:string,adminOnly:boolean,usageKey:string,doesKey:string,needsKey:string,gate:object,defaultKeybind?:string}>} entries */
+    function buildHelpCommandTable(entries) {
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('cmdref_column_command'), S('cmdref_column_does'), S('cmdref_column_needs'), S('status_column')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < entries.length; i++) {
+            tbody.appendChild(buildCommandReferenceRow(entries[i]));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    function buildHelpCommandsSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_commands_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_commands_intro') }));
+
+        for (var c = 0; c < COMMAND_REFERENCE_CATEGORIES.length; c++) {
+            var category = COMMAND_REFERENCE_CATEGORIES[c];
+            var rows = [];
+            for (var i = 0; i < COMMAND_REFERENCE.length; i++) {
+                var entry = COMMAND_REFERENCE[i];
+                if (entry.category === category.key && !entry.adminOnly) rows.push(entry);
+            }
+            if (rows.length === 0) continue;
+            wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S(category.labelKey) }));
+            wrap.appendChild(buildHelpCommandTable(rows));
+        }
+
+        // ADDITIVE ONLY -- high command sees the base list above PLUS this,
+        // never a replacement for it (this screen's own header, "high
+        // command is a handler or K9 who also administers").
+        if (helpHighCommandOnly()) {
+            wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_commands_admin_heading') }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_commands_admin_intro') }));
+            for (var c2 = 0; c2 < COMMAND_REFERENCE_CATEGORIES.length; c2++) {
+                var category2 = COMMAND_REFERENCE_CATEGORIES[c2];
+                var rows2 = [];
+                for (var j = 0; j < COMMAND_REFERENCE.length; j++) {
+                    var entry2 = COMMAND_REFERENCE[j];
+                    if (entry2.category === category2.key && entry2.adminOnly) rows2.push(entry2);
+                }
+                if (rows2.length === 0) continue;
+                wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S(category2.labelKey) }));
+                wrap.appendChild(buildHelpCommandTable(rows2));
+            }
+        }
+
+        return wrap;
+    }
+
+    /** @param {string} heading @param {string[]} paragraphs -- already
+     * resolved (S()/formatTemplate()) text, not keys, since several
+     * callers below need to interpolate a live label into one line. */
+    function buildHelpTaskBlock(heading, paragraphs) {
+        var block = mk('div', { class: 'k9tablet-help-task' });
+        block.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: heading }));
+        for (var i = 0; i < paragraphs.length; i++) {
+            block.appendChild(mk('p', { class: 'k9tablet-hint', text: paragraphs[i] }));
+        }
+        return block;
+    }
+
+    function buildHelpTasksSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_tasks_heading') }));
+
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_get_certified_heading'), [
+            S('help_task_get_certified_1'),
+            S('help_task_get_certified_2'),
+            formatTemplate(S('help_task_get_certified_3_template'), { certifyLabel: S('certify_label') }),
+        ]));
+
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_partner_up_heading'), [
+            S('help_task_partner_up_1'),
+            S('help_task_partner_up_2'),
+            S('help_task_partner_up_3'),
+            S('help_task_partner_up_4'),
+        ]));
+
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_vehicle_heading'), [
+            S('help_task_vehicle_1'),
+            S('help_task_vehicle_2'),
+            S('help_task_vehicle_3'),
+        ]));
+
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_search_heading'), [
+            S('help_task_search_1'),
+            S('help_task_search_2'),
+            S('help_task_search_3'),
+        ]));
+
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_treat_heading'), [
+            S('help_task_treat_1'),
+            S('help_task_treat_2'),
+            S('help_task_treat_3'),
+        ]));
+
+        // ADDITIVE ONLY, same posture as buildHelpCommandsSection() above.
+        if (helpHighCommandOnly()) {
+            wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_certify_someone_heading'), [
+                S('help_task_hc_certify_someone_1'),
+                formatTemplate(S('help_task_hc_certify_someone_2_template'), { certifyLabel: S('certify_label') }),
+                S('help_task_hc_certify_someone_3'),
+                formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowOnboardStepLabels().join(' → ') }),
+            ]));
+
+            wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_assign_k9_heading'), [
+                S('help_task_hc_assign_k9_1'),
+                formatTemplate(S('help_task_hc_assign_k9_2_template'), { assignLabel: S('role_assign_label') }),
+                formatTemplate(S('help_task_hc_assign_k9_3_template'), { revertLabel: S('role_revert_label') }),
+            ]));
+
+            wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_toggle_feature_heading'), [
+                S('help_task_hc_toggle_feature_1'),
+                S('help_task_hc_toggle_feature_2'),
+                S('help_task_hc_toggle_feature_3'),
+                formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowTuningStepLabels().join(' → ') }),
+            ]));
+
+            wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_check_history_heading'), [
+                S('help_task_hc_check_history_1'),
+                S('help_task_hc_check_history_2'),
+                S('help_task_hc_check_history_3'),
+            ]));
+        }
+
+        return wrap;
+    }
+
+    /** Every (title, body) pair below is role-agnostic ON PURPOSE -- a
+     * high-command viewer can hit a certification-flavored refusal just as
+     * easily as an ordinary handler can hit an authorization-flavored one
+     * (e.g. attempting an action a colleague's grant covers but theirs
+     * does not), so this list is never filtered by role, unlike every
+     * other section on this screen. */
+    function buildHelpTroubleshootingSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_trouble_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_trouble_intro') }));
+
+        var pairs = [
+            ['help_trouble_no_k9_access_title', 'help_trouble_no_k9_access_body'],
+            ['help_trouble_not_certified_title', 'help_trouble_not_certified_body'],
+            ['help_trouble_feature_off_title', 'help_trouble_feature_off_body'],
+            ['help_trouble_needs_grant_title', 'help_trouble_needs_grant_body'],
+            ['help_trouble_rate_limited_title', 'help_trouble_rate_limited_body'],
+            ['help_trouble_self_cert_disabled_title', 'help_trouble_self_cert_disabled_body'],
+            ['help_trouble_target_offline_title', 'help_trouble_target_offline_body'],
+            ['help_trouble_insufficient_authorization_title', 'help_trouble_insufficient_authorization_body'],
+        ];
+        for (var i = 0; i < pairs.length; i++) {
+            wrap.appendChild(mk('h3', { class: 'k9tablet-specializations-heading', text: S(pairs[i][0]) }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S(pairs[i][1]) }));
+        }
+
+        return wrap;
+    }
+
+    /** THE HELP SCREEN -- see this block's own header for the full design.
+     * No loading/error gate on state.myRecord (unlike Home/My Record):
+     * every section here is either static teaching prose or already
+     * null-safe against a not-yet-loaded state.myRecord (homeCertificationCounts()/
+     * commandReferenceStatus() both already tolerate that -- see their own
+     * doc comments), the same posture buildCommandReferenceScreen() above
+     * already takes for the identical reason. */
+    function buildHelpScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen k9tablet-help' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('help_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('help_intro_line1') }));
+
+        var roleNoteKey = state.isK9Model ? 'help_role_note_k9'
+            : (homeCertificationCounts().active > 0 ? 'help_role_note_handler' : 'help_role_note_uncertified');
+        var roleNoteText = S(roleNoteKey);
+        if (helpHighCommandOnly()) {
+            roleNoteText = roleNoteText + ' ' + S('help_role_note_high_command_suffix');
+        }
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: roleNoteText }));
+
+        wrap.appendChild(buildHelpStartHereSection());
+        wrap.appendChild(buildHelpTabsSection());
+        wrap.appendChild(buildHelpCommandsSection());
+        wrap.appendChild(buildHelpTasksSection());
+        wrap.appendChild(buildHelpTroubleshootingSection());
+
+        return wrap;
     }
 
     // ---- My Record screen ----
@@ -4497,6 +5260,283 @@
         return wrap;
     }
 
+    // ------------------------------------------------------------------
+    // PARTNERSHIPS TAB (this pass, coder-ui) -- owner, verbatim, two
+    // passes: "both the k9 and handler should be able to pull up a list
+    // of there partners and levels etc in a tab... Past partnerships
+    // matter too, not just the active one" -- refined -- "a partnership
+    // tab should be shown on all tablets as a tab as it entails how many
+    // handlers a k9 has or how many k9s a handler has and high command is
+    // a handler or a k9 and should have control over it also but the
+    // partnership tab should show whos there partners."
+    //
+    // ONE TAB, EVERYONE, HIGH COMMAND INCLUDED (owner's own correction:
+    // "high command is not a fourth species... a handler or a k9... and
+    // also administers") -- buildPartnershipsScreen() below renders the
+    // SAME personal section for every viewer (their own current + past
+    // partnerships), with an EXTRA admin lookup section on top for
+    // isHighCommand specifically -- never a separate screen for it (see
+    // buildTabs()'s own header comment on this same tab).
+    //
+    // "HOW MANY... HAS" IS A HISTORICAL COUNT, NEVER A CONCURRENT ONE --
+    // VERIFIED, not assumed (qa-tester/ad71ee3115acd466d's audit, this same
+    // pass): server/partnership.lua enforces at most one ACTIVE
+    // partnership per citizenid, in either role, at a time (two
+    // independent UNIQUE keys plus PartnershipEstablishMutex's own
+    // pre-INSERT re-check -- traced end to end with no race found). So a
+    // live "how many partners right now" count would always be 0 or 1 --
+    // meaningless. The count this screen shows is the length of the
+    // HISTORICAL list server/tablet.lua's tabletRequestMyPartnerships/
+    // tabletRequestPartnershipsForTarget return (every row this citizenid
+    // has ever held, active or ended -- k9_partnerships is append-only),
+    // exactly matching the owner's own clarified reading ("Past
+    // partnerships... is where the count comes from historically").
+    //
+    // NAMES, NEVER CITIZENIDS -- every partner shown here is
+    // `partnerName`/`endedByName`, server/tablet.lua's own ResolveDisplayName,
+    // confirmed offline-safe (a3c05728358946da4's contract): most of a
+    // citizenid's PAST partners are, by definition, not the person holding
+    // the tablet right now, and often not online at all.
+    //
+    // TENURE LEVEL IS NOT PRESENTED AS TAMPER-PROOF (coordinator-directed):
+    // server/partnership.lua's own PairTenureSeed anti-farm guard is
+    // disclosed as in-memory-only, reset by a resource restart -- nothing
+    // below uses words like "verified"/"certified"/"audited" for
+    // tenureTierGranted or the live tenure-progress enrichment; it is
+    // shown as plain informational data, same as XP elsewhere on this page.
+    // ------------------------------------------------------------------
+
+    function goToPartnershipsScreen() {
+        state.screen = 'partnerships';
+        render();
+        loadMyPartnerships();
+    }
+
+    /**
+     * One row of partnership HISTORY (active or ended) -- shared by the
+     * personal section and the high-command admin lookup below, so an
+     * officer never sees a richer/different shape for someone else than
+     * for their own history.
+     * @param {object} entry -- server/tablet.lua's per-row shape (see
+     *   CALLBACKS 7-9's own doc comment): { partnerCitizenid, partnerName,
+     *   role, active, establishedAtUnix, endedAtUnix, endedByName,
+     *   endedBySystemReason, tenureTierGranted, tenureProgress? }
+     * @returns {Element}
+     */
+    function buildPartnershipHistoryRow(entry) {
+        var row = mk('div', { class: 'k9tablet-partnership-row' });
+        row.appendChild(mk('span', { class: 'k9tablet-partnership-row-name', text: entry.partnerName }));
+
+        var roleText = entry.role === 'k9' ? S('partnership_role_value_k9') : S('partnership_role_value_handler');
+        row.appendChild(mk('span', { class: 'k9tablet-muted', text: S('partnership_role_label') + ': ' + roleText }));
+
+        var stateClass = entry.active ? 'k9tablet-feature-state--available' : 'k9tablet-feature-state--global_off';
+        var stateText = entry.active ? S('partnerships_state_active') : S('partnerships_state_ended');
+        row.appendChild(mk('span', { class: 'k9tablet-feature-state ' + stateClass, text: stateText }));
+
+        if (typeof entry.establishedAtUnix === 'number') {
+            row.appendChild(mk('span', { class: 'k9tablet-muted', text: S('partnerships_established_label') + ': ' + new Date(entry.establishedAtUnix * 1000).toLocaleDateString() }));
+        }
+
+        if (!entry.active) {
+            if (typeof entry.endedAtUnix === 'number') {
+                row.appendChild(mk('span', { class: 'k9tablet-muted', text: S('partnerships_ended_label') + ': ' + new Date(entry.endedAtUnix * 1000).toLocaleDateString() }));
+            }
+            var endedByText = null;
+            if (typeof entry.endedByName === 'string' && entry.endedByName.length > 0) {
+                endedByText = entry.endedByName;
+            } else if (typeof entry.endedBySystemReason === 'string' && entry.endedBySystemReason.length > 0) {
+                endedByText = formatTemplate(S('partnerships_ended_system_template'), { reason: entry.endedBySystemReason });
+            }
+            if (endedByText) {
+                row.appendChild(mk('span', { class: 'k9tablet-muted', text: S('partnerships_ended_by_label') + ': ' + endedByText }));
+            }
+        }
+
+        var tier = (typeof entry.tenureTierGranted === 'number') ? entry.tenureTierGranted : 0;
+        if (tier > 0) {
+            row.appendChild(mk('span', { class: 'k9tablet-muted', text: S('partnerships_tier_label') + ': ' + formatTemplate(S('partnerships_tier_value_template'), { tier: tier }) }));
+        }
+
+        return row;
+    }
+
+    /**
+     * Rich tier/duration detail for the CURRENT active partnership only --
+     * `entry.tenureProgress`, when present, is client/tablet.lua's own
+     * composition (tablet:requestMyPartnerships) with the ALREADY-SHIPPED
+     * getPartnershipTenureProgress result (tier/tierTitle/secondsUntilNextTier);
+     * absent for the high-command admin lookup (no target argument exists
+     * for that self-only server callback -- see server/tablet.lua's own
+     * doc comment), in which case this falls back to the plain
+     * `tenureTierGranted` number, same as any ended row.
+     * @param {object} entry
+     * @returns {Element}
+     */
+    function buildPartnershipTierDetail(entry) {
+        var wrap = mk('div', { class: 'k9tablet-partnership-tier' });
+        var progress = entry.tenureProgress;
+
+        if (progress && typeof progress === 'object') {
+            var tier = (typeof progress.tier === 'number') ? progress.tier : 0;
+            var tierText = (typeof progress.tierTitle === 'string' && progress.tierTitle.length > 0)
+                ? progress.tierTitle
+                : (tier > 0 ? formatTemplate(S('partnerships_tier_value_template'), { tier: tier }) : S('partnerships_tier_none'));
+            wrap.appendChild(mk('p', { class: 'k9tablet-partnership-line', text: S('partnerships_tier_label') + ': ' + tierText }));
+            if (typeof progress.secondsUntilNextTier === 'number' && progress.secondsUntilNextTier > 0) {
+                var days = Math.ceil(progress.secondsUntilNextTier / 86400);
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('partnerships_next_tier_countdown_template'), { days: days }) }));
+            }
+        } else {
+            var tenureTier = (typeof entry.tenureTierGranted === 'number') ? entry.tenureTierGranted : 0;
+            var text = tenureTier > 0 ? formatTemplate(S('partnerships_tier_value_template'), { tier: tenureTier }) : S('partnerships_tier_none');
+            wrap.appendChild(mk('p', { class: 'k9tablet-partnership-line', text: S('partnerships_tier_label') + ': ' + text }));
+        }
+
+        if (typeof entry.establishedAtUnix === 'number') {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_established_label') + ': ' + new Date(entry.establishedAtUnix * 1000).toLocaleDateString() }));
+        }
+        return wrap;
+    }
+
+    /**
+     * HIGH COMMAND ONLY -- owner: "high command... should have control
+     * over it also." Rendered ON TOP of the personal section by
+     * buildPartnershipsScreen() below, never a separate screen. Reuses the
+     * SAME "open by exact citizen ID" input pattern buildConsoleScreen()
+     * already established (idInput + open_by_id_label), so this needs no
+     * new input-box copy. THE SECURITY RULE applies here exactly as
+     * everywhere else on this page: the Force End button below is shown
+     * because state.viewer.isHighCommand made it worth building for this
+     * viewer, never because that is what makes tablet:forceEndPartnership
+     * permitted -- server/tablet.lua's CALLBACK 9 re-verifies IsHighCommand
+     * fresh from `source` on every call.
+     * @returns {Element}
+     */
+    function buildPartnershipsAdminSection() {
+        var wrap = mk('div', { class: 'k9tablet-home-section k9tablet-partnerships-admin' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('partnerships_admin_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_admin_hint') }));
+
+        var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
+        var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
+        idBar.appendChild(idInput);
+        idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
+            var id = (idInput.value || '').trim();
+            if (id.length === 0) return;
+            loadPartnershipsForTarget(id);
+        }));
+        wrap.appendChild(idBar);
+
+        if (state.partnershipsAdminLoading && !state.partnershipsAdminResult) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.partnershipsAdminError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.partnershipsAdminError) }));
+        }
+        if (!state.partnershipsAdminResult) {
+            return wrap;
+        }
+
+        var result = state.partnershipsAdminResult;
+        var targetName = (result.target && typeof result.target.name === 'string') ? result.target.name : '';
+        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: targetName }));
+
+        if (result.featureEnabled === false) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_feature_disabled') }));
+            return wrap;
+        }
+
+        var list = result.partnerships || [];
+        if (list.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_admin_none') }));
+            return wrap;
+        }
+
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('partnerships_count_summary_template'), { count: list.length }) }));
+        if (result.truncated) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('partnerships_truncated_notice_template'), { shown: list.length }) }));
+        }
+
+        var targetCitizenid = result.target && result.target.citizenid;
+        var historyWrap = mk('div', { class: 'k9tablet-partnership-history-list' });
+        for (var i = 0; i < list.length; i++) {
+            var entry = list[i];
+            var row = buildPartnershipHistoryRow(entry);
+            if (entry.active && typeof targetCitizenid === 'string' && targetCitizenid.length > 0) {
+                row.appendChild(mkConfirmButton(S('partnerships_force_end_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+                    forceEndPartnership(targetCitizenid);
+                }, { disabled: state.pendingAction }));
+            }
+            historyWrap.appendChild(row);
+        }
+        wrap.appendChild(historyWrap);
+
+        return wrap;
+    }
+
+    /** THE PARTNERSHIPS TAB'S SCREEN -- see this block's own header comment
+     * for the full contract/reasoning. Same loading/error/empty posture as
+     * every other data-driven screen on this page. */
+    function buildPartnershipsScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+
+        if (state.viewer && state.viewer.isHighCommand) {
+            wrap.appendChild(buildPartnershipsAdminSection());
+        }
+
+        if (state.myPartnershipsLoading && !state.myPartnerships) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.myPartnershipsError && !state.myPartnerships) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.myPartnershipsError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadMyPartnerships));
+            return wrap;
+        }
+        if (!state.myPartnerships) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        if (state.myPartnerships.featureEnabled === false) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_feature_disabled') }));
+            return wrap;
+        }
+
+        var list = state.myPartnerships.partnerships || [];
+        var active = null;
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].active === true) { active = list[i]; break; }
+        }
+
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('person_partnership_heading') }));
+        if (active) {
+            wrap.appendChild(buildPartnershipSection({ partnerCitizenid: active.partnerCitizenid, partnerName: active.partnerName, role: active.role }));
+            wrap.appendChild(buildPartnershipTierDetail(active));
+        } else {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnership_none') }));
+        }
+
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('partnerships_history_heading') }));
+        if (list.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('partnerships_history_empty') }));
+        } else {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('partnerships_count_summary_template'), { count: list.length }) }));
+            if (state.myPartnerships.truncated) {
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('partnerships_truncated_notice_template'), { shown: list.length }) }));
+            }
+            var historyWrap = mk('div', { class: 'k9tablet-partnership-history-list' });
+            for (var j = 0; j < list.length; j++) {
+                historyWrap.appendChild(buildPartnershipHistoryRow(list[j]));
+            }
+            wrap.appendChild(historyWrap);
+        }
+
+        return wrap;
+    }
+
     /**
      * K9 role assign / revert-to-human -- owner's own words: "assign de
      * assign give certs remove certs remove k9 ped and reverts them to a
@@ -4965,7 +6005,7 @@
         return tr;
     }
 
-    // ---- Tablet theme screen (high command only) ----
+    // ---- Tablet theme screen (high command OR a delegated 'k9.tablettheme' grant -- see canManageTabletTheme()) ----
 
     /**
      * Six inputs, one per field server/runtimecontrol.lua's own
@@ -5396,7 +6436,7 @@
         return wrap;
     }
 
-    // ---- K9 Supply Shop location management screen (high command only) ----
+    // ---- K9 Supply Shop location management screen (high command OR a delegated 'k9.equipmentshoplocations' grant -- see canManageShopLocations()) ----
 
     /**
      * Owner's own words: "make the shop a dog ped and i can change the
@@ -5651,7 +6691,7 @@
         }
     }
 
-    // ---- K9 Supply Shop ITEM CATALOG editing screen (high command only) ----
+    // ---- K9 Supply Shop ITEM CATALOG editing screen (high command OR a delegated 'k9.equipmentshopitems' grant -- see canManageShopItems()) ----
     // server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM CATALOG" section
     // -- owner's own words: "give high command real control over the
     // equipment shop." Sits alongside the Shop Locations screen above --
@@ -6061,9 +7101,10 @@
     /**
      * Fetched fresh every time the Shop Items tab is opened (see
      * buildTabs()) -- NEVER a hardcoded list, same posture as
-     * loadCertTiers()/loadShopLocations() above. High command only
-     * (server-side gate -- server/equipmentshop.lua's own
-     * CanManageShopItems).
+     * loadCertTiers()/loadShopLocations() above. High command OR a
+     * delegated 'k9.equipmentshopitems' grant (server-side gate --
+     * server/equipmentshop.lua's own CanManageShopItems; client-side
+     * display gate -- canManageShopItems()).
      */
     function loadEquipmentShopItems() {
         state.shopItemsLoading = true;
@@ -6247,7 +7288,7 @@
         });
     }
 
-    // ---- Runtime feature control + tuning screen (high command only) ----
+    // ---- Runtime feature control + tuning screen (high command OR a delegated 'k9.runtimecontrol' grant -- see canManageRuntimeControl()) ----
 
     /**
      * Owner's own words: "Lets high command switch features on and off
@@ -8721,6 +9762,66 @@
         });
     }
 
+    /** Partnerships tab -- self, everyone (see that screen's own header
+     * comment). */
+    function loadMyPartnerships() {
+        state.myPartnershipsLoading = true;
+        state.myPartnershipsError = null;
+        render();
+
+        fetchNui('tablet:requestMyPartnerships', {}).then(function (result) {
+            state.myPartnershipsLoading = false;
+            if (!result || result.ok !== true) {
+                state.myPartnershipsError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.myPartnerships = {
+                featureEnabled: result.featureEnabled !== false,
+                partnerships: result.partnerships || [],
+                truncated: result.truncated === true,
+            };
+            render();
+        });
+    }
+
+    /** Partnerships tab admin lookup -- high command only (server-side
+     * re-verified; see buildPartnershipsAdminSection()'s own doc comment).
+     * @param {string} citizenid */
+    function loadPartnershipsForTarget(citizenid) {
+        state.partnershipsAdminLoading = true;
+        state.partnershipsAdminError = null;
+        render();
+
+        fetchNui('tablet:requestPartnershipsForTarget', { targetCitizenId: citizenid }).then(function (result) {
+            state.partnershipsAdminLoading = false;
+            if (!result || result.ok !== true) {
+                state.partnershipsAdminError = result || { error: 'unknown_error' };
+                state.partnershipsAdminResult = null;
+                render();
+                return;
+            }
+            state.partnershipsAdminResult = {
+                target: result.target || { citizenid: citizenid, name: citizenid },
+                featureEnabled: result.featureEnabled !== false,
+                partnerships: result.partnerships || [],
+                truncated: result.truncated === true,
+            };
+            render();
+        });
+    }
+
+    /** Partnerships tab admin control -- high command only. Re-pulls the
+     * same target's lookup afterward (runMutation()'s own "never trust a
+     * local optimistic copy" contract) rather than assuming success means
+     * the row is now gone.
+     * @param {string} citizenid */
+    function forceEndPartnership(citizenid) {
+        runMutation('tablet:forceEndPartnership', { targetCitizenId: citizenid }, function () {
+            loadPartnershipsForTarget(citizenid);
+        });
+    }
+
     function loadRoster(query) {
         state.rosterLoading = true;
         state.rosterError = null;
@@ -8796,6 +9897,30 @@
     }
 
     function loadPersonSummary(citizenid) {
+        // STUCK-LOADING FIX (this pass, focus-and-state audit finding #5) --
+        // this ENTRY guard is the SAME identity check the .then() callback
+        // below already runs, moved to run BEFORE the loading/error prelude
+        // that follows it, not just before the state this function's own
+        // fetch eventually writes. Without it: refreshPersonAndSelf()
+        // (called from every Person-screen mutation's onSettled, to catch a
+        // self-certify/self-XP-grant) can call loadPersonSummary(citizenid)
+        // again for a citizenid the operator has SINCE navigated away from
+        // (they opened a different person, or left the Person screen
+        // entirely, while that earlier mutation was still in flight). That
+        // stale call's own prelude used to run unconditionally --
+        // clobbering whatever loading/error state the CURRENTLY-displayed
+        // person's own, unrelated fetch had already settled into (including
+        // a real, retryable error) with a fresh "loading" flag -- and
+        // because the .then() callback's own guard then correctly bails out
+        // for that mismatched citizenid, personSummaryLoading was left
+        // stuck at `true` forever, with no code path left to ever clear it:
+        // a permanently-stuck loading skeleton with no retry button,
+        // silently replacing a real error the operator could otherwise have
+        // retried. Bailing out HERE, before either the prelude or the fetch
+        // even starts, means a call for a citizenid no longer on screen
+        // touches NOTHING.
+        if (!state.person || state.person.citizenid !== citizenid) return;
+
         state.personSummaryLoading = true;
         state.personSummaryError = null;
         render();
@@ -8841,6 +9966,15 @@
     }
 
     function loadPersonFeatures(citizenid) {
+        // STUCK-LOADING FIX (this pass) -- SAME entry guard, SAME reasoning,
+        // SAME "moved before the prelude" fix as loadPersonSummary()'s
+        // identical comment just above -- this function has the exact same
+        // shape (a stale refreshPersonFeaturesAndSelf() call for a
+        // citizenid the operator has since navigated away from) and the
+        // exact same "prelude wipes a real error into a permanently stuck
+        // skeleton" failure mode.
+        if (!state.person || state.person.citizenid !== citizenid) return;
+
         state.personFeaturesLoading = true;
         state.personFeaturesError = null;
         render();
@@ -9082,8 +10216,10 @@
 
     /** Fetched fresh every time the Shop Locations tab is opened (see
      * buildTabs()) -- NEVER a hardcoded list, same posture as
-     * loadCertTiers() just above. High command only (server-side gate --
-     * see this screen's own buildShopLocationsScreen() doc comment). */
+     * loadCertTiers() just above. High command OR a delegated
+     * 'k9.equipmentshoplocations' grant (server-side gate -- see this
+     * screen's own buildShopLocationsScreen() doc comment; client-side
+     * display gate -- canManageShopLocations()). */
     function loadShopLocations() {
         state.shopLocationsLoading = true;
         state.shopLocationsError = null;
@@ -9118,11 +10254,13 @@
 
     /** Fetched fresh every time the Runtime Control tab is opened (see
      * buildTabs()) -- NEVER a hardcoded list, same posture as
-     * loadCertTiers()/loadShopLocations() above. High command only
-     * (server-side gate -- see buildRuntimeControlScreen()'s own doc
-     * comment). STALE-RESPONSE GUARD: same request-id shape as
-     * loadShopLocations() above -- this list has no per-request identity
-     * (like a citizenid/query) to compare against arrival order. */
+     * loadCertTiers()/loadShopLocations() above. High command OR a
+     * delegated 'k9.runtimecontrol' grant (server-side gate -- see
+     * buildRuntimeControlScreen()'s own doc comment; client-side display
+     * gate -- canManageRuntimeControl()). STALE-RESPONSE GUARD: same
+     * request-id shape as loadShopLocations() above -- this list has no
+     * per-request identity (like a citizenid/query) to compare against
+     * arrival order. */
     function loadRuntimeFeatures() {
         state.runtimeFeaturesLoading = true;
         state.runtimeFeaturesError = null;
@@ -9434,6 +10572,7 @@
             case 'invalid_granter': return S('mutation_error_invalid_granter');
             case 'db_error': return S('mutation_error_db_error');
             case 'actions_disabled': return S('mutation_error_actions_disabled');
+            case 'not_partnered': return S('mutation_error_not_partnered');
             case 'not_authorized': return S('error_not_authorized');
             case 'timeout': return S('error_timeout');
             case 'network_error': return S('error_network');
@@ -10385,11 +11524,32 @@
         // to 'console' for a genuine high-command caller, exactly as it
         // already overrode the previous 'my_record' default.
         state.screen = 'home';
+        // STALE-LOCK FIX (this pass, focus-and-state audit finding #3) --
+        // state.pendingAction disables nearly every action button on this
+        // page while a mutation/trigger fetch is in flight (see its own
+        // declaration comment below). handleClose() only ever sets
+        // state.open = false -- it never touched this flag -- so closing
+        // the tablet mid-action (Escape, death, a K9 takedown, the Close
+        // button) and reopening it left every control dead until the
+        // ORIGINAL, now-irrelevant request's promise finally settled (or
+        // AwaitServerCallback's own synthetic timeout fired), even though
+        // the fetch that set it belongs to a session the operator already
+        // left. A fresh open is a fresh start for every OTHER piece of
+        // per-session state reset in this block; this flag was simply
+        // missed. See html/tests/tablet_open_close_spec.js's own
+        // regression test for the exact repro this fixes.
+        state.pendingAction = false;
         state.viewer = null;
         state.myRecord = null;
         state.myRecordError = null;
         state.isK9Model = false;
         state.isPartnered = false;
+        state.myPartnershipsLoading = false;
+        state.myPartnershipsError = null;
+        state.myPartnerships = null;
+        state.partnershipsAdminLoading = false;
+        state.partnershipsAdminError = null;
+        state.partnershipsAdminResult = null;
         state.commandReferenceQuery = '';
         state.roster = null;
         state.rosterError = null;
@@ -10525,6 +11685,47 @@
         render();
     }
 
+    /** qbx_k9unit:client:featureBlocksSync relayed push (THIS PASS,
+     * focus-and-state audit finding #4) -- see client/tablet.lua's own NUI
+     * CONTRACT note on tablet:featureBlocksSync: fires ONLY at THIS
+     * client's own connection (server/permissions.lua's own
+     * PushFeatureBlocksToSource never broadcasts), on join/reconnect, a
+     * server-restart backfill, or a `block.<Name>` grant/revoke against
+     * THIS citizenid specifically -- so an arriving push always means
+     * "your own entitlements, as this tablet already knows them, may now
+     * be stale", never someone else's. NOT gated on state.open, SAME
+     * posture as handleThemeUpdated()/handleShopLocationsUpdated() above --
+     * a no-op-looking re-fetch while hidden is still worth doing (the
+     * result is ready and current the moment this page is next opened,
+     * rather than only after the next such push happens to land AFTER
+     * reopening).
+     *
+     * THE TABLET IS A VIEW. IT DECIDES NOTHING (this file's header THE
+     * SECURITY RULE) -- deliberately does NOT read `blockedKeys` at all,
+     * let alone try to merge it into state.myRecord.myFeatures/
+     * state.personFeatures itself: client/featureblocks.lua's own twelve
+     * CLIENT_ENFORCED_FEATURES are a narrower, differently-keyed catalog
+     * than tablet:requestMyRecord's own server-composed `myFeatures` rows,
+     * and reconciling the two client-side would be exactly the kind of
+     * client-side authorization guess THE SECURITY RULE forbids. Instead
+     * this simply RE-FETCHES the authoritative record -- the SAME
+     * "re-pull the source of truth rather than patch state locally"
+     * posture refreshPersonAndSelf()/refreshPersonFeaturesAndSelf() already
+     * establish for the analogous post-mutation case -- so the Home/My
+     * Record screens' abilities list catches up live instead of staying
+     * stale until the next full close/reopen. If the Person screen is
+     * ALSO currently open on the viewer's own citizenid (self-service via
+     * "open by exact citizen ID"), that screen is refreshed the same way,
+     * for the identical reason.
+     * @param {Array} blockedKeys -- unused by design, see above; accepted only so this handler's signature matches the push */
+    function handleFeatureBlocksSync(blockedKeys) {
+        loadMyRecord();
+        if (state.screen === 'person' && state.person && state.viewer && state.person.citizenid === state.viewer.citizenid) {
+            loadPersonSummary(state.person.citizenid);
+            loadPersonFeatures(state.person.citizenid);
+        }
+    }
+
     function init() {
         rootEl = document.getElementById('k9tablet-root');
 
@@ -10543,6 +11744,9 @@
                     break;
                 case 'tablet:equipmentShopLocationsUpdated':
                     handleShopLocationsUpdated(msg.data);
+                    break;
+                case 'tablet:featureBlocksSync':
+                    handleFeatureBlocksSync(msg.data);
                     break;
                 default:
                     break;

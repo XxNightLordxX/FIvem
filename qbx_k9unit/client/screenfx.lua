@@ -1,10 +1,10 @@
 --[[
     qbx_k9unit/client/screenfx.lua
 
-    Phase 4 (coder-ui). Implements Config.Features.ContrabandScreenFX --
+    Implements Config.Features.ContrabandScreenFX --
     DEVELOPER_REFERENCE.md §13.4.5 / §13.2 / §13.3's file-plan row for this feature --
-    the last Phase 4 feature that had a written spec and zero implementation
-    anywhere in this resource as of this pass.
+    the last Phase 4 feature that had a written spec but no implementation
+    anywhere in this resource before this file.
 
     ======================================================================
     FILENAME/FILE-PLAN DEVIATION -- READ BEFORE ASSUMING THIS MATCHES
@@ -13,11 +13,10 @@
     §13.3's file-plan row for this feature puts the CLIENT-side handling
     inside `client/search.lua` as an "Extends" entry ("Handles
     qbx_k9unit:client:applyContrabandScreenFx -- calls SetTimecycleModifier
-    ... Mirrors client/vision.lua's exit-path discipline"). This pass
-    deliberately does NOT do that -- client/search.lua is owned by another
-    coder this session and is off-limits to this pass's edits. Instead, this
-    NEW file (client/screenfx.lua) registers the SAME event name directly
-    and owns 100% of the effect's client-side lifecycle itself.
+    ... Mirrors client/vision.lua's exit-path discipline"). This file
+    deliberately does NOT do that -- instead, this file (client/screenfx.lua)
+    registers the SAME event name directly and owns 100% of the effect's
+    client-side lifecycle itself, entirely independent of client/search.lua.
 
     This is a strictly smaller footprint than §13.3 sketched, not a
     different design: `RegisterNetEvent` lets any number of client files
@@ -31,23 +30,17 @@
     integration point still required is server-side (see "REQUIRED
     SERVER-SIDE HOOK" below), which was already true under §13.3's own
     plan regardless of which client file consumes the event.
-
-    Reported to this session's integration owner (who applies config.lua/
-    fxmanifest.lua/.luacheckrc changes and coordinates server/search.lua's
-    owner) rather than silently assumed -- see that report for the exact
-    blocks needed.
     ======================================================================
 
     Supplementary implementation detail cited below (non-authoritative --
     DEVELOPER_REFERENCE.md §13.4.5 is the source of truth if anything here drifts
     from it): client/vision.lua (this resource's only other file that owns
-    a full-screen post-effect native, and per this pass's own task framing
-    the closest structural precedent -- its "gate at registration," "force
-    off on every exit path," and "the native's own state persists with no
-    automatic reset" lessons are all reused directly below) and
-    client/audio.lua (this resource's other Phase 4 file also awaiting
-    fxmanifest.lua/config.lua integration this session -- same
-    `if not Config.Features.X then return end` file-scope gating shape).
+    a full-screen post-effect native, and the closest structural precedent --
+    its "gate at registration," "force off on every exit path," and "the
+    native's own state persists with no automatic reset" lessons are all
+    reused directly below) and client/audio.lua (this resource's other file
+    using the same `if not Config.Features.X then return end` file-scope
+    gating shape).
 
     ======================================================================
     EVENT/CALLBACK CONTRACT -- Phase 4, per DEVELOPER_REFERENCE.md §13.4.5:
@@ -56,20 +49,19 @@
        [server->client, REQUESTER ONLY, never a broadcast -- see REQUIRED
        SERVER-SIDE HOOK below]
        Sent from inside server/search.lua's existing searchTarget success
-       path (a file this pass does not touch) once that file's own
-       server-computed alertTier is resolved and Config.Features.
-       ContrabandScreenFX + Config.ContrabandScreenFX.triggerTiers say it
-       should fire for this result. This file only ever CONSUMES this
-       event -- it never triggers it, and has no client-triggerable path of
-       its own to request this effect on demand (there is no legitimate
-       reason a client would ever need to ask for this cosmetic effect
-       outside a real, already-validated search result. DEVELOPER_REFERENCE.md
-       §13.4.5's own event contract text is explicit on this point).
+       path once that file's own server-computed alertTier is resolved and
+       Config.Features.ContrabandScreenFX + Config.ContrabandScreenFX.
+       triggerTiers say it should fire for this result. This file only ever
+       CONSUMES this event -- it never triggers it, and has no
+       client-triggerable path of its own to request this effect on demand
+       (there is no legitimate reason a client would ever need to ask for
+       this cosmetic effect outside a real, already-validated search
+       result. DEVELOPER_REFERENCE.md §13.4.5's own event contract text is
+       explicit on this point).
 
-    TRUST BOUNDARY -- DEVELOPER_REFERENCE.md#trust-boundary (written
-    this session, read in full before writing this file): a client-side
-    RegisterNetEvent handler cannot otherwise distinguish a genuine
-    server-sent TriggerClientEvent from a local, zero-server-contact
+    TRUST BOUNDARY -- see DEVELOPER_REFERENCE.md#trust-boundary: a
+    client-side RegisterNetEvent handler cannot otherwise distinguish a
+    genuine server-sent TriggerClientEvent from a local, zero-server-contact
     TriggerEvent('qbx_k9unit:client:applyContrabandScreenFx', <anything>)
     self-invocation using only the public Lua API -- that note's own
     §1 finding (graded MEDIUM-HIGH confidence there, not blindly copied
@@ -77,25 +69,21 @@
     documented, official way to reject the self-triggered case (FiveM's
     own "Secure your events" guidance: "The server will send net id 65535
     for events from the server"). Applied below as this handler's first
-    statement, per this pass's own task instruction to read that note and
-    apply its check to any RegisterNetEvent handler added this session.
-    Unlike that note's client/combat.lua findings (a forged event there
-    could grant invincibility/griefing capability), forging THIS event
-    grants no actual advantage to the forger -- worst case for a
-    self-triggering cheat menu is applying a purely cosmetic, self-only
-    visual effect to their own screen, i.e. the same net effect as if this
-    check didn't exist at all -- but the check costs one line and keeps
-    this file consistent with the resource-wide convention rather than
-    being a silent, unexplained exception to it.
+    statement, matching that convention. Unlike that note's client/combat.lua
+    findings (a forged event there could grant invincibility/griefing
+    capability), forging THIS event grants no actual advantage to the
+    forger -- worst case for a self-triggering cheat menu is applying a
+    purely cosmetic, self-only visual effect to their own screen, i.e. the
+    same net effect as if this check didn't exist at all -- but the check
+    costs one line and keeps this file consistent with the resource-wide
+    convention rather than being a silent, unexplained exception to it.
 
     ======================================================================
     SERVER-SIDE HOOK -- IMPLEMENTED. Live at server/search.lua, firing
     qbx_k9unit:client:applyContrabandScreenFx at the resolved alert tier, sent
     to `source` only and never broadcast (broadcasting would hand every nearby
-    player a free contraband detector). The request below is kept as the record
-    of what was asked for and what shipped; do NOT apply it a second time.
-    The original text read "not implemented by this pass -- server files are
-    off-limits to this session":
+    player a free contraband detector). The block below documents exactly
+    what was added there -- do NOT apply it a second time:
 
     Inside server/search.lua's searchTarget callback success path, after
     `alertTier` is resolved (that file's own `ResolveAlertTier` call,
@@ -122,69 +110,64 @@
 
     ======================================================================
     CONFIDENCE NOTE -- SetTimecycleModifier/ClearTimecycleModifier (the
-    NATIVES) vs. 'drug_wobbly' (the MODIFIER STRING) are graded
-    SEPARATELY, per this pass's own task instruction to be honest about
-    what is and isn't independently verified:
+    NATIVES) vs. 'drug_wobbly' (the MODIFIER STRING) are graded SEPARATELY:
 
     - SetTimecycleModifier / ClearTimecycleModifier as NATIVE FUNCTIONS:
-      not independently re-verified against a native-declaration fetch
-      this session (no research pass was run for this file), but these are
-      long-standing, extremely widely-used FiveM/GTA natives across the
-      ecosystem for exactly this "apply a named post-process look, clear it
-      later" shape -- DEVELOPER_REFERENCE.md §13.4.5's own reality-check section
-      independently reaches the same "confirmed native-only per DEVELOPER_REFERENCE.md §7"
-      conclusion for the mechanism. Treated as reasonably high confidence
-      for the native call shape itself, distinct from the string below.
+      not independently re-verified against a native-declaration fetch for
+      this file, but these are long-standing, extremely widely-used
+      FiveM/GTA natives across the ecosystem for exactly this "apply a
+      named post-process look, clear it later" shape -- DEVELOPER_REFERENCE.md
+      §13.4.5's own reality-check section independently reaches the same
+      "confirmed native-only per DEVELOPER_REFERENCE.md §7" conclusion for
+      the mechanism. Treated as reasonably high confidence for the native
+      call shape itself, distinct from the string below.
     - The specific modifier name is a GENUINE, UNRESOLVED UNCERTAINTY,
       exactly as DEVELOPER_REFERENCE.md §13.4.5 already flags it ("a candidate
       only... no equivalent verification pass has been done for this
       specific modifier name"). This file does NOT hardcode that string --
-      it reads Config.ContrabandScreenFX.modifierName (owned by
-      config.lua's owner) and only falls back to the spec's own candidate
-      value if that config field is missing, so a future verification pass
-      can correct the real value with a one-line config edit, never a code
-      change. Worst case if the string is wrong: SetTimecycleModifier
-      silently no-ops (per this codebase's own established "an
-      unrecognized name is a harmless no-op, not an error" convention,
-      already relied on identically for client/main.lua's placeholder
-      bark-sound names) -- the player sees no visual effect at all, not a
-      crash, not a stuck-on effect, not a gameplay-blocking failure.
+      it reads Config.ContrabandScreenFX.modifierName (in config.lua) and
+      only falls back to the spec's own candidate value if that config
+      field is missing, so a future verification pass can correct the real
+      value with a one-line config edit, never a code change. Worst case if
+      the string is wrong: SetTimecycleModifier silently no-ops (per this
+      codebase's own established "an unrecognized name is a harmless
+      no-op, not an error" convention, already relied on identically for
+      client/main.lua's placeholder bark-sound names) -- the player sees no
+      visual effect at all, not a crash, not a stuck-on effect, not a
+      gameplay-blocking failure.
 
     ======================================================================
-    INTENSITY / DURATION CONCERN -- flagged per this pass's own task
-    instruction to say so rather than ship an unreviewed default silently:
-    DEVELOPER_REFERENCE.md §13.2's sketch defaults `durationMs` to 8000 (8 seconds).
-    A "wobbly shroom"-family timecycle modifier is, by its own name and by
-    every public description of that GTA effect family this session is
-    aware of, a strong, saturating, warping full-screen look -- not a subtle
-    one. Combined with an 8-second hold, that reads as disorienting/
-    gameplay-obscuring, in tension with this pass's own brief ("subtle and
-    non-punitive... feedback for the handler, not a screen-blocking
-    penalty"). This file does not silently accept whatever durationMs
-    Config.ContrabandScreenFX or the event payload carries: SCREENFX_MAX_DURATION_MS
-    below hard-clamps the EFFECTIVE duration well under the spec's own
-    8000ms sketch, regardless of what config or the event payload requests
-    -- see that constant's own comment for the exact number and reasoning.
-    This is a defensible, disclosed judgment call by this file, not a
-    silent override -- the config owner is free to raise
-    Config.ContrabandScreenFX.durationMs, but this file will not honor a
-    value past its own safety ceiling. Recommended (not enforced beyond the
-    ceiling) config default: something in the 2500-4000ms range, not 8000.
+    INTENSITY / DURATION CONCERN: DEVELOPER_REFERENCE.md §13.2's sketch
+    defaults `durationMs` to 8000 (8 seconds). A "wobbly shroom"-family
+    timecycle modifier is, by its own name and by every public description
+    of that GTA effect family, a strong, saturating, warping full-screen
+    look -- not a subtle one. Combined with an 8-second hold, that reads as
+    disorienting/gameplay-obscuring, in tension with this feature's own
+    brief ("subtle and non-punitive... feedback for the handler, not a
+    screen-blocking penalty"). This file does not silently accept whatever
+    durationMs Config.ContrabandScreenFX or the event payload carries:
+    SCREENFX_MAX_DURATION_MS below hard-clamps the EFFECTIVE duration well
+    under the spec's own 8000ms sketch, regardless of what config or the
+    event payload requests -- see that constant's own comment for the
+    exact number and reasoning. This is a defensible, disclosed judgment
+    call by this file, not a silent override -- the config owner is free
+    to raise Config.ContrabandScreenFX.durationMs, but this file will not
+    honor a value past its own safety ceiling. Recommended (not enforced
+    beyond the ceiling) config default: something in the 2500-4000ms
+    range, not 8000.
 
     ======================================================================
-    GATING -- "gate at registration, not just inside the handler" (this
-    pass's own explicit instruction, and the SAME convention as
-    client/audio.lua's/client/hud.lua's/client/partnership.lua's own file
-    headers, and client/vision.lua's per-toggle Config.Features.* gate).
-    This file returns entirely, registering NEITHER the net event handler
-    NOR the onResourceStop safety net, while Config.Features.
+    GATING -- "gate at registration, not just inside the handler," the SAME
+    convention as client/audio.lua's/client/hud.lua's/client/partnership.lua's
+    own file headers, and client/vision.lua's per-toggle Config.Features.*
+    gate. This file returns entirely, registering NEITHER the net event
+    handler NOR the onResourceStop safety net, while Config.Features.
     ContrabandScreenFX is false -- so a hostile client cannot reach this
     file's logic at all by forging the event when the feature is disabled
     (there is no handler for FiveM to dispatch the forged event to in the
     first place), closing the exact "registered unconditionally, reachable
-    even with the feature off" defect class this pass's own task
-    description names as a real, already-found bug elsewhere in this
-    resource (client/combat.lua, fixed by coder-security this session).
+    even with the feature off" defect class already found and fixed
+    elsewhere in this resource (client/combat.lua).
 ]]
 
 if not Config.Features.ContrabandScreenFX then return end
@@ -229,11 +212,10 @@ local SCREENFX_POLL_MS = 250
 -- Fallback ONLY if Config.ContrabandScreenFX.modifierName is missing or
 -- not a string -- the exact same candidate DEVELOPER_REFERENCE.md §13.2/§13.4.5
 -- names, not a value this file invents independently. See this file's
--- header CONFIDENCE NOTE: this string itself is NOT independently verified
--- this session.
--- CORRECTED after a native audit: 'drug_wobbly_shroom' does not exist. Every
--- `drug_`-prefixed entry in a 2806-entry game-data extraction was checked and
--- only 'drug_wobbly' is real. The old value would have made this feature a
+-- header CONFIDENCE NOTE: this string itself is NOT independently verified.
+-- VERIFIED: 'drug_wobbly_shroom' does not exist. Every `drug_`-prefixed
+-- entry in a 2806-entry game-data extraction was checked and only
+-- 'drug_wobbly' is real. The old value would have made this feature a
 -- permanent silent no-op with nothing in the logs to explain it.
 local FALLBACK_MODIFIER_NAME = 'drug_wobbly'
 
@@ -262,9 +244,9 @@ local screenFxExpiresAt = 0
 --- same way this codebase's own client/vision.lua already treats
 --- SetSeethrough(false)/SetNightvision(false): an idempotent "ensure off"
 --- call, not a stacking counter, so calling it when nothing is active is a
---- harmless no-op. (Not independently re-verified this session for this
---- specific native -- extending client/vision.lua's own established
---- reasoning for the same shape of native, not asserting new evidence.)
+--- harmless no-op. (Not independently re-verified for this specific
+--- native -- extending client/vision.lua's own established reasoning for
+--- the same shape of native, not asserting new evidence.)
 local function ClearScreenFx()
     ClearTimecycleModifier()
 end
@@ -320,8 +302,8 @@ end
 -- registration" this file's header commits to, not a redundant inner check
 -- duplicated here.
 RegisterNetEvent('qbx_k9unit:client:applyContrabandScreenFx', function(durationMs)
-    -- DEVELOPER_REFERENCE.md#trust-boundary's origin check -- see
-    -- this file's header TRUST BOUNDARY section for the full citation and
+    -- DEVELOPER_REFERENCE.md#trust-boundary's origin check -- see this
+    -- file's header TRUST BOUNDARY section for the full citation and
     -- confidence grading. First statement in the handler body, per that
     -- note's own recommended shape.
     if source ~= 65535 then return end

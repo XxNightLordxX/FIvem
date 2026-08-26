@@ -7,8 +7,8 @@ separate documents: `SPEC.md`, `PHASE3_SPEC.md`, `PHASE4_SPEC.md`,
 `locales/README.md`, `tests/README.md`, and `shared/compat/README.md` (all
 deleted — their content lives below or was cut as superseded decision
 history), plus `sql/rollback/README.md` and `sql/README.md` (folded into
-`OPERATOR_RUNBOOK.md` instead, since removal/day-to-day-operation
-instructions belong with the other operator-facing material, not here).
+`README.md` instead, since removal/day-to-day-operation instructions
+belong with the other operator-facing material, not here).
 
 **Section numbers below are preserved from the source documents on
 purpose.** Hundreds of code comments across this resource cite a section by
@@ -38,16 +38,14 @@ current behavior.
 | The detailed per-feature spec for a phase (config shape, event contracts, open items) | §11 (Phase 2), §12 (Phase 3), §13 (Phase 4), §14 (Phase 5) |
 | Confirmed native behavior / security review findings other code relies on | §15 |
 | Known technical debt and what's already been fixed | §16 |
-| Current live/off status of flags and operator decisions still needed | §17 (superseded day-to-day by `OPERATOR_RUNBOOK.md` and `README.md` — this section is the historical reasoning) |
-| Not-yet-built feature ideas | §18 |
+| Current live/off status of flags and operator decisions still needed | §17 (superseded day-to-day by `README.md` and `KNOWN_ISSUES.md` — this section is the historical reasoning) |
+| Not-yet-built feature ideas | §18, and the roadmap section of `PROJECT_HISTORY.md` |
 | How the locale/translation system works | §19 |
 | How the automated test suite works | §20 |
 | How the `shared/compat` resource-detection layer works | §21 |
-| Install steps, current config reference, exports | `README.md` |
-| Day-to-day operation, uninstalling | `OPERATOR_RUNBOOK.md` |
-| How to play a K9 | `PLAYER_GUIDE.md` |
-| What shipped and when | `CHANGELOG.md` |
-| Features still being actively built | `K9_IDEAS.md` |
+| Install steps, current config reference, exports, day-to-day operation, and how to play a K9 | `README.md` |
+| Open bugs, limitations, and decisions waiting on the resource owner | `KNOWN_ISSUES.md` |
+| What shipped and when, and how the project got to its current state | `PROJECT_HISTORY.md` |
 
 ---
 
@@ -94,16 +92,15 @@ controls themselves directly, like any other player character, at all times.
   mechanic, deployable kennel, K9 camera feed R&D spike (Phase 5).
 
 ### Explicit non-goals
-- **ESX support, and QBCore support — CORRECTED, 2026-08-26: this bullet
-  used to read "Qbox/QBCore data model only," implying QBCore was a
-  second supported framework alongside Qbox. It never was, and line one
-  of this same list ("Qbox-only... No ESX") already said so; this bullet
-  just failed to say the same thing about QBCore.** `Config.Compat`'s
-  framework detection correctly identifies `qb-core` if you run it, but
-  detection was never adaptation — roughly 169 call sites across this
-  resource talk to Qbox directly, and `qbx_core` is a hard `fxmanifest.lua`
-  dependency regardless of what's detected. See README.md's own "No QBCore
-  or ESX support" section and `config.lua`'s
+- **ESX support, and QBCore support.** `Config.Compat`'s framework
+  detection correctly identifies `qb-core` if you run it, but detection was
+  never adaptation — the large majority of this resource's server-side call
+  sites talk to Qbox (`qbx_core`) directly rather than through the
+  framework compat layer (a grep of direct `exports.qbx_core` calls outside
+  `shared/compat/` and outside the test suite lands somewhere in the
+  160s–190s depending on exactly what's counted), and `qbx_core` is a hard
+  `fxmanifest.lua` dependency regardless of what's detected. See
+  `README.md`'s own "No QBCore or ESX support" section and `config.lua`'s
   `Config.Compat.Systems.framework` comment for the current, full story.
 - **True live-video PiP camera feed** of the dog's point of view. Concluded
   infeasible without new native support — see §7/§15 (`#phase-5-research`).
@@ -471,8 +468,9 @@ feature-group phase is being reviewed.
 
 ## 8. Phased build plan
 
-All five phases have shipped; see `README.md`/`CHANGELOG.md` for current
-state. Kept only as a one-line map from phase number to detail section:
+All five phases have shipped; see `README.md` for current state and
+`PROJECT_HISTORY.md` for how each phase built on the last. Kept only as a
+one-line map from phase number to detail section:
 Phase 1 = vertical slice (§3, §4, §6.1); Phase 2 = tracking & basic vision
 (§11); Phase 3 = combat & advanced agility (§12); Phase 4 = inventory,
 progression, vitality (§13); Phase 5 = audio/props polish + camera R&D
@@ -562,8 +560,8 @@ so those citations keep resolving to something meaningful.
     server-side, synchronous on item drop) is the mechanism; implemented in
     `server/tracking.lua`. **One disclosed gap remains:** the hook's exact
     payload shape was confirmed by source-reading, not by an independent
-    test against a live `ox_inventory` install — see `OPERATOR_RUNBOOK.md`
-    §2a for the five-minute live check that closes this gap.
+    test against a live `ox_inventory` install — see `README.md`'s
+    go-live checklist for the five-minute live check that closes this gap.
 
 ---
 
@@ -1595,8 +1593,8 @@ rejected server-side.
 Open: whether the hard-timeout-then-retry shape is right vs. requiring
 explicit "Calm Down" every time; whether "Calm Down" should be self-only
 (this document assumes self-only, an interpretation not a certainty) or
-issuable by a partnered handler on someone else's K9. **See `OPERATOR_RUNBOOK.md`'s
-D13 for the still-open, repeatable-griefing angle on this stat.**
+issuable by a partnered handler on someone else's K9. **See `KNOWN_ISSUES.md`'s
+fear/stress entry for the still-open, repeatable-griefing angle on this stat.**
 
 #### 13.4.3.4 Distraction (`Config.Features.DistractionSystem`)
 
@@ -1780,8 +1778,8 @@ rather than a guess — see §14.4.2/§14.4.3 for each feature's disclosed
 fallback. This sweep is a single dev-server task that unlocks both features
 at once — not scheduled twice. **The shipped implementation of this
 sweep is `client/bonetool.lua`/`server/bonetool.lua`, run via
-`Config.Features.BoneSweepDevTool` — see `OPERATOR_RUNBOOK.md` §2b/§4 for
-how to run it and why it must be turned back off afterward.**
+`Config.Features.BoneSweepDevTool` — see `README.md` for how to run it and
+why it must be turned back off afterward.**
 
 ### Fork 2 — `ProximityAudioFX`'s missing "hidden suspect" detection primitive
 
@@ -2349,7 +2347,7 @@ own client *honestly receiving* a genuine server-sent event and then simply
 choosing not to execute the restriction it applies. That is a structural
 property of FiveM — it is detectable, not preventable, and is accepted as a
 disclosed, guardrailed risk (§12.0 item 8), not something this guard was
-ever meant to address. **See `OPERATOR_RUNBOOK.md` §3 for the exact
+ever meant to address. **See `README.md`'s live-test section for the exact
 sequenced live test that checks whether this guard is actually holding on
 your server** — a naive one-shot test of this guard is worthless (a fresh
 client that has never received a genuine server event will read "clean"
@@ -2467,10 +2465,10 @@ audit pass.
 
 Condensed from a document that used to track "what's currently live and
 what needs a human decision" as a dated snapshot. **`README.md`'s config
-reference and `OPERATOR_RUNBOOK.md` are the current, maintained versions of
-"what's live" and "what to check"; treat everything below as the reasoning
-that produced today's defaults, not a substitute for reading those two
-files.**
+reference and `KNOWN_ISSUES.md`'s "Decisions that need the resource owner"
+section are the current, maintained versions of "what's live" and "what to
+check"; treat everything below as the reasoning that produced today's
+defaults, not a substitute for reading those two files.**
 
 **The one-paragraph history:** this resource shipped with 5 of ~40 feature
 flags enabled and the rest off pending review. All flags (`CameraFeedPiP`
@@ -2494,9 +2492,10 @@ forged `TriggerEvent` against a guarded handler and see whether `source`
 still reads `65535`. Four attempts to settle this by reading FiveM's own
 source code have hit the same wall: the part that decides this isn't in any
 file readable from outside the engine's private build process. **As of this
-writing, nobody has run the live test.** See `OPERATOR_RUNBOOK.md` §3 for
-the exact, sequenced procedure — running it out of order or skipping the
-"receive one genuine event first" step tells you nothing.
+writing, nobody has run the live test.** See `README.md`'s live-test
+section for the exact, sequenced procedure — running it out of order or
+skipping the "receive one genuine event first" step tells you nothing. See
+also `KNOWN_ISSUES.md` for the plain-language version of this decision.
 
 **What this blocks:** trusting `BiteAndHold`, `NonLethalTakedown`, and
 `PropDragging` as actually secure against a modified client — all three are
@@ -2515,7 +2514,8 @@ no way to verify who actually fired a gun, by design, the same tradeoff
 already accepted for scent tracking (§15 `#tracking`'s "FORGED TRAIL
 DECISION"). Whether this is an acceptable cost for the realism it buys is a
 judgment call about what kind of server you want to run, not something more
-code can answer.
+code can answer — see `KNOWN_ISSUES.md` for the plain-language version of
+this decision.
 
 ### The one setting that should not stay on
 
@@ -2527,7 +2527,7 @@ boss-rank job check **and** a separate server-startup convar
 flag is `true` and/or that convar is set on a server with real players,
 turn both off and **restart the resource** (a flag flip alone does not
 unregister the `/k9bonetool` command — it stays reachable until the next
-restart). See `OPERATOR_RUNBOOK.md` §4 for the full procedure.
+restart). See `README.md` for the full procedure.
 
 ### Mistakes this project has made before (so the pattern doesn't repeat)
 
@@ -2562,8 +2562,9 @@ claim at all.
 ## 18. Feature ideation backlog
 
 Condensed from two brainstorm documents (ideation only — nothing below is
-approved or built just because it's listed here; `K9_IDEAS.md` is the
-separate, closer-to-committed backlog). Section labels (`Part A §N`, `Part A
+approved or built just because it's listed here; the "Ideas considered,
+not built" section of `PROJECT_HISTORY.md` is the separate,
+closer-to-committed backlog). Section labels (`Part A §N`, `Part A
 Tier X §N`, `Part B §N`/`Part B item N`) are cited directly in code and
 preserved. Items already shipped are marked so below rather than removed,
 since their reasoning is still what a citation is pointing at.
@@ -2930,69 +2931,14 @@ that belongs in the file that owns the authorization check, not here.
 
 ---
 
-## Watchdog record
+## Keeping this file honest
 
-A scheduled job re-checks this resource periodically. Only the MOST RECENT
-pass is kept here, deliberately — the old `WATCHDOG_LOG.md` was an
-append-forever file, which is exactly the decision-history this
-consolidation cut. What a future pass needs is what was last covered, not
-every pass ever run. Overwrite this section; do not append to it.
-
-**2026-08-26 00:45 UTC — three real fixes, everything else clean.**
-
-- Six commits reviewed since the previous pass (the compat-layer work,
-  the any-ped verification, the README citation repoint). All 147 Lua
-  files parse; luacheck 0 warnings / 0 errors across 146; all 64 spec
-  files pass, 2550 assertions.
-- Five regression spot-checks, all still correct, and all read as code
-  rather than counted: `Config.Features.AgilityBasicJump` is still read at
-  client/movement.lua:1281 and registered `clientonly` at
-  server/runtimecontrol.lua:434; `LeashPairs` still writes `isK9` in both
-  directions at server/main.lua:849-850 and still branches on it at :913;
-  `RevokeCertificationOffline` still calls `RefreshCertificationCache`;
-  client/vehicle.lua still has its `onResourceStop` handler at :252;
-  client/radial.lua still registers submenu contents before the opener
-  item (lib.registerRadial at :1379, lib.addRadialItem at :1389) — the
-  2026-08-23 hard-error fix is intact.
-  *Note for the next pass: a raw grep of radial.lua reports 14/11 for
-  those two calls; the real code sites are 4 and 1. The rest is prose
-  inside `--[[ ]]` blocks, which single-line comment stripping does not
-  remove. Read the call sites; do not compare the counts to the 5/3 the
-  previous pass recorded.*
-- Bark audio: still resolved. Five `.ogg` files on disk, the same five
-  listed in the manifest's `files{}` block.
-- Manifest coverage: every `.lua` under client/, server/ and shared/ is
-  registered in `fxmanifest.lua`. Zero unregistered — the footgun that
-  bit this project five times has not recurred.
-- Completion claims re-verified against code, not against other docs:
-  zero direct `MySQL.*` calls outside `server/datastore.lua`; exactly one
-  real read of `Config.Database.enabled`, at datastore.lua:147 (the two
-  other hits are print strings); zero direct `exports.ox_target` calls
-  outside `shared/compat/`; the two `ox_inventory:Items` exceptions are
-  where `ISSUES.md` says, both `pcall`-wrapped.
-- **The ox dependency question was again deliberately NOT re-checked.**
-  The criterion stands: an archive banner reappearing on one of the four
-  repositories, or six months without commits. Six hours have passed.
-
-**Three things were actually wrong, and were fixed this pass:**
-
-1. `fxmanifest.lua`'s `server/bonetool.lua` load-order comment claimed the
-   sweep tool was "ACE re-checked per invocation". It is not — that file
-   stopped calling `IsPlayerAceAllowed` entirely. Anyone auditing the
-   resource's gating from the manifest would have got the wrong answer
-   about a dev tool that spawns props. A documentation pass had already
-   spotted this and left it "for whoever owns that file"; nobody picked it
-   up. *Rule: a note that names no owner is a note nobody will action —
-   the pass that finds it either fixes it or files it in ISSUES.md.*
-2. `CHANGELOG.md`'s header told the reader to go read `PROJECT_STATUS.md`
-   first — a file the consolidation deleted. Repointed at `ISSUES.md`.
-   The historical entries below it still name deleted documents, and were
-   deliberately left alone: a changelog records what was true when the
-   change was made. A note now says so, so the next pass does not "fix"
-   them.
-3. Two citations in `tests/clientscreenfx_spec.lua` still named
-   `DECISIONS_NEEDED.md`. Same shape as the README miss recorded earlier:
-   the big sweep covered production `.lua` and the large documents, and
-   left a changelog header and a test file behind. *Rule: a citation sweep
-   is finished when it has run over every text file in the resource, not
-   every file the sweep's author was thinking about.*
+This resource is checked before every change ships: every `.lua` file must
+parse, `luacheck` must report zero warnings, and the full spec suite under
+`tests/` must pass (see §20 for how to run it yourself). That check is
+mechanical and says nothing about whether this document still matches the
+code — the two can drift independently. If you find a place where this
+file disagrees with `config.lua` or the actual `.lua` source, the code is
+correct and this file is stale; fix the sentence, don't work around it.
+`KNOWN_ISSUES.md` is where an unresolved discrepancy like that belongs if
+you don't have time to fix it on the spot.

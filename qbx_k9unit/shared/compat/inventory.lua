@@ -20,8 +20,7 @@
     runs in -- see IsResourceExportCapable's own doc comment).
 
     ======================================================================
-    ADDENDUM (this pass, coder-architect, resource-auto-connect sweep):
-    SERVER-REALM `ItemExists` ADDED TO THE CONTRACT.
+    ADDENDUM: SERVER-REALM `ItemExists` ADDED TO THE CONTRACT.
 
     `K9Compat.RequiredMethods.inventory.server` used to stop at seven names
     (`ItemExists` was CLIENT-only). Two independent server files each
@@ -75,27 +74,24 @@
         `nil` unconditionally for both realms, so `VerifyMethods` is never
         even reached for them.
 
-    NOT DONE BY THIS ADDENDUM, reported rather than assumed: the two real
-    call sites (server/equipmentshop.lua, server/wellbeing.lua) are outside
-    this pass's file ownership and still make their own direct
-    `exports.ox_inventory:Items(...)` call today -- this addendum only makes
-    the accessor they were asking for exist. Routing those two call sites
-    onto `K9Compat.Get('inventory').ItemExists(itemName)` is a small,
-    mechanical follow-up reported to coder-backend (the agent who wrote both
-    finding comments), not performed here.
+    NOT DONE BY THIS ADDENDUM: the two real call sites
+    (server/equipmentshop.lua, server/wellbeing.lua) still make their own
+    direct `exports.ox_inventory:Items(...)` call today -- this addendum
+    only makes the accessor they were asking for exist. Routing those two
+    call sites onto `K9Compat.Get('inventory').ItemExists(itemName)` is a
+    small, mechanical follow-up that has not been done here.
 
     ======================================================================
-    RESEARCH DISCIPLINE (this task's own explicit requirement, restated so
-    the next reader does not have to re-derive it): every signature below is
-    either CONFIRMED against a primary source fetched and read directly this
-    session (cited inline, with the exact file/function), or marked
-    UNCONFIRMED and made to return `nil` from its factory rather than ship a
-    guess. "A guessed signature is worse than no adapter: it detects as
-    working and then silently does nothing" -- this file follows that rule
-    even where it costs real coverage (see ps-inventory below, a real,
-    found, actively-maintained project that still gets skipped because three
-    of the required server methods -- seven at the time this was researched,
-    now eight -- have no confirmed equivalent in its source).
+    RESEARCH DISCIPLINE: every signature below is either CONFIRMED against
+    a primary source fetched and read directly this session (cited inline,
+    with the exact file/function), or marked UNCONFIRMED and made to return
+    `nil` from its factory rather than ship a guess. "A guessed signature is
+    worse than no adapter: it detects as working and then silently does
+    nothing" -- this file follows that rule even where it costs real
+    coverage (see ps-inventory below, a real, found, actively-maintained
+    project that still gets skipped because three of the required server
+    methods -- seven at the time this was researched, now eight -- have no
+    confirmed equivalent in its source).
 
     CONFIRMATION LEDGER, one line per candidate, fullest detail in each
     adapter's own section below:
@@ -155,9 +151,10 @@
                                      `main` -- fetched and read
                                      server/main.lua + client/main.lua this
                                      session; 3 of the (then-7, now 8 --
-                                     ItemExists was added in a later pass and
-                                     was not separately re-checked against
-                                     this candidate) required server methods
+                                     ItemExists was added after this ledger
+                                     was first written and was not
+                                     separately re-checked against this
+                                     candidate) required server methods
                                      have no confirmed equivalent)
       qs-inventory      UNCONFIRMED -- no public source repository located
                                      this session (see "UNCONFIRMED
@@ -211,11 +208,11 @@
     ...)` veto point -- covers Config.K9Inventory.allowedItems for real. The
     "item dropped to the ground" half (`payload.toType == 'drop'`,
     ScentTracking's actual usage) is ALSO now a CONFIRMED, real translation
-    (corrected this pass -- an EARLIER revision of this paragraph recorded it
-    as a permanent no-op, based on a claim that no call site ever fires
+    (corrected here -- an EARLIER revision of this paragraph recorded it as
+    a permanent no-op, based on a claim that no call site ever fires
     `Events.ItemDropped`; re-fetching and re-reading qb-inventory's `main`
-    branch directly this session found the real, current call site the
-    earlier pass missed: server/main.lua's own
+    branch directly this session found the real, current call site that
+    earlier revision missed: server/main.lua's own
     `qb-inventory:server:createDrop` callback runs
     `TriggerHook('ItemDropped', hookData.item.type, hookData)` on every
     ground drop, with a payload -- `{ source, sourceInventory, coords, item,
@@ -379,7 +376,7 @@ end
 -- ox_inventory -- CONFIRMED. The reference this resource was built
 -- against (fxmanifest.lua hard `dependencies` entry) and the only
 -- candidate with every one of the twelve required methods (4 client + 8
--- server, since a later pass added server-realm ItemExists) backed by a
+-- server, since server-realm ItemExists was later added) backed by a
 -- real, cited export.
 -- ======================================================================
 
@@ -628,13 +625,12 @@ local function BuildOxInventoryServer()
             return callOk
         end,
 
-        --- ADDED THIS PASS (coder-architect, resource-auto-connect sweep) --
-        --- see this file's header ADDENDUM for the full "why now" writeup.
-        --- CONFIRMED, for free: identical body to BuildOxInventoryClient's
-        --- own `ItemExists` above, against the SAME `Items` export -- that
-        --- factory's own doc comment already establishes `Items` is
-        --- registered identically on both realms, so no new research was
-        --- needed to add this half.
+        --- ADDED: see this file's header ADDENDUM for the full "why now"
+        --- writeup. CONFIRMED, for free: identical body to
+        --- BuildOxInventoryClient's own `ItemExists` above, against the
+        --- SAME `Items` export -- that factory's own doc comment already
+        --- establishes `Items` is registered identically on both realms, so
+        --- no new research was needed to add this half.
         --- @param itemName string
         --- @return boolean
         ItemExists = function(itemName)
@@ -914,11 +910,11 @@ local function BuildQbInventoryServer()
         --- 'swapItems' with `payload.toType == 'drop'` (ScentTracking's real
         --- usage) is now a SECOND, SEPARATE CONFIRMED TRANSLATION, not the
         --- permanent no-op an earlier revision of this comment recorded.
-        --- CORRECTION (this pass, coder-backend, re-fetched and re-read
-        --- qbcore-framework/qb-inventory's `main` branch directly this
-        --- session, fxmanifest.lua still version '2.1.0'): the earlier claim
-        --- that "no call site anywhere ever fires `TriggerHook('ItemDropped',
-        --- ...)`" was WRONG -- server/main.lua's own
+        --- CORRECTION (re-fetched and re-read qbcore-framework/qb-inventory's
+        --- `main` branch directly, fxmanifest.lua still version '2.1.0'):
+        --- the earlier claim that "no call site anywhere ever fires
+        --- `TriggerHook('ItemDropped', ...)`" was WRONG -- server/main.lua's
+        --- own
         --- `QBCore.Functions.CreateCallback('qb-inventory:server:createDrop',
         --- ...)` (the server side of the client's `DropItem` NUI callback,
         --- client/drops.lua -- the ONLY place a ground `Drops[...]` entry is
@@ -1041,18 +1037,17 @@ local function BuildQbInventoryServer()
             return true
         end,
 
-        --- ADDED THIS PASS (coder-architect, resource-auto-connect sweep) --
-        --- see this file's header ADDENDUM for the full "why now" writeup.
-        --- DISCLOSED PLACEHOLDER, NOT A GUESSED EXPORT: this backend's
-        --- complete server-side source (server/main.lua, server/functions.lua,
-        --- server/commands.lua, server/hooks.lua) has no confirmed
-        --- item-catalog-lookup export this method could call -- reaching
-        --- into `QBCore.Shared.Items` would couple this INVENTORY adapter to
-        --- one specific FRAMEWORK choice, which this file's own header
-        --- (see "THE `RegisterHook` VOCABULARY", and the qb-inventory CLIENT
-        --- realm's own identical refusal a few sections up) already
-        --- establishes this compat layer's systems must not do to stay
-        --- independently pluggable.
+        --- ADDED: see this file's header ADDENDUM for the full "why now"
+        --- writeup. DISCLOSED PLACEHOLDER, NOT A GUESSED EXPORT: this
+        --- backend's complete server-side source (server/main.lua,
+        --- server/functions.lua, server/commands.lua, server/hooks.lua) has
+        --- no confirmed item-catalog-lookup export this method could call --
+        --- reaching into `QBCore.Shared.Items` would couple this INVENTORY
+        --- adapter to one specific FRAMEWORK choice, which this file's own
+        --- header (see "THE `RegisterHook` VOCABULARY", and the
+        --- qb-inventory CLIENT realm's own identical refusal a few sections
+        --- up) already establishes this compat layer's systems must not do
+        --- to stay independently pluggable.
         ---
         --- Always answers `true` ("assume present"), never `false`
         --- ("assume absent") -- deliberately, not arbitrarily: this method's
@@ -1092,12 +1087,12 @@ end)
 -- hook-registration mechanism at all (`AddHook`/`TriggerHook`/
 -- `registerHook` -- zero matches for "Hook" anywhere in the file). That is
 -- 3 of the required server methods (7 at the time this was researched, now
--- 8 -- `ItemExists` was added in a later pass and was NOT separately
--- re-checked against ps-inventory's source, so its status here is simply
--- unknown, not confirmed either way) with no confirmed real equivalent --
--- `OpenInventory`/`OpenShop` are, like qb-inventory, SERVER-side exports
--- taking `source`, so the client realm has the identical architectural
--- mismatch as qb-inventory on top of that.
+-- 8 -- `ItemExists` was added after this section was first written and was
+-- NOT separately re-checked against ps-inventory's source, so its status
+-- here is simply unknown, not confirmed either way) with no confirmed real
+-- equivalent -- `OpenInventory`/`OpenShop` are, like qb-inventory,
+-- SERVER-side exports taking `source`, so the client realm has the
+-- identical architectural mismatch as qb-inventory on top of that.
 --
 -- A caller COULD compose a partial server table (GetItemCount via
 -- possession-scanning, RemoveItem is a confirmed real export) and let

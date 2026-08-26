@@ -260,11 +260,14 @@ t.test('server load: registers requestSarCall via lib.callback and abandonSarCal
     t.equals(createThreadCallCount, 1)
 end)
 
-t.test('requestSarCall: Config.Features.SARCalls off is a real no-op (reason = denied), even with access', function()
+t.test('requestSarCall: Config.Features.SARCalls off is a real no-op (reason = denied), even with access, and now ALSO sends a plain "not about you" NotifyPlayer (DISCOVERABILITY FIX)', function()
     ServerConfig.Features.SARCalls = false
+    local before = #notifyCalls
     local result = requestSarCall(1)
     t.isFalse(result.started)
     t.equals(result.reason, 'denied')
+    t.equals(#notifyCalls, before + 1)
+    t.equals(notifyCalls[#notifyCalls].description, locale('sar.feature_disabled'))
     ServerConfig.Features.SARCalls = true
 end)
 
@@ -525,7 +528,7 @@ end)
 -- own equivalent sections for the identical steps 2-4.
 -- ------------------------------------------------------------------------
 
-t.test('grant_required: RequireGrant.SARCalls = true + no grant held -- denied even though HasK9Access is true, before the cooldown is ever consumed', function()
+t.test('grant_required: RequireGrant.SARCalls = true + no grant held -- denied even though HasK9Access is true, before the cooldown is ever consumed, and now sends the distinct not_granted NotifyPlayer naming SAR Calls + High Command', function()
     playersBySource[30] = { citizenid = 'CIT_GRANTREQ', job = 'police' }
     pedCoordsBySource[30] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
@@ -534,6 +537,8 @@ t.test('grant_required: RequireGrant.SARCalls = true + no grant held -- denied e
     ServerConfig.FeatureControl.RequireGrant.SARCalls = false
     t.isFalse(result.started)
     t.equals(result.reason, 'denied')
+    t.equals(notifyCalls[#notifyCalls].target, 30)
+    t.equals(notifyCalls[#notifyCalls].description, locale('sar.not_granted'))
 
     -- Cooldown must NOT have been consumed by the denied attempt -- an
     -- immediately-following request (still under startCooldownMs) for the
@@ -558,7 +563,7 @@ t.test('RequireGrant.SARCalls = true + an active feature.SARCalls grant -- allow
     t.isTrue(result.started)
 end)
 
-t.test('BLOCK ALWAYS WINS: an explicit block.SARCalls denies even a citizenid who ALSO holds an active feature.SARCalls grant', function()
+t.test('BLOCK ALWAYS WINS: an explicit block.SARCalls denies even a citizenid who ALSO holds an active feature.SARCalls grant, and sends the DIFFERENT blocked message, never not_granted', function()
     playersBySource[32] = { citizenid = 'CIT_BLOCKED', job = 'police' }
     pedCoordsBySource[32] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
@@ -569,6 +574,8 @@ t.test('BLOCK ALWAYS WINS: an explicit block.SARCalls denies even a citizenid wh
     ServerConfig.FeatureControl.RequireGrant.SARCalls = false
     t.isFalse(result.started)
     t.equals(result.reason, 'denied')
+    t.equals(notifyCalls[#notifyCalls].description, locale('sar.blocked'))
+    t.isTrue(notifyCalls[#notifyCalls].description ~= locale('sar.not_granted'), 'blocked and not_granted must read as two different, actionable messages, not one collapsed generic denial')
 end)
 
 t.test('BLOCK STILL APPLIES even when NOT listed in RequireGrant (step 2 fires independently of step 3)', function()
@@ -679,38 +686,19 @@ t.test('FEATURE GATE: Config.Features.SARCalls = false is a genuine no-op at loa
 end)
 
 -- ------------------------------------------------------------------------
--- CONFIG-SAFETY GUARD -- Config.SARCalls itself missing/wrong-shaped must
--- still error LOUDLY at load time (nothing sensible to substitute for "the
--- whole block is missing"); every NUMBER inside it, once the block itself
--- is a real table, is now CLAMP AND WARN, never assert-and-abort -- see
--- the REGRESSION section below for why.
+-- CONFIG-SAFETY GUARD -- Config.SARCalls itself missing/wrong-shaped now
+-- CLAMPS AND WARNS too, exactly like every NUMBER inside it once the block
+-- itself is a real table -- see the REGRESSION section below for why, and
+-- this file's own header NON-NEGOTIABLE against a bare assert on a config
+-- value.
 -- ------------------------------------------------------------------------
 
---- Attempts to load server/sarcalls.lua fresh into a throwaway env with
---- `badConfig` in place of Config.SARCalls, and returns the error message
---- (or nil if it did NOT error, which every case below treats as a test
---- failure).
---- @param badTuning table
---- @return string? err
-local function loadWithBadConfig(badTuning)
-    local freshEnv = Sandbox.newEnv({
-        GetGameTimer = function() return 0 end,
-        CreateThread = function() end,
-        AddEventHandler = function() end,
-        RegisterNetEvent = function() end,
-        math = FakeMath,
-        lib = { callback = { register = function() end } },
-        Config = { Features = { SARCalls = true }, SARCalls = badTuning, XP = { awards = { sarCallCompleted = 30 } } },
-    })
-    Sandbox.loadInto('../server/cooldowns.lua', freshEnv)
-    local ok, err = pcall(Sandbox.loadInto, '../server/sarcalls.lua', freshEnv)
-    if ok then return nil end
-    return tostring(err)
-end
-
---- Same as loadWithBadConfig, but for the values that are meant to SURVIVE
---- rather than abort -- returns the lines the file printed while loading, so
---- a clamp-and-warn can be asserted on rather than just "it didn't crash".
+--- Loads server/sarcalls.lua fresh into a throwaway env with `tuning` in
+--- place of Config.SARCalls (nil included -- the whole-table-missing case),
+--- returning the lines the file printed while loading and whether it loaded
+--- at all, so a clamp-and-warn can be asserted on rather than just "it
+--- didn't crash".
+--- @param tuning table?
 --- @return string[] printedLines, boolean loaded
 local function loadCapturingPrints(tuning)
     local printedLines = {}
@@ -816,10 +804,17 @@ local function newCapturingFixture(tuning)
     }
 end
 
-t.test('CONFIG-SAFETY GUARD: Config.SARCalls missing entirely errors, naming Config.SARCalls', function()
-    local err = loadWithBadConfig(nil)
-    t.isNotNil(err)
-    t.contains(err, 'Config.SARCalls')
+t.test('CONFIG-SAFETY GUARD: Config.SARCalls missing entirely no longer aborts this file\'s load -- clamps every field to its shipped fallback, warns loudly naming Config.SARCalls, and the feature keeps working', function()
+    local printedLines, ok = loadCapturingPrints(nil)
+    t.isTrue(ok, 'must not crash merely because Config.SARCalls is missing -- the whole point of clamp-and-warn over assert-and-abort')
+
+    local warned = false
+    for _, line in ipairs(printedLines) do
+        if line:find('Config.SARCalls', 1, true) and line:find('missing', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must print a warning naming Config.SARCalls as missing')
 end)
 
 -- ------------------------------------------------------------------

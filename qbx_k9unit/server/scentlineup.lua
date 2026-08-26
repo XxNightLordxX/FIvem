@@ -162,6 +162,20 @@
     here -- server/permissions.lua is outside this file's ownership this
     pass.
 
+    DISCOVERABILITY FIX (this pass, no authorization logic touched):
+    CanUseScentLineup() used to return a single boolean, and /k9lineup sent
+    the SAME 'scentlineup.no_grant' copy ("You don't have permission to run
+    a Scent Lineup.") whether the caller was explicitly blocked, simply
+    never granted, or had an unresolvable identity (K9Compat's framework
+    adapter not yet ready). Those are three different problems with three
+    different fixes -- nothing to ask for, a specific grant to request from
+    High Command, or a transient state to retry -- and collapsing them left
+    the caller unable to tell which applied. CanUseScentLineup() now returns
+    a second value ('blocked'|'not_granted'|'identity_unresolved') and the
+    command handler below routes each to its own copy via
+    SCENTLINEUP_PERMISSION_DENY_MESSAGES. Nothing about WHICH citizenids
+    pass or fail changed -- this is a message-routing fix only.
+
     ======================================================================
     SYSTEM-AGNOSTIC BY CONSTRUCTION: the one piece of durable identity this
     file needs (the CONDUCTOR's citizenid, to consult the per-person
@@ -445,14 +459,25 @@ end
 --- Fails CLOSED if this file cannot resolve `src`'s own citizenid at all
 --- (see ResolveCitizenId above) -- a per-person check with no resolvable
 --- person to check can never be answered "allow".
+---
+--- DISCOVERABILITY FIX (this pass): used to return a single boolean, and
+--- /k9lineup below sent the SAME 'scentlineup.no_grant' copy for an
+--- explicit block, a missing grant, AND an unresolvable identity alike --
+--- three different problems ("nothing to ask for", "ask High Command for
+--- this specific grant", "your account could not be verified right now")
+--- collapsed into one generic denial that told the caller nothing about
+--- which applied or what to do about it. Now returns a second value so the
+--- caller can route each to its own copy -- see
+--- SCENTLINEUP_PERMISSION_DENY_MESSAGES below.
 --- @param src number
---- @return boolean
+--- @return boolean allowed
+--- @return ('blocked'|'not_granted'|'identity_unresolved')? denyReason -- nil when allowed == true
 local function CanUseScentLineup(src)
     local citizenid = ResolveCitizenId(src)
-    if type(citizenid) ~= 'string' then return false end
+    if type(citizenid) ~= 'string' then return false, 'identity_unresolved' end
 
     if type(HasPermission) == 'function' and HasPermission(citizenid, 'block.ScentLineup') then
-        return false
+        return false, 'blocked'
     end
 
     local requireGrant = type(Config.FeatureControl) == 'table'
@@ -460,11 +485,23 @@ local function CanUseScentLineup(src)
         and Config.FeatureControl.RequireGrant.ScentLineup == true
 
     if requireGrant then
-        return type(HasPermission) == 'function' and HasPermission(citizenid, 'feature.ScentLineup')
+        if type(HasPermission) == 'function' and HasPermission(citizenid, 'feature.ScentLineup') then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true
 end
+
+--- Player-facing copy for each of CanUseScentLineup's three denial reasons
+--- -- see that function's own doc comment for why these must not collapse
+--- back into one message.
+local SCENTLINEUP_PERMISSION_DENY_MESSAGES = {
+    blocked             = locale('scentlineup.blocked'),
+    not_granted         = locale('scentlineup.not_granted'),
+    identity_unresolved = locale('scentlineup.identity_unresolved'),
+}
 
 --- Best-effort display name for `src`, server-side, via the real CFX
 --- native GetPlayerName(playerSrc) (verified: ext/native-decls/
@@ -596,8 +633,9 @@ RegisterCommand('k9lineup', function(source, args)
         return
     end
 
-    if not CanUseScentLineup(src) then
-        NotifyPlayer(src, locale('scentlineup.no_grant'), 'error')
+    local permitted, denyReason = CanUseScentLineup(src)
+    if not permitted then
+        NotifyPlayer(src, SCENTLINEUP_PERMISSION_DENY_MESSAGES[denyReason] or locale('scentlineup.no_grant'), 'error')
         return
     end
 

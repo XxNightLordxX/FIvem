@@ -150,6 +150,39 @@ local FIND_ALERT_REACTION_COOLDOWN_MS = 1500
 local FindAlertReactionCooldown = NewCooldown(FIND_ALERT_REACTION_COOLDOWN_MS)
 FindAlertReactionCooldown.RegisterPlayerDropped()
 
+--- DISCOVERABILITY FIX (this pass): a K9 whose find-alert reaction is
+--- silently swallowed by an explicit block.FindAlerts row, or by
+--- RequireGrant.FindAlerts=true with no feature.FindAlerts grant held,
+--- previously got NOTHING -- no message at all, ever, ONLY the missing
+--- sit/bark itself -- so there was no way to learn a per-person grant was
+--- even the mechanism in play, let alone which one to ask for. Every OTHER
+--- silent-no-op branch in DispatchFindAlertReaction below (feature off,
+--- unmapped tier, no HasK9Access, unresolvable citizenid, the reaction
+--- cooldown itself) stays exactly as silent as it always was -- each of
+--- those is either genuinely not-about-the-player (an unmapped tier) or
+--- already correctly communicated elsewhere (HasK9Access is re-checked by
+--- server/search.lua before a search can even complete, so a real player
+--- reaching this function without K9 access essentially cannot happen in
+--- practice) -- see DispatchFindAlertReaction's own updated comment. This
+--- cooldown exists ONLY to keep the new notification from firing on every
+--- single completed search for a K9 stuck in this state (which could
+--- otherwise be several times a minute) -- deliberately much longer than
+--- FindAlertReactionCooldown above, which paces the REACTION, not this
+--- reminder.
+local FIND_ALERT_DENIAL_NOTIFY_COOLDOWN_MS = 300000 -- 5 minutes
+local FindAlertDenialNotifyCooldown = NewCooldown(FIND_ALERT_DENIAL_NOTIFY_COOLDOWN_MS)
+FindAlertDenialNotifyCooldown.RegisterPlayerDropped()
+
+--- Player-facing copy for the two PER-PERSON FEATURE CONTROL denial
+--- reasons IsFindAlertsPermittedForCitizenId can return -- see that
+--- function's own doc comment. Deliberately does NOT cover 'feature
+--- disabled'/'no access'/'no identity' -- see FIND_ALERT_DENIAL_NOTIFY_COOLDOWN_MS's
+--- own comment for why those stay silent.
+local FIND_ALERT_DENY_MESSAGES = {
+    blocked     = locale('findalert.blocked'),
+    not_granted = locale('findalert.not_granted'),
+}
+
 --- Resolves `citizenid` to its CURRENTLY connected player's server id, or
 --- nil if that citizenid is not online right now. See this file's header
 --- "WHY exports.qbx_core:GetPlayerByCitizenId(...) DIRECTLY" section for why
@@ -184,6 +217,8 @@ end
 ---   4. otherwise -> ALLOW
 --- @param citizenid string
 --- @return boolean allowed
+--- @return ('blocked'|'not_granted')? denyReason -- nil when allowed == true;
+---   see FIND_ALERT_DENY_MESSAGES above for the player-facing copy each maps to.
 local function IsFindAlertsPermittedForCitizenId(citizenid)
     -- Soft dependency, this resource's established convention -- see
     -- server/pursuitsprint.lua's own identical comment on its own copy of
@@ -191,7 +226,7 @@ local function IsFindAlertsPermittedForCitizenId(citizenid)
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
     if hasPermissionAvailable and HasPermission(citizenid, 'block.FindAlerts') == true then
-        return false -- step 2: an explicit block always wins, even over an active grant
+        return false, 'blocked' -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
@@ -201,7 +236,10 @@ local function IsFindAlertsPermittedForCitizenId(citizenid)
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.FindAlerts') == true
+        if hasPermissionAvailable and HasPermission(citizenid, 'feature.FindAlerts') == true then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
@@ -248,13 +286,23 @@ local function DispatchFindAlertReaction(targetSrc, alertTier)
     -- citizenid cannot be resolved at all -- a per-person check with no
     -- resolvable person to check can never be answered "allow", same
     -- reasoning server/scentlineup.lua's own CanUseScentLineup gives for
-    -- itself. Silent, no NotifyPlayer call, on purpose -- this function's
-    -- every other denial above is already a silent no-op (this is a
-    -- background reaction dispatch, not a direct player-issued command
-    -- that owes its caller an explanation).
+    -- itself. UNRESOLVABLE CITIZENID STAYS SILENT (no NotifyPlayer) -- there
+    -- is no confirmed identity to attribute a "you need a grant" message to,
+    -- and this is a rare/transient edge case (a framework race), not a
+    -- steady-state denial a player can act on. A CONFIRMED block/grant
+    -- denial, below, is different -- see FIND_ALERT_DENIAL_NOTIFY_COOLDOWN_MS's
+    -- own comment for why this got a message this pass when it never had one.
     local k9Player = exports.qbx_core:GetPlayer(targetSrc)
     local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
-    if not k9Citizenid or not IsFindAlertsPermittedForCitizenId(k9Citizenid) then
+    if not k9Citizenid then
+        return
+    end
+    local citizenPermitted, denyReason = IsFindAlertsPermittedForCitizenId(k9Citizenid)
+    if not citizenPermitted then
+        local message = FIND_ALERT_DENY_MESSAGES[denyReason]
+        if message and FindAlertDenialNotifyCooldown.Consume(targetSrc) then
+            NotifyPlayer(targetSrc, message, 'error')
+        end
         return
     end
 

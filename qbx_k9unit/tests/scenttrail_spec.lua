@@ -144,6 +144,15 @@ local function TriggerClientEvent(eventName, target, ...)
     triggerClientEventCalls[#triggerClientEventCalls + 1] = { event = eventName, target = target, args = { ... } }
 end
 
+-- DISCOVERABILITY FIX (this pass) -- server/scenttrail.lua now sends a
+-- direct NotifyPlayer for the feature-disabled/blocked/not_granted denial
+-- branches of startScentHunt below (never previously stubbed, since the
+-- production file never called it before this pass).
+local serverNotifyCalls = {}
+local function NotifyPlayer(target, description, notifyType)
+    serverNotifyCalls[#serverNotifyCalls + 1] = { target = target, description = description, notifyType = notifyType }
+end
+
 -- PER-PERSON FEATURE CONTROL fixture scaffolding -- server/scenttrail.lua's
 -- startScentHunt resolves `exports.qbx_core:GetPlayer(source).PlayerData.
 -- citizenid` (added alongside IsScentTrailHuntPermittedForCitizenId this
@@ -194,6 +203,7 @@ serverEnv = Sandbox.newEnv({
     GetEntityCoords = GetEntityCoords,
     HasK9Access = HasK9Access,
     TriggerClientEvent = TriggerClientEvent,
+    NotifyPlayer = NotifyPlayer,
     lib = libStub,
     Config = ServerConfig,
     exports = exportsStub,
@@ -230,11 +240,14 @@ t.test('server/scenttrail.lua registers both lib.callback handlers and the stopS
     t.isNotNil(registeredNetEvents['qbx_k9unit:server:stopScentHunt'])
 end)
 
-t.test('startScentHunt: Config.Features.ScentTrailHunt off is a real no-op (reason = denied), even with access', function()
+t.test('startScentHunt: Config.Features.ScentTrailHunt off is a real no-op (reason = denied), even with access, and now ALSO sends a plain "not about you" NotifyPlayer (DISCOVERABILITY FIX)', function()
     ServerConfig.Features.ScentTrailHunt = false
+    local before = #serverNotifyCalls
     local result = startScentHunt(1)
     t.isFalse(result.started)
     t.equals(result.reason, 'denied')
+    t.equals(#serverNotifyCalls, before + 1)
+    t.equals(serverNotifyCalls[#serverNotifyCalls].description, locale('scenttrail.feature_disabled'))
     ServerConfig.Features.ScentTrailHunt = true
 end)
 
@@ -422,7 +435,7 @@ end)
 -- state is guaranteed untouched by anything before it.
 -- ----------------------------------------------------------------------
 
-t.test('grant_required: RequireGrant.ScentTrailHunt = true + no grant held -- denied even though HasK9Access is true', function()
+t.test('grant_required: RequireGrant.ScentTrailHunt = true + no grant held -- denied even though HasK9Access is true, and now sends the distinct not_granted NotifyPlayer naming Scent Trail Hunt + High Command', function()
     ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = true
     setCitizenId(101, 'CID-BLOCKED-1')
     pedCoordsBySource[101] = { x = 0.0, y = 0.0, z = 0.0 }
@@ -433,6 +446,8 @@ t.test('grant_required: RequireGrant.ScentTrailHunt = true + no grant held -- de
 
     t.isFalse(result.started)
     t.equals(result.reason, 'denied')
+    t.equals(serverNotifyCalls[#serverNotifyCalls].target, 101)
+    t.equals(serverNotifyCalls[#serverNotifyCalls].description, locale('scenttrail.not_granted'))
     ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = false
 end)
 
@@ -450,7 +465,7 @@ t.test('RequireGrant.ScentTrailHunt = true + an active feature.ScentTrailHunt gr
     ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = false
 end)
 
-t.test('BLOCK ALWAYS WINS: an explicit block.ScentTrailHunt denies even a citizenid who ALSO holds an active feature.ScentTrailHunt grant, RequireGrant on', function()
+t.test('BLOCK ALWAYS WINS: an explicit block.ScentTrailHunt denies even a citizenid who ALSO holds an active feature.ScentTrailHunt grant, RequireGrant on, and sends the DIFFERENT blocked message, never not_granted', function()
     ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = true
     setCitizenId(103, 'CID-BLOCKED-2')
     grantPermission('CID-BLOCKED-2', 'feature.ScentTrailHunt', true)
@@ -462,6 +477,8 @@ t.test('BLOCK ALWAYS WINS: an explicit block.ScentTrailHunt denies even a citize
 
     t.isFalse(result.started)
     t.equals(result.reason, 'denied')
+    t.equals(serverNotifyCalls[#serverNotifyCalls].description, locale('scenttrail.blocked'))
+    t.isTrue(serverNotifyCalls[#serverNotifyCalls].description ~= locale('scenttrail.not_granted'), 'blocked and not_granted must read as two different, actionable messages, not one collapsed generic denial')
     ServerConfig.FeatureControl.RequireGrant.ScentTrailHunt = false
 end)
 

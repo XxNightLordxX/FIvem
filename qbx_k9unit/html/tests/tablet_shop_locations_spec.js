@@ -88,6 +88,21 @@ t.test('a non-high-command console user never sees the Shop Locations tab', asyn
     t.equals(findByText(h.getRoot(), 'Shop Locations').length, 0);
 });
 
+t.test('a non-high-command officer holding a delegated k9.equipmentshoplocations grant DOES see the Shop Locations tab, and can open it', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: DELEGATED_SHOP_LOCATIONS_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:equipmentShopGetLocations': () => ({ ok: true, locations: {} }),
+        })),
+    });
+    await openTablet(h);
+    const tab = findByText(h.getRoot(), 'Shop Locations')[0];
+    t.isTrue(!!tab, 'the tab itself is visible to a delegated non-high-command officer');
+    tab.click();
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Add Location Here').length >= 1, 'the real screen renders, not a dead end');
+});
+
 t.test('DYNAMIC LIST: locations rendered come entirely from tablet:equipmentShopGetLocations -- a cfg: row shows Config/no controls, a db: row shows Runtime/Edit+Move+Remove', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({

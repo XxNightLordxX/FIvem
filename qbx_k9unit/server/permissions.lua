@@ -1125,7 +1125,25 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
         return false, 'invalid_granter'
     end
 
-    if targetCitizenid == granterCitizenid then
+    -- AUDIT (coder-security, this pass -- "a reader of the audit trail
+    -- could not actually tell a self-grant apart from an ordinary one"):
+    -- computed once, here, and threaded through every LogAuditInvocation
+    -- call for the rest of this function as an explicit, ALWAYS-PRESENT
+    -- `self=true`/`self=false` field. Before this pass a self-grant's own
+    -- audit line only ever proved itself by a human (or a script) noticing
+    -- that the SAME citizenid string appears twice in one printed line --
+    -- once as `whoLabel` (LogAuditInvocation's own granter resolution),
+    -- once inside `detail`'s `target=%s` -- which is trivially missable on
+    -- a skim and not a stable, greppable signal either
+    -- ("AUDIT:.*self=true" now is). This does not change WHO may self-grant
+    -- or WHAT they may self-grant -- it only makes an already-permitted or
+    -- already-rejected self-grant impossible to mistake for an ordinary
+    -- one afterward. Deliberately a plain boolean comparison against the
+    -- SAME two values (targetCitizenid, granterCitizenid) the self-grant
+    -- check immediately below already computes -- not a new trust decision.
+    local isSelfGrant = targetCitizenid == granterCitizenid
+
+    if isSelfGrant then
         -- CRITICAL DAY-ONE FIX -- see header "SELF-GRANT" for the full
         -- writeup. Exempted ONLY for 'feature.<Name>' (RequireGrant/block
         -- feature-control grants) AND ONLY when the operator has not
@@ -1139,12 +1157,13 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
         -- required to reach this line at all, checked earlier in this
         -- function).
         if not (IsFeatureNamespacePermissionKey(permissionKey) and HighCommandSelfGrantOfFeaturesAllowed()) then
-            LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'self_grant_blocked')
+            LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), 'self_grant_blocked')
             return false, 'self_grant_blocked'
         end
         -- Falls through to the normal grant path below -- still fully
-        -- logged via LogAuditInvocation like any other grant (target ==
-        -- granter is plainly visible in that line's own `detail` string),
+        -- logged via LogAuditInvocation like any other grant, now carrying
+        -- an explicit `self=true` field (see AUDIT comment above) rather
+        -- than relying on a reader to notice target == granter unaided,
         -- still rate-limited, still notified. This is not a silent
         -- exception; it is a same-actor grant that is now permitted to
         -- proceed instead of being refused outright.
@@ -1168,7 +1187,7 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     -- entirely separate mutex (see this new file's own header for why).
     local havePermKeyMutex = type(PermissionKeyEditMutex) == 'table'
     if havePermKeyMutex and not PermissionKeyEditMutex.TryAcquire(permissionKey) then
-        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'busy')
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), 'busy')
         return false, 'busy'
     end
 
@@ -1178,14 +1197,14 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     -- write a grant row for a key that no longer validates.
     if havePermKeyMutex and not IsValidPermissionKey(permissionKey) then
         PermissionKeyEditMutex.Release(permissionKey)
-        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'invalid_permission')
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), 'invalid_permission')
         return false, 'invalid_permission'
     end
 
     local lockKey = targetCitizenid .. ':' .. permissionKey
     if GrantInFlight[lockKey] then
         if havePermKeyMutex then PermissionKeyEditMutex.Release(permissionKey) end
-        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'already_granted')
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), 'already_granted')
         return false, 'already_granted'
     end
     GrantInFlight[lockKey] = true
@@ -1234,17 +1253,24 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
 
     if not grantOk then
         print(('[qbx_k9unit] permissions.lua GrantPermission unexpected error for %s/%s: %s'):format(targetCitizenid, permissionKey, tostring(grantErr)))
-        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'db_error')
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), 'db_error')
         return false, 'db_error'
     end
 
     if outcome ~= 'ok' then
-        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), outcome)
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), outcome)
         return false, outcome
     end
 
     RefreshPermissionCacheIfOnline(targetCitizenid)
-    LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'ok')
+    -- AUDIT (coder-security, this pass): `self=true` here is the single
+    -- most important instance of this field in the whole file -- this is
+    -- the line printed for a SUCCESSFUL self-grant (the exact case the
+    -- CRITICAL DAY-ONE FIX above exists to permit for 'feature.<Name>').
+    -- Grep for "AUDIT:.*self=true.*-> ok" to find every self-service grant
+    -- that actually took effect, with no need to cross-reference `whoLabel`
+    -- against `target=` by eye.
+    LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s self=%s'):format(permissionKey, targetCitizenid, tostring(isSelfGrant)), 'ok')
 
     -- NOTIFICATIONS: target only, see header. Always sent on a real grant.
     local onlineTargetPlayer = exports.qbx_core:GetPlayerByCitizenId(targetCitizenid)
