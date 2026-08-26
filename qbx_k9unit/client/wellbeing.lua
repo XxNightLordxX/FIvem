@@ -1,8 +1,8 @@
 --[[
     qbx_k9unit/client/wellbeing.lua
 
-    Phase 4 implementation. Client-side half of Config.Features.FatigueSystem
-    / MoodSystem / FearStressSystem / DistractionSystem / InjuryLimping
+    Client-side half of Config.Features.FatigueSystem / MoodSystem /
+    FearStressSystem / DistractionSystem / InjuryLimping
     (DEVELOPER_REFERENCE.md §13.0 Decision 1, §13.3, §13.4.3). Receives the server's
     pushed wellbeing snapshots, sets the shared `K9MoveRateModifiers` entries
     for Fatigue/Injury/Mood (DEVELOPER_REFERENCE.md §13.0 Decision 2) and calls
@@ -14,29 +14,34 @@
     self-actions.
 
     Every one of the five wellbeing flags is checked at the point of use
-    below, not just declared. UPDATED (this pass, see "LIVE FEATURE FLAGS"
-    below): every check now reads `LiveFeatureFlags.<Name>` — the server's
-    CURRENT flag state, kept fresh by every `wellbeingUpdate` push/
-    `getWellbeingSnapshot` fetch — rather than this client's own static
-    `Config.Features.<Name>` copy, fixed at THIS client's own resource start
-    and never updated by a runtime tablet toggle
-    (server/runtimecontrol.lua). Registration (CreateThread/RegisterCommand/
-    ox_target option registration) now always happens regardless of that
-    static value too — a live-OFF flag is enforced at the point each ability
-    ACTS, never by skipping registration entirely, matching
-    client/featureblocks.lua's own established rule for this exact class of
-    check ("check at the point it acts, never merely at registration") — see
-    each section's own "ALWAYS STARTS/REGISTERS NOW" comment for the
-    specific gap this closed. The one exception, left as a disclosed,
-    bounded (not unbounded) staleness rather than a correctness bug: the
+    below, not just declared: see "LIVE FEATURE FLAGS" below. Every check
+    reads `LiveFeatureFlags.<Name>` — the server's CURRENT flag state, kept
+    fresh by every `wellbeingUpdate` push/`getWellbeingSnapshot` fetch —
+    rather than this client's own static `Config.Features.<Name>` copy,
+    fixed at this client's own resource start and never updated by a
+    runtime tablet toggle (server/runtimecontrol.lua). Registration
+    (CreateThread/RegisterCommand/ox_target option registration) always
+    happens regardless of that static value too — a live-OFF flag is
+    enforced at the point each ability ACTS, never by skipping registration
+    entirely, matching client/featureblocks.lua's own established rule for
+    this exact class of check ("check at the point it acts, never merely at
+    registration") — see each section's own "ALWAYS STARTS/REGISTERS"
+    comment for the specific gap this closes. The one exception, left as a
+    disclosed, bounded staleness rather than a correctness bug: the
     on-demand "just became K9-modeled" snapshot-fetch thread below still
     only starts if this client's OWN static config had at least one flag
     true at boot — a client that shipped fully wellbeing-disabled misses
     that one optimization and instead waits for the server's own periodic
-    tick push (bounded to `Config.Wellbeing.tickIntervalMs`, itself now
-    guaranteed to eventually start per server/wellbeing.lua's own
-    RUNTIME-TOGGLE-ON FIX) rather than getting an instant fetch the moment
-    it becomes K9-modeled.
+    tick push (bounded to `Config.Wellbeing.tickIntervalMs`). NOTE: that
+    periodic tick has the identical one-time boot-flag gate server-side
+    (server/wellbeing.lua's own CreateThread guard near the bottom of that
+    file) — an attempt to make it always start and idle was tried and
+    reverted there (see that file's own "DISCLOSED, NOT FIXED HERE"
+    comment), so a deployment where BOTH the server and this client booted
+    with every wellbeing flag false can in fact go unbounded time, not
+    merely one tick interval, before either side notices a later runtime
+    toggle-ON. This file's "bounded" framing above only holds once at least
+    one flag was already true at boot on the server.
 
     NOTHING BELOW IS A SECURITY BOUNDARY. Every mutating action
     (pet/feed/calm-down/distraction-item-use) is re-validated server-side in
@@ -44,22 +49,18 @@
     thinks — the standard "client hides the option, server is the real
     gate" split this codebase applies everywhere (DEVELOPER_REFERENCE.md §4.1).
 
-    DELIBERATELY NOT WIRED INTO client/radial.lua THIS PASS: DEVELOPER_REFERENCE.md
-    §13.4.3.3 frames "Calm Down" as a radial command, but client/radial.lua
-    is being actively worked on by a concurrent agent (AdvancedBarkRadial,
-    Phase 5) this session — touching it here risks a collision with that
-    work. Instead, this file exposes a plain resource-global,
-    `RequestK9CalmDown()`, and registers a working `/k9calmdown` command as
-    a real, usable-today entry point. Whoever next touches client/radial.lua
-    should add a menu entry that calls `RequestK9CalmDown()` (or triggers
-    'qbx_k9unit:server:calmDownK9' directly) rather than duplicating this
-    file's validation.
+    NOT CURRENTLY WIRED INTO client/radial.lua: DEVELOPER_REFERENCE.md
+    §13.4.3.3 frames "Calm Down" as a radial command. Instead, this file
+    exposes a plain resource-global, `RequestK9CalmDown()`, and registers a
+    working `/k9calmdown` command as a real, usable-today entry point. A
+    future client/radial.lua menu entry should call `RequestK9CalmDown()`
+    (or trigger 'qbx_k9unit:server:calmDownK9' directly) rather than
+    duplicating this file's validation.
 
     ======================================================================
     OX_TARGET API — same `addGlobalPlayer` shape already confirmed HIGH
-    confidence against real ox_target source by client/medkit.lua this
-    session (see that file's header) — not re-verified independently here,
-    reused unchanged.
+    confidence against real ox_target source by client/medkit.lua (see that
+    file's header) — not re-verified independently here, reused unchanged.
 
     EVENT/CALLBACK CONTRACT — see server/wellbeing.lua's header for the full
     contract; this file is the client side of every entry listed there.
@@ -111,29 +112,28 @@ local wasDistracted = false
 local wasHesitating = false
 
 -- ======================================================================
--- LIVE FEATURE FLAGS (this pass -- closes a real, confirmed gap traced from
--- server/runtimecontrol.lua's own disclosed limitation: "It does not push a
--- live Config update to already-connected CLIENTS... [that] is a
--- client/coder-frontend decision, not a server-lens one. Reported as a
--- follow-up, not built here."). Every check below USED TO read
--- `Config.Features.<Name>` directly -- this CLIENT's own copy of config.lua,
--- fixed at THIS client's own resource start and never updated by a runtime
--- tablet toggle (server/runtimecontrol.lua's runtimeSetFeature/
--- runtimeResetFeature only ever mutate the SERVER's own in-memory Config
--- table). Concretely, that meant: an operator switching e.g. FatigueSystem
--- off mid-session via the tablet left every already-connected, already-
--- penalized K9 stuck at its last-applied K9MoveRateModifiers.fatigue
--- penalty FOREVER -- server/wellbeing.lua's own TickWellbeing stops
--- decaying/regenerating that stat the instant its flag is false, so nothing
--- was ever going to carry lastStats.fatigue back across the threshold that
--- would have cleared the modifier, and this file had no way to learn the
--- flag had changed at all. A control that reports "done" to the operator
--- while silently doing nothing for an already-connected player -- worse
--- than one that honestly requires a restart.
+-- LIVE FEATURE FLAGS -- closes a real, confirmed gap: every check below
+-- USED TO read `Config.Features.<Name>` directly -- this CLIENT's own copy
+-- of config.lua, fixed at THIS client's own resource start and never
+-- updated by a runtime tablet toggle (server/runtimecontrol.lua's
+-- runtimeSetFeature/runtimeResetFeature only ever mutate the SERVER's own
+-- in-memory Config table; that file discloses it does not push a live
+-- Config update to already-connected clients, since doing so is a
+-- client-side decision it does not own). Concretely, that meant: an
+-- operator switching e.g. FatigueSystem off mid-session via the tablet
+-- left every already-connected, already-penalized K9 stuck at its
+-- last-applied K9MoveRateModifiers.fatigue penalty FOREVER --
+-- server/wellbeing.lua's own TickWellbeing stops decaying/regenerating
+-- that stat the instant its flag is false, so nothing was ever going to
+-- carry lastStats.fatigue back across the threshold that would have
+-- cleared the modifier, and this file had no way to learn the flag had
+-- changed at all. A control that reports "done" to the operator while
+-- silently doing nothing for an already-connected player -- worse than one
+-- that honestly requires a restart.
 --
 -- THE FIX: server/wellbeing.lua's SnapshotOf (see that file's own header
--- comment on this exact change) now piggybacks a `featureFlags` table onto
--- the ALREADY-EXISTING `wellbeingUpdate` push / `getWellbeingSnapshot`
+-- comment on this exact change) piggybacks a `featureFlags` table onto the
+-- ALREADY-EXISTING `wellbeingUpdate` push / `getWellbeingSnapshot`
 -- on-demand fetch -- no new event, no new poll, reusing the exact channel
 -- this file already listens to every tick. `ApplyWellbeingSnapshot` below
 -- copies any recognised boolean field from that table into this mirror;
@@ -161,10 +161,10 @@ local LiveFeatureFlags = {
 }
 
 -- ======================================================================
--- LIVE WELLBEING TUNABLES (this pass -- "make the speed boost and stamina
--- numbers genuinely editable" task, extended by the owner to every K9
--- stat). SAME MECHANISM, SAME CHANNEL AS "LIVE FEATURE FLAGS" ABOVE, NOT A
--- SECOND ONE -- server/wellbeing.lua's SnapshotOf now piggybacks a SECOND
+-- LIVE WELLBEING TUNABLES -- originally "make the speed boost and stamina
+-- numbers genuinely editable," extended by the owner to every K9 stat.
+-- SAME MECHANISM, SAME CHANNEL AS "LIVE FEATURE FLAGS" ABOVE, NOT A
+-- SECOND ONE -- server/wellbeing.lua's SnapshotOf piggybacks a SECOND
 -- table, `wellbeingTunables`, onto the identical `wellbeingUpdate` push /
 -- `getWellbeingSnapshot` fetch this section's own comment already
 -- describes in full; read that comment first, it is not repeated here.
@@ -228,14 +228,13 @@ local LiveWellbeingTunables = {
 
 --- Recomputes this file's three owned `K9MoveRateModifiers` slots from
 --- `lastStats` and asks client/movement.lua's composer to recompute the
---- single real `SetPedMoveRateOverride` call. UPDATED (this pass, see "LIVE
---- FEATURE FLAGS" above): a stat whose OWNING flag is currently OFF (per
---- `LiveFeatureFlags`, not the static `Config.Features` copy) now has its
---- slot explicitly RESET to 1.0 every call, never merely left at whatever
---- it already was — the previous "leave it untouched" behaviour is exactly
---- what let a flag switched off mid-effect leave that modifier frozen
---- forever, since nothing else in this file was ever going to move it back
---- to neutral on its own.
+--- single real `SetPedMoveRateOverride` call. A stat whose OWNING flag is
+--- currently OFF (per `LiveFeatureFlags`, not the static `Config.Features`
+--- copy -- see "LIVE FEATURE FLAGS" above) has its slot explicitly RESET to
+--- 1.0 every call, never merely left at whatever it already was: leaving a
+--- modifier untouched is exactly what would let a flag switched off
+--- mid-effect leave that modifier frozen forever, since nothing else in
+--- this file would ever move it back to neutral on its own.
 local function ApplyMoveRateModifiers()
     -- Every branch below now gates on `LiveFeatureFlags.<Name>` (the
     -- server's CURRENT flag state, kept fresh by ApplyWellbeingSnapshot
@@ -359,16 +358,15 @@ end
 --- header EVENT/CALLBACK CONTRACT item 8.
 --- @param stats table
 RegisterNetEvent('qbx_k9unit:client:wellbeingUpdate', function(stats)
-    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
-    -- "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
-    -- not re-derived here). Without this, a forged local
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup; not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:wellbeingUpdate', { fatigue = 999,
     -- ... })` would feed straight into ApplyWellbeingSnapshot() ->
     -- ApplyMoveRateModifiers()'s move-rate composer with zero server
     -- contact. Confidence: MEDIUM-HIGH, the official documented pattern
     -- for distinguishing a genuine server-sent event from a local
-    -- self-trigger, not independently verified in-engine this pass.
+    -- self-trigger, not independently verified in-engine.
     if source ~= 65535 then return end
 
     ApplyWellbeingSnapshot(stats)
@@ -386,17 +384,17 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
         while true do
             local isK9 = IsOwnModelK9()
             if isK9 and not wasK9 then
-                -- FAIL-CLOSED GUARD (dependency-verification finding, this
-                -- pass): `lib.callback.await` throws on a timeout/
-                -- unregistered-callback rejection rather than returning
-                -- nil (see client/main.lua's HasK9Access() doc comment for
-                -- the full citation against ox_lib's/FiveM's real source).
-                -- This is a `while true do` thread -- an uncaught throw
-                -- here would kill this entire loop permanently (until a
-                -- resource restart), silently ending the on-demand
-                -- snapshot fetch feature for the rest of this client's
-                -- session. pcall it; `type(snapshot) == 'table'` below
-                -- already treats a nil snapshot as "nothing to apply."
+                -- FAIL-CLOSED GUARD: `lib.callback.await` throws on a
+                -- timeout/unregistered-callback rejection rather than
+                -- returning nil (see client/main.lua's HasK9Access() doc
+                -- comment for the full citation against ox_lib's/FiveM's
+                -- real source). This is a `while true do` thread -- an
+                -- uncaught throw here would kill this entire loop
+                -- permanently (until a resource restart), silently ending
+                -- the on-demand snapshot fetch feature for the rest of this
+                -- client's session. pcall it; `type(snapshot) == 'table'`
+                -- below already treats a nil snapshot as "nothing to
+                -- apply."
                 local ok, snapshot = pcall(lib.callback.await, 'qbx_k9unit:server:getWellbeingSnapshot', false)
                 if not ok then snapshot = nil end
                 if type(snapshot) == 'table' then
@@ -415,26 +413,26 @@ end
 -- boundary, same category as the speed-penalty modifier above (§13.0
 -- Decision 3).
 --
--- ALWAYS STARTS NOW (this pass) -- UPDATED FROM "only started at all if
--- InjuryLimping is enabled (no thread, no cost, when disabled)": that
--- one-time, load-time gate on the static `Config.Features.InjuryLimping`
--- copy created the SAME "unbounded trap" class of bug this file's header
--- "LIVE FEATURE FLAGS" section describes, in BOTH directions --
+-- ALWAYS STARTS, regardless of Config.Features.InjuryLimping's boot-time
+-- value: gating thread creation on that static copy would create the SAME
+-- "unbounded trap" class of bug this file's header "LIVE FEATURE FLAGS"
+-- section describes, in BOTH directions --
 --   (a) OFF while active: a client that booted with InjuryLimping=true
---       (so this thread started) kept calling DisableControlAction forever
---       against a `lastStats.injury` value server/wellbeing.lua had
---       PERMANENTLY FROZEN the instant the server-side flag went false (no
+--       (so this thread started) would keep calling DisableControlAction
+--       forever against a `lastStats.injury` value server/wellbeing.lua
+--       PERMANENTLY FREEZES the instant the server-side flag goes false (no
 --       more decay, no more regen for that stat) -- an already-blocked K9
---       stayed sprint/jump-blocked forever, with no server push and no
+--       would stay sprint/jump-blocked forever, with no server push and no
 --       code path left anywhere that would ever clear it.
 --   (b) ON while never started: a client that booted with
---       InjuryLimping=false never started this thread at all -- a later
---       runtime toggle-ON had nothing left running client-side to ever
---       begin enforcing the block, for the rest of that client's session.
--- FIXED the same way client/movement.lua's own MOVE-RATE WATCHDOG closes
+--       InjuryLimping=false would never start this thread at all -- a
+--       later runtime toggle-ON would have nothing left running
+--       client-side to ever begin enforcing the block, for the rest of
+--       that client's session.
+-- Fixed the same way client/movement.lua's own MOVE-RATE WATCHDOG closes
 -- the identical class of gap (see that file's header for the general
--- pattern this mirrors): the thread now always exists, and checks the
--- CHEAP, purely-local `LiveFeatureFlags.InjuryLimping` boolean FIRST, every
+-- pattern this mirrors): the thread always exists, and checks the CHEAP,
+-- purely-local `LiveFeatureFlags.InjuryLimping` boolean FIRST, every
 -- iteration, before paying for a single native call
 -- (IsEntityModelK9/IsEntityDead) -- idling at the same coarse 1000ms this
 -- section already uses for its "not currently K9"/"dead" branches whenever
@@ -450,7 +448,7 @@ end
 -- mapping): 22 = INPUT_JUMP. INPUT_SPRINT = 21 is the standard,
 -- widely-documented FiveM/GTA V control id for the sprint action — HIGH
 -- confidence per common ecosystem knowledge, not independently re-verified
--- against a live client this session.
+-- against a live client.
 -- ======================================================================
 do
     local INPUT_SPRINT = 21
@@ -458,10 +456,9 @@ do
 
     CreateThread(function()
         while true do
-            -- OWN-DEATH GUARD (coder-frontend correctness pass, earlier
-            -- session): mirrors this codebase's own established "own ped
-            -- death forces an active perception/effect feature to end"
-            -- precedent (client/vision.lua's maintenance thread,
+            -- OWN-DEATH GUARD: mirrors this codebase's own established
+            -- "own ped death forces an active perception/effect feature to
+            -- end" precedent (client/vision.lua's maintenance thread,
             -- client/propattachment.lua's "OWN-DEATH AUTO-DETACH",
             -- client/tracking.lua's own equivalent guard on its
             -- state/compute thread). A dead ped can neither sprint nor
@@ -474,59 +471,47 @@ do
             -- needed — IsEntityDead() is polled fresh every loop iteration
             -- here).
             --
-            -- IDLE-SPIN FIX (performance audit, this pass): the branch below
-            -- used to take Wait(0) for the ENTIRE "alive and K9-modeled"
-            -- case unconditionally, regardless of whether either threshold
-            -- was actually crossed. With the shipped defaults
-            -- (sprintBlockThreshold=30, jumpBlockThreshold=20 out of
-            -- Injury.max=100), a HEALTHY K9 — injury anywhere in (30, 100],
-            -- the overwhelmingly common case for the entire time InjuryLimping
-            -- has anything to do — spun this thread at full per-frame rate
-            -- forever, calling PlayerPedId/IsOwnModelK9 (-> GetEntityModel)/
-            -- IsEntityDead roughly 180 times/second per K9 player, for the
-            -- rest of that session, for zero gameplay effect: this is the
-            -- DEFAULT case, not an edge case, unlike the dead-ped guard
-            -- above (which correctly idles only the much rarer "currently
-            -- dead" state). FIXED the same way that guard already
-            -- established: only take Wait(0) — the cadence
-            -- DisableControlAction's own contract genuinely requires while
-            -- actively re-asserting a block — when at least one threshold is
-            -- ACTUALLY crossed this tick; idle at the same coarse 1000ms
-            -- otherwise. A healthy-to-injured transition can therefore take
-            -- up to 1000ms to start being enforced (the same latency the
-            -- dead-ped guard above already accepts for resuming enforcement
-            -- after a respawn) — negligible against Config.Wellbeing
+            -- IDLE-SPIN FIX: the branch below used to take Wait(0) for the
+            -- ENTIRE "alive and K9-modeled" case unconditionally, regardless
+            -- of whether either threshold was actually crossed. With the
+            -- shipped defaults (sprintBlockThreshold=30,
+            -- jumpBlockThreshold=20 out of Injury.max=100), a HEALTHY K9 —
+            -- injury anywhere in (30, 100], the overwhelmingly common case
+            -- for the entire time InjuryLimping has anything to do — spun
+            -- this thread at full per-frame rate forever, calling
+            -- PlayerPedId/IsOwnModelK9 (-> GetEntityModel)/IsEntityDead
+            -- roughly 180 times/second per K9 player, for the rest of that
+            -- session, for zero gameplay effect: this is the DEFAULT case,
+            -- not an edge case, unlike the dead-ped guard above (which
+            -- correctly idles only the much rarer "currently dead" state).
+            -- Fixed the same way that guard already established: only take
+            -- Wait(0) — the cadence DisableControlAction's own contract
+            -- genuinely requires while actively re-asserting a block — when
+            -- at least one threshold is ACTUALLY crossed this tick; idle at
+            -- the same coarse 1000ms otherwise. A healthy-to-injured
+            -- transition can therefore take up to 1000ms to start being
+            -- enforced (the same latency the dead-ped guard above already
+            -- accepts for resuming enforcement after a respawn) —
+            -- negligible against Config.Wellbeing
             -- .tickIntervalMs's own 5000ms default cadence for Injury to
             -- change at all, and this was never a security boundary to
             -- begin with (this section's own header, and DEVELOPER_REFERENCE.md
             -- §13.0 Decision 3).
             --
-            -- OWNER'S CALL, NOT GUESSED (K9 role/model decoupling pass):
-            -- IsOwnModelK9() below is a RESTRICTION gate, not an access
-            -- grant — it TAKES sprint/jump AWAY from whoever it applies to.
-            -- Its own widening (client/main.lua: answers IsK9Role() instead
-            -- of a pure model check when Config.K9Appearance
-            -- .requireK9ModelForRole is false, the shipped default) already
-            -- swept this in: a certified handler who holds the K9 role
-            -- while still on a HUMAN model now also has this injury-based
-            -- sprint/jump block applied, despite never having had
-            -- quadruped locomotion — or this Injury stat's own K9-specific
-            -- meaning — to restrict in the first place. Deliberately left
-            -- AS-IS, same "reasonable owners could want either answer"
-            -- reasoning as client/movement.lua's identical AgilityBasicJump
-            -- note. Reverting to model-only (this block applies ONLY to an
-            -- actual K9-modeled ped, never a human-modeled role-holder) is
-            -- exactly a ONE-LINE change: replace `IsOwnModelK9()` below
-            -- with `IsEntityModelK9(PlayerPedId())`.
-            -- OWNER'S DECISION, 2026-08-25: MODEL, not role -- same call and
-            -- same reasoning as client/movement.lua's jump/crouch suppression.
-            -- The injury sprint/jump block restricts quadruped locomotion; a
+            -- OWNER'S DECISION: MODEL, not role (K9 role/model decoupling)
+            -- -- same call and same reasoning as client/movement.lua's
+            -- jump/crouch suppression. IsEntityModelK9(PlayerPedId()) below
+            -- is a RESTRICTION gate, not an access grant -- it TAKES
+            -- sprint/jump AWAY from whoever it applies to. The injury
+            -- sprint/jump block restricts quadruped locomotion; a
             -- role-holder on a human body never had that locomotion to
-            -- restrict. Deliberately NOT IsOwnModelK9(), which answers
-            -- role-OR-model -- do not "fix" this in a future any-ped sweep.
-            -- LIVE FLAG GATE, CHECKED FIRST (this pass -- see this
-            -- section's own header, "ALWAYS STARTS NOW"): a plain local
-            -- boolean read, zero native-call cost, ahead of
+            -- restrict, so this deliberately checks the model alone, not
+            -- IsOwnModelK9() (which would also match a role-holder on a
+            -- human body). Do not "fix" this to IsOwnModelK9() in a future
+            -- any-ped sweep.
+            -- LIVE FLAG GATE, CHECKED FIRST (see this section's own header,
+            -- "ALWAYS STARTS"): a plain local boolean read, zero
+            -- native-call cost, ahead of
             -- IsEntityModelK9()/IsEntityDead() below -- exactly the
             -- "cheap local flag first, real work only while there is
             -- something to do" shape client/movement.lua's own MOVE-RATE
@@ -540,8 +525,8 @@ do
             if not LiveFeatureFlags.InjuryLimping then
                 Wait(1000)
             elseif IsEntityModelK9(PlayerPedId()) and not IsEntityDead(PlayerPedId()) then
-                -- LIVE TUNABLE READ (this pass -- see this file's header
-                -- "LIVE WELLBEING TUNABLES"): reads the server's CURRENT
+                -- LIVE TUNABLE READ (see this file's header "LIVE
+                -- WELLBEING TUNABLES"): reads the server's CURRENT
                 -- threshold, not this client's static config copy, so a
                 -- tablet edit that raises a threshold lifts an existing
                 -- block on this very next 1000ms-or-sooner iteration, never
@@ -570,16 +555,16 @@ end
 -- ======================================================================
 -- MOOD — "Pet K9" / "Feed K9" ox_target world interactions.
 --
--- ALWAYS REGISTERS NOW (this pass) -- UPDATED FROM the original
--- `if Config.Features.MoodSystem then ... end` gate wrapping this ENTIRE
--- block, including the ox_target registration itself: that gate meant a
--- client who booted with MoodSystem=false could never see "Pet K9"/
--- "Feed K9" appear even after a later runtime toggle-ON, for the rest of
--- that client's session -- no restart of THIS resource would help, since
--- nothing client-side was left to ever call RegisterMoodOxTargetOptions()
--- again. FIXED per this file's header "LIVE FEATURE FLAGS": registration
--- now always happens (cheap -- ox_target option registration is a one-time
--- table build, not a poll), and both `canInteract` closures below gate on
+-- ALWAYS REGISTERS, regardless of Config.Features.MoodSystem's boot-time
+-- value: gating this entire block (including the ox_target registration
+-- itself) on that static copy would mean a client who booted with
+-- MoodSystem=false could never see "Pet K9"/"Feed K9" appear even after a
+-- later runtime toggle-ON, for the rest of that client's session -- no
+-- restart of THIS resource would help, since nothing client-side would be
+-- left to ever call RegisterMoodOxTargetOptions() again. Per this file's
+-- header "LIVE FEATURE FLAGS": registration always happens (cheap --
+-- ox_target option registration is a one-time table build, not a poll),
+-- and both `canInteract` closures below gate on
 -- `LiveFeatureFlags.MoodSystem` (the server's CURRENT flag state) instead
 -- of the static `Config.Features.MoodSystem` this client shipped with --
 -- exactly matching client/featureblocks.lua's own established rule for
@@ -623,14 +608,14 @@ do
     -- script gets both options translated automatically instead of losing
     -- them outright.
     --
-    -- LIFECYCLE FIX (this pass): extracted into a named function, sole
-    -- call site the AddEventHandler('onResourceStart', ...) below, so both
-    -- options come back after a bare restart of whatever resource actually
-    -- backs the 'target' system, not just after this resource's own
-    -- restart -- every supported target script keeps its own registry in a
-    -- plain file-local Lua table inside its own client chunk, reloaded
-    -- empty on THAT resource's own restart with nothing else prompting a
-    -- re-add. Mirrors server/tracking.lua's RegisterScentInventoryHook /
+    -- LIFECYCLE FIX: extracted into a named function, sole call site the
+    -- AddEventHandler('onResourceStart', ...) below, so both options come
+    -- back after a bare restart of whatever resource actually backs the
+    -- 'target' system, not just after this resource's own restart -- every
+    -- supported target script keeps its own registry in a plain file-local
+    -- Lua table inside its own client chunk, reloaded empty on THAT
+    -- resource's own restart with nothing else prompting a re-add. Mirrors
+    -- server/tracking.lua's RegisterScentInventoryHook /
     -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for
     -- the identical bug class against ox_inventory. DUPLICATE-VS-REPLACE:
     -- both options below always set `name`, and every adapter's own
@@ -660,9 +645,8 @@ do
                     local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
                     if not targetServerId then return end
 
-                    -- FAIL-CLOSED GUARD (dependency-verification finding,
-                    -- this pass): `lib.callback.await` throws rather than
-                    -- returning nil on a timeout/unregistered-callback
+                    -- FAIL-CLOSED GUARD: `lib.callback.await` throws rather
+                    -- than returning nil on a timeout/unregistered-callback
                     -- rejection (see client/main.lua's HasK9Access() doc
                     -- comment for the full citation). pcall it; NotifyResult
                     -- already treats a nil/falsy `result` as a silent no-op
@@ -707,12 +691,13 @@ do
     -- resource's own start, or ox_target's own start -- mirrors
     -- server/tracking.lua's RegisterScentInventoryHook /
     -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for
-    -- the identical class of gap against ox_inventory. UNCONDITIONAL now
-    -- (this pass) -- see this section's own header "ALWAYS REGISTERS NOW"
-    -- for why registering regardless of MoodSystem's STATIC boot-time value
-    -- is the fix, not a regression: the actual gate a disabled feature
-    -- needs lives in `canInteract` (`LiveFeatureFlags.MoodSystem`), checked
-    -- fresh on every look, not at registration.
+    -- the identical class of gap against ox_inventory. Registration is
+    -- unconditional here -- see this section's own header "ALWAYS
+    -- REGISTERS" for why registering regardless of MoodSystem's STATIC
+    -- boot-time value is the fix, not a regression: the actual gate a
+    -- disabled feature needs lives in `canInteract`
+    -- (`LiveFeatureFlags.MoodSystem`), checked fresh on every look, not at
+    -- registration.
     AddEventHandler('onResourceStart', function(resourceName)
         if resourceName == GetCurrentResourceName() then
             RegisterMoodOxTargetOptions()
@@ -736,19 +721,20 @@ end
 
 -- ======================================================================
 -- FEARSTRESS — "Calm Down" self-action. See this file's header for why
--- this is a plain command + exported global rather than a client/radial.lua
--- menu entry this pass.
+-- this is a plain command + exported global rather than a
+-- client/radial.lua menu entry.
 -- ======================================================================
 
 --- Resource-global (no `local`) — a future radial menu entry should call
 --- this rather than re-deriving its own validation.
 --- Already unconditionally registered (RegisterCommand below is never
 --- gated by a `Config.Features.FearStressSystem` wrapper) -- this function
---- itself is the only gate, so switching it from the static
---- `Config.Features.FearStressSystem` to `LiveFeatureFlags.FearStressSystem`
---- (this pass -- see this file's header "LIVE FEATURE FLAGS") is enough on
---- its own to make a runtime toggle reach an already-connected client in
---- BOTH directions, with no registration-lifecycle change needed.
+--- itself is the only gate, so reading
+--- `LiveFeatureFlags.FearStressSystem` here (see this file's header "LIVE
+--- FEATURE FLAGS") rather than the static
+--- `Config.Features.FearStressSystem` is enough on its own to make a
+--- runtime toggle reach an already-connected client in BOTH directions,
+--- with no registration-lifecycle change needed.
 function RequestK9CalmDown()
     if not LiveFeatureFlags.FearStressSystem then return end
     if not CanShowK9UI() then
@@ -765,28 +751,25 @@ RegisterCommand('k9calmdown', RequestK9CalmDown, false)
 -- DISTRACTION — meat-bait / whistle self-use. Deliberately open to ANY
 -- player, not gated on CanShowK9UI() — see this file's header.
 --
--- COMMANDS ALWAYS REGISTER NOW (this pass) -- UPDATED FROM the original
--- `if Config.Features.DistractionSystem then ... end` gate wrapping BOTH
--- RegisterCommand calls: a client who booted with DistractionSystem=false
--- could never even attempt `/k9meatbait`/`/k9whistle` after a later runtime
--- toggle-ON, for the rest of that session (an unrecognised command, not a
--- refused one). FIXED per this file's header "LIVE FEATURE FLAGS" and
--- matching RequestK9CalmDown's own already-correct shape immediately
--- above: both commands now always register, and `UseDistractionItem` below
--- checks `LiveFeatureFlags.DistractionSystem` FIRST -- a plain local read,
--- avoiding a wasted round trip to the server's own (unchanged, still
--- live-checked) `applyK9Distraction` callback for a flag this client
--- already knows is off.
+-- COMMANDS ALWAYS REGISTER, regardless of
+-- Config.Features.DistractionSystem's boot-time value: gating BOTH
+-- RegisterCommand calls on that static copy would mean a client who
+-- booted with DistractionSystem=false could never even attempt
+-- `/k9meatbait`/`/k9whistle` after a later runtime toggle-ON, for the rest
+-- of that session (an unrecognised command, not a refused one). Per this
+-- file's header "LIVE FEATURE FLAGS" and matching RequestK9CalmDown's own
+-- already-correct shape immediately above: both commands always register,
+-- and `UseDistractionItem` below checks `LiveFeatureFlags.DistractionSystem`
+-- FIRST -- a plain local read, avoiding a wasted round trip to the
+-- server's own (unchanged, still live-checked) `applyK9Distraction`
+-- callback for a flag this client already knows is off.
 -- ======================================================================
 do
     local function UseDistractionItem(itemType, failDescription)
         if not LiveFeatureFlags.DistractionSystem then return end
 
-        -- FAIL-CLOSED GUARD (dependency-verification finding, this pass;
-        -- this call site was not in the originally reported list --
-        -- re-grepping `lib.callback.await` across client/ this pass turned
-        -- it up too): `lib.callback.await` throws rather than returning
-        -- nil on a timeout/unregistered-callback rejection (see
+        -- FAIL-CLOSED GUARD: `lib.callback.await` throws rather than
+        -- returning nil on a timeout/unregistered-callback rejection (see
         -- client/main.lua's HasK9Access() doc comment for the full
         -- ox_lib/FiveM source citation). pcall it; the very next line's
         -- `if not result then return end` already treats a nil result as

@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/radial.lua
 
-    Phase 1 scaffold (coder-architect). Thin ox_lib radial menu WIRING
+    Phase 1 scaffold. Thin ox_lib radial menu WIRING
     ONLY — this file must never implement anim/native gameplay logic
     directly. Every item's onSelect should do at most a cheap access check
     plus a single call into a global function exposed by client/main.lua,
@@ -12,8 +12,8 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — this file does not register or trigger any
-    NETWORK event/callback directly (the one local-only exception, added
-    this pass, is noted separately below this list: an AddEventHandler for
+    NETWORK event/callback directly (the one local-only exception, noted
+    separately below this list, is an AddEventHandler for
     client/featureblocks.lua's purely client-side
     `qbx_k9unit:client:featureBlocksApplied` re-broadcast, which crosses no
     network boundary and needs no trust-boundary check). It calls:
@@ -48,19 +48,18 @@
       - client/training.lua's IsTrainingModeActive(),
         RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
         RequestTrainingBiteDrill().
-      Every cross-file global added after this file's own initial Phase 1
-      pass is called behind a `type(fn) == 'function'` runtime existence
-      guard (this codebase's established soft-dependency convention — see
-      e.g. RestoreInjury/AwardXP in server/tracking.lua) because
-      client/radial.lua loads FIRST among client_scripts (fxmanifest.lua),
-      before every file listed above that defines one of these globals —
-      the guard is never a load-order assumption, since by the time any of
-      these onSelect closures actually RUNS (a player action, always well
-      after this resource has finished loading), every one of those files
-      has already executed and defined its own globals for real; it is kept
-      anyway per this resource's own documented "runtime existence guard,
-      not a load-order assumption" convention, matching every other guarded
-      call site in this codebase.
+      Every cross-file global added after Phase 1 is called behind
+      a `type(fn) == 'function'` runtime existence guard (this codebase's
+      established soft-dependency convention — see e.g. RestoreInjury/AwardXP
+      in server/tracking.lua) because client/radial.lua loads FIRST among
+      client_scripts (fxmanifest.lua), before every file listed above that
+      defines one of these globals — the guard is never a load-order
+      assumption, since by the time any of these onSelect closures actually
+      RUNS (a player action, always well after this resource has finished
+      loading), every one of those files has already executed and defined
+      its own globals for real; it is kept anyway per this resource's own
+      documented "runtime existence guard, not a load-order assumption"
+      convention, matching every other guarded call site in this codebase.
     ======================================================================
 
     DEVELOPER_REFERENCE.md §6.1 / §8 step 7 Phase 1 radial item list: Bark, Sit,
@@ -68,11 +67,12 @@
     its owning Config.Features flag is true AND the access check above
     passes."
 
-    OPEN STRUCTURAL QUESTION flagged for coder-frontend (not decided
-    here): ox_lib's `lib.addRadialItem` registers items once; there's no
-    built-in live "should this item be visible right now" predicate the
-    way ox_target's `canInteract` works. Two ways to satisfy "each item
-    only appears if... access check passes" (DEVELOPER_REFERENCE.md §3/§6.1):
+    STRUCTURAL QUESTION, RESOLVED (see "OPEN STRUCTURAL QUESTION
+    resolution" below, right before FindNearestLeashCandidate()): ox_lib's
+    `lib.addRadialItem` registers items once; there's no built-in live
+    "should this item be visible right now" predicate the way ox_target's
+    `canInteract` works. Two ways to satisfy "each item only appears
+    if... access check passes" (DEVELOPER_REFERENCE.md §3/§6.1):
       (a) A lightweight polling thread (e.g. every 2-3s while the local
           player is near/playing) that calls CanShowK9UI() and
           lib.addRadialItem/lib.removeRadialItem the whole "K9 Unit"
@@ -84,12 +84,14 @@
           player.
     DEVELOPER_REFERENCE.md's "only appears if" phrasing leans toward (a), but a live
     network round-trip (CanShowK9UI awaits a server callback) firing every
-    couple of seconds for every player near a PD may be more chatter than
-    wanted — your call, but document whichever is chosen so
-    qa-tester/integration-verifier know what "appears" means here.
+    couple of seconds for every player near a PD is more chatter than
+    wanted — (b) is what this file implements; see the resolution comment
+    below for the full reasoning. Documented here so "appears" in this
+    file's own comments is understood to mean "is present in the radial
+    wheel," not "is currently usable."
 
-    QBOX/OX_LIB API FIX (framework-compatibility pass, verified against
-    ox_lib's actual source — overextended/ox_lib
+    QBOX/OX_LIB API FIX (verified against ox_lib's actual source —
+    overextended/ox_lib
     resource/interface/client/radial.lua's registerRadial/addRadialItem/
     radialClick — not just the docs prose): the earlier draft of this file
     built ONE FLAT ARRAY containing an "opener" item (id='k9unit', no
@@ -142,18 +144,18 @@
     off (the default), behavior is unchanged from the single-literal
     description above.
 
-    OX_LIB RESTART LIFECYCLE FIX (dependency-verification pass, verified
-    against ox_lib's own source -- overextended/ox_lib
-    resource/interface/client/radial.lua, read directly): every
-    `lib.registerRadial`/`lib.addRadialItem` call this file makes used to run
-    ONCE, at this file's own load time, as bare top-level statements. That
-    was fine for THIS resource's own lifecycle (fxmanifest.lua only loads
-    this file once per resource start), but ox_lib keeps `menus` and
-    `menuItems` -- the tables every one of those calls writes into -- as
-    plain FILE-LOCAL Lua tables inside ox_lib's OWN client chunk, exactly
-    the same shape client/movement.lua's own "LIFECYCLE FIX" comment
-    documents for ox_target's addGlobalPlayer/addGlobalObject registries.
-    ox_lib's `onClientResourceStop` handler only clears `menuItems` entries
+    OX_LIB RESTART LIFECYCLE FIX (verified against ox_lib's own source --
+    overextended/ox_lib resource/interface/client/radial.lua, read
+    directly): every `lib.registerRadial`/`lib.addRadialItem` call this file
+    makes used to run ONCE, at this file's own load time, as bare top-level
+    statements. That was fine for THIS resource's own lifecycle
+    (fxmanifest.lua only loads this file once per resource start), but
+    ox_lib keeps `menus` and `menuItems` -- the tables every one of those
+    calls writes into -- as plain FILE-LOCAL Lua tables inside ox_lib's OWN
+    client chunk, exactly the same shape client/movement.lua's own
+    "LIFECYCLE FIX" comment documents for ox_target's
+    addGlobalPlayer/addGlobalObject registries. ox_lib's
+    `onClientResourceStop` handler only clears `menuItems` entries
     belonging to the STOPPING resource -- it never touches `menus` at all --
     but neither table survives ox_lib ITSELF restarting: that reloads the
     whole chunk from scratch, reconstructing both empty, with nothing in
@@ -188,23 +190,21 @@
 -- satisfying DEVELOPER_REFERENCE.md §3's "read at the point... menu item visibility"),
 -- and every onSelect below independently re-checks CanShowK9UI() before
 -- doing anything, notifying+denying on failure. Rationale for (b) over
--- (a) here: every one of coder-architect's own onSelect TODO snippets
--- already assumed this exact "if not CanShowK9UI() then notify + return"
--- shape, which only makes sense if the item can actually be seen/selected
--- by a non-qualifying player in the first place; (a) would make that
--- branch largely unreachable. (b) also avoids a polling thread that
--- would otherwise re-await the server's hasK9Access callback every couple
--- of seconds for every player near a PD. (NOTE: a later
--- framework-compatibility pass DID verify the actual
+-- (a): every onSelect's own "if not CanShowK9UI() then notify + return"
+-- shape only makes sense if the item can actually be seen/selected by a
+-- non-qualifying player in the first place; (a) would make that branch
+-- largely unreachable. (b) also avoids a polling thread that would
+-- otherwise re-await the server's hasK9Access callback every couple of
+-- seconds for every player near a PD. (NOTE: the actual
 -- lib.registerRadial/lib.addRadialItem submenu-then-children mechanics
--- against ox_lib's own source — see the QBOX/OX_LIB API FIX note above —
--- and found the original registration call itself was broken; that is
--- now fixed independently of this option-(b)-vs-(a) choice, which still
--- stands.) Documented here for qa-tester/
--- integration-verifier: "appears" in this file means "is present in the
--- radial wheel," not "is currently usable" — usability is enforced at
--- onSelect time, same as every gated server event is independently
--- re-verified server-side regardless of what the client shows.
+-- were separately verified against ox_lib's own source — see the
+-- QBOX/OX_LIB API FIX note above — which found the original registration
+-- call itself was broken; that is fixed independently of this
+-- option-(b)-vs-(a) choice, which still stands.) "Appears" in this file's
+-- own comments means "is present in the radial wheel," not "is currently
+-- usable" — usability is enforced at onSelect time, same as every gated
+-- server event is independently re-verified server-side regardless of
+-- what the client shows.
 --- Finds the nearest OTHER player within Config.LeashMaxDistance (the base
 --- leash range, reused directly here as a search radius rather than via
 --- a derived factor — see config.lua's comment on that field and
@@ -285,9 +285,9 @@ end
 --- Idempotent (re-)registration of every "K9 Unit" radial menu and
 --- submenu this resource owns.
 ---
---- LIFECYCLE FIX (dependency-verification pass, verified against ox_lib's
---- own source -- overextended/ox_lib resource/interface/client/radial.lua,
---- read directly, not assumed): `menus` and `menuItems` inside that file are
+--- LIFECYCLE FIX (verified against ox_lib's own source --
+--- overextended/ox_lib resource/interface/client/radial.lua, read
+--- directly, not assumed): `menus` and `menuItems` inside that file are
 --- plain FILE-LOCAL Lua tables in ox_lib's own client chunk, exactly the
 --- same shape as ox_target's addGlobalPlayer/addGlobalObject registries
 --- (see client/movement.lua's own "LIFECYCLE FIX" comment on
@@ -340,7 +340,7 @@ end
 --- call site around it, nothing about the registration sequence itself was
 --- reordered.
 ---
---- DUPLICATE-VS-REPLACE (verified against ox_lib's own source, this pass):
+--- DUPLICATE-VS-REPLACE (verified against ox_lib's own source):
 --- `lib.registerRadial` does `menus[radial.id] = radial` -- a plain
 --- key-based table write, so re-running this function against a `menus`
 --- table that already holds an entry for a given id (this resource's own
@@ -362,12 +362,12 @@ end
 --- one-shot `locale()`/`lib.notify` calls each onSelect closure makes at
 --- CLICK time, which need no persistent handle to ox_lib at all.
 --- ======================================================================
---- K9 UNIT RADIAL -- PER-PERSON BLOCK (client/featureblocks.lua,
---- REQUESTED -- see that file's own header for the full contract).
---- RadialMenu and AdvancedBarkRadial are the only two of the twelve
---- purely-client-side features this pass makes blockable that live in
---- THIS file, and both are handled the SAME way, deliberately DIFFERENT
---- from every other feature this pass touches: at REGISTRATION time
+--- K9 UNIT RADIAL -- PER-PERSON BLOCK (client/featureblocks.lua -- see
+--- that file's own header for the full contract). RadialMenu and
+--- AdvancedBarkRadial are the only two of the twelve purely-client-side
+--- features made blockable that live in THIS file, and both are handled
+--- the SAME way, deliberately DIFFERENT from how every other blockable
+--- feature elsewhere in this codebase is handled: at REGISTRATION time
 --- inside RegisterK9RadialMenu() below, not inside an onSelect closure.
 --- WHY THIS ONE FILE IS THE EXCEPTION (see client/featureblocks.lua's own
 --- header "WHERE THE CHECK GOES" for the short version): both features
@@ -413,8 +413,8 @@ end
 --- the Bark entry degrades to the SAME single, flat, generic-'bark'-type
 --- item this file already ships when Config.Features.AdvancedBarkRadial
 --- is globally false -- barking itself keeps working (BasicBarkSounds has
---- its OWN, separate, server-enforced block key; this pass does not touch
---- it), only the variant SUBMENU is withheld.
+--- its OWN, separate, server-enforced block key, untouched here), only the
+--- variant SUBMENU is withheld.
 ---
 --- LIVE, NOT JUST AT NEXT RESTART: client/featureblocks.lua fires a local
 --- `qbx_k9unit:client:featureBlocksApplied` event every time it processes
@@ -433,7 +433,7 @@ end
 --- `type(IsK9FeatureBlocked) == 'function'` guard throughout, per this
 --- resource's soft-dependency convention -- fails OPEN (never blocked) if
 --- client/featureblocks.lua has not loaded, matching every other call
---- site this pass adds.
+--- site in this file.
 --- @param featureName string -- 'RadialMenu' | 'AdvancedBarkRadial'
 --- @return boolean
 local function IsRadialFeatureBlockedForMe(featureName)
@@ -464,15 +464,15 @@ local function RegisterK9RadialMenu()
                 -- type(...) == 'function' guard per this file's own header
                 -- policy ("every cross-file global... called behind a
                 -- type(fn) == 'function' runtime existence guard") --
-                -- HEADER/CODE DRIFT FIX (dependency-verification pass):
-                -- this call, and every other one this fix touches below,
-                -- used to call straight through unguarded, contradicting
-                -- that stated blanket policy even though it was never
-                -- actually reachable with a nil target in a real session
-                -- (fxmanifest.lua loads client/movement.lua before any
-                -- player action can fire this onSelect). Added for
-                -- consistency with every other post-Phase-1 item in this
-                -- file, and so the header's own claim is no longer false.
+                -- HEADER/CODE DRIFT FIX: this call, and every other one
+                -- this fix touches below, used to call straight through
+                -- unguarded, contradicting that stated blanket policy even
+                -- though it was never actually reachable with a nil target
+                -- in a real session (fxmanifest.lua loads
+                -- client/movement.lua before any player action can fire
+                -- this onSelect). Added for consistency with every other
+                -- post-Phase-1 item in this file, and so the header's own
+                -- claim is no longer false.
                 if type(K9Sit) == 'function' then
                     K9Sit()
                 end
@@ -667,17 +667,14 @@ local function RegisterK9RadialMenu()
     --- StopTracking()); while tracking a DIFFERENT type is active, it defers to
     --- Start*Track()'s own "already tracking — stop first" rejection/notify
     --- rather than silently canceling the wrong trail; otherwise it starts that
-    --- specific trail type. This is deliberately the only in-game entry point
-    --- to client/tracking.lua's Start*Track()/StopTracking() globals —
-    --- integration-verifier/correctness-overseer both flagged that nothing
-    --- called them, leaving no way to trigger or cancel a trail at all.
-    --- regression-tester finding on the FIRST version of this wiring: a bare
-    --- `if IsTracking() then StopTracking()` check here (not gated on the
-    --- item's OWN type) meant clicking, say, "Track Gunpowder" while already
-    --- tracking blood would silently cancel the blood trail and do nothing
-    --- else — the click was swallowed by the wrong item's toggle branch, with
-    --- zero notification, and Track Gunpowder had to be clicked a SECOND time
-    --- to actually start. Fixed below via GetActiveTrackType() — each item now
+    --- specific trail type. This is the only in-game entry point to
+    --- client/tracking.lua's Start*Track()/StopTracking() globals.
+    --- A bare `if IsTracking() then StopTracking()` check here (not gated on
+    --- the item's OWN type) would mean clicking, say, "Track Gunpowder"
+    --- while already tracking blood would silently cancel the blood trail
+    --- and do nothing else — the click swallowed by the wrong item's toggle
+    --- branch, with zero notification, and Track Gunpowder needing a SECOND
+    --- click to actually start. Avoided via GetActiveTrackType() — each item
     --- only self-toggles when it's already the active type. Each gated
     --- independently by its own Config.Features flag, same pattern as
     --- Bark/Leash/Vehicle above.
@@ -905,7 +902,7 @@ local function RegisterK9RadialMenu()
     --- check would strand a K9 that loses access mid-drag (decertified,
     --- feature-flag flip, model swap) with no way to let go, stranding the drag
     --- until the server's maxDragDurationMs timeout. This was the exact mistake
-    --- corrected for Bite & Hold in an earlier pass; not repeating it here.
+    --- corrected for Bite & Hold above; not repeating it here.
     if Config.Features.PropDragging then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_drag',
@@ -940,8 +937,8 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Break Partnership -- DEVELOPER_REFERENCE.md §12.0 item 7. Closes a real gap a QA
-    --- pass found: client/partnership.lua exposes BreakPartnership() as a fully
+    --- Break Partnership -- DEVELOPER_REFERENCE.md §12.0 item 7. Closes a real gap:
+    --- client/partnership.lua exposes BreakPartnership() as a fully
     --- implemented resource-global specifically FOR a future radial entry (see
     --- that file's own header, "FILE-TO-FILE CONTRACT" -> BreakPartnership()),
     --- but nothing in this resource called it -- "Partner Up" has a live
@@ -1003,18 +1000,17 @@ local function RegisterK9RadialMenu()
     --- unneeded is strictly better than one that is sometimes invisible to
     --- exactly the player who needs it.
     ---
-    --- RESOLVED (was a TODO here; corrected, not left stale): the live
-    --- partnership-status callback this note was waiting on has landed --
-    --- server/partnership.lua registers
+    --- The live partnership-status callback this section once anticipated
+    --- has since landed -- server/partnership.lua registers
     --- `lib.callback.register('qbx_k9unit:server:getPartnershipState', ...)`,
     --- returning current SERVER-truth partnership state, and
     --- client/partnership.lua's RefreshPartnershipStateFromServer() already
-    --- awaits it (per this resource's own fxmanifest.lua comment on that file).
-    --- As anticipated below, THIS file needed no change when it landed -- the
-    --- "Break Partnership" item stays unconditionally offered regardless of
-    --- local partnership-state cache accuracy, for the exact reconnect-trap
-    --- reason described above. Kept here only as a historical note so a future
-    --- reader doesn't go looking for a callback that already exists.
+    --- awaits it (per this resource's own fxmanifest.lua comment on that
+    --- file). This item needed no change when it landed -- "Break
+    --- Partnership" stays unconditionally offered regardless of local
+    --- partnership-state cache accuracy, for the exact reconnect-trap reason
+    --- described above. Noted here so a future reader doesn't go looking for
+    --- a callback that already exists.
     if Config.Features.HandlerPartnership then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_break_partnership',
@@ -1041,13 +1037,10 @@ local function RegisterK9RadialMenu()
     end
 
     --- Partner Up -- DEVELOPER_REFERENCE.md §12.0 item 7. The other half of the gap
-    --- Break Partnership above already closed: client/partnership.lua's own
-    --- ox_target "Partner Up" option is a live entry point, but nothing in
-    --- this file offered the same action from the radial (fxmanifest.lua's own
-    --- comment on client/partnership.lua currently claims "the radial entry is
-    --- now wired" for this feature -- that was aspirational when written, not
-    --- yet true as of the start of this pass; report this drift to whoever
-    --- owns fxmanifest.lua). This item is what makes that claim true.
+    --- Break Partnership above already closes: client/partnership.lua's own
+    --- ox_target "Partner Up" option is a live entry point; this item is what
+    --- makes fxmanifest.lua's comment on client/partnership.lua ("the radial
+    --- entry is now wired") true from this file's side as well.
     ---
     --- A SEPARATE FLAT ITEM, NOT A DUAL-MODE TOGGLE WITH Break Partnership --
     --- same reasoning Break Partnership's own comment block above already
@@ -1107,10 +1100,10 @@ local function RegisterK9RadialMenu()
 
     --- Recall -- DEVELOPER_REFERENCE.md §12.5.1. Closes a real gap: client/recall.lua
     --- exposes RequestRecall() specifically "ready for [a future
-    --- client/radial.lua entry]" (that file's own header), but until this pass
-    --- nothing ever called it from here -- only its own '/k9recall' chat
-    --- command worked. config.lua's own Config.Recall header independently
-    --- names this exact feature this resource's "PRIMARY TERMINATION" path.
+    --- client/radial.lua entry]" (that file's own header); this item is that
+    --- entry, alongside client/recall.lua's own '/k9recall' chat command.
+    --- config.lua's own Config.Recall header independently names this exact
+    --- feature this resource's "PRIMARY TERMINATION" path.
     ---
     --- NOT GATED ON CanShowK9UI() -- same "no unbounded trap" requirement as
     --- Detach Leash / Release Bite & Hold / Release Drag / Break Partnership
@@ -1146,12 +1139,12 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Handler-Down Defense confirm -- DEVELOPER_REFERENCE.md §12.5.3. Fixes a live,
-    --- QA-found WRONG-INSTRUCTION bug: client/defense.lua's own
+    --- Handler-Down Defense confirm -- DEVELOPER_REFERENCE.md §12.5.3. Fixes a real
+    --- WRONG-INSTRUCTION bug: client/defense.lua's own
     --- handlerDownDefenseTrigger notify literally tells the K9 "Press %s to
-    --- respond, OR USE THE RADIAL MENU" -- and until this pass, no radial menu
-    --- entry for it existed anywhere in this file, making the second half of
-    --- that sentence false for every player who read it.
+    --- respond, OR USE THE RADIAL MENU" -- this item is what makes that
+    --- instruction true; without it, no radial menu entry for this action
+    --- existed anywhere in this file.
     ---
     --- A SUBMENU OF TWO TERMINAL ACTIONS, NOT ONE ITEM -- unlike this
     --- feature's own keybind (which always confirms 'bite' by default, per
@@ -1224,13 +1217,11 @@ local function RegisterK9RadialMenu()
 
     --- Fetch -- Phase 5 (FetchMechanic). client/fetch.lua exposes
     --- RequestThrowFetchBall()/ReleaseFetchBall()/RequestRecallFetchBall()/
-    --- IsFetchCarryEngaged() specifically "for a future client/radial.lua
-    --- entry to call" (that file's own header), disclosing it was left
-    --- deliberately unwired only to dodge a merge conflict with a concurrent
-    --- pass on this same file -- not a design rejection. This submenu is that
-    --- follow-up. "Pick Up Ball" and "Deliver to Handler" stay ox_target
-    --- options exactly as client/fetch.lua's own header already documents
-    --- (targeted, proximity-driven actions on a specific ball/player, not a
+    --- IsFetchCarryEngaged() specifically for a client/radial.lua entry to
+    --- call (that file's own header); this submenu is that entry point.
+    --- "Pick Up Ball" and "Deliver to Handler" stay ox_target options exactly
+    --- as client/fetch.lua's own header already documents (targeted,
+    --- proximity-driven actions on a specific ball/player, not a
     --- self-initiated radial verb) -- not duplicated here.
     ---
     --- TWO ITEMS, NOT THREE, DESPITE THREE UNDERLYING FUNCTIONS -- Throw and
@@ -1312,8 +1303,9 @@ local function RegisterK9RadialMenu()
     --- Toggle K9 Vest -- Phase 5 R&D (PropAttachments). Closes a real gap:
     --- client/propattachment.lua exposes RequestToggleK9PropAttachment()
     --- specifically "so a future radial entry can call this directly without
-    --- this file needing to change" (that function's own doc comment), but
-    --- until this pass only its own '/k9propattach' command called it.
+    --- this file needing to change" (that function's own doc comment); this
+    --- item is that entry point, alongside the existing '/k9propattach'
+    --- command.
     ---
     --- A SINGLE FLAT TOGGLE ITEM, not two -- RequestToggleK9PropAttachment()
     --- is already a toggle by design (its own doc comment: "a toggle is a
@@ -1351,8 +1343,8 @@ local function RegisterK9RadialMenu()
     --- Deploy Kennel -- Phase 5 R&D (DeployableKennel). Closes a real gap:
     --- client/kennel.lua exposes RequestDeployKennel() specifically "so a
     --- future radial item can call it directly once client/radial.lua is
-    --- available to extend again" (that function's own doc comment), but until
-    --- this pass only its own '/k9deploykennel' command called it.
+    --- available to extend again" (that function's own doc comment); this item
+    --- is that entry point, alongside the existing '/k9deploykennel' command.
     ---
     --- DEPLOY-ONLY, BY DESIGN, NOT A DISCLOSED OMISSION -- "Pick Up Kennel"
     --- stays client/kennel.lua's own established ox_target option on the
@@ -1388,8 +1380,8 @@ local function RegisterK9RadialMenu()
     --- Open My Gear -- Phase 4 (K9Inventory). Closes a real gap: client/inventory.lua
     --- exposes RequestOpenOwnK9Inventory() specifically as a "future
     --- client/radial.lua 'Open My Gear' item" entry point (see that file's own
-    --- header, "RESOLVED" note), but until this pass nothing called it -- the
-    --- only live entry point into a K9 player's own gear stash was the
+    --- header, "RESOLVED" note); this item is that entry point -- the only
+    --- other live entry point into a K9 player's own gear stash is the
     --- ox_target "Open K9 Gear" option on their own ped, awkward/unusual UX
     --- for targeting yourself (that file's own header names this exact
     --- awkwardness as the reason a self-service global was added).
@@ -1426,9 +1418,9 @@ local function RegisterK9RadialMenu()
     --- Treat K9 -- Phase 4 (K9Medkit). Closes a real gap: client/medkit.lua
     --- exposes RequestTreatNearestK9() specifically as a radial entry point
     --- (see that file's own header, "FILE-TO-FILE CONTRACT" -> "THIS FILE
-    --- exposes one resource-global function for a radial entry point"), but
-    --- until this pass nothing called it -- the only live entry point into the
-    --- treat-request sequence was the ox_target "Treat K9" option on a
+    --- exposes one resource-global function for a radial entry point"); this
+    --- item is that entry point -- the only other live entry point into the
+    --- treat-request sequence is the ox_target "Treat K9" option on a
     --- specifically-targeted K9 player, leaving a handler with no visible
     --- nearby K9 (or who simply prefers the radial) no way to self-initiate the
     --- same request against the nearest eligible K9.
@@ -1466,16 +1458,12 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Search & Rescue Call -- closes a real, disclosed gap:
-    --- client/sarcalls.lua's own header used to state plainly that
-    --- RequestStartSarCall()/RequestAbandonSarCall() were "not wired into
-    --- client/radial.lua by this pass" because, at the time that file was
-    --- written, this file was reported as owned by a different agent this
-    --- session -- both files are owned by the same pass now, closing that
-    --- gap. Until now this feature was reachable ONLY via
-    --- '/k9sarcall [stop]' -- exactly the "reachable only by remembering an
-    --- exact command" shape this resource's own radial menu exists to
-    --- avoid.
+    --- Search & Rescue Call -- closes a real gap: client/sarcalls.lua's
+    --- RequestStartSarCall()/RequestAbandonSarCall() previously had no
+    --- client/radial.lua entry point; until now this feature was reachable
+    --- ONLY via '/k9sarcall [stop]' -- exactly the "reachable only by
+    --- remembering an exact command" shape this resource's own radial menu
+    --- exists to avoid.
     ---
     --- A single context-sensitive toggle item, the SAME shape as
     --- Attach/Detach Leash / Bite & Hold / Drag / Fetch above:
@@ -1522,15 +1510,15 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Training -- closes a real, disclosed gap: until this pass, Training
-    --- Mode and its two practice drills were reachable ONLY via
-    --- '/k9training <on|off>', '/k9trainsearch' and '/k9trainbite' --
-    --- exactly the "reachable only by remembering an exact command" shape
-    --- this resource's own radial menu exists to avoid, and worse than most:
-    --- '/k9training' with NO argument (the single most natural first thing
-    --- to type) produces only a usage error, never a toggle. See
-    --- client/training.lua's own header "RADIAL ENTRY POINT" section for
-    --- the full contract of the three globals this nested submenu calls.
+    --- Training -- closes a real gap: Training Mode and its two practice
+    --- drills were previously reachable ONLY via '/k9training <on|off>',
+    --- '/k9trainsearch' and '/k9trainbite' -- exactly the "reachable only by
+    --- remembering an exact command" shape this resource's own radial menu
+    --- exists to avoid, and worse than most: '/k9training' with NO argument
+    --- (the single most natural first thing to type) produces only a usage
+    --- error, never a toggle. See client/training.lua's own header "RADIAL
+    --- ENTRY POINT" section for the full contract of the three globals this
+    --- nested submenu calls.
     ---
     --- NESTED, mirroring Bark / Handler-Down Response / Fetch's own submenu
     --- precedent (several related terminal actions sharing one theme), not
@@ -1705,18 +1693,17 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
--- SECOND call site (client/featureblocks.lua, REQUESTED -- see this
--- function's own "K9 UNIT RADIAL -- PER-PERSON BLOCK" header above for the
--- full contract). A purely LOCAL event (client/featureblocks.lua's own
--- TriggerEvent, never a server round trip from here) fired every time this
--- client processes a fresh block-state sync -- re-running
--- RegisterK9RadialMenu() here is what makes a live RadialMenu/
--- AdvancedBarkRadial block/unblock take effect without waiting for either
--- this resource or ox_lib to restart. Safe to call this often (a rare
--- event in practice -- join, reconnect, or a high-command block action)
--- because every registration inside RegisterK9RadialMenu() REPLACES the
--- previous one in place rather than duplicating it -- see that function's
--- own "DUPLICATE-VS-REPLACE" note.
+-- SECOND call site (client/featureblocks.lua -- see this function's own "K9
+-- UNIT RADIAL -- PER-PERSON BLOCK" header above for the full contract). A
+-- purely LOCAL event (client/featureblocks.lua's own TriggerEvent, never a
+-- server round trip from here) fired every time this client processes a
+-- fresh block-state sync -- re-running RegisterK9RadialMenu() here is what
+-- makes a live RadialMenu/AdvancedBarkRadial block/unblock take effect
+-- without waiting for either this resource or ox_lib to restart. Safe to
+-- call this often (a rare event in practice -- join, reconnect, or a
+-- high-command block action) because every registration inside
+-- RegisterK9RadialMenu() REPLACES the previous one in place rather than
+-- duplicating it -- see that function's own "DUPLICATE-VS-REPLACE" note.
 AddEventHandler('qbx_k9unit:client:featureBlocksApplied', function()
     RegisterK9RadialMenu()
 end)
