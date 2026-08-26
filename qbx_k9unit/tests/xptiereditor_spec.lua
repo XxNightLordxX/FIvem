@@ -455,6 +455,95 @@ t.test('ALREADY-PROMOTED PLAYER: an OFFLINE citizenid at the same XP is silently
 end)
 
 -- ============================================================================
+-- SECTION 4B -- SELF-SERVICE VISIBILITY (economy red-team follow-up,
+-- coder-security pass): LOWERING a threshold never demotes anyone -- it can
+-- only PROMOTE an online citizenid with zero additional XP earned. Before
+-- this pass, that direction produced `demotedCount == 0`, so the response
+-- carried NO warning and the audit line carried no trace of who gained a
+-- rank -- exactly the "quietly self-grant, then quietly revert" shape this
+-- section closes.
+-- ============================================================================
+
+t.test('SELF-SERVICE VISIBILITY: lowering a threshold promotes an online citizenid immediately, and the response NAMES them (the exact gap this pass closes)', function()
+    local citizenid = 'PROMO1'
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        xpByCitizenid = { [citizenid] = 2000 }, -- currently Trained (1250 <= 2000 < 4000)
+        onlineSources = { [77] = citizenid },
+    })
+    t.equals(f.env.GetXPTier(citizenid).label, 'Trained K9', 'sanity check on this test\'s own fixture')
+
+    -- Lowers rank 3 (Veteran, default 4000) to 1500 -- still a valid ladder
+    -- (1250 < 1500 < 9000) -- but now PROMOTES citizenid (2000 XP) from
+    -- Trained straight to Veteran with zero additional XP earned.
+    local result = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 3, { xp = 1500 }))
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNotNil(result.warning, 'a promotion must be disclosed in the response -- BEFORE this pass this exact edit shape produced NO warning at all')
+    t.isTrue(result.warning:find('HIGHER', 1, true) ~= nil, 'the warning must name this as a promotion, not a generic re-rank')
+    t.isTrue(result.warning:find(citizenid, 1, true) ~= nil, 'the warning must NAME the promoted citizenid, not just count them')
+    t.isNil(result.warning:find('SELF%-PROMOTION'), 'the acting officer here is a different citizenid than the one promoted -- no self-promotion callout is warranted')
+
+    t.equals(f.env.GetXPTier(citizenid).label, 'Veteran K9', 'the citizenid must now resolve to a HIGHER rank -- their real XP total is unchanged, only the threshold moved')
+
+    t.equals(#f.world.audit, 1)
+    t.isTrue(f.world.audit[1].detail:find('HIGHER', 1, true) ~= nil, 'the audit detail must record the promotion, not just the raw xp field change')
+    t.isTrue(f.world.audit[1].detail:find(citizenid, 1, true) ~= nil, 'the audit detail must NAME the promoted citizenid')
+end)
+
+t.test('SELF-PROMOTION: when the acting officer\'s OWN citizenid is among those promoted by their own edit, both the response and the audit flag it distinctly', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    -- The acting officer must be "online" (per ResolveCitizenId) for their
+    -- own citizenid to be resolvable at all -- exactly the same fixture
+    -- requirement the pre-existing AUDIT section below already documents.
+    f.onlineSources[HC_SOURCE] = 'OFFICER1'
+    f.xpByCitizenid['OFFICER1'] = 2000 -- currently Trained, same shape as above
+
+    local result = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 3, { xp = 1500 }))
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNotNil(result.warning)
+    t.isTrue(result.warning:find('SELF%-PROMOTION') ~= nil, 'the response must call out that the ACTING OFFICER is among those promoted by their own edit')
+
+    t.equals(#f.world.audit, 1)
+    t.isTrue(f.world.audit[1].detail:find('SELF%-PROMOTION') ~= nil, 'the audit trail must record the self-promotion distinctly, not fold it into a generic re-rank line')
+    t.isTrue(f.world.audit[1].detail:find('OFFICER1', 1, true) ~= nil, 'the audit trail must name the promoted (self) citizenid')
+end)
+
+t.test('SELF-SERVICE VISIBILITY: a REVERT (raising the threshold back) is exactly as visible in the log as the promotion it undoes', function()
+    local citizenid = 'PROMO1'
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        xpByCitizenid = { [citizenid] = 2000 },
+        onlineSources = { [77] = citizenid },
+    })
+
+    local promote = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 3, { xp = 1500 }))
+    t.isTrue(promote.ok, tostring(promote.reason))
+    t.equals(f.env.GetXPTier(citizenid).label, 'Veteran K9')
+
+    advance(f)
+    local revert = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 3, { xp = 4000 }))
+    t.isTrue(revert.ok, tostring(revert.reason))
+    t.isNotNil(revert.warning, 'the revert demotes citizenid back down -- it must be disclosed exactly like the original promotion was')
+    t.isTrue(revert.warning:find('LOWER', 1, true) ~= nil)
+    t.equals(f.env.GetXPTier(citizenid).label, 'Trained K9', 'the revert must actually put them back where they started')
+
+    t.equals(#f.world.audit, 2, 'both the original promotion and its revert must each produce their own audit row')
+    t.isTrue(f.world.audit[1].detail:find('HIGHER', 1, true) ~= nil, 'row 1: the original promotion')
+    t.isTrue(f.world.audit[2].detail:find('LOWER', 1, true) ~= nil, 'row 2: the revert, equally visible')
+end)
+
+t.test('SELF-SERVICE VISIBILITY: legitimate equivalent still works -- a normal threshold edit HC is authorized to make completes with no self-service noise', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    -- No online citizenid anywhere near rank 2's own bracket -- an ordinary,
+    -- unremarkable tuning edit must still succeed cleanly, with neither a
+    -- promotion nor a demotion warning manufactured for it.
+    local result = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { xp = 1300 }))
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNil(result.warning, 'an edit with no online population near the crossed threshold must not manufacture a warning')
+    t.equals(f.config.XPTiers[2].xp, 1300)
+end)
+
+-- ============================================================================
 -- SECTION 5 -- CLAMP AND WARN, NEVER ASSERT, ON BAD PERSISTED VALUES
 -- ============================================================================
 

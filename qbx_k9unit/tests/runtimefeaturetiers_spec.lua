@@ -249,4 +249,23 @@ t.test('a still-genuinely-unaudited feature (this spec\'s own fixture, never ser
     t.equals(result.reason, 'unaudited_feature')
 end)
 
+t.test('DISCLOSED PARTIAL LIVENESS: BiteAndHold/NonLethalTakedown/PropDragging stay tier = \'live\' (the request-time gate genuinely is), but each carries a note disclosing that server/combat.lua\'s own auto-release maintenance thread does not', function()
+    local f = boot()
+    local result = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    t.isTrue(result.ok)
+
+    local rowByName = {}
+    for _, row in ipairs(result.features) do
+        rowByName[row.name] = row
+    end
+
+    for _, name in ipairs({ 'BiteAndHold', 'NonLethalTakedown', 'PropDragging' }) do
+        local row = rowByName[name]
+        t.isNotNil(row, name .. ' must be present in config.lua\'s Config.Features')
+        t.equals(row.tier, 'live', name .. ' -- the request-time gate (ValidateCombatRequest) really is checked fresh every call')
+        t.isTrue(type(row.note) == 'string' and #row.note > 0, name .. ' must carry a note disclosing the maintenance-thread gap -- a bare tier = \'live\' with no note would silently over-promise a working timeout/holder-death/vehicle-entry auto-release that a boot-time-off-then-live-on flip does not actually get until a restart')
+        t.isTrue(row.note:find('maintenance thread', 1, true) ~= nil, name .. ' note must name the actual mechanism (the maintenance thread) this gap is about, not just a vague caveat')
+    end
+end)
+
 os.exit(t.summary())

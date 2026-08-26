@@ -735,8 +735,37 @@ end)
 -- load-time), mirroring server/certtiers.lua's own identical
 -- "config-only defaults at file-load, DB layered on top at
 -- onResourceStart" pattern exactly.
+--
+-- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (db-schema
+-- boot-order fix, this pass): server/datastore.lua loads before this file
+-- and registers its own onResourceStart handler first, but that handler's
+-- own MySQL.query.await yields -- and a yielding handler does not block
+-- FXServer's event dispatch from moving straight on to THIS handler while
+-- the probe is still in flight. Without this wait,
+-- K9Store.PermKey_GetAllRows() below would run its own, narrower SELECT
+-- (4 of the 7 columns k9_permission_keys is checked against) against
+-- whatever `k9_permission_keys` currently is, before the probe has had a
+-- chance to say whether that table is even really ours -- a foreign table
+-- the full probe would correctly reject could still satisfy this
+-- narrower one during that window. K9Store.WaitForSchemaCheckToSettle()
+-- (server/datastore.lua) blocks THIS coroutine only, with a bounded
+-- timeout, until that determination is final -- see its own header for
+-- the full contract. On a `false` return (the probe genuinely had not
+-- settled within the wait budget -- database unreachable/slow, or off by
+-- config, which settles instantly instead of waiting at all), this
+-- catalog boots to config-only defaults for this session, exactly like
+-- `Config.Database.enabled == false` -- PermKeyByKey already holds those
+-- defaults from this file's own synchronous file-load-time population
+-- above, so simply skipping the refresh here is sufficient, not a
+-- separate fallback path to maintain. The next successful
+-- permKeysUpsert/DeleteKey call (or a resource restart, by which point the
+-- probe will certainly have settled) re-reads the real state as normal.
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] permissionkeycatalog: the schema-collision check had not finished within its wait budget -- booting this session\'s permission-key catalog with config.lua defaults ONLY (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next successful permission-key edit (or a restart once the check has had time to finish) will pick up any real persisted state.')
+        return
+    end
     RefreshPermissionKeyCatalog()
 end)

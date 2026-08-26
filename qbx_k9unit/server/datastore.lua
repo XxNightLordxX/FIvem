@@ -147,6 +147,21 @@ K9Store = {}
 -- path without any of them needing their own awareness of it.
 local SCHEMA_COLLISION_DETECTED = false
 
+-- Set to `true` exactly once the schema-collision determination above is
+-- FINAL for this boot -- either because there was nothing to check
+-- (`Config.Database.enabled == false`, so the probe below never runs at
+-- all) or because the probe ran and returned, by whatever outcome (a real
+-- collision, a clean match, or the probe's own pcall degrading a failed
+-- check to "no collision found" -- see VerifyTableShapesAgainstKnownSchema's
+-- own header). NEVER read directly by a K9Store.* accessor -- only by
+-- K9Store.WaitForSchemaCheckToSettle() below, which every OTHER file's own
+-- boot-time cache read (permissionkeycatalog.lua, xptiers.lua,
+-- equipmentshop.lua) must call before trusting its own first query -- see
+-- that function's own header for the race this closes and this file's own
+-- "SCHEMA COLLISION SAFETY NET" section near the bottom for the full
+-- writeup.
+local SCHEMA_CHECK_SETTLED = false
+
 --- @return boolean
 --- Anything other than a literal `false` on `Config.Database.enabled`
 --- means "on" -- including `Config.Database` not existing at all yet (an
@@ -160,6 +175,138 @@ local function DatabaseEnabled()
 end
 
 K9Store.IsDatabaseEnabled = DatabaseEnabled
+
+-- ======================================================================
+-- BOOT-ORDER SETTLEMENT -- closes the race between the schema-collision
+-- probe below (VerifyTableShapesAgainstKnownSchema, a real, YIELDING
+-- MySQL.query.await call) and every OTHER file's own `onResourceStart`
+-- boot-time cache read (permissionkeycatalog.lua, xptiers.lua,
+-- equipmentshop.lua). See this file's own "SCHEMA COLLISION SAFETY NET"
+-- section near the bottom for the full "why this exists" writeup; this is
+-- just the mechanism.
+--
+-- THE RACE, PRECISELY: fxmanifest.lua loads this file before any of those
+-- three, so THIS file's own `AddEventHandler('onResourceStart', ...)` call
+-- (bottom of this file) registers first. But registering first only
+-- guarantees running first up to that handler's own FIRST yield --
+-- `MySQL.query.await` always yields (it awaits a real oxmysql promise), and
+-- when a handler yields, FXServer's event dispatch does not wait for it to
+-- resume before invoking the NEXT handler already registered for the same
+-- event -- it moves on immediately. So for the entire window between this
+-- probe's own query going out and coming back, `SCHEMA_COLLISION_DETECTED`
+-- above still reads whatever it read before the probe started (`false`,
+-- since it starts false and is set at most once), and any OTHER file's own
+-- onResourceStart handler that fires in that window sees a stale answer.
+--
+-- WHY THIS MATTERS MORE THAN "STALE FOR A MOMENT": each of those three
+-- catalogs' own boot-time reads is a NARROWER `SELECT` than the columns
+-- this file's own EXPECTED_TABLE_COLUMNS checks (e.g. PermKey_GetAllRows
+-- selects 4 of the 7 columns k9_permission_keys is checked against). A
+-- foreign table the full probe would correctly reject as a collision can
+-- still satisfy one of these narrower SELECTs during that window,
+-- returning a stranger's real rows into a catalog cache -- exactly the
+-- outcome the safety net exists to prevent, just via a side door instead
+-- of the front one.
+--
+-- THE FIX: every one of those three files' own onResourceStart handlers
+-- must call K9Store.WaitForSchemaCheckToSettle() FIRST, before its own
+-- first K9Store.* read, and treat a `false` result (see below) the exact
+-- same way it already treats `Config.Database.enabled == false` -- boot to
+-- config-only defaults for this session, no DB read attempted. This keeps
+-- the fix entirely coordination-based (a shared "has this been decided
+-- yet" flag), not a structural merge of every catalog's own query into
+-- this file's -- see this file's own "SCHEMA COLLISION SAFETY NET" section
+-- for why that alternative was rejected.
+-- ======================================================================
+
+-- Bounded wait budget for K9Store.WaitForSchemaCheckToSettle() below --
+-- see the "DOES NOT BLOCK INDEFINITELY" paragraph on that function's own
+-- header for why this MUST be finite. 3 seconds comfortably covers a real
+-- (even mildly congested) local-network schema lookup -- a single,
+-- indexed INFORMATION_SCHEMA.COLUMNS query -- while still keeping a
+-- genuinely unreachable/hung database from stalling every other file's own
+-- resource start by more than a few seconds.
+local SCHEMA_CHECK_WAIT_TIMEOUT_MS = 3000
+local SCHEMA_CHECK_WAIT_POLL_MS = 50
+
+--- @return boolean -- true only when `Config.Database.enabled` is the
+--- literal value `false` -- i.e. the database is off BY CONFIGURATION,
+--- independent of whatever SCHEMA_COLLISION_DETECTED currently holds.
+--- Deliberately NOT the same question as DatabaseEnabled() above (which
+--- also folds in the collision flag) -- this one exists purely so
+--- WaitForSchemaCheckToSettle() below can recognize "there was never going
+--- to be a probe to wait for" and return immediately, with zero delay,
+--- regardless of whether the probe's own onResourceStart handler has run
+--- yet at all.
+local function DatabaseTurnedOffByConfig()
+    return type(Config) == 'table' and type(Config.Database) == 'table' and Config.Database.enabled == false
+end
+
+--- Blocks the CALLING coroutine (never the whole server -- see below) until
+--- the schema-collision determination above is final, or until a bounded
+--- timeout elapses, whichever comes first. This is the ONE call every
+--- OTHER file's own onResourceStart handler that reads a `k9_*` table this
+--- file's EXPECTED_TABLE_COLUMNS list also checks (currently
+--- permissionkeycatalog.lua, xptiers.lua, equipmentshop.lua) must make
+--- BEFORE its own first K9Store.* read -- see the "BOOT-ORDER SETTLEMENT"
+--- header just above for the exact race this closes.
+---
+--- DOES NOT BLOCK INDEFINITELY, BY CONSTRUCTION: this polls
+--- SCHEMA_CHECK_SETTLED at most `SCHEMA_CHECK_WAIT_TIMEOUT_MS /
+--- SCHEMA_CHECK_WAIT_POLL_MS` times (a fixed, small number), via `Wait(...)`
+--- -- the same cooperative-yield primitive every maintenance thread in
+--- this resource already uses (see e.g. server/appearance.lua's own sweep
+--- thread) -- never a busy spin. A database that never answers at all
+--- (unreachable, or the probe's own query hangs rather than erroring) costs
+--- callers at most SCHEMA_CHECK_WAIT_TIMEOUT_MS once, at boot, never again
+--- -- it does not retry, and it does not grow the wait for a second caller
+--- (every caller polls the SAME shared flag, so a slow first caller does
+--- not make a second caller wait twice).
+---
+--- @return boolean settled -- `true` means the determination is final for
+--- this boot and DatabaseEnabled()/every K9Store.* accessor now gives the
+--- correct, settled answer -- proceed exactly as before. `false` means the
+--- probe genuinely had not finished within the wait budget -- per this
+--- resource's own fail-closed convention (see this file's header
+--- "FAIL-CLOSED, BY CONSTRUCTION"), the caller must NOT proceed to read a
+--- `k9_*` table on the strength of its own narrower query in this case --
+--- the collision state is unknown, and unknown must be treated the same as
+--- "assume collision" for that one boot-time read: fall back to
+--- config-only defaults for this session, exactly like
+--- `Config.Database.enabled == false`, and let a later natural refresh
+--- (this resource's own established self-healing convention -- every one
+--- of these three catalogs already re-reads its own table after its next
+--- successful admin edit) pick up the real state once the probe -- which
+--- keeps running in the background regardless of this timeout -- actually
+--- finishes.
+function K9Store.WaitForSchemaCheckToSettle()
+    if SCHEMA_CHECK_SETTLED then return true end
+    if DatabaseTurnedOffByConfig() then
+        -- Nothing to wait for: the probe's own onResourceStart handler
+        -- below never even attempts to run when the database is off by
+        -- config, so SCHEMA_CHECK_SETTLED would otherwise never be set at
+        -- all this session -- recognized here, directly, so this returns
+        -- instantly instead of waiting out the full timeout every single
+        -- boot on a `Config.Database.enabled = false` server.
+        return true
+    end
+    if type(Wait) ~= 'function' then
+        -- No real FXServer scheduler available (a plain sandbox/unit-test
+        -- load with no natives stubbed) -- there is nothing to
+        -- cooperatively wait ON, so report whatever is already known
+        -- rather than erroring or spinning. Every current caller already
+        -- treats `false` here as "could not confirm settlement yet, fall
+        -- back to config defaults" -- the safe direction in a sandbox that
+        -- has not modeled the probe's own timing at all.
+        return SCHEMA_CHECK_SETTLED
+    end
+    local waited = 0
+    while not SCHEMA_CHECK_SETTLED and waited < SCHEMA_CHECK_WAIT_TIMEOUT_MS do
+        Wait(SCHEMA_CHECK_WAIT_POLL_MS)
+        waited = waited + SCHEMA_CHECK_WAIT_POLL_MS
+    end
+    return SCHEMA_CHECK_SETTLED
+end
 
 -- ======================================================================
 -- SHARED MEMORY-BACKEND HELPERS
@@ -2437,6 +2584,46 @@ end
 -- says exactly why, loudly, once, in the console, instead of quietly
 -- writing into a table it does not own.
 --
+-- THE BOOT-ORDER RACE THIS USED TO HAVE, AND HOW IT IS CLOSED (interaction
+-- review + fix, this pass): the paragraph above is true ONLY from the
+-- moment this probe's own query returns -- and that query, like every real
+-- `MySQL.*.await` call, YIELDS. `permissionkeycatalog.lua`, `xptiers.lua`,
+-- and `equipmentshop.lua` each register their OWN `onResourceStart`
+-- handler to populate their own boot-time cache from a `k9_*` table this
+-- same EXPECTED_TABLE_COLUMNS list also checks. fxmanifest.lua loads this
+-- file first, so this probe's handler registers first too -- but
+-- registering first only guarantees running first up to its own first
+-- yield; when it yields, FXServer's event dispatch moves straight on to
+-- the NEXT already-registered handler rather than waiting for this one to
+-- resume. Those three files' own boot-time reads are each a NARROWER
+-- `SELECT` than the column list this probe checks (e.g.
+-- `K9Store.PermKey_GetAllRows` selects 4 of the 7 columns
+-- `k9_permission_keys` is checked against below) -- so for the length of
+-- that one window, a foreign table this probe WOULD correctly reject as a
+-- collision could still satisfy one of those narrower SELECTs and hand a
+-- stranger's real rows into a catalog cache, exactly the outcome this
+-- whole safety net exists to prevent, just through a side door instead of
+-- the front one. THE FIX: `K9Store.WaitForSchemaCheckToSettle()` (declared
+-- next to `SCHEMA_CHECK_SETTLED`, near the top of this file) gives every
+-- one of those three files' own onResourceStart handlers a shared,
+-- resource-global "has this been decided yet" signal to wait on, with a
+-- bounded timeout (`SCHEMA_CHECK_WAIT_TIMEOUT_MS`), BEFORE their own first
+-- read -- see that function's own header for the full contract, including
+-- what a caller must do on a timeout (treat it the same as
+-- `Config.Database.enabled == false` for that one boot-time read, never
+-- proceed on an unconfirmed answer). THE RESIDUAL WINDOW, DISCLOSED RATHER
+-- THAN LEFT IMPLICIT: this closes the race for every boot-time read that
+-- calls `WaitForSchemaCheckToSettle()` first -- it does nothing for a
+-- `K9Store.*` call made OUTSIDE of a boot sequence (a live admin edit, a
+-- runtime callback) that races the probe, but no such call exists in this
+-- resource -- every other `K9Store.*` accessor is reached only through a
+-- player-triggered command/callback, all of which fire long after resource
+-- start settles. A future file that adds its OWN `onResourceStart` read of
+-- a table in EXPECTED_TABLE_COLUMNS without calling
+-- `WaitForSchemaCheckToSettle()` first would silently reopen this exact
+-- window -- there is no automatic enforcement of that call today beyond
+-- this comment and each call site's own.
+--
 -- THE TRADE-OFF, STATED PLAINLY: this is a WHOLE-RESOURCE fallback, not a
 -- per-table one. If only ONE of this resource's tables collides, ALL of
 -- them fall back to memory mode until the operator fixes the one real
@@ -2599,5 +2786,18 @@ if type(AddEventHandler) == 'function' then
         if DatabaseEnabled() then
             VerifyTableShapesAgainstKnownSchema()
         end
+        -- SETTLEMENT, ALWAYS, REGARDLESS OF OUTCOME (db-schema pass,
+        -- 2026-08-26 boot-order fix) -- see K9Store.WaitForSchemaCheckToSettle's
+        -- own header for the race this closes. Reached whether
+        -- DatabaseEnabled() was already false by config (the branch above
+        -- never ran at all), a real collision was just found, the database
+        -- is clean, or VerifyTableShapesAgainstKnownSchema()'s own internal
+        -- pcall degraded a failed check to "no collision found" -- that
+        -- function never throws past its own pcall, so this line always
+        -- runs once this handler reaches it, and every OTHER file's own
+        -- onResourceStart handler that is currently parked inside
+        -- K9Store.WaitForSchemaCheckToSettle() wakes up on its very next
+        -- poll with the correct, final answer.
+        SCHEMA_CHECK_SETTLED = true
     end)
 end

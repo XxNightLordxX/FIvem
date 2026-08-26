@@ -337,6 +337,27 @@
     about them. Editing a tier's label/ordinal/capability set never
     touches any player's job/grade/permission-grant row.
 
+    "IT CAN BE DONE QUIETLY, EVEN IF IT ISN'T ESCALATION" (economy red-team
+    follow-up, coder-security): the paragraph above establishes there is no
+    PRIVILEGE-ESCALATION shape here -- granting a capability to your own
+    currently-held tier cannot make IsHighCommand/HasPermission decide
+    anything different about you. It CAN still be self-preferential in a
+    quieter way this file did not previously call out: granting capability
+    C to your own tier makes C ACTIVE resource-wide (IsCapabilityActiveInternal),
+    which instantly narrows every OTHER tier's access to C down to nothing,
+    while your own tier keeps it -- then revoking it a moment later restores
+    the prior (usually dormant, "everyone allowed") state, with the only
+    trace being two ordinary-looking `capabilities_added`/`capabilities_removed`
+    audit lines under the same `tier_key`. certTiersUpsert below now
+    resolves the acting officer's OWN currently-held tier
+    (GetCertificationTier(citizenid, jobName, true), soft-guarded) and, when
+    it matches the `key` being edited, appends a `SELF-TIER CAPABILITY EDIT`
+    marker to that SAME audit line (not a separate row) and returns a
+    non-optional `warning` in the response, mirroring server/xptiers.lua's
+    own "louder for a self-serving effect, never blocked" decision for its
+    own promoted-online-citizenid case. This is disclosure, not a new gate:
+    the edit still completes in one action either way.
+
     ======================================================================
     CAPABILITY COMPOSITION — TierCapabilityPermits (this pass, owner-
     directed follow-up: "wire the capabilities to something real")
@@ -926,6 +947,29 @@ local function ResolveCitizenId(source)
     return nil
 end
 
+--- SELF-SERVICE VISIBILITY (coder-security economy pass, same lens
+--- server/xptiers.lua's own "THE ALREADY-PROMOTED PLAYER" section applies to
+--- its own surface): used ONLY by certTiersUpsert below, to answer "is the
+--- tier this edit is touching the SAME tier the acting officer currently
+--- holds for their own job". Not an authorization check and never blocks
+--- anything -- HAZARD 4 already establishes structurally that no capability
+--- in CAPABILITY_CATALOG can grant a permission or become high command, so
+--- this is not a privilege-escalation gate. It exists so a high-command
+--- account cannot grant (or revoke) a capability on their OWN currently-held
+--- tier -- narrowing an ability to "only my tier" is exactly as available to
+--- a legitimate operator tuning an unrelated tier, but doing it to your OWN
+--- tier is the one shape worth naming explicitly in the log, the same way
+--- xptiers.lua now names a self-promotion rather than folding it into a
+--- generic "threshold changed" line.
+--- @param source number
+--- @return string? jobName
+local function ResolveJobName(source)
+    local Player = exports.qbx_core:GetPlayer(source)
+    local jobName = Player and Player.PlayerData and Player.PlayerData.job and Player.PlayerData.job.name
+    if type(jobName) == 'string' and jobName ~= '' then return jobName end
+    return nil
+end
+
 --- Server-authoritative, re-resolved fresh on every call -- never cached,
 --- never trusts a client-supplied flag. Deliberately IsHighCommand ONLY
 --- -- no HasPermission-based delegation, unlike
@@ -1179,20 +1223,57 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
         action = 'tier_create'
     end
 
+    -- SELF-SERVICE VISIBILITY -- see ResolveJobName's own doc comment.
+    -- Evaluated from what actually SUCCEEDED (`added`/`removed`, already
+    -- failure-filtered above), not the requested `capsSet` -- a capability
+    -- change that failed to write never happened, so it must never be
+    -- reported as a self-tier edit either. Soft-guarded (GetCertificationTier
+    -- may be absent, citizenid/jobName may not resolve) -- any of those
+    -- leaves `selfTierCapabilityChange` false, never an error, matching this
+    -- resource's established soft-dependency convention.
+    local selfTierCapabilityChange = false
+    if (#added > 0 or #removed > 0) and citizenid and type(GetCertificationTier) == 'function' then
+        local actingJobName = ResolveJobName(source)
+        if actingJobName then
+            local actingTierKey = GetCertificationTier(citizenid, actingJobName, true)
+            selfTierCapabilityChange = actingTierKey == key
+        end
+    end
+
     -- Audit only what actually succeeded -- `added`/`removed` above already
     -- exclude anything that failed, so this line never overstates what
     -- happened, even though `action` (create/restore/update) itself is
-    -- independent of the capability reconciliation outcome.
-    WriteTierAudit(action, key,
-        ('label=%q ordinal=%d capabilities_added=[%s] capabilities_removed=[%s]'):format(
-            payload.label, ordinal, table.concat(added, ','), table.concat(removed, ',')),
-        citizenid or 'unknown')
+    -- independent of the capability reconciliation outcome. The
+    -- SELF-TIER CAPABILITY EDIT suffix is appended in the SAME line (never a
+    -- separate, easy-to-miss audit row) so "who changed which tier's
+    -- capabilities" and "was that their own tier" are always read together.
+    local auditDetail = ('label=%q ordinal=%d capabilities_added=[%s] capabilities_removed=[%s]'):format(
+        payload.label, ordinal, table.concat(added, ','), table.concat(removed, ','))
+    if selfTierCapabilityChange then
+        auditDetail = auditDetail .. (' -- SELF-TIER CAPABILITY EDIT: acting officer %s currently holds tier %q themselves -- this change affects their OWN capabilities immediately, not only other holders of this tier'):format(citizenid or 'unknown', key)
+    end
+    WriteTierAudit(action, key, auditDetail, citizenid or 'unknown')
 
     -- Refresh from DB truth regardless of outcome -- if any capability
     -- write failed above, this ensures every reader (including this
     -- call's own response below) sees exactly what actually landed, never
     -- the fully-requested-but-not-fully-applied `capsSet`.
     RefreshCertificationTierCatalog()
+
+    -- LOUDER TREATMENT FOR A SELF-TIER EDIT, not merely a bare mutex/status
+    -- flag -- surfaced in the actual server response (not merely logged),
+    -- same "the tablet is expected to surface this warning prominently"
+    -- convention HAZARD 3's own ReorderTiers warning already establishes.
+    -- Never a gate/confirmation dialog -- high command can still complete
+    -- the edit in one action; this only makes it visible AT THE MOMENT it
+    -- is made, matching xptiers.lua's own "louder for a self-serving effect,
+    -- not blocked" decision.
+    local selfTierWarning
+    if selfTierCapabilityChange then
+        local grantPart = #added > 0 and (' Granting %s takes effect for YOUR OWN tier immediately, in addition to every other holder of %q.'):format(table.concat(added, ', '), key) or ''
+        local revokePart = #removed > 0 and (' Revoking %s from your own tier takes effect immediately as well.'):format(table.concat(removed, ', ')) or ''
+        selfTierWarning = ('This edit changes capabilities on tier %q, which you currently hold yourself.%s%s This is logged distinctly in the tier audit trail for review.'):format(key, grantPart, revokePart)
+    end
 
     if #failedAdds > 0 or #failedRemoves > 0 then
         return {
@@ -1201,10 +1282,11 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
             failedCapabilities = { added = failedAdds, removed = failedRemoves },
             tiers = ListCertificationTiers(),
             capabilityCatalog = PublicCapabilityCatalog(),
+            warning = selfTierWarning,
         }
     end
 
-    return { ok = true, tiers = ListCertificationTiers(), capabilityCatalog = PublicCapabilityCatalog() }
+    return { ok = true, tiers = ListCertificationTiers(), capabilityCatalog = PublicCapabilityCatalog(), warning = selfTierWarning }
 end)
 
 lib.callback.register('qbx_k9unit:server:certTiersReorder', function(source, orderedKeys)

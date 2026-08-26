@@ -38,14 +38,17 @@
          separately proving what happens WITHOUT that wipe (a second
          closure IS added) so "does not duplicate" is never asserted
          beyond what was actually observed.
-      3. Config.K9Inventory.accessScope is asserted to be 'department' at
-         this resource's own onResourceStart -- proven both for the
-         passing case and for 'ownerOnly'/an arbitrary typo, each firing
-         the loud, named assert this file's header describes as
-         deliberately NOT a silent fallback (a value that could silently
-         grant world-readable access to every K9's stash is treated as a
-         hard startup failure, same precedent as server/main.lua's/
-         server/search.lua's own config-invariant asserts).
+      3. Config.K9Inventory.accessScope is WARNED-AND-FORCED to 'department'
+         at this resource's own onResourceStart (CHANGED this pass,
+         coder-security, from a hard `assert` that aborted this file's
+         entire onResourceStart chain) -- proven both for the passing case
+         (no warning at all) and for 'ownerOnly'/an arbitrary typo, each
+         printing a loud, named warning AND having Config.K9Inventory.
+         accessScope itself forced back to 'department' -- never a silent
+         fallback, and never an abort either, since 'department' is a
+         known-safe, strictly narrower substitute (see server/inventory.lua's
+         own header "UPDATED THIS PASS" section for the full
+         failure-direction proof).
       4. HandleOpenK9Inventory's FULL validation chain (this pass, closing
          the coverage gap the previous version of this file explicitly
          disclosed rather than skipped): netId->entity resolution
@@ -375,34 +378,54 @@ local function newInventoryFixture(opts)
 end
 
 -- ========================================================================
--- POINT 3: Config.K9Inventory.accessScope asserted to be 'department' at
--- this resource's own onResourceStart.
+-- POINT 3: Config.K9Inventory.accessScope is WARNED-AND-FORCED to
+-- 'department' at this resource's own onResourceStart -- CHANGED THIS PASS
+-- (coder-security) from a hard `assert` (which aborted this file's ENTIRE
+-- onResourceStart chain, including K9 stash registration and the
+-- allowedItems hook, over one bad field) to ResolveConfiguredAccessScope's
+-- warn-and-force shape, same precedent as server/cooldowns.lua's
+-- ResolveConfiguredThresholdMs -- see server/inventory.lua's own header
+-- "UPDATED THIS PASS" section for the full failure-direction proof
+-- ('department' is the ONLY accessScope value with any real ox_inventory
+-- access control, so forcing to it can only ever NARROW access, never
+-- widen it).
 -- ========================================================================
 
-t.test('onResourceStart: Config.K9Inventory.accessScope = "department" (the shipped default) starts fine, no error', function()
+t.test('onResourceStart: Config.K9Inventory.accessScope = "department" (the shipped default) starts fine, no error, no warning', function()
     local f = newInventoryFixture({ accessScope = 'department' })
     local ok = pcall(f.fireResourceStart, 'qbx_k9unit')
     t.isTrue(ok)
+    t.equals(f.config.K9Inventory.accessScope, 'department')
+    for _, line in ipairs(f.printedLines) do
+        t.isFalse(line:find('accessScope') ~= nil, 'the already-correct default must not print a warning at all: ' .. line)
+    end
 end)
 
-t.test("onResourceStart: Config.K9Inventory.accessScope = 'ownerOnly' fails the startup assert loudly, naming accessScope and 'department' in the error", function()
+t.test("onResourceStart: Config.K9Inventory.accessScope = 'ownerOnly' does NOT abort startup -- it is WARNED loudly (naming accessScope and 'department') and FORCED back to 'department'", function()
     local f = newInventoryFixture({ accessScope = 'ownerOnly' })
-    local ok, err = pcall(f.fireResourceStart, 'qbx_k9unit')
-    t.isFalse(ok, "'ownerOnly' provides no real ox_inventory access control (per this file's own header) and must be a hard startup failure, never a silently-accepted config value")
-    t.contains(tostring(err), 'accessScope')
-    t.contains(tostring(err), "'department'")
+    local ok = pcall(f.fireResourceStart, 'qbx_k9unit')
+    t.isTrue(ok, "a bad accessScope value must never abort this file's entire onResourceStart chain -- 'department' is a known-safe, strictly narrower substitute")
+    t.equals(f.config.K9Inventory.accessScope, 'department', "the bad value must be FORCED back to 'department' in Config itself, not merely tolerated locally, so every other read of this field (ResolveStashOwnerAndGroups/IsAuthorizedForK9Inventory) also observes the corrected value")
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('accessScope', 1, true) and line:find("'department'", 1, true) then warned = true end
+    end
+    t.isTrue(warned, "'ownerOnly' provides no real ox_inventory access control (per this file's own header) and must be surfaced with a loud, named warning, never a silently-accepted config value")
 end)
 
-t.test("onResourceStart: an arbitrary, typo'd accessScope value also fails the same assert -- not a special-cased check for \"ownerOnly\" alone", function()
+t.test("onResourceStart: an arbitrary, typo'd accessScope value is also warned-and-forced -- not a special-cased check for \"ownerOnly\" alone", function()
     local f = newInventoryFixture({ accessScope = 'departmnet' })
     local ok = pcall(f.fireResourceStart, 'qbx_k9unit')
-    t.isFalse(ok)
+    t.isTrue(ok)
+    t.equals(f.config.K9Inventory.accessScope, 'department')
 end)
 
-t.test("onResourceStart: the accessScope assert ignores a DIFFERENT resource restarting (GetCurrentResourceName mismatch)", function()
-    local f = newInventoryFixture({ accessScope = 'ownerOnly' }) -- would fail immediately if THIS resource's own start fired
+t.test("onResourceStart: the accessScope guard ignores a DIFFERENT resource restarting (GetCurrentResourceName mismatch)", function()
+    local f = newInventoryFixture({ accessScope = 'ownerOnly' })
     local ok = pcall(f.fireResourceStart, 'some_other_resource')
-    t.isTrue(ok, "a different resource's own onResourceStart must never run this resource's own startup assert")
+    t.isTrue(ok, "a different resource's own onResourceStart must never run this resource's own startup guard")
+    t.equals(f.config.K9Inventory.accessScope, 'ownerOnly', "a DIFFERENT resource's own onResourceStart must never touch this resource's own Config at all -- the bad value must be left completely untouched, not forced early")
 end)
 
 -- ========================================================================
@@ -521,7 +544,7 @@ t.test("Both lifecycle triggers independently (re-)register the hook: this resou
     t.equals(f.hookRegistrationCount(), 1, "ox_inventory's own restart must ALSO independently re-trigger registration, restoring enforcement after the wipe")
 end)
 
-t.test('An unrelated resource restarting triggers neither the accessScope assert nor a hook (re-)registration', function()
+t.test('An unrelated resource restarting triggers neither the accessScope guard nor a hook (re-)registration', function()
     local f = newInventoryFixture({ allowedItems = { 'k9_treat' } })
     local ok = pcall(f.fireResourceStart, 'some_other_resource')
     t.isTrue(ok)

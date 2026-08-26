@@ -290,6 +290,30 @@ RegisterNetEvent('qbx_k9unit:client:applyK9Ped', function(requestId, modelNameOr
         return
     end
 
+    -- RE-CHECK ENGAGEMENT (bug found + fixed this pass): LoadModelWithTimeout
+    -- above can YIELD one or more times (its own Wait(50) polling loop) while
+    -- this model streams in -- up to ModelLoadTimeoutMs() (10s by default).
+    -- The IsCurrentlyEngaged() check above only proves this ped was NOT
+    -- leashed/mid-drag/mid-bite-hold/mid-fetch-carry/in-a-K9-vehicle/
+    -- mid-PropAttachment at the INSTANT this handler started -- it says
+    -- nothing about whatever happened during however long the wait above
+    -- actually took. Any of those six mechanics can be started by an
+    -- independent action (another player leashing this one, a drag/bite
+    -- landing, etc.) entirely outside this handler's control while it was
+    -- suspended here. Applying SetPlayerModel now would carry exactly the
+    -- "per-ped state assumes this ped is a K9" hazard this file's own header
+    -- ("PER-PED STATE ACROSS A MODEL SWAP") already refuses to force-clear
+    -- for -- there is no reason that hazard applies only at the moment this
+    -- handler was DISPATCHED and not at the moment it is about to actually
+    -- act. SetModelAsNoLongerNeeded releases the streaming reference this
+    -- successful LoadModelWithTimeout call just took -- the model loaded
+    -- fine, it simply is not going to be used now.
+    if IsCurrentlyEngaged() then
+        SetModelAsNoLongerNeeded(modelHash)
+        ConfirmSwap(requestId, false, 'engaged')
+        return
+    end
+
     SetPlayerModel(PlayerId(), modelHash)
     SetModelAsNoLongerNeeded(modelHash)
 

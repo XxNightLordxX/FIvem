@@ -211,7 +211,41 @@
          position immediately" disclosure convention exactly. High command
          sees the blast radius of their own edit at the moment they make
          it, not the first time an officer complains their dog got slower.
-      3. What this file deliberately does NOT do, per HAZARD "NO UNBOUNDED
+      3. SELF-SERVICE VISIBILITY (economy red-team follow-up, coder-security
+         pass -- the ONE gap the original version of this section did not
+         close): the demotion-only accounting above has an asymmetry a
+         high-command account can exploit. LOWERING a threshold never
+         demotes anyone -- it can only PROMOTE currently-online citizenids
+         who now clear a lower bar, including the acting officer themselves
+         or an ally, with zero additional XP earned. Under the ORIGINAL
+         demoted-only counting, that edit produced `demotedCount == 0`, so
+         NO warning was shown and the audit line carried no trace of who
+         gained a rank -- exactly the "quietly self-grant, then quietly
+         revert" shape this pass exists to close. Silence was never a
+         deliberate design choice here; it was an oversight in which
+         direction of re-ranking got counted. FIXED:
+         PushRefreshedSnapshotsAfterEdit now counts and NAMES (by citizenid)
+         BOTH directions -- promoted and demoted -- and the audit line
+         records both counts and both citizenid lists whenever either is
+         non-zero, so a revert (which demotes exactly whoever the original
+         edit promoted) is exactly as visible in the log as the promotion
+         it undoes. Promotions get LOUDER treatment than demotions, not
+         merely equal treatment: the response `warning` for a promotion
+         states plainly that the named citizenid(s) gained a rank's
+         speed/scent bonuses with NO additional XP earned, and separately
+         calls out when the ACTING OFFICER'S OWN citizenid is among those
+         promoted (a `SELF-PROMOTION` marker, both in the audit `detail` and
+         in the response `warning`) -- reliably detectable because the
+         officer is, by construction, online and authenticated at the exact
+         moment they submit the edit that reaches this code, so their own
+         citizenid is always present in `beforeOnlineSnapshot` alongside
+         everyone else's. This is disclosure, not a new gate: the edit
+         still completes in one action, exactly as before -- high command
+         can still self-promote if the config genuinely allows it (nothing
+         here is a privilege-escalation surface -- see the file-top
+         "CAPABILITY_CATALOG-equivalent" note), it just can no longer do so
+         invisibly.
+      4. What this file deliberately does NOT do, per HAZARD "NO UNBOUNDED
          TRAP" below (mirroring server/certtiers.lua's own HAZARD 5): it
          never force-ends or interrupts an in-progress action because a
          threshold edit changed someone's tier mid-use -- only the request-
@@ -744,27 +778,41 @@ local function SnapshotOnlineCitizenXpForRefresh()
 end
 
 --- Pushes a fresh, authoritative tier snapshot to every citizenid captured
---- by `beforeSnapshot`, and counts how many of them just moved to a STRICTLY
---- LOWER threshold as a direct result of this edit (their real XP total is
+--- by `beforeSnapshot`, and counts + NAMES (by citizenid) everyone who just
+--- moved to a STRICTLY LOWER threshold (demoted) or a STRICTLY HIGHER one
+--- (promoted) as a direct result of this edit (their real XP total is
 --- unchanged -- only which rank it now qualifies for). Silent no-op for
 --- anyone whose bracket did not move, by construction of
 --- client/progression.lua's own existing "notify only on a real label
 --- change" rule -- no server-side diffing needed to decide who gets a
---- toast, only who gets counted in the warning below.
+--- toast, only who gets counted/named in the warning below.
+---
+--- SELF-SERVICE VISIBILITY (see header "THE ALREADY-PROMOTED PLAYER" point
+--- 3): promotions are tracked here with EXACTLY the same rigor as
+--- demotions, not merely as an afterthought -- LOWERING a threshold never
+--- demotes anyone, so a self-promoting (or ally-promoting) edit produced
+--- `demotedCount == 0` under the original demoted-only accounting, which is
+--- precisely the silence this pass closes. `citizenid` lists (not just
+--- counts) are returned specifically so the audit trail and the caller's
+--- own response can name who gained a rank, not merely how many did.
 --- @param beforeSnapshot table<string, {src: number, xp: number}>
---- @return number demotedCount
+--- @return table effect -- { demotedCount, promotedCount, demotedCitizenIds: string[], promotedCitizenIds: string[] }
 local function PushRefreshedSnapshotsAfterEdit(beforeSnapshot)
-    local demoted = 0
-    if type(GetXPTier) ~= 'function' then return demoted end
+    local effect = { demotedCount = 0, promotedCount = 0, demotedCitizenIds = {}, promotedCitizenIds = {} }
+    if type(GetXPTier) ~= 'function' then return effect end
 
     for citizenid, before in pairs(beforeSnapshot) do
         local afterTier = GetXPTier(citizenid)
         TriggerClientEvent('qbx_k9unit:client:xpTierChanged', before.src, CopyXPTier(afterTier))
         if afterTier.xp < before.xp then
-            demoted = demoted + 1
+            effect.demotedCount = effect.demotedCount + 1
+            effect.demotedCitizenIds[#effect.demotedCitizenIds + 1] = citizenid
+        elseif afterTier.xp > before.xp then
+            effect.promotedCount = effect.promotedCount + 1
+            effect.promotedCitizenIds[#effect.promotedCitizenIds + 1] = citizenid
         end
     end
-    return demoted
+    return effect
 end
 
 -- ======================================================================
@@ -893,21 +941,77 @@ lib.callback.register('qbx_k9unit:server:xpTiersUpsert', function(source, payloa
     if oldMedkit ~= medkitCooldownMultiplier then changes[#changes + 1] = ('medkitCooldownMultiplier: %s -> %s'):format(tostring(oldMedkit), tostring(medkitCooldownMultiplier)) end
     if oldBadge ~= badge then changes[#changes + 1] = ('badge: %s -> %s'):format(tostring(oldBadge), tostring(badge)) end
 
-    local demotedCount = PushRefreshedSnapshotsAfterEdit(beforeOnlineSnapshot)
+    -- SELF-SERVICE VISIBILITY -- see header "THE ALREADY-PROMOTED PLAYER"
+    -- point 3 and PushRefreshedSnapshotsAfterEdit's own doc comment.
+    -- `effect` names BOTH directions of re-ranking, never just demotions.
+    local effect = PushRefreshedSnapshotsAfterEdit(beforeOnlineSnapshot)
+
+    -- Reliable self-promotion detection: the acting officer is, by
+    -- construction, online and authenticated at the exact moment this
+    -- callback runs (they just called it), so if THEIR OWN citizenid is
+    -- among those promoted, it is because THIS edit put them there -- never
+    -- a false positive from an unrelated concurrent promotion, since
+    -- XPTierEditMutex has already serialized every edit to this ladder by
+    -- the time `effect` is computed above.
+    local isSelfPromotion = false
+    if citizenid then
+        for _, promotedId in ipairs(effect.promotedCitizenIds) do
+            if promotedId == citizenid then
+                isSelfPromotion = true
+                break
+            end
+        end
+    end
+
+    -- Audit detail records BOTH directions, by citizenid, in the SAME line
+    -- as the field-level before/after values above -- a revert (which
+    -- demotes exactly whoever the original edit promoted) is therefore
+    -- exactly as visible in the log as the promotion it undoes, and neither
+    -- direction can be omitted just because the OTHER direction happened to
+    -- be zero.
+    local reRankParts = {}
+    if effect.promotedCount > 0 then
+        reRankParts[#reRankParts + 1] = (' -- %d currently-connected K9(s) re-ranked HIGHER by this edit with NO additional XP earned (citizenid(s): %s)%s'):format(
+            effect.promotedCount, table.concat(effect.promotedCitizenIds, ', '), isSelfPromotion and ' [SELF-PROMOTION: includes the acting officer]' or '')
+    end
+    if effect.demotedCount > 0 then
+        reRankParts[#reRankParts + 1] = (' -- %d currently-connected K9(s) re-ranked LOWER by this edit (citizenid(s): %s)'):format(
+            effect.demotedCount, table.concat(effect.demotedCitizenIds, ', '))
+    end
 
     K9Store.XPTierAudit_Append(
         ordinal,
-        ('rank %d (%s): %s%s'):format(ordinal, tostring(payload.label), table.concat(changes, ', '),
-            demotedCount > 0 and (' -- %d currently-connected K9(s) re-ranked LOWER by this edit'):format(demotedCount) or ''),
+        ('rank %d (%s): %s%s'):format(ordinal, tostring(payload.label), table.concat(changes, ', '), table.concat(reRankParts, '')),
         citizenid or 'unknown'
     )
 
+    -- LOUDER TREATMENT FOR A PROMOTION THAN A DEMOTION -- decided, not
+    -- merely defaulted to equal wording: a threshold edit that instantly
+    -- HANDS OUT a rank's bonuses with zero additional XP earned is the
+    -- shape a high-command account could actually exploit for personal or
+    -- ally gain; a demotion only ever takes away something re-ranking
+    -- already justified, never grants anything. Both are still disclosed in
+    -- the SAME response (never one silencing the other), but the promotion
+    -- warning is built first, is more specific (names who, states the
+    -- zero-additional-XP fact explicitly), and gets its own SELF-PROMOTION
+    -- callout when it applies. Never a gate -- the edit has already
+    -- completed by the time this warning is built; this is disclosure, not
+    -- a confirmation dialog.
+    local warningParts = {}
+    if effect.promotedCount > 0 then
+        warningParts[#warningParts + 1] = ('%d currently-connected K9(s) just gained a HIGHER rank\'s speed/scent bonuses as a direct result of this edit, with NO additional XP earned (citizenid(s): %s).%s'):format(
+            effect.promotedCount, table.concat(effect.promotedCitizenIds, ', '),
+            isSelfPromotion and ' SELF-PROMOTION: the acting officer\'s own citizenid is among those promoted by this edit.' or '')
+    end
+    if effect.demotedCount > 0 then
+        warningParts[#warningParts + 1] = ('%d currently-connected K9(s) just moved to a LOWER rank as a direct result of this edit ' ..
+            '(their real accumulated XP did not change -- only which rank it currently qualifies for did).'):format(effect.demotedCount)
+    end
+
     local warning
-    if demotedCount > 0 then
-        warning = ('This change immediately RE-RANKS every currently-connected K9 against the new thresholds. ' ..
-            '%d currently-connected K9(s) just moved to a LOWER rank as a direct result of this edit ' ..
-            '(their real accumulated XP did not change -- only which rank it currently qualifies for did). ' ..
-            'This is not automatically reversible; edit the threshold back if that was not intended.'):format(demotedCount)
+    if #warningParts > 0 then
+        warning = ('This change immediately RE-RANKS every currently-connected K9 against the new thresholds. %s ' ..
+            'This is not automatically reversible; edit the threshold back if that was not intended -- doing so is logged with the same visibility as this change.'):format(table.concat(warningParts, ' '))
     end
 
     return { ok = true, tiers = ListXPTiersSnapshot(), warning = warning }
@@ -921,8 +1025,39 @@ end)
 -- file-load [here: at every other file's own file-load, since this file
 -- makes no changes at its OWN file-load beyond registering callbacks], DB
 -- layered on top at onResourceStart" pattern exactly.
+--
+-- WAITS FOR THE SCHEMA-COLLISION PROBE TO SETTLE FIRST (db-schema
+-- boot-order fix, this pass): server/datastore.lua loads before this file
+-- and registers its own onResourceStart handler first, but that handler's
+-- own MySQL.query.await yields -- and a yielding handler does not block
+-- FXServer's event dispatch from moving straight on to THIS handler while
+-- the probe is still in flight. Without this wait,
+-- K9Store.XPTier_GetAllRows() below would run its own SELECT (a different
+-- column set than k9_xp_tiers is checked against -- it includes
+-- medkit_cooldown_multiplier/badge, which the probe does not check, and
+-- omits updated_by/updated_at, which the probe does) against whatever
+-- `k9_xp_tiers` currently is, before the probe has had a chance to say
+-- whether that table is even really ours -- a foreign table the full
+-- probe would correctly reject could still satisfy this different one
+-- during that window. K9Store.WaitForSchemaCheckToSettle()
+-- (server/datastore.lua) blocks THIS coroutine only, with a bounded
+-- timeout, until that determination is final -- see its own header for
+-- the full contract. On a `false` return (the probe genuinely had not
+-- settled within the wait budget -- database unreachable/slow, or off by
+-- config, which settles instantly instead of waiting at all), this file
+-- boots every rank to its config.lua default for this session, exactly
+-- like `Config.Database.enabled == false` -- simply skipping
+-- ApplyPersistedXPTierOverrides() leaves Config.XPTiers exactly as shipped
+-- (nothing above this point ever mutates it except that function), so no
+-- separate fallback path is needed. The next successful xpTiersUpsert
+-- call (or a resource restart, by which point the probe will certainly
+-- have settled) re-reads the real state as normal.
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] xptiers: the schema-collision check had not finished within its wait budget -- every rank is using its config.lua default for this session (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. The next successful XP-tier edit (or a restart once the check has had time to finish) will pick up any real persisted state.')
+        return
+    end
     ApplyPersistedXPTierOverrides()
 end)

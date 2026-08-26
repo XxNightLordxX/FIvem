@@ -86,21 +86,56 @@
     config value here can close.
 
     `accessScope` is therefore HARD-ENFORCED to `'department'` — the only
-    value this file actually implements a real access control for — via an
-    `assert` at resource start (below), not left selectable with a caveat
-    comment: a config value that can silently grant world-readable
-    read/write access to every K9's inventory is exactly the class this
-    resource already treats as a hard startup failure, per
-    server/main.lua's `nudgeRequiresUnlocked` assert and
-    server/search.lua's own `onResourceStart` config-invariant asserts —
-    same precedent, applied here. `ResolveStashOwnerAndGroups` and
-    `IsAuthorizedForK9Inventory` below still fail closed for any
-    non-'department' value as defense-in-depth (in case a future edit ever
-    removes the assert without touching them), but that code path is
-    UNREACHABLE in a running resource today — 'ownerOnly' is not an
-    implemented, selectable option, it is a rejected one. Still flagged for
-    an explicit human product sign-off before `Config.Features.K9Inventory`
-    ever defaults to `true` on a live server.
+    value this file actually implements a real access control for — not
+    left selectable with a caveat comment: a config value that can silently
+    grant world-readable read/write access to every K9's inventory is
+    exactly the class this resource would otherwise treat as a hard startup
+    failure, per server/main.lua's `nudgeRequiresUnlocked` assert and
+    server/search.lua's own `onResourceStart` config-invariant asserts.
+
+    UPDATED THIS PASS (coder-security review) — CHANGED FROM A HARD
+    `assert` TO A WARN-AND-FORCE GUARD, deliberately NOT given the same
+    treatment as those two sibling asserts: this field is the one case in
+    this file (unlike a missing/wrong-type Config TABLE, which has no sane
+    substitute) where an obvious, strictly NARROWER safe fallback exists —
+    `'department'` is already the correct, intended, shipped value, and is
+    the ONLY value this file implements real access control for at all.
+    Aborting this file's ENTIRE `onResourceStart` chain (K9 stash
+    registration, the `allowedItems` hook, everything else registered in
+    that same handler) over one mistyped config field is a disproportionate
+    failure mode when the one correct value is already known and
+    unambiguous — unlike server/main.lua's/server/search.lua's own asserts,
+    each of which guards a shape with no such safe substitute to fall back
+    to. `ResolveConfiguredAccessScope` (below) — same clamp-and-warn SHAPE
+    as server/cooldowns.lua's `ResolveConfiguredThresholdMs` — now WARNS
+    LOUDLY, naming the exact bad value found, on any non-'department'
+    value, then FORCES `Config.K9Inventory.accessScope` back to
+    `'department'` for this session, writing the corrected value BACK onto
+    `Config.K9Inventory.accessScope` itself (never just a local), exactly
+    like server/pursuitsprint.lua's own
+    `Config.PursuitSprint.speedMultiplier =
+    ResolveConfiguredPositiveNumber(...)` precedent — so every other read of
+    this field in this file (`ResolveStashOwnerAndGroups`,
+    `IsAuthorizedForK9Inventory`, both of which re-read
+    `Config.K9Inventory.accessScope` directly, never a cached value) also
+    observes the corrected value, not just the guard itself.
+
+    FAILURE DIRECTION, confirmed, not assumed: forcing to `'department'` can
+    only ever NARROW access relative to whatever was misconfigured, never
+    widen it — every OTHER value (including `'ownerOnly'`, and any typo)
+    provides NO real ox_inventory access control at all (see above), i.e.
+    the single MOST PERMISSIVE state this field could ever be in is exactly
+    the one this fallback replaces; there is no value this field could hold
+    that `'department'` would be widening access relative to.
+    `ResolveStashOwnerAndGroups` and `IsAuthorizedForK9Inventory` below
+    still fail closed for any non-'department' value as defense-in-depth (in
+    case a future edit ever reads a DIFFERENT, uncorrected copy of this
+    field without going through `ResolveConfiguredAccessScope`), but that
+    code path is UNREACHABLE in a running resource today, exactly as before
+    this pass — 'ownerOnly' is not an implemented, selectable option, it is
+    a rejected one. Still flagged for an explicit human product sign-off
+    before `Config.Features.K9Inventory` ever defaults to `true` on a live
+    server.
 
     ======================================================================
     CONFIDENCE NOTES — every ox_inventory export/shape this file's body
@@ -392,8 +427,10 @@ for jobName in pairs(Config.Departments) do
     K9InventoryDepartmentGroups[jobName] = 0
 end
 
--- CONFIG-SAFETY GUARD (coder-security finding, this pass — see this file's
--- header RESOLVED DESIGN DECISION section for the full trace). `'department'`
+-- CONFIG-SAFETY GUARD (coder-security finding, originally an `assert` —
+-- CHANGED THIS PASS to a warn-and-force guard, see this file's header
+-- RESOLVED DESIGN DECISION section, "UPDATED THIS PASS", for the full
+-- before/after reasoning and the failure-direction proof). `'department'`
 -- is the ONLY `Config.K9Inventory.accessScope` value this file implements a
 -- real ox_inventory access control for — `'ownerOnly'` (or any other value)
 -- relies on ox_inventory's `owner` RegisterStash argument, which is never
@@ -401,31 +438,53 @@ end
 -- own open-inventory path (independently verified against the live,
 -- current `overextended/ox_inventory` source this session): `groups` via
 -- `server.hasGroup` is the only real gate, and a nil `groups` (what
--- 'ownerOnly' produces) short-circuits to ALLOW for every caller. Failing
--- loudly here, at resource start, rather than letting a misconfigured value
--- silently grant world-readable read/write access to every K9's stash —
--- same precedent as server/main.lua's `nudgeRequiresUnlocked` assert and
--- server/search.lua's own `onResourceStart` config-invariant asserts,
--- placed in THIS file (not centralized) because this is the file whose
--- security model actually depends on it, same reasoning server/search.lua's
--- own header already gives for that placement choice.
+-- 'ownerOnly' produces) short-circuits to ALLOW for every caller. Warning
+-- loudly and forcing the one safe value here, at resource start, rather
+-- than letting a misconfigured value silently grant world-readable
+-- read/write access to every K9's stash — placed in THIS file (not
+-- centralized) because this is the file whose security model actually
+-- depends on it, same reasoning server/search.lua's own header already
+-- gives for that placement choice.
+--- Same clamp-and-warn SHAPE as server/cooldowns.lua's
+--- ResolveConfiguredThresholdMs: validate, and on failure, print ONE loud
+--- (never silent) warning naming the exact bad value found and what is
+--- being substituted, then return the safe value — NEVER throws, NEVER
+--- aborts the caller.
+--- @return string accessScope -- always 'department'
+local function ResolveConfiguredAccessScope()
+    local configured = Config.K9Inventory.accessScope
+    if configured == 'department' then
+        return 'department'
+    end
+
+    print(
+        ("[qbx_k9unit] server/inventory.lua: Config.K9Inventory.accessScope is not 'department' " ..
+         "(found: %s). 'department' is the ONLY accessScope value this file implements a real " ..
+         "ox_inventory access control for -- ox_inventory's RegisterStash only gates stash access via " ..
+         'its `groups` argument (server.hasGroup); the `owner` argument (what every other value, ' ..
+         "including 'ownerOnly', relies on) is never checked against the calling player's identity " ..
+         "anywhere in ox_inventory's own open-inventory path. Left uncorrected, this would silently let " ..
+         "ANY connected player who knows or guesses a K9's citizenid open that K9's stash directly via " ..
+         "exports.ox_inventory:openInventory('stash', 'k9inv-<citizenid>'), bypassing every check this " ..
+         'resource makes (proximity, HasK9Access, IsAuthorizedForK9Inventory, the cooldown/mutex) and ' ..
+         "Config.Features.K9Inventory itself. FORCING Config.K9Inventory.accessScope back to " ..
+         "'department' for this session so K9 stashes stay gated to department membership instead -- " ..
+         'find Config.K9Inventory.accessScope in config.lua and set it to \'department\' to clear this ' ..
+         'warning.'
+        ):format(tostring(configured))
+    )
+    return 'department'
+end
+
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
-    assert(
-        Config.K9Inventory.accessScope == 'department',
-        "[qbx_k9unit] Config.K9Inventory.accessScope must be 'department' -- " ..
-        "'ownerOnly' (or any other value) is NOT a real access control. ox_inventory's " ..
-        'RegisterStash only gates stash access via its `groups` argument (server.hasGroup); ' ..
-        'the `owner` argument is used exclusively for internal stash keying and DB persistence ' ..
-        "and is never checked against the calling player's identity anywhere in ox_inventory's " ..
-        'open-inventory path (verified against the current overextended/ox_inventory source). ' ..
-        "Setting accessScope to anything but 'department' would silently let ANY connected " ..
-        "player who knows or guesses a K9's citizenid open that K9's stash directly via " ..
-        "exports.ox_inventory:openInventory('stash', 'k9inv-<citizenid>'), bypassing every " ..
-        'check this resource makes (proximity, HasK9Access, IsAuthorizedForK9Inventory, the ' ..
-        'cooldown/mutex) and Config.Features.K9Inventory itself.'
-    )
+    -- Writes the resolved value BACK onto Config.K9Inventory.accessScope
+    -- itself (never just a local) so every other read of this field in this
+    -- file (ResolveStashOwnerAndGroups/IsAuthorizedForK9Inventory below, both
+    -- of which re-read Config.K9Inventory.accessScope directly) observes the
+    -- corrected value too, not just this guard.
+    Config.K9Inventory.accessScope = ResolveConfiguredAccessScope()
 end)
 
 -- ======================================================================
@@ -643,12 +702,14 @@ end)
 --- Resolves the `owner`/`groups` RegisterStash arguments for a given K9
 --- citizenid, per Config.K9Inventory.accessScope. See this file's header
 --- RESOLVED DESIGN DECISION section for the full reasoning. The
---- onResourceStart assert above guarantees accessScope is always
---- 'department' in a running resource — the branch below is UNREACHABLE
---- dead code today, kept only as defense-in-depth (fails to the most
---- restrictive shape, single-owner/no-groups, rather than the more
---- permissive 'department' reading) in case a future edit ever removes
---- that assert without touching this function.
+--- onResourceStart guard above (ResolveConfiguredAccessScope, which WARNS
+--- and FORCES Config.K9Inventory.accessScope back to 'department' rather
+--- than asserting) guarantees accessScope is always 'department' in a
+--- running resource — the branch below is UNREACHABLE dead code today,
+--- kept only as defense-in-depth (fails to the most restrictive shape,
+--- single-owner/no-groups, rather than the more permissive 'department'
+--- reading) in case a future edit ever reads a different, uncorrected copy
+--- of this field without going through that guard.
 --- @param citizenid string
 --- @return string|boolean owner
 --- @return table? groups
@@ -685,10 +746,10 @@ local function IsAuthorizedForK9Inventory(interactorJobName, isSelf)
         return interactorJobName ~= nil and Config.Departments[interactorJobName] ~= nil
     end
 
-    -- UNREACHABLE in a running resource (the onResourceStart assert above
-    -- guarantees accessScope == 'department') — fails closed, same
-    -- direction/reasoning as ResolveStashOwnerAndGroups above, kept only as
-    -- defense-in-depth.
+    -- UNREACHABLE in a running resource (the onResourceStart guard above,
+    -- ResolveConfiguredAccessScope, guarantees accessScope == 'department')
+    -- — fails closed, same direction/reasoning as ResolveStashOwnerAndGroups
+    -- above, kept only as defense-in-depth.
     return false
 end
 
@@ -725,8 +786,9 @@ end
 --- RegisterStash is REAL (composed onto `CreateInventory`, per
 --- shared/compat/inventory.lua's own qb-inventory section) so the K9
 --- stash itself is genuinely created -- but this file's own onResourceStart
---- assert already hard-enforces `Config.K9Inventory.accessScope ==
---- 'department'`, and qb-inventory's `groups`/`owner` arguments are silently
+--- guard (ResolveConfiguredAccessScope) already forces
+--- `Config.K9Inventory.accessScope == 'department'`, and qb-inventory's
+--- `groups`/`owner` arguments are silently
 --- discarded by that adapter (no per-inventory ACL concept exists on that
 --- backend at all, per that adapter's own header) -- meaning the real access
 --- boundary for a qb-inventory-backed K9 stash is ENTIRELY this file's own

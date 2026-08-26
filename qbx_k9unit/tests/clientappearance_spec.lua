@@ -78,14 +78,20 @@ local function newFixture(opts)
     end
 
     -- Engaged-state stubs -- each independently settable, to prove the OR
-    -- across all five (see client/appearance.lua's own IsCurrentlyEngaged
-    -- doc comment for the full list/reasoning).
+    -- across all six (see client/appearance.lua's own IsCurrentlyEngaged
+    -- doc comment for the full list/reasoning). CORRECTED this pass: this
+    -- fixture used to stub only five of the six predicates -- missing
+    -- IsPropAttachmentEngaged entirely (added to production per that file's
+    -- own "CLOSED GAP" header note, but never given fixture coverage here),
+    -- silently leaving that sixth engagement source untested this whole
+    -- time.
     local engaged = {}
     local function IsLeashed() return engaged.leashed == true end
     local function IsBiteHoldEngaged() return engaged.biteHold == true end
     local function IsDragEngaged() return engaged.drag == true end
     local function IsFetchCarryEngaged() return engaged.fetchCarry == true end
     local function IsInK9Vehicle() return engaged.vehicle == true end
+    local function IsPropAttachmentEngaged() return engaged.propAttachment == true end
 
     -- RequestModel/HasModelLoaded/SetModelAsNoLongerNeeded/IsModelValid --
     -- same shape as tests covering client/kennel.lua's identical
@@ -126,6 +132,7 @@ local function newFixture(opts)
         IsDragEngaged = IsDragEngaged,
         IsFetchCarryEngaged = IsFetchCarryEngaged,
         IsInK9Vehicle = IsInK9Vehicle,
+        IsPropAttachmentEngaged = IsPropAttachmentEngaged,
         RequestModel = RequestModel,
         HasModelLoaded = HasModelLoaded,
         SetModelAsNoLongerNeeded = SetModelAsNoLongerNeeded,
@@ -280,11 +287,11 @@ t.test('applyK9Ped: a genuine server-origin trigger (source == 65535) is process
 end)
 
 -- ----------------------------------------------------------------------
--- "REFUSE, DON'T FORCE-CLEAR" -- engaged in ANY of the five tracked states
+-- "REFUSE, DON'T FORCE-CLEAR" -- engaged in ANY of the six tracked states
 -- refuses the swap outright, before RequestModel is ever called.
 -- ----------------------------------------------------------------------
 
-local ENGAGED_KEYS = { 'leashed', 'biteHold', 'drag', 'fetchCarry', 'vehicle' }
+local ENGAGED_KEYS = { 'leashed', 'biteHold', 'drag', 'fetchCarry', 'vehicle', 'propAttachment' }
 for _, key in ipairs(ENGAGED_KEYS) do
     t.test(('applyK9Ped: refuses outright when engaged via %s -- no model ever requested, reports "engaged"'):format(key), function()
         local f = newFixture()
@@ -307,6 +314,46 @@ t.test('applyK9Ped: not engaged in any tracked way -- proceeds normally', functi
     f.markModelLoaded('HASH(a_c_husky)')
     f.events['qbx_k9unit:client:applyK9Ped']('req-1', 'a_c_husky')
     t.equals(#f.setPlayerModelCalls, 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- BUG (found + fixed this pass): the ORIGINAL IsCurrentlyEngaged() check
+-- above only proves the ped was unengaged at the INSTANT this handler
+-- started -- LoadModelWithTimeout's own Wait(50) polling loop can run for
+-- however long the configured modelLoadTimeoutMs allows, and nothing
+-- re-checked engagement after that wait before this pass's own fix. This
+-- reproduces the race directly: the model loads successfully, but the
+-- player becomes engaged (an independent action landing while this handler
+-- was suspended, e.g. another player leashing this one) DURING the wait,
+-- not before it.
+-- ----------------------------------------------------------------------
+
+t.test('BUG (found + fixed this pass): becoming engaged DURING the model-load wait (not before it started) still refuses the swap, releases the successfully-loaded model, and reports "engaged"', function()
+    local f = newFixture()
+    f.env.source = 65535
+
+    -- Not engaged at dispatch time (the FIRST IsCurrentlyEngaged() check
+    -- must pass, or this test would prove nothing about the SECOND,
+    -- post-wait check this pass added). The model reports "still loading"
+    -- for its first poll -- during which this fixture's own Wait stub flips
+    -- the player LEASHED -- then "loaded" from the second poll onward.
+    local pollCount = 0
+    f.env.Wait = function(_ms)
+        pollCount = pollCount + 1
+        f.setEngaged('leashed', true) -- lands mid-wait, independent of this handler
+        f.markModelLoaded('HASH(a_c_husky)')
+    end
+
+    f.events['qbx_k9unit:client:applyK9Ped']('req-1', 'a_c_husky')
+
+    t.equals(#f.requestModelCalls, 1, 'the load was genuinely attempted -- this is not the "refused before RequestModel" path')
+    t.equals(#f.setPlayerModelCalls, 0, 'FIXED: must NOT apply the swap -- the player became engaged during the wait, even though it started unengaged')
+    t.equals(#f.releaseModelCalls, 1, 'the successfully-loaded model\'s streaming reference must still be released even though it ends up unused')
+    t.equals(f.releaseModelCalls[1], 'HASH(a_c_husky)')
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1][3], false)
+    t.equals(f.serverEvents[1][4], 'engaged', 'reported the same way as the pre-existing "engaged at dispatch time" case, not "timeout" or a silent drop')
+    t.isTrue(pollCount >= 1, 'sanity: the Wait stub above must have actually run for this test to prove anything')
 end)
 
 -- ----------------------------------------------------------------------
