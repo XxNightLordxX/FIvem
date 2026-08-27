@@ -56,6 +56,9 @@
 #                         feature parity)
 #     k9_personnel        every K9/Handler roster assignment and callsign,
 #                         past and present (ROSTER_SPEC.md §3/§4)
+#     k9_wellbeing        every online K9's current fatigue, mood, fear/
+#                         stress, injury, hunger and thirst condition
+#                         (server/wellbeing.lua)
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -175,8 +178,11 @@ fi
 # shipped, so a backup taken via this script right before an uninstall
 # would have silently NOT protected it. Fixed here, added below alongside
 # migration 0020's k9_personnel (ROSTER_SPEC.md §3/§4, added from the
-# start). The DRIFT GUARD immediately below is the backstop for the next
-# table a future migration adds here.
+# start). db-schema pass, 2026-08-27: migration 0022's k9_wellbeing (K9
+# fatigue/mood/fear-stress/injury/hunger/thirst persistence,
+# server/wellbeing.lua's K9Store.Wellbeing_Get/K9Store.Wellbeing_Upsert)
+# added here from the start, same reasoning. The DRIFT GUARD immediately
+# below is the backstop for the next table a future migration adds here.
 ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_partnership_pair_progress
             k9_progression k9_permissions
             k9_certification_specializations k9_runtime_feature_overrides
@@ -187,7 +193,7 @@ ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_partnership_pair_
             k9_equipment_shop_items k9_equipment_shop_item_audit
             k9_xp_tiers k9_xp_tier_audit
             k9_individual_overrides k9_individual_override_audit
-            k9_dog_characters k9_personnel)
+            k9_dog_characters k9_personnel k9_wellbeing)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do

@@ -297,6 +297,16 @@ FROM (
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'
          AND COLUMN_NAME IN ('citizenid','model','active','set_by','set_at','unset_at'))
+    -- migration 0022 (K9 fatigue/mood/fear-stress/injury/hunger/thirst
+    -- persistence -- server/wellbeing.lua's K9Store.Wellbeing_Get/
+    -- K9Store.Wellbeing_Upsert). Column list mirrors sql/install.sql's own
+    -- CREATE TABLE and server/datastore.lua's own EXPECTED_TABLE_COLUMNS
+    -- entry for this table exactly -- keep all three in sync if any changes.
+    UNION ALL SELECT 'k9_wellbeing', 8,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_wellbeing'
+         AND COLUMN_NAME IN ('citizenid','fatigue','mood','fear_stress','injury','hunger','thirst','updated_at'))
 ) x
 ORDER BY x.table_name;
 
@@ -343,7 +353,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit',
                           'k9_individual_overrides','k9_individual_override_audit',
-                          'k9_partnership_pair_progress','k9_personnel','k9_dog_characters');
+                          'k9_partnership_pair_progress','k9_personnel','k9_dog_characters','k9_wellbeing');
 
 
 -- ---------------------------------------------------------------------
@@ -387,7 +397,7 @@ SELECT
 SELECT TABLE_NAME AS `our_table`, TABLE_ROWS AS `approx_rows`
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit','k9_equipment_shop_locations','k9_equipment_shop_locations_audit','k9_permission_keys','k9_permission_key_audit','k9_equipment_shop_items','k9_equipment_shop_item_audit','k9_xp_tiers','k9_xp_tier_audit','k9_individual_overrides','k9_individual_override_audit','k9_partnership_pair_progress','k9_personnel','k9_dog_characters')
+  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit','k9_equipment_shop_locations','k9_equipment_shop_locations_audit','k9_permission_keys','k9_permission_key_audit','k9_equipment_shop_items','k9_equipment_shop_item_audit','k9_xp_tiers','k9_xp_tier_audit','k9_individual_overrides','k9_individual_override_audit','k9_partnership_pair_progress','k9_personnel','k9_dog_characters','k9_wellbeing')
 ORDER BY TABLE_NAME;
 
 

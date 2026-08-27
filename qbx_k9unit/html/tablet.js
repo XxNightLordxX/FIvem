@@ -1318,7 +1318,7 @@
         // ceiling is now an owner-editable server setting, so this page
         // never states a specific figure it cannot promise is still true.
         k9_profile_speed_multiplier_hint: "Multiplies this K9's movement and sprint speed. Must be greater than 0 -- there is no fixed upper limit here; an extremely high value may still be refused if it exceeds what your server allows. Default: 1.0, meaning no change from its rank.",
-        k9_profile_speed_clamp_note: "Note: this server's own movement code currently caps the FINAL, fully-combined speed effect at 2x, regardless of this value -- an override above roughly 2 is saved and real, but you will not see the dog get any faster past that point.",
+        k9_profile_speed_clamp_note: "This value genuinely applies in-game, all the way up to your server's speed ceiling -- that is Config.MaxSpeedScentMultiplier in config.lua, 10 by default, which is also the highest the game engine itself accepts. There is no hidden lower cap. This note used to say the opposite, and it was right at the time: anything above 2x saved, showed here, and silently never happened. That is fixed.",
         k9_profile_scent_range_multiplier_label: 'Scent Range Multiplier',
         k9_profile_scent_range_multiplier_hint: "Multiplies how far this K9 can pick up a scent trail or search target. Must be greater than 0 -- there is no fixed upper limit here; an extremely high value may still be refused if it exceeds what your server allows. Default: 1.0, meaning no change from its rank.",
         k9_profile_medkit_cooldown_multiplier_label: 'Medkit Cooldown Multiplier',
@@ -1336,7 +1336,7 @@
         k9_profile_error_invalid_citizenid: 'Enter a valid citizen ID.',
         k9_profile_error_invalid_payload: 'That request was malformed. Try again.',
         k9_profile_error_no_fields_to_set: 'Enter at least one value to save.',
-        k9_profile_error_invalid_speed_multiplier: 'Sprint speed multiplier must be a number greater than 0, or left blank.',
+        k9_profile_error_invalid_speed_multiplier: "Sprint speed multiplier must be a number above 0.1 and no higher than your server's speed ceiling -- that is Config.MaxSpeedScentMultiplier in config.lua, 10 by default, and never more than 10 whatever you set it to, because that is the game engine's own maximum. Or leave it blank.",
         k9_profile_error_invalid_scent_range_multiplier: 'Scent range multiplier must be a number greater than 0, or left blank.',
         k9_profile_error_invalid_medkit_cooldown_multiplier: 'Medkit cooldown multiplier must be greater than 0 and no more than 1, or left blank.',
         k9_profile_error_invalid_stamina: 'Stamina drain rate must be 0 (permanent) or a positive number, or left blank.',

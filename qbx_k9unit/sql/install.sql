@@ -4,7 +4,7 @@
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
 -- This is a hard requirement, not a recommendation. Five of the
--- twenty-seven (27) tables below (k9_certifications,
+-- twenty-eight (28) tables below (k9_certifications,
 -- k9_certification_specializations, k9_partnerships, k9_permissions,
 -- k9_personnel)
 -- declare an INDEXED VIRTUAL GENERATED COLUMN backing a UNIQUE KEY
@@ -13,7 +13,7 @@
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
 -- `k9_permissions.active_permission_key`,
 -- `k9_personnel.active_personnel_key` and `active_callsign_key`
--- (migration 0020, ROSTER_SPEC.md §3/§4)) -- the other twenty-two
+-- (migration 0020, ROSTER_SPEC.md §3/§4)) -- the other twenty-three
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
@@ -22,7 +22,7 @@
 -- k9_permission_keys, k9_permission_key_audit, k9_equipment_shop_items,
 -- k9_equipment_shop_item_audit, k9_xp_tiers, k9_xp_tier_audit,
 -- k9_individual_overrides, k9_individual_override_audit,
--- k9_partnership_pair_progress, k9_dog_characters) need
+-- k9_partnership_pair_progress, k9_dog_characters, k9_wellbeing) need
 -- nothing from this floor and would run on an older server on their own,
 -- but this resource has one stated minimum for the schema as a whole, not
 -- a per-table one.
@@ -1666,4 +1666,50 @@ CREATE TABLE IF NOT EXISTS `k9_personnel` (
   KEY `idx_job_active` (`job`, `active`),
   UNIQUE KEY `uq_one_active_personnel_per_job` (`active_personnel_key`),
   UNIQUE KEY `uq_one_active_callsign_per_job` (`active_callsign_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_wellbeing
+--
+-- Added alongside `sql/migrations/0022_create_k9_wellbeing.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (why six DECIMAL(6,2) stats and not the four short-lived
+-- GetGameTimer()-relative timer-window fields, why one row per citizenid
+-- rather than an append-mostly audit log, and why no FK to a `players`
+-- table). Not repeated a second time here.
+--
+-- db-schema convergence pass, 2026-08-27: this section was previously
+-- completely absent from this file even though migration 0022 itself had
+-- already shipped -- the exact class of silent gap migrations
+-- 0010/0011/0013/0014/0015/0019 each already had fixed here once before for
+-- THIS file (see this file's own top-of-header table count, which this
+-- addition brings back in sync with the real CREATE TABLE count below).
+-- Without this section, a FRESH install via this file alone never created
+-- this table at all, so server/wellbeing.lua's own K9Store.Wellbeing_Get/
+-- K9Store.Wellbeing_Upsert accessors would have had nothing to read or
+-- write against on a brand-new server until an operator separately ran
+-- the migrations folder.
+--
+-- Owner file: `server/wellbeing.lua`, exclusively through
+-- `server/datastore.lua`'s `K9Store.Wellbeing_Get`/`K9Store.Wellbeing_Upsert`
+-- (this resource's own established "only datastore.lua names a k9_* table
+-- or calls MySQL.* directly" rule -- see that file's own header).
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, run
+-- `sql/migrations/0022_create_k9_wellbeing.sql` instead (a guaranteed
+-- no-op if this file already created it).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_wellbeing` (
+  `citizenid`   VARCHAR(50)  NOT NULL,
+  `fatigue`     DECIMAL(6,2) NOT NULL DEFAULT 100.00,
+  `mood`        DECIMAL(6,2) NOT NULL DEFAULT 100.00,
+  `fear_stress` DECIMAL(6,2) NOT NULL DEFAULT 0.00,
+  `injury`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
+  `hunger`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
+  `thirst`      DECIMAL(6,2) NOT NULL DEFAULT 100.00,
+  `updated_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`citizenid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

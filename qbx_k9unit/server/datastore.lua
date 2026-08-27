@@ -1527,6 +1527,93 @@ function K9Store.HandlerXP_UpsertAdd(citizenid, delta)
 end
 
 -- ======================================================================
+-- k9_wellbeing
+--
+-- Mirrored from server/wellbeing.lua's own K9Store.Wellbeing_Get/
+-- K9Store.Wellbeing_Upsert call sites (EnsureStats' own load path;
+-- FlushDirtyWellbeingStats/FlushWellbeingEntryNow's own write path -- see
+-- that file's header "DATABASE PERSISTENCE" section for the full design
+-- these two accessors exist to back). ONE ROW PER CITIZENID, upserted in
+-- place -- same "live profile row, not an append-mostly audit log" shape
+-- as k9_progression immediately above, not k9_certifications' shape.
+-- sql/migrations/0022_create_k9_wellbeing.sql is this table's owner
+-- migration; sql/install.sql carries the identical CREATE TABLE for a
+-- fresh install.
+-- ======================================================================
+local WellbeingRows = {} -- citizenid -> { fatigue, mood, fear_stress, injury, hunger, thirst, updated_at_unix }
+
+--- Mirrors MySQL.single.await exactly -- nil for no row, same raw-mirror
+--- contract as Cert_GetActiveMeta above (throws on a genuine DB-mode
+--- error; NOT pcall-wrapped here on purpose -- server/wellbeing.lua's own
+--- EnsureStats already pcalls this call site and degrades a throw to
+--- EXACTLY the same fresh-default construction it already uses for a nil
+--- return, per that file's header "FAIL DIRECTION, STATED EXPLICITLY" --
+--- wrapping it a second time here would only hide a real error from that
+--- caller's own diagnostic print). `fear_stress` is aliased to
+--- `fearStress` in the real SELECT so the returned row's keys match
+--- server/wellbeing.lua's own camelCase reads with no remapping needed at
+--- the call site -- same convention this file already uses for
+--- `UNIX_TIMESTAMP(expires_at) AS expires_at_unix` in Cert_GetActiveMeta
+--- above.
+--- @param citizenid string
+--- @return table? row -- { fatigue, mood, fearStress, injury, hunger, thirst }, or nil if this citizenid has no row yet
+function K9Store.Wellbeing_Get(citizenid)
+    if DatabaseEnabled('k9_wellbeing') then
+        return MySQL.single.await(
+            'SELECT fatigue, mood, fear_stress AS fearStress, injury, hunger, thirst FROM k9_wellbeing WHERE citizenid = ? LIMIT 1',
+            { citizenid })
+    end
+    local row = WellbeingRows[citizenid]
+    if not row then return nil end
+    return {
+        fatigue = row.fatigue,
+        mood = row.mood,
+        fearStress = row.fear_stress,
+        injury = row.injury,
+        hunger = row.hunger,
+        thirst = row.thirst,
+    }
+end
+
+--- Mirrors the SafeWrite contract (boolean, never throws) -- same shape as
+--- Override_Upsert above, chosen over XP_UpsertAdd's raw-mirror-and-throw
+--- contract because `row` always carries ABSOLUTE, already-clamped values
+--- (never a delta to accumulate server-side) -- k9_runtime_feature_overrides'
+--- own "the caller already knows the final value, just persist it" shape,
+--- not k9_progression's "atomic increment-or-create" one.
+--- server/wellbeing.lua's own FlushDirtyWellbeingStats/
+--- FlushWellbeingEntryNow already treat "threw" and "returned false"
+--- identically (both leave `stats.dirty` untouched so the next flush
+--- retries the same row), so never throwing here costs that caller
+--- nothing while sparing every call site its own pcall wrapper.
+--- @param citizenid string
+--- @param row table -- exactly six numeric fields, already clamped to each stat's own range by the caller: fatigue, mood, fearStress, injury, hunger, thirst
+--- @return boolean ok
+function K9Store.Wellbeing_Upsert(citizenid, row)
+    if DatabaseEnabled('k9_wellbeing') then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_wellbeing (citizenid, fatigue, mood, fear_stress, injury, hunger, thirst) VALUES (?, ?, ?, ?, ?, ?, ?) ' ..
+            'ON DUPLICATE KEY UPDATE fatigue = VALUES(fatigue), mood = VALUES(mood), fear_stress = VALUES(fear_stress), injury = VALUES(injury), hunger = VALUES(hunger), thirst = VALUES(thirst), updated_at = CURRENT_TIMESTAMP',
+            { citizenid, row.fatigue, row.mood, row.fearStress, row.injury, row.hunger, row.thirst })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Wellbeing_Upsert write failed for %s: %s'):format(citizenid, tostring(err)))
+            return false
+        end
+        return true
+    end
+    WellbeingRows[citizenid] = {
+        fatigue = row.fatigue,
+        mood = row.mood,
+        fear_stress = row.fearStress,
+        injury = row.injury,
+        hunger = row.hunger,
+        thirst = row.thirst,
+        updated_at_unix = NowUnix(),
+    }
+    return true
+end
+
+-- ======================================================================
 -- k9_search_log
 --
 -- Mirrored from server/search.lua (LogSearchAttempt's INSERT) and
@@ -3664,6 +3751,20 @@ local EXPECTED_TABLE_COLUMNS = {
     -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entry for
     -- this table exactly -- keep both in sync if either changes.
     k9_personnel                       = { 'citizenid', 'job', 'role', 'callsign', 'granted_by', 'granted_at', 'cleared_by', 'cleared_at', 'active' },
+    -- db-schema pass, 2026-08-27 (wellbeing persistence wiring): matches
+    -- sql/migrations/0022_create_k9_wellbeing.sql's real CREATE TABLE
+    -- exactly -- `citizenid`, `fatigue`, `mood`, `fear_stress`, `injury`,
+    -- `hunger`, `thirst`, `updated_at`. Column list mirrors
+    -- sql/preflight_check.sql's own CHECK 1 entry for this table exactly --
+    -- keep both in sync if either changes. GETTING THIS WRONG DOES NOT
+    -- WARN QUIETLY: a real column list that does not cover every name
+    -- listed here forces VerifyTableShapesAgainstKnownSchema below to treat
+    -- `k9_wellbeing` as a SCHEMA COLLISION, which refuses MySQL for the
+    -- WHOLE RESOURCE this session, not just this one table -- see that
+    -- function's own header and DatabaseEnabled's own "SCHEMA COLLISION
+    -- SAFETY NET" comment above for why a single wrong entry here is a
+    -- resource-wide fail-closed event, not a small one.
+    k9_wellbeing                       = { 'citizenid', 'fatigue', 'mood', 'fear_stress', 'injury', 'hunger', 'thirst', 'updated_at' },
 }
 
 --- Short, operator-facing phrase for each table in EXPECTED_TABLE_COLUMNS
@@ -3703,6 +3804,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
     k9_permission_key_audit            = 'the permission-key audit log',
     k9_dog_characters                  = 'admin-pinned "this citizenid is permanently a dog" records (/k9setdog, /k9removedog -- mana_policedogs feature parity) -- NOTE: while this table is missing, every currently-pinned dog character falls back to memory only for the rest of this session (nobody\'s actual K9 role/certification is affected either way -- this table has never decided whether a citizenid may act as a K9, only whether their dog form is pinned in place; see server/dogcharacter.lua\'s own header)',
     k9_personnel                       = 'the K9/Handler roster assignments and callsigns -- NOTE: while this table is missing, every currently-assigned K9/handler falls back to the "Unassigned" bucket on the roster screens the moment this resource restarts (nobody\'s actual certification/permission/feature access is affected either way -- see ROSTER_SPEC.md §8)',
+    k9_wellbeing                       = 'K9 fatigue/mood/fear-stress/injury/hunger/thirst -- NOTE: while this table is missing, every online K9\'s condition resets to fresh-and-uninjured on the next restart (nobody\'s actual certification/permission/feature access is affected either way -- see server/wellbeing.lua\'s own header "DATABASE PERSISTENCE")',
 }
 
 --- A table this resource treats as MISSING when the table it is listed

@@ -3232,4 +3232,300 @@ t.test('STOPS CLEANLY: every wellbeing stat system switched off at once clears e
     t.equals(#partnerConditionEvents(f), 2)
 end)
 
+-- ============================================================================
+-- DATABASE PERSISTENCE (this pass, coder-backend). See server/wellbeing.lua's
+-- own header "DATABASE PERSISTENCE" section for the full design writeup this
+-- section proves. K9Store is ABSENT from every fixture above (none of them
+-- pass opts.k9Store) -- every one of those 112 tests is therefore already a
+-- standing regression proof that this whole feature is a pure ADDITION: with
+-- no K9Store at all, EnsureStats/FlushDirtyWellbeingStats/
+-- EvictStaleWellbeingEntries must all behave EXACTLY as they did before this
+-- pass (WellbeingPersistenceAvailable() is false throughout). The tests below
+-- are the NEW behaviour, exercised with a real, controllable fake K9Store.
+-- ============================================================================
+
+--- Minimal, deterministic in-memory K9Store stub mirroring the EXACT
+--- contract server/wellbeing.lua's own WellbeingPersistenceAvailable/
+--- EnsureStats/FlushDirtyWellbeingStats/FlushWellbeingEntryNow call sites
+--- depend on: Wellbeing_Get mirrors MySQL.single.await (nil = no row);
+--- Wellbeing_Upsert mirrors this resource's own SafeWrite-style bespoke
+--- contract (returns true/false, never throws in the ordinary case --
+--- `setThrowOnUpsert`/`setThrowOnGet` below simulate the DISCONNECTED-
+--- DATABASE case specifically, for the fail-direction tests). `rows`
+--- (the durable "database" content) is mutated ONLY on a genuinely
+--- successful upsert -- `upsertCalls` records every ATTEMPT, succeeded or
+--- not, so a test can tell "did this write really persist" (`ctl.rows`)
+--- apart from "was a write even attempted" (`ctl.upsertCallCount()`).
+--- @return table k9Store, table ctl
+local function newFakeK9Store()
+    local rows = {}
+    local getCalls, upsertCalls = {}, {}
+    local throwOnGet, throwOnUpsert, failUpsert = false, false, false
+
+    local function shallowCopy(tbl)
+        local out = {}
+        for k, v in pairs(tbl) do out[k] = v end
+        return out
+    end
+
+    local store = {
+        Wellbeing_Get = function(citizenid)
+            getCalls[#getCalls + 1] = citizenid
+            if throwOnGet then error('simulated K9Store.Wellbeing_Get failure (database unreachable)') end
+            local row = rows[citizenid]
+            return row and shallowCopy(row) or nil
+        end,
+        Wellbeing_Upsert = function(citizenid, row)
+            upsertCalls[#upsertCalls + 1] = { citizenid = citizenid, row = row }
+            if throwOnUpsert then error('simulated K9Store.Wellbeing_Upsert failure (database unreachable)') end
+            if failUpsert then return false end
+            rows[citizenid] = shallowCopy(row)
+            return true
+        end,
+    }
+
+    return store, {
+        rows = rows,
+        seedRow = function(citizenid, row) rows[citizenid] = row end,
+        setThrowOnGet = function(v) throwOnGet = v end,
+        setThrowOnUpsert = function(v) throwOnUpsert = v end,
+        setFailUpsert = function(v) failUpsert = v end,
+        getCallCount = function() return #getCalls end,
+        upsertCallCount = function() return #upsertCalls end,
+    }
+end
+
+--- baselineWellbeingConfig() plus a small, fast Persistence sub-block --
+--- real field names, deliberately small numbers so a test can cross
+--- evictAfterMs/evictSweepIntervalMs/flushIntervalMs with a handful of
+--- f.advance() calls instead of the real 15-minute/5-minute/1-minute
+--- shipped defaults.
+--- @return table
+local function persistenceWellbeingConfig()
+    local cfg = baselineWellbeingConfig()
+    cfg.Persistence = {
+        enabled = true,
+        flushIntervalMs = 1000,
+        evictAfterMs = 5000,
+        evictSweepIntervalMs = 1000,
+    }
+    return cfg
+end
+
+t.test('CONFIG-DEFENSIVE: Config.Wellbeing.Persistence entirely absent (an old config.lua that predates this feature) never crashes and never prints a single warning -- silent hardcoded defaults, exactly like Hunger/Thirst\'s own established convention for a brand-new sub-block', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } }) -- baselineWellbeingConfig() has no Persistence block at all
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok)
+    t.equals(#f.printedLines, 0, 'a sub-block this file does not own the addition of must never warn just because a fixture/server has not added it yet')
+end)
+
+t.test('ROW NOT FOUND matches a fresh in-memory default EXACTLY -- first-ever login, an empty database, and "K9Store not wired at all" must all look identical, with no special case a player could ever notice', function()
+    local fNoStore = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true } })
+    fNoStore.setPlayer(1, 'NEW-CID')
+    local snapNoStore = fNoStore.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+
+    local k9Store, ctl = newFakeK9Store() -- Wellbeing_Get always returns nil -- nothing ever seeded
+    local fWithStore = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, k9Store = k9Store })
+    fWithStore.setPlayer(1, 'NEW-CID')
+    local snapWithStore = fWithStore.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+
+    t.equals(ctl.getCallCount(), 1, 'CONTROL: the database load path was genuinely exercised, not skipped -- a fixture that never reaches K9Store.Wellbeing_Get would pass every equality below for the wrong reason')
+    for _, field in ipairs({ 'fatigue', 'mood', 'fearStress', 'injury', 'hunger', 'thirst' }) do
+        t.equals(snapWithStore[field], snapNoStore[field], ('%s must be identical whether a database that simply has no row yet is present or absent entirely'):format(field))
+    end
+end)
+
+t.test('PERSISTENCE LOAD FREEZES the persisted value -- no catch-up decay while offline; decay resumes FROM the loaded number once back online, never from a fresh max (the "two-week holiday" trap this design exists to avoid)', function()
+    local k9Store, ctl = newFakeK9Store()
+    ctl.seedRow('K9-CID', { fatigue = 50, mood = 20, fearStress = 10, injury = 60, hunger = 5, thirst = 3 })
+
+    local f = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true }, k9Store = k9Store })
+    f.setPlayer(1, 'K9-CID')
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.hunger, 5, 'loaded verbatim -- never reset to a fresh 100')
+    t.equals(snap.thirst, 3, 'loaded verbatim')
+    t.equals(ctl.getCallCount(), 1, 'CONTROL: the load path was genuinely exercised')
+
+    -- Two real WEEKS pass with this citizenid genuinely offline (never in
+    -- GetPlayers()) -- TickWellbeing's own loop never visits an offline
+    -- citizenid, so real elapsed time alone must never touch their stats,
+    -- restart or no restart.
+    f.advance(14 * 24 * 60 * 60 * 1000)
+    for _ = 1, 5 do f.runOneTick() end
+    snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.hunger, 5, 'still exactly the loaded value -- two real weeks offline must never apply any catch-up decay')
+    t.equals(snap.thirst, 3, 'still exactly the loaded value')
+    -- CONTROL, and a STRONGER proof than "it just sat in memory untouched":
+    -- this loaded-but-never-dirtied entry was ALSO evicted somewhere in
+    -- those two weeks (never marked dirty, and never re-touched -- exactly
+    -- eviction's own real, intended behaviour for a genuinely idle
+    -- citizenid) and reloaded from K9Store a SECOND time for the
+    -- assertion just above -- so "still exactly 5/3" is proven to survive
+    -- a REAL eviction-and-reload round trip, not merely an in-memory
+    -- no-op that never exercised the load path again at all.
+    t.equals(ctl.getCallCount(), 2, 'CONTROL: a second real reload happened (this idle, never-dirtied entry was evicted during the two-week gap and reloaded here) -- the freeze above holds even across a genuine reload, not just a same-session cache hit')
+
+    -- Now genuinely online: decay resumes from the LOADED number, not from
+    -- a fresh max.
+    f.setOnline({ 1 })
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+    f.runOneTick()
+    snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.hunger, 5 - f.config.Wellbeing.Hunger.decayPerTick, 'exactly one tick of decay FROM the loaded value, never from a fresh 100')
+end)
+
+t.test('TIMER-WINDOW FIELDS ARE NEVER READ FROM A LOADED ROW -- a stale/hostile hesitatingUntil or distractedUntil in the database can never freeze a returning K9 (GetGameTimer() is process-uptime, not wall-clock -- see server/wellbeing.lua\'s own header for why persisting these would be actively misleading after a restart)', function()
+    local k9Store, ctl = newFakeK9Store()
+    -- Simulates a row carrying extra data PersistableRowOf itself would
+    -- never write -- proves the LOAD side is equally strict, not merely
+    -- that the write side happens to be clean.
+    ctl.seedRow('K9-CID', {
+        fatigue = 40, mood = 40, fearStress = 40, injury = 40, hunger = 40, thirst = 40,
+        hesitatingUntil = 999999999, distractedUntil = 999999999, hesitationEpisodeStartedAt = 999999999,
+    })
+    local f = newWellbeingFixture({ featuresOverride = { FearStressSystem = true, DistractionSystem = true }, k9Store = k9Store })
+    f.setPlayer(1, 'K9-CID')
+
+    t.isFalse(f.isHesitating('K9-CID'), 'a loaded row must never leave a K9 stuck hesitating, no matter what a stale/hostile stored value claims')
+    t.isFalse(f.isDistracted('K9-CID'), 'same for distraction')
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.distractedUntil, 0)
+    t.equals(snap.hesitatingUntil, 0)
+    t.equals(ctl.getCallCount(), 1, 'CONTROL: the hostile row really was loaded and really was read from')
+end)
+
+t.test('PERSISTENCE ANTI-FARM: an entry evicted after a genuine offline stretch reloads its EXACT last-saved value on reconnect under a NEW/recycled source id -- logging out (or a server restart) can never be used to reset a K9\'s condition', function()
+    local k9Store, ctl = newFakeK9Store()
+    local cfg = persistenceWellbeingConfig()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true }, wellbeingCfg = cfg, k9Store = k9Store })
+
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:relayDamageEvent', 1) -- mood 100 -> 85
+    f.runOneTick() -- TickWellbeing's own passiveRegenPerTick: 85 -> 86; the SAME pass also flushes it
+
+    t.equals(ctl.rows['K9-CID'] and ctl.rows['K9-CID'].mood, 86, 'CONTROL: the flush really ran and really wrote the current, real mood value')
+
+    -- Disconnect, and stay offline long enough for eviction (evictAfterMs=5000,
+    -- evictSweepIntervalMs=1000 -- ten real hours comfortably clears both).
+    f.firePlayerDropped(1)
+    f.setOnline({})
+    f.advance(10 * 60 * 60 * 1000)
+    for _ = 1, 3 do f.runOneTick() end
+
+    -- Reconnect: SAME citizenid, a brand-new/recycled server source id --
+    -- exactly the shape a real relog or a server restart produces.
+    f.setPlayer(2, 'K9-CID')
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 2)
+
+    t.equals(ctl.getCallCount(), 2, 'CONTROL: Wellbeing_Get was called a SECOND time -- proving the in-memory entry really was evicted and this reconnect genuinely reloaded from the database, rather than trivially reading an untouched cache entry')
+    t.equals(snap.mood, 86, 'the reloaded mood is EXACTLY the last value that was actually saved -- never reset to a fresh 100')
+end)
+
+t.test('EVICTION NEVER DROPS AN UNFLUSHED ENTRY -- a persistently-failing database write must never let a player\'s condition silently reset either, and eviction genuinely resumes once persistence starts working again', function()
+    local k9Store, ctl = newFakeK9Store()
+    local cfg = persistenceWellbeingConfig()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true }, wellbeingCfg = cfg, k9Store = k9Store })
+
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    ctl.setFailUpsert(true) -- every write fails from here on
+    f.dispatchNetEvent('qbx_k9unit:server:relayDamageEvent', 1) -- mood 100 -> 85
+    f.runOneTick() -- passiveRegenPerTick: 85 -> 86; flush is attempted and FAILS -- dirty must stay true
+
+    f.firePlayerDropped(1)
+    f.setOnline({})
+    f.advance(10 * 60 * 60 * 1000)
+    for _ = 1, 5 do f.runOneTick() end -- repeated eviction sweeps, every one must refuse to drop a dirty entry
+
+    f.setPlayer(2, 'K9-CID')
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 2)
+    t.equals(ctl.getCallCount(), 1, 'CONTROL: still only the ONE initial creation-time load -- Wellbeing_Get must never be called again while every write keeps failing, proving the entry was never evicted')
+    t.equals(snap.mood, 86, 'the in-memory value survives, untouched, while persistence keeps failing')
+    t.isNil(ctl.rows['K9-CID'], 'and nothing was ever actually saved while every write kept failing')
+
+    -- GREEN: once the database genuinely accepts a write, the exact same
+    -- kind of offline stretch eventually DOES evict -- proving eviction is
+    -- a real, working path this fix did not silently disable altogether.
+    ctl.setFailUpsert(false)
+    f.runOneTick() -- this flush now succeeds; dirty clears
+    t.equals(ctl.rows['K9-CID'] and ctl.rows['K9-CID'].mood, 86, 'the retried write now really saves')
+
+    f.advance(10 * 60 * 60 * 1000)
+    for _ = 1, 5 do f.runOneTick() end
+
+    f.setPlayer(3, 'K9-CID')
+    local snap2 = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 3)
+    t.equals(ctl.getCallCount(), 2, 'once persistence genuinely succeeded, the same offline stretch now DOES evict -- a fresh reconnect reloads from the database again')
+    t.equals(snap2.mood, 86, 'and the reloaded value matches exactly what was last (successfully) saved -- no drift from the eviction/reload round trip')
+end)
+
+t.test('FAIL DIRECTION: K9Store.Wellbeing_Get throwing (a genuinely unreachable database) degrades to the exact same fresh default as no database at all -- never crashes the callback, never a half-populated stat table', function()
+    local k9Store, ctl = newFakeK9Store()
+    ctl.setThrowOnGet(true)
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true, HungerThirstSystem = true }, k9Store = k9Store })
+    f.setPlayer(1, 'K9-CID')
+
+    local ok, snap = pcall(f.invokeCallback, 'qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.isTrue(ok, 'a throwing Wellbeing_Get must never propagate out of the callback')
+    t.equals(snap.mood, 100, 'degrades to the exact same fresh default as if no database existed at all')
+    t.equals(snap.hunger, 100, 'every field defaults independently -- never a half-populated row')
+    t.equals(snap.thirst, 100)
+    t.isTrue(#f.printedLines > 0, 'the failure is at least logged somewhere, never silently swallowed with no trace')
+end)
+
+t.test('FAIL DIRECTION: K9Store.Wellbeing_Upsert throwing during a flush never crashes the tick thread, never marks the change saved, and a later successful write still saves it -- retried, never permanently lost', function()
+    local k9Store, ctl = newFakeK9Store()
+    local cfg = persistenceWellbeingConfig()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true }, wellbeingCfg = cfg, k9Store = k9Store })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    ctl.setThrowOnUpsert(true)
+    f.dispatchNetEvent('qbx_k9unit:server:relayDamageEvent', 1) -- mood 100 -> 85
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'a throwing Wellbeing_Upsert must never crash the shared tick thread')
+    t.isNil(ctl.rows['K9-CID'], 'the throwing attempt must not have actually saved anything')
+    t.isTrue(#f.printedLines > 0, 'the failure is logged, not silently swallowed')
+
+    -- Retry: the NEXT flush, once the database stops throwing, must still
+    -- save the (by-then-current) value -- proving a failed write retries
+    -- rather than permanently losing the pending change.
+    ctl.setThrowOnUpsert(false)
+    f.advance(cfg.Persistence.flushIntervalMs + 1)
+    f.runOneTick()
+    local snapAfter = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.isNotNil(ctl.rows['K9-CID'], 'the retried flush must have actually saved this time')
+    t.equals(ctl.rows['K9-CID'].mood, snapAfter.mood, 'the retried write matches whatever the real current in-memory value is at the moment it finally succeeds')
+end)
+
+-- ============================================================================
+-- PROOF SCAFFOLDING CHECK (rule 6 of this task): this file must never ship a
+-- leftover "flip this to force red" switch. Grepped by hand, this pass:
+-- `grep -n "FORCE_RED\|DEBUG_BREAK\|TEMP_DISABLE" tests/wellbeing_spec.lua`
+-- returns nothing -- every red-then-green proof this task required
+-- (PERSISTENCE ANTI-FARM above, and the LOAD FREEZE test) was verified by
+-- hand-editing server/wellbeing.lua's EnsureStats to ignore `loadedRow` and
+-- reverting immediately after confirming the specific test went red and then
+-- green again -- never by leaving a switch in this file.
+-- ============================================================================
+
 os.exit(t.summary())

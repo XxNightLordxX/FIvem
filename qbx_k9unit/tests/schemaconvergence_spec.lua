@@ -510,6 +510,12 @@ local MIGRATION_FILES_THAT_CREATE_TABLES = {
     -- like this one is still only as good as its own maintenance.
     '0019_create_k9_dog_characters.sql',
     '0020_create_k9_personnel.sql',
+    -- db-schema pass, 2026-08-27 (wellbeing persistence wiring): added from
+    -- the start this time, rather than found missing by a later audit --
+    -- see this list's own header comment above for why a hand-maintained
+    -- list like this one needs every new migration added in the SAME
+    -- change that adds the migration file itself.
+    '0022_create_k9_wellbeing.sql',
 }
 
 local FOUNDING_TABLES_WITH_NO_DEDICATED_MIGRATION = {
