@@ -2057,6 +2057,140 @@ t.test('UPPER CEILING: every real shipped config.lua default (6000/8000/6000) si
 end)
 
 -- ========================================================================
+-- O(1) RING-BUFFER EVICTION (load audit, this pass -- coder-backend).
+--
+-- AppendTrackableLogEntry used to be `log[#log+1] = entry; while #log >
+-- maxEntries do table.remove(log, 1) end`. That was already CORRECT --
+-- the ENTRY-COUNT CEILING tests above prove exactly that shape evicts
+-- oldest-first -- but O(n) PER WRITE once a log is saturated:
+-- `table.remove(t, 1)` shifts every remaining element down by one slot. At
+-- this resource's own documented worst case (128 players bleeding, Blood's
+-- 500ms relay floor, Blood's own 8000-entry cap) that was roughly 2 million
+-- slot copies per second purely from eviction. Converted to a real
+-- circular buffer (head/tail indices, O(1) per write) following
+-- server/debugdump.lua's own DecisionTrail ring-index pattern -- see
+-- AppendTrackableLogEntry's own doc comment in server/tracking.lua for the
+-- full writeup.
+--
+-- IMPORTANT, why the tests above do NOT already prove this fix: "the cap
+-- holds" and "eviction is oldest-first" both pass against the OLD O(n)
+-- implementation too (it was slow, never incorrect) -- so neither one can
+-- distinguish the fix from the bug it replaces, and neither one can catch
+-- the NEW, DIFFERENT correctness risk this exact kind of conversion
+-- invites: once eviction becomes "overwrite a physical slot in place"
+-- instead of "shift the whole array down", physical slot layout stops
+-- matching chronological (append) order the instant a log first wraps. A
+-- reader that naively walks raw physical slots 1..count (instead of
+-- computing where the CURRENT oldest entry actually lives, the way
+-- TrackableRingLogEntriesOldestFirst does) would silently reorder what
+-- every consumer sees. The two tests below are the additional, distinct
+-- proof this needs:
+--   1. a static proof the write path really is O(1) now (no `table.remove`
+--      left anywhere in AppendTrackableLogEntry's own body) -- RED-proven
+--      this pass by running it against server/tracking.lua with
+--      AppendTrackableLogEntry temporarily reverted to the pre-fix
+--      `table.remove`-based body (confirmed FAIL), then restored (confirmed
+--      PASS again).
+--   2. a behavioral proof that reads still come back in true chronological
+--      (oldest-first) order after a wrap, via a tie-break outcome that only
+--      a genuinely order-correct reader gets right -- RED-proven this pass
+--      by temporarily hobbling TrackableRingLogEntriesOldestFirst to always
+--      start its walk at physical slot 1 regardless of wrap state (exactly
+--      the naive-conversion bug this test exists to catch), confirming it
+--      FAILED (returned the newer entry's coords instead of the older
+--      one's), then restoring the real head-tracking implementation and
+--      confirming it PASSED again.
+-- ========================================================================
+
+t.test('PERFORMANCE: AppendTrackableLogEntry no longer contains an O(n)-per-write table.remove loop', function()
+    local handle = assert(io.open('../server/tracking.lua', 'r'))
+    local source = handle:read('a')
+    handle:close()
+
+    local startPos = source:find('\nlocal function AppendTrackableLogEntry(', 1, true)
+    assert(startPos, 'AppendTrackableLogEntry not found in server/tracking.lua -- this test needs updating alongside whatever renamed it')
+    local endPos = source:find('\nend', startPos, true)
+    assert(endPos, 'could not find the end of AppendTrackableLogEntry in server/tracking.lua')
+    local body = source:sub(startPos, endPos)
+
+    t.isFalse(body:find('table.remove', 1, true) ~= nil,
+        'AppendTrackableLogEntry must never call table.remove -- that is exactly the O(n)-per-write shape this pass closed (see this section\'s own header for the full writeup)')
+end)
+
+t.test('RING BUFFER ORDER: a reader must still see entries OLDEST FIRST after a wrap -- proven via a tie-break outcome only a chronologically-correct reader gets right', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { blood = 2 } })
+    f.registerPlayer(1, 'K9-CID', 100) -- the searching K9, standing at the origin
+    f.setPedCoords(100, 0, 0, 0)
+
+    -- Fill the cap-2 ring, then force exactly one wrap: FILLER (evicted),
+    -- then A, then B -- so by the time B is written, physical slot 1 (the
+    -- one FILLER originally occupied) now holds B, and physical slot 2
+    -- still holds A. A reader that walked raw physical order (1, then 2)
+    -- would visit B before A -- the OPPOSITE of reality, since A was
+    -- logged strictly before B.
+    f.registerPlayer(101, 'FILLER-CID', 201)
+    f.setPedCoords(201, 9999, 9999, 0) -- far outside maxRange -- only here to occupy, then vacate, physical slot 1
+    f.relayDamageEvent(101)
+
+    f.registerPlayer(102, 'A-CID', 202)
+    f.setPedCoords(202, 20, 0, 0) -- distance 20 from the K9 at the origin
+    f.relayDamageEvent(102) -- A -- the OLDER of the two entries that survive the wrap
+
+    f.registerPlayer(103, 'B-CID', 203)
+    f.setPedCoords(203, -20, 0, 0) -- distance 20 from the K9 at the origin -- an EXACT tie with A, opposite side
+    f.relayDamageEvent(103) -- B -- this write evicts FILLER; B is the NEWER of the two survivors
+
+    -- A and B are an exact distance tie (20 each). FindNearestFreshTrackableEntry's
+    -- own tie-break is `dist < nearestDist` (strict) -- the FIRST entry
+    -- encountered in the walk keeps its claim over an equal-distance later
+    -- one. Read in true chronological order (A, then B), A wins. Read by
+    -- raw physical slot instead (B, then A, post-wrap), B would win
+    -- instead -- this is the one observable signal available through the
+    -- real event/callback surface for "which order did the reader actually
+    -- walk in".
+    local result = f.findTrackableSource(1, 'blood')
+    t.isTrue(result.found)
+    t.equals(result.coords.x, 20,
+        'the tie must be won by A (x=20), the OLDER of the two surviving entries -- a reader walking raw physical slot order instead of true chronological order would incorrectly return B (x=-20) here')
+end)
+
+t.test('RING BUFFER ORDER: the SAME tie-break outcome still holds after MULTIPLE wraps, not just the first one', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { blood = 2 } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+
+    -- FIVE (deliberately ODD -- see below) irrelevant fillers, each far
+    -- outside maxRange, so any leftover physical-slot aliasing from an
+    -- earlier wrap has every opportunity to surface. ODD matters: with an
+    -- EVEN filler count, A and B would land back on the SAME physical
+    -- slots (1, 2) they'd occupy with zero fillers at all -- coincidentally
+    -- matching chronological order again even under a naive
+    -- always-start-at-slot-1 reader, and silently failing to exercise
+    -- anything the single-wrap test above does not already cover. An ODD
+    -- count instead lands A and B on slots (2, 1) -- physically REVERSED
+    -- from chronological order, exactly like the single-wrap test, but only
+    -- reachable here after several additional wraps.
+    for i = 1, 5 do
+        local src, ped = 200 + i, 300 + i
+        f.registerPlayer(src, 'FILLER-' .. i, ped)
+        f.setPedCoords(ped, 9999, 9999, 0)
+        f.relayDamageEvent(src)
+    end
+
+    f.registerPlayer(102, 'A-CID', 202)
+    f.setPedCoords(202, 20, 0, 0)
+    f.relayDamageEvent(102) -- A -- older survivor
+
+    f.registerPlayer(103, 'B-CID', 203)
+    f.setPedCoords(203, -20, 0, 0)
+    f.relayDamageEvent(103) -- B -- newer survivor, this write evicts the last filler
+
+    local result = f.findTrackableSource(1, 'blood')
+    t.isTrue(result.found)
+    t.equals(result.coords.x, 20, 'after several full wraps, the tie must still be won by A (x=20), the older survivor')
+end)
+
+-- ========================================================================
 -- SPECIALIZATION-SCOPED TRACKING (owner-directed decluttering pass,
 -- 2026-08-26 -- "merge all the scent tracking stuff into one thing... when
 -- certed for extra stuff it just does it"). Pins:

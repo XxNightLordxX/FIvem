@@ -1895,6 +1895,7 @@
         "blocked_by_drag": "You can't load into a vehicle while your K9 is dragging someone.",
         "blocked_by_being_dragged": "You can't load into a vehicle while being dragged.",
         "loaded": "Loaded into the vehicle.",
+        "no_driver_seat": "A K9 cannot drive. Get in a passenger seat instead.",
         "released": "Released from the vehicle.",
         "vehicle_lost": "Lost contact with the vehicle — released.",
         "released_on_death": "Your K9 went down while loaded — released from the vehicle.",

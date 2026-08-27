@@ -404,6 +404,77 @@ end
 --- full verified seat-index rationale.
 --- @param vehicle number
 --- @return number? seatIndex
+-- ======================================================================
+-- HOW A K9 SITS ONCE IT IS IN (owner-directed, this pass).
+--
+-- GTA has no "dog riding in a car" animation. SET_PED_INTO_VEHICLE puts a
+-- quadruped into a seat and the engine plays its ordinary human sit-in
+-- pose, which is what made a K9 in a car read wrong. These play a real dog
+-- scenario on the seated ped instead.
+--
+-- Per-breed lookup, copied verbatim from client/movement.lua's own
+-- native-api-assistant-verified K9_SIT_SCENARIO_BY_MODEL_HASH -- see that
+-- file's doc comment above K9Sit() for the full verification writeup (two
+-- independent community scenario dumps agreeing WORLD_DOG_SIT is NOT real
+-- and the genuine names are per-breed). Same disclosed-duplicate posture
+-- client/findalert.lua and client/kennel.lua already use for their own
+-- copies, and for the same reason: K9Sit() opens with a CanShowK9UI gate,
+-- and a cosmetic pose must never carry an authorization check.
+--
+-- THERE IS NO VERIFIED LYING-DOWN SCENARIO NAME. That is why
+-- Config.K9VehicleRide.rearPose ships 'sit' rather than 'lie' -- inventing
+-- a lie-down name would be a silent no-op, the exact failure class this
+-- resource keeps having to dig out. An operator who has a confirmed one
+-- names it in lieScenarioOverride and flips the pose.
+local K9_RIDE_SCENARIO_BY_MODEL_HASH = {}
+for model, scenario in pairs({
+    a_c_shepherd   = 'WORLD_DOG_SITTING_SHEPHERD',
+    a_c_rottweiler = 'WORLD_DOG_SITTING_ROTTWEILER',
+    a_c_chop       = 'WORLD_DOG_SITTING_ROTTWEILER', -- Chop is Rottweiler-framed; no Chop-specific scenario exists
+    a_c_husky      = 'WORLD_DOG_SITTING_RETRIEVER',  -- no husky-specific scenario; RETRIEVER is the closest general/medium-dog sit
+}) do
+    K9_RIDE_SCENARIO_BY_MODEL_HASH[GetHashKey(model)] = scenario
+end
+local K9_RIDE_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD'
+
+--- Rear seats are 1, 2, 5 and 6 (see SEAT_PREFERENCE_ORDER above and the
+--- seat-index enum block with it). 0, 3 and 4 are front passenger seats.
+--- Seat -1 never reaches here -- it is not in the preference order at all.
+--- @param seatIndex number
+--- @return boolean
+local function IsRearSeat(seatIndex)
+    return seatIndex == 1 or seatIndex == 2 or seatIndex == 5 or seatIndex == 6
+end
+
+--- Resolves which pose this seat should use and plays it on the local ped.
+--- NOT GATED on anything -- a cosmetic pose is not a capability, and by the
+--- time this runs the server has already granted the seat claim. Same
+--- reasoning client/kennel.lua's own PlayKennelRestPose documents.
+---
+--- 'none' is honoured as a real choice (some operators will prefer the
+--- engine's default), and a 'lie' with no configured scenario name falls
+--- back to the sit pose rather than playing nothing -- a half-finished
+--- setting must never leave the dog standing upright in a car seat.
+--- @param ped number
+--- @param seatIndex number
+local function PlayK9RidePose(ped, seatIndex)
+    local cfg = type(Config.K9VehicleRide) == 'table' and Config.K9VehicleRide or {}
+    local pose = IsRearSeat(seatIndex) and cfg.rearPose or cfg.frontPose
+    if pose == 'none' then return end
+
+    local scenarioName
+    if pose == 'lie' and type(cfg.lieScenarioOverride) == 'string' and cfg.lieScenarioOverride ~= '' then
+        scenarioName = cfg.lieScenarioOverride
+    else
+        scenarioName = K9_RIDE_SCENARIO_BY_MODEL_HASH[GetEntityModel(ped)] or K9_RIDE_DEFAULT_SCENARIO
+    end
+
+    -- playEnterAnim = false, same reasoning as client/kennel.lua's rest
+    -- pose: this ped is already fixed in a seat, so an enter transition
+    -- would render as sliding against a position it cannot actually leave.
+    TaskStartScenarioInPlace(ped, scenarioName, 0, false)
+end
+
 local function FindBestK9Seat(vehicle)
     local maxPassengers = GetVehicleMaxNumberOfPassengers(vehicle)
     for _, seatIndex in ipairs(SEAT_PREFERENCE_ORDER) do
@@ -827,6 +898,24 @@ RegisterNetEvent('qbx_k9unit:client:vehicleSeatClaimGranted', function(vehicleNe
         -- isn't trusted to stay valid for the whole ride.
         vehicleState = { vehicleNetId = vehicleNetId, seatIndex = seatIndex }
         vehicleEntryInProgress = false
+
+        -- THE RIDE POSE. Applied after the door-shut wait above, which is
+        -- itself past the engine's own get-in animation -- playing it any
+        -- earlier means the get-in anim overrides it the instant it runs.
+        -- Re-checked against live state rather than assumed: the dog may
+        -- have been pulled out, died, or had the vehicle vanish during the
+        -- wait, and posing a ped that is no longer seated would leave a
+        -- sitting dog standing in the road.
+        local poseCfg = type(Config.K9VehicleRide) == 'table' and Config.K9VehicleRide or {}
+        local poseDelay = type(poseCfg.poseDelayMs) == 'number' and poseCfg.poseDelayMs or 900
+        CreateThread(function()
+            Wait(poseDelay)
+            local livePed = PlayerPedId()
+            if not vehicleState then return end
+            if not DoesEntityExist(livePed) or IsEntityDead(livePed) then return end
+            if not IsPedInAnyVehicle(livePed, false) then return end
+            PlayK9RidePose(livePed, seatIndex)
+        end)
         lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.loaded'), type = 'success' })
     end)
 end)
@@ -1212,5 +1301,119 @@ AddEventHandler('onResourceStart', function(resourceName)
     K9Compat.Redetect()
     if resourceName == K9Compat.Which('target') then
         RegisterVehicleOxTargetOptions()
+    end
+end)
+
+-- ======================================================================
+-- RIDING: THE NORMAL ENTER KEY, AND NEVER THE DRIVER'S SEAT
+-- (owner-directed, this pass, and stated three times in escalating
+-- specificity: "make it where its part of the normal getting in a
+-- vehicle", then "Not a 3rd eye function a normal get in vehicle", then
+-- "disable it where it trys to get in a driver seat of a vehicle it wont
+-- allow it or attempt to get in a driver seat... i want it to be fluid".)
+--
+-- WHAT WAS WRONG. Loading a K9 into a car was reachable only through this
+-- resource's own surfaces -- a command, a radial item, a target option.
+-- Pressing the key every other player in the server presses to get into a
+-- car did one of two unhelpful things: nothing, or the ordinary engine
+-- behaviour, which happily walks a dog round to the driver's door and puts
+-- it behind the wheel. Neither is what anyone expects, and the second is
+-- the specific thing the owner asked to be made impossible.
+--
+-- WHAT THIS DOES. Two independent jobs in one thread, because they share
+-- the same "am I a K9 right now" question and splitting them would mean
+-- asking it twice per tick for no gain:
+--
+--   1. CAPTURE THE ENTER KEY, but only in the moment it matters. The
+--      game's own enter action is disabled ONLY while a K9 is on foot AND
+--      genuinely within reach of an eligible vehicle. In that window the
+--      press routes into this file's own seating flow, which picks a rear
+--      seat first and never seat -1. Outside that window the control is
+--      left completely alone -- being on foot is otherwise unchanged, and
+--      a K9 nowhere near a car has a totally ordinary keyboard.
+--
+--   2. EVICT FROM THE DRIVER'S SEAT. The seat picker already never OFFERS
+--      seat -1, but that only governs seats this resource assigns. A dog
+--      can still arrive behind the wheel by routes this file never sees:
+--      an admin teleport, another resource seating them, or simply
+--      pressing enter during the window before this resource finished
+--      loading. This catches those and puts the dog out.
+--
+-- WHY A POLLING THREAD AND NOT A PER-FRAME ONE. It idles at 500ms and only
+-- drops to per-frame while a K9 is actually standing next to an eligible
+-- vehicle -- the one moment the key could be pressed. DisableControlAction
+-- has to run every frame to hold, so there is no way to capture a control
+-- from a slow loop, but there is also no reason to pay that cost while the
+-- player is nowhere near a car. This mirrors the dual-interval shape this
+-- file's own watchdog and client/combat.lua's maintenance thread already
+-- use.
+--
+-- GATE THE START OF A THING, NEVER THE STOP: this thread only ever ADDS a
+-- way in and REMOVES a wrong seat. It never touches any exit path -- a K9
+-- in a passenger seat still leaves by every route it already had, and the
+-- driver-seat eviction is itself an exit, so it is deliberately
+-- unconditional rather than gated on access.
+-- ======================================================================
+CreateThread(function()
+    local IDLE_MS = 500
+    local ACTIVE_MS = 0
+
+    while true do
+        local sleep = IDLE_MS
+        local cfg = type(Config.K9VehicleRide) == 'table' and Config.K9VehicleRide or {}
+
+        -- HasK9Access() alone, matching this file's own EnterNearestK9Vehicle
+        -- gate exactly (widened there in the permission audit for the same
+        -- reason). Soft-guarded: client/main.lua defines it unconditionally,
+        -- but this file keeps the convention so it can load standalone.
+        local isK9 = type(HasK9Access) == 'function' and HasK9Access()
+
+        if isK9 then
+            local ped = PlayerPedId()
+
+            -- (2) DRIVER-SEAT EVICTION. Checked first and unconditionally:
+            -- this is a correction, not a capability, and a dog behind the
+            -- wheel must not survive a single extra tick because some other
+            -- condition below happened to be false.
+            if cfg.preventDriverSeat ~= false and DoesEntityExist(ped) and not IsEntityDead(ped) then
+                local occupied = GetVehiclePedIsIn(ped, false)
+                if occupied ~= 0 and GetPedInVehicleSeat(occupied, -1) == ped then
+                    -- TaskLeaveVehicle rather than a hard reposition: it is
+                    -- the same native this file's own ForceLeaveVehicle
+                    -- already uses for a live ped, and it plays the real
+                    -- get-out animation instead of teleporting the dog into
+                    -- the road, which is the "fluid" the owner asked for.
+                    TaskLeaveVehicle(ped, occupied, 0)
+                    -- Local state is cleared too, if this resource happened
+                    -- to be the one tracking that seat -- otherwise a stale
+                    -- vehicleState would keep claiming the dog is riding.
+                    if vehicleState then vehicleState = nil end
+                    lib.notify({
+                        title = locale('common.notify_title'),
+                        description = locale('vehicle.no_driver_seat'),
+                        type = 'error',
+                    })
+                    sleep = IDLE_MS
+                end
+            end
+
+            -- (1) ENTER-KEY CAPTURE. Only while on foot and genuinely in
+            -- reach -- FindNearestK9Vehicle applies this resource's own
+            -- eligibility and distance rules, so the control is never taken
+            -- for a vehicle the dog could not ride in anyway.
+            if cfg.captureNativeEnterKey ~= false and not IsPedInAnyVehicle(ped, false) then
+                local nearby = FindNearestK9Vehicle(Config.VehicleInteractMeters)
+                if nearby then
+                    sleep = ACTIVE_MS
+                    local control = type(cfg.enterControl) == 'number' and cfg.enterControl or 23
+                    DisableControlAction(0, control, true)
+                    if IsDisabledControlJustPressed(0, control) then
+                        EnterNearestK9Vehicle()
+                    end
+                end
+            end
+        end
+
+        Wait(sleep)
     end
 end)

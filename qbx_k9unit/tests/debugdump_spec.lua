@@ -159,8 +159,17 @@ local function newFixture(opts)
     -- never be exercised at all; (2) an explicit per-test override via
     -- resourceFiles[relativePath] = <string|false>; (3) the REAL file off
     -- disk (tests run with cwd = tests/) -- see this file's own header.
+    --
+    -- PERFORMANCE FIX (load audit, this pass) -- `loadResourceFileCallCounts`
+    -- (relativePath -> count, every call, regardless of which of the three
+    -- branches above ends up answering it) added purely as an OBSERVATION
+    -- point for the ExtractDatastoreTableNames/ExtractSelfcheckDependencies
+    -- memoization tests further down -- it does not change LoadResourceFile's
+    -- own behavior for any existing test in this file at all.
     local resourceFiles = {}
+    local loadResourceFileCallCounts = {}
     local function LoadResourceFile(_resourceName, relativePath)
+        loadResourceFileCallCounts[relativePath] = (loadResourceFileCallCounts[relativePath] or 0) + 1
         if savedFiles[relativePath] then
             return savedFiles[relativePath][#savedFiles[relativePath]]
         end
@@ -287,6 +296,7 @@ local function newFixture(opts)
         savedFiles = savedFiles,
         printLines = printLines,
         notifyCalls = notifyCalls,
+        loadResourceFileCallCounts = loadResourceFileCallCounts,
         setPlayer = function(src, citizenid, firstname, lastname)
             playersBySource[src] = { citizenid = citizenid, firstname = firstname, lastname = lastname }
         end,
@@ -505,6 +515,90 @@ t.test('A4: a dependency below its minimum version is reported', function()
     f.setPlayer(7, 'ABC123')
     local content = runCommandAndGetLastDump(f, 7)
     t.contains(content, "'ox_lib' version 0.0.1 is older than")
+end)
+
+-- ======================================================================
+-- PERFORMANCE FIX (load audit, this pass) -- ExtractDatastoreTableNames
+-- (A3) and ExtractSelfcheckDependencies (A4) used to call LoadResourceFile
+-- and re-parse the FULL text of server/datastore.lua (~238KB) and
+-- server/selfcheck.lua (~45KB) on EVERY /k9debug run, even though neither
+-- file can change while this resource is running -- pure waste past the
+-- first call. Both are now memoized, module-level, nil-checked (see each
+-- function's own doc comment in server/debugdump.lua).
+--
+-- RED-THEN-GREEN PROOF PERFORMED FOR THIS PASS: the test below
+-- ("re-read on a second run") was run against the PRE-FIX source (both
+-- extraction functions with their memoization guard removed, restored to
+-- unconditionally re-reading and re-parsing on every call) and failed --
+-- server/datastore.lua's and server/selfcheck.lua's own call counts both
+-- DOUBLED on the second /k9debug run instead of staying flat. Restoring the
+-- real, memoized functions made it pass again. The safety test just below
+-- it was written specifically to catch the WRONG way to fix this (caching
+-- based on "have we tried" rather than "did we succeed") -- see that test's
+-- own comment.
+-- ======================================================================
+
+t.test('PERFORMANCE: ExtractDatastoreTableNames/ExtractSelfcheckDependencies are memoized -- a second /k9debug run (even by a DIFFERENT player) never re-reads either file', function()
+    local f = newFixture()
+    f.setPlayer(7, 'ABC123')
+    f.setPlayer(8, 'DEF456')
+
+    runCommandAndGetLastDump(f, 7)
+    local firstDatastoreReads = f.loadResourceFileCallCounts['server/datastore.lua'] or 0
+    local firstSelfcheckReads = f.loadResourceFileCallCounts['server/selfcheck.lua'] or 0
+    t.isTrue(firstDatastoreReads >= 1, 'the first run must actually read server/datastore.lua at least once -- otherwise this test proves nothing')
+    t.isTrue(firstSelfcheckReads >= 1, 'the first run must actually read server/selfcheck.lua at least once -- otherwise this test proves nothing')
+
+    -- A DIFFERENT player, deliberately -- the cache is module-level (the
+    -- extraction result is invariant for the whole resource's uptime, not
+    -- per-caller), so a second run by anyone at all must hit it.
+    runCommandAndGetLastDump(f, 8)
+    t.equals(f.loadResourceFileCallCounts['server/datastore.lua'], firstDatastoreReads,
+        'a second /k9debug run must NEVER re-read server/datastore.lua once the table-name extraction has already succeeded once this session')
+    t.equals(f.loadResourceFileCallCounts['server/selfcheck.lua'], firstSelfcheckReads,
+        'a second /k9debug run must NEVER re-read server/selfcheck.lua once the dependency-list extraction has already succeeded once this session')
+end)
+
+t.test('PERFORMANCE FIX SAFETY: a transient read failure on the first run is never cached as success -- a LATER run with the file readable again still extracts the real data', function()
+    local f = newFixture()
+    f.setPlayer(7, 'ABC123')
+
+    -- Simulates LoadResourceFile failing on the FIRST run (a genuinely
+    -- transient condition this fix must never turn into a permanent one).
+    f.setResourceFile('server/datastore.lua', false)
+    local firstContent, firstPath = runCommandAndGetLastDump(f, 7)
+    t.contains(firstContent, 'Could not automatically read the list of tables')
+
+    -- The file is readable again on a LATER run -- if the memoization were
+    -- wrongly keyed on "have we tried" instead of "did we succeed", this
+    -- would incorrectly keep failing forever from here on.
+    f.setResourceFile('server/datastore.lua', [[
+local EXPECTED_TABLE_COLUMNS = {
+    k9_wellbeing = { 'citizenid' },
+}
+]])
+    f.setNow(10001) -- past DebugDumpCommandCooldown (10000ms)
+    f.commands.k9debug.handler(7, {})
+
+    -- Deliberately NOT a second runCommandAndGetLastDump call: with TWO
+    -- dump files now saved for the same citizenid, that helper's own
+    -- unordered `pairs()` scan over ALL matching diagnostics/k9debug_*
+    -- files could pick EITHER one back up -- exactly the kind of ambiguity
+    -- the retention tests above this one avoid by keying off an explicit,
+    -- already-known path instead. Isolate the SECOND run's own file
+    -- unambiguously by excluding the already-known `firstPath`.
+    local secondPath
+    for path in pairs(f.savedFiles) do
+        if path:match('^diagnostics/k9debug_') and not path:match('_manifest') and path ~= firstPath then
+            secondPath = path
+        end
+    end
+    t.isNotNil(secondPath, 'the second run must have written its own, distinct dump file')
+    local secondContent = f.savedFiles[secondPath][#f.savedFiles[secondPath]]
+
+    t.notContains(secondContent, 'Could not automatically read the list of tables',
+        'a transient first-run failure must never be cached as a permanent one')
+    t.contains(secondContent, 'Table `k9_wellbeing`: OK (database-backed).')
 end)
 
 -- ======================================================================

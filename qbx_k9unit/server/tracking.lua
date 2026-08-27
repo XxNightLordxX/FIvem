@@ -765,11 +765,20 @@ end
 -- for maxPointsPerPerson (see that function's own doc comment further
 -- down), applied here to the whole server's shared per-type log instead of
 -- one person's trail. Deliberately NEVER drops the newest entry to make
--- room: the log is naturally in chronological-append order (every append
--- happens at the moment the underlying event occurs, never reordered), so
--- the OLDEST entry is always at index 1 -- and the newest entry is exactly
--- the one a dog is most likely to be tracking, so eviction always takes
--- from the front, never the back.
+-- room -- the newest entry is exactly the one a dog is most likely to be
+-- tracking, so eviction always takes the oldest, never the newest.
+--
+-- PERFORMANCE FIX, LATER PASS (load audit): the sentence this comment used
+-- to have here -- "the log is naturally in chronological-append order... so
+-- the OLDEST entry is always at index 1" -- described the ORIGINAL
+-- implementation (a plain array, evicted via `table.remove(log, 1)`), which
+-- is no longer how this works: TrackableLog.<type> is now a ring buffer
+-- (AppendTrackableLogEntry below), and physical index 1 stops being the
+-- oldest entry the moment a log first wraps. "Oldest evicted first" is still
+-- exactly true LOGICALLY -- see AppendTrackableLogEntry's and
+-- TrackableRingLogEntriesOldestFirst's own doc comments for how the ring
+-- preserves that guarantee in O(1) without needing entries to sit in
+-- chronological PHYSICAL order at all.
 -- ======================================================================
 
 --- ======================================================================
@@ -957,49 +966,56 @@ end
 local TRACKABLE_LOG_PRUNE_INTERVAL_MS = 15000
 
 --- Drops any TrackableLog.scent/blood/gunpowder entry older than that
---- type's Config.Tracking.<Type>.maxAgeSeconds. Rebuilds each type's array
---- via a single linear pass (not a full-table `pairs` remove-while-iterating,
---- which is unsafe on Lua arrays). RESOLVED, this pass (performance audit at
---- 128 players): this comment used to end with "cheap relative to how
+--- type's Config.Tracking.<Type>.maxAgeSeconds. Rebuilds each type's ring
+--- via a single linear pass, walked OLDEST FIRST via
+--- TrackableRingLogEntriesOldestFirst (never a raw `ipairs`/`pairs` over the
+--- ring's own physical `entries` array -- see that function's own doc
+--- comment for why physical slot order cannot be trusted directly once a
+--- ring has wrapped). RESOLVED, an earlier pass (performance audit at 128
+--- players): this comment used to end with "cheap relative to how
 --- infrequently this runs and how small these logs are expected to stay on
 --- a normal server (flag for resource-performance-profiler if real
 --- entry-count numbers under load ever suggest otherwise)" -- that
 --- profiling happened, the worst case WAS real (up to ~243,000 entries
 --- across all three logs, see the ENTRY-COUNT CEILING section above), and
---- this pass closes it: AppendTrackableLogEntry above now enforces
+--- that pass closed it: AppendTrackableLogEntry enforces
 --- TRACKABLE_LOG_MAX_ENTRIES on every write, so this rebuild's own worst
---- case is now bounded by that same ceiling regardless of population or
---- combat duration, not just by how infrequently this thread happens to
---- run.
+--- case is bounded by that same ceiling regardless of population or combat
+--- duration, not just by how infrequently this thread happens to run.
+--- This pass's OWN fix (converting AppendTrackableLogEntry to an O(1)
+--- ring-buffer write, see that function's doc comment) does not touch this
+--- function's own complexity -- PruneTrackableLogs already only ran once per
+--- TRACKABLE_LOG_PRUNE_INTERVAL_MS (15s), never per write, so its O(n)
+--- periodic rebuild was never the "2 million slot copies per second"
+--- problem the write path was; it still fully rebuilds each type's ring
+--- into a fresh, freshly-compacted one every pass (age-based pruning can
+--- drop entries from the MIDDLE of the live set, unlike cap eviction, so a
+--- full rebuild is the simplest correct way to re-derive a clean ring
+--- afterward) -- the rebuilt ring's `writeIndex`/`count` are set to exactly
+--- describe that fresh, compact set, so the very next AppendTrackableLogEntry
+--- call resumes correctly whether or not this type is still below its cap.
+--- @param ringLog table -- TrackableLog.scent | .blood | .gunpowder
+--- @param maxEntries number -- TRACKABLE_LOG_MAX_ENTRIES[trackType] for this ringLog
+--- @param maxAgeMs number
+--- @param now number
+local function PruneOneTrackableRingLog(ringLog, maxEntries, maxAgeMs, now)
+    local fresh = {}
+    for _, entry in TrackableRingLogEntriesOldestFirst(ringLog, maxEntries) do
+        if (now - entry.loggedAt) < maxAgeMs then
+            fresh[#fresh + 1] = entry
+        end
+    end
+    ringLog.entries = fresh
+    ringLog.writeIndex = #fresh
+    ringLog.count = #fresh
+end
+
 local function PruneTrackableLogs()
     local now = GetGameTimer()
 
-    local scentMaxAgeMs = Config.Tracking.Scent.maxAgeSeconds * 1000
-    local freshScent = {}
-    for _, entry in ipairs(TrackableLog.scent) do
-        if (now - entry.loggedAt) < scentMaxAgeMs then
-            freshScent[#freshScent + 1] = entry
-        end
-    end
-    TrackableLog.scent = freshScent
-
-    local bloodMaxAgeMs = Config.Tracking.Blood.maxAgeSeconds * 1000
-    local freshBlood = {}
-    for _, entry in ipairs(TrackableLog.blood) do
-        if (now - entry.loggedAt) < bloodMaxAgeMs then
-            freshBlood[#freshBlood + 1] = entry
-        end
-    end
-    TrackableLog.blood = freshBlood
-
-    local gunpowderMaxAgeMs = Config.Tracking.Gunpowder.maxAgeSeconds * 1000
-    local freshGunpowder = {}
-    for _, entry in ipairs(TrackableLog.gunpowder) do
-        if (now - entry.loggedAt) < gunpowderMaxAgeMs then
-            freshGunpowder[#freshGunpowder + 1] = entry
-        end
-    end
-    TrackableLog.gunpowder = freshGunpowder
+    PruneOneTrackableRingLog(TrackableLog.scent, TRACKABLE_LOG_MAX_ENTRIES.scent, Config.Tracking.Scent.maxAgeSeconds * 1000, now)
+    PruneOneTrackableRingLog(TrackableLog.blood, TRACKABLE_LOG_MAX_ENTRIES.blood, Config.Tracking.Blood.maxAgeSeconds * 1000, now)
+    PruneOneTrackableRingLog(TrackableLog.gunpowder, TRACKABLE_LOG_MAX_ENTRIES.gunpowder, Config.Tracking.Gunpowder.maxAgeSeconds * 1000, now)
 end
 
 CreateThread(function()
@@ -1581,7 +1597,16 @@ end
 local function FindNearestFreshTrackableEntry(trackType, myCoords, maxRange, maxAgeMs, now)
     local nearestDist, sourceCoords, nearestEntry
 
-    for _, entry in ipairs(TrackableLog[trackType]) do
+    -- PERFORMANCE FIX (load audit, this pass) -- TrackableLog[trackType] is
+    -- now a ring buffer (see AppendTrackableLogEntry's own doc comment);
+    -- walked OLDEST FIRST here specifically so the tie-break rule just below
+    -- (`dist < nearestDist`, strict -- ties keep whichever entry was
+    -- encountered FIRST) still means "ties keep the OLDEST entry", exactly
+    -- as it always has, rather than "ties keep whatever happens to sit in
+    -- the lowest physical ring slot" (a real, silent behavior change a plain
+    -- `ipairs(TrackableLog[trackType])` walk would have introduced the
+    -- moment this ring first wraps).
+    for _, entry in TrackableRingLogEntriesOldestFirst(TrackableLog[trackType], TRACKABLE_LOG_MAX_ENTRIES[trackType]) do
         if (now - entry.loggedAt) < maxAgeMs then
             local dist = #(myCoords - entry.coords)
             if dist <= maxRange and (not nearestDist or dist < nearestDist) then

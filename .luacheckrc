@@ -527,6 +527,15 @@ read_globals = {
     "NetworkGetEntityFromNetworkId", "NetworkGetNetworkIdFromEntity",
     "NetworkDoesEntityExistWithNetworkId",
     "GetVehicleNumberPlateText", "IsPedInAnyVehicle",
+    -- GET_PED_IN_VEHICLE_SEAT (0xBB40DD2270B65366, VEHICLE namespace,
+    -- client) -- (vehicle, seatIndex) -> Ped. Added for
+    -- client/vehicle.lua's driver-seat guard: asking "is THIS ped the one
+    -- in seat -1" is the only way to catch a K9 that reached the driver's
+    -- seat by a route this resource never saw (an admin teleport, another
+    -- resource seating them, or pressing enter before this file loaded).
+    -- A long-standing base-game native with an ext/native-decls entry;
+    -- realm is client-only, and every call site here is client-side.
+    "GetPedInVehicleSeat",
     "GetEntityHealth", "GetEntityMaxHealth", "GetEntityForwardVector",
     "ApplyForceToEntity",
     -- K9Medkit (client/medkit.lua, server/medkit.lua, Phase 4,

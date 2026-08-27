@@ -2216,6 +2216,93 @@ Config.CertifyMaxNewGranteesPerDay = 8
 -- VEHICLES — which vehicle models expose the "Load K9" / "Release K9"
 -- ox_target option on their trunk/rear door.
 -- ======================================================================
+-- ======================================================================
+-- RIDING IN A VEHICLE -- how a K9 gets in, where it sits, and how it sits
+-- (owner-directed, this pass: "if a k9 gets in any vehicle it will position
+-- the dog where it sits appropriately like laying down in the back seat or
+-- sitting down in the back seat or if it sits up front it sits in the
+-- passenger seat... make it where its part of the normal getting in a
+-- vehicle... disable it where it trys to get in a driver seat of a vehicle
+-- it wont allow it or attempt to get in a driver seat... i want it to be
+-- fluid").
+-- ======================================================================
+Config.K9VehicleRide = {
+    -- THE NORMAL ENTER KEY WORKS. With this on, a K9 pressing the game's
+    -- own "enter vehicle" key (F by default) near a K9-eligible vehicle
+    -- loads up exactly as any player would expect -- no command, no radial,
+    -- no third-eye. That was the owner's specific correction: this belongs
+    -- on the ordinary control, not on a separate menu.
+    --
+    -- HOW IT WORKS, and why it is a capture rather than a replacement: the
+    -- game's own enter-vehicle behaviour is DISABLED for a K9 only while
+    -- one is genuinely in reach of an eligible vehicle, and that keypress
+    -- is routed into this resource's own seating flow instead. Outside that
+    -- moment the control is left completely alone, so nothing else about
+    -- being on foot changes.
+    captureNativeEnterKey = true,
+
+    -- Control 23 is INPUT_ENTER, the game's own enter/exit-vehicle action.
+    -- Exposed rather than hardcoded so an operator running a control-remap
+    -- resource can point this at whatever their players actually press.
+    enterControl = 23,
+
+    -- NEVER THE DRIVER'S SEAT. Two independent mechanisms, because one is
+    -- not enough:
+    --
+    --   1. The seat picker never offers seat -1 in the first place (see
+    --      client/vehicle.lua's SEAT_PREFERENCE_ORDER, which starts at the
+    --      rear and has no -1 entry at all).
+    --   2. This flag additionally EJECTS a K9 that ends up in the driver's
+    --      seat by any route this resource does not control -- an admin
+    --      teleport, another resource seating them, a vehicle whose driver
+    --      left while they were inside, or simply pressing enter before
+    --      this resource loaded.
+    --
+    -- (1) alone would leave the dog able to end up driving via routes this
+    -- script never sees, which is exactly the "it wont allow it or attempt
+    -- to get in a driver seat" the owner asked for. Turning this off leaves
+    -- (1) intact -- the dog still will not be SEATED there by this
+    -- resource -- but stops policing seats it did not assign.
+    preventDriverSeat = true,
+
+    -- How the dog actually sits once it is in. GTA has no "dog riding in a
+    -- car" animation -- a quadruped in a car seat plays the human sit-in,
+    -- which reads badly. These play a real dog scenario on the seated ped
+    -- instead, which is what makes it look like a dog in a car rather than
+    -- a dog wearing a seatbelt.
+    --
+    -- REAR SEATS get the lying-down look by default (a working dog rides
+    -- lying down in the back); the FRONT PASSENGER seat gets the sitting
+    -- look (a dog up front sits up and watches the road). Both are
+    -- per-breed, resolved the same way every other dog pose in this
+    -- resource is.
+    --
+    -- CONFIDENCE, stated rather than assumed: the WORLD_DOG_SITTING_* names
+    -- are the same verified family used everywhere else here (two
+    -- independent community scenario dumps agree they exist). There is NO
+    -- verified generic "dog lying down" scenario name -- so `rearPose`
+    -- ships as 'sit' rather than inventing a lie-down name that would be a
+    -- silent no-op. Set it to 'lie' only once you have a confirmed
+    -- lying-down scenario or anim for your own server, and put that name in
+    -- `lieScenarioOverride` below.
+    rearPose = 'sit',   -- 'sit' | 'lie' | 'none'
+    frontPose = 'sit',  -- 'sit' | 'lie' | 'none'
+
+    -- Left empty on purpose. If you have a confirmed lying-down dog
+    -- scenario or anim on your server, name it here and set a pose above to
+    -- 'lie'. Empty plus 'lie' falls back to the sit pose rather than
+    -- playing nothing, so a half-finished setting never leaves the dog
+    -- standing bolt upright in a car seat.
+    lieScenarioOverride = '',
+
+    -- Milliseconds after seating before the pose is applied. The engine's
+    -- own get-in animation has to finish first, or it overrides the pose
+    -- the instant it plays. Untuned but deliberately chosen to sit just
+    -- past the door-shut delay this file's own VEHICLE_DOOR_SHUT_DELAY_MS
+    -- already waits out.
+    poseDelayMs = 900,
+}
+
 Config.K9Vehicles = {
     'police', 'police2', 'police3', 'police4', 'sheriff', 'sheriff2',
 }

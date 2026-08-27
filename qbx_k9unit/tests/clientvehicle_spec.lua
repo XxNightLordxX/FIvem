@@ -272,6 +272,30 @@ local function newVehicleFixture(opts)
         seatCalls[#seatCalls + 1] = { ped = ped, vehicle = vehicle, seatIndex = seatIndex }
         if ped == pedHandle then pedCurrentVehicle = vehicle end
     end
+    -- RIDE POSE / DRIVER-SEAT GUARD / ENTER CAPTURE (owner-directed ride
+    -- pass). Recorded rather than merely stubbed: for each of these three
+    -- the interesting question is WHICH value or WHEN, not "was it called".
+    local scenarioCalls = {}
+    local function TaskStartScenarioInPlace(ped, scenarioName, unkDelay, playEnterAnim)
+        scenarioCalls[#scenarioCalls + 1] = { ped = ped, scenarioName = scenarioName, playEnterAnim = playEnterAnim }
+    end
+
+    -- Who is in seat -1 of a given vehicle. Defaults to nobody, so the
+    -- driver-seat guard is inert unless a test deliberately puts the dog
+    -- there -- otherwise every unrelated test would trip it.
+    local driverBySeat = {}
+    local function GetPedInVehicleSeat(vehicle, seatIndex)
+        if seatIndex ~= -1 then return 0 end
+        return driverBySeat[vehicle] or 0
+    end
+
+    local disabledControls = {}
+    local function DisableControlAction(_group, control, _disable)
+        disabledControls[control] = (disabledControls[control] or 0) + 1
+    end
+    local pressedControls = {}
+    local function IsDisabledControlJustPressed(_group, control) return pressedControls[control] == true end
+
     local function SetVehicleDoorOpen(vehicle, doorIndex, loose, openInstantly)
         doorOpenCalls[#doorOpenCalls + 1] = { vehicle = vehicle, doorIndex = doorIndex, loose = loose, openInstantly = openInstantly }
     end
@@ -388,6 +412,30 @@ local function newVehicleFixture(opts)
         end
     end
 
+    --- Resumes the RIDE GUARD thread -- the enter-key capture and
+    --- driver-seat eviction loop added at the bottom of client/vehicle.lua
+    --- (owner-directed ride pass). It is the LAST thread created at file
+    --- load, so it is the last entry present before any test does anything
+    --- that creates one of its own; captured by index at fixture build
+    --- time rather than by position later, so a test that creates threads
+    --- first still drives the right one.
+    ---
+    --- Resumed exactly once: the loop body runs one full pass and then
+    --- yields at its own Wait, which is precisely one tick of the real
+    --- thread.
+    -- Resolved AFTER the file is loaded (see the assignment just below
+    -- Sandbox.loadInto) -- this closure is defined before the load runs, so
+    -- capturing the count here would always read 0.
+    local rideGuardThreadIndex = 0
+    local function runGuardThread()
+        local co = capturedThreads[rideGuardThreadIndex]
+        if not co then return end
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('vehicle fixture: ride guard thread errored: %s'):format(tostring(err)))
+        end
+    end
+
     --- Resumes ONLY the file-load-time watchdog thread (always
     --- capturedThreads[1]) exactly once.
     local function stepWatchdogOnce()
@@ -436,6 +484,10 @@ local function newVehicleFixture(opts)
         GetVehicleMaxNumberOfPassengers = GetVehicleMaxNumberOfPassengers,
         IsVehicleSeatFree = IsVehicleSeatFree,
         SetPedIntoVehicle = SetPedIntoVehicle,
+        TaskStartScenarioInPlace = TaskStartScenarioInPlace,
+        GetPedInVehicleSeat = GetPedInVehicleSeat,
+        DisableControlAction = DisableControlAction,
+        IsDisabledControlJustPressed = IsDisabledControlJustPressed,
         SetVehicleDoorOpen = SetVehicleDoorOpen,
         SetVehicleDoorShut = SetVehicleDoorShut,
         NetworkRequestControlOfEntity = NetworkRequestControlOfEntity,
@@ -473,6 +525,10 @@ local function newVehicleFixture(opts)
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../client/vehicle.lua', env)
+    -- The ride guard is the LAST thread client/vehicle.lua creates at load
+    -- time, so it is the last captured entry at exactly this moment --
+    -- before any test has had a chance to create one of its own.
+    rideGuardThreadIndex = #capturedThreads
 
     -- File load itself already creates ONE thread (the persistent
     -- watchdog) -- every test below cares about threads created SINCE
@@ -486,6 +542,16 @@ local function newVehicleFixture(opts)
         notifyCalls = notifyCalls,
         lastNotify = function() return notifyCalls[#notifyCalls] end,
         seatCalls = seatCalls,
+        scenarioCalls = scenarioCalls,
+        runGuardThread = runGuardThread,
+        MY_PED = pedHandle,
+        --- Puts this client's own ped into a vehicle WITHOUT going through
+        --- this resource's seating flow -- the admin-teleport / other-
+        --- resource / loaded-late case the driver-seat guard exists for.
+        setPedCurrentVehicle = function(vehicle) pedCurrentVehicle = vehicle end,
+        disabledControlCount = function(control) return disabledControls[control] or 0 end,
+        pressControl = function(control) pressedControls[control] = true end,
+        setDriverSeatOccupant = function(vehicle, ped) driverBySeat[vehicle] = ped end,
         doorOpenCalls = doorOpenCalls,
         doorShutCalls = doorShutCalls,
         networkControlCalls = networkControlCalls,
@@ -1691,6 +1757,98 @@ t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked unde
     f.grantSeatClaim()
     f.runLatestThreadToCompletion()
     t.equals(#f.seatCalls, 1, 'an unknown block state must never freeze this ability -- it must fail OPEN')
+end)
+
+
+-- ========================================================================
+-- RIDING IN A VEHICLE (owner-directed, this pass, asked three times in
+-- escalating specificity): the dog sits like a dog, the ordinary enter key
+-- works, and the driver's seat is never an option.
+-- ========================================================================
+
+t.test('RIDE POSE: a seated K9 is posed like a dog, not left in the engine\'s human sit-in', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1, 'precondition: genuinely seated')
+
+    -- The pose runs on its own delayed thread, after the door-shut wait.
+    f.runLatestThreadToCompletion()
+    t.equals(#f.scenarioCalls, 1, 'a dog in a car must be posed as a dog')
+    t.equals(f.scenarioCalls[1].playEnterAnim, false, 'no enter transition -- the ped is fixed in a seat and would visibly slide')
+end)
+
+t.test('RIDE POSE: the scenario is a real, verified dog-sit name, never nil', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    f.runLatestThreadToCompletion()
+    local name = f.scenarioCalls[1] and f.scenarioCalls[1].scenarioName
+    t.isTrue(type(name) == 'string' and name:find('WORLD_DOG_SITTING', 1, true) == 1,
+        'a nil or invented scenario name is a silent no-op that leaves the dog standing in the seat')
+end)
+
+t.test('DRIVER SEAT: a K9 found in seat -1 is put out, whatever route placed it there', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    -- Nothing in this resource seated them -- this is the admin-teleport /
+    -- other-resource / loaded-late case the guard exists for.
+    f.setPedCurrentVehicle(50)
+    f.setDriverSeatOccupant(50, f.MY_PED)
+
+    f.runGuardThread()
+
+    t.equals(#f.taskLeaveVehicleCalls, 1, 'the dog must be taken out of the driver\'s seat')
+    t.equals(f.taskLeaveVehicleCalls[1].ped, f.MY_PED)
+end)
+
+t.test('DRIVER SEAT: a K9 in an ORDINARY passenger seat is left completely alone', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.setPedCurrentVehicle(50)
+    -- Seat -1 is occupied by someone else entirely -- the human driver.
+    f.setDriverSeatOccupant(50, 4242)
+
+    f.runGuardThread()
+
+    t.equals(#f.taskLeaveVehicleCalls, 0, 'riding as a passenger is the whole point of the feature and must never be interrupted')
+end)
+
+t.test('ENTER KEY: the ordinary enter control is captured only while a K9 is in reach of an eligible vehicle', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.runGuardThread()
+    t.isTrue(f.disabledControlCount(23) > 0, 'in reach, the game\'s own enter must be taken over so it cannot walk the dog to the driver door')
+end)
+
+t.test('ENTER KEY: nothing is captured when there is no eligible vehicle nearby -- a K9 away from cars has an ordinary keyboard', function()
+    local f = newVehicleFixture()
+    -- No vehicle added at all.
+    f.runGuardThread()
+    t.equals(f.disabledControlCount(23), 0)
+end)
+
+t.test('ENTER KEY: pressing it loads the dog in, through the same seating flow the command already used', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.pressControl(23)
+    f.runGuardThread()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    t.equals(#f.seatCalls, 1, 'the normal key must do what the command does')
+    t.isTrue(f.seatCalls[1].seatIndex ~= -1, 'and never the driver\'s seat')
+end)
+
+t.test('CONTROL: a non-K9 never has the enter key taken from them', function()
+    local f = newVehicleFixture({ hasK9Access = false })
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.runGuardThread()
+    t.equals(f.disabledControlCount(23), 0, 'capturing a control from an ordinary player would break their game')
+    t.equals(#f.taskLeaveVehicleCalls, 0)
 end)
 
 os.exit(t.summary())
