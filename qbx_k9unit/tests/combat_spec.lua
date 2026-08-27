@@ -385,6 +385,12 @@ local function newCombatFixture(opts)
         NotifyPlayer = NotifyPlayer,
         print = printStub,
         HasK9Access = HasK9Access,
+        -- IsHighCommand: absent by default, matching the real
+        -- server/highcommand.lua being a separate file that
+        -- IsAuthorizedForNonComplianceAlert reaches through a
+        -- `type(...) == 'function'` guard. Set opts.isHighCommandFn to make
+        -- a specific source high command.
+        IsHighCommand = opts.isHighCommandFn,
         exports = { qbx_core = { GetPlayer = qbxGetPlayer } },
         GetPlayerPed = GetPlayerPed,
         GetEntityHealth = GetEntityHealth,
@@ -2884,6 +2890,98 @@ t.test('requestBiteHold: a tier capability revoked AFTER an already-open hold do
     wireNpcTarget(f, 501)
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'still exactly 1 -- the new request against 501 must be denied')
+end)
+
+
+
+t.test('non-compliance alerts: HIGH COMMAND is told even when their own grade is below the threshold, and an ordinary officer below it still is not', function()
+    -- The gap this closes, found by a permission audit: this was the ONE
+    -- rank gate in the resource with no high-command branch, while
+    -- HasK9Access, IsEligibleCertifier and IsAuthorizedAdmin all have one.
+    --
+    -- It ships invisible. nonComplianceAlertGrade defaults to 0, so everyone
+    -- in a department already qualifies and high command comes in under the
+    -- ordinary grade check -- which is exactly why nobody noticed. Raise the
+    -- threshold, as an owner narrowing who hears pursuit chatter would, and
+    -- before this fix the officers most responsible for a pursuit became the
+    -- only ones not told it had gone wrong.
+    local f = newCombatFixture({
+        nonComplianceDetectionCfg = {
+            enabled = true,
+            positionSampleWindowMs = 500,
+            biteHoldIdleCeiling = 0,
+            biteHoldSpeedTolerance = 0,
+            biteHoldViolationSamples = 1,
+            takedownNetDisplacementMeters = 3.0,
+            action = 'notify_staff',
+            OnViolationOverride = nil,
+            dragComplianceSlackMeters = 4.0,
+        },
+        departmentsCfg = { police = { nonComplianceAlertGrade = 9 } },
+        isHighCommandFn = function(src) return src == 40 end,
+    })
+
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    -- Identical rank, identical department, below the threshold. The ONLY
+    -- difference between them is that IsHighCommand answers true for one.
+    f.setPlayer(40, { citizenid = 'HC',  job = { name = 'police', isboss = false, grade = { level = 3 } } })
+    f.addOnline(40)
+    f.setPlayer(41, { citizenid = 'ORD', job = { name = 'police', isboss = false, grade = { level = 3 } } })
+    f.addOnline(41)
+
+    f.setCoords(ped, 500, 0, 0)
+    f.advance(500)
+    f.runOneTick()
+
+    local notified = {}
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'ox_lib:notify' then notified[e.target] = true end
+    end
+
+    t.isTrue(notified[40] == true, 'high command must be alerted regardless of the numeric grade threshold')
+    t.isNil(notified[41], 'an identical officer who is NOT high command must still be refused -- the bypass is rank, not a hole')
+end)
+
+t.test('non-compliance alerts: a missing IsHighCommand global degrades to the ordinary grade check rather than erroring', function()
+    -- server/highcommand.lua is a separate file reached through a
+    -- type(...) == 'function' guard. If it ever fails to load, this path
+    -- must fall through, not take the whole alert dispatch down with it.
+    local f = newCombatFixture({
+        nonComplianceDetectionCfg = {
+            enabled = true,
+            positionSampleWindowMs = 500,
+            biteHoldIdleCeiling = 0,
+            biteHoldSpeedTolerance = 0,
+            biteHoldViolationSamples = 1,
+            takedownNetDisplacementMeters = 3.0,
+            action = 'notify_staff',
+            OnViolationOverride = nil,
+            dragComplianceSlackMeters = 4.0,
+        },
+        departmentsCfg = { police = { nonComplianceAlertGrade = 2 } },
+        -- isHighCommandFn deliberately omitted: IsHighCommand is nil.
+    })
+
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    f.setPlayer(45, { citizenid = 'SUP', job = { name = 'police', isboss = false, grade = { level = 2 } } })
+    f.addOnline(45)
+
+    f.setCoords(ped, 500, 0, 0)
+    f.advance(500)
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'a missing IsHighCommand global must never raise')
+
+    local notified = {}
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'ox_lib:notify' then notified[e.target] = true end
+    end
+    t.isTrue(notified[45] == true, 'and the ordinary grade check must still work')
 end)
 
 os.exit(t.summary())

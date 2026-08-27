@@ -2220,6 +2220,31 @@ local function IsAuthorizedForNonComplianceAlert(playerId)
 
     if job.isboss then return true end
 
+    -- HIGH COMMAND, for consistency with every other rank gate in this
+    -- resource (owner's own instruction: "high command automatically get
+    -- every permission every feature every k9 upgrade"). A permission audit
+    -- found this was the ONE rank gate with no high-command branch, which
+    -- made it quietly inconsistent with HasK9Access, IsEligibleCertifier and
+    -- IsAuthorizedAdmin, all of which have one.
+    --
+    -- It is currently a difference that does not show: nonComplianceAlertGrade
+    -- ships as 0, so every sworn member of a configured department already
+    -- qualifies and high command comes in under the ordinary grade check
+    -- below. It only bites an owner who raises that threshold above their own
+    -- high-command grade -- at which point the officers most responsible for
+    -- a pursuit would be the only ones not told it had gone wrong. Fixing it
+    -- while it is invisible is cheaper than discovering it mid-shift.
+    --
+    -- Deliberately BEFORE the numeric grade check and AFTER isboss, matching
+    -- the order the other three gates already use, so the reading order is
+    -- the same wherever you look: boss, then rank, then the configured
+    -- number.
+    --
+    -- Soft-guarded: server/highcommand.lua is a separate file and this
+    -- resource's convention is to reach a cross-file global through a
+    -- type check rather than assume load order.
+    if type(IsHighCommand) == 'function' and IsHighCommand(playerId) then return true end
+
     local dept = Config.Departments[job.name]
     if type(dept.nonComplianceAlertGrade) ~= 'number' then return false end
 
