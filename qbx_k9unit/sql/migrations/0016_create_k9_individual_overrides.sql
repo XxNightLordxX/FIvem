@@ -116,14 +116,30 @@
 -- `medkit_cooldown_multiplier` to some value; NULL here means "defer to
 -- this citizenid's own XP-tier value for this one field", read live, so an
 -- operator who only ever wanted to touch ONE field never accidentally
--- freezes the OTHER two against a future XP-tier re-tune. Bounds
--- (`(0, 3.0]` for the first two, `(0, 1.0]` for the third, mirroring
--- server/xptiers.lua's own MAX_SPEED_SCENT_MULTIPLIER/
--- MAX_MEDKIT_COOLDOWN_MULTIPLIER exactly) are enforced ENTIRELY at the
--- application layer (server/k9profiles.lua's own IsValidMultiplier) --
--- this column has no CHECK constraint, matching this schema's own
--- established "validate in Lua, not in SQL" convention for every other
--- bounded numeric column in this resource.
+-- freezes the OTHER two against a future XP-tier re-tune. Bounds are
+-- enforced ENTIRELY at the application layer (server/k9profiles.lua's own
+-- IsValidMultiplier, and server/xptiers.lua's MAX_SPEED_SCENT_MULTIPLIER /
+-- MAX_MEDKIT_COOLDOWN_MULTIPLIER), never in SQL.
+--
+-- THIS COMMENT USED TO STATE THE BOUNDS AS LITERAL NUMBERS, `(0, 3.0]` for
+-- the first two, and that went stale. The speed/scent ceiling is not a
+-- constant: it is read from `Config.MaxSpeedScentMultiplier`, which the
+-- owner edits and which ships at 10.0 -- the game engine's own documented
+-- maximum for the movement override this eventually feeds. So a value this
+-- file once described as impossible is now perfectly ordinary.
+--
+-- Deliberately NOT restated as a new number here. A bound written into a
+-- migration comment is a copy of a fact that lives somewhere else, and
+-- copies rot silently while the original keeps changing -- which is exactly
+-- what happened. Read the two Lua constants named above for the live
+-- answer; they are the ones actually enforcing it.
+--
+-- THE COLUMN ITSELF IS DELIBERATELY UNCONSTRAINED, and that is why raising
+-- the ceiling in config needed no migration at all: this is a plain DOUBLE,
+-- with no CHECK, matching this schema's own established "validate in Lua,
+-- not in SQL" convention. Had the bound been baked in here as a constraint,
+-- an owner raising their own configured ceiling would have hit a database
+-- rejection with no obvious cause.
 --
 -- `note` VARCHAR(120) NULLABLE: an optional, operator-authored, freeform
 -- reason ("K9 injured in training, temp cap"), rendered by the tablet

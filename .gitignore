@@ -1,0 +1,4 @@
+
+# Python bytecode from .github/scripts (locale_cross_check.py)
+__pycache__/
+*.pyc
