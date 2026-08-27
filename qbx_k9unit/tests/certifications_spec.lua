@@ -193,7 +193,7 @@ end
 -- never leak between unrelated test cases.
 -- ----------------------------------------------------------------------
 
---- @param opts table? -- { includePartnershipHook: boolean (default true), departments: table (default 2-dept Config.Departments), allowSelfCert: boolean (default true), proximityMeters: number (default 5.0), features: table? (Config.Features -- default nil, matching every pre-existing test's shipped-default posture), expiryDays/expiryWarningDays/expiryCheckIntervalMs: number?, k9Specializations: table? }
+--- @param opts table? -- { includePartnershipHook: boolean (default true), departments: table (default 2-dept Config.Departments), allowSelfCert: boolean (default true), proximityMeters: number (default 5.0), features: table? (Config.Features -- default nil, matching every pre-existing test's shipped-default posture), expiryDays/expiryWarningDays/expiryCheckIntervalMs: number?, k9Specializations: table?, certifyMaxNewGranteesPerDay: number? (default nil -- production's own built-in fallback of 8 applies) }
 local function newFixture(opts)
     opts = opts or {}
 
@@ -387,6 +387,13 @@ local function newFixture(opts)
         },
         AllowSelfCertification = opts.allowSelfCert,
         CertifyProximityMeters = opts.proximityMeters or 5.0,
+        -- FARM FIX (this pass) -- absent (nil) by default, matching every
+        -- pre-existing test's shipped-default posture: the production
+        -- resolver (ResolveCertifyMaxNewGranteesPerDay) already falls back
+        -- to its own built-in default (8) when this reads nil, exactly the
+        -- same way a real, un-upgraded server config would. Tests that care
+        -- about the cap set this explicitly via opts.certifyMaxNewGranteesPerDay.
+        CertifyMaxNewGranteesPerDay = opts.certifyMaxNewGranteesPerDay,
         -- K9 role/model decoupling (coder-architect, server/appearance.lua,
         -- landed concurrently with this pass): GrantCertification's own
         -- §4.2.5 model check now only runs when
@@ -1256,6 +1263,196 @@ t.test('ECONOMY FIX: AwardHandlerXP being entirely absent (soft dependency) neve
 
     f.events['qbx_k9unit:server:certifyHandler'](1)
     t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'), 'the grant itself must still succeed with no AwardHandlerXP global defined at all')
+end)
+
+-- ======================================================================
+-- FARM FIX: distinct-target certify farm (Config.CertifyMaxNewGranteesPerDay).
+--
+-- See server/certifications.lua's own header comment right after
+-- CertifyXpMintKey's declaration (search for "FARM FIX (audit finding,
+-- this pass") for the full writeup this section proves out end to end,
+-- against the REAL production file: CertifyXpMintCooldown above (per
+-- (granter, target) PAIR, 24h) never caps how many DIFFERENT targets one
+-- granter mints off in a day -- every pair used exactly once always pays,
+-- whether the "different target" is a real alt character or (via
+-- /k9certifyoffline, which accepts ANY citizenid string) a plain typed
+-- string that never corresponds to a real character at all. These tests
+-- drive that exact command, through the REAL RegisterCommand entry point
+-- captured in f.commands, never a local function directly.
+-- ======================================================================
+
+t.test('FARM FIX: a granter minting more DISTINCT new certifications than Config.CertifyMaxNewGranteesPerDay in one sitting is paid for exactly the cap, never more -- the farm loop is refused at the configured bound, not merely slowed', function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 3 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    -- Nine DISTINCT, entirely fabricated citizenids -- exactly the shape
+    -- this fix closes. Each is a genuinely NEW (granter, target) pair, so
+    -- CertifyXpMintCooldown ALONE would happily pay every single one.
+    for i = 1, 9 do
+        f.advanceTime(COOLDOWN_MS + 100)
+        f.commands['k9certifyoffline'].fn(1, { 'FAKE' .. i, 'police' })
+    end
+
+    t.equals(#f.handlerXpAwardCalls, 3, 'exactly Config.CertifyMaxNewGranteesPerDay (3) of the nine distinct-target attempts may mint handlerCertifyK9 XP in one rolling day')
+    for i = 1, 3 do
+        t.equals(f.handlerXpAwardCalls[i][1], 'G1')
+        t.equals(f.handlerXpAwardCalls[i][2], 'handlerCertifyK9')
+    end
+end)
+
+t.test('FARM FIX: a certification refused its handlerCertifyK9 mint by the granter-level cap still succeeds as a REAL certification -- the cap gates only the XP reward, never the grant itself', function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 1 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 1, 'sanity: the first mint pays')
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 1, 'the second, over-cap certification must NOT mint XP')
+
+    local grantedFake2 = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:certificationGranted' and ev[2] == 'FAKE2' and ev[3] == 'police' then
+            grantedFake2 = true
+        end
+    end
+    t.isTrue(grantedFake2, 'the certification itself must still be granted for real (outbound event fired, DB row committed) even though the granter is already at their daily XP-mint cap -- gate the reward, never the action')
+end)
+
+t.test('FARM FIX: a real training officer certifying six genuine recruits in one evening is paid for every single one -- the shipped default cap has deliberate headroom above this exact legitimate case', function()
+    local f = newFixture() -- opts.certifyMaxNewGranteesPerDay omitted -- production's own shipped default (8) applies
+    f.registerPlayer(1, 'TRAINER', { name = 'police', isboss = true })
+    f.setPed(1, 100, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.setSource(1)
+
+    for i = 1, 6 do
+        f.registerPlayer(10 + i, 'RECRUIT' .. i, { name = 'police', grade = { level = 1 } })
+        f.setPed(10 + i, 200 + i, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+        f.advanceTime(COOLDOWN_MS + 100)
+        f.events['qbx_k9unit:server:certifyHandler'](10 + i)
+    end
+
+    t.equals(#f.handlerXpAwardCalls, 6, 'a genuine six-recruit onboarding evening must be paid IN FULL under the shipped default cap -- a cap that punishes this legitimate case would be worse than the farm it exists to stop')
+end)
+
+t.test('FARM FIX: the per-granter daily cap survives the granter disconnecting and reconnecting under a DIFFERENT, recycled server id -- it is keyed by citizenid, never by source', function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 1 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 1)
+
+    -- Genuine disconnect + reconnect under a DIFFERENT numeric source
+    -- (FXServer recycles ids) -- the SAME citizenid, G1, logging back in.
+    f.disconnectPlayer(1)
+    f.registerPlayer(99, 'G1', { name = 'police', isboss = true })
+    f.setSource(99)
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certifyoffline'].fn(99, { 'FAKE2', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 1, "a resource restart-free relog cannot reset this citizenid's own daily cap -- it must still refuse the second distinct target")
+end)
+
+t.test('FARM FIX: a slot freed by rolling past its OWN 24-hour window frees up exactly one more granter-level mint, never the whole cap at once', function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 2 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    local slot1StampedAt = f.state.now
+    t.equals(#f.handlerXpAwardCalls, 1)
+
+    -- A full hour between slot 1's and slot 2's own stamps -- gives a wide,
+    -- unambiguous margin between their two INDEPENDENT 24h rollover points
+    -- for the assertions below (slot 1 rolls off a full hour before slot 2
+    -- does, so "past slot 1's rollover" and "past slot 2's rollover" are
+    -- never ambiguous instants).
+    f.advanceTime(3600000)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 2, "sanity: both of the cap's 2 slots are now used")
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE3', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 2, "still inside slot 1's own 24h window -- a 3rd distinct target must not pay yet")
+
+    -- Advance to just past slot 1's OWN 24h mark, measured from when IT was
+    -- stamped (not from "now") -- mirrors the existing CertifyXpMintCooldown
+    -- "pays again once 24h has fully elapsed" test's own style. This lands
+    -- comfortably short of slot 2's OWN rollover, a full hour further out.
+    f.advanceTime((slot1StampedAt + CERTIFY_XP_MINT_COOLDOWN_MS + 500) - f.state.now)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE4', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 3, "slot 1 has now rolled off its own 24h window -- exactly ONE more mint frees up")
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE5', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 3, "slot 2 has not rolled off yet (nearly a full hour still remains on it) -- a second extra mint must still be refused")
+end)
+
+t.test("FARM FIX: a NEW target refused its mint only by the granter-level cap is NOT also forced onto its own 24h pair-cooldown -- it can pay in full as soon as a granter slot frees up", function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 1 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' }) -- uses the ONLY slot
+    t.equals(#f.handlerXpAwardCalls, 1)
+
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' }) -- refused by the granter cap, not by its own pair-cooldown
+    t.equals(#f.handlerXpAwardCalls, 1)
+
+    -- Free the granter's own slot back up (FAKE1's stamp rolls off 24h
+    -- later). If TryConsumeCertifyHandlerXpMint had also consumed FAKE2's
+    -- OWN pair-cooldown on the earlier, denied attempt, this next call
+    -- would incorrectly still be refused for a further 24h.
+    f.advanceTime(CERTIFY_XP_MINT_COOLDOWN_MS)
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 2, "FAKE2 must pay the moment a granter slot is free again -- its own pair-cooldown must never have been consumed by the earlier, denied attempt")
+end)
+
+t.test('FARM FIX: Config.CertifyMaxNewGranteesPerDay -- CLAMP AND WARN on an invalid configured value (never assert), falling back to the built-in default', function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 0 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    for i = 1, 9 do
+        f.advanceTime(COOLDOWN_MS + 100)
+        f.commands['k9certifyoffline'].fn(1, { 'FAKE' .. i, 'police' })
+    end
+    t.equals(#f.handlerXpAwardCalls, 8, 'an invalid (zero) configured cap must fall back to the built-in default (8) -- never "always refuse" and never "never refuse"')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('CertifyMaxNewGranteesPerDay', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'an invalid configured value must be warned about loudly, not silently substituted')
+end)
+
+t.test('FARM FIX: Config.CertifyMaxNewGranteesPerDay left UNSET (nil, an un-upgraded config) silently uses the built-in default -- no console warning for a value nobody was ever asked to set', function()
+    local f = newFixture() -- opts.certifyMaxNewGranteesPerDay omitted -> nil
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    t.equals(#f.handlerXpAwardCalls, 1)
+
+    for _, line in ipairs(f.printLog) do
+        t.isFalse(line:find('CertifyMaxNewGranteesPerDay', 1, true) ~= nil, 'a missing config value must never itself trigger a console warning')
+    end
+end)
+
+t.test('FARM FIX: a large, validly-configured Config.CertifyMaxNewGranteesPerDay is honored, not silently clamped down to the built-in fallback', function()
+    local f = newFixture({ certifyMaxNewGranteesPerDay = 50 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+
+    for i = 1, 20 do
+        f.advanceTime(COOLDOWN_MS + 100)
+        f.commands['k9certifyoffline'].fn(1, { 'FAKE' .. i, 'police' })
+    end
+    t.equals(#f.handlerXpAwardCalls, 20, 'a real, validly-configured cap of 50 must allow more than the built-in fallback of 8 to pay in one rolling day')
 end)
 
 t.test('GrantCertification: a target whose LIVE ped model is not a configured K9 model is rejected, even if job/proximity pass (Config.K9Appearance.requireK9ModelForRole opted in)', function()
@@ -4244,26 +4441,30 @@ end)
 --
 -- SHARED-THREADRUNNER NOTE: with Config.Features.CertificationExpiry on
 -- (every test below), server/certifications.lua's file scope registers
--- THREE separate CreateThread loops onto this ONE fixture-wide
--- threadRunner: CertifyXpMintCooldown's 24h StartSweep cleanup
--- (unconditional, registered first, near this file's top), THIS
--- section's own expiry-check thread (registered second, only when the
--- feature above is on), and the always-on unresolved-certification
--- resync sweep (registered third, unconditional, 30000ms). fixtures/
+-- FOUR separate CreateThread loops onto this ONE fixture-wide
+-- threadRunner, in this exact registration order: (1) CertifyXpMintCooldown's
+-- 24h StartSweep cleanup (unconditional, registered first, near this
+-- file's top), (2) FARM FIX (this pass): CertifyNewGrantSlotCooldown's own
+-- 24h StartSweep cleanup (unconditional, registered immediately after (1),
+-- right next to CertifyXpMintKey -- see that section's own header), (3)
+-- THIS section's own expiry-check thread (registered third, only when the
+-- feature above is on), and (4) the always-on unresolved-certification
+-- resync sweep (registered fourth, unconditional, 30000ms). fixtures/
 -- sandbox.lua's own newThreadRunner.step() resumes every registered
--- thread once per call, in registration order, so the three threads'
--- captured Wait() values interleave 1:1:1 in the SAME f.waitCalls array
+-- thread once per call, in registration order, so the four threads'
+-- captured Wait() values interleave 1:1:1:1 in the SAME f.waitCalls array
 -- -- expiryThreadWaitCalls() below isolates just this section's own
--- thread's captures (position 2 of every 3) so each test can assert on
--- ITS OWN thread's interval without the other two, unrelated threads'
--- fixed 86400000/30000 values ever being mistaken for a regression here.
+-- thread's captures (position 3 of every 4) so each test can assert on
+-- ITS OWN thread's interval without the other three, unrelated threads'
+-- fixed 86400000/86400000/30000 values ever being mistaken for a
+-- regression here.
 -- ----------------------------------------------------------------------
 
 --- @param f table -- a newFixture() result
 --- @return table -- just this section's expiry-check thread's own captured Wait() ms values, in order
 local function expiryThreadWaitCalls(f)
     local out = {}
-    for i = 2, #f.waitCalls, 3 do out[#out + 1] = f.waitCalls[i] end
+    for i = 3, #f.waitCalls, 4 do out[#out + 1] = f.waitCalls[i] end
     return out
 end
 

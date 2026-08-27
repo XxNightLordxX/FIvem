@@ -1838,6 +1838,232 @@ local function CertifyXpMintKey(granterCitizenid, targetCitizenid)
     return granterCitizenid .. ':' .. targetCitizenid
 end
 
+-- ==========================================================================
+-- FARM FIX (audit finding, this pass -- "distinct-target certify farm").
+-- CertifyXpMintCooldown above (24h, keyed by the (GRANTER, TARGET) PAIR)
+-- closes re-minting off the SAME person -- it was never meant to, and still
+-- does not, cap how many DIFFERENT people one granter may mint off in a
+-- day. Verified against the real shipped code, not assumed:
+--
+--   1. `/k9certifyoffline <citizenid> <job>` accepts ANY non-empty string as
+--      `citizenid` -- nothing in this file, and nothing in k9_certifications'
+--      own schema (sql/install.sql has no FK from `citizenid` to qbx_core's
+--      `players` table -- see that migration's own "a hard ERROR 1267" note
+--      for why not), checks that this citizenid belongs to a real, existing
+--      character. A certifier-grade officer can therefore call this command
+--      with a freshly typed, never-before-seen string every time -- NO
+--      multicharacter system, NO alt character, and NO accomplice required.
+--   2. Even where a real distinct target IS required (the online
+--      `/k9certify` path), a server whose multicharacter system allows
+--      cheap creation and deletion of throwaway characters gets the
+--      identical result more slowly: each new character is, to
+--      CertifyXpMintCooldown, simply a citizenid it has never seen paired
+--      with this granter before, so it always pays.
+--
+-- Either way, CertifyXpMintCooldown's own per-pair 24h window never
+-- triggers, because every pair really is used exactly once. The other
+-- floor this action rides, CERTIFY_ACTION_COOLDOWN_MS (1500ms, shared by
+-- grant+revoke, per granter source), was only ever a fat-finger guard, not
+-- a mint throttle (see that constant's own declaration comment) -- it does
+-- not stand in the way of firing ten `/k9certifyoffline` calls with ten
+-- fresh strings roughly 1.5s apart.
+--
+-- THE ARITHMETIC (re-derived against the REAL shipped numbers in config.lua
+-- as of this pass, not assumed): Config.HandlerXP.awards.handlerCertifyK9 =
+-- 50 XP, Config.HandlerXPTiers' own Master Handler threshold = 500 XP (10
+-- mints). server/progression.lua's shared cross-mechanic
+-- XP_MINT_BUDGET_STARTER_TOKENS -- a ONE-TIME allowance sized to cover a
+-- genuine same-tick multi-milestone burst for ONE citizenid, see that
+-- file's own "STARTING BALANCE" writeup -- sums to 505 XP today (280 from
+-- Config.XP.awards + 225 from Config.HandlerXP.awards). That is
+-- comfortably enough, ON ITS OWN, to pay all 10 handlerCertifyK9 mints
+-- (500 XP) in one sitting, bound only by CERTIFY_ACTION_COOLDOWN_MS: 10
+-- grants x 1500ms =~ 13.5-15 seconds from a cold start to MASTER HANDLER,
+-- THE TOP RANK, with zero real recruiting, zero real duty time, and (via
+-- the offline path) zero character creation at all. server/progression.lua's
+-- own starter-allowance design comment explicitly assumed "certifying
+-- dozens of distinct new people in an hour is not realistic" -- true for a
+-- REAL recruiting drive, false for a fabricated or throwaway one, which is
+-- exactly the gap this section closes. This is NOT a finding that the
+-- shared budget is broken -- its own hourly/starter ceiling is completely
+-- unaffected, unchanged, and still the correct backstop against every
+-- OTHER mechanic combined -- it is that ONE mechanic with no per-granter
+-- cap of its own can spend that entire starter allowance by itself, in
+-- seconds, on targets that cost the attacker nothing.
+--
+-- FIX: Config.CertifyMaxNewGranteesPerDay (config.lua) -- the most DISTINCT
+-- handlerCertifyK9 mints any one granter may collect in a rolling 24-hour
+-- window, regardless of how many different (or fabricated) targets they
+-- use. Gates ONLY the XP MINT, exactly like CertifyXpMintCooldown already
+-- does -- see TryConsumeCertifyHandlerXpMint below -- never the
+-- certification GRANT itself, which always succeeds regardless of this cap
+-- (gate the reward, never the underlying action).
+--
+-- WEIGHED AGAINST THE LEGITIMATE CASE before picking a shape or a number: a
+-- real training officer onboarding several genuine new recruits in one
+-- evening is exactly the behaviour Config.HandlerXPTiers' own Master
+-- Handler comment describes wanting ("roughly seven to ten personally-
+-- granted certifications... spread across several weeks") -- a cap that
+-- refuses recruit #2 of a six-recruit onboarding night would be strictly
+-- worse than the farm it exists to stop. A flat per-granter TIME-SPACING
+-- cooldown (mirroring CertifyXpMintCooldown's own shape, just keyed by
+-- granter alone) was considered and rejected for exactly that reason: it
+-- would force a genuine trainer to wait out a fixed interval between EACH
+-- of those six recruits, one at a time -- a real, avoidable annoyance a
+-- same-day BATCH cap does not impose. A rolling COUNT instead lets an
+-- entire batch clear as fast as the recruits themselves can be processed,
+-- then simply refuses further NEW mints until the next rolling day, which
+-- is what actually needs throttling here (how many NEW people this pays
+-- out for per day), not how far apart in time they were certified.
+--
+-- Config.CertifyMaxNewGranteesPerDay's shipped default (8) is chosen with
+-- deliberate headroom above "six recruits in one evening" (that exact
+-- legitimate scenario clears with two mints to spare), while still bounding
+-- the farm above to AT LEAST a full day-plus of continuous, repeated,
+-- VISIBLE manual effort to reach Master Handler (10 mints needed; 8 fit on
+-- day one, the remaining 2 cannot mint until day one's OLDEST slot rolls
+-- off 24h later) -- turning a single ~15-second script-friendly burst into
+-- a multi-day grind an operator can actually notice, matching this
+-- ladder's own stated intent far more closely than the pre-fix arithmetic
+-- ever did.
+--
+-- WINDOW is a FILE-LOCAL CONSTANT, NOT a Config key -- same reasoning as
+-- server/progression.lua's own XP_MINT_BUDGET_WINDOW_MS: the CAP (how
+-- many) is a legitimate operator balance knob; the WINDOW SHAPE (a rolling
+-- day) is a structural anti-farm floor, mirroring
+-- CERTIFY_XP_MINT_COOLDOWN_MS's own identical 24h window one section up.
+--
+-- IMPLEMENTATION: Config.CertifyMaxNewGranteesPerDay independent "slots",
+-- each its OWN flat NewCooldown() entry keyed by "granterCitizenid:slot<N>"
+-- (the SAME composite-string-into-a-flat-NewCooldown technique
+-- CertifyXpMintKey above already uses, for the identical reason --
+-- :StartSweep is only exposed by NewCooldown, not NewNestedCooldown; see
+-- CertifyXpMintKey's own doc comment). A mint is allowed only when at
+-- least one of the granter's own `cap` slots is not currently on its own
+-- 24h cooldown; on success, exactly ONE such slot is stamped. This is
+-- mathematically a proper sliding-window counter of size `cap`: a slot
+-- stamped at time T is unavailable again until exactly T + 24h, so at most
+-- `cap` mints can ever land for one granter inside ANY rolling 24-hour
+-- span -- never a fixed-clock-boundary window (no midnight-edge doubling,
+-- the same boundary flaw server/progression.lua's own token-bucket
+-- rejected a fixed-window counter for).
+--
+-- KEYED BY CITIZENID, NOT :RegisterPlayerDropped() -- same reasoning as
+-- CertifyXpMintCooldown immediately above (a cooldown that resets on
+-- reconnect is not a cooldown; this one must survive the granter logging
+-- off and back on, including switching which of THEIR OWN characters is
+-- online -- exactly the scenario this fix exists to close). Bounded
+-- instead by CertifyNewGrantSlotCooldown's own :StartSweep below.
+-- ==========================================================================
+local CERTIFY_NEW_GRANT_WINDOW_MS = 24 * 60 * 60 * 1000 -- 24 real hours -- mirrors CERTIFY_XP_MINT_COOLDOWN_MS's own window; see this section's own "WINDOW" note above for why it is not a Config key
+
+-- Sane upper bound on Config.CertifyMaxNewGranteesPerDay -- NOT a balance
+-- knob (raising THIS requires editing this file's own source, same
+-- "security floor, not an operator-tunable balance knob" posture as
+-- server/progression.lua's XP_MINT_BUDGET_STARTER_TOKENS_CEILING_XP) --
+-- purely a guard against a config typo (e.g. an extra zero) turning every
+-- single certify action into a needlessly long loop. An operator who
+-- genuinely wants a materially larger cap than this can still set one;
+-- this only stops an accidental one.
+local CERTIFY_MAX_NEW_GRANTEES_PER_DAY_CEILING = 1000
+-- Used when Config.CertifyMaxNewGranteesPerDay is missing or invalid --
+-- matches config.lua's own shipped default (see ResolveCertifyMaxNewGranteesPerDay
+-- below for the missing-vs-invalid distinction).
+local CERTIFY_MAX_NEW_GRANTEES_PER_DAY_FALLBACK = 8
+
+local WarnedBadCertifyMaxNewGranteesPerDay = false
+
+--- CLAMP AND WARN (never assert -- same posture as every other Config
+--- reader in this file). A MISSING Config.CertifyMaxNewGranteesPerDay (nil
+--- -- an install predating this pass, or a config an operator simply never
+--- touched) falls back SILENTLY to CERTIFY_MAX_NEW_GRANTEES_PER_DAY_FALLBACK
+--- (the shipped config.lua default) -- never a console warning for a value
+--- nobody was ever asked to set. A PRESENT-BUT-INVALID value (wrong type,
+--- NaN, zero, negative, non-integer) warns ONCE per resource lifetime and
+--- then behaves exactly like "missing". Clamped to
+--- CERTIFY_MAX_NEW_GRANTEES_PER_DAY_CEILING at the top end for the reason
+--- that constant's own declaration comment gives.
+--- @return number cap
+local function ResolveCertifyMaxNewGranteesPerDay()
+    local raw = Config.CertifyMaxNewGranteesPerDay
+    if raw == nil then return CERTIFY_MAX_NEW_GRANTEES_PER_DAY_FALLBACK end
+    if type(raw) == 'number' and raw == raw and raw >= 1 then
+        return math.min(math.floor(raw), CERTIFY_MAX_NEW_GRANTEES_PER_DAY_CEILING)
+    end
+    if not WarnedBadCertifyMaxNewGranteesPerDay then
+        WarnedBadCertifyMaxNewGranteesPerDay = true
+        print(
+            ('[qbx_k9unit] certifications.lua: Config.CertifyMaxNewGranteesPerDay must be a positive number ' ..
+             '(found: %s). Using the built-in fallback of %d instead -- find Config.CertifyMaxNewGranteesPerDay ' ..
+             'in config.lua and fix it.'):format(tostring(raw), CERTIFY_MAX_NEW_GRANTEES_PER_DAY_FALLBACK)
+        )
+    end
+    return CERTIFY_MAX_NEW_GRANTEES_PER_DAY_FALLBACK
+end
+
+local CertifyNewGrantSlotCooldown = NewCooldown()
+CertifyNewGrantSlotCooldown.StartSweep(CERTIFY_NEW_GRANT_WINDOW_MS, function(now, loggedAt)
+    return (now - loggedAt) > (CERTIFY_NEW_GRANT_WINDOW_MS * 2)
+end)
+
+--- @param granterCitizenid string
+--- @param slot number
+--- @return string
+local function CertifyNewGrantSlotKey(granterCitizenid, slot)
+    return granterCitizenid .. ':slot' .. slot
+end
+
+--- Check-only (never stamps) -- returns the first of the granter's own
+--- `cap` slots that is NOT currently on cooldown, or nil if all `cap` slots
+--- are still within their own 24h window (this granter has already minted
+--- `cap` NEW handlerCertifyK9 payouts in the last rolling day).
+--- @param granterCitizenid string
+--- @param cap number
+--- @return number? availableSlot
+local function FindAvailableCertifyNewGrantSlot(granterCitizenid, cap)
+    for slot = 1, cap do
+        if not CertifyNewGrantSlotCooldown.IsOnCooldown(CertifyNewGrantSlotKey(granterCitizenid, slot), CERTIFY_NEW_GRANT_WINDOW_MS) then
+            return slot
+        end
+    end
+    return nil
+end
+
+--- Single choke point for "should THIS handlerCertifyK9 mint actually pay
+--- out right now" -- called from BOTH GrantCertification's and
+--- GrantCertificationOffline's own doGrantInsert, so the two award doors
+--- can never drift out of sync with each other (mirrors this file's own
+--- existing "second door to the exact same event" reasoning for
+--- CertifyXpMintCooldown itself). BOTH independent gates below must agree;
+--- NEITHER one is weakened by the other's presence:
+---   1. Config.CertifyMaxNewGranteesPerDay, PER-GRANTER, checked (never
+---      consumed) FIRST -- see this section's own header above for the full
+---      "distinct-target farm" writeup this closes. Checking before gate 2
+---      below ever touches anything means a granter who is already at
+---      today's cap never burns the NEW target's own once-per-pair 24h
+---      cooldown for a mint that was never going to pay anyway -- that
+---      target's very first certification with this granter is left
+---      completely untouched by CertifyXpMintCooldown, so it can still pay
+---      in full the moment a slot frees up, rather than ALSO being forced
+---      to wait out its own fresh 24h pair-cooldown.
+---   2. CertifyXpMintCooldown, PER-(GRANTER, TARGET) PAIR, 24h -- UNCHANGED,
+---      see its own declaration comment above. Still the exact same
+---      check-and-consume it always was.
+--- Only once BOTH agree is the chosen slot itself stamped -- a slot is
+--- never spent on a mint that gate 2 goes on to refuse.
+--- @param granterCitizenid string
+--- @param targetCitizenid string
+--- @return boolean shouldMint
+local function TryConsumeCertifyHandlerXpMint(granterCitizenid, targetCitizenid)
+    local availableSlot = FindAvailableCertifyNewGrantSlot(granterCitizenid, ResolveCertifyMaxNewGranteesPerDay())
+    if not availableSlot then return false end
+    if not CertifyXpMintCooldown.Consume(CertifyXpMintKey(granterCitizenid, targetCitizenid), CERTIFY_XP_MINT_COOLDOWN_MS) then
+        return false
+    end
+    CertifyNewGrantSlotCooldown.Touch(CertifyNewGrantSlotKey(granterCitizenid, availableSlot))
+    return true
+end
+
 -- SECURITY FIX (dedicated K9 pass, 2026-08-25): closes GrantCertification's
 -- check-then-act TOCTOU on ITS OWN TERMS, independent of whether
 -- `uq_one_active_cert_per_job` (SQL migration 0004) has actually been
@@ -2259,8 +2485,15 @@ local function GrantCertification(granterSrc, targetServerId)
         -- fxmanifest.lua's server_scripts list) -- same soft-dependency
         -- convention as ApplyK9AppearanceOnGrant's own guard immediately
         -- below.
+        -- FARM FIX (this pass) -- CertifyXpMintCooldown alone (per-pair,
+        -- 24h) never caps how many DIFFERENT targets one granter can mint
+        -- off in a day (real alts, or via /k9certifyoffline, fabricated
+        -- citizenid strings) -- see TryConsumeCertifyHandlerXpMint's own
+        -- declaration comment (immediately after CertifyXpMintKey above)
+        -- for the full writeup and arithmetic this closes. Both gates run
+        -- as one unit now; CertifyXpMintCooldown itself is unchanged.
         if type(AwardHandlerXP) == 'function'
-            and CertifyXpMintCooldown.Consume(CertifyXpMintKey(granterCitizenid, targetCitizenid), CERTIFY_XP_MINT_COOLDOWN_MS) then
+            and TryConsumeCertifyHandlerXpMint(granterCitizenid, targetCitizenid) then
             AwardHandlerXP(granterCitizenid, 'handlerCertifyK9')
         end
 
@@ -2446,8 +2679,16 @@ local function GrantCertificationOffline(granterSrc, citizenid, jobName)
         -- per-granter action cooldown) never covered this -- same
         -- FALSIFIED CLAIM this pass corrects at GrantCertification's call
         -- site, not repeated here.
+        -- FARM FIX (this pass) -- same TryConsumeCertifyHandlerXpMint gate as
+        -- GrantCertification's own identical call above (see that call
+        -- site's own comment, and TryConsumeCertifyHandlerXpMint's own
+        -- declaration comment, for the full writeup): this offline door
+        -- must be throttled identically, not treated as a separate,
+        -- unthrottled distinct-target mint path -- especially since this is
+        -- the ONE path that accepts a citizenid with no existence check at
+        -- all (see this fix's own header, item 1).
         if type(AwardHandlerXP) == 'function'
-            and CertifyXpMintCooldown.Consume(CertifyXpMintKey(granterCitizenid, citizenid), CERTIFY_XP_MINT_COOLDOWN_MS) then
+            and TryConsumeCertifyHandlerXpMint(granterCitizenid, citizenid) then
             AwardHandlerXP(granterCitizenid, 'handlerCertifyK9')
         end
 
