@@ -396,6 +396,18 @@ local function newFixture(opts)
     for key, value in pairs(opts.config or {}) do
         env.Config[key] = value
     end
+    -- Per-KEY overrides inside an existing sub-table (as opposed to
+    -- replacing the whole sub-table, which opts.config does). Needed by the
+    -- feature-gate tests below: replacing Config.Features wholesale would
+    -- turn off every OTHER feature at the same time and make it impossible
+    -- to tell "this one entry was skipped for its own flag" from "the whole
+    -- table went quiet."
+    for tableName, fields in pairs(opts.configFields or {}) do
+        if type(env.Config[tableName]) ~= 'table' then env.Config[tableName] = {} end
+        for key, value in pairs(fields) do
+            env.Config[tableName][key] = value
+        end
+    end
     Sandbox.loadInto('../client/commandsuggestions.lua', env)
 
     return {
@@ -551,6 +563,66 @@ t.test('re-firing onResourceStart is safe -- calls TriggerEvent again for every 
     local ok = pcall(f.fireResourceStart, 'qbx_k9unit')
     t.isTrue(ok, 're-firing onResourceStart must not throw')
     t.equals(#f.suggestionCalls, firstCount * 2, 'a second pass calls TriggerEvent again for every command (this file itself holds no dedup state -- the real chat resource\'s own addSuggestion is what replaces-by-name, per this file\'s own header "RE-REGISTRATION SAFETY")')
+end)
+
+
+-- ========================================================================
+-- FEATURE-GATED SUGGESTIONS (QA finding, this pass). Every command in
+-- COMMAND_SUGGESTIONS carrying a `featureFlag` lives in a file whose own
+-- top-level guard is `if not Config.Features.<flag> then return end` -- a
+-- FILE-LEVEL early return, so with the flag off that file's RegisterCommand
+-- never executes and the command is not registered at all. Advertising it
+-- in chat autocomplete then promises something typing it cannot deliver.
+-- ========================================================================
+t.test('DEAD COMMAND, LIVE ON THE SHIPPED CONFIG: /k9nosehunt is no longer advertised -- Config.Features.ScentTrailHunt was deliberately removed from config.lua, so client/scenttrail.lua returns at its top and never registers the command on any client', function()
+    local f = newFixture()
+    f.fireResourceStart('qbx_k9unit')
+
+    t.isNil(f.Config.Features.ScentTrailHunt, 'precondition: the flag really is absent from the shipped config, not merely false')
+    t.isNil(f.findSuggestion('k9nosehunt'), 'a command no client ever registers must not appear in autocomplete')
+end)
+
+t.test('A REMOVED KEY (nil) SKIPS, not just an explicit false -- nil is the actual shipped ScentTrailHunt case, and `== false` would have missed it entirely', function()
+    local f = newFixture({ configFields = { Features = { ScentLineup = nil } } })
+    -- ScentLineup ships true, so prove the nil path directly by clearing it.
+    f.Config.Features.ScentLineup = nil
+    f.fireResourceStart('qbx_k9unit')
+    t.isNil(f.findSuggestion('k9lineup'))
+end)
+
+t.test('THE SAME PROTECTION COVERS EVERY OTHER GATED FAMILY, not just the one that was broken -- turning a feature off stops advertising all of its commands', function()
+    local f = newFixture({ configFields = { Features = { FetchMechanic = false, TrainingMode = false } } })
+    f.fireResourceStart('qbx_k9unit')
+
+    t.isNil(f.findSuggestion('k9fetch'))
+    t.isNil(f.findSuggestion('k9throwfetchball'))
+    t.isNil(f.findSuggestion('k9train'))
+    t.isNil(f.findSuggestion('k9training'))
+end)
+
+t.test('CONTROL: an UNGATED command is still advertised while other features are off -- proves the skip is per-entry and did not simply silence the whole table', function()
+    local f = newFixture({ configFields = { Features = { FetchMechanic = false, TrainingMode = false } } })
+    f.fireResourceStart('qbx_k9unit')
+
+    t.isNotNil(f.findSuggestion('k9recall') or f.findSuggestion('k9bitehold') or f.findSuggestion('k9track'),
+        'at least one ungated command must still be suggested')
+end)
+
+t.test('CONTROL: with a gated feature ON, its commands ARE advertised -- proves these tests can tell the two states apart', function()
+    local f = newFixture({ configFields = { Features = { FetchMechanic = true } } })
+    f.fireResourceStart('qbx_k9unit')
+
+    t.isNotNil(f.findSuggestion('k9fetch'), 'FetchMechanic on must advertise /k9fetch')
+end)
+
+t.test('/k9debug follows the same rule through a DIFFERENT switch: server/debugdump.lua returns at its top unless Config.DebugDump.enabled is exactly true, and that is not a Config.Features key', function()
+    local off = newFixture({ configFields = { DebugDump = { enabled = false } } })
+    off.fireResourceStart('qbx_k9unit')
+    t.isNil(off.findSuggestion('k9debug'), 'ships off, so the command is never registered -- do not advertise it')
+
+    local on = newFixture({ configFields = { DebugDump = { enabled = true } } })
+    on.fireResourceStart('qbx_k9unit')
+    t.isNotNil(on.findSuggestion('k9debug'), 'switched on, the command really is registered and should be discoverable')
 end)
 
 os.exit(t.summary())

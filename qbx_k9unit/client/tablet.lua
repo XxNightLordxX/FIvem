@@ -1285,6 +1285,8 @@ local TABLET_STRING_KEYS = {
     -- fails when two sides DISAGREE, so a key missing from TWO of them
     -- passes silently forever.
     'cmdref_k9kennel_usage', 'cmdref_k9kennel_does', 'cmdref_k9kennel_needs',
+    -- k9debug -- server/debugdump.lua's diagnostic dump command.
+    'cmdref_k9debug_usage', 'cmdref_k9debug_does', 'cmdref_k9debug_needs',
     -- k9dog (family #2, dog record) and k9train (family #4, training) --
     -- the remaining two merged entry points from the same spec. Grouped
     -- here with k9kennel rather than beside their own old per-command

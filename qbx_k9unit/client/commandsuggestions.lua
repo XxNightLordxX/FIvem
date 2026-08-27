@@ -245,9 +245,9 @@ end
 -- ----------------------------------------------------------------------
 local COMMAND_SUGGESTIONS = {
     -- client/scenttrail.lua
-    { command = 'k9nosehunt', keySuffix = 'k9nosehunt' },
+    { command = 'k9nosehunt', keySuffix = 'k9nosehunt' , featureFlag = 'ScentTrailHunt' },
     -- client/pursuitsprint.lua (qbx_k9unit: namespace -- RegisterKeyMapping global-uniqueness requirement)
-    { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' },
+    { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' , featureFlag = 'PursuitSprint' },
     -- client/kennel.lua -- COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
     -- k9deploykennel keeps its own registration forever (RegisterKeyMapping/
     -- radial.lua both call it directly by this literal name -- see that
@@ -274,7 +274,7 @@ local COMMAND_SUGGESTIONS = {
     -- k9training/k9trainsearch/k9trainbite are now HIDDEN ALIASES of
     -- 'k9train' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.
-    { command = 'k9train', keySuffix = 'k9train' },
+    { command = 'k9train', keySuffix = 'k9train' , featureFlag = 'TrainingMode' },
     -- client/vision.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCameraFeed', keySuffix = 'toggle_camera_feed' },
     -- client/vision.lua -- OWNER REVERSAL (coder-architect, this pass):
@@ -294,7 +294,7 @@ local COMMAND_SUGGESTIONS = {
     -- underlying functions, not a replacement for the explicit ones).
     { command = 'k9vision', keySuffix = 'k9vision' },
     -- client/recall.lua
-    { command = 'k9recall', keySuffix = 'k9recall' },
+    { command = 'k9recall', keySuffix = 'k9recall' , featureFlag = 'Recall' },
     -- client/movement.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCamera', keySuffix = 'toggle_camera' },
     -- client/movement.lua -- menu-parity pass ("chat commands, 3rd eye, and
@@ -304,11 +304,11 @@ local COMMAND_SUGGESTIONS = {
     -- client/vehicle.lua -- menu-parity pass: Enter/Exit K9 Vehicle
     -- previously had an ox_target option and a client/radial.lua item, but
     -- no chat command.
-    { command = 'k9vehicle', keySuffix = 'k9vehicle' },
+    { command = 'k9vehicle', keySuffix = 'k9vehicle' , featureFlag = 'VehicleEntryExit' },
     -- client/partnership.lua -- menu-parity pass: Partner Up/Break
     -- Partnership previously had an ox_target option and two
     -- client/radial.lua items, but no chat command.
-    { command = 'k9partner', keySuffix = 'k9partner' },
+    { command = 'k9partner', keySuffix = 'k9partner' , featureFlag = 'HandlerPartnership' },
     -- client/inventory.lua -- menu-parity pass: Open My Gear (own K9
     -- inventory) previously had an ox_target option and a
     -- client/radial.lua Utility item, but no chat command.
@@ -318,7 +318,7 @@ local COMMAND_SUGGESTIONS = {
     -- item, but no chat command.
     { command = 'k9treat', keySuffix = 'k9treat' },
     -- client/sarcalls.lua
-    { command = 'k9sarcall', keySuffix = 'k9sarcall' },
+    { command = 'k9sarcall', keySuffix = 'k9sarcall' , featureFlag = 'SARCalls' },
     -- client/defense.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:confirmHandlerDownDefense', keySuffix = 'confirm_handler_down_defense' },
     -- client/dangerwarn.lua (qbx_k9unit: namespace) -- Alert already had a
@@ -331,7 +331,7 @@ local COMMAND_SUGGESTIONS = {
     -- ALIASES of 'k9fetch' (still real, working RegisterCommand calls --
     -- see that file's own comment), never chat-suggested under their own
     -- names.
-    { command = 'k9fetch', keySuffix = 'k9fetch' },
+    { command = 'k9fetch', keySuffix = 'k9fetch' , featureFlag = 'FetchMechanic' },
     -- client/wellbeing.lua
     { command = 'k9calmdown', keySuffix = 'k9calmdown' },
     { command = 'k9meatbait', keySuffix = 'k9meatbait' },
@@ -381,9 +381,9 @@ local COMMAND_SUGGESTIONS = {
     -- file's own comment), never chat-suggested under their own names.
     { command = 'k9permission', keySuffix = 'k9permission' },
     -- server/scentlineup.lua
-    { command = 'k9lineup', keySuffix = 'k9lineup' },
-    { command = 'k9lineuppick', keySuffix = 'k9lineuppick' },
-    { command = 'k9lineupcancel', keySuffix = 'k9lineupcancel' },
+    { command = 'k9lineup', keySuffix = 'k9lineup' , featureFlag = 'ScentLineup' },
+    { command = 'k9lineuppick', keySuffix = 'k9lineuppick' , featureFlag = 'ScentLineup' },
+    { command = 'k9lineupcancel', keySuffix = 'k9lineupcancel' , featureFlag = 'ScentLineup' },
 }
 
 --- Registers one `chat:addSuggestion` for a resolved command name, reading
@@ -410,7 +410,37 @@ end
 --- edit needed to this file.
 local function RegisterAllCommandSuggestions()
     for _, entry in ipairs(COMMAND_SUGGESTIONS) do
-        RegisterSuggestion(entry.command, entry.keySuffix)
+        -- FEATURE-GATED ENTRIES ARE SKIPPED WHEN THEIR FEATURE IS OFF (QA
+        -- finding, this pass). Every command carrying a `featureFlag` lives
+        -- in a file whose own top-level guard is `if not
+        -- Config.Features.<flag> then return end` -- a FILE-LEVEL early
+        -- return, which means that file's RegisterCommand never executes at
+        -- all. The command is not "disabled", it is never registered, so
+        -- typing it does nothing this resource can explain.
+        --
+        -- THE BUG THIS CLOSES, live on the shipped default config:
+        -- Config.Features.ScentTrailHunt was deliberately removed from
+        -- config.lua, so it reads nil, so client/scenttrail.lua returns at
+        -- its top and /k9nosehunt is never registered on any client, ever.
+        -- This table went on advertising it in chat autocomplete anyway,
+        -- with a description promising a working feature. The tablet's own
+        -- Command Reference already disclosed the truth for that command
+        -- ("neither form of this command currently does anything") -- the
+        -- disclosure simply never reached this surface.
+        --
+        -- Written as a live Config read rather than a hardcoded skip-list
+        -- so the same protection covers every other entry here the moment
+        -- an operator turns ITS feature off -- /k9lineup, /k9fetch,
+        -- /k9train and the rest are all the same shape and were all one
+        -- config edit away from the identical defect.
+        --
+        -- `== false` is not the test; `~= true` is. A removed key reads nil,
+        -- which is exactly the ScentTrailHunt case, and nil must skip.
+        local gatedOff = entry.featureFlag ~= nil
+            and not (Config.Features and Config.Features[entry.featureFlag] == true)
+        if not gatedOff then
+            RegisterSuggestion(entry.command, entry.keySuffix)
+        end
     end
 
     -- client/tablet.lua's two command entry points. Mirrors that file's own
@@ -443,6 +473,19 @@ local function RegisterAllCommandSuggestions()
         if type(hqTabletCommand) == 'string' and hqTabletCommand ~= '' then
             RegisterSuggestion(hqTabletCommand, nil, pendingLocale('commandsuggestions.k9hqtablet_does'))
         end
+    end
+
+    -- server/debugdump.lua's /k9debug. Kept OUT of the static table above
+    -- and read live here for the same reason the tablet's own commands are:
+    -- its switch is Config.DebugDump.enabled, which is not a
+    -- Config.Features key, so the featureFlag lookup above cannot express
+    -- it. Same defect class either way -- server/debugdump.lua returns at
+    -- its top unless that flag is exactly `true`, so with it off the
+    -- command is never registered at all and advertising it would promise
+    -- something typing it cannot deliver. `~= true`, not `== false`: an
+    -- absent or malformed Config.DebugDump block must skip, not suggest.
+    if type(Config.DebugDump) == 'table' and Config.DebugDump.enabled == true then
+        RegisterSuggestion('k9debug', 'k9debug')
     end
 
     -- shared/compat/core.lua's diagnostic command. That file's own

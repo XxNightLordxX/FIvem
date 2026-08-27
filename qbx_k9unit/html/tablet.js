@@ -1558,6 +1558,15 @@
         cmdref_k9kennel_usage: '/k9kennel',
         cmdref_k9kennel_does: 'Deploys, enters, or exits your kennel -- whichever one makes sense right now. Old names /k9deploykennel and /k9exitkennel still work too.',
         cmdref_k9kennel_needs: 'An active K9 certification, and you must currently be controlling your K9, to deploy or enter. Exiting is always available. This feature must be turned on for your server.',
+        // k9debug -- server/debugdump.lua. The one command whose gate is
+        // NOT a Config.Features key: it is switched by Config.DebugDump
+        // .enabled, which the tablet's predictive-availability logic has no
+        // way to read, so its COMMAND_REFERENCE row below is deliberately
+        // gate 'open' and the `needs` text carries the real precondition in
+        // words instead of a live yes/no.
+        cmdref_k9debug_usage: "/k9debug [normal|verbose]",
+        cmdref_k9debug_does: "Writes a diagnostic report about your own K9 state to a file inside the script folder, for you to hand to a developer. Nothing is printed to the console.",
+        cmdref_k9debug_needs: "Your server owner must switch this on first (Config.DebugDump.enabled). It reports only on you -- never on anyone else.",
         cmdref_k9propattach_usage: '/k9propattach',
         cmdref_k9propattach_does: 'Attaches or removes a prop (for example a vest) on your K9.',
         cmdref_k9propattach_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
@@ -2448,6 +2457,13 @@
         // this same command exactly as they already are via the two rows
         // above, per this file's own "never gate the stop" convention).
         { command: 'k9kennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9kennel_usage', doesKey: 'cmdref_k9kennel_does', needsKey: 'cmdref_k9kennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
+        // gate 'open', deliberately -- see this command's own DEFAULT_STRINGS
+        // comment above. Every other row's gate resolves against a real
+        // Config.Features key the tablet already knows the live value of;
+        // Config.DebugDump.enabled is not one, so claiming a live yes/no
+        // here would be a guess. 'open' plus an honest `needs` string is the
+        // truthful shape.
+        { command: 'k9debug', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9debug_usage', doesKey: 'cmdref_k9debug_does', needsKey: 'cmdref_k9debug_needs', gate: { kind: 'open' } },
         { command: 'k9propattach', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9propattach_usage', doesKey: 'cmdref_k9propattach_does', needsKey: 'cmdref_k9propattach_needs', gate: { kind: 'access', featureKey: 'PropAttachments' } },
         { command: 'k9throwfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9throwfetchball_usage', doesKey: 'cmdref_k9throwfetchball_does', needsKey: 'cmdref_k9throwfetchball_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
         { command: 'k9dropfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9dropfetchball_usage', doesKey: 'cmdref_k9dropfetchball_does', needsKey: 'cmdref_k9dropfetchball_needs', gate: { kind: 'open' } },

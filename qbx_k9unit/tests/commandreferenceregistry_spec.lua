@@ -137,6 +137,10 @@ local SERVER_LUA_FILES = {
     'pursuitsprint.lua', 'recall.lua', 'runtimecontrol.lua', 'sarcalls.lua', 'scentlineup.lua',
     'scenttrail.lua', 'search.lua', 'selfcheck.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
     'vehicle.lua', 'webhook.lua', 'wellbeing.lua', 'xptiers.lua',
+    -- Added with /k9debug's own COMMAND_REFERENCE entry, in the same change
+    -- -- this snapshot is exactly the mechanism that would otherwise report
+    -- that entry as naming a command nothing registers.
+    'debugdump.lua',
 }
 
 -- 'announce.lua'/'dangerwarn.lua' added this pass -- both were missing from
