@@ -3699,3 +3699,51 @@ AddEventHandler('onResourceStart', function(resourceName)
         WarnIfItemMissing(thirstCfg.drinkItemName, 'Config.Wellbeing.Thirst.drinkItemName', 'Config.Features.HungerThirstSystem')
     end
 end)
+
+-- ======================================================================
+-- FLUSH ON RESOURCE STOP (lifecycle QA finding, this pass).
+--
+-- THE BUG: this file had NO onResourceStop handler at all -- the one
+-- stateful subsystem in this resource that was missed, while kennel,
+-- combat, vehicle, propattachment, fetch, bonetool, equipmentshop, hud and
+-- tablet all gained one (several of them as explicitly-logged red-team/QA
+-- fixes). Persistence rested on exactly two writes: the periodic flush
+-- thread, and FlushWellbeingEntryNow on a clean disconnect. Neither fires
+-- when the resource stops.
+--
+-- WHAT THAT COST: `restart qbx_k9unit` -- an ordinary thing an operator
+-- does while configuring a server -- discarded WellbeingStats wholesale,
+-- and the next boot reloaded each citizenid's last-flushed row from
+-- k9_wellbeing. Up to Config.Wellbeing.Persistence.flushIntervalMs of
+-- drift (60 seconds by default) in Fatigue, Mood, FearStress, Injury,
+-- Hunger and Thirst, for every online K9 and handler, silently reverted to
+-- an older but entirely plausible-looking value. No error, no warning, and
+-- nothing on screen to distinguish it from the stats simply not having
+-- changed. A graceful full server shutdown lost the same.
+--
+-- This file's own header already argued the periodic-flush window was an
+-- acceptable exposure, and for a CRASH it is -- nothing can be done about
+-- power loss. A deliberate restart is not a crash: the process is still
+-- alive, the data is still in memory, and FlushDirtyWellbeingStats() was
+-- sitting right there, already written, already iterating exactly the set
+-- that needs writing. The header's reasoning was right about the case it
+-- was reasoning about and simply never covered this one.
+--
+-- SAFE TO CALL FROM HERE: Wellbeing_Upsert bottoms out in a synchronous
+-- MySQL.query.await (server/datastore.lua), and server/appearance.lua
+-- already proves that shape works from inside a disconnect/stop handler.
+-- FlushDirtyWellbeingStats is additionally already pcall-wrapped per
+-- citizenid internally, so one failing row cannot abandon the rest of the
+-- sweep on the way out -- which matters more here than anywhere else,
+-- since there is no next flush to retry on.
+--
+-- NO NEW CONDITION OF ITS OWN beyond the resource-name check every
+-- onResourceStop in this codebase carries. FlushDirtyWellbeingStats
+-- already returns immediately when persistence is disabled or the database
+-- is unavailable, so this is a clean no-op on a memory-only server rather
+-- than something that needed a second gate here.
+-- ======================================================================
+AddEventHandler('onResourceStop', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    FlushDirtyWellbeingStats()
+end)

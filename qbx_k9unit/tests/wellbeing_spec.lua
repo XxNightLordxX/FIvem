@@ -639,6 +639,15 @@ local function newWellbeingFixture(opts)
                 handler()
             end
         end,
+        --- Fires the real onResourceStop handler. `resourceName` defaults to
+        --- this fixture's own resource name, so a test that means "we are
+        --- stopping" does not have to restate it; pass something else to
+        --- prove the name check works.
+        fireResourceStop = function(resourceName)
+            for _, handler in ipairs(eventHandlers['onResourceStop'] or {}) do
+                handler(resourceName == nil and 'qbx_k9unit' or resourceName)
+            end
+        end,
         --- Fires 'onResourceStart' with the given resourceName -- mirrors
         --- firePlayerDropped's shape. `resourceName` defaults to this
         --- fixture's own stubbed GetCurrentResourceName() value ('qbx_k9unit')
@@ -3735,5 +3744,72 @@ end)
 -- never reached it, and that the fix does not accidentally make every case
 -- fall through to the same branch. Reverting restored all three to green.
 -- ============================================================================
+
+
+-- ========================================================================
+-- FLUSH ON RESOURCE STOP (lifecycle QA finding, this pass). This file had
+-- NO onResourceStop handler at all -- the one stateful subsystem in this
+-- resource that was missed, while kennel, combat, vehicle, propattachment,
+-- fetch, bonetool, equipmentshop, hud and tablet all had one.
+--
+-- What it cost: `restart qbx_k9unit` discarded WellbeingStats wholesale
+-- and the next boot reloaded each citizenid's LAST-FLUSHED row, silently
+-- reverting up to flushIntervalMs (60s by default) of Fatigue, Mood,
+-- FearStress, Injury, Hunger and Thirst drift for every online K9 and
+-- handler, to a value that looks entirely plausible.
+-- ========================================================================
+t.test('RESOURCE STOP FLUSHES: a dirty stat that has NOT yet hit a periodic flush is written on the way out, instead of being discarded with the table', function()
+    local k9Store, ctl = newFakeK9Store()
+    local f = newWellbeingFixture({
+        featuresOverride = { MoodSystem = true },
+        configOverride = persistenceWellbeingConfig(),
+        k9Store = k9Store,
+    })
+    local interactorSrc, targetSrc = wireMoodPair(f)
+
+    -- Make a real change, then stop WITHOUT letting the periodic flush run.
+    local r = f.invokeCallback('qbx_k9unit:server:petK9', interactorSrc, targetSrc)
+    t.isTrue(r.ok, 'precondition: the stat really did change, so there is genuinely something dirty to lose')
+    local writesBeforeStop = ctl.upsertCallCount()
+
+    f.fireResourceStop()
+
+    t.isTrue(ctl.upsertCallCount() > writesBeforeStop, 'stopping must write the dirty stat -- without this it is simply gone, with no error anywhere')
+end)
+
+t.test('RESOURCE STOP: a mismatched resourceName never flushes -- this handler must not fire when some OTHER resource stops', function()
+    local k9Store, ctl = newFakeK9Store()
+    local f = newWellbeingFixture({
+        featuresOverride = { MoodSystem = true },
+        configOverride = persistenceWellbeingConfig(),
+        k9Store = k9Store,
+    })
+    local interactorSrc, targetSrc = wireMoodPair(f)
+    f.invokeCallback('qbx_k9unit:server:petK9', interactorSrc, targetSrc)
+    local writesBefore = ctl.upsertCallCount()
+
+    f.fireResourceStop('some_other_resource')
+
+    t.equals(ctl.upsertCallCount(), writesBefore)
+end)
+
+t.test('RESOURCE STOP: nothing dirty is a clean no-op -- a stop with no pending change must not issue a pointless write', function()
+    local k9Store, ctl = newFakeK9Store()
+    local f = newWellbeingFixture({
+        featuresOverride = { MoodSystem = true },
+        configOverride = persistenceWellbeingConfig(),
+        k9Store = k9Store,
+    })
+    f.fireResourceStop()
+    t.equals(ctl.upsertCallCount(), 0)
+end)
+
+t.test('RESOURCE STOP: persistence disabled is a clean no-op, never an error -- a memory-only server must stop as quietly as any other', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } }) -- no Persistence block at all
+    local interactorSrc, targetSrc = wireMoodPair(f)
+    f.invokeCallback('qbx_k9unit:server:petK9', interactorSrc, targetSrc)
+    local ok = pcall(f.fireResourceStop)
+    t.isTrue(ok)
+end)
 
 os.exit(t.summary())
