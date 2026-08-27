@@ -1127,6 +1127,19 @@ end)
     keeps an admin's live 'always'->'off' edit from stranding an
     already-rendering player, per this codebase's own "gate the start,
     never the stop" rule.
+
+    CONTRABAND BODY HIGHLIGHT (owner-directed follow-up, 2026-08-26 --
+    "diffrent colors on there body if they have explosives drugs etc") rides
+    THIS SAME poll/response rather than a second one. server/tracking.lua's
+    own getScentVisionPoints callback already reduces this down to nothing
+    but a network id and a short list of pre-resolved RGB swatches per
+    visible person (see that callback's own "CONTRABAND BODY HIGHLIGHT"
+    header for the full five-point design writeup) -- this file's job is
+    purely "resolve that network id to a local entity and draw the swatches
+    on it", the same DUMB-RENDERER posture it already has for trail points.
+    See SCENT_VISION_CONTRABAND_HIGHLIGHT_LINGER_MS's own comment for why
+    this half gets a SHORTER, separate on-screen lifetime than a trail dot's
+    own dotLifetimeMs.
     ======================================================================
 ]]
 
@@ -1176,6 +1189,39 @@ do
         print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.fadeStartFraction must be a number in [0, 1) (got %s) -- falling back to the shipped default of %.2f.'):format(tostring(configured), SCENT_VISION_FADE_START_FRACTION_DEFAULT))
     end
 end
+
+-- CONTRABAND BODY HIGHLIGHT (owner-directed follow-up, 2026-08-26 -- see
+-- server/tracking.lua's own "CONTRABAND BODY HIGHLIGHT" header for the full
+-- design writeup and the five decisions recorded there). Unlike a trail
+-- point (which carries its OWN ageMs and fades on its OWN per-dot timer),
+-- a highlight is a LIVE, right-now truth about a specific nearby person --
+-- there is no sensible "per-item age" for it, so it is instead given a
+-- short, SESSION-LOCAL linger window measured from the moment the
+-- containing response was received: a highlight simply stops being drawn
+-- once this much time has passed since the last successful poll, rather
+-- than persisting for up to a full dotLifetimeMs (45s shipped) the way an
+-- already-drawn trail point deliberately does. That distinction is
+-- deliberate, not an oversight: dot lingering is the owner's own explicit
+-- "delay before markers go away" ask for FOOTPRINTS; a lingering
+-- contraband highlight after the handler has already moved on or the
+-- ability was switched off would be a materially MORE sensitive kind of
+-- leftover information, so it gets its own, much shorter, budget instead --
+-- long enough to smooth over one missed poll, never long enough to read as
+-- "still watching" well after the fact.
+local SCENT_VISION_CONTRABAND_HIGHLIGHT_LINGER_MS = SCENT_VISION_POLL_INTERVAL_MS * 2
+
+-- DrawMarker parameters for a contraband highlight -- the EXACT same
+-- already-verified native/call shape DrawTrailMarker/DrawScentVisionPoints
+-- below already use (see DrawScentVisionPoints' own doc comment for the
+-- native-verification citation; no new native is introduced for this).
+-- Deliberately a SMALLER scale and a different base Z offset than
+-- TRAIL_MARKER_SCALE/TRAIL_MARKER_TYPE above -- a highlight sits ON the
+-- person's own body (stacked upward from roughly waist height, one ring
+-- per colour), never on the ground the way a footprint trail dot does.
+local CONTRABAND_HIGHLIGHT_MARKER_TYPE = 1
+local CONTRABAND_HIGHLIGHT_MARKER_SCALE = 0.35
+local CONTRABAND_HIGHLIGHT_BASE_Z_OFFSET = 0.4 -- roughly waist/stomach height above GetEntityCoords' own root-bone-ish return for a standing ped
+local CONTRABAND_HIGHLIGHT_STACK_SPACING = 0.35 -- vertical gap between stacked colour rings when more than one category (or the baseline colour) matches at once
 
 -- Full opacity for a not-yet-fading dot -- matches TRAIL_MARKER_COLOR.a
 -- above (180) closely enough to read as "the same kind of marker", picked
@@ -1242,7 +1288,7 @@ local scentVisionGeneration = 0
 --- received (or everything in it has since individually expired — see
 --- DrawScentVisionPoints below, which is the ONLY place this is ever set
 --- back to nil once populated).
---- @type { dotLifetimeMs: number, receivedAtClientMs: number, points: { x: number, y: number, z: number, r: number, g: number, b: number, ageMs: number }[] } | nil
+--- @type { dotLifetimeMs: number, receivedAtClientMs: number, points: { x: number, y: number, z: number, r: number, g: number, b: number, ageMs: number }[], highlights: { netId: number, colors: { r: number, g: number, b: number }[] }[] } | nil
 local scentVisionSnapshot = nil
 
 --- @return boolean
@@ -1251,15 +1297,18 @@ function IsScentVisionActive()
 end
 
 --- Draws every still-live point in `scentVisionSnapshot` this frame
---- (already-expired ones are skipped, never drawn) and reports whether
---- anything was actually drawn, so the shared render thread (this file's
---- own TRACK_RENDER_IDLE_TICK_MS block above) can decide whether to keep
---- running at Wait(0) or go back to idling. Also clears
+--- (already-expired ones are skipped, never drawn), and every still-fresh
+--- contraband body highlight (see SCENT_VISION_CONTRABAND_HIGHLIGHT_LINGER_MS
+--- above for that half's own, separate freshness rule), and reports whether
+--- ANYTHING was actually drawn (either half), so the shared render thread
+--- (this file's own TRACK_RENDER_IDLE_TICK_MS block above) can decide
+--- whether to keep running at Wait(0) or go back to idling. Also clears
 --- `scentVisionSnapshot` to nil entirely once EVERY point in it has
---- individually expired, so that thread does not keep re-evaluating an
---- empty, fully-expired snapshot forever — this is also the ENTIRE
---- mechanism behind dots persisting for a while after ToggleScentVision()
---- turns the ability off (see this section's own header).
+--- individually expired AND no highlight is still fresh, so that thread
+--- does not keep re-evaluating an empty, fully-expired snapshot forever —
+--- this is also the ENTIRE mechanism behind dots persisting for a while
+--- after ToggleScentVision() turns the ability off (see this section's own
+--- header).
 ---
 --- DrawMarker — VERIFIED (this pass): its own ext/native-decls page 404s
 --- (https://raw.githubusercontent.com/citizenfx/fivem/master/ext/native-decls/DrawMarker.md
@@ -1318,11 +1367,51 @@ DrawScentVisionPoints = function()
         end
     end
 
-    if not anyLive then
+    -- CONTRABAND BODY HIGHLIGHT -- see this section's own comment on
+    -- SCENT_VISION_CONTRABAND_HIGHLIGHT_LINGER_MS above for why this uses
+    -- its OWN, much shorter linger window instead of riding each point's
+    -- own ageMs. Drawn from `scentVisionSnapshot.highlights`, which the
+    -- poll loop below replaces wholesale on every successful response —
+    -- server/tracking.lua's own getScentVisionPoints already resolved every
+    -- swatch server-side, so this is purely "draw what I was told, on the
+    -- entity I was told to draw it on", the same posture DrawTrailMarker/
+    -- the point loop above already have.
+    local highlightsFresh = type(scentVisionSnapshot.highlights) == 'table'
+        and #scentVisionSnapshot.highlights > 0
+        and elapsedSinceReceived < SCENT_VISION_CONTRABAND_HIGHLIGHT_LINGER_MS
+
+    if highlightsFresh then
+        local highlights = scentVisionSnapshot.highlights
+        for i = 1, #highlights do
+            local highlight = highlights[i]
+            -- Single, non-yielding check (attempts defaults to 1) — this
+            -- runs inside a per-frame render loop, where a Wait() would be
+            -- wrong (ResolveNetworkEntity's own doc comment, client/main.lua).
+            local entity = ResolveNetworkEntity(highlight.netId)
+            if entity then
+                local coords = GetEntityCoords(entity)
+                local colors = highlight.colors
+                for c = 1, #colors do
+                    local color = colors[c]
+                    DrawMarker(
+                        CONTRABAND_HIGHLIGHT_MARKER_TYPE,
+                        coords.x, coords.y, coords.z + CONTRABAND_HIGHLIGHT_BASE_Z_OFFSET + (c - 1) * CONTRABAND_HIGHLIGHT_STACK_SPACING,
+                        0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0,
+                        CONTRABAND_HIGHLIGHT_MARKER_SCALE, CONTRABAND_HIGHLIGHT_MARKER_SCALE, CONTRABAND_HIGHLIGHT_MARKER_SCALE,
+                        color.r, color.g, color.b, SCENT_VISION_MARKER_ALPHA,
+                        false, false, 2, false, '', '', false
+                    )
+                end
+            end
+        end
+    end
+
+    if not anyLive and not highlightsFresh then
         scentVisionSnapshot = nil
     end
 
-    return anyLive
+    return anyLive or highlightsFresh
 end
 
 --- Poll loop — same pcall/generation-staleness shape as this file's own
@@ -1403,6 +1492,13 @@ local function EnsureScentVisionPollThreadRunning()
                     dotLifetimeMs = type(result.dotLifetimeMs) == 'number' and result.dotLifetimeMs or SCENT_VISION_DOT_LIFETIME_MS_DEFAULT,
                     receivedAtClientMs = GetGameTimer(),
                     points = result.points,
+                    -- `highlights` is REPLACED WHOLESALE alongside `points`
+                    -- on every successful poll (never merged) -- see
+                    -- SCENT_VISION_CONTRABAND_HIGHLIGHT_LINGER_MS's own
+                    -- comment for why a contraband highlight deliberately
+                    -- does NOT get to ride an already-established per-point
+                    -- ageMs the way a trail dot does.
+                    highlights = type(result.highlights) == 'table' and result.highlights or {},
                 }
             end
             -- A failed/empty response (that is NOT a live 'off' signal,

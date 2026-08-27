@@ -2007,12 +2007,28 @@ end)
 --     REGARDLESS of server population. Degradation under load always drops
 --     the FURTHEST trail/point first, per the owner's own instruction, at
 --     both the trail-selection and per-trail-point levels below.
---   - COLOUR SPACE: exactly `maxVisibleTrails` (5) fixed, curated swatches
---     (Config.Tracking.ScentVision.palette), one per "handful" slot -- see
---     ResolveScentVisionColors below for why scoping colours to this same
---     small, proximity-ranked visible set (never the server's whole
---     population) makes a colour COLLISION between two SIMULTANEOUSLY SHOWN
---     trails structurally impossible, not merely statistically unlikely.
+--   - COLOUR SPACE: `maxVisibleTrails` (5) fixed, curated swatches
+--     (Config.Tracking.ScentVision.palette) -- see ResolveScentVisionColors/
+--     HashStringToIndex below. UPDATED (owner-directed follow-up,
+--     2026-08-26 -- "hold a colour stable... the same person is the same
+--     colour... for every handler looking"): colour is now a DETERMINISTIC
+--     HASH of the trail owner's own durable citizenid into this palette,
+--     never sent to the client -- resolved fresh on every query, needs no
+--     server-side memory of its own at all (a pure function of the string),
+--     and is the SAME colour for the SAME person across every handler and
+--     the whole session, which the OLDER per-observer "first free slot"
+--     scheme this replaces could not promise (it only held a colour stable
+--     for as long as one handler kept that trail in view). The trade-off,
+--     stated honestly: the old scheme made a colour COLLISION between two
+--     SIMULTANEOUSLY SHOWN trails structurally impossible as long as the
+--     palette was at least `maxVisibleTrails` long; a hash can always,
+--     rarely, send two different citizenids to the same swatch even below
+--     that count. Config.Tracking.ScentVision.palette's own comment
+--     discloses this trade explicitly -- accepted for the same reason
+--     `maxVisibleTrails` already accepted "colours repeat once there are
+--     more people than swatches": telling trails apart most of the time
+--     with a real handful-sized palette is the actual ask, not a
+--     cryptographic guarantee.
 --
 -- TRUST BOUNDARY: every point returned by getScentVisionPoints below is
 -- this SERVER's own resolved position for some OTHER connected player,
@@ -2022,13 +2038,71 @@ end)
 -- is never handed the whole server's positions, and never learns WHO a dot
 -- belongs to (no citizenid/name/source is ever put on the wire) -- only
 -- WHERE, and which of its own "handful" colours that trail currently holds.
+--
+-- CONTRABAND BODY HIGHLIGHT (owner-directed follow-up, 2026-08-26 --
+-- "diffrent colors on there body if they have explosives drugs etc"), added
+-- to this SAME callback/poll rather than a second one -- see
+-- Config.Tracking.ScentVision.contrabandHighlight's own config.lua header
+-- for the full plain-English writeup, and CONTRABAND_ITEM_CATEGORY's own
+-- comment further below for the one piece of this that is a disclosed,
+-- temporary duplication rather than a clean reuse. FIVE DECISIONS RECORDED
+-- HERE, so a future reader does not have to re-derive them:
+--   1. GATED IDENTICALLY TO SEARCH: a category only ever highlights if the
+--      OBSERVING K9's own citizenid currently holds that
+--      Config.K9Specializations key (HasSpecialization -- the exact same
+--      gate server/search.lua's own contraband weighing uses), and
+--      uncategorised contraband is the same "found by everyone with K9
+--      access" baseline search already treats it as. A dog with zero
+--      matching specializations gets the baseline highlight only, same as
+--      it can only ever find baseline items on a real search.
+--   2. MINIMAL, SERVER-DECIDED PAYLOAD: the server sends only pre-resolved
+--      RGB swatches per visible target, never a category NAME, never an
+--      item name, never a count, never a weight, and never a boolean for
+--      every possible category (only entries for categories that actually
+--      matched are ever present at all) -- a modified client learns
+--      nothing beyond "this many coloured marks, these colours" for a
+--      person it can already see in front of it.
+--   3. RANGE: capped far tighter than the trail reveal above
+--      (`contrabandHighlight.rangeMeters`, ceilinged in code at
+--      Config.SearchZones.personSearchDistance -- the SAME distance a real
+--      "Search Person" already requires), checked here against this
+--      SERVER's own live GetEntityCoords for both the caller and the
+--      target, never a client-supplied position for either.
+--   4. RELATIONSHIP TO REAL SEARCHING, DECIDED DELIBERATELY: this highlight
+--      answers ONLY "is something in a category I can detect present on
+--      this person right now" -- never what, never how much. It mints ZERO
+--      XP, never calls BroadcastContrabandAlert, and never writes to
+--      k9_search_log. Actually running "Search Person" is still the only
+--      action that reveals the alert tier, awards XP, and can warn nearby
+--      officers -- this is a nose twitch that tells a handler to go search,
+--      not a replacement for searching. If this bullet is ever weakened
+--      (e.g. this highlight starts distinguishing WEIGHT/tier, or starts
+--      minting XP itself) that is a deliberate, disclosed scope change, not
+--      a drive-by addition.
+--   5. RATE/COST: reuses THIS SAME poll (ScentVisionQueryCooldown above
+--      already floors the cadence) rather than a second loop, and the
+--      per-query cost is bounded by `visibleSources` (already capped at
+--      `maxVisibleTrails`, 5 shipped) -- at most 5 extra GetPlayerPed/
+--      GetEntityCoords pairs, and at most 5 inventory reads GATED BEHIND
+--      the tight proximity check in decision 3 above (in practice, usually
+--      0-1 of the 5 visible trails are ever actually within
+--      contrabandHighlight.rangeMeters at once) -- never O(connected
+--      players).
 -- ======================================================================
 
--- Load-time sanity check -- see `palette`'s own config.lua comment for what
--- happens if it is shorter than maxVisibleTrails (colour REUSE across two
--- simultaneously-visible trails -- the one case this design cannot make
--- structurally impossible, since there are only as many fixed swatches as
--- the operator configured).
+-- Load-time sanity check -- see `palette`'s own config.lua comment for the
+-- full, honestly-updated writeup of what "too short" means now that colour
+-- is a HASH of the trail owner's citizenid (HashStringToIndex/
+-- ResolveScentVisionColors below) rather than a per-observer slot: this
+-- warning still fires for the same "maxVisibleTrails > palette length"
+-- condition as before (a real, guaranteed-reuse case once more than
+-- paletteLen distinct people are ever shown to the same K9 at once), but a
+-- hash collision between two DIFFERENT citizenids can now, rarely, produce
+-- the same colour for two simultaneously-visible trails even when this
+-- check finds nothing wrong (paletteLen >= maxVisibleTrails) -- there is no
+-- load-time check that can catch that case, since it depends on which
+-- citizenids happen to be online, not on any config value alone. Disclosed
+-- here and in config.lua's own comment, not silently accepted.
 do
     local svConfig = Config.Tracking.ScentVision
     if type(svConfig) == 'table' then
@@ -2054,15 +2128,15 @@ end
 -- itself.
 local PositionTrail = {}
 
--- Per-OBSERVER (the QUERYING K9's own source) stable colour-slot
--- assignment. ScentVisionColorSlots[observerSource][slotIndex] =
--- targetSource -- see ResolveScentVisionColors below for the full stability
--- rule (owner's own words: "hold a colour stable for as long as that trail
--- stays in the visible set, reassign only when it drops out entirely").
--- Bounded at (connected observers) x maxVisibleTrails entries, trivial
--- regardless of population -- cleared on the OBSERVING source's own
--- playerDropped.
-local ScentVisionColorSlots = {}
+-- NO PER-OBSERVER COLOUR STATE ANY MORE (owner-directed follow-up,
+-- 2026-08-26 -- see this section's own header "COLOUR SPACE" bullet for the
+-- full writeup). This used to be a `ScentVisionColorSlots[observerSource]
+-- [slotIndex] = targetSource` table, cleared on the OBSERVING source's own
+-- playerDropped -- replaced entirely by ResolveScentVisionColors/
+-- HashStringToIndex below, which are pure functions of a citizenid string
+-- and need no server-side memory at all. Removed rather than left dead, so
+-- a future reader does not wonder whether it is still load-bearing for
+-- something.
 
 local ScentVisionQueryCooldown = NewCooldown()
 ScentVisionQueryCooldown.RegisterPlayerDropped()
@@ -2348,66 +2422,256 @@ local function ResolveScentVisionPalette()
     return { { r = 255, g = 255, b = 255 } }
 end
 
+--- Deterministic, stateless string -> palette-index hash (owner-directed
+--- follow-up, 2026-08-26 -- see this section's own header "COLOUR SPACE"
+--- bullet). DJB2-shaped (multiply-and-add accumulate) -- chosen only for
+--- being a well-known, trivially reproducible byte hash; this has NO
+--- cryptographic requirement, the only property leaned on is "the same
+--- string always yields the same index, and different strings spread
+--- reasonably evenly across a small palette", which any stable string hash
+--- gives for free. Used for BOTH the per-person trail colour
+--- (`citizenid` -> Config.Tracking.ScentVision.palette index) and the
+--- per-category contraband highlight colour (a Config.K9Specializations key
+--- -> Config.Tracking.ScentVision.contrabandHighlight.categoryPalette
+--- index) below -- ONE shared utility, not two copies, since both are the
+--- exact same "stable string -> small palette" problem. Lua 5.4 integers
+--- wrap on overflow rather than erroring (confirmed language behaviour, not
+--- an assumption -- Lua 5.4 manual §3.4.1), so this never throws regardless
+--- of input length.
+--- @param value string
+--- @param paletteLen number -- must be >= 1 (every caller below resolves its
+--- own palette through a defensively-defaulted Resolve*Palette function
+--- first, so this is never called with 0)
+--- @return number index -- 1-based, in [1, paletteLen]
+local function HashStringToIndex(value, paletteLen)
+    local hash = 5381
+    for i = 1, #value do
+        hash = (hash * 33 + value:byte(i)) % 2147483647
+    end
+    return (hash % paletteLen) + 1
+end
+
+--- @param src number
+--- @return string? citizenid -- nil if `src` is not a currently-connected,
+--- fully-loaded qbx_core player (matches every other "soft" citizenid
+--- resolution already in this file/server/search.lua -- never throws).
+local function ResolveCitizenIdForSource(src)
+    local player = exports.qbx_core:GetPlayer(src)
+    return player and player.PlayerData and player.PlayerData.citizenid or nil
+end
+
 --- Resolves a STABLE colour for each entry in `visibleSources` (already
 --- ranked nearest-first, length already capped at maxVisibleTrails by the
---- caller) for THIS ONE observer. Reuses `observerSource`'s own existing
---- slot for a trail that was already visible on that same observer's last
---- query; only hands out a fresh slot to a trail newly entering the visible
---- set; frees a slot the INSTANT its trail is no longer anywhere in the
---- current visible set -- never merely because it slipped a rank within it.
---- This is deliberately PER-OBSERVER state (two different K9s can, and
---- will, assign the same suspect two different colours, independently) and
---- deliberately PROXIMITY-scoped rather than a global per-citizenid hash --
---- see this section's own header for why: the owner's own resolution to
---- "colours only for a handful near the dog" is what makes a colour
---- COLLISION between two SIMULTANEOUSLY VISIBLE trails structurally
---- impossible (one fixed swatch per slot, and never more slots handed out
---- than `visibleSources` has entries), not merely statistically unlikely.
---- @param observerSource number
+--- caller) -- DETERMINISTICALLY, from each trail owner's own durable
+--- citizenid, via HashStringToIndex above. Pure function of who is
+--- currently visible: no server-side memory of its own (see this section's
+--- own "NO PER-OBSERVER COLOUR STATE ANY MORE" comment above for what this
+--- replaced and why), so the SAME person is the SAME colour for EVERY
+--- handler watching and across the whole session -- the owner's own
+--- explicit ask this pass. A trail owner whose citizenid cannot be resolved
+--- right now (mid-disconnect race -- see this file's own recycled-source
+--- discipline elsewhere) is simply given no colour at all and dropped by
+--- the caller, rather than guessed at.
 --- @param visibleSources number[]
 --- @return table<number, table> colorBySource
-local function ResolveScentVisionColors(observerSource, visibleSources)
+local function ResolveScentVisionColors(visibleSources)
     local palette = ResolveScentVisionPalette()
 
-    local slots = ScentVisionColorSlots[observerSource]
-    if not slots then
-        slots = {}
-        ScentVisionColorSlots[observerSource] = slots
-    end
-
-    local stillVisible = {}
-    for _, src in ipairs(visibleSources) do stillVisible[src] = true end
-
-    -- Free a slot ONLY when its trail has left the visible set ENTIRELY --
-    -- owner's own explicit rule: never reassign merely because a trail's
-    -- RANK moved within an already-visible set.
-    for slotIndex, holder in pairs(slots) do
-        if not stillVisible[holder] then
-            slots[slotIndex] = nil
-        end
-    end
-
-    local slotOfSource = {}
-    for slotIndex, holder in pairs(slots) do
-        slotOfSource[holder] = slotIndex
-    end
-
     local colorBySource = {}
-    local nextFreeSlot = 1
     for _, src in ipairs(visibleSources) do
-        local slotIndex = slotOfSource[src]
-        if not slotIndex then
-            while slots[nextFreeSlot] ~= nil do
-                nextFreeSlot = nextFreeSlot + 1
-            end
-            slotIndex = nextFreeSlot
-            slots[slotIndex] = src
-            slotOfSource[src] = slotIndex
+        local citizenid = ResolveCitizenIdForSource(src)
+        if citizenid then
+            colorBySource[src] = palette[HashStringToIndex(citizenid, #palette)]
         end
-        colorBySource[src] = palette[((slotIndex - 1) % #palette) + 1]
     end
 
     return colorBySource
+end
+
+-- ======================================================================
+-- CONTRABAND CATEGORY LOOKUP -- TEMPORARY, DISCLOSED DUPLICATION of
+-- server/search.lua's own `ContrabandItemInfo` parse of
+-- Config.SearchContrabandItems (same dual array/keyed-entry shape, same
+-- clamp-and-warn degrade for a category naming something that is not a
+-- real Config.K9Specializations key -- see that file's own ContrabandItemInfo
+-- header for the full writeup this mirrors). This is the SAME config
+-- table, read the SAME way, for the SAME reason server/search.lua reads it
+-- -- NOT a second, independently-evolving notion of "what is contraband".
+-- It is duplicated here, rather than called via a single shared function,
+-- ONLY because server/search.lua exposes no export today for this file to
+-- call into instead, and this pass's own file-ownership boundary puts
+-- server/search.lua out of reach to edit directly (a minimal, read-only
+-- export has been requested from coder-backend -- see this pass's own
+-- report). THE INSTANT that export lands: delete this table and
+-- CollectContrabandCategoriesPresent below, and call into it instead. Until
+-- then, if this table and server/search.lua's ContrabandItemInfo ever
+-- disagree because one was edited without the other, that is a real bug --
+-- re-diff the two whenever Config.SearchContrabandItems' own shape changes.
+-- Note this DOES mean a malformed Config.SearchContrabandItems category
+-- entry now prints its clamp-and-warn TWICE at boot (once from this file,
+-- once from server/search.lua) -- harmless, if slightly noisy; both warn
+-- about the exact same misconfiguration and both degrade the exact same
+-- way (uncategorised, found by everyone).
+-- ======================================================================
+local CONTRABAND_ITEM_CATEGORY = {}
+do
+    local knownSpecializations = type(Config.K9Specializations) == 'table' and Config.K9Specializations or {}
+    local rawList = type(Config.SearchContrabandItems) == 'table' and Config.SearchContrabandItems or {}
+    for key, value in pairs(rawList) do
+        if type(key) == 'number' then
+            -- Array entry: `value` is the item name, uncategorised. `false`
+            -- (never `nil`) is the sentinel -- see
+            -- CollectContrabandCategoriesPresent below for why the
+            -- distinction between "absent" (nil, not contraband at all) and
+            -- "present but uncategorised" (false) matters.
+            if type(value) == 'string' then
+                CONTRABAND_ITEM_CATEGORY[value] = false
+            end
+        elseif type(key) == 'string' then
+            if type(value) == 'string' and knownSpecializations[value] ~= nil then
+                CONTRABAND_ITEM_CATEGORY[key] = value
+            else
+                print(('[qbx_k9unit] ScentVision contraband highlight: Config.SearchContrabandItems[%q] names category %q, which is not a key in Config.K9Specializations -- treating %q as UNCATEGORISED (highlighted for every K9 with search access, regardless of specialization), matching server/search.lua\'s own identical degrade for the same malformed entry.'):format(key, tostring(value), key))
+                CONTRABAND_ITEM_CATEGORY[key] = false
+            end
+        end
+    end
+end
+
+-- Mirrors server/search.lua's own MAX_CONTAINER_RECURSION_DEPTH -- same
+-- reasoning (DEVELOPER_REFERENCE.md#contraband-search §2: "an explicitly
+-- chosen max depth -- not unbounded, and not skipped"), same number,
+-- disclosed duplication for the same reason CONTRABAND_ITEM_CATEGORY above
+-- is.
+local CONTRABAND_HIGHLIGHT_MAX_RECURSION_DEPTH = 3
+
+--- Recurses into `items` (and any nested container, up to
+--- CONTRABAND_HIGHLIGHT_MAX_RECURSION_DEPTH -- "put the drugs in a bag" must
+--- not defeat this the same way it must not defeat a real search) and
+--- records WHICH categories are physically present -- never a weight, a
+--- count, or an item name. Mirrors SumContrabandWeight's own recursion
+--- shape (server/search.lua) but stops at "is at least one matching slot
+--- present", since the highlight only ever needs a boolean per category.
+--- @param inventoryId string|number
+--- @param items table<number, table>?
+--- @param depth number
+--- @param presentCategories table<string, boolean> -- mutated in place
+--- @return boolean hasUncategorised
+local function CollectContrabandCategoriesPresent(inventoryId, items, depth, presentCategories)
+    local hasUncategorised = false
+    if not items then return hasUncategorised end
+
+    for _, slot in pairs(items) do
+        local category = CONTRABAND_ITEM_CATEGORY[slot.name]
+        if category ~= nil then
+            if category == false then
+                hasUncategorised = true
+            else
+                presentCategories[category] = true
+            end
+        end
+
+        if depth < CONTRABAND_HIGHLIGHT_MAX_RECURSION_DEPTH then
+            -- Same K9Compat.Get('inventory').GetContainerFromSlot route
+            -- SumContrabandWeight uses, same pcall-wrapped defensive
+            -- posture (a mid-scan entity/inventory change could error
+            -- rather than cleanly return nil).
+            local containerOk, containerInv = pcall(function()
+                return K9Compat.Get('inventory').GetContainerFromSlot(inventoryId, slot.slot)
+            end)
+            if containerOk and containerInv and containerInv.items then
+                local nestedUncategorised = CollectContrabandCategoriesPresent(
+                    containerInv.id or inventoryId, containerInv.items, depth + 1, presentCategories)
+                hasUncategorised = hasUncategorised or nestedUncategorised
+            end
+        end
+    end
+
+    return hasUncategorised
+end
+
+--- Mirrors server/search.lua's own ResolveHeldContrabandCategoriesForCitizenId
+--- (same HasSpecialization + Config.K9Specializations read). This specific
+--- check -- "does citizenid hold specialization X" -- is ALREADY
+--- independently duplicated between this file's own
+--- ResolveEnabledTrackTypesForCitizenId (above, gating
+--- Config.SpecializationTracking) and server/search.lua's version (gating
+--- Config.SearchContrabandItems categories), and that has always been fine:
+--- the check itself is one global call with no ITEM-level state of its own
+--- to drift. What must NOT be duplicated is server/search.lua's own
+--- Config.SearchContrabandItems ITEM-categorisation table -- see
+--- CONTRABAND_ITEM_CATEGORY's own header above for why that one really is a
+--- temporary, disclosed duplication rather than an accepted pattern.
+--- @param citizenid string?
+--- @param jobName string?
+--- @return table<string, boolean> heldCategories
+local function ResolveHeldContrabandSpecializationsForCitizenId(citizenid, jobName)
+    local held = {}
+    if type(HasSpecialization) ~= 'function' or type(citizenid) ~= 'string' then
+        return held
+    end
+    local knownSpecializations = type(Config.K9Specializations) == 'table' and Config.K9Specializations or {}
+    for specKey in pairs(knownSpecializations) do
+        if HasSpecialization(citizenid, jobName, specKey) then
+            held[specKey] = true
+        end
+    end
+    return held
+end
+
+--- @return boolean
+local function IsContrabandHighlightEnabled()
+    local ch = Config.Tracking.ScentVision and Config.Tracking.ScentVision.contrabandHighlight
+    return type(ch) == 'table' and ch.enabled == true
+end
+
+--- Clamp-and-warn: Config.Tracking.ScentVision.contrabandHighlight.rangeMeters
+--- must be a positive number, and is HARD-CEILINGED at
+--- Config.SearchZones.personSearchDistance -- the SAME distance a real
+--- "Search Person" interaction already requires -- see that config
+--- field's own contrabandHighlight comment for why: a bigger number here is
+--- exactly the "scan a crowd from range" x-ray this feature must never
+--- become. A hand-edit above that ceiling is CLAMPED DOWN to it, never
+--- honoured -- same "clamp and warn, never assert, never silently honour a
+--- dangerous value" posture this whole file applies everywhere else.
+--- @param configuredValue any
+--- @return number
+local function ResolveContrabandHighlightRangeMeters(configuredValue)
+    local ceiling = 2.0
+    if type(Config.SearchZones) == 'table' and type(Config.SearchZones.personSearchDistance) == 'number'
+        and Config.SearchZones.personSearchDistance > 0 then
+        ceiling = Config.SearchZones.personSearchDistance
+    end
+
+    if type(configuredValue) ~= 'number' or configuredValue ~= configuredValue or configuredValue <= 0 then
+        print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.contrabandHighlight.rangeMeters must be a positive number (found: %s) -- falling back to %s.'):format(tostring(configuredValue), tostring(ceiling)))
+        return ceiling
+    end
+    if configuredValue > ceiling then
+        print(('[qbx_k9unit] ScentVision: Config.Tracking.ScentVision.contrabandHighlight.rangeMeters (%s) exceeds Config.SearchZones.personSearchDistance (%s) -- this feature must never see further than a real search already reaches, so it is clamped down to %s instead.'):format(tostring(configuredValue), tostring(ceiling), tostring(ceiling)))
+        return ceiling
+    end
+    return configuredValue
+end
+
+--- @return table[]
+local function ResolveContrabandCategoryPalette()
+    local ch = Config.Tracking.ScentVision and Config.Tracking.ScentVision.contrabandHighlight
+    local palette = ch and ch.categoryPalette
+    if type(palette) == 'table' and #palette > 0 then
+        return palette
+    end
+    return { { r = 255, g = 255, b = 255 } }
+end
+
+--- @return table
+local function ResolveContrabandBaselineColor()
+    local ch = Config.Tracking.ScentVision and Config.Tracking.ScentVision.contrabandHighlight
+    local color = ch and ch.baselineColor
+    if type(color) == 'table' and type(color.r) == 'number' and type(color.g) == 'number' and type(color.b) == 'number' then
+        return color
+    end
+    return { r = 241, g = 196, b = 15 }
 end
 
 --- Owner-directed pass ("scent vision" keybind). Resolves the caller's own
@@ -2417,8 +2681,15 @@ end
 --- ALREADY coloured server-side (see ResolveScentVisionColors above) -- the
 --- client never learns WHO a dot belongs to, never learns about anyone
 --- outside range/the visible-set cap, and never receives the server's whole
---- population regardless of how many people are actually connected. See
---- this section's own header for the full per-query cost bound.
+--- population regardless of how many people are actually connected. Also
+--- returns `highlights` -- at most `visibleSources` entries (so bounded by
+--- the SAME maxVisibleTrails cap), each ALREADY reduced server-side to
+--- nothing but a network id and a short list of pre-resolved RGB swatches
+--- for contraband categories that BOTH the caller holds the matching
+--- specialization for AND the target is actually carrying right now (see
+--- this section's own header, "CONTRABAND BODY HIGHLIGHT", for the full
+--- five-point design writeup). See this section's own header for the full
+--- per-query cost bound.
 lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
     -- `mode = 'off'` echoed here too, deliberately -- the master feature
     -- being off is functionally IDENTICAL to mode == 'off' from a
@@ -2432,8 +2703,8 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
     -- already-rendering player's screen without a restart: `mode` itself
     -- is not yet tablet-editable (see config.lua's own comment on
     -- Config.Tracking.ScentVision.mode for why), but this flag already is.
-    if not Config.Features.ScentVision then return { points = {}, mode = 'off' } end
-    if not HasK9Access(source) then return { points = {} } end
+    if not Config.Features.ScentVision then return { points = {}, highlights = {}, mode = 'off' } end
+    if not HasK9Access(source) then return { points = {}, highlights = {} } end
 
     -- PER-PERSON FEATURE CONTROL -- same shared 4-step resolution as
     -- Scent/Blood/Gunpowder above (IsTrackingFeaturePermittedForCitizenId),
@@ -2442,8 +2713,10 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
     -- already establishes.
     local callerPlayer = exports.qbx_core:GetPlayer(source)
     local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
+    local callerJobName = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.job
+        and callerPlayer.PlayerData.job.name
     if not callerCitizenid or not IsTrackingFeaturePermittedForCitizenId(callerCitizenid, 'ScentVision') then
-        return { points = {} }
+        return { points = {}, highlights = {} }
     end
 
     local svConfig = Config.Tracking.ScentVision or {}
@@ -2470,17 +2743,17 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
     -- POPULATION axes; the mode axis is new and the promise now covers it
     -- too.
     if ResolveScentVisionMode(svConfig.mode) == 'off' then
-        return { points = {}, mode = 'off' }
+        return { points = {}, highlights = {}, mode = 'off' }
     end
 
     local now = GetGameTimer()
     local cooldownMs = ResolveConfiguredThresholdMs(svConfig.queryCooldownMs, 1000, 'Config.Tracking.ScentVision.queryCooldownMs')
     if not ScentVisionQueryCooldown.Consume(source, cooldownMs, now) then
-        return { points = {} } -- rate-limited -- same bare, reasonless shape every other denial in this callback uses
+        return { points = {}, highlights = {} } -- rate-limited -- same bare, reasonless shape every other denial in this callback uses
     end
 
     local ped = GetPlayerPed(source)
-    if ped == 0 then return { points = {} } end
+    if ped == 0 then return { points = {}, highlights = {} } end
     local myCoords = GetEntityCoords(ped)
 
     local range = ResolveScentVisionNumber(svConfig.queryRangeMeters, 40.0, 1.0, 'Config.Tracking.ScentVision.queryRangeMeters')
@@ -2522,7 +2795,88 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
         visibleSources[#visibleSources + 1] = ranked[i].src
     end
 
-    local colorBySource = ResolveScentVisionColors(source, visibleSources)
+    local colorBySource = ResolveScentVisionColors(visibleSources)
+
+    -- CONTRABAND BODY HIGHLIGHT -- see this section's own header (bullets
+    -- 1-5) for the full design writeup. Computed here, inside the SAME
+    -- guarded flow/poll as the trail reveal above (feature flag, per-person
+    -- block, live mode, and rate-limit have all already been checked and
+    -- consumed above this point) -- never a second callback, never a second
+    -- cooldown.
+    local highlights = {}
+    if IsContrabandHighlightEnabled() then
+        local highlightRange = ResolveContrabandHighlightRangeMeters(
+            svConfig.contrabandHighlight and svConfig.contrabandHighlight.rangeMeters)
+        local highlightRangeSq = highlightRange * highlightRange
+        local heldCategories = ResolveHeldContrabandSpecializationsForCitizenId(callerCitizenid, callerJobName)
+        local categoryPalette = ResolveContrabandCategoryPalette()
+        local baselineColor = ResolveContrabandBaselineColor()
+
+        for _, src in ipairs(visibleSources) do
+            local targetPed = GetPlayerPed(src)
+            if targetPed ~= 0 then
+                -- REAL, SERVER-READ coordinates for BOTH peds -- never a
+                -- client-supplied position for either side, and never the
+                -- (possibly several-seconds-stale) PositionTrail sample
+                -- used for trail reveal above.
+                local targetCoords = GetEntityCoords(targetPed)
+                local dx, dy, dz = targetCoords.x - myCoords.x, targetCoords.y - myCoords.y, targetCoords.z - myCoords.z
+                local distSq = dx * dx + dy * dy + dz * dz
+                if distSq <= highlightRangeSq then
+                    local queryOk, items = pcall(function()
+                        return K9Compat.Get('inventory').GetInventoryItems(src)
+                    end)
+                    if queryOk and items then
+                        local presentCategories = {}
+                        local collectOk, hasUncategorised = pcall(
+                            CollectContrabandCategoriesPresent, src, items, 1, presentCategories)
+                        if collectOk then
+                            local colors = {}
+                            if hasUncategorised then
+                                colors[#colors + 1] = baselineColor
+                            end
+
+                            -- Sorted so the ORDER these render in is stable
+                            -- frame-to-frame/poll-to-poll -- never dependent
+                            -- on pairs()' unspecified iteration order.
+                            local matchedCategories = {}
+                            for category in pairs(presentCategories) do
+                                if heldCategories[category] then
+                                    matchedCategories[#matchedCategories + 1] = category
+                                end
+                            end
+                            table.sort(matchedCategories)
+
+                            for _, category in ipairs(matchedCategories) do
+                                colors[#colors + 1] = categoryPalette[HashStringToIndex(category, #categoryPalette)]
+                            end
+
+                            -- Only ever emit an entry when there is actually
+                            -- something to show -- never a present-but-empty
+                            -- entry a modified client could use to learn
+                            -- "the server checked this person and found
+                            -- nothing", which would itself leak more than
+                            -- intended (see this section's own header,
+                            -- decision 2).
+                            if #colors > 0 then
+                                highlights[#highlights + 1] = {
+                                    -- Identifies WHICH already-visible, real
+                                    -- player entity to draw on -- never a
+                                    -- citizenid/name, and never anything a
+                                    -- client could not already read off that
+                                    -- same entity locally (a nearby ped's own
+                                    -- network id is ordinary client-visible
+                                    -- state, not privileged identity).
+                                    netId = NetworkGetNetworkIdFromEntity(targetPed),
+                                    colors = colors,
+                                }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
 
     local points = {}
     for _, src in ipairs(visibleSources) do
@@ -2569,6 +2923,7 @@ lib.callback.register('qbx_k9unit:server:getScentVisionPoints', function(source)
 
     return {
         points = points,
+        highlights = highlights,
         -- Echoed back so the client fades/expires every point in THIS
         -- response against the SAME lifetime THIS SERVER actually enforced
         -- for it, rather than trusting its own possibly-stale local config
@@ -2593,14 +2948,13 @@ end)
 AddEventHandler('playerDropped', function(_reason)
     local src = source
     PendingTrackArrival[src] = nil
-    -- SCENT VISION cleanup -- see PositionTrail's/ScentVisionColorSlots' own
-    -- declaration comments above. Clearing PositionTrail[src] here (rather
-    -- than waiting for PruneScentVisionPoints' own periodic sweep) also
-    -- means every OTHER observer's ResolveScentVisionColors call frees any
-    -- slot this disconnecting player held on their own very next query --
-    -- no special cross-observer cleanup is needed for that half, since a
-    -- source with no PositionTrail entry can never again appear in a future
-    -- query's `ranked` candidate list for anyone.
+    -- SCENT VISION cleanup -- see PositionTrail's own declaration comment
+    -- above. Clearing PositionTrail[src] here (rather than waiting for
+    -- PruneScentVisionPoints' own periodic sweep) means a disconnecting
+    -- player can never again appear in a future query's `ranked` candidate
+    -- list for anyone. There is no colour-slot state to clean up any more
+    -- (ResolveScentVisionColors is now a pure function of citizenid -- see
+    -- that function's own declaration comment above for what this
+    -- replaced).
     PositionTrail[src] = nil
-    ScentVisionColorSlots[src] = nil
 end)

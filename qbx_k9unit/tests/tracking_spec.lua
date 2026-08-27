@@ -893,8 +893,65 @@ local function newScentVisionFixture(opts)
     local requireGrant = {}
     for k, v in pairs(opts.requireGrantListed or {}) do requireGrant[k] = v end
 
+    -- CONTRABAND BODY HIGHLIGHT support (owner-directed follow-up,
+    -- 2026-08-26) -- OFF by default (opts.contraband absent), matching
+    -- production's own "contrabandHighlight table absent/enabled=false"
+    -- fail-closed default: every pre-existing test above/below that never
+    -- passes opts.contraband gets none of this wired in at all, so none of
+    -- it can affect a single test that predates this feature.
+    local contrabandOpts = opts.contraband or {}
+    local specializationGrants = {}
+    for citizenid, keys in pairs(contrabandOpts.specializationGrants or {}) do
+        specializationGrants[citizenid] = {}
+        for k, v in pairs(keys) do specializationGrants[citizenid][k] = v end
+    end
+    -- Mirrors the REAL server/certifications.lua signature
+    -- (citizenid, jobName, specializationKey) -- see server/tracking.lua's
+    -- own `type(HasSpecialization) == 'function'` soft-dependency call
+    -- sites, both the pre-existing one (ResolveEnabledTrackTypesForCitizenId)
+    -- and this pass's own (ResolveHeldContrabandSpecializationsForCitizenId).
+    local function HasSpecialization(citizenid, _jobName, specKey)
+        return specializationGrants[citizenid] ~= nil and specializationGrants[citizenid][specKey] == true
+    end
+
+    -- inventoryItemsBySrc[src] = { { name = 'coke_brick', slot = 1, weight = 1 }, ... }
+    -- -- exactly K9Compat.Get('inventory').GetInventoryItems' own real
+    -- return shape (an array of ItemSlot-alikes), keyed by the TARGET's own
+    -- live numeric server id, matching HandleSearchTarget's own real
+    -- inventoryId derivation for a connected player (server/search.lua).
+    local inventoryItemsBySrc = {}
+    for src, items in pairs(contrabandOpts.inventoryItemsBySrc or {}) do
+        inventoryItemsBySrc[src] = items
+    end
+    local K9CompatStub = {
+        Get = function(name)
+            if name == 'inventory' then
+                return {
+                    GetInventoryItems = function(src) return inventoryItemsBySrc[src] end,
+                    -- No container-recursion fixtures needed for this
+                    -- pass's own pinned tests (mirrors server/search.lua's
+                    -- own SumContrabandWeight, already independently tested
+                    -- elsewhere for the container-recursion case) --
+                    -- always "no container here", never a crash.
+                    GetContainerFromSlot = function(_inventoryId, _slot) return nil end,
+                }
+            end
+            return nil
+        end,
+    }
+
+    -- Deterministic, REVERSIBLE stub (never the real 32-bit-wrap semantics,
+    -- which this suite has no need to reproduce) -- entity handle + a fixed
+    -- offset, so a test can predict exactly which netId a given pedHandle
+    -- will be reported under without needing to inspect the stub's own
+    -- internals.
+    local function NetworkGetNetworkIdFromEntity(entity) return entity + 10000 end
+
     local Config = {
         Features = { ScentVision = true },
+        K9Specializations = contrabandOpts.k9Specializations or {},
+        SearchContrabandItems = contrabandOpts.searchContrabandItems or {},
+        SearchZones = contrabandOpts.searchZones or { personSearchDistance = 2.0 },
         Tracking = {
             -- REQUIRED even though this fixture never exercises Scent/Blood/
             -- Gunpowder directly (qa-tester finding, this pass): server/tracking.lua's
@@ -933,6 +990,15 @@ local function newScentVisionFixture(opts)
         Config.Tracking.ScentVision[k] = v
     end
 
+    if opts.contraband then
+        Config.Tracking.ScentVision.contrabandHighlight = {
+            enabled = contrabandOpts.enabled ~= false, -- default true whenever opts.contraband is passed at all
+            rangeMeters = contrabandOpts.rangeMeters or 2.0,
+            categoryPalette = contrabandOpts.categoryPalette or { { r = 1, g = 1, b = 1 } },
+            baselineColor = contrabandOpts.baselineColor or { r = 9, g = 9, b = 9 },
+        }
+    end
+
     local registeredCallbacks = {}
     local libStub = { callback = { register = function(name, fn) registeredCallbacks[name] = fn end } }
 
@@ -958,6 +1024,9 @@ local function newScentVisionFixture(opts)
         GetEntityCoords = GetEntityCoords,
         HasK9Access = HasK9Access,
         HasPermission = defaultHasPermission,
+        HasSpecialization = HasSpecialization,
+        K9Compat = K9CompatStub,
+        NetworkGetNetworkIdFromEntity = NetworkGetNetworkIdFromEntity,
         lib = libStub,
         RegisterNetEvent = RegisterNetEvent,
         AddEventHandler = AddEventHandler,
@@ -1249,7 +1318,43 @@ t.test('ScentVision: only maxVisibleTrails distinct trails are revealed at once 
     t.isFalse(sawFar, 'the FURTHEST trail (x=25) must be the one dropped when more than maxVisibleTrails are in range')
 end)
 
-t.test('ScentVision: a freed slot is reused by a newcomer, while an UNRELATED still-visible trail keeps its own colour throughout', function()
+-- ========================================================================
+-- PER-PERSON DURABLE COLOUR (owner-directed follow-up, 2026-08-26 -- "hold
+-- a colour stable... the same person is the same colour... for every
+-- handler looking"). REPLACES a PRE-EXISTING test here
+-- ("a freed slot is reused by a newcomer...") that pinned the OLD
+-- per-observer/slot-reuse mechanism this pass replaced -- that old test
+-- happened to still PASS after the rewrite (a coincidental hash collision
+-- between its own 'A-CID'/'C-CID' fixture citizenids at the fixture's
+-- 2-swatch palette made its final assertion true for the wrong reason),
+-- which is exactly the kind of accidentally-still-green, no-longer-honest
+-- test this whole pass's own "prove it, don't assume it" discipline exists
+-- to catch. Removed rather than left, and replaced with tests that pin the
+-- REAL, NEW mechanism (a pure hash of citizenid, no server-side memory).
+-- ========================================================================
+
+t.test('ScentVision: the SAME citizenid gets the SAME colour across repeated queries, with no state change in between', function()
+    local f = newScentVisionFixture()
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+    f.step()
+    f.step()
+
+    local first = f.getScentVisionPoints(1)
+    t.equals(#first.points, 1)
+    local firstColor = { r = first.points[1].r, g = first.points[1].g, b = first.points[1].b }
+
+    f.advance(2000) -- clear queryCooldownMs before the next query
+    local second = f.getScentVisionPoints(1)
+    t.equals(#second.points, 1)
+    t.equals(second.points[1].r, firstColor.r, 'repeated queries for the SAME still-visible person must return the SAME colour')
+    t.equals(second.points[1].g, firstColor.g, 'repeated queries for the SAME still-visible person must return the SAME colour')
+    t.equals(second.points[1].b, firstColor.b, 'repeated queries for the SAME still-visible person must return the SAME colour')
+end)
+
+t.test('ScentVision: colour is DURABLE per citizenid -- reconnecting under a brand-new (recycled) source number still gets the SAME colour, while an unrelated still-visible trail is unaffected', function()
     local f = newScentVisionFixture() -- maxVisibleTrails = 2, palette length 2
     f.registerPlayer(1, 'K9-CID', 100)
     f.registerPlayer(2, 'A-CID', 200)
@@ -1265,34 +1370,100 @@ t.test('ScentVision: a freed slot is reused by a newcomer, while an UNRELATED st
     t.equals(#first.points, 2)
     local colorByX = {}
     for _, p in ipairs(first.points) do colorByX[p.x] = { r = p.r, g = p.g, b = p.b } end
-    local aColor, bColor = colorByX[5], colorByX[10]
-    t.isNotNil(aColor, 'A must be visible before disconnecting')
-    t.isNotNil(bColor, 'B must be visible throughout')
+    local aColorBefore, bColor = colorByX[5], colorByX[10]
+    t.isNotNil(aColorBefore, 'A-CID must be visible before disconnecting')
+    t.isNotNil(bColor, 'B-CID must be visible throughout')
 
-    -- A disconnects entirely -- their slot frees (see this file's own
-    -- server/tracking.lua header, ResolveScentVisionColors, for the "reassign
-    -- only when it drops out entirely" rule this proves).
+    -- A-CID disconnects entirely (PositionTrail[2] is cleared).
     f.disconnectPlayer(2)
 
-    -- C, a brand-new third person, appears and moves into range, taking the
-    -- now-free slot.
-    f.registerPlayer(4, 'C-CID', 400)
-    f.setPedCoords(4, 15, 0, 0)
+    -- A-CID reconnects under a BRAND-NEW source number -- this codebase's
+    -- own standing discipline is that server ids are RECYCLED, so this is
+    -- the expected shape of a reconnect, not an edge case being invented
+    -- for this test.
+    f.registerPlayer(5, 'A-CID', 500)
+    f.setPedCoords(5, 5, 0, 0)
     f.advance(2000) -- clear queryCooldownMs before the next query
     f.step()
 
     local second = f.getScentVisionPoints(1)
-    t.equals(#second.points, 2, "B (still visible) plus C (newly visible) fill the same 2 slots")
+    t.equals(#second.points, 2, "B-CID (never left) plus A-CID (reconnected under a new source number) fill the same 2 slots")
     local colorByX2 = {}
     for _, p in ipairs(second.points) do colorByX2[p.x] = { r = p.r, g = p.g, b = p.b } end
 
-    t.equals(colorByX2[10].r, bColor.r, "B's colour must be UNCHANGED -- it never left the visible set")
-    t.equals(colorByX2[10].g, bColor.g, "B's colour must be UNCHANGED -- it never left the visible set")
-    t.equals(colorByX2[10].b, bColor.b, "B's colour must be UNCHANGED -- it never left the visible set")
+    t.equals(colorByX2[10].r, bColor.r, "B-CID's colour must be UNCHANGED -- it never left the visible set")
+    t.equals(colorByX2[10].g, bColor.g, "B-CID's colour must be UNCHANGED -- it never left the visible set")
+    t.equals(colorByX2[10].b, bColor.b, "B-CID's colour must be UNCHANGED -- it never left the visible set")
 
-    t.equals(colorByX2[15].r, aColor.r, "the freed slot's colour is now held by C, the new occupant")
-    t.equals(colorByX2[15].g, aColor.g, "the freed slot's colour is now held by C, the new occupant")
-    t.equals(colorByX2[15].b, aColor.b, "the freed slot's colour is now held by C, the new occupant")
+    t.equals(colorByX2[5].r, aColorBefore.r, "A-CID's colour is DURABLE -- reconnecting under a brand-new source number must reproduce the exact same colour, since it is now a pure function of citizenid, never a per-observer slot")
+    t.equals(colorByX2[5].g, aColorBefore.g, "A-CID's colour is DURABLE across a reconnect")
+    t.equals(colorByX2[5].b, aColorBefore.b, "A-CID's colour is DURABLE across a reconnect")
+end)
+
+t.test("ScentVision: two different citizenids get DIFFERENT colours when the palette has room (indices verified by directly computing this resource's own hash formula, not assumed)", function()
+    -- 'A-CID' and 'B-CID' were verified, by running this resource's own
+    -- HashStringToIndex formula (server/tracking.lua) directly against a
+    -- 5-entry palette BEFORE this test was written, to resolve to indices 3
+    -- and 4 respectively -- picked BECAUSE they differ, not assumed to.
+    local f = newScentVisionFixture({
+        trackingOverrides = {
+            maxVisibleTrails = 2,
+            palette = {
+                { r = 1, g = 1, b = 1 },
+                { r = 2, g = 2, b = 2 },
+                { r = 3, g = 3, b = 3 }, -- index 3 -- A-CID's own colour
+                { r = 4, g = 4, b = 4 }, -- index 4 -- B-CID's own colour
+                { r = 5, g = 5, b = 5 },
+            },
+        },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'A-CID', 200)
+    f.registerPlayer(3, 'B-CID', 300)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+    f.setPedCoords(3, 10, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 2)
+    local colorByX = {}
+    for _, p in ipairs(result.points) do colorByX[p.x] = { r = p.r, g = p.g, b = p.b } end
+
+    t.equals(colorByX[5].r, 3, "A-CID must resolve to palette index 3 (r=3), per this resource's own HashStringToIndex formula")
+    t.equals(colorByX[10].r, 4, "B-CID must resolve to palette index 4 (r=4), per this resource's own HashStringToIndex formula")
+    t.isFalse(colorByX[5].r == colorByX[10].r, 'two different citizenids with room in the palette must get genuinely different colours')
+end)
+
+t.test('ScentVision: colours REPEAT once there are more distinct people than palette swatches -- disclosed, accepted (pigeonhole: 3 people can never produce more than 2 distinct colours out of a 2-swatch palette)', function()
+    local f = newScentVisionFixture({ trackingOverrides = { maxVisibleTrails = 3 } }) -- palette length 2, fixture default
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'A-CID', 200)
+    f.registerPlayer(3, 'B-CID', 300)
+    f.registerPlayer(4, 'C-CID', 400)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+    f.setPedCoords(3, 10, 0, 0)
+    f.setPedCoords(4, 15, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 3, 'all three must be simultaneously visible for the pigeonhole argument below to apply')
+
+    local seenColorKeys = {}
+    local distinctCount = 0
+    for _, p in ipairs(result.points) do
+        local key = ('%d,%d,%d'):format(p.r, p.g, p.b)
+        if not seenColorKeys[key] then
+            seenColorKeys[key] = true
+            distinctCount = distinctCount + 1
+        end
+    end
+    t.isTrue(distinctCount <= 2, ('a 2-swatch palette showing 3 simultaneously-visible people must produce AT MOST 2 distinct colours (pigeonhole) -- got %d distinct colours, which would mean this implementation used a colour outside the configured palette'):format(distinctCount))
 end)
 
 t.test("ScentVision: a K9 never sees their own trail", function()
@@ -1481,6 +1652,251 @@ t.test('MODE: "off" does NOT change the capture threads own cost -- population-w
     f.Config.Tracking.ScentVision.mode = 'keybind'
     local result = f.getScentVisionPoints(1)
     t.isTrue(#result.points >= 2, ('capture must be unaffected by mode == "off" -- expected at least 2 points, got %d'):format(#result.points))
+end)
+
+-- ========================================================================
+-- CONTRABAND BODY HIGHLIGHT (owner-directed follow-up, 2026-08-26 --
+-- "diffrent colors on there body if they have explosives drugs etc"). See
+-- server/tracking.lua's own "CONTRABAND BODY HIGHLIGHT" header (five
+-- decisions) for the design this pins. Uses newScentVisionFixture's
+-- opts.contraband extension (see that fixture's own comment for the exact
+-- shape) -- every test below is OPT-IN (opts.contraband present), so none
+-- of the ScentVision-only tests above this point are affected.
+-- ========================================================================
+
+--- Recursively walks `value` and asserts every TABLE KEY encountered is in
+--- `allowedKeys`, and every STRING/NUMBER LEAF is not one of the forbidden
+--- `forbiddenValues` -- the "assert on the payload's actual shape, not on
+--- intent" check this pass's own task explicitly demanded, rather than
+--- trusting that the production code simply "doesn't mean to" leak an item
+--- name/count/weight.
+--- @param value any
+--- @param allowedKeys table<string, boolean>
+--- @param forbiddenValues table<any, boolean>
+--- @param path string
+local function assertPayloadShape(value, allowedKeys, forbiddenValues, path)
+    if type(value) == 'table' then
+        for k, v in pairs(value) do
+            if type(k) == 'string' then
+                t.isTrue(allowedKeys[k] == true, ('payload key %q at %s is not in the allow-list -- the server must never send a field this suite has not explicitly vetted'):format(k, path))
+            end
+            assertPayloadShape(v, allowedKeys, forbiddenValues, path .. '.' .. tostring(k))
+        end
+    elseif type(value) == 'string' or type(value) == 'number' then
+        t.isFalse(forbiddenValues[value] == true, ('forbidden value %s found at %s -- the server must never send an item name, count, or weight'):format(tostring(value), path))
+    end
+end
+
+local CONTRABAND_PAYLOAD_ALLOWED_KEYS = {
+    points = true, highlights = true, mode = true, dotLifetimeMs = true,
+    x = true, y = true, z = true, r = true, g = true, b = true, ageMs = true,
+    netId = true, colors = true,
+}
+
+t.test('CONTRABAND HIGHLIGHT: a dog with NO matching specialization gets NO highlight for a categorised item, and the payload contains nothing it could infer one from', function()
+    local f = newScentVisionFixture({
+        contraband = {
+            rangeMeters = 2.0,
+            k9Specializations = { narcotics = {}, explosives = {} },
+            searchContrabandItems = { coke_brick = 'narcotics' },
+            searchZones = { personSearchDistance = 2.0 },
+            specializationGrants = {}, -- K9-CID holds NOTHING
+            inventoryItemsBySrc = { [2] = { { name = 'coke_brick', slot = 1, weight = 1.0 } } },
+            categoryPalette = { { r = 201, g = 202, b = 203 } },
+            baselineColor = { r = 210, g = 211, b = 212 },
+        },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 1, 0, 0) -- well within the 2.0m highlight range
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.points > 0, 'the trail reveal itself must be unaffected -- this test isolates the highlight half only')
+    t.equals(#result.highlights, 0, 'a dog with no matching specialization must get NO highlight entry at all for a categorised-only item -- not an entry with an empty colour list, no entry')
+end)
+
+t.test('CONTRABAND HIGHLIGHT: a dog with narcotics but NOT explosives highlights drugs and NOT explosives', function()
+    -- categoryPalette indices verified by directly computing this
+    -- resource's own HashStringToIndex('narcotics', 5) = 2 and
+    -- HashStringToIndex('explosives', 5) = 1 before writing this test (see
+    -- server/tracking.lua's own HashStringToIndex) -- picked so the two
+    -- categories resolve to two DIFFERENT, individually identifiable
+    -- swatches below.
+    local f = newScentVisionFixture({
+        contraband = {
+            rangeMeters = 2.0,
+            k9Specializations = { narcotics = {}, explosives = {} },
+            searchContrabandItems = { coke_brick = 'narcotics', c4 = 'explosives' },
+            searchZones = { personSearchDistance = 2.0 },
+            specializationGrants = { ['K9-CID'] = { narcotics = true } }, -- narcotics ONLY, not explosives
+            inventoryItemsBySrc = { [2] = {
+                { name = 'coke_brick', slot = 1, weight = 1.0 },
+                { name = 'c4', slot = 2, weight = 1.0 },
+            } },
+            categoryPalette = {
+                { r = 11, g = 11, b = 11 }, -- index 1 -- explosives' own colour
+                { r = 22, g = 22, b = 22 }, -- index 2 -- narcotics' own colour
+                { r = 33, g = 33, b = 33 },
+                { r = 44, g = 44, b = 44 },
+                { r = 55, g = 55, b = 55 },
+            },
+            baselineColor = { r = 99, g = 99, b = 99 },
+        },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 1, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.highlights, 1, 'exactly one visible person is carrying matched contraband')
+    local colors = result.highlights[1].colors
+    t.equals(#colors, 1, 'only narcotics matched -- explosives must NOT appear, and there is no uncategorised item here either')
+    t.equals(colors[1].r, 22, "the one colour present must be narcotics' own swatch (index 2)")
+    t.equals(colors[1].g, 22, "the one colour present must be narcotics' own swatch (index 2)")
+    t.equals(colors[1].b, 22, "the one colour present must be narcotics' own swatch (index 2)")
+end)
+
+t.test('CONTRABAND HIGHLIGHT: uncategorised contraband is highlighted for EVERY K9 with search access, regardless of specialization -- the same shared baseline search itself already grants', function()
+    local f = newScentVisionFixture({
+        contraband = {
+            rangeMeters = 2.0,
+            k9Specializations = { narcotics = {} },
+            searchContrabandItems = { 'weed_bud' }, -- bare array entry -- UNCATEGORISED, matches this file's own real shipped Config.SearchContrabandItems shape
+            searchZones = { personSearchDistance = 2.0 },
+            specializationGrants = {}, -- holds NOTHING -- must not matter for the baseline
+            inventoryItemsBySrc = { [2] = { { name = 'weed_bud', slot = 1, weight = 1.0 } } },
+            categoryPalette = { { r = 201, g = 202, b = 203 } },
+            baselineColor = { r = 210, g = 211, b = 212 },
+        },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 1, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.highlights, 1, 'uncategorised contraband must highlight even with zero specializations held')
+    local colors = result.highlights[1].colors
+    t.equals(#colors, 1)
+    t.equals(colors[1].r, 210, 'the baseline colour, never a categoryPalette entry, must be used for uncategorised contraband')
+end)
+
+t.test('CONTRABAND HIGHLIGHT: a target beyond the configured range is never included, even though their trail is still visible -- the range check uses server-read coordinates for BOTH peds', function()
+    local f = newScentVisionFixture({
+        contraband = {
+            rangeMeters = 2.0, -- highlight range -- deliberately SHORT
+            k9Specializations = { narcotics = {} },
+            searchContrabandItems = { coke_brick = 'narcotics' },
+            searchZones = { personSearchDistance = 5.0 }, -- higher ceiling, so 2.0 above is OUR configured value being enforced, not merely a clamp
+            specializationGrants = { ['K9-CID'] = { narcotics = true } },
+            inventoryItemsBySrc = { [2] = { { name = 'coke_brick', slot = 1, weight = 1.0 } } },
+            categoryPalette = { { r = 201, g = 202, b = 203 } },
+            baselineColor = { r = 210, g = 211, b = 212 },
+        },
+        -- queryRangeMeters (trail visibility) stays at this fixture's own
+        -- 40.0 default -- comfortably wider than the 8m below, so the trail
+        -- itself is still revealed; only the highlight's own much tighter
+        -- 2.0m must exclude this target.
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 8, 0, 0) -- 8m -- inside queryRangeMeters (40), OUTSIDE contrabandHighlight.rangeMeters (2.0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.points > 0, 'the trail itself must still be revealed at 8m -- this test isolates the highlight range gate specifically')
+    t.equals(#result.highlights, 0, 'a target outside contrabandHighlight.rangeMeters must never be highlighted, even though they match specialization and are carrying a matching item')
+end)
+
+t.test('CONTRABAND HIGHLIGHT: with ScentVision switched OFF (Config.Features.ScentVision = false), the server answers NOTHING at all -- no points, no highlights, even with a fully-matching setup', function()
+    local f = newScentVisionFixture({
+        contraband = {
+            rangeMeters = 2.0,
+            k9Specializations = { narcotics = {} },
+            searchContrabandItems = { coke_brick = 'narcotics' },
+            searchZones = { personSearchDistance = 2.0 },
+            specializationGrants = { ['K9-CID'] = { narcotics = true } },
+            inventoryItemsBySrc = { [2] = { { name = 'coke_brick', slot = 1, weight = 1.0 } } },
+            categoryPalette = { { r = 201, g = 202, b = 203 } },
+            baselineColor = { r = 210, g = 211, b = 212 },
+        },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 1, 0, 0)
+
+    f.step()
+    f.step()
+
+    -- Control: prove this exact setup DOES produce a highlight while the
+    -- feature is on, so the zero below is caused by the master switch, not
+    -- a fixture quirk.
+    local controlResult = f.getScentVisionPoints(1)
+    t.equals(#controlResult.highlights, 1, 'control: this setup must produce a highlight while ScentVision is on')
+
+    f.advance(2000) -- clear queryCooldownMs
+    f.Config.Features.ScentVision = false
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 0, 'master feature off must answer with zero points')
+    t.equals(#result.highlights, 0, 'master feature off must answer with zero highlights too -- the off switch must not leak a "yes, they are carrying something" bit via a different field')
+    t.equals(result.mode, 'off')
+end)
+
+t.test('CONTRABAND HIGHLIGHT: the payload never contains an item name, a count, or a weight, anywhere -- asserted on the payload\'s actual shape, not on intent', function()
+    local f = newScentVisionFixture({
+        contraband = {
+            rangeMeters = 2.0,
+            k9Specializations = { narcotics = {}, explosives = {} },
+            searchContrabandItems = { 'weed_bud', coke_brick = 'narcotics', c4 = 'explosives' }, -- coke_brick/c4 CATEGORISED; weed_bud a bare array entry (UNCATEGORISED) -- both shapes in one table, exactly config.lua's own documented illustrative example
+            searchZones = { personSearchDistance = 2.0 },
+            specializationGrants = { ['K9-CID'] = { narcotics = true, explosives = true } },
+            -- A distinctive item NAME, WEIGHT, and COUNT this test can prove
+            -- never reaches the payload anywhere -- 91.0 and 17 chosen to
+            -- not coincidentally collide with any coordinate/colour/age
+            -- value this test itself configures below.
+            inventoryItemsBySrc = { [2] = {
+                { name = 'coke_brick', slot = 1, weight = 91.0, count = 17 },
+                { name = 'c4', slot = 2, weight = 91.0, count = 17 },
+                { name = 'weed_bud', slot = 3, weight = 91.0, count = 17 },
+            } },
+            categoryPalette = {
+                { r = 201, g = 202, b = 203 },
+                { r = 204, g = 205, b = 206 },
+                { r = 207, g = 208, b = 209 },
+                { r = 210, g = 211, b = 212 },
+                { r = 213, g = 214, b = 215 },
+            },
+            baselineColor = { r = 220, g = 221, b = 222 },
+        },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 1, 0, 0)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.highlights >= 1, 'this setup must actually produce a highlight -- otherwise the shape check below would trivially pass for the wrong reason')
+
+    local forbiddenValues = { ['coke_brick'] = true, ['c4'] = true, ['weed_bud'] = true, [91.0] = true, [17] = true }
+    assertPayloadShape(result, CONTRABAND_PAYLOAD_ALLOWED_KEYS, forbiddenValues, 'result')
 end)
 
 -- ========================================================================
