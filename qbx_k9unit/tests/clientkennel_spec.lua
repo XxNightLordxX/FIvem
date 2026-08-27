@@ -1216,9 +1216,9 @@ end)
 t.test('"Pick Up Kennel": icon is fa-user-tie, and canInteract relies on HasK9Access() alone -- NOT CanShowK9UI()/IsOwnModelK9()', function()
     local f = newKennelFixture()
     f.fireResourceStart(RESOURCE_NAME)
-    t.equals(#f.addModelCalls, 1, 'all three options register via ONE AddModel call')
+    t.equals(#f.addModelCalls, 1, 'all five options register via ONE AddModel call')
     local options = f.addModelCalls[1].options
-    t.equals(#options, 3)
+    t.equals(#options, 5, 'Pick Up, Rest In, Exit, Close, and Open Kennel -- see the CLOSEABLE KENNEL ox_target tests below for the two added this pass')
     local pickupOption
     for _, option in ipairs(options) do
         if option.name == 'qbx_k9unit:pickupKennel' then pickupOption = option end
@@ -1667,6 +1667,171 @@ t.test('/k9kennel close|open with nothing deployed and nothing entered is a sile
 
     k9kennel(nil, { 'open' })
     t.equals(#f.serverEvents, 0)
+end)
+
+-- ========================================================================
+-- CLOSEABLE KENNEL -- ox_target surface (owner-directed audit finding, this
+-- pass: "Allow the kennel to close" was reachable by chat and the
+-- contextual radial item, but had NO ox_target option at all, unlike every
+-- OTHER kennel action). Reuses RequestCloseKennelDoor()/
+-- RequestOpenKennelDoor() (already exercised via chat above) UNMODIFIED --
+-- these tests pin the ox_target-SPECIFIC part: which entity the option
+-- shows on, and that it never fires on the wrong kennel.
+-- ========================================================================
+
+t.test('"Close Kennel"/"Open Kennel" ox_target options exist, with the expected icons, alongside Pick Up/Rest/Exit', function()
+    local f = newKennelFixture()
+    f.fireResourceStart(RESOURCE_NAME)
+    local closeOption, openOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+        if option.name == 'qbx_k9unit:openKennel' then openOption = option end
+    end
+    t.isNotNil(closeOption, 'a "Close Kennel" option must be registered')
+    t.isNotNil(openOption, 'an "Open Kennel" option must be registered')
+    t.equals(closeOption.icon, 'fas fa-lock')
+    t.equals(openOption.icon, 'fas fa-lock-open')
+    t.equals(closeOption.label, locale('kennel.close_target_label'))
+    t.equals(openOption.label, locale('kennel.open_target_label'))
+end)
+
+t.test('"Close Kennel"/"Open Kennel": canInteract is TRUE on the OWNER\'s own deployed kennel entity, and onSelect sends the matching real event with the correct netId', function()
+    local f = newKennelFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    local kennelEntity = f.createObjectCalls[1].entity
+
+    f.fireResourceStart(RESOURCE_NAME)
+    local closeOption, openOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+        if option.name == 'qbx_k9unit:openKennel' then openOption = option end
+    end
+
+    t.isTrue(closeOption.canInteract(kennelEntity, 1.0, {}, 'anything'))
+    t.isTrue(openOption.canInteract(kennelEntity, 1.0, {}, 'anything'))
+
+    closeOption.onSelect()
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestCloseKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+
+    openOption.onSelect()
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestOpenKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+end)
+
+t.test('"Close Kennel"/"Open Kennel": canInteract is TRUE on the kennel the OCCUPANT is actually resting in, and onSelect resolves via restState (no myKennelNetId of their own)', function()
+    local f = newKennelFixture()
+    local netId = 960
+    f.registerForeignEntity(netId, 61, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
+
+    f.fireResourceStart(RESOURCE_NAME)
+    local closeOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+    end
+
+    t.isTrue(closeOption.canInteract(61, 1.0, {}, 'anything'))
+    closeOption.onSelect()
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestCloseKennel')
+    t.equals(f.lastServerEvent().args[1], netId)
+end)
+
+t.test('CORRECTNESS: "Close Kennel"/"Open Kennel" canInteract is FALSE on a DIFFERENT kennel prop -- must never let a click on a stranger\'s kennel silently toggle THIS client\'s own, unrelated one', function()
+    local f = newKennelFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    -- A second, unrelated kennel-model entity (e.g. some other handler's
+    -- deployed kennel) this client has no relationship to at all.
+    local strangerNetId = 961
+    f.registerForeignEntity(strangerNetId, 62, GetHashKey(PRIMARY_MODEL))
+
+    f.fireResourceStart(RESOURCE_NAME)
+    local closeOption, openOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+        if option.name == 'qbx_k9unit:openKennel' then openOption = option end
+    end
+
+    t.isFalse(closeOption.canInteract(62, 1.0, {}, 'anything'), 'must not offer to close a kennel this client neither owns nor rests in, even while THIS client has its own kennel deployed elsewhere')
+    t.isFalse(openOption.canInteract(62, 1.0, {}, 'anything'))
+end)
+
+t.test('"Close Kennel"/"Open Kennel": canInteract is FALSE with nothing deployed and nothing entered', function()
+    local f = newKennelFixture()
+    f.fireResourceStart(RESOURCE_NAME)
+    local closeOption, openOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+        if option.name == 'qbx_k9unit:openKennel' then openOption = option end
+    end
+    t.isFalse(closeOption.canInteract(999, 1.0, {}, 'anything'))
+    t.isFalse(openOption.canInteract(999, 1.0, {}, 'anything'))
+end)
+
+t.test('"Close Kennel"/"Open Kennel": canInteract hides while THIS client is carrying a kennel (matches "Pick Up Kennel"\'s own exclusion)', function()
+    local f = newKennelFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    local kennelEntity = f.createObjectCalls[1].entity
+    f.dispatchNetEvent('qbx_k9unit:client:pickupKennelConfirmed', 65535, kennelNetId)
+    t.isTrue(f.env.IsCarryingKennel())
+
+    f.fireResourceStart(RESOURCE_NAME)
+    local closeOption, openOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+        if option.name == 'qbx_k9unit:openKennel' then openOption = option end
+    end
+
+    t.isFalse(closeOption.canInteract(kennelEntity, 1.0, {}, 'anything'))
+    t.isFalse(openOption.canInteract(kennelEntity, 1.0, {}, 'anything'))
+end)
+
+-- ========================================================================
+-- RED-THEN-GREEN CONTROL (the load-bearing proof, per this pass's own
+-- brief): adding the Close/Open ox_target options above must NEVER make
+-- the closed-kennel-traps-its-occupant bug possible again. The occupant's
+-- "Exit Kennel" option, ExitKennelRest(), and the shared watchdog's own
+-- backstops read NONE of this file's new code -- pinned here, alongside
+-- the two new options, specifically so a future change to one cannot
+-- silently break the other without a red test catching it in THIS same
+-- file.
+-- ========================================================================
+
+t.test('CONTROL: the occupant can still ALWAYS exit through "Exit Kennel" while "Close Kennel"/"Open Kennel" are ALSO visible on the exact same entity', function()
+    local f = newKennelFixture()
+    local netId = 962
+    f.registerForeignEntity(netId, 63, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
+
+    f.fireResourceStart(RESOURCE_NAME)
+    local exitOption, closeOption, openOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:exitKennel' then exitOption = option end
+        if option.name == 'qbx_k9unit:closeKennel' then closeOption = option end
+        if option.name == 'qbx_k9unit:openKennel' then openOption = option end
+    end
+
+    -- All three genuinely coexist on the SAME entity -- exit is not hidden
+    -- by the new options existing, and the new options are not hidden by
+    -- exit existing.
+    t.isTrue(exitOption.canInteract(63, 1.0, {}, 'anything'))
+    t.isTrue(closeOption.canInteract(63, 1.0, {}, 'anything'))
+    t.isTrue(openOption.canInteract(63, 1.0, {}, 'anything'))
+
+    -- This is the occupant's own release path -- it reads NO field of
+    -- server-side kennel state (see server/kennel.lua's own "CLOSEABLE
+    -- KENNEL" header: "requestExitKennel... is UNCHANGED, still reads no
+    -- field of `Kennels` at all"), so a closed kennel (a fact this client
+    -- never even tracks locally) can never change what this call below
+    -- does.
+    exitOption.onSelect()
+    t.isFalse(f.env.IsRestingInKennel(), 'the occupant must still be able to get out, regardless of the kennel\'s open/closed state, which this option never reads')
+    t.isTrue(#f.detachCalls >= 1 and f.detachCalls[#f.detachCalls].handle == MY_PED)
+    t.isTrue(#f.collisionCalls >= 1 and f.collisionCalls[#f.collisionCalls].handle == MY_PED and f.collisionCalls[#f.collisionCalls].toggle == true)
 end)
 
 -- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, this

@@ -5783,5 +5783,108 @@ Config.DangerWarn = {
     -- Settings > Key Bindings > FiveM; changing this value later does not
     -- move a binding a player already changed for themselves, it only sets
     -- what a brand new player starts with.
-    keybind = 'N',
+    -- CHANGED FROM 'N' ON 2026-08-27 -- IT COLLIDED, AND THE COLLISION WAS
+    -- ARMED BY THE VERY COMMENT INVITING YOU TO TURN THIS FEATURE ON.
+    -- client/pursuitsprint.lua hardcodes 'N' for pursuit sprint, which
+    -- ships ON. This feature ships OFF, and its whole file is gated behind
+    -- that switch, so the two never met on a stock install -- but the
+    -- moment an owner did what Config.Features.DangerWarn's own comment
+    -- invites ("turn it on once that review has happened"), every press of
+    -- N would have fired BOTH: a K9 bursting after a suspect would bark a
+    -- danger warning to their handler, every single time, and vice versa.
+    -- Nothing anywhere warned about it, and it would only have appeared
+    -- after a restart, for the one person who opted in.
+    --
+    -- 'P' chosen by this file's own documented rule (client/keybinds.lua's
+    -- header: "a free, uncommonly-bound letter, not a forced mnemonic",
+    -- avoiding every other default this resource ships and every core
+    -- movement key). Verified free: the keys already taken are B, C, G, H,
+    -- I, J, K, L, M, N, O, T, U, V, X, Y and Z, and D/E/F/Q/R were ruled
+    -- out as core GTA controls rather than merely unused here.
+    keybind = 'P',
+}
+
+-- ======================================================================
+-- DEBUG DUMP (server/debugdump.lua, client/debugdump.lua) -- owner's own
+-- words: "I want a debug mode setup... so that way when I am testing I can
+-- give you the information for fixes etc", later extended twice in the
+-- same conversation: "I also want that debug super comprehensive so it
+-- helps you a lot when finding bugs etc" and "This debug mode for if you
+-- as Claude turn it on will help you drastically in finding and fixing all
+-- issues."
+--
+-- WHAT `/k9debug` DOES: a caller-owned diagnostic. It never inspects
+-- anyone but the player who ran it, re-runs this resource's OWN
+-- already-tested boot-time checks (the Config.Features/Config.FeatureGroups
+-- disagreement detector immediately above ResolveFeatureGroups() in this
+-- file, server/selfcheck.lua's dependency-version check) on demand instead
+-- of only once at boot to a console nobody is watching, and writes ONE
+-- timestamped file per run under this resource's own `diagnostics/` folder
+-- -- never the chat box, never the F8 console -- so it can be attached
+-- whole rather than scrolled and retyped. See server/debugdump.lua's own
+-- header for the full three-tier report shape (findings, worth-checking,
+-- full state) and DIAGNOSTIC_CHECKS.md for exactly which checks this
+-- performs and why each one is scoped the way it is.
+--
+-- NOT A Config.Features ENTRY, ON PURPOSE -- same "extra, independent
+-- kill-switch" posture as Config.LeashVisual.enabled/Config.K9Onboarding.
+-- enabled elsewhere in this file: this is a standalone diagnostic tool with
+-- no runtime-control-tablet exposure, no feature-group family, and no
+-- per-person block/grant of its own (see server/debugdump.lua's own header
+-- for why "own state only" makes a permission gate unnecessary rather than
+-- adding one). Putting it in Config.Features would require the full
+-- governance wiring (Config.FeatureGroups membership, FEATURE_TIERS in
+-- server/runtimecontrol.lua, tests/runtimefeaturetiers_spec.lua's drift
+-- guard) for a tool that is deliberately NOT part of the runtime-feature
+-- system it exists to help debug.
+Config.DebugDump = {
+    -- SHIPS OFF. This whole subsystem -- the `/k9debug` command, its
+    -- server callback, and (at the verbose level below) the decision-log
+    -- wrapping around HasK9Access/IsHighCommand/HasPermission -- does
+    -- NOTHING AT ALL while this is anything other than exactly `true`.
+    -- Turn it on only while you are actively testing and plan to hand the
+    -- resulting files to a developer; there is no reason to leave it on
+    -- for a live server nobody is actively diagnosing.
+    enabled = false,
+
+    -- 'normal' or 'verbose'. Any other value falls back to 'normal' with a
+    -- console warning naming the bad value (clamp-and-warn, never a bare
+    -- assert -- see server/debugdump.lua's own header).
+    --
+    -- 'normal' costs nothing beyond the command itself running: no
+    -- wrapping of any other file's functions, no ongoing bookkeeping
+    -- between runs. Safe to leave on for an entire testing session.
+    --
+    -- 'verbose' additionally keeps a rolling, in-memory trail of DECISIONS
+    -- this resource makes -- every HasK9Access/IsHighCommand/HasPermission
+    -- call, its result, and (best-effort) why -- included in full in every
+    -- dump file written while verbose is active. This is genuinely more
+    -- expensive (one extra function-call layer and a small table write on
+    -- every one of those checks, which this resource calls very
+    -- frequently) -- turn it on only for the specific session where you
+    -- are chasing a "why did this refuse me" bug, and back to 'normal'
+    -- afterwards.
+    level = 'normal',
+
+    -- Every `/k9debug` run writes ONE new file under this resource's own
+    -- `diagnostics/` folder. This is a testing tool an owner may run many
+    -- times in one session, so this caps how many of those files this
+    -- resource keeps meaningful content in before it starts clearing out
+    -- the oldest ones to make room -- see server/debugdump.lua's own
+    -- header "WHY EMPTYING, NOT DELETING" for exactly what "clearing out"
+    -- means (there is no native this resource could verify for deleting a
+    -- resource file outright). A non-positive or non-number value falls
+    -- back to 200 with a console warning.
+    maxRetainedDumps = 200,
+
+    -- If true, this resource ALSO writes one dump automatically, right
+    -- after it finishes its own boot-time checks -- but ONLY when at least
+    -- one of those checks actually found something wrong (a feature
+    -- switch disagreement, a database table that isn't there). A clean
+    -- boot writes nothing extra. This exists because an owner will not
+    -- think to run `/k9debug` before he has noticed a problem, and the
+    -- state at the exact moment of boot is often the most useful moment to
+    -- have captured. Has no effect at all unless `enabled` above is also
+    -- `true`.
+    autoOnBoot = true,
 }

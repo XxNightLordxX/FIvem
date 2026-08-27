@@ -1535,7 +1535,9 @@
         "closed_success": "Kennel closed.",
         "already_open": "That kennel is already open.",
         "opened_success": "Kennel opened.",
-        "you_have_been_closed_in": "The kennel you're resting in has been closed. You can still leave any time -- press your Exit Kennel key."
+        "you_have_been_closed_in": "The kennel you're resting in has been closed. You can still leave any time -- press your Exit Kennel key.",
+        "close_target_label": "Close Kennel",
+        "open_target_label": "Open Kennel"
     },
     "leaderboard": {
         "no_access": "You must be a certified K9 handler to view the leaderboard.",

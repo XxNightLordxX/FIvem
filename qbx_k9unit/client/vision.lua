@@ -2,9 +2,24 @@
     qbx_k9unit/client/vision.lua
 
     Phase 2. fxmanifest.lua lists this file under
-    client_scripts, config.lua's Config.Vision (§11.2) has landed, and
-    client/radial.lua deliberately gets NO items for this feature (this is
-    keybind-only, by design — see below).
+    client_scripts, config.lua's Config.Vision (§11.2) has landed.
+
+    CORRECTED (owner's standing "reachable from chat, 3rd eye, and radial"
+    audit, this pass) — THIS PARAGRAPH USED TO CLAIM "client/radial.lua
+    deliberately gets NO items for this feature (this is keybind-only, by
+    design)." That was true when first written, but went stale the moment
+    the "CYCLE — EXTRA, OPTIONAL CONVENIENCE" section further down shipped
+    and was never revisited here afterward — a comment trusted over the
+    code is exactly the bug class this audit exists to catch. THE ACTUAL,
+    CURRENT STATE: client/radial.lua has THREE items for thermal/night
+    vision today ("Thermal Vision", "Night Vision", and the CycleVision()
+    convenience, `k9_vision_cycle`) — see that section below for the full
+    history of why radial coverage was added, removed, and restored. THE
+    ONE TOGGLE IN THIS FILE STILL WITHOUT A RADIAL ITEM (OR AN ox_target
+    OPTION) IS CameraFeedPiP, added in a later pass than the sentence above
+    — see this file's own "CAMERA FEED" header section, "SURFACE COVERAGE"
+    paragraph, for that decision's OWN, separately-reconsidered reasoning
+    (not this same stale claim reapplied to a different feature).
 
     Owns the two independent thermal/night vision toggle keybinds —
     DEVELOPER_REFERENCE.md §11.1 sub-phase 2a, §11.3's `client/vision.lua` row (new file,
@@ -51,7 +66,11 @@
         IsNightVisionActive()
       No other Phase 2 file currently needs to call into these (§1 of
       DEVELOPER_REFERENCE.md#vision: "no radial item; no other
-      Phase 2 file's design references vision toggling") — exposed as
+      Phase 2 file's design references vision toggling" — HISTORICAL ONLY,
+      describing the state AT THE TIME this file was first written, already
+      superseded by the very next bullet below and by this file's own
+      corrected opening paragraph above; client/radial.lua has three vision
+      items today, not zero) — exposed as
       resource-globals anyway, per this codebase's established convention
       that every toggle/action function is a resource-global (see
       README.md's "Public API for developers (exports/events)" section's
@@ -231,6 +250,61 @@
        CanShowK9UI() mid-view) — see StopCameraFeed() below, the single
        choke point every exit path routes through, so freezing can never
        be applied without a matching unfreeze on every single exit.
+
+    SURFACE COVERAGE — RE-EXAMINED, NOT MERELY INHERITED (this pass,
+    owner's standing "reachable from chat, 3rd eye, and radial" audit
+    finding). `qbx_k9unit:toggleCameraFeed` is STILL a command + keybind
+    only — no radial item, no ox_target option. This file's OWN opening
+    header paragraph used to justify that with the SAME sentence applied to
+    thermal/night vision too ("client/radial.lua deliberately gets NO items
+    for this feature") — that sentence is now corrected up there because it
+    went stale for thermal/night vision the moment the CYCLE shipped three
+    radial items for it, and it was fair to ask whether it was just as
+    stale here, never actually re-examined for CameraFeedPiP specifically.
+    IT WAS RE-EXAMINED THIS PASS. The conclusion is unchanged, but for a
+    reason specific to this feature, not a carried-over assumption:
+
+    WHY STILL NO RADIAL ITEM: StartCameraFeedAttempt() above only succeeds
+    through a STACK of preconditions client/radial.lua's own "Partner Up"/
+    "Break Partnership" items do not share — Config.Features.HandlerPartnership
+    on, CanShowK9UI(), not feature-blocked, ACTUALLY partnered with someone
+    RIGHT NOW (an explicit two-consent opt-in most players are not
+    currently in), that partner online, AND that partner's ped currently
+    streamed into this client's world. Contrast "Partner Up"'s own doc
+    comment (client/radial.lua), which explicitly tolerates its one refusal
+    case ("clicking Partner Up while already partnered just costs one
+    harmless... round trip") precisely because that refusal is the
+    EXCEPTION — the common case for most players, most of the time, is "not
+    partnered yet, a nearby candidate exists," which succeeds. CameraFeedPiP
+    is the mirror image: for any player who has not separately opted into
+    an active partnership right now — the default state for most players,
+    most of the time, since it requires a second consenting player and
+    starts every session off — a standalone "Camera Feed" radial item would
+    refuse with `partnership.not_partnered_with_anyone` EVERY TIME, not
+    occasionally, until that player goes and partners up first. That is the
+    "menu item that lands on a step which always refuses" failure mode this
+    codebase's own radial design already rejects elsewhere — the "WHY
+    CameraFeedPiP AND ScentVision ARE NOT STEPS IN THIS CYCLE" section
+    earlier in this header made exactly this point about the CYCLE
+    specifically; this paragraph is that same finding, re-applied on
+    purpose to the standalone-item question this pass actually asked, not
+    a stale answer copied across from a different question.
+
+    A DIFFERENT SURFACE WAS CONSIDERED, AND IS NOT RULED OUT — JUST NOT
+    BUILT THIS PASS: an ox_target option placed on the ACTIVE PARTNER's own
+    ped (rather than a flag-gated radial slot, and unlike every ox_target
+    option this resource registers today, which targets a prop/model, not
+    a player) would not have the always-refuses problem above — its own
+    canInteract would be naturally scoped to "a player currently standing
+    near a specific, already-identified, in-range partner," which
+    structurally cannot fire for someone with no partner or an
+    out-of-range one, sidestepping the failure mode entirely rather than
+    merely tolerating it. Left for a genuinely separate design pass instead
+    of being folded in as a rushed afterthought to this specific audit
+    finding — it deserves its own deliberate treatment (candidate
+    resolution against client/partnership.lua's own partner-identification
+    precedent, icon/label convention for a player-entity target, whether it
+    belongs in this file or that one) rather than a guess bolted on here.
     ======================================================================
 ]]
 

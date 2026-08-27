@@ -1367,6 +1367,109 @@ local function RegisterKennelOxTargetOption()
                 ExitKennelRest()
             end,
         },
+        -- CLOSEABLE KENNEL, ox_target surface (owner-directed audit finding,
+        -- THIS PASS -- "Allow the kennel to close" already had a chat
+        -- command (/k9kennel close|open) and the contextual radial item, but
+        -- NO ox_target option at all, unlike every other kennel action here.
+        -- Reuses RequestCloseKennelDoor()/RequestOpenKennelDoor() (above)
+        -- UNMODIFIED -- no new permission check invented, this file's own
+        -- established "no client-side gate beyond 'is there a kennel to act
+        -- on at all'" posture for those two functions, and real
+        -- authorization (owner OR current occupant) is entirely server-side
+        -- (server/kennel.lua's ResolveAuthorizedKennelForDoorToggle) --
+        -- matching VISIBILITY VS. AUTHORIZATION above, a bystander with no
+        -- relationship to this specific kennel sees the option too and gets
+        -- a clean `kennel.door_not_authorized` notify on select, never a
+        -- security issue.
+        --
+        -- WHY canInteract COMPARES THE TARGETED entity TO
+        -- ResolveKennelNetIdForDoorAction()'s RESULT, NOT JUST "is the
+        -- feature on" like Pick Up/Rest In Kennel above: those two options
+        -- act on WHATEVER kennel prop the player is actually looking at
+        -- (onSelect reads `data.entity`'s own netId), so any nearby kennel
+        -- is a valid target for them. RequestCloseKennelDoor()/
+        -- RequestOpenKennelDoor() do NOT take an entity/netId argument --
+        -- they resolve WHICH kennel to act on from this client's own LOCAL
+        -- STATE (myKennelNetId first, else restState -- see
+        -- ResolveKennelNetIdForDoorAction()'s own doc comment). Without this
+        -- check, a player standing near a STRANGER's kennel while their own
+        -- kennel sits deployed somewhere else entirely would see "Close
+        -- Kennel" on the stranger's prop, click it, and silently toggle
+        -- THEIR OWN, completely different kennel instead of the one they
+        -- are actually looking at -- a real correctness bug, not just a
+        -- cosmetic one, even though it can never be a security issue (the
+        -- server independently re-resolves ownership from whatever netId is
+        -- actually sent). Mirrors the "Exit Kennel" option's own
+        -- `ResolveKennelFromRestState() == entity` guard immediately above,
+        -- applied to ResolveKennelNetIdForDoorAction() instead of
+        -- restState -- same shape, same reason: only show the option on the
+        -- EXACT kennel instance the resolve-first helper would actually act
+        -- on, never a same-model lookalike elsewhere in the world.
+        --
+        -- NOT excluded while IsRestingInKennel() -- see server/kennel.lua's
+        -- own "CLOSEABLE KENNEL" header ("WHO MAY OPEN/CLOSE: the kennel's
+        -- OWNER... OR the CURRENT OCCUPANT"): an occupant resting inside is
+        -- exactly as entitled to toggle the door as the owner standing
+        -- outside, and ResolveKennelNetIdForDoorAction() already falls back
+        -- to restState.kennelNetId for precisely that case.
+        --
+        -- EXCLUDED while IsCarryingKennel(), matching "Pick Up Kennel"'s own
+        -- exclusion above -- there is no sensible reason to toggle the door
+        -- of a kennel currently slung over this player's own shoulder, and
+        -- excluding it here avoids ever presenting the option on an object
+        -- that is, for the moment, attached to this player's own hands
+        -- rather than sitting in the world.
+        --
+        -- THIS IS THE START OF A TOGGLE, NOT AN EXIT PATH -- gating it is
+        -- correct and does not touch the "GATE THE START, NEVER THE STOP"
+        -- rule the "Exit Kennel" option and ExitKennelRest() itself are
+        -- built around: this option can never be the occupant's only way
+        -- out (that is, and remains, the separate "Exit Kennel" option /
+        -- ExitKennelRest() / the k9exitkennel keybind / the radial "Exit
+        -- Kennel" item, all completely untouched by this addition, all
+        -- still reading no field of this option's own gating at all).
+        {
+            name = 'qbx_k9unit:closeKennel',
+            icon = 'fas fa-lock',
+            label = locale('kennel.close_target_label'),
+            distance = Config.DeployableKennel.interactDistanceMeters,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.DeployableKennel then return false end
+                if IsCarryingKennel() then return false end
+                local netId = ResolveKennelNetIdForDoorAction()
+                return netId ~= nil and ResolveNetworkEntity(netId) == entity
+            end,
+            onSelect = function()
+                RequestCloseKennelDoor()
+            end,
+        },
+        -- Symmetric to "Close Kennel" immediately above -- see that item's
+        -- own doc comment for the full reasoning, identical here in every
+        -- respect except which door-action global it calls. Both options
+        -- are shown together regardless of the kennel's ACTUAL current
+        -- open/closed state (this client has no reliable local knowledge of
+        -- that -- see server/kennel.lua's own "CLIENT-SIDE VISIBILITY GAP"
+        -- header paragraph for why even the bare '/k9kennel' contextual
+        -- dispatch needs a real server round trip to know) -- picking the
+        -- "wrong" one of the two costs nothing but a clean
+        -- `kennel.already_closed`/`kennel.already_open` notify, the exact
+        -- same "canInteract is a UX convenience only" tolerance this file's
+        -- header already states for every option in this block.
+        {
+            name = 'qbx_k9unit:openKennel',
+            icon = 'fas fa-lock-open',
+            label = locale('kennel.open_target_label'),
+            distance = Config.DeployableKennel.interactDistanceMeters,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.DeployableKennel then return false end
+                if IsCarryingKennel() then return false end
+                local netId = ResolveKennelNetIdForDoorAction()
+                return netId ~= nil and ResolveNetworkEntity(netId) == entity
+            end,
+            onSelect = function()
+                RequestOpenKennelDoor()
+            end,
+        },
     })
 end
 

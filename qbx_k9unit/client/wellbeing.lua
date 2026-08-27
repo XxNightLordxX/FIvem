@@ -9,8 +9,10 @@
     `RecomputeK9MoveRate()` (client/movement.lua), enforces the client-local
     sprint/jump input blocks for low Injury (a disclosed, bounded, self-
     applied limitation — see server/wellbeing.lua's header and DEVELOPER_REFERENCE.md
-    §13.0 Decision 3, not a security boundary), and owns the "Pet K9"/
-    "Feed K9" ox_target interactions plus the meat-bait/whistle/calm-down
+    §13.0 Decision 3, not a security boundary), and owns the merged "Care
+    for K9" ox_target interaction (COMMAND_CONSOLIDATION_SPEC.md §7 /
+    FEATURE_STRUCTURE_SPEC.md §5 — see the MOOD section further down for the
+    full consolidation writeup) plus the meat-bait/whistle/calm-down
     self-actions.
 
     Every one of the five wellbeing flags is checked at the point of use
@@ -729,26 +731,139 @@ CreateThread(function()
 end)
 
 -- ======================================================================
--- MOOD — "Pet K9" / "Feed K9" ox_target world interactions.
+-- MOOD — "Care for K9" ox_target world interaction (was two: "Pet K9" /
+-- "Feed K9"), merged this pass (coder-backend).
+--
+-- CONSOLIDATION, PICKED UP FROM ITS OWN DEFERRAL: COMMAND_CONSOLIDATION_SPEC.md
+-- §7 ("watch, don't act yet") and FEATURE_STRUCTURE_SPEC.md §5 both named
+-- this exact merge and both explicitly deferred it for the same stated
+-- reason -- "the file is hot" -- with an instruction to revisit once it
+-- quieted down. It has. This closes the one family FEATURE_STRUCTURE_SPEC.md
+-- §6's own count-down table left as "Deferred (file hot)" while every
+-- sibling family (kennel, fetch, training, Detection) already landed.
+--
+-- WHAT MERGED, AND WHY THOSE TWO SPECIFICALLY: FEATURE_STRUCTURE_SPEC.md §5's
+-- own framing lists FOUR target options under this family --
+-- feedK9/petK9/treatK9/drinkFromBowl -- but only feedK9/petK9 are actually
+-- reachable from this file (treatK9 lives in client/medkit.lua, out of this
+-- pass's file-ownership scope; drinkFromBowl is this file's own, see its own
+-- "WHY drinkFromBowl DOES NOT JOIN THIS MERGE" note further down for why it
+-- stays separate on the merits, not merely on ownership). Pet and Feed,
+-- confirmed by reading server/wellbeing.lua's own petK9/feedK9 callbacks
+-- directly before touching anything here, are the two that are ACTUALLY
+-- interchangeable for a merge: identical actor/target shape (any player,
+-- targeting a DIFFERENT K9-modeled player's ped -- both reject
+-- `targetPed == usingPed`), identical `MOOD_INTERACT_RANGE` proximity gate,
+-- and the SAME shared `AffectionCooldown` tracker instance (server/
+-- wellbeing.lua's own REWARD-FARM FIX comment on that declaration --
+-- petting and feeding are already treated as one interchangeable "affection"
+-- action server-side, this merge just makes the CLIENT UI agree). The only
+-- axis they differ on is Feed's own extra precondition (carrying
+-- Config.Wellbeing.Mood.feedItemName) -- exactly the shape this file's task
+-- brief calls out as "the hard part": a naive single button would land on
+-- whichever of the two happened to be tried and refuse for a reason the
+-- player standing in front of a perfectly pettable dog cannot see.
+--
+-- RESOLUTION RULE, IN ONE SENTENCE: try Feed first (the strictly BETTER
+-- outcome when possible -- it also raises Mood, per
+-- Config.Wellbeing.Mood.feedRegenAmount, same or higher than Pet's own
+-- petRegenAmount in every shipped config this pass reviewed); fall back to
+-- Pet, which carries NO consumable precondition of its own, only when Feed's
+-- OWN server response says the SPECIFIC reason it did not go through was
+-- `no_item` -- see RequestCareForK9() below for the full "why exactly this
+-- reason, and no other" reasoning. This is "resolve to whichever action the
+-- player can actually perform right now" (this task's own suggested shape),
+-- not "offer a merged option that mostly refuses": Pet has no precondition
+-- of its own, so the fallback is guaranteed to succeed whenever the ONLY
+-- thing blocking the player was a missing item, not distance/cooldown/
+-- feature-off/invalid-target (those four are IDENTICAL checks on both
+-- server callbacks, in the same order, against the same state -- see
+-- RequestCareForK9()'s own doc comment for why those four are reported
+-- directly rather than triggering a second, guaranteed-to-fail round trip).
+--
+-- NOT A NEW PERMISSION CHECK: this section writes ZERO new server code and
+-- ZERO new client-side gating of its own. `RequestCareForK9()` below is pure
+-- orchestration over the two EXISTING, UNMODIFIED
+-- 'qbx_k9unit:server:petK9'/'qbx_k9unit:server:feedK9' callbacks -- every
+-- permission/proximity/cooldown/item check a player could hit today is
+-- still made by exactly the same server-side code, in exactly the same
+-- place, unchanged by one line. This is what "must reach the SAME functions
+-- and inherit their gating exactly" (this task's own hard rule) looks like
+-- in practice: reusing, never re-deriving.
+--
+-- HIDDEN ALIASES, THE ox_target TRANSLATION OF THIS RESOURCE'S ESTABLISHED
+-- CONVENTION: COMMAND_CONSOLIDATION_SPEC.md §3's own "hidden alias" shape
+-- for a MERGED COMMAND is "keep the old RegisterCommand call registered,
+-- same handler body, now usually just forwarding into the new merged
+-- dispatcher... but stop advertising it in the discoverability layer." A
+-- third-eye option has no separate discoverability layer to strip (its
+-- OWN registration in the visible options list IS the discoverability) --
+-- the faithful translation of the same convention is therefore the one this
+-- codebase ALREADY shipped for an identical visible-list merge,
+-- client/tracking.lua's own Detection consolidation (client/radial.lua's
+-- three former "Track Scent"/"Track Blood"/"Track Gunpowder" items are
+-- GONE, replaced by one 'k9_track_certified' entry -- but StartScentTrack()/
+-- StartBloodTrack()/StartGunpowderTrack() themselves SURVIVE, unchanged,
+-- as still-callable resource-globals, reachable today via
+-- client/tablet.lua's FEATURE_TRIGGERS table). Applied here identically:
+-- the two former standalone visible entries ('qbx_k9unit:petK9',
+-- 'qbx_k9unit:feedK9') are gone from RegisterMoodOxTargetOptions()'s own
+-- table below, replaced by the one 'qbx_k9unit:careForK9' entry -- but
+-- their exact former onSelect bodies survive UNCHANGED as `RequestPetK9()`/
+-- `RequestFeedK9()`, resource-globals (no `local`) below, reachable by
+-- anything that wants an UNAMBIGUOUS single action with no resolution step
+-- (a future radial item, the tablet's FEATURE_TRIGGERS, or a later
+-- reconsideration of this merge) without duplicating either action's own
+-- validation. The real, load-bearing "entry point" this task's Rule 1 asks
+-- to preserve -- the two SERVER callbacks another file or a modified client
+-- could already depend on -- are untouched by this pass, full stop: not one
+-- line of server/wellbeing.lua changed for this merge.
+--
+-- WHY drinkFromBowl DOES NOT JOIN THIS MERGE (confirmed against
+-- server/wellbeing.lua's own drinkFromBowl handler before deciding, not
+-- assumed): Pet/Feed are HANDLER-TO-K9 actions -- ANY player, targeting a
+-- DIFFERENT player's K9 ped (`targetPed ~= usingPed` is enforced), the exact
+-- "a genuine second player in the loop" bonding mechanic this file's own
+-- "SELF-SERVICE, A DELIBERATE DIVERGENCE FROM MOOD" header section (further
+-- down, HUNGER/THIRST) contrasts against. drinkFromBowl is SELF-ONLY -- the
+-- ACTOR must themselves be a K9 (`ResolveK9Ped(src)`'s own `isK9` check
+-- there requires the CALLER's ped, not a target's), relieving THEIR OWN
+-- citizenid's thirst, and it targets a completely different ENTITY CLASS
+-- (a world prop via `AddModel`, never a player ped via `AddGlobalPlayer`).
+-- Concretely, this means drinkFromBowl NEVER actually stacks with Pet/Feed
+-- in the first place -- a player looking at a K9's ped never saw "Drink
+-- from Bowl" appear alongside "Pet K9"/"Feed K9" (they are options on TWO
+-- DIFFERENT ENTITIES), so folding it into this merge would not remove one
+-- real choice from the "stack of choices on a K9" this task describes --
+-- there was no third choice stacking there to begin with. Forcing it in
+-- would ALSO mean either (a) silently letting a HANDLER trigger a SELF-ONLY
+-- K9 action on someone else's behalf (a real gating change this task's Rule
+-- 2 forbids outright), or (b) inventing a brand-new "is a bowl near the
+-- TARGET K9" server-side world scan this task's file scope was never asked
+-- to build. Left exactly as it is, further down this file, as its own
+-- single, already-unambiguous entry point on its own target.
 --
 -- ALWAYS REGISTERS, regardless of Config.Features.MoodSystem's boot-time
 -- value: gating this entire block (including the ox_target registration
 -- itself) on that static copy would mean a client who booted with
--- MoodSystem=false could never see "Pet K9"/"Feed K9" appear even after a
+-- MoodSystem=false could never see "Care for K9" appear even after a
 -- later runtime toggle-ON, for the rest of that client's session -- no
 -- restart of THIS resource would help, since nothing client-side would be
 -- left to ever call RegisterMoodOxTargetOptions() again. Per this file's
 -- header "LIVE FEATURE FLAGS": registration always happens (cheap --
 -- ox_target option registration is a one-time table build, not a poll),
--- and both `canInteract` closures below gate on
--- `LiveFeatureFlags.MoodSystem` (the server's CURRENT flag state) instead
--- of the static `Config.Features.MoodSystem` this client shipped with --
--- exactly matching client/featureblocks.lua's own established rule for
--- this class of check ("check at the point it acts, never merely at
--- registration"). ox_target calls `canInteract` fresh on every look, so a
--- live flag flip is reflected the very next time a player looks at a K9,
--- with no registration-lifecycle work needed on either side of the
--- transition.
+-- and `canInteract` below gates on `LiveFeatureFlags.MoodSystem` (the
+-- server's CURRENT flag state) instead of the static
+-- `Config.Features.MoodSystem` this client shipped with -- exactly matching
+-- client/featureblocks.lua's own established rule for this class of check
+-- ("check at the point it acts, never merely at registration"). ox_target
+-- calls `canInteract` fresh on every look, so a live flag flip is reflected
+-- the very next time a player looks at a K9, with no registration-lifecycle
+-- work needed on either side of the transition. UNCHANGED from the former
+-- two-option shape: this is the exact same predicate both "Pet K9" and
+-- "Feed K9" already used (confirmed identical before merging) -- the merged
+-- option therefore appears in EXACTLY the same circumstances either of the
+-- two former options did, never wider, never narrower.
 -- ======================================================================
 do
     -- ResolvePlayerServerIdFromPed(entity) used to be defined here as a
