@@ -224,6 +224,19 @@ t.test('PARENT ON, NO FORCED-OFF PRINT: flipping Combat.enabled back to true (it
     t.isFalse(env.Config.Features.DangerWarn, 'DangerWarn\'s own real default is false -- recovering the ORIGINAL default must not be confused with recovering "true"')
 end)
 
+t.test('IDEMPOTENCY, THE CASE THAT ACTUALLY EXERCISES THE FALLBACK PATH: an operator who OMITS a child from Config.FeatureGroups entirely (never sets Combat.BiteAndHold at all, unlike the shipped default template which spells out every child explicitly) still recovers its TRUE original shipped value after a disable-then-reenable cycle -- this is the one shape that would have caught this resolver reading its own already-narrowed Config.Features value as if it were the pristine default, since the shipped defaults alone (every child spelled out explicitly) never exercise the omitted-child fallback branch at all', function()
+    local env = loadRealConfig()
+    env.Config.FeatureGroups.Combat.BiteAndHold = nil -- OMITTED, not merely set to true -- this is the load-bearing difference from the shipped template
+
+    env.Config.FeatureGroups.Combat.enabled = false
+    env.ResolveFeatureGroups()
+    t.isFalse(env.Config.Features.BiteAndHold, 'sanity: parent-off still forces the omitted child off too')
+
+    env.Config.FeatureGroups.Combat.enabled = true
+    env.ResolveFeatureGroups()
+    t.isTrue(env.Config.Features.BiteAndHold, 'must recover true (the pristine original shipped default) -- a resolver reading its own live, already-narrowed Config.Features value here instead would find `false` with nothing left to recover the real default from, and this would fail')
+end)
+
 t.test('BASE COLLAPSE: Detection.enabled directly IS the resolved ScentTracking value -- toggling one toggles the other, with no separate child slot for it', function()
     local env = loadRealConfig()
     t.isTrue(env.Config.Features.ScentTracking) -- sanity: shipped default

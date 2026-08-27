@@ -1023,7 +1023,7 @@ function ResolveFeatureGroups()
                 -- function's own doc comment on why this must never read
                 -- Config.Features' own live value here) -- i.e. "not
                 -- overridden in Config.FeatureGroups".
-                local childValue = Config.Features[flatName]
+                local childValue = Config.FeaturesBeforeGrouping[flatName]
                 if family ~= nil and family[childKey] ~= nil then
                     if type(family[childKey]) ~= 'boolean' then
                         print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.%s is not a boolean (got %s) -- using Config.Features.%s\'s original shipped value instead. Fix Config.FeatureGroups.%s.%s in config.lua.'):format(familyName, childKey, type(family[childKey]), flatName, familyName, childKey))
