@@ -413,8 +413,19 @@
       'function'`, this file's own established "genuine new cross-file
       dependency, no consumer exists yet" idiom already used for
       RestoreInjury/IsHesitating's OWN callers) so this file degrades to
-      EXACTLY today's memory-only behaviour, never an error, on a server
-      whose server/datastore.lua has not yet grown these two accessors.
+      EXACTLY today's memory-only behaviour, never an error, the moment
+      `K9Store.Wellbeing_Get`/`K9Store.Wellbeing_Upsert` are ever absent —
+      STATUS, CORRECTED (a follow-up change closed this the same day):
+      server/datastore.lua now DOES carry both accessors (this pass's own
+      migration, sql/migrations/0022_create_k9_wellbeing.sql, is also now
+      folded into sql/install.sql directly), so this guard's immediate
+      trigger — "server/datastore.lua has not grown these accessors yet" —
+      no longer describes this resource's own real state. The guard itself
+      is kept regardless, as permanent defense-in-depth (the same posture
+      RestoreInjury's own `type(...) == 'function'` check keeps
+      indefinitely after server/combat.lua actually landed as a real
+      caller — see that accessor's own doc comment), not removed just
+      because its original trigger closed.
       `WellbeingStats` STILL grows one entry per distinct citizenid seen
       this session (same accepted growth profile as server/
       certifications.lua's `Certifications` cache) BUT is now bounded
@@ -1011,7 +1022,10 @@
     FAIL DIRECTION, STATED EXPLICITLY: every `K9Store.Wellbeing_*` call
     site in this file is soft-guarded (`WellbeingPersistenceAvailable()`)
     and pcall-wrapped. A database that is unavailable, a query that fails,
-    or a server/datastore.lua that has not yet grown these two accessors
+    or (kept as permanent defense-in-depth, not because it currently
+    describes this resource — server/datastore.lua carries both accessors
+    as of the follow-up change that closed the FILE-TO-FILE CONTRACT note
+    above) a server/datastore.lua missing one or both of these accessors
     all degrade to EXACTLY today's memory-only behaviour (every gameplay
     action still works; nothing crashes; nothing is evicted while
     unconfirmed) -- never a broken wellbeing system, and never a crashed

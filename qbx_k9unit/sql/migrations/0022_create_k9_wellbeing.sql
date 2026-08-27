@@ -2,13 +2,15 @@
 -- qbx_k9unit :: migration 0022 :: create k9_wellbeing
 --
 -- WHO NEEDS THIS FILE: an existing installation whose `qbx_k9unit/sql/install.sql`
--- was applied BEFORE `k9_wellbeing` existed in it. A brand-new install
--- needs this file too, right now, as of this pass -- unlike most of the
--- migrations in this folder, `sql/install.sql` has NOT yet been updated to
--- create this table (see the DISCLOSED CROSS-FILE DEPENDENCY note below).
--- Run this file explicitly (or via `sql/k9_setup.sh`, which already runs
--- every file in this folder after install.sql) until install.sql catches
--- up.
+-- was applied BEFORE `k9_wellbeing` existed in it. A brand-new install does
+-- NOT need to run this file by hand -- `sql/install.sql` now also creates
+-- this table directly (added in the same follow-up change that closed the
+-- CROSS-FILE DEPENDENCY note below), matching this resource's own
+-- established "install.sql creates every table any migration creates"
+-- convention. Running this file anyway (e.g. via `sql/k9_setup.sh`, which
+-- runs every file in this folder after install.sql) is always safe --
+-- `CREATE TABLE IF NOT EXISTS` is a guaranteed no-op once install.sql has
+-- already created it.
 --
 -- WHAT THIS TABLE IS FOR: server/wellbeing.lua's six per-K9 stats
 -- (fatigue, mood, fearStress, injury, hunger, thirst) used to live ONLY in
@@ -33,26 +35,27 @@
 -- server/wellbeing.lua's own header, "DATABASE PERSISTENCE" section, for
 -- the full design writeup this table exists to support.
 --
--- DISCLOSED CROSS-FILE DEPENDENCY, NOT SILENTLY ASSUMED COMPLETE: this
--- migration was authored under a file-ownership boundary that does not
--- include server/datastore.lua (the ONLY file in this resource permitted
--- to name a `k9_*` table or call `MySQL.*` directly), sql/install.sql,
--- sql/preflight_check.sql, sql/migration_status.sql,
--- sql/rollback/uninstall_all.sql, sql/rollback/backup_k9_tables.sh, or
--- tests/schemaconvergence_spec.lua's own hand-maintained
--- MIGRATION_FILES_THAT_CREATE_TABLES list. Every one of those needs a
--- matching entry for `k9_wellbeing` (server/datastore.lua specifically
--- needs two new accessors, `K9Store.Wellbeing_Get(citizenid)` mirroring
--- `MySQL.single.await` and `K9Store.Wellbeing_Upsert(citizenid, row)`
--- returning a boolean and never throwing, mirroring this resource's own
--- SafeWrite-style bespoke-wrapper contract) before this table is actually
--- reachable from a running server. server/wellbeing.lua itself already
--- degrades safely in the meantime -- every `K9Store.Wellbeing_*` call site
--- there is soft-guarded (`type(K9Store.Wellbeing_Get) == 'function'`) and
--- falls back to exactly its own pre-existing memory-only behaviour, never
--- an error, until those accessors exist. This migration is shipped now,
--- rather than withheld, so the schema half of this work is not blocked on
--- the wiring half landing first.
+-- CROSS-FILE DEPENDENCY, DISCLOSED WHEN THIS MIGRATION WAS AUTHORED AND
+-- NOW CLOSED IN A FOLLOW-UP CHANGE: this migration was originally authored
+-- under a file-ownership boundary that did not include server/datastore.lua
+-- (the ONLY file in this resource permitted to name a `k9_*` table or call
+-- `MySQL.*` directly), sql/install.sql, sql/preflight_check.sql,
+-- sql/migration_status.sql, sql/rollback/uninstall_all.sql,
+-- sql/rollback/backup_k9_tables.sh, or tests/schemaconvergence_spec.lua's
+-- own hand-maintained MIGRATION_FILES_THAT_CREATE_TABLES list -- so this
+-- table shipped for one pass with nothing reading or writing it yet.
+-- CONFIRMED, this follow-up: every one of those files now carries a
+-- matching `k9_wellbeing` entry -- server/datastore.lua's
+-- `K9Store.Wellbeing_Get(citizenid)` (mirrors `MySQL.single.await`: nil =
+-- no row) and `K9Store.Wellbeing_Upsert(citizenid, row)` (SafeWrite-style:
+-- returns a boolean, never throws) both exist and are exactly what
+-- server/wellbeing.lua's own soft-guarded call sites
+-- (`type(K9Store.Wellbeing_Get) == 'function'`) now find and use. That
+-- guard itself was never removed and still matters: it is what lets this
+-- table, and this whole feature, keep degrading safely to memory-only
+-- behaviour on any server where the database is unreachable or
+-- `Config.Database.enabled`/`Config.Wellbeing.Persistence.enabled` is
+-- `false`, exactly as before.
 --
 -- IDEMPOTENT / SAFE TO RE-RUN: `CREATE TABLE IF NOT EXISTS` is a no-op if
 -- the table already exists -- never ALTERs, never DROPs, never touches

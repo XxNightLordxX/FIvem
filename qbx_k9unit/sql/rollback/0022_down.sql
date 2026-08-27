@@ -41,15 +41,13 @@
 --     wellbeing feature keeps working normally in the meantime (this
 --     resource degrades to session-memory-only for this one table, never
 --     an error).
---   * Genuinely want this table gone? Report to the sql/** owner that
---     `k9_wellbeing` needs adding to sql/preflight_check.sql,
---     sql/migration_status.sql, sql/rollback/uninstall_all.sql,
---     sql/rollback/backup_k9_tables.sh, server/datastore.lua's
---     EXPECTED_TABLE_COLUMNS, and sql/install.sql itself (this migration
---     was authored under a file-ownership boundary that does not include
---     any of those -- see migration 0022's own header, "DISCLOSED
---     CROSS-FILE DEPENDENCY," for the current, honest state of that
---     wiring) -- neither of which this file edits. Once that lands: run
+--   * Genuinely want this table gone? `k9_wellbeing` is now a real entry in
+--     sql/preflight_check.sql, sql/migration_status.sql,
+--     sql/rollback/uninstall_all.sql, sql/rollback/backup_k9_tables.sh,
+--     server/datastore.lua's EXPECTED_TABLE_COLUMNS, and sql/install.sql
+--     itself (see migration 0022's own header, "CROSS-FILE DEPENDENCY,"
+--     for the full landing history -- this migration shipped one pass
+--     before that wiring did, disclosed as such at the time). Run
 --     sql/rollback/backup_k9_tables.sh FIRST, then arm and run
 --     sql/rollback/uninstall_all.sql.
 --
@@ -80,7 +78,7 @@ BEGIN
         SELECT COUNT(*) INTO rows_held FROM `k9_wellbeing`;
         SELECT 'NOTHING DONE - ON PURPOSE' AS status,
                rows_held AS wellbeing_rows_this_would_destroy,
-               'This script never drops a table. Those rows are every tracked K9''s current fatigue/mood/fear-stress/injury/hunger/thirst and cannot be rebuilt from anything else -- dropping this table resets that condition to fresh for every one of them. To remove the table anyway: run backup_k9_tables.sh first, then arm and run uninstall_all.sql (once k9_wellbeing has been added to that file and to backup_k9_tables.sh -- see this file''s own header).' AS detail;
+               'This script never drops a table. Those rows are every tracked K9''s current fatigue/mood/fear-stress/injury/hunger/thirst and cannot be rebuilt from anything else -- dropping this table resets that condition to fresh for every one of them. To remove the table anyway: run backup_k9_tables.sh first, then arm and run uninstall_all.sql.' AS detail;
     END IF;
 END$$
 DELIMITER ;
