@@ -3637,6 +3637,29 @@ local EXPECTED_TABLE_COLUMNS = {
     -- in sync if either changes.
     k9_permission_keys                 = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
     k9_permission_key_audit            = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
+    -- SCHEMA-SAFETY AUDIT FIX (db-schema pass, 2026-08-27): migration 0019
+    -- (mana_policedogs feature-parity pass, the admin-pinned "this
+    -- citizenid IS a dog" record behind /k9setdog and /k9removedog,
+    -- server/dogcharacter.lua) created `k9_dog_characters` but this table
+    -- name was NEVER added here, or to sql/install.sql, sql/preflight_check
+    -- .sql, sql/migration_status.sql, sql/rollback/uninstall_all.sql or
+    -- sql/rollback/backup_k9_tables.sh -- the exact same class of gap
+    -- k9_permission_keys/k9_permission_key_audit had before being fixed
+    -- (see the comment on those two rows above), except this one meant the
+    -- ONE table in this whole schema that could actually collide with a
+    -- foreign table silently and never be told so, since
+    -- VerifyTableShapesAgainstKnownSchema below only ever protects a table
+    -- named here. server/dogcharacter.lua's own accessors already call
+    -- through `K9Store.IsDatabaseEnabled('k9_dog_characters')` (a
+    -- deliberate, flagged exception to this file's own "only
+    -- server/datastore.lua calls MySQL.*" rule -- see that file's own
+    -- header), so adding this row needed no other code change there: a real
+    -- name collision or a genuinely missing table now correctly falls back
+    -- this ONE table to honest memory-only mode instead of issuing a real
+    -- query against a table that either does not exist or is not ours.
+    -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entry for
+    -- this table exactly -- keep both in sync if either changes.
+    k9_dog_characters                  = { 'citizenid', 'model', 'active', 'set_by', 'set_at', 'unset_at' },
     -- ROSTER_SPEC.md §3/§4 (migration 0020, db-schema pass, 2026-08-26).
     -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entry for
     -- this table exactly -- keep both in sync if either changes.
@@ -3678,6 +3701,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
     k9_equipment_shop_item_audit       = 'the shop-item audit log',
     k9_permission_keys                 = 'the permission-key catalog',
     k9_permission_key_audit            = 'the permission-key audit log',
+    k9_dog_characters                  = 'admin-pinned "this citizenid is permanently a dog" records (/k9setdog, /k9removedog -- mana_policedogs feature parity) -- NOTE: while this table is missing, every currently-pinned dog character falls back to memory only for the rest of this session (nobody\'s actual K9 role/certification is affected either way -- this table has never decided whether a citizenid may act as a K9, only whether their dog form is pinned in place; see server/dogcharacter.lua\'s own header)',
     k9_personnel                       = 'the K9/Handler roster assignments and callsigns -- NOTE: while this table is missing, every currently-assigned K9/handler falls back to the "Unassigned" bucket on the roster screens the moment this resource restarts (nobody\'s actual certification/permission/feature access is affected either way -- see ROSTER_SPEC.md §8)',
 }
 

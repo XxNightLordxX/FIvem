@@ -4,7 +4,7 @@
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
 -- This is a hard requirement, not a recommendation. Five of the
--- twenty-six (26) tables below (k9_certifications,
+-- twenty-seven (27) tables below (k9_certifications,
 -- k9_certification_specializations, k9_partnerships, k9_permissions,
 -- k9_personnel)
 -- declare an INDEXED VIRTUAL GENERATED COLUMN backing a UNIQUE KEY
@@ -13,7 +13,7 @@
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
 -- `k9_permissions.active_permission_key`,
 -- `k9_personnel.active_personnel_key` and `active_callsign_key`
--- (migration 0020, ROSTER_SPEC.md §3/§4)) -- the other twenty-one
+-- (migration 0020, ROSTER_SPEC.md §3/§4)) -- the other twenty-two
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
@@ -22,7 +22,7 @@
 -- k9_permission_keys, k9_permission_key_audit, k9_equipment_shop_items,
 -- k9_equipment_shop_item_audit, k9_xp_tiers, k9_xp_tier_audit,
 -- k9_individual_overrides, k9_individual_override_audit,
--- k9_partnership_pair_progress) need
+-- k9_partnership_pair_progress, k9_dog_characters) need
 -- nothing from this floor and would run on an older server on their own,
 -- but this resource has one stated minimum for the schema as a whole, not
 -- a per-table one.
@@ -1534,6 +1534,64 @@ CREATE TABLE IF NOT EXISTS `k9_partnership_pair_progress` (
   `highest_tenure_tier_granted`  TINYINT UNSIGNED  NOT NULL DEFAULT 0,
 
   PRIMARY KEY (`k9_citizenid`, `handler_citizenid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_dog_characters
+--
+-- SCHEMA-SAFETY AUDIT FIX (db-schema pass, 2026-08-27): this table was
+-- created by `sql/migrations/0019_create_k9_dog_characters.sql` (see that
+-- file's own header for the full mana_policedogs feature-parity design
+-- rationale) but was NEVER added here -- so a fresh install via this file
+-- alone never created it, `/k9setdog`/`/k9removedog` (server/dogcharacter.lua)
+-- issued real queries against a table that plain did not exist on any
+-- server that only ever ran `install.sql`, and the failure reported back
+-- was a generic `db_error` with nothing pointing at the actual cause. This
+-- table's own migration file was the ONLY place that created it before this
+-- fix -- every other integration point this schema's tables normally go
+-- through (this file, `sql/preflight_check.sql`, `sql/migration_status.sql`,
+-- `sql/rollback/uninstall_all.sql`, `sql/rollback/backup_k9_tables.sh`,
+-- `server/datastore.lua`'s `EXPECTED_TABLE_COLUMNS`) had the identical gap,
+-- all fixed in this same change.
+--
+-- Byte-for-byte the same column definitions, types, charset and collation
+-- as `sql/migrations/0019_create_k9_dog_characters.sql`'s own `CREATE
+-- TABLE` -- see that file's own header for the full "why" of this table's
+-- shape (a single admin-pinned "this citizenid IS a dog" fact, deliberately
+-- separate from and never overwriting the certification-driven appearance
+-- state `k9_ped_assignments`, migration 0008, already tracks). Answers a
+-- different question than `k9_personnel` below: this table is a purely
+-- COSMETIC pin, completely decoupled from role/certification (see that
+-- table's own header, and `k9_personnel`'s header just below, for the full
+-- "why not this table instead" argument).
+--
+-- No FK anywhere, matching this schema's own established "no FK,
+-- relational integrity enforced at the application layer" convention.
+-- `server/dogcharacter.lua`'s own accessors are a DELIBERATE, FLAGGED
+-- exception to this file's "only server/datastore.lua calls MySQL.*"
+-- convention (see that file's own header) -- they call through
+-- `K9Store.IsDatabaseEnabled('k9_dog_characters')`, which this fix also
+-- wires into `server/datastore.lua`'s `EXPECTED_TABLE_COLUMNS` so a real
+-- name collision on this exact table name now forces this ONE table (not
+-- the whole resource) into honest memory-only mode instead of a silent
+-- write into a table this resource does not own.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, run
+-- `sql/migrations/0019_create_k9_dog_characters.sql` instead (a guaranteed
+-- no-op if this file already created it).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_dog_characters` (
+  `citizenid` VARCHAR(50)  NOT NULL,
+  `model`     VARCHAR(64)  NOT NULL,
+  `active`    TINYINT(1)   NOT NULL DEFAULT 1,
+  `set_by`    VARCHAR(50)  NOT NULL,
+  `set_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `unset_at`  DATETIME     DEFAULT NULL,
+
+  PRIMARY KEY (`citizenid`),
+  KEY `idx_active` (`active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================

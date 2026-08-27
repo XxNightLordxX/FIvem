@@ -283,6 +283,20 @@ FROM (
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel'
          AND COLUMN_NAME IN ('citizenid','job','role','callsign','granted_by','granted_at','cleared_by','cleared_at','active'))
+    -- migration 0019 (mana_policedogs feature-parity pass, /k9setdog /
+    -- k9removedog's admin-pinned "this citizenid IS a dog" fact) --
+    -- SCHEMA-SAFETY AUDIT FIX, db-schema pass 2026-08-27: this table was
+    -- missing from this check entirely from the day it shipped -- the exact
+    -- same class of silent gap migrations 0010/0011/0013/0014/0015/0016
+    -- each had here before being fixed (see the comments on those rows
+    -- above). Column list mirrors sql/install.sql's own CREATE TABLE and
+    -- server/datastore.lua's own EXPECTED_TABLE_COLUMNS entry for this
+    -- table exactly -- keep all three in sync if any changes.
+    UNION ALL SELECT 'k9_dog_characters', 6,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'
+         AND COLUMN_NAME IN ('citizenid','model','active','set_by','set_at','unset_at'))
 ) x
 ORDER BY x.table_name;
 
@@ -329,7 +343,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit',
                           'k9_individual_overrides','k9_individual_override_audit',
-                          'k9_partnership_pair_progress','k9_personnel');
+                          'k9_partnership_pair_progress','k9_personnel','k9_dog_characters');
 
 
 -- ---------------------------------------------------------------------
@@ -373,7 +387,7 @@ SELECT
 SELECT TABLE_NAME AS `our_table`, TABLE_ROWS AS `approx_rows`
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit','k9_equipment_shop_locations','k9_equipment_shop_locations_audit','k9_permission_keys','k9_permission_key_audit','k9_equipment_shop_items','k9_equipment_shop_item_audit','k9_xp_tiers','k9_xp_tier_audit','k9_individual_overrides','k9_individual_override_audit','k9_partnership_pair_progress','k9_personnel')
+  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit','k9_equipment_shop_locations','k9_equipment_shop_locations_audit','k9_permission_keys','k9_permission_key_audit','k9_equipment_shop_items','k9_equipment_shop_item_audit','k9_xp_tiers','k9_xp_tier_audit','k9_individual_overrides','k9_individual_override_audit','k9_partnership_pair_progress','k9_personnel','k9_dog_characters')
 ORDER BY TABLE_NAME;
 
 

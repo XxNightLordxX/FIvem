@@ -498,6 +498,17 @@ local MIGRATION_FILES_THAT_CREATE_TABLES = {
     '0015_create_k9_xp_tiers.sql',
     '0016_create_k9_individual_overrides.sql',
     '0018_create_k9_partnership_pair_progress.sql',
+    -- SCHEMA-SAFETY AUDIT FIX (db-schema pass, 2026-08-27): this migration
+    -- was missing from this exact list -- meaning this test, whose whole
+    -- job is to prove "every table sql/migrations/*.sql can CREATE is also
+    -- in install.sql", was never even looking at the one migration file
+    -- that had actually drifted (its table, k9_dog_characters, was absent
+    -- from install.sql from the day migration 0019 shipped). This is the
+    -- automated backstop the next missing entry in this list needs: see
+    -- this list's own header comment above for the "why hand-maintained"
+    -- tradeoff, and note this incident as proof that a hand-maintained list
+    -- like this one is still only as good as its own maintenance.
+    '0019_create_k9_dog_characters.sql',
     '0020_create_k9_personnel.sql',
 }
 

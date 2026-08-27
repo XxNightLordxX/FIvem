@@ -108,25 +108,34 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress')
     UNION ALL SELECT 'k9_personnel',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel')
+    UNION ALL SELECT 'k9_dog_characters',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters')
 ) t
 ORDER BY t.table_name;
--- NOTE: install.sql now converges with sql/migrations/0001-0020 (26 tables
+-- NOTE: install.sql now converges with sql/migrations/0001-0021 (27 tables
 -- total, including k9_progression's idx_xp, migration 0010's three
 -- certification-tier tables, migration 0011's two equipment-shop-location
 -- tables, migration 0013's two permission-key-catalog tables, migration
 -- 0014's two equipment-shop-item tables, migration 0015's two
 -- XP-rank-override tables, migration 0016's two per-individual-K9
 -- override tables, migration 0018's one partnership-tenure
--- anti-farm-guard table, and migration 0020's one K9/Handler roster
--- assignment table (ROSTER_SPEC.md §3/§4)). If this comment and install.sql's real table
--- count ever disagree again, install.sql is out of date; report it rather
--- than trust this file. (This comment previously said "0001-0011 / 16
--- tables", then "0001-0013/0015 / 20 tables" while claiming migration
--- 0014's own two tables were a still-pending, separately-landing pass --
--- that was itself the exact class of silent omission this note exists to
--- flag: migration 0014 had already shipped as a real migration file for
--- some time by then, install.sql was simply never updated to match it.
--- Fixed here, along with install.sql itself, in the same change.)
+-- anti-farm-guard table, migration 0019's one admin-pinned dog-character
+-- table (mana_policedogs feature parity, /k9setdog /k9removedog -- this
+-- table was itself the SCHEMA-SAFETY AUDIT FIX, db-schema pass 2026-08-27:
+-- it had been completely absent from install.sql/this file/preflight_check
+-- .sql/uninstall_all.sql/backup_k9_tables.sh/datastore.lua's
+-- EXPECTED_TABLE_COLUMNS since the day migration 0019 shipped, so a fresh
+-- install via install.sql alone never created it at all), and migration
+-- 0020's one K9/Handler roster assignment table (ROSTER_SPEC.md §3/§4)).
+-- If this comment and install.sql's real table count ever disagree again,
+-- install.sql is out of date; report it rather than trust this file. (This
+-- comment previously said "0001-0011 / 16 tables", then "0001-0013/0015 /
+-- 20 tables" while claiming migration 0014's own two tables were a
+-- still-pending, separately-landing pass -- that was itself the exact
+-- class of silent omission this note exists to flag: migration 0014 had
+-- already shipped as a real migration file for some time by then,
+-- install.sql was simply never updated to match it. Fixed here, along with
+-- install.sql itself, in the same change.)
 
 
 -- ---------------------------------------------------------------------
@@ -490,6 +499,31 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress') AS tbl_exists
 ) t;
 
+-- 0019: CREATE TABLE (k9_dog_characters) -- mana_policedogs feature-parity
+-- pass, the admin-pinned "this citizenid IS a dog" fact behind /k9setdog
+-- and /k9removedog (server/dogcharacter.lua). SCHEMA-SAFETY AUDIT FIX
+-- (db-schema pass, 2026-08-27): this migration was previously completely
+-- absent from this report -- the exact same class of omission migrations
+-- 0010/0011/0013/0014/0015/0016 already had fixed here once before (see
+-- the PART 1 note above), except this one was never caught until a
+-- dedicated schema-safety audit found it: install.sql, this file,
+-- preflight_check.sql, uninstall_all.sql, backup_k9_tables.sh and
+-- datastore.lua's EXPECTED_TABLE_COLUMNS had ALL missed this table since
+-- the day migration 0019 shipped. Independent of every other table (see
+-- that migration's own header -- no FK, no dependency on any other table),
+-- so there is no "BLOCKED" case to report here, same as
+-- 0010/0011/0013/0014/0015/0016/0018 above.
+SELECT
+    t.table_name AS `0019_create_k9_dog_characters.sql would...`,
+    CASE WHEN t.tbl_exists = 0
+         THEN CONCAT('CREATE TABLE `', t.table_name, '` (currently absent)')
+         ELSE CONCAT('no-op -- `', t.table_name, '` already exists')
+    END AS plan
+FROM (
+    SELECT 'k9_dog_characters' AS table_name,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters') AS tbl_exists
+) t;
+
 -- 0020: CREATE TABLE (k9_personnel) -- ROSTER_SPEC.md §3/§4, the K9/Handler
 -- roster assignment + callsign table. Independent of every other table (no
 -- FK, no dependency on any other table -- see that migration's own header
@@ -525,7 +559,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                       'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                       'k9_xp_tiers','k9_xp_tier_audit',
                       'k9_individual_overrides','k9_individual_override_audit',
-                      'k9_partnership_pair_progress','k9_personnel')
+                      'k9_partnership_pair_progress','k9_personnel','k9_dog_characters')
 ORDER BY TABLE_NAME;
 
 -- DRIFT CHECK -- same posture and same reasoning as preflight_check.sql's
@@ -555,6 +589,6 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit',
                           'k9_individual_overrides','k9_individual_override_audit',
-                          'k9_partnership_pair_progress','k9_personnel');
+                          'k9_partnership_pair_progress','k9_personnel','k9_dog_characters');
 
 SELECT 'DRY RUN COMPLETE -- nothing was changed by this report. Run sql/k9_setup.sh (without --dry-run) to actually apply the plan above; it backs up your whole database first, automatically, and refuses to write anything if that backup fails.' AS final_note;

@@ -32,7 +32,13 @@ You need two files from this `sql/` folder: `preflight_check.sql` and
 `install.sql`. That is it — for a brand-new install, you do **not** need
 any of the numbered files inside the `migrations/` folder. Those only
 matter later, when you update to a newer version of this resource (see
-Part 3).
+Part 3). (Verified true as of the 2026-08-27 schema-safety audit:
+`install.sql` creates every table AND every column any file under
+`migrations/` creates or adds, including migration 0019's
+`k9_dog_characters` table, which had been missing from `install.sql` — a
+real, shipped gap this exact claim used to be wrong about for anyone who
+followed it literally. `tests/schemaconvergence_spec.lua` now checks this
+on every commit so it cannot go stale again unnoticed.)
 
 ### If you have phpMyAdmin, HeidiSQL, Adminer, or any similar tool
 
@@ -168,7 +174,7 @@ can genuinely happen — some other K9-themed resource, for example), this
 file recognizes that it is not one of its own and refuses to touch it,
 loudly, by name, instead of guessing. It never uses a broad "delete
 anything starting with k9\_" rule — it only ever acts on an exact,
-pre-written list of this resource's own 25 table names, and only after
+pre-written list of this resource's own 27 table names, and only after
 confirming each one is really this resource's own table.
 
 Running the uninstall file twice in a row is safe — the second time it

@@ -6,10 +6,21 @@
 -- fourteen, migration 0011 took it to sixteen, migration 0013 took it to
 -- eighteen, migration 0014 took it to twenty, migration 0015 took it to
 -- twenty-two, migration 0016 took it to twenty-four, migration 0018 took
--- it to twenty-five, and migration 0020 (ROSTER_SPEC.md §3/§4) took it to
--- twenty-six. A hardcoded count in a destructive script is a promise
--- that silently rots every time a migration lands, so it is deliberately
--- not restated as a number here.
+-- it to twenty-five, migration 0019 took it to twenty-six, and migration
+-- 0020 (ROSTER_SPEC.md §3/§4) took it to twenty-seven. A hardcoded count
+-- in a destructive script is a promise that silently rots every time a
+-- migration lands, so it is deliberately not restated as a number here.
+--
+-- SCHEMA-SAFETY AUDIT FIX (db-schema pass, 2026-08-27): migration 0019's
+-- own table (`k9_dog_characters`, the mana_policedogs feature-parity
+-- admin-pinned dog-character record behind /k9setdog and /k9removedog)
+-- had been completely absent from this file's FK-blocker gate, shape gate
+-- and DROP list since the day it shipped -- the exact same class of gap
+-- migration 0010's three tables, and every hand-maintained list like it in
+-- this repo, had before being fixed. Named everywhere in this procedure
+-- now, in the same change that added it to sql/install.sql,
+-- sql/preflight_check.sql, sql/migration_status.sql and
+-- sql/rollback/backup_k9_tables.sh.
 -- The DROP list below is the authority. If you add a table in a
 -- migration, add it here in the SAME change -- and to preflight_check.sql
 -- and migration_status.sql, which have the same exposure.
@@ -23,7 +34,7 @@
 -- #  deliberate: it means you cannot destroy your server's K9 data by #
 -- #  pasting the wrong file into HeidiSQL or phpMyAdmin.              #
 -- #                                                                   #
--- #  It also refuses -- armed or not -- if any of the 26 table names  #
+-- #  It also refuses -- armed or not -- if any of the 27 table names  #
 -- #  it wants to drop is currently a table (or view) whose columns    #
 -- #  do not look like qbx_k9unit's own, or blocked by another table's #
 -- #  foreign key. It only ever drops a table it can verify is ours.   #
@@ -204,6 +215,21 @@
 --                      table is not recomputable from the first, which
 --                      only ever holds the current override, never history.
 --
+--   k9_dog_characters  Every character an admin has ever pinned as
+--                      permanently a dog with /k9setdog (and un-pinned
+--                      with /k9removedog) -- mana_policedogs feature
+--                      parity. Dropping this silently un-pins every
+--                      currently-pinned dog character: they do not break
+--                      and are not stuck as dogs, they simply revert to an
+--                      ordinary certification-driven appearance at their
+--                      next appearance evaluation. Nobody's actual K9
+--                      role/certification is affected either way -- this
+--                      table has never decided whether a citizenid may act
+--                      as a K9, only whether their dog form is pinned in
+--                      place. The admin decisions themselves are gone and
+--                      would have to be re-made by hand, character by
+--                      character.
+--
 --   k9_personnel       Every K9/Handler roster assignment ever made
 --                      (which of the two rosters a certified citizenid
 --                      belongs to per department) and their current
@@ -320,7 +346,10 @@ BEGIN
     -- dependency report below is the backstop for the next time a migration
     -- is missed here anyway: it runs unconditionally, on every single
     -- invocation (armed or not), and names any `k9_%` table in this
-    -- database that is not one of the twenty-five named below, loudly, in the
+    -- database that is not one of the twenty-seven named below (this
+    -- prose previously said "twenty-five," which was already one short of
+    -- the real count even before this pass's own k9_dog_characters fix --
+    -- corrected here to match the real, counted list), loudly, in the
     -- one report every operator already reads before doing anything else in
     -- this file.
     SELECT COUNT(*) INTO fk_blockers
@@ -337,7 +366,7 @@ BEGIN
                                     'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                                     'k9_xp_tiers','k9_xp_tier_audit',
                                     'k9_individual_overrides','k9_individual_override_audit',
-                                    'k9_personnel')
+                                    'k9_personnel','k9_dog_characters')
       AND TABLE_NAME NOT IN ('k9_certifications','k9_search_log','k9_partnerships',
                              'k9_partnership_pair_progress',
                              'k9_progression','k9_permissions','k9_certification_specializations',
@@ -349,7 +378,7 @@ BEGIN
                              'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                              'k9_xp_tiers','k9_xp_tier_audit',
                              'k9_individual_overrides','k9_individual_override_audit',
-                             'k9_personnel');
+                             'k9_personnel','k9_dog_characters');
 
 
     -- =================================================================
@@ -357,15 +386,15 @@ BEGIN
     -- dropped, armed or not, same as the FK-blocker gate above.
     --
     -- WHY THIS EXISTS: the FK-blocker gate above only refuses if some
-    -- OTHER table references one of our 25 names via a real foreign key.
+    -- OTHER table references one of our 27 names via a real foreign key.
     -- It says nothing about whether the table CURRENTLY sitting under one
-    -- of those 25 names is actually ours. `DROP TABLE IF EXISTS` drops
+    -- of those 27 names is actually ours. `DROP TABLE IF EXISTS` drops
     -- whatever object has that name, full stop -- it does not check that
     -- the object's columns look like something qbx_k9unit created. On a
     -- shared database (the exact case this resource's own comments
     -- elsewhere already treat as real and expected -- a sibling K9
     -- resource, e.g. `k9_units`, sharing this same database), a foreign
-    -- resource happening to use one of these 25 exact table names would
+    -- resource happening to use one of these 27 exact table names would
     -- otherwise be silently, permanently destroyed by an armed run of
     -- this file, with no warning -- the single worst outcome this
     -- resource's own design principle rules out everywhere else
@@ -383,7 +412,7 @@ BEGIN
     -- inventing a third, independently-drifting list. HONEST LIMIT OF
     -- THIS APPROACH: SQL has no way to `require()` a Lua table or another
     -- .sql file at runtime, so this is necessarily a THIRD hand-typed copy
-    -- of the same 25 signatures, not a shared reference to one -- exactly
+    -- of the same 27 signatures, not a shared reference to one -- exactly
     -- the same hand-maintained-list tradeoff this procedure's own OWNED
     -- TABLE LIST comment above already accepts for the DROP list itself.
     -- If you change a table's identifying columns in ANY of the three
@@ -538,6 +567,18 @@ BEGIN
               (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel'),
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel'
                  AND COLUMN_NAME IN ('citizenid','job','role','callsign','granted_by','granted_at','cleared_by','cleared_at','active'))
+            -- migration 0019 (mana_policedogs feature-parity pass) --
+            -- SCHEMA-SAFETY AUDIT FIX, db-schema pass 2026-08-27: same class
+            -- of gap as migration 0020's row above documents for itself,
+            -- except this one predates it and went unnoticed until a
+            -- dedicated schema-safety audit found it. Column list mirrors
+            -- sql/install.sql's own CREATE TABLE and server/datastore.lua's
+            -- own EXPECTED_TABLE_COLUMNS entry for this table exactly.
+            UNION ALL SELECT 'k9_dog_characters', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'
+                 AND COLUMN_NAME IN ('citizenid','model','active','set_by','set_at','unset_at'))
     ) shp
     WHERE shp.tbl_exists = 1
       AND (shp.obj_type <> 'BASE TABLE' OR shp.cols_found <> shp.cols_expected);
@@ -588,6 +629,7 @@ BEGIN
         UNION ALL SELECT 'k9_xp_tier_audit' AS table_name, 'The full history of every XP-rank edit ever made. Not recomputable from the table above.' AS what_you_would_lose
         UNION ALL SELECT 'k9_individual_overrides' AS table_name, 'Every per-citizenid speed/scent/medkit-cooldown override (the per-K9 ''god mode'' layer). Dropping this silently reverts every hand-tuned K9 to its plain XP-tier values on the next restart.' AS what_you_would_lose
         UNION ALL SELECT 'k9_individual_override_audit' AS table_name, 'The full history of every per-citizenid override create/edit/reset ever made. Not recomputable from the table above.' AS what_you_would_lose
+        UNION ALL SELECT 'k9_dog_characters' AS table_name, 'Every character ever admin-pinned as permanently a dog with /k9setdog (mana_policedogs feature parity). Dropping this silently un-pins every currently-pinned dog character on their next appearance evaluation -- they revert to an ordinary certification-driven appearance, not a broken state. Nobody''s actual K9 role/certification is affected either way.' AS what_you_would_lose
         UNION ALL SELECT 'k9_personnel' AS table_name, 'Every K9/Handler roster assignment and callsign, past and present (ROSTER_SPEC.md §3/§4). Dropping this silently sends every currently-assigned K9/handler back to the "Unassigned" bucket on the next roster read and forgets every current callsign -- a real change to the roster screens, but not to anyone''s actual in-game abilities.' AS what_you_would_lose
     ) w
     JOIN INFORMATION_SCHEMA.TABLES t
@@ -610,8 +652,8 @@ BEGIN
                       '` DROP FOREIGN KEY `', CONSTRAINT_NAME, '`;') AS detail
         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
         WHERE CONSTRAINT_SCHEMA = DATABASE()
-          AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel)$'
-          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|partnership_pair_progress|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel)$'
+          AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel|dog_characters)$'
+          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|partnership_pair_progress|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel|dog_characters)$'
         UNION ALL
         SELECT 1,
                'BLOCKS UNINSTALL - table name is not ours (columns do not match)',
@@ -755,6 +797,11 @@ BEGIN
               (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel'),
               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_personnel'
                  AND COLUMN_NAME IN ('citizenid','job','role','callsign','granted_by','granted_at','cleared_by','cleared_at','active'))
+            UNION ALL SELECT 'k9_dog_characters', 6,
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
+              (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'),
+              (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_dog_characters'
+                 AND COLUMN_NAME IN ('citizenid','model','active','set_by','set_at','unset_at'))
         ) shp2
         WHERE shp2.tbl_exists = 1
           AND (shp2.obj_type <> 'BASE TABLE' OR shp2.cols_found <> shp2.cols_expected)
@@ -765,7 +812,7 @@ BEGIN
                'This view keeps existing after the uninstall but errors with "references invalid table(s)" whenever anything uses it. Drop or rewrite it.'
         FROM INFORMATION_SCHEMA.VIEWS
         WHERE TABLE_SCHEMA = DATABASE()
-          AND VIEW_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel)'
+          AND VIEW_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel|dog_characters)'
         UNION ALL
         SELECT 3,
                'WILL BE DELETED - trigger lives on one of our tables',
@@ -774,7 +821,7 @@ BEGIN
                       ' and MySQL deletes it together with that table. Save its definition now if you want it back (SHOW CREATE TRIGGER `', TRIGGER_NAME, '`).')
         FROM INFORMATION_SCHEMA.TRIGGERS
         WHERE TRIGGER_SCHEMA = DATABASE()
-          AND EVENT_OBJECT_TABLE REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel)$'
+          AND EVENT_OBJECT_TABLE REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel|dog_characters)$'
         UNION ALL
         SELECT 4,
                'WILL BREAK - stored routine reads one of our tables',
@@ -783,7 +830,7 @@ BEGIN
         FROM INFORMATION_SCHEMA.ROUTINES
         WHERE ROUTINE_SCHEMA = DATABASE()
           AND ROUTINE_NAME NOT LIKE 'qbx\_k9unit\_%'
-          AND ROUTINE_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel)'
+          AND ROUTINE_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel|dog_characters)'
         UNION ALL
         -- DRIFT CHECK (db-schema foolproofing pass, 2026-08-25): reproduced by
         -- execution -- a real FK into `k9_certification_tiers` (a table this
@@ -821,7 +868,7 @@ BEGIN
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_NAME LIKE 'k9\_%'
-          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|partnership_pair_progress|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel)$'
+          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|partnership_pair_progress|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit|equipment_shop_locations|equipment_shop_locations_audit|permission_keys|permission_key_audit|equipment_shop_items|equipment_shop_item_audit|xp_tiers|xp_tier_audit|individual_overrides|individual_override_audit|personnel|dog_characters)$'
     ) deps
     ORDER BY ord, object_name;
 
@@ -841,7 +888,7 @@ BEGIN
     ELSEIF shape_blockers > 0 THEN
         SELECT 'REFUSED - NOTHING WAS DELETED' AS status,
                CONCAT(shape_blockers,
-                      ' of our 25 table name(s) are used in this database by something whose columns do not ',
+                      ' of our 27 table name(s) are used in this database by something whose columns do not ',
                       'match qbx_k9unit (listed above as "BLOCKS UNINSTALL - table name is not ours"). ',
                       'Dropping a table just because its NAME matches ours would risk destroying a DIFFERENT ',
                       'resource''s data -- so nothing was touched at all, exactly like the foreign-key case ',
@@ -923,6 +970,16 @@ BEGIN
         -- any two of our own tables, so its position in this list carries
         -- no ordering requirement.
         DROP TABLE IF EXISTS `k9_partnership_pair_progress`;
+        -- migration 0019 (mana_policedogs feature-parity pass, the
+        -- admin-pinned "this citizenid IS a dog" record behind /k9setdog
+        -- and /k9removedog) -- SCHEMA-SAFETY AUDIT FIX, db-schema pass
+        -- 2026-08-27: this table was completely absent from this DROP
+        -- list (and from the FK-blocker gate and shape gate above) since
+        -- the day it shipped, the exact same class of gap migration 0010's
+        -- three tables had before being fixed. No FK exists between any
+        -- two of our own tables, so its position in this list carries no
+        -- ordering requirement.
+        DROP TABLE IF EXISTS `k9_dog_characters`;
         -- migration 0020 (ROSTER_SPEC.md §3/§4, the K9/Handler roster
         -- assignment + callsign table) -- named here plus in the
         -- FK-blocker gate and dependency report above, from the start.

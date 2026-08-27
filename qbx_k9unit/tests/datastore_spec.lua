@@ -1348,7 +1348,7 @@ t.test('SETTLEMENT: PART-INSTALLED database, CASCADE CASE -- a missing k9_certif
     Sandbox.loadInto('../server/datastore.lua', env)
     for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
 
-    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'resource-wide flag stays true -- 24 of 25 tables are genuinely fine')
+    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'resource-wide flag stays true -- all but one of this resource\'s real tables (whatever EXPECTED_TABLE_COLUMNS currently lists, minus k9_certifications here) are genuinely fine')
     t.isFalse(env.K9Store.IsDatabaseEnabled('k9_certifications'), 'k9_certifications is genuinely missing')
     t.isFalse(env.K9Store.IsDatabaseEnabled('k9_certification_specializations'), 'CASCADE: specializations must ALSO fall back to memory this session even though its own table is fully intact, because it depends on live certification state -- see MISSING_TABLE_CASCADES')
     t.isTrue(env.K9Store.IsDatabaseEnabled('k9_permissions'), 'an unrelated, uncoupled table must NOT be swept into the cascade -- only the one documented coupling is affected')
