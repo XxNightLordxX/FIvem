@@ -1550,6 +1550,14 @@
         cmdref_k9exitkennel_usage: '/k9exitkennel',
         cmdref_k9exitkennel_does: 'Gets you out of a kennel you are resting in.',
         cmdref_k9exitkennel_needs: 'Nothing -- always available while resting in a kennel, so you can never get stuck inside one.',
+        // k9kennel -- COMMAND_CONSOLIDATION_SPEC.md #5's merged entry point.
+        // does/usage text from client/commandsuggestions.lua's own
+        // PENDING_LOCALE_KEYS (the exact interim text already shipped
+        // client-side for this command); needs mirrors k9deploykennel's own
+        // above (the START half this command's gate documents).
+        cmdref_k9kennel_usage: '/k9kennel',
+        cmdref_k9kennel_does: 'Deploys, enters, or exits your kennel -- whichever one makes sense right now. Old names /k9deploykennel and /k9exitkennel still work too.',
+        cmdref_k9kennel_needs: 'An active K9 certification, and you must currently be controlling your K9, to deploy or enter. Exiting is always available. This feature must be turned on for your server.',
         cmdref_k9propattach_usage: '/k9propattach',
         cmdref_k9propattach_does: 'Attaches or removes a prop (for example a vest) on your K9.',
         cmdref_k9propattach_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
@@ -1562,6 +1570,12 @@
         cmdref_k9recallfetchball_usage: '/k9recallfetchball',
         cmdref_k9recallfetchball_does: 'Cancels your own fetch throw in progress.',
         cmdref_k9recallfetchball_needs: 'Nothing -- always available, so a throw can always be called off.',
+        // k9fetch -- COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
+        // does/usage from client/commandsuggestions.lua's own
+        // PENDING_LOCALE_KEYS; needs mirrors k9throwfetchball's own above.
+        cmdref_k9fetch_usage: '/k9fetch',
+        cmdref_k9fetch_does: 'Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.',
+        cmdref_k9fetch_needs: 'An active K9 certification to throw. Recalling or dropping is always available. Only one ball may be in play for you at a time. This feature must be turned on for your server.',
 
         cmdref_k9recall_usage: '/k9recall',
         cmdref_k9recall_does: 'Calls your K9 partner back from whatever it is doing (a bite hold, a takedown, a drag).',
@@ -1608,6 +1622,14 @@
         cmdref_k9trainbite_usage: '/k9trainbite',
         cmdref_k9trainbite_does: 'Runs a practice bite-hold drill.',
         cmdref_k9trainbite_needs: 'Training Mode must already be switched on for you (see /k9training).',
+        // k9train -- COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point.
+        // does/usage from client/commandsuggestions.lua's own
+        // PENDING_LOCALE_KEYS; needs mirrors k9training's own above (the
+        // START half this command's gate documents -- turning off, unlike
+        // turning on, is always available).
+        cmdref_k9train_usage: '/k9train',
+        cmdref_k9train_does: 'Turns Training Mode on or off (whichever it isn\'t right now). Use /k9train search or /k9train bite for a specific drill. Old names /k9training, /k9trainsearch and /k9trainbite still work too.',
+        cmdref_k9train_needs: 'An active K9 certification, you must currently be controlling your K9, and you must be standing in one of this server\'s configured training areas, to turn it ON. Turning it off is always available.',
 
         cmdref_k9stats_usage: '/k9stats [limit]',
         cmdref_k9stats_does: 'Shows the server\'s K9 XP leaderboard.',
@@ -1646,6 +1668,15 @@
         cmdref_k9unspecializeoffline_usage: '/k9unspecializeoffline <citizenid> <job> <specialization>',
         cmdref_k9unspecializeoffline_does: 'Old, still-working name for /k9unspecialize\'s offline form (a numeric first argument means online, anything else means offline -- see /k9unspecialize).',
         cmdref_k9unspecializeoffline_needs: 'Same as /k9certify. Refuses if that person is actually online right now.',
+        // k9dog -- COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point.
+        // does/usage from client/commandsuggestions.lua's own
+        // PENDING_LOCALE_KEYS; needs is new (this pass) -- gated on
+        // IsHighCommand(source) alone, no Config.Features flag exists for
+        // this file at all (confirmed by reading server/dogcharacter.lua
+        // directly), unlike k9certify's own capability-based gate above.
+        cmdref_k9dog_usage: '/k9dog <target>',
+        cmdref_k9dog_does: 'Shows or changes whether a character is permanently pinned as a K9. One command for both: /k9setdog and /k9removedog still work too.',
+        cmdref_k9dog_needs: 'High Command only.',
 
         cmdref_k9givexp_usage: '/k9givexp <server id> <amount>',
         cmdref_k9givexp_does: 'Awards XP directly to an online player.',
@@ -2408,10 +2439,29 @@
         // certification -- this is a confining-mechanic escape hatch, never
         // gated on the way out.
         { command: 'k9exitkennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9exitkennel_usage', doesKey: 'cmdref_k9exitkennel_does', needsKey: 'cmdref_k9exitkennel_needs', gate: { kind: 'open' }, defaultKeybind: 'O' },
+        // k9kennel -- COMMAND_CONSOLIDATION_SPEC.md #5's merged, ADDITIVE
+        // entry point (client/kennel.lua) -- reported as
+        // PENDING_NEW_CANONICAL_COMMANDS while html/tablet.js was a hot
+        // file; added here now that it is not. Contextual dispatch over
+        // deploy/enter/exit/close/open -- gate mirrors k9deploykennel's own
+        // (the START half; exit/close/open all stay reachable ungated via
+        // this same command exactly as they already are via the two rows
+        // above, per this file's own "never gate the stop" convention).
+        { command: 'k9kennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9kennel_usage', doesKey: 'cmdref_k9kennel_does', needsKey: 'cmdref_k9kennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
         { command: 'k9propattach', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9propattach_usage', doesKey: 'cmdref_k9propattach_does', needsKey: 'cmdref_k9propattach_needs', gate: { kind: 'access', featureKey: 'PropAttachments' } },
         { command: 'k9throwfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9throwfetchball_usage', doesKey: 'cmdref_k9throwfetchball_does', needsKey: 'cmdref_k9throwfetchball_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
         { command: 'k9dropfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9dropfetchball_usage', doesKey: 'cmdref_k9dropfetchball_does', needsKey: 'cmdref_k9dropfetchball_needs', gate: { kind: 'open' } },
         { command: 'k9recallfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9recallfetchball_usage', doesKey: 'cmdref_k9recallfetchball_does', needsKey: 'cmdref_k9recallfetchball_needs', gate: { kind: 'open' } },
+        // k9fetch -- COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point
+        // (client/fetch.lua) -- reported as PENDING_NEW_CANONICAL_COMMANDS
+        // in tests/commandreferenceregistry_spec.lua while html/tablet.js
+        // was a hot file; added here now that it is not. Contextual
+        // dispatch over the SAME three resource-globals the three old names
+        // above already call -- gate mirrors k9throwfetchball's own (the
+        // one branch of the three with a real access gate; drop/recall stay
+        // ungated release paths the same way k9leash/k9partner's own toggle
+        // entries above document).
+        { command: 'k9fetch', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9fetch_usage', doesKey: 'cmdref_k9fetch_does', needsKey: 'cmdref_k9fetch_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
         { command: 'k9eat', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9eat_usage', doesKey: 'cmdref_k9eat_does', needsKey: 'cmdref_k9eat_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
         { command: 'k9drink', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9drink_usage', doesKey: 'cmdref_k9drink_does', needsKey: 'cmdref_k9drink_needs', gate: { kind: 'access', featureKey: 'HungerThirstSystem' } },
 
@@ -2435,6 +2485,15 @@
         { command: 'k9training', category: 'training', adminOnly: false, usageKey: 'cmdref_k9training_usage', doesKey: 'cmdref_k9training_does', needsKey: 'cmdref_k9training_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
         { command: 'k9trainsearch', category: 'training', adminOnly: false, usageKey: 'cmdref_k9trainsearch_usage', doesKey: 'cmdref_k9trainsearch_does', needsKey: 'cmdref_k9trainsearch_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
         { command: 'k9trainbite', category: 'training', adminOnly: false, usageKey: 'cmdref_k9trainbite_usage', doesKey: 'cmdref_k9trainbite_does', needsKey: 'cmdref_k9trainbite_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
+        // k9train -- COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point
+        // (client/training.lua) -- reported as PENDING_NEW_CANONICAL_COMMANDS
+        // while html/tablet.js was a hot file; added here now that it is
+        // not. Bare form is a deterministic on/off toggle (gate mirrors
+        // k9training's own start-half access gate; turning off stays
+        // ungated the same way every other release path in this catalog
+        // does); 'search'/'bite' stay explicit words, same underlying
+        // globals as k9trainsearch/k9trainbite above.
+        { command: 'k9train', category: 'training', adminOnly: false, usageKey: 'cmdref_k9train_usage', doesKey: 'cmdref_k9train_does', needsKey: 'cmdref_k9train_needs', gate: { kind: 'access', featureKey: 'TrainingMode' } },
 
         // ---- Records & Progress ----
         { command: 'k9stats', category: 'records', adminOnly: false, usageKey: 'cmdref_k9stats_usage', doesKey: 'cmdref_k9stats_does', needsKey: 'cmdref_k9stats_needs', gate: { kind: 'access', featureKey: 'K9Leaderboard' } },
@@ -2446,6 +2505,24 @@
         { command: 'k9recertify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9recertify_usage', doesKey: 'cmdref_k9recertify_does', needsKey: 'cmdref_k9recertify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9specialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9specialize_usage', doesKey: 'cmdref_k9specialize_does', needsKey: 'cmdref_k9specialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9unspecialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9unspecialize_usage', doesKey: 'cmdref_k9unspecialize_does', needsKey: 'cmdref_k9unspecialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
+        // k9dog -- COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point
+        // (server/dogcharacter.lua) -- reported as
+        // PENDING_NEW_CANONICAL_COMMANDS while html/tablet.js was a hot
+        // file; added here now that it is not. Its two folded-away
+        // originals, k9setdog/k9removedog, deliberately have NO entry of
+        // their own and never will -- see
+        // tests/commandreferenceregistry_spec.lua's own HIDDEN_ALIAS_COMMANDS
+        // ('dog_record' family, already flagged COMMANDS_TAB_CLEANUP_COMPLETE)
+        // -- do not add rows for those two. Gated on IsHighCommand(source)
+        // alone, confirmed by reading server/dogcharacter.lua's
+        // RegisterCommand('k9dog', ...) handler directly -- no
+        // Config.Features flag exists for this file at all, so no featureKey
+        // (unlike k9bonetool/k9permission's highCommandOnly rows, which each
+        // carry a real one). 'set'/'remove' stay explicit words (never
+        // auto-inferred -- see that file's own header on why this specific
+        // family keeps the destructive-action carve-out); the bare
+        // '/k9dog <target>' form is read-only.
+        { command: 'k9dog', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9dog_usage', doesKey: 'cmdref_k9dog_does', needsKey: 'cmdref_k9dog_needs', gate: { kind: 'highCommandOnly' } },
 
         // ---- XP Management (admin) ----
         { command: 'k9givexp', category: 'xp', adminOnly: true, usageKey: 'cmdref_k9givexp_usage', doesKey: 'cmdref_k9givexp_does', needsKey: 'cmdref_k9givexp_needs', gate: { kind: 'capability', capability: 'k9.givexp' } },

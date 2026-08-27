@@ -173,35 +173,25 @@
 --   commandsuggestions.k9hqtablet_does = "Opens the K9 Command Tablet directly to the High Command view."
 --   commandsuggestions.k9compat_does   = "Reprints this resource's compatibility detection summary (which framework, inventory, target and other integrations it detected) to your own client console."
 -- ----------------------------------------------------------------------
--- COMMAND_CONSOLIDATION_SPEC.md new-canonical-command entries (this pass,
--- coder-backend): 'k9dog' is a genuinely NEW command name (family #2's
--- merged '/k9dog <set|remove> <target> ...') with no existing
--- `tablet.cmdref_k9dog_*` locale key yet -- html/tablet.js is a hot file
--- this pass cannot edit (a UI agent is live in it), so its real
--- COMMAND_REFERENCE/DEFAULT_STRINGS entry (and client/tablet.lua's matching
--- TABLET_STRING_KEYS pair) is reported to project-lead rather than added
--- here. Same "tries the real locale() first, only falls back here while the
--- key hasn't landed yet" contract as the three dynamic-name commands below.
+-- CLOSED, AND THE ENTRIES REMOVED: this block used to carry eight
+-- `tablet.cmdref_k9dog|k9fetch|k9train|k9kennel_does/_usage` fallbacks,
+-- added because html/tablet.js was a hot file at the time (another agent
+-- was live in it) and their real entries could not be landed alongside.
+-- All four families now have genuine entries on ALL THREE sides of the
+-- tablet-string contract -- html/tablet.js's DEFAULT_STRINGS and
+-- COMMAND_REFERENCE, client/tablet.lua's TABLET_STRING_KEYS, and
+-- locales/en.json's `tablet` group -- so locale() resolves them for real
+-- and pendingLocale() never reaches the fallback table for them again.
+--
+-- The removed values were verified byte-identical to what landed before
+-- being deleted, so this is a pure dead-code removal with no text change.
+-- Removed rather than left in place because a fallback that can never fire
+-- is exactly the kind of entry a later reader mistakes for the live source
+-- of a string and edits instead of the real one.
 local PENDING_LOCALE_KEYS = {
     ['commandsuggestions.k9tablet_does'] = 'Opens the K9 Command Tablet.',
     ['commandsuggestions.k9hqtablet_does'] = 'Opens the K9 Command Tablet directly to the High Command view.',
     ['commandsuggestions.k9compat_does'] = "Reprints this resource's compatibility detection summary (which framework, inventory, target and other integrations it detected) to your own client console.",
-    ['tablet.cmdref_k9dog_does'] = 'Shows or changes whether a character is permanently pinned as a K9. One command for both: /k9setdog and /k9removedog still work too.',
-    -- Deliberately just the bare "show status" shape for the chat
-    -- suggestion's own parameter hint (ParseUsageParams below only ever
-    -- extracts ONE flat parameter list, and this command's other two forms
-    -- put a literal 'set'/'remove' word BEFORE the target, which a single
-    -- bracket-token usage string cannot represent without misleading
-    -- param-order hints) -- the explicit set/remove forms are documented in
-    -- full in the `_does` string above and in dogcharacter.usage_dog's own
-    -- in-game usage print.
-    ['tablet.cmdref_k9dog_usage'] = '/k9dog <target>',
-    ['tablet.cmdref_k9fetch_does'] = 'Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.',
-    ['tablet.cmdref_k9fetch_usage'] = '/k9fetch',
-    ['tablet.cmdref_k9train_does'] = 'Turns Training Mode on or off (whichever it isn\'t right now). Use /k9train search or /k9train bite for a specific drill. Old names /k9training, /k9trainsearch and /k9trainbite still work too.',
-    ['tablet.cmdref_k9train_usage'] = '/k9train',
-    ['tablet.cmdref_k9kennel_does'] = 'Deploys, enters, or exits your kennel -- whichever one makes sense right now. Old names /k9deploykennel and /k9exitkennel still work too.',
-    ['tablet.cmdref_k9kennel_usage'] = '/k9kennel',
 }
 local function pendingLocale(key, ...)
     local ok, value = pcall(locale, key, ...)

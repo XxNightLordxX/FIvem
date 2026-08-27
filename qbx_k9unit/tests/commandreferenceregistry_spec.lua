@@ -327,12 +327,16 @@ local COMMANDS_TAB_CLEANUP_COMPLETE = {
 -- opposite ordering. Reported to project-lead per family below; remove a
 -- name from this table in the SAME change that adds its real
 -- COMMAND_REFERENCE entry.
-local PENDING_NEW_CANONICAL_COMMANDS = {
-    k9dog = true, -- family #2 (dog record) -- needs cmdref_k9dog_usage/_does/_needs; see client/commandsuggestions.lua's own PENDING_LOCALE_KEYS for the exact interim _does/_usage text already in use client-side.
-    k9fetch = true, -- family #3 (fetch) -- needs cmdref_k9fetch_usage/_does/_needs; same interim text location.
-    k9train = true, -- family #4 (training) -- needs cmdref_k9train_usage/_does/_needs; same interim text location.
-    k9kennel = true, -- family #5 (kennel, ADDITIVE) -- needs cmdref_k9kennel_usage/_does/_needs; same interim text location.
-}
+--
+-- STARTS EMPTY (menu-parity/menu-audit pass, this session): the four names
+-- this table used to hold -- k9dog, k9fetch, k9train, k9kennel -- all now
+-- have real COMMAND_REFERENCE/DEFAULT_STRINGS entries in html/tablet.js
+-- (plus client/tablet.lua's matching TABLET_STRING_KEYS triples), landed in
+-- the same change that emptied this table, per this table's own "remove a
+-- name... in the SAME change" rule above. Left as an empty table, not
+-- deleted outright, so a future family blocked by the identical hot-file
+-- cause has an established place to report into.
+local PENDING_NEW_CANONICAL_COMMANDS = {}
 
 --- Pure text-in, set-out extraction -- exactly the
 --- `RegisterCommand\('[a-zA-Z0-9_:]+'` shape this whole task was scoped

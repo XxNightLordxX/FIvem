@@ -1278,10 +1278,26 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9dragtoggle_usage', 'cmdref_k9dragtoggle_does', 'cmdref_k9dragtoggle_needs',
     'cmdref_k9deploykennel_usage', 'cmdref_k9deploykennel_does', 'cmdref_k9deploykennel_needs',
     'cmdref_k9exitkennel_usage', 'cmdref_k9exitkennel_does', 'cmdref_k9exitkennel_needs',
+    -- k9kennel -- COMMAND_CONSOLIDATION_SPEC.md #5's merged, ADDITIVE entry
+    -- point. Landed here in the SAME change as html/tablet.js's own
+    -- DEFAULT_STRINGS entry and locales/en.json's `tablet` group entry --
+    -- all three sides of this contract, or none: the enforcing test only
+    -- fails when two sides DISAGREE, so a key missing from TWO of them
+    -- passes silently forever.
+    'cmdref_k9kennel_usage', 'cmdref_k9kennel_does', 'cmdref_k9kennel_needs',
+    -- k9dog (family #2, dog record) and k9train (family #4, training) --
+    -- the remaining two merged entry points from the same spec. Grouped
+    -- here with k9kennel rather than beside their own old per-command
+    -- siblings purely because these four landed as one change; the list
+    -- itself is order-insensitive (it is read as a set).
+    'cmdref_k9dog_usage', 'cmdref_k9dog_does', 'cmdref_k9dog_needs',
+    'cmdref_k9train_usage', 'cmdref_k9train_does', 'cmdref_k9train_needs',
     'cmdref_k9propattach_usage', 'cmdref_k9propattach_does', 'cmdref_k9propattach_needs',
     'cmdref_k9throwfetchball_usage', 'cmdref_k9throwfetchball_does', 'cmdref_k9throwfetchball_needs',
     'cmdref_k9dropfetchball_usage', 'cmdref_k9dropfetchball_does', 'cmdref_k9dropfetchball_needs',
     'cmdref_k9recallfetchball_usage', 'cmdref_k9recallfetchball_does', 'cmdref_k9recallfetchball_needs',
+    -- k9fetch -- COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
+    'cmdref_k9fetch_usage', 'cmdref_k9fetch_does', 'cmdref_k9fetch_needs',
     'cmdref_k9eat_usage', 'cmdref_k9eat_does', 'cmdref_k9eat_needs',
     'cmdref_k9drink_usage', 'cmdref_k9drink_does', 'cmdref_k9drink_needs',
     'cmdref_k9recall_usage', 'cmdref_k9recall_does', 'cmdref_k9recall_needs',

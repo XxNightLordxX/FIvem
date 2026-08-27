@@ -1013,6 +1013,12 @@
         "cmdref_k9exitkennel_usage": "/k9exitkennel",
         "cmdref_k9exitkennel_does": "Gets you out of a kennel you are resting in.",
         "cmdref_k9exitkennel_needs": "Nothing -- always available while resting in a kennel, so you can never get stuck inside one.",
+        "cmdref_k9kennel_usage": "/k9kennel",
+        "cmdref_k9kennel_does": "Deploys, enters, or exits your kennel -- whichever one makes sense right now. Old names /k9deploykennel and /k9exitkennel still work too.",
+        "cmdref_k9kennel_needs": "An active K9 certification, and you must currently be controlling your K9, to deploy or enter. Exiting is always available. This feature must be turned on for your server.",
+        "cmdref_k9dog_usage": "/k9dog <target>",
+        "cmdref_k9dog_does": "Shows or changes whether a character is permanently pinned as a K9. One command for both: /k9setdog and /k9removedog still work too.",
+        "cmdref_k9dog_needs": "High Command only.",
         "cmdref_k9propattach_usage": "/k9propattach",
         "cmdref_k9propattach_does": "Attaches or removes a prop (for example a vest) on your K9.",
         "cmdref_k9propattach_needs": "An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.",
@@ -1025,6 +1031,9 @@
         "cmdref_k9recallfetchball_usage": "/k9recallfetchball",
         "cmdref_k9recallfetchball_does": "Cancels your own fetch throw in progress.",
         "cmdref_k9recallfetchball_needs": "Nothing -- always available, so a throw can always be called off.",
+        "cmdref_k9fetch_usage": "/k9fetch",
+        "cmdref_k9fetch_does": "Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.",
+        "cmdref_k9fetch_needs": "An active K9 certification to throw. Recalling or dropping is always available. Only one ball may be in play for you at a time. This feature must be turned on for your server.",
         "cmdref_k9eat_usage": "/k9eat",
         "cmdref_k9eat_does": "Feeds your K9 from your own carried food, restoring Hunger.",
         "cmdref_k9eat_needs": "You must currently be controlling your K9, and be holding the item this server has configured for K9 food. This feature must be turned on for your server.",
@@ -1067,6 +1076,9 @@
         "cmdref_k9trainbite_usage": "/k9trainbite",
         "cmdref_k9trainbite_does": "Runs a practice bite-hold drill.",
         "cmdref_k9trainbite_needs": "Training Mode must already be switched on for you (see /k9training).",
+        "cmdref_k9train_usage": "/k9train",
+        "cmdref_k9train_does": "Turns Training Mode on or off (whichever it isn't right now). Use /k9train search or /k9train bite for a specific drill. Old names /k9training, /k9trainsearch and /k9trainbite still work too.",
+        "cmdref_k9train_needs": "An active K9 certification, you must currently be controlling your K9, and you must be standing in one of this server's configured training areas, to turn it ON. Turning it off is always available.",
         "cmdref_k9stats_usage": "/k9stats [limit]",
         "cmdref_k9stats_does": "Shows the server's K9 XP leaderboard.",
         "cmdref_k9stats_needs": "An active K9 certification. This feature must be turned on for your server.",
@@ -1972,5 +1984,13 @@
         "handler_alert_Alert": "Your K9 is alerting -- something seems off %s of it, %s. Worth a look.",
         "handler_alert_Threat": "Your K9 is barking at a real threat %s of it, %s! Approach with caution.",
         "keybind_label": "K9: Danger Warning (Alert)"
+    },
+    "debugdump": {
+        "cooldown": "Please wait a few seconds before running /k9debug again.",
+        "no_citizenid": "Could not resolve your character -- try again once your character has fully loaded.",
+        "bad_level_arg": "%s is not a valid level (use \"normal\" or \"verbose\") -- using %s instead.",
+        "verbose_not_collected": "Verbose decision-trail data has not been collected this session because Config.DebugDump.level is \"normal\" in config.lua -- writing a normal-level dump instead. Set Config.DebugDump.level = 'verbose' and restart the resource to collect it.",
+        "write_failed": "The debug dump could not be written to disk -- check the server console for details.",
+        "written": "Debug dump written: %s (%d finding(s), %d worth checking). Send this file to your developer."
     }
 }
