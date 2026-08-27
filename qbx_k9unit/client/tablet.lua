@@ -2149,27 +2149,30 @@ local FEATURE_TRIGGERS = {
     -- radial.lua's own two-item submenu offers is not reachable through
     -- this single-button contract.
     --
-    -- CHECKED, NOT WIDENED (permission audit finding, this pass) --
-    -- matches client/radial.lua's own 'k9unit_defense' submenu items
-    -- verbatim ("this is an INITIATION action... mirrors
-    -- ConfirmHandlerDownDefense()'s own internal CanShowK9UI() gate"): the
-    -- callee, client/defense.lua's ConfirmHandlerDownDefense(), gates on
-    -- the full CanShowK9UI() combinator itself, so widening only THIS
-    -- wrapper's pre-check to HasK9Access() would be a no-op -- the callee
-    -- would still refuse a High Command/autoAccessGrade-bypass holder with
-    -- its own DenyK9UIAccess() call, one line further down, regardless of
-    -- what this wrapper decides. UNLIKE Bite & Hold/Takedown/Drag above,
+    -- CLAIM BELOW IS STALE, VERIFIED BY DIRECT READ OF client/defense.lua:
+    -- this paragraph originally argued CHECKED, NOT WIDENED (permission
+    -- audit finding, this pass) -- matches client/radial.lua's own
+    -- 'k9unit_defense' submenu items verbatim ("this is an INITIATION
+    -- action... mirrors ConfirmHandlerDownDefense()'s own internal
+    -- CanShowK9UI() gate"): the callee, client/defense.lua's
+    -- ConfirmHandlerDownDefense(), gates on the full CanShowK9UI()
+    -- combinator itself, so widening only THIS wrapper's pre-check to
+    -- HasK9Access() would be a no-op -- the callee would still refuse a
+    -- High Command/autoAccessGrade-bypass holder with its own
+    -- DenyK9UIAccess() call, one line further down, regardless of what
+    -- this wrapper decides. UNLIKE Bite & Hold/Takedown/Drag above,
     -- ConfirmHandlerDownDefense() does NOT call RequestBiteHold()/
     -- RequestTakedown() (which were widened) -- it fires
     -- 'qbx_k9unit:server:requestBiteHold'/'requestTakedown' directly with a
     -- pre-resolved target, reaching the SAME server/combat.lua
     -- ValidateCombatRequest (HasK9Access(src) alone) those widened
-    -- functions do, but through a callee whose own internal gate was never
-    -- brought in line with that fact. That is a real instance of this same
-    -- audit's target bug, but it lives one layer down in
-    -- client/defense.lua (a file this pass does not own) -- reported to the
-    -- team rather than "fixed" here by widening a check that cannot change
-    -- the actual outcome.
+    -- functions do. THAT LAST CLAUSE IS NOW OUT OF DATE: client/defense.lua's
+    -- ConfirmHandlerDownDefense() has SINCE been widened to gate on
+    -- HasK9Access() alone (see that file's own "GATE WIDENED TO
+    -- HasK9Access() ALONE" note), matching server/combat.lua's
+    -- ValidateCombatRequest exactly. The bottom-line conclusion --  no
+    -- pre-check belongs on this wrapper -- still holds, and holds more
+    -- cleanly now than when this paragraph was written.
     -- NOT GATED HERE, AND THE HISTORY MATTERS. This wrapper used to check
     -- CanShowK9UI() first, with a comment saying widening it would be a
     -- no-op because ConfirmHandlerDownDefense() re-gated on the same

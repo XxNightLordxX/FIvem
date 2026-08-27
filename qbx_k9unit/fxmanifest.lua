@@ -342,7 +342,7 @@ server_scripts {
     -- HasK9Role/GetAssignedK9Model/ApplyK9PedRole/ApplyK9AppearanceOnGrant/
     -- MaybeRevertK9Appearance.
     -- HARD load-order requirement on server/cooldowns.lua: NewCooldown is
-    -- called at this file's own file-load time (line 156), not lazily.
+    -- called at this file's own file-load time (line 230), not lazily.
     -- Placed before server/permissions.lua because that file calls two of
     -- these functions -- through a type(fn) == 'function' guard, so it is a
     -- soft dependency, but there is no reason to make the guard do that job.
