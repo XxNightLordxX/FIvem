@@ -58,7 +58,7 @@ tablet's own Help tab, not here.
   limitations" below for the one real gap in its anti-farming guard) and
   a partner camera-feed toggle (full-screen view-switch to your
   partner's viewpoint, not a literal picture-in-picture — see below).
-- **Five reaction/"hunting" features, easy to miss because they're new
+- **Four reaction/"hunting" features, easy to miss because they're new
   enough that even this resource's own internal history file hadn't
   caught up on them — all shipped, on by default, and worth knowing
   about specifically:**
@@ -66,11 +66,15 @@ tablet's own Help tab, not here.
     automatically sit and bark, reacting differently depending on the
     outcome. No manual trigger, and it doesn't depend on the XP system
     being on.
-  - **Scent Trail Hunt** — turns a search into a hunt: the K9 is guided
-    only by a growl that gets stronger as it gets closer to a hidden
-    spot. The location itself is never sent to the player's game, only
-    the growl intensity — there is nothing to read the answer out of.
-    No marker, no XP.
+  - **Scent Trail Hunt was removed** (owner-approved — judged genuinely
+    redundant with the scent-tracking "follow a fading signal"
+    mechanic above, which already covers the same interaction shape
+    against a real destination instead of a made-up one). It is
+    **not** one of the four below, and it is not merely toggled off:
+    `Config.Features.ScentTrailHunt` no longer exists in `config.lua`
+    at all, so `/k9nosehunt` cannot be turned on by editing config —
+    see that key's own former spot in `config.lua`'s `Config.Features`
+    comment for the full reasoning and exactly how to bring it back.
   - **Pursuit Sprint** — a short, cooldown-gated burst of genuinely
     extra speed for a certified K9 chasing a *wanted* target only.
     Every speed source this resource has (breed, XP tier, fatigue,
@@ -84,7 +88,7 @@ tablet's own Help tab, not here.
     or lost property); the K9 reacts more strongly on approach. Always
     resolves as a rescue, never an arrest, and the "target" is always
     scenery, never a real player without their consent.
-  - All five need an individual grant from high command on top of their
+  - All four need an individual grant from high command on top of their
     global switch by default (see `Config.FeatureControl.RequireGrant`
     in "The command tablet" section below) — nobody has any of them
     until high command hands them out one person at a time.
@@ -534,6 +538,17 @@ a stopgap only.
   after roughly 64 seconds), but the repeatable part can't be closed in
   code — there is no way to verify who actually fired a gun. It's a
   policy call about the kind of server you want, not a bug.
+- **Apprehension Announcement (`/k9announce`) is fully built but cannot
+  be turned on, on any install.** The code is real and complete — a
+  keybind (`M` by default), a chat command, a server-side warning
+  window, its own tests — but the switch it's gated on,
+  `Config.Features.ApprehensionAnnouncement`, has never existed in
+  `config.lua`, in this resource's entire history. There is no setting
+  anywhere for you to flip. The command tablet's own Command Reference
+  now says this plainly instead of telling you to "turn it on" for a
+  switch that isn't there. If you want this feature, it needs a small
+  config addition from whoever maintains your `config.lua`, not a
+  toggle — ask them to add the missing flag.
 
 ---
 

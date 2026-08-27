@@ -52,18 +52,36 @@ local locale = Sandbox.locale
 -- Sandbox setup
 -- ----------------------------------------------------------------------
 
---- @param opts { handlerDownDefense: boolean?, canShowK9UI: boolean?, provideIsBiteHoldEngaged: boolean?, confirmKey: string?, promptTtlMs: number? }?
+--- @param opts { handlerDownDefense: boolean?, canShowK9UI: boolean?, hasK9Access: boolean?, provideIsBiteHoldEngaged: boolean?, confirmKey: string?, promptTtlMs: number? }?
 local function newDefenseFixture(opts)
     opts = opts or {}
 
     local fakeNow = 0
     local function GetGameTimer() return fakeNow end
 
+    -- Kept controllable even though ConfirmHandlerDownDefense no longer
+    -- calls it directly (PERMISSION AUDIT FOLLOW-UP, this pass -- was
+    -- CanShowK9UI(), widened to match server/combat.lua's shared
+    -- ValidateCombatRequest, which gates access on HasK9Access(src) alone
+    -- -- see that function's own "GATE WIDENED" doc comment) -- same
+    -- "kept controllable so a High-Command-bypass-shape test can prove it's
+    -- irrelevant" reasoning tests/clientcombat_spec.lua's own newCombatFixture
+    -- already established for the identical fix on RequestBiteHold/RequestTakedown.
     local canShowK9UI = opts.canShowK9UI
     if canShowK9UI == nil then canShowK9UI = true end
-    local denyCalls = 0
     local function CanShowK9UI() return canShowK9UI end
-    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
+
+    -- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, this
+    -- pass) -- see ConfirmHandlerDownDefense()'s own doc comment. Defaults
+    -- to true so every PRE-EXISTING test written before this gate changed
+    -- keeps exercising the same "access granted" path without needing to
+    -- opt in.
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = true end
+    local denyCalls = 0
+    local denyReasons = {}
+    local function HasK9Access() return hasK9Access end
+    local function DenyK9UIAccess(reason) denyCalls = denyCalls + 1; denyReasons[#denyReasons + 1] = reason end
 
     local isBiteHoldEngaged = false
     local function IsBiteHoldEngaged() return isBiteHoldEngaged end
@@ -120,6 +138,7 @@ local function newDefenseFixture(opts)
         Config = Config,
         GetGameTimer = GetGameTimer,
         CanShowK9UI = CanShowK9UI,
+        HasK9Access = HasK9Access,
         DenyK9UIAccess = DenyK9UIAccess,
         lib = lib,
         TriggerServerEvent = TriggerServerEvent,
@@ -147,7 +166,9 @@ local function newDefenseFixture(opts)
         serverEvents = serverEvents,
         keyMappingCalls = keyMappingCalls,
         denyCallCount = function() return denyCalls end,
+        lastDenyReason = function() return denyReasons[#denyReasons] end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         setIsBiteHoldEngaged = function(v) isBiteHoldEngaged = v end,
         setNow = function(v) fakeNow = v end,
         setEntityExists = function(entity, v) existingEntities[entity] = v end,
@@ -317,17 +338,30 @@ end)
 
 -- ----------------------------------------------------------------------
 -- SECTION D -- ConfirmHandlerDownDefense(): every rejection path, ANY PED,
--- and the "pure consumer, not RequestBiteHold/RequestTakedown" contract.
+-- the "pure consumer, not RequestBiteHold/RequestTakedown" contract, and
+-- the GATE WIDENED TO HasK9Access() ALONE fix (permission audit finding,
+-- this pass -- was CanShowK9UI(); see that function's own doc comment).
 -- ----------------------------------------------------------------------
 
-t.test('ConfirmHandlerDownDefense: CanShowK9UI() false denies access, no server event, prompt untouched', function()
-    local f = newDefenseFixture({ canShowK9UI = false })
+t.test('CONTROL: ConfirmHandlerDownDefense: HasK9Access() false denies access with reason combat.no_access, no server event, prompt untouched', function()
+    local f = newDefenseFixture({ hasK9Access = false })
     f.fireTrigger(false, 5000, 6000)
     f.runConfirmCommand()
     t.equals(f.denyCallCount(), 1)
+    t.equals(f.lastDenyReason(), 'combat.no_access')
     t.equals(#f.serverEvents, 0)
-    f.setCanShowK9UI(true)
+    f.setHasK9Access(true)
     t.isTrue(f.env.HasFreshDefensePrompt(), 'a denial on the access check must not have consumed the prompt')
+end)
+
+t.test('GATE WIDENED: HasK9Access() true with CanShowK9UI() false (High Command/autoAccessGrade-bypass shape) still reaches the server -- proves this gate is HasK9Access() alone, not the broader CanShowK9UI() combinator', function()
+    local f = newDefenseFixture({ hasK9Access = true, canShowK9UI = false })
+    f.fireTrigger(false, 5000, 6000)
+    f.runConfirmCommand()
+    t.equals(f.denyCallCount(), 0, 'a HasK9Access()-true bypass holder must never be denied even though CanShowK9UI() would have refused them')
+    t.equals(#f.serverEvents, 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:requestBiteHold')
+    t.equals(f.serverEvents[1].args[1], 6000)
 end)
 
 t.test('ANY PED: ConfirmHandlerDownDefense never touches a model native directly -- proven by omitting IsOwnModelK9/GetEntityModel from the sandbox entirely', function()

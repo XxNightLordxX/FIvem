@@ -391,13 +391,43 @@
       exclusively (DEVELOPER_REFERENCE.md item 1's established convention) —
       no hand-rolled cooldown table anywhere in this file.
     - Owns `WellbeingStats` (citizenid -> stat table) and `RecentGunfire`
-      (append-only array) as file-local state. Ephemeral/in-memory only,
-      deliberately not persisted — mirrors server/tracking.lua's
-      `TrackableLog` / server/main.lua's `LeashPairs` precedent. Grows one
-      entry per distinct citizenid ever seen while the server is up, same
-      accepted growth profile as server/certifications.lua's `Certifications`
-      cache — never cleared on disconnect (a K9 who logs off tired should
-      still be tired on reconnect within the same server session).
+      (append-only array) as file-local state. `RecentGunfire` remains
+      ephemeral/in-memory only (a short-lived spatial log, meaningless
+      across a restart) — mirrors server/tracking.lua's `TrackableLog` /
+      server/main.lua's `LeashPairs` precedent. `WellbeingStats` ITSELF IS
+      NOW DATABASE-BACKED (this pass, coder-backend — see this file's own
+      "DATABASE PERSISTENCE" header section further down for the full
+      design). The line that used to stand here ("ephemeral/in-memory
+      only, deliberately not persisted") was true when written and had
+      become actively wrong: a server restart wiped every K9's fatigue/
+      mood/fearStress/injury/hunger/thirst with no database write of any
+      kind ever having existed for this table, directly contradicting this
+      header's own very next sentence ("a K9 who logs off tired should
+      still be tired"), which was only ever true WITHIN one continuously-
+      running server process. Corrected, not merely re-worded: writes now
+      go through `K9Store.Wellbeing_Get`/`K9Store.Wellbeing_Upsert`
+      (server/datastore.lua — "THE ONLY PLACE IN THIS RESOURCE THAT MAY
+      NAME A `k9_*` TABLE OR CALL `MySQL.*` DIRECTLY," this file's own
+      established convention, reused rather than bypassed), softly guarded
+      (`type(K9Store) == 'table' and type(K9Store.Wellbeing_Get) ==
+      'function'`, this file's own established "genuine new cross-file
+      dependency, no consumer exists yet" idiom already used for
+      RestoreInjury/IsHesitating's OWN callers) so this file degrades to
+      EXACTLY today's memory-only behaviour, never an error, on a server
+      whose server/datastore.lua has not yet grown these two accessors.
+      `WellbeingStats` STILL grows one entry per distinct citizenid seen
+      this session (same accepted growth profile as server/
+      certifications.lua's `Certifications` cache) BUT is now bounded
+      going forward: once an entry's persisted stats are confirmed written
+      (`dirty == false`) and its owning citizenid has been offline longer
+      than `Config.Wellbeing.Persistence.evictAfterMs`, that entry is
+      dropped from memory (never before either condition holds — evicting
+      an unflushed change would be the exact "reset a player's dog" bug
+      this whole feature exists to avoid) and reloaded from the database
+      on the next reference. Still never cleared on a mere disconnect
+      within the eviction window (a K9 who logs off tired should still be
+      tired on reconnect — now true across a RESTART too, not merely
+      within one server session).
     ======================================================================
 
     ======================================================================
@@ -810,6 +840,185 @@
          this from that loop's own `else` branch, the one iteration that
          would otherwise do nothing at all.
     ======================================================================
+
+    ======================================================================
+    DATABASE PERSISTENCE (this pass, coder-backend) -- closes a real,
+    confirmed production gap: this file's own header, for as long as this
+    file has existed, claimed a K9 who logs off tired stays tired "on
+    reconnect within the same server session" -- true, but nothing ever
+    made it true ACROSS a restart, because `WellbeingStats` had genuinely
+    never been written to a database at all. A nightly restart (or a
+    crash) silently reset every online K9's fatigue/mood/fearStress/
+    injury/hunger/thirst to fresh-and-uninjured, every time, with no
+    config flag, no log line and no player-visible warning that this was
+    happening. Fixed here by routing through server/datastore.lua's
+    `K9Store` (this file's own established convention already requires --
+    "THE ONLY PLACE IN THIS RESOURCE THAT MAY NAME A `k9_*` TABLE OR CALL
+    `MySQL.*` DIRECTLY" -- see that file's own header), never a direct SQL
+    call from this file.
+
+    FOUR DESIGN DECISIONS, IN THE ORDER THEY HAD TO BE MADE:
+
+    1. WHEN TO WRITE. Every-tick (every `TICK_INTERVAL_MS`, per online K9)
+       was rejected outright -- this file's own tick already fires for
+       every online K9 every 5 real seconds by default; a real UPDATE per
+       K9 per tick is a write rate this resource has never asked a
+       database to sustain anywhere else. Write-on-disconnect-only was
+       ALSO rejected -- it loses every single stat change since the last
+       clean disconnect the moment this resource crashes or the host
+       power-cycles, which is exactly the scenario persistence exists to
+       protect against; a design that only survives a graceful stop is not
+       meaningfully better than not persisting at all. THE SHAPE CHOSEN
+       mirrors this resource's own two already-established, materially
+       different precedents, picked apart rather than copied wholesale:
+       server/progression.lua's AwardXP persists a DELTA immediately, on
+       every discrete XP-earning EVENT (a real, comparatively rare
+       occurrence, cheap to persist eagerly) -- wellbeing's six stats have
+       no equivalent "event," they drift continuously every tick, so
+       eager-persist-every-change would mean eager-persist-every-tick,
+       the exact rate already rejected above. server/webhook.lua's own
+       FlushQueue is the closer precedent: a small, cheap, PERIODIC
+       `CreateThread(function() while true do Wait(batchIntervalMs) ...
+       end end)` flush loop, decoupled from whatever cadence actually
+       produces the data. Applied here as a DIRTY FLAG (`stats.dirty`,
+       set true the instant any of the six persisted values changes --
+       every tick a feature is on, AND at each of the eight explicit
+       action handlers: petK9/feedK9/calmDownK9/feedK9Hunger/giveK9Water/
+       drinkFromBowl/RestoreInjury/the relayDamageEvent Mood+Injury decay)
+       plus a PERIODIC FLUSH (`Config.Wellbeing.Persistence.flushIntervalMs`,
+       default 60000ms -- twelve ticks' worth of drift batched into one
+       write, not one write per drift) plus a WRITE ON DISCONNECT
+       (`FlushWellbeingEntryNow`, called from the `playerDropped` handler
+       below, for exactly the reason write-on-disconnect-only was
+       rejected as the ONLY mechanism, not as a WORTHLESS one: it closes
+       the specific, common "logged off normally, resource restarted
+       before the next periodic flush" gap the periodic flush alone would
+       otherwise leave up to `flushIntervalMs` wide). Together: a crash
+       loses at most `flushIntervalMs` of drift for a K9 who never
+       disconnected cleanly, and effectively nothing for one who did --
+       never the whole session, and never a write rate this file's own
+       tick cadence would make expensive.
+
+       A FAILED WRITE NEVER LOSES THE CHANGE SILENTLY: `dirty` is cleared
+       ONLY on a confirmed-successful `K9Store.Wellbeing_Upsert` call
+       (pcall-wrapped; a thrown error OR an explicit `false` return both
+       count as failure) -- a failing write leaves `dirty` untouched, so
+       the NEXT periodic flush (or a later disconnect) retries the exact
+       same row rather than the change being silently dropped the moment
+       one write attempt fails.
+
+    2. WHAT HAPPENS ON LOAD -- FREEZE, NEVER A CATCH-UP DECAY. A returning
+       player's row comes back with whatever was last flushed; real time
+       has passed since then, and TickWellbeing has NO concept of
+       "elapsed wall-clock time since last tick" to begin with -- its own
+       `dtSeconds` is a FIXED `TICK_INTERVAL_MS / 1000`, never a measured
+       gap, because every existing per-tick decay/regen amount is already
+       defined as "this much per tick," not "this much per second," and
+       every tick this file has ever run assumes the K9 it is ticking was
+       online for the whole preceding interval. An offline K9 is, and
+       always has been, simply never ticked at all -- `TickWellbeing`'s
+       own loop only ever iterates `GetPlayers()`, so a citizenid with no
+       corresponding connected player accrues zero decay for however long
+       it stays offline, restart or no restart. APPLYING a catch-up decay
+       proportional to real elapsed offline time on load would not be
+       "more accurate," it would be a NEW behaviour this file has never
+       had and directly the trap this task named: a K9 left offline for
+       two real weeks would come back to `decayPerTick * (two weeks worth
+       of ticks)` of accumulated Hunger/Thirst loss -- arithmetically
+       enough to blow through 0 and clamp there many times over, i.e. a
+       guaranteed-starving dog on every single return from a long break,
+       with no way for the returning player to have prevented it. FREEZE
+       is therefore not a compromise made to dodge that trap -- it is the
+       ONLY choice that keeps "an offline K9 does not decay" true in the
+       one new case (offline-across-a-restart) this pass adds, exactly as
+       it was already true in the case that already existed (offline-
+       within-a-session). No new code enforces this; it falls out
+       naturally from loading the six numbers as-is and never touching
+       them again until the next real tick this citizenid is actually
+       online for.
+
+       THE FOUR TIMER-WINDOW FIELDS ARE DELIBERATELY NEVER PERSISTED.
+       `distractedUntil`/`hesitatingUntil`/`hesitationEpisodeStartedAt`/
+       `injuryDeathEpisodeStartedAt` are `GetGameTimer()`-relative
+       (process-uptime) timestamps, not wall-clock ones -- correct for
+       surviving an ordinary disconnect/reconnect WITHIN one continuously-
+       running process (this header's own category-1 note above already
+       explains why: the clock itself never stops just because a player
+       disconnects), but meaningless the instant the PROCESS restarts,
+       since `GetGameTimer()` resets to a small value near zero on a fresh
+       boot. Persisting one of these verbatim and reloading it after a
+       restart would compare a large, stale, OLD-process timestamp against
+       a freshly-small NEW-process `GetGameTimer()` read -- `hesitatingUntil
+       > now` could then read `true` for what would appear, in real time,
+       to be an absurdly long stretch after the restart, i.e. exactly the
+       "comes back frozen in a state they cannot recover from" trap this
+       task separately warned about, just for a different stat than
+       Hunger/Thirst. All four are short, already-bounded windows (seconds
+       to low minutes -- `HESITATION_MAX_CONTINUOUS_MS` bounds the longest
+       of them), never a magnitude a player accumulates and keeps -- so a
+       returning row always reloads all four as `0` (inactive), the exact
+       same "category 2, transient, ped-instance-scoped" treatment this
+       header already established for `lastCoords`/
+       `injuryDeathEpisodeStartedAt` on an ordinary reconnect, now extended
+       to a restart for the same reason: correctly clearing a short window
+       early is never worse than what a same-process reconnect already
+       does today, and is strictly safer than carrying a stale value
+       forward.
+
+    3. WHAT HAPPENS WHEN THE ROW DOES NOT EXIST -- first-ever login for
+       this citizenid, or a genuinely fresh install. `K9Store.Wellbeing_Get`
+       mirrors `MySQL.single.await`'s own contract (nil = no row), and
+       `EnsureStats` treats that nil exactly the same as
+       `WellbeingPersistenceAvailable()` being false: it falls through to
+       the SAME hardcoded-default construction this function has always
+       used (fatigue/mood/injury/hunger/thirst at each stat's own `max`,
+       fearStress at 0, every timer field at 0). This is not merely
+       "similar" to the pre-this-pass behaviour -- it is the IDENTICAL code
+       path, unchanged, so a player can never observe any difference
+       between "no database at all," "database on, but no row yet," and
+       "this pass never shipped" -- the three cases that must all look the
+       same per this task's own explicit instruction.
+
+    4. EVICTION, ONLY AFTER PERSISTENCE WORKS. A `WellbeingStats` entry is
+       dropped from memory only when BOTH `stats.dirty == false` (every
+       change is confirmed safely on disk -- or there was never a change
+       to lose in the first place) AND its citizenid has been offline for
+       at least `Config.Wellbeing.Persistence.evictAfterMs`. Reuses
+       server/cooldowns.lua's proven `NewCooldown()`/`:StartSweep()`
+       machinery (16 existing trackers, not a new mechanism) for the
+       actual "has this been offline long enough" bookkeeping via a
+       dedicated `WellbeingLastSeenOnline` tracker, touched once per tick
+       per online tracked citizenid (and once at `EnsureStats` creation/
+       load time, so a citizenid that logs off before its very first tick
+       still has a real baseline to measure "offline since" against,
+       rather than reading as "never touched, therefore immediately
+       stale"). ONE HONEST LIMITATION, WORTH STATING PLAINLY: `StartSweep`'s
+       own `isStaleFn` contract is `fun(now, loggedAt): boolean` -- by
+       design, matching every one of its other 16 call sites, none of
+       which ever needed the KEY being evaluated, only the elapsed time --
+       so it cannot itself reach into a SIBLING table (`WellbeingStats`) to
+       delete a specific citizenid's entry; `StartSweep` bounds
+       `WellbeingLastSeenOnline`'s OWN table directly and exactly as
+       documented, while `WellbeingStats`'s own eviction is driven by a
+       lightweight check folded into the ALREADY-EXISTING tick thread
+       (`EvictStaleWellbeingEntries`, gated to run only once every
+       `evictSweepIntervalMs` via a plain "next-due" timestamp, never a
+       second `CreateThread`), using `WellbeingLastSeenOnline.IsOnCooldown`
+       as the single shared staleness oracle so the two tables' eviction
+       decisions can never independently drift out of agreement about what
+       "stale" means.
+
+    FAIL DIRECTION, STATED EXPLICITLY: every `K9Store.Wellbeing_*` call
+    site in this file is soft-guarded (`WellbeingPersistenceAvailable()`)
+    and pcall-wrapped. A database that is unavailable, a query that fails,
+    or a server/datastore.lua that has not yet grown these two accessors
+    all degrade to EXACTLY today's memory-only behaviour (every gameplay
+    action still works; nothing crashes; nothing is evicted while
+    unconfirmed) -- never a broken wellbeing system, and never a crashed
+    tick. This mirrors `Config.Database.enabled = false`'s own resource-
+    wide promise (config.lua's own header on that flag) applied to this
+    one file's own new dependency.
+    ======================================================================
 ]]
 
 -- WellbeingStats[citizenid] = {
@@ -827,6 +1036,18 @@
 --                                              -- (both FOLLOW-UP notes) for the full history, and
 --                                              -- MIN_DEATH_EPISODE_DURATION_MS below for the qualifying
 --                                              -- duration this field's episode length is judged against.
+--     dirty,                                  -- boolean -- PERSISTENCE (this pass, coder-backend). true
+--                                              -- whenever any of the six persisted stats above has
+--                                              -- changed since the last CONFIRMED-successful
+--                                              -- K9Store.Wellbeing_Upsert write; cleared only on that
+--                                              -- confirmation, never merely on attempting one. See this
+--                                              -- file's header "DATABASE PERSISTENCE" section for the
+--                                              -- full write/eviction design this field drives. A THIRD
+--                                              -- category, not #1 or #2 below -- it is never itself
+--                                              -- persisted (there is no column for it; it exists only to
+--                                              -- decide WHETHER to persist the others) and never reset on
+--                                              -- disconnect/model-switch the way category 2 is (an
+--                                              -- unflushed change must survive both).
 --
 -- TWO DIFFERENT CATEGORIES OF FIELD LIVE IN THIS SAME TABLE -- read this
 -- before adding a new one, since conflating them is exactly the bug class a
@@ -1104,15 +1325,254 @@ local function GetThirstBowlModelHashes()
     return ThirstBowlModelHashes
 end
 
---- Returns the citizenid's stat entry, creating a fresh default one on
---- first reference. Fatigue/Mood/Injury default to their own `max` (a K9
---- starts fresh, not exhausted/miserable/injured); FearStress defaults to 0
---- (calm); distractedUntil/hesitatingUntil default to 0 (inactive).
+-- ======================================================================
+-- DATABASE PERSISTENCE (this pass, coder-backend) -- see this file's own
+-- header section of the same name for the full design writeup (when to
+-- write, what happens on load, the missing-row case, and eviction). What
+-- follows is the mechanism; the header has the reasoning.
+-- ======================================================================
+
+--- true only when server/datastore.lua has ACTUALLY grown the two
+--- accessors this file needs -- never assumed from `K9Store` merely
+--- existing (every OTHER K9Store consumer in this resource loads before a
+--- resource-start race could matter; this file makes no such assumption
+--- and re-checks fresh on every call, cheaply, rather than caching a
+--- boot-time snapshot). Mirrors this file's own already-established
+--- `type(RestoreInjury) == 'function'`-style guard for "a genuine new
+--- cross-file dependency, no consumer exists yet" -- applied here to a
+--- PRODUCER (K9Store) this file depends on, rather than a consumer that
+--- depends on this file.
+--- @return boolean
+local function WellbeingPersistenceAvailable()
+    return type(K9Store) == 'table'
+        and type(K9Store.Wellbeing_Get) == 'function'
+        and type(K9Store.Wellbeing_Upsert) == 'function'
+end
+
+--- Resolved ONCE at this file's own load time -- same timing/reasoning as
+--- TICK_INTERVAL_MS/MIN_DEATH_EPISODE_DURATION_MS above: every consumer
+--- below (the flush thread, the eviction sweep, EnsureStats' own load
+--- path) must agree on the same numbers, never independently re-derive
+--- them. CONFIG-DEFENSIVE, and SILENT when the whole sub-block is simply
+--- ABSENT -- exactly GetResolvedHungerThirstConfig's own "an inert
+--- default is never an activation" convention (this file's header), not
+--- TICK_INTERVAL_MS's own "always warn, this field has shipped for a long
+--- time" one: `Config.Wellbeing.Persistence` is BRAND NEW, like
+--- Config.Wellbeing.Hunger/.Thirst, and this file does not own adding it
+--- to every server's config.lua. A server whose config.lua has not yet
+--- picked it up must not print three loud warnings on every single boot
+--- about a sub-block nobody has had the chance to add yet -- that is
+--- precisely the "one Config typo/absence takes an unrelated feature's
+--- console output down with it" outcome this file's own established
+--- convention refuses to repeat. CLAMP-AND-WARN only applies once the
+--- sub-block genuinely EXISTS (a real operator edit with a bad individual
+--- field) -- ResolveConfiguredThresholdMs is only ever reached in that
+--- branch, never against a synthesized empty table.
+local PersistenceCfg = (function()
+    if type(Config.Wellbeing.Persistence) ~= 'table' then
+        return { enabled = true, flushIntervalMs = 60000, evictAfterMs = 900000, evictSweepIntervalMs = 300000 }
+    end
+    local raw = Config.Wellbeing.Persistence
+    return {
+        -- Only a literal `false` opts out -- a missing/unrecognized value
+        -- means "on," the same fail-safe-to-today's-behaviour default
+        -- Config.Database.enabled's own doc comment establishes.
+        enabled              = raw.enabled ~= false,
+        flushIntervalMs      = ResolveConfiguredThresholdMs(raw.flushIntervalMs, 60000, 'Config.Wellbeing.Persistence.flushIntervalMs'),
+        evictAfterMs         = ResolveConfiguredThresholdMs(raw.evictAfterMs, 900000, 'Config.Wellbeing.Persistence.evictAfterMs'),
+        evictSweepIntervalMs = ResolveConfiguredThresholdMs(raw.evictSweepIntervalMs, 300000, 'Config.Wellbeing.Persistence.evictSweepIntervalMs'),
+    }
+end)()
+
+--- citizenid -> GetGameTimer() ms of the last time this citizenid was
+--- confirmed online/tracked -- touched once at EnsureStats' own
+--- creation/load time (so a citizenid that disconnects before its very
+--- first tick still has a real baseline, never reading as "never touched,
+--- therefore immediately stale") and once per tick thereafter from
+--- TickWellbeing's own per-K9 loop, for as long as that citizenid stays
+--- online. Deliberately NOT `:RegisterPlayerDropped()` -- keyed by
+--- CITIZENID, a durable identity, never a raw/recycled server id (this
+--- file's own established rule); StartSweep is the correct cleanup
+--- mechanism for exactly that shape, per server/cooldowns.lua's own doc
+--- comment on when to use one over the other. See this file's header
+--- "DATABASE PERSISTENCE" section, point 4, for why `WellbeingStats`
+--- ITSELF cannot be evicted directly from inside `:StartSweep` (its own
+--- `isStaleFn` contract never receives the key) and instead uses this
+--- tracker's own `IsOnCooldown` as the shared staleness oracle from
+--- EvictStaleWellbeingEntries below.
+local WellbeingLastSeenOnline = NewCooldown()
+WellbeingLastSeenOnline.StartSweep(PersistenceCfg.evictSweepIntervalMs, function(now, loggedAt)
+    return (now - loggedAt) >= PersistenceCfg.evictAfterMs
+end)
+
+--- The exact row shape K9Store.Wellbeing_Upsert expects -- the six
+--- PERSISTED magnitude stats ONLY. See this file's header "DATABASE
+--- PERSISTENCE" point 2 for why the four timer-window fields
+--- (distractedUntil/hesitatingUntil/hesitationEpisodeStartedAt/
+--- injuryDeathEpisodeStartedAt) are deliberately excluded -- they are
+--- GetGameTimer()-relative (process-uptime), not wall-clock, and
+--- meaningless (worse: actively misleading) across a restart.
+--- @param stats table
+--- @return table row
+local function PersistableRowOf(stats)
+    return {
+        fatigue = stats.fatigue,
+        mood = stats.mood,
+        fearStress = stats.fearStress,
+        injury = stats.injury,
+        hunger = stats.hunger,
+        thirst = stats.thirst,
+    }
+end
+
+--- One flush pass: UPSERTs every currently-dirty citizenid's row and
+--- clears its `dirty` flag ONLY on a confirmed-successful write -- a
+--- failed write (a thrown error, or an explicit `false` return) leaves
+--- `dirty` untouched so the NEXT flush (or a later disconnect) retries it
+--- rather than the change being silently lost. A no-op entirely when
+--- persistence is unavailable -- see WellbeingPersistenceAvailable's own
+--- doc comment; this file's tick/action-handler logic never depends on
+--- this function having done anything.
+local function FlushDirtyWellbeingStats()
+    if not PersistenceCfg.enabled or not WellbeingPersistenceAvailable() then return end
+    for citizenid, stats in pairs(WellbeingStats) do
+        if stats.dirty then
+            local ok, resultOrErr = pcall(K9Store.Wellbeing_Upsert, citizenid, PersistableRowOf(stats))
+            if ok and resultOrErr ~= false then
+                stats.dirty = false
+            else
+                print(('[qbx_k9unit] wellbeing.lua: persistence write failed for citizenid %s -- will retry on the next flush (%s)'):format(citizenid, tostring(resultOrErr)))
+            end
+        end
+    end
+end
+
+--- Immediate, single-citizenid flush -- called from the `playerDropped`
+--- handler below so a clean disconnect does not have to wait up to
+--- `Config.Wellbeing.Persistence.flushIntervalMs` for its last change to
+--- reach disk (see this file's header "DATABASE PERSISTENCE" point 1 for
+--- the full "why both a periodic flush AND a write on disconnect"
+--- writeup). Also what makes eviction of a just-disconnected citizenid
+--- possible as soon as `evictAfterMs` elapses, rather than only after the
+--- next periodic flush happens to catch it.
+--- @param citizenid string
+local function FlushWellbeingEntryNow(citizenid)
+    local stats = WellbeingStats[citizenid]
+    if not stats or not stats.dirty then return end
+    if not PersistenceCfg.enabled or not WellbeingPersistenceAvailable() then return end
+    local ok, resultOrErr = pcall(K9Store.Wellbeing_Upsert, citizenid, PersistableRowOf(stats))
+    if ok and resultOrErr ~= false then
+        stats.dirty = false
+    else
+        print(('[qbx_k9unit] wellbeing.lua: persistence write failed on disconnect for citizenid %s -- kept in memory (never evicted while dirty) so a later flush/reconnect can still save it (%s)'):format(citizenid, tostring(resultOrErr)))
+    end
+end
+
+--- Bounds `WellbeingStats`' own size, called from the ALREADY-EXISTING
+--- tick thread below (no second CreateThread) but internally gated to
+--- actually scan at most once every `evictSweepIntervalMs`, via a plain
+--- "next-due" timestamp -- an unconditional `pairs(WellbeingStats)` walk
+--- every single `TICK_INTERVAL_MS` would be needless work on every tick
+--- for a table that, by design, only ever changes slowly (an entry is
+--- only ever added by EnsureStats or removed here). Never evicts a
+--- citizenid with an unconfirmed change (`stats.dirty`) or one
+--- `WellbeingLastSeenOnline` still considers recently online -- see this
+--- file's header "DATABASE PERSISTENCE" point 4 for why `IsOnCooldown` is
+--- the correct, shared oracle for "stale" here (it also correctly answers
+--- `false` — i.e. "not stale, keep" — is wrong for a key `:StartSweep` on
+--- that SAME tracker already deleted for exceeding this SAME threshold;
+--- `IsOnCooldown` reads that as "never touched," which is the same
+--- eviction verdict, just reached from a different, already-correct
+--- code path).
+--- @param now number
+local nextEvictionSweepAt = 0
+local function EvictStaleWellbeingEntries(now)
+    if now < nextEvictionSweepAt then return end
+    nextEvictionSweepAt = now + PersistenceCfg.evictSweepIntervalMs
+
+    -- Never evicts without confirmed persistence, AND respects an
+    -- operator's explicit `Persistence.enabled = false` (a citizenid whose
+    -- last change was never flushable in the first place must not be
+    -- dropped from memory either -- "administratively disabled" means
+    -- behave as if this whole feature does not exist, not "still evict,
+    -- just never flush").
+    if not PersistenceCfg.enabled or not WellbeingPersistenceAvailable() then return end
+    for citizenid, stats in pairs(WellbeingStats) do
+        if not stats.dirty and not WellbeingLastSeenOnline.IsOnCooldown(citizenid, PersistenceCfg.evictAfterMs) then
+            WellbeingStats[citizenid] = nil
+        end
+    end
+end
+
+--- Returns the citizenid's stat entry, creating one on first reference
+--- THIS SESSION. A citizenid not yet cached in `WellbeingStats` (a
+--- returning player, or one whose entry was evicted -- see
+--- EvictStaleWellbeingEntries above) first tries a real database load
+--- (`WellbeingPersistenceAvailable()`-guarded); only when that is
+--- unavailable OR genuinely returns no row does this fall back to the
+--- SAME hardcoded-default construction this function has always used:
+--- Fatigue/Mood/Injury default to their own `max` (a K9 starts fresh, not
+--- exhausted/miserable/injured); FearStress defaults to 0 (calm);
+--- distractedUntil/hesitatingUntil/hesitationEpisodeStartedAt/
+--- injuryDeathEpisodeStartedAt default to 0 (inactive) -- see this file's
+--- header "DATABASE PERSISTENCE" point 3 for why the two branches below
+--- must, and do, produce an identical result for the "no row" case, with
+--- no special case a player could ever notice.
 --- @param citizenid string
 --- @return table stats
 local function EnsureStats(citizenid)
     local stats = WellbeingStats[citizenid]
-    if not stats then
+    if stats then return stats end
+
+    -- CONFIG-DEFENSIVE, same reasoning as every other Config.Wellbeing.Hunger/
+    -- .Thirst read in this file: this file does not own config.lua and
+    -- these subtables may not exist yet on a given server.
+    local hungerMax = (type(Config.Wellbeing.Hunger) == 'table' and tonumber(Config.Wellbeing.Hunger.max)) or 100
+    local thirstMax = (type(Config.Wellbeing.Thirst) == 'table' and tonumber(Config.Wellbeing.Thirst.max)) or 100
+
+    -- PERSISTENCE LOAD (this pass) -- see this file's header "DATABASE
+    -- PERSISTENCE" point 3. A throw here (an unexpected K9Store/DB error)
+    -- degrades to `loadedRow = nil` (the fresh-default branch below),
+    -- never propagates out of EnsureStats -- a load failure must never
+    -- break every OTHER wellbeing feature for this citizenid.
+    local loadedRow = nil
+    if WellbeingPersistenceAvailable() then
+        local ok, rowOrErr = pcall(K9Store.Wellbeing_Get, citizenid)
+        if ok then
+            loadedRow = rowOrErr
+        else
+            print(('[qbx_k9unit] wellbeing.lua: K9Store.Wellbeing_Get threw for citizenid %s -- degrading to a fresh in-memory default for this session (%s)'):format(citizenid, tostring(rowOrErr)))
+        end
+    end
+
+    if loadedRow then
+        -- FREEZE, NEVER A CATCH-UP DECAY (this file's header point 2) --
+        -- every value below is the exact number last flushed, clamped
+        -- defensively against this server's CURRENT config maxima (in
+        -- case a max was lowered, or a row is corrupt) but never adjusted
+        -- for elapsed offline time. The four timer-window fields are
+        -- deliberately NOT read from `loadedRow` at all (PersistableRowOf
+        -- never wrote them) -- always 0/inactive on a load, same as a
+        -- fresh citizenid, for the GetGameTimer()-is-process-uptime reason
+        -- this file's header point 2 explains in full.
+        stats = {
+            fatigue = Clamp(tonumber(loadedRow.fatigue) or Config.Wellbeing.Fatigue.max, 0, Config.Wellbeing.Fatigue.max),
+            mood = Clamp(tonumber(loadedRow.mood) or Config.Wellbeing.Mood.max, 0, Config.Wellbeing.Mood.max),
+            fearStress = Clamp(tonumber(loadedRow.fearStress) or 0, 0, Config.Wellbeing.FearStress.max),
+            injury = Clamp(tonumber(loadedRow.injury) or Config.Wellbeing.Injury.max, 0, Config.Wellbeing.Injury.max),
+            hunger = Clamp(tonumber(loadedRow.hunger) or hungerMax, 0, hungerMax),
+            thirst = Clamp(tonumber(loadedRow.thirst) or thirstMax, 0, thirstMax),
+            distractedUntil = 0,
+            hesitatingUntil = 0,
+            hesitationEpisodeStartedAt = 0,
+            lastCoords = nil,
+            injuryDeathEpisodeStartedAt = 0,
+            dirty = false, -- matches what is on disk right now -- nothing to flush yet
+        }
+    else
+        -- IDENTICAL to this function's own pre-persistence default
+        -- construction -- see this file's header point 3 for why this
+        -- must never visibly differ from "no database at all."
         stats = {
             fatigue = Config.Wellbeing.Fatigue.max,
             mood = Config.Wellbeing.Mood.max,
@@ -1122,43 +1582,20 @@ local function EnsureStats(citizenid)
             hesitatingUntil = 0,
             hesitationEpisodeStartedAt = 0,
             lastCoords = nil,
-            -- DEATH/RESPAWN RESET (this pass, coder-backend softlock fix,
-            -- since redesigned by two FOLLOW-UP fixes): GetGameTimer() ms
-            -- of the tick a tracked K9's native health is FIRST observed
-            -- continuously at/below PED_DEAD_HEALTH_THRESHOLD; 0 = not
-            -- currently in a candidate episode. See this file's header,
-            -- STUCK-K9 SOFTLOCK FIX item 2 (both FOLLOW-UP notes), and
-            -- TickWellbeing's own Injury branch below for the full
-            -- read/qualify/reset cycle, and MIN_DEATH_EPISODE_DURATION_MS
-            -- for the minimum episode span a restore requires. Starts 0: a
-            -- freshly-referenced citizenid has never been observed dead by
-            -- this tracker. TRANSIENT, PED-INSTANCE-SCOPED, NOT a persisted
-            -- value — see the WellbeingStats struct comment above
-            -- (category 2) for why this MUST be reset (to 0, not `false` —
-            -- this is a timestamp) wherever lastCoords is reset.
             injuryDeathEpisodeStartedAt = 0,
-            -- HUNGER/THIRST (this pass, coder-backend): PERSISTED, same
-            -- category as fatigue/mood/fearStress/injury above -- "a K9 who
-            -- logs off hungry should still be hungry on reconnect." Default
-            -- to each stat's own max (a K9 starts fresh, not already
-            -- starving), same convention as every other stat here.
-            -- CONFIG-DEFENSIVE: `Config.Wellbeing.Hunger`/`.Thirst` may not
-            -- exist yet on a server whose config.lua has not added them
-            -- (this file does not own config.lua) -- EnsureStats runs
-            -- unconditionally for EVERY stat regardless of which Features
-            -- flag is on, so an unguarded `Config.Wellbeing.Hunger.max`
-            -- read here would crash this function, and therefore every
-            -- OTHER wellbeing feature, the instant anything referenced this
-            -- citizenid -- not merely a HungerThirstSystem-gated failure.
-            -- Guarded, not warned: this is an inert default, never an
-            -- "activation" (see this file's header for that distinction) --
-            -- the loud warning lives in GetResolvedHungerThirstConfig()
-            -- below, reached only once the feature is actually gated on.
-            hunger = (type(Config.Wellbeing.Hunger) == 'table' and tonumber(Config.Wellbeing.Hunger.max)) or 100,
-            thirst = (type(Config.Wellbeing.Thirst) == 'table' and tonumber(Config.Wellbeing.Thirst.max)) or 100,
+            hunger = hungerMax,
+            thirst = thirstMax,
+            dirty = false,
         }
-        WellbeingStats[citizenid] = stats
     end
+
+    WellbeingStats[citizenid] = stats
+    -- PERSISTENCE (this pass) -- gives this citizenid a real "last seen
+    -- online" baseline from the moment it exists in memory, so a
+    -- disconnect before this citizenid's very first TickWellbeing pass
+    -- still measures "offline since" from something real, never reading
+    -- as "never touched, therefore immediately eligible for eviction."
+    WellbeingLastSeenOnline.Touch(citizenid)
     return stats
 end
 
@@ -1438,9 +1875,11 @@ AddEventHandler('qbx_k9unit:server:relayDamageEvent', function()
     -- only ever recover, never worsen, from this event.
     if Config.Features.MoodSystem and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'MoodSystem') then
         stats.mood = Clamp(stats.mood - Config.Wellbeing.Mood.damageDecayAmount, 0, Config.Wellbeing.Mood.max)
+        stats.dirty = true -- PERSISTENCE (this pass) -- see this file's header "DATABASE PERSISTENCE" point 1
     end
     if Config.Features.InjuryLimping and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'InjuryLimping') then
         stats.injury = Clamp(stats.injury - Config.Wellbeing.Injury.damageDecayAmount, 0, Config.Wellbeing.Injury.max)
+        stats.dirty = true -- PERSISTENCE (this pass)
     end
 end)
 
@@ -1694,6 +2133,7 @@ lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId
 
     local stats = EnsureStats(targetCitizenid)
     stats.mood = Clamp(stats.mood + Config.Wellbeing.Mood.petRegenAmount, 0, Config.Wellbeing.Mood.max)
+    stats.dirty = true -- PERSISTENCE (this pass) -- see this file's header "DATABASE PERSISTENCE" point 1
 
     return { ok = true }
 end)
@@ -1771,6 +2211,7 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
 
     local stats = EnsureStats(targetCitizenid)
     stats.mood = Clamp(stats.mood + Config.Wellbeing.Mood.feedRegenAmount, 0, Config.Wellbeing.Mood.max)
+    stats.dirty = true -- PERSISTENCE (this pass)
 
     return { ok = true }
 end)
@@ -1802,6 +2243,7 @@ RegisterNetEvent('qbx_k9unit:server:calmDownK9', function()
 
     local stats = EnsureStats(citizenid)
     stats.fearStress = Clamp(stats.fearStress - Config.Wellbeing.FearStress.calmDownReduceAmount, 0, Config.Wellbeing.FearStress.max)
+    stats.dirty = true -- PERSISTENCE (this pass)
     NotifyPlayer(src, locale('wellbeing.calm_down_success'), 'success')
 end)
 
@@ -1985,6 +2427,7 @@ AddEventHandler('qbx_k9unit:server:feedK9Hunger', function()
 
     local stats = EnsureStats(citizenid)
     stats.hunger = Clamp(stats.hunger + hc.hungerFeedRegenAmount, 0, hc.hungerMax)
+    stats.dirty = true -- PERSISTENCE (this pass)
     NotifyPlayer(src, locale('wellbeing.eat_success'), 'success')
 end)
 
@@ -2021,6 +2464,7 @@ AddEventHandler('qbx_k9unit:server:giveK9Water', function()
 
     local stats = EnsureStats(citizenid)
     stats.thirst = Clamp(stats.thirst + hc.thirstDrinkRegenAmount, 0, hc.thirstMax)
+    stats.dirty = true -- PERSISTENCE (this pass)
     NotifyPlayer(src, locale('wellbeing.drink_success'), 'success')
 end)
 
@@ -2069,6 +2513,7 @@ AddEventHandler('qbx_k9unit:server:drinkFromBowl', function(netId)
 
     local stats = EnsureStats(citizenid)
     stats.thirst = Clamp(stats.thirst + hc.thirstBowlRegenAmount, 0, hc.thirstMax)
+    stats.dirty = true -- PERSISTENCE (this pass)
     NotifyPlayer(src, locale('wellbeing.drink_success'), 'success')
 end)
 
@@ -2089,6 +2534,7 @@ function RestoreInjury(citizenid, amount)
 
     local stats = EnsureStats(citizenid)
     stats.injury = Clamp(stats.injury + amount, 0, Config.Wellbeing.Injury.max)
+    stats.dirty = true -- PERSISTENCE (this pass)
 end
 
 --- @param citizenid string
@@ -2700,6 +3146,21 @@ local function TickWellbeing()
                         end
                     end
 
+                    -- PERSISTENCE (this pass) -- see this file's header
+                    -- "DATABASE PERSISTENCE" point 1/4. Marked dirty
+                    -- unconditionally for every online, tracked K9 this
+                    -- tick (simpler and strictly safer than tracking exact
+                    -- per-field dirtiness at each of the six branches
+                    -- above -- a periodic flush rewriting an occasionally-
+                    -- unchanged value is harmless; a future mutation site
+                    -- added above without remembering to flag it would not
+                    -- be). `WellbeingLastSeenOnline.Touch` is this
+                    -- citizenid's OWN "still online" heartbeat -- see
+                    -- EvictStaleWellbeingEntries' own doc comment for how
+                    -- this is used to decide eviction eligibility.
+                    stats.dirty = true
+                    WellbeingLastSeenOnline.Touch(citizenid, now)
+
                     TriggerClientEvent('qbx_k9unit:client:wellbeingUpdate', src, SnapshotOf(stats))
 
                     -- HANDLER CONDITION BADGE (this pass) — same per-K9
@@ -2819,6 +3280,17 @@ AddEventHandler('playerDropped', function(_reason)
         stats.injuryDeathEpisodeStartedAt = 0
     end
 
+    -- PERSISTENCE (this pass) -- write-on-disconnect, so this citizenid's
+    -- last change does not have to wait for the next periodic flush to
+    -- reach disk, and so it becomes eligible for eviction as soon as
+    -- Config.Wellbeing.Persistence.evictAfterMs elapses rather than only
+    -- after a periodic flush happens to catch it. See this file's header
+    -- "DATABASE PERSISTENCE" point 1 for the full writeup; no-op if this
+    -- citizenid has nothing unflushed or persistence is unavailable.
+    if citizenid then
+        FlushWellbeingEntryNow(citizenid)
+    end
+
     -- HANDLER CONDITION BADGE CLEANUP (this pass) — if this disconnecting
     -- player IS a K9 with a cached, currently-visible condition badge
     -- showing on some handler's screen, that badge has no way to
@@ -2934,6 +3406,21 @@ end)
 CreateThread(function()
     while true do
         Wait(TICK_INTERVAL_MS)
+
+        -- PERSISTENCE (this pass, coder-backend) -- eviction rides this
+        -- ALREADY-EXISTING tick (no second CreateThread), unconditionally,
+        -- regardless of the six-flag check just below: a dirty entry
+        -- created while a feature was on must still be flushed/evicted
+        -- correctly after that feature is later turned off, and
+        -- EvictStaleWellbeingEntries' own internal "next-due" gate already
+        -- keeps this cheap (a plain timestamp compare) on every tick where
+        -- it isn't actually due to scan. See that function's own doc
+        -- comment above for the full design.
+        local evictOk, evictErr = pcall(EvictStaleWellbeingEntries, GetGameTimer())
+        if not evictOk then
+            print(('[qbx_k9unit] wellbeing.lua: eviction sweep error: %s'):format(tostring(evictErr)))
+        end
+
         if Config.Features.FatigueSystem or Config.Features.MoodSystem
             or Config.Features.FearStressSystem or Config.Features.DistractionSystem
             or Config.Features.InjuryLimping or Config.Features.HungerThirstSystem then
@@ -2951,6 +3438,27 @@ CreateThread(function()
             local ok, err = pcall(ClearAllHandlerConditionBadges)
             if not ok then
                 print(('[qbx_k9unit] wellbeing handler-condition clear error: %s'):format(tostring(err)))
+            end
+        end
+    end
+end)
+
+-- PERSISTENCE (this pass, coder-backend) -- periodic flush thread. See
+-- this file's header "DATABASE PERSISTENCE" point 1 for the full "why a
+-- separate, coarser thread rather than flushing on TickWellbeing's own
+-- 5-second-default cadence" writeup. Same defensive shape as every other
+-- periodic thread in this file (and mirrors server/webhook.lua's own
+-- FlushQueue thread): `Wait` first, every iteration, unconditionally --
+-- see the main tick thread's own header comment (further up this file)
+-- for why that shape, not an act-then-Wait one, is load-bearing for this
+-- file's own test suite, not merely a style preference.
+CreateThread(function()
+    while true do
+        Wait(PersistenceCfg.flushIntervalMs)
+        if PersistenceCfg.enabled then
+            local ok, err = pcall(FlushDirtyWellbeingStats)
+            if not ok then
+                print(('[qbx_k9unit] wellbeing.lua: persistence flush error: %s'):format(tostring(err)))
             end
         end
     end

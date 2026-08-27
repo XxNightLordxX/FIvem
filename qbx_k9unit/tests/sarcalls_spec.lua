@@ -512,6 +512,11 @@ t.test('tick loop: found -- awards XP exactly once, fires the sarCallCompleted o
     t.equals(endPush.args[1], 'found')
     t.equals(endPush.args[2], completedOutbound.args[4], 'callType pushed to the client must match the callType in the outbound event')
     t.equals(endPush.args[3], started.callId, 'the found push must carry THIS call\'s own callId, in its fixed 3rd position -- see this file\'s header "STALE-SESSION RACE"')
+    -- SHARED FOUND MARKER (this pass): the found push must also carry the
+    -- real target coordinates so client/sarcalls.lua can draw its own
+    -- shared marker -- see server/sarcalls.lua's header of the same name.
+    t.equals(endPush.args[4], 10.0, 'the found push must carry the real targetX, now that the call has resolved')
+    t.equals(endPush.args[5], 0.0, 'the found push must carry the real targetY, now that the call has resolved')
 
     -- Confirmed actually cleared, not lingering: a fresh request from the
     -- SAME citizenid, after the cooldown, must succeed (no stale already_active).
@@ -545,6 +550,8 @@ t.test('tick loop: an unfinished call older than maxCallDurationMs auto-expires 
     t.equals(endPush.args[1], 'timeout')
     t.isNil(endPush.args[2], 'callType is unused for a timeout -- must be an explicit nil, not silently absent, so callId still lands in its own fixed 3rd position')
     t.equals(endPush.args[3], started.callId, 'a timeout push must still carry THIS call\'s own callId')
+    t.isNil(endPush.args[4], 'a timeout never resolved as found -- there is no target coordinate to share')
+    t.isNil(endPush.args[5], 'a timeout never resolved as found -- there is no target coordinate to share')
 
     -- Confirmed actually cleared: a fresh request succeeds once the
     -- cooldown clears too.
@@ -572,6 +579,8 @@ t.test('abandonSarCall: UNCONDITIONAL -- clears an active call with Config off a
     t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
     t.equals(endPush.args[1], 'abandoned')
     t.equals(endPush.args[3], started.callId, 'an abandoned push must still carry THIS call\'s own callId')
+    t.isNil(endPush.args[4], 'an abandon never resolved as found -- there is no target coordinate to share')
+    t.isNil(endPush.args[5], 'an abandon never resolved as found -- there is no target coordinate to share')
 
     -- No-op on a source with nothing active: must not error.
     fireAbandonSarCall(999)
@@ -812,7 +821,28 @@ local function newCapturingFixture(tuning)
     local printedLines = {}
     local threadCreated = false
     local runner = Sandbox.newThreadRunner()
-    local registeredCallback, registeredNetEvent
+    -- KEYED BY NAME, NOT a single last-registration-wins local -- REGRESSION
+    -- FIX (RADIAL JOIN ENTRY POINT pass): server/sarcalls.lua now registers
+    -- a SECOND lib.callback (findNearestJoinableSarCall) alongside
+    -- requestSarCall, and a THIRD/fourth RegisterNetEvent
+    -- (requestJoinSarCall/respondJoinSarCall) alongside abandonSarCall --
+    -- both existed as a single bare local here, which silently rebound to
+    -- WHICHEVER call happened to run last, rather than the one this
+    -- fixture's own callers actually meant. Harmless for the boolean
+    -- `hasAbandonNetEvent ~= nil` check either way, but genuinely wrong for
+    -- `requestSarCall`, which this fixture actually INVOKES -- proven live
+    -- by two REGRESSION tests below silently calling
+    -- findNearestJoinableSarCall(src) instead of requestSarCall(src) once
+    -- that second callback landed, and getting back `{ targetServerId = nil
+    -- }` (so `result.started`/`result.reason` both read nil) instead of a
+    -- real grant/denial. Named with a `fixture` prefix, same convention as
+    -- fixtureGetPlayerPed/fixtureGetEntityCoords/fixtureQbxGetPlayer below,
+    -- to avoid shadowing this file's own SECTION 1 module-level
+    -- registeredCallbacks/registeredNetEvents (declared far above, around
+    -- line 106) -- this fixture is fully self-contained and never reads or
+    -- writes SECTION 1's state, but a shadowed name in the same file is a
+    -- needless luacheck warning and a trap for a future reader.
+    local fixtureRegisteredCallbacks, fixtureRegisteredNetEvents = {}, {}
     local pedCoords, players = {}, {}
     local clientEvents = {}
     local env
@@ -837,9 +867,9 @@ local function newCapturingFixture(tuning)
         CreateThread = function(fn) threadCreated = true; runner.CreateThread(fn) end,
         Wait = runner.Wait,
         AddEventHandler = function() end,
-        RegisterNetEvent = function(_name, fn) registeredNetEvent = fn end,
+        RegisterNetEvent = function(name, fn) fixtureRegisteredNetEvents[name] = fn end,
         math = FakeMath,
-        lib = { callback = { register = function(_name, fn) registeredCallback = fn end } },
+        lib = { callback = { register = function(name, fn) fixtureRegisteredCallbacks[name] = fn end } },
         HasK9Access = function() return true end,
         GetPlayerPed = fixtureGetPlayerPed,
         GetEntityCoords = fixtureGetEntityCoords,
@@ -866,9 +896,9 @@ local function newCapturingFixture(tuning)
         printedLines = printedLines,
         loaded = ok,
         threadCreated = threadCreated,
-        hasRequestCallback = registeredCallback ~= nil,
-        hasAbandonNetEvent = registeredNetEvent ~= nil,
-        requestSarCall = function(src) return registeredCallback(src) end,
+        hasRequestCallback = fixtureRegisteredCallbacks['qbx_k9unit:server:requestSarCall'] ~= nil,
+        hasAbandonNetEvent = fixtureRegisteredNetEvents['qbx_k9unit:server:abandonSarCall'] ~= nil,
+        requestSarCall = function(src) return fixtureRegisteredCallbacks['qbx_k9unit:server:requestSarCall'](src) end,
         tick = runner.step,
         setPedCoords = function(src, x, y, z) pedCoords[src] = { x = x, y = y, z = z } end,
         registerPlayer = function(src, citizenid, job) players[src] = { citizenid = citizenid, job = job } end,
@@ -1233,11 +1263,19 @@ t.test('a second officer can join an active call and genuinely participate: thei
     t.equals(finderPush.event, 'qbx_k9unit:client:sarCallEnded')
     t.equals(finderPush.args[1], 'found', 'the member who actually crossed arrivalRadius gets reason == found')
     t.equals(finderPush.args[3], started.callId)
+    -- SHARED FOUND MARKER (this pass): BOTH the finder and the teammate get
+    -- the real target coordinates -- see server/sarcalls.lua's header of the
+    -- same name. Target rolled at (10.0, 0.0) per this test's own queueRandom
+    -- call above.
+    t.equals(finderPush.args[4], 10.0, "the finder's own found push must also carry the real targetX")
+    t.equals(finderPush.args[5], 0.0, "the finder's own found push must also carry the real targetY")
 
     local teammatePush = lastEventFor(100)
     t.equals(teammatePush.event, 'qbx_k9unit:client:sarCallEnded')
     t.equals(teammatePush.args[1], 'found_by_teammate', 'every OTHER member gets found_by_teammate, never found -- they are not standing where the target was')
     t.isNil(teammatePush.args[2], 'found_by_teammate carries no callType -- there is nothing for that client to reveal')
+    t.equals(teammatePush.args[4], 10.0, 'found_by_teammate must STILL carry the real targetX, so that member can draw the shared found-marker even without the entity-level reveal')
+    t.equals(teammatePush.args[5], 0.0, 'found_by_teammate must STILL carry the real targetY, so that member can draw the shared found-marker even without the entity-level reveal')
 
     -- Confirmed fully cleared for BOTH sources -- a fresh request from
     -- either succeeds (no lingering already_active for the joiner either).
@@ -1427,6 +1465,83 @@ t.test('when the OWNER leaves via abandonSarCall while a participant remains, ow
 
     fakeNow = fakeNow + 20000
     t.isTrue(requestSarCall(116).started, 'the officer who voluntarily left must themselves be completely free again too')
+end)
+
+-- ------------------------------------------------------------------------
+-- RED-TEAM PASS: two narrow findings against "TWO OFFICERS, ONE CALL",
+-- neither present in the tests above. See this file's own header sections
+-- "STALE JOIN-REQUEST FIX" and "JOIN-ELIGIBILITY CHECK ORDERING FIX" for
+-- the full writeups these tests pin.
+-- ------------------------------------------------------------------------
+
+t.test('STALE JOIN-REQUEST FIX (RED-TEAM PASS): a pending request answered AFTER the named owner abandoned that call and started a NEW one must NOT silently seat the joiner into the new call', function()
+    playersBySource[150] = { citizenid = 'CIT_STALE_OWNER_150', job = 'police' }
+    playersBySource[151] = { citizenid = 'CIT_STALE_JOINER_151', job = 'police' }
+    pedCoordsBySource[150] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[151] = { x = 1.0, y = 0.0, z = 0.0 } -- within joinProximityMeters throughout
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local callA = requestSarCall(150)
+    t.isTrue(callA.started)
+
+    -- B asks to join A's call (C1) -- the owner's client is shown the prompt, unanswered so far.
+    fireRequestJoinSarCall(151, 150)
+    t.equals(lastEventFor(150).event, 'qbx_k9unit:client:sarJoinRequest', 'sanity: the prompt genuinely reached the owner')
+
+    -- A abandons C1 BEFORE ever answering B's request.
+    fireAbandonSarCall(150)
+
+    -- A starts a brand-new call, C2 -- a completely different callId.
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local callB = requestSarCall(150)
+    t.isTrue(callB.started)
+    t.isTrue(callB.callId > callA.callId, 'sanity: genuinely a different, later call')
+
+    -- A now taps ACCEPT on the STALE dialog still sitting on their screen,
+    -- naming the ORIGINAL request. Without this pass's fix, this silently
+    -- seats B into C2 -- a call B never asked to help with.
+    fireRespondJoinSarCall(150, 151, true)
+
+    -- B must never have been sent a sarCallJoined push for ANY call.
+    local joinedPushToB = nil
+    for _, ev in ipairs(triggerClientEventCalls) do
+        if ev.target == 151 and ev.event == 'qbx_k9unit:client:sarCallJoined' then joinedPushToB = ev end
+    end
+    t.isNil(joinedPushToB, 'the stale accept must never seat B into ANY call, including the new one -- this is what the bug did before this pass\'s fix')
+
+    -- Observable proof B was never made a member of anything: B is
+    -- completely free to start their own, brand-new call (a citizenid who
+    -- WAS silently seated as a member would be rejected here as
+    -- already_active).
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    t.isTrue(requestSarCall(151).started, 'B must never have been silently added as a member of A\'s new call -- this is the CONTROL: a genuinely free citizenid must still be able to start their own call')
+
+    fireAbandonSarCall(150)
+    fireAbandonSarCall(151)
+end)
+
+t.test('JOIN-ELIGIBILITY CHECK ORDERING FIX (RED-TEAM PASS): a requester too far away gets too_far EVEN WHEN the target has no call at all -- never a way to distinguish "no call" from "call, but too far" from a distance', function()
+    playersBySource[160] = { citizenid = 'CIT_NOCALL_TARGET_160', job = 'police' } -- never starts a call at all
+    playersBySource[161] = { citizenid = 'CIT_FAR_REQUESTER_161', job = 'police' }
+    pedCoordsBySource[160] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[161] = { x = 500.0, y = 0.0, z = 0.0 } -- far beyond joinProximityMeters (10.0 default)
+
+    fireRequestJoinSarCall(161, 160)
+    t.contains(lastNotifyFor(161).description, locale('sar.join_too_far'),
+        'a distant requester must get the SAME too_far answer whether or not the target has a call -- never invalid_target, which would leak "no call running" to someone too far to ever legitimately join')
+end)
+
+t.test('JOIN-ELIGIBILITY CHECK ORDERING FIX, CONTROL: a genuinely NEARBY requester targeting someone with no call still gets the honest invalid_target answer, not too_far -- the reorder must not make the ordinary case confusing', function()
+    playersBySource[162] = { citizenid = 'CIT_NOCALL_TARGET_162', job = 'police' } -- never starts a call at all
+    playersBySource[163] = { citizenid = 'CIT_NEAR_REQUESTER_163', job = 'police' }
+    pedCoordsBySource[162] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[163] = { x = 1.0, y = 0.0, z = 0.0 } -- well within joinProximityMeters (10.0 default)
+
+    fireRequestJoinSarCall(163, 162)
+    t.contains(lastNotifyFor(163).description, locale('sar.join_invalid_target'),
+        'a genuinely nearby requester targeting a no-call target must still get the honest answer -- proximity passing must fall through to ownership resolution exactly as before this pass')
 end)
 
 t.test('ANTI-FARM: two citizenids alternately starting-and-inviting each other, with the JOINER finding every single call, still each only ever earn XP from calls THEY THEMSELVES started -- the join path never mints XP for anyone', function()

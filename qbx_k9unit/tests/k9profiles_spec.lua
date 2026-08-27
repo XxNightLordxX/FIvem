@@ -100,7 +100,7 @@ local function makeQueryAwait(world)
     end
 end
 
---- @param opts table? -- { world, isHighCommand, tierByCitizenid, onlineSources, databaseEnabled, throwOnWrite, maxSpeedScentMultiplier, wellbeingConfig }
+--- @param opts table? -- { world, isHighCommand, tierByCitizenid, onlineSources, databaseEnabled, throwOnWrite, maxSpeedScentMultiplier, wellbeingConfig, omitGetPlayerByCitizenId, omitTriggerClientEvent, omitGetPlayers }
 --- @return table fixture
 local function boot(opts)
     opts = opts or {}
@@ -136,6 +136,16 @@ local function boot(opts)
     end
 
     local onlineSources = opts.onlineSources or {}
+    --- @param citizenid string
+    --- @return table? player -- { PlayerData = { citizenid, source } }, or nil if offline
+    local function findOnlinePlayerByCitizenid(citizenid)
+        for src, cid in pairs(onlineSources) do
+            if cid == citizenid then
+                return { PlayerData = { citizenid = citizenid, source = src } }
+            end
+        end
+        return nil
+    end
     local exportsStub = {
         qbx_core = {
             GetPlayer = function(_self, src)
@@ -145,6 +155,44 @@ local function boot(opts)
             end,
         },
     }
+    -- GAP 1, PART 2 -- PushK9SpeedOverrideStatusIfOnline's own reverse
+    -- lookup. Real qbx_core exposes this unconditionally; OMITTED entirely
+    -- (never merely stubbed to answer nil -- an `X and nil or Y` idiom here
+    -- would backfire, since `true and nil` collapses to `nil` and the
+    -- trailing `or Y` would then wrongly reinstate it) whenever
+    -- opts.omitGetPlayerByCitizenId is true, to prove that function's own
+    -- `type(...) == 'function'` guard degrades safely against a genuinely
+    -- ABSENT export, not just a nil-returning one.
+    if not opts.omitGetPlayerByCitizenId then
+        exportsStub.qbx_core.GetPlayerByCitizenId = function(_self, citizenid)
+            return findOnlinePlayerByCitizenid(citizenid)
+        end
+    end
+
+    -- GAP 1, PART 2 -- captures every TriggerClientEvent call this file
+    -- makes (the k9SpeedOverrideStatus push, on an edit, a fresh
+    -- PlayerLoaded, or this file's own onResourceStart backfill loop).
+    -- Omittable per-test via opts.omitTriggerClientEvent to prove
+    -- PushK9SpeedOverrideStatus's own soft-guard degrades safely without it.
+    local capturedClientEvents = {}
+    local function TriggerClientEventStub(eventName, target, payload)
+        capturedClientEvents[#capturedClientEvents + 1] = { event = eventName, target = target, payload = payload }
+    end
+
+    -- GAP 1, PART 2 -- real GetPlayers() returns an array of STRING server
+    -- ids; tonumber() at every real call site (this file's own backfill
+    -- loop, mirroring server/permissions.lua's identical idiom) is what
+    -- turns them back into numbers -- returning strings here, not numbers,
+    -- exercises that conversion for real rather than assuming it away.
+    -- Omittable per-test via opts.omitGetPlayers to prove the backfill loop
+    -- itself does not crash a boot() with no such native at all (this
+    -- file's own onResourceStart handler calls it unconditionally).
+    local function GetPlayersStub()
+        local ids = {}
+        for src in pairs(onlineSources) do ids[#ids + 1] = tostring(src) end
+        table.sort(ids)
+        return ids
+    end
 
     local isHighCommand = opts.isHighCommand or function() return false end
 
@@ -178,6 +226,18 @@ local function boot(opts)
         Config                 = config,
         GetXPTier              = GetXPTierStub,
     }
+    -- Deliberately NOT `opts.omitX and nil or Xstub` in the table
+    -- constructor above -- that idiom silently backfires the moment the
+    -- omit flag is true (`true and nil` collapses to `nil`, and the
+    -- trailing `or Xstub` then wrongly reinstates it -- the exact bug this
+    -- spec's own GetPlayerByCitizenId wiring above was written to avoid).
+    -- Plain `if not opts.omitX then` assignments have no such trap.
+    if not opts.omitTriggerClientEvent then
+        envOverrides.TriggerClientEvent = TriggerClientEventStub
+    end
+    if not opts.omitGetPlayers then
+        envOverrides.GetPlayers = GetPlayersStub
+    end
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -193,6 +253,23 @@ local function boot(opts)
     return {
         env = env, world = world, callbacks = callbacks, printedLines = printedLines,
         fakeNow = fakeNow, onlineSources = onlineSources, tierByCitizenid = tierByCitizenid,
+        -- GAP 1, PART 2 -- every TriggerClientEvent call this file makes,
+        -- in order.
+        capturedClientEvents = capturedClientEvents,
+        --- Simulates a fresh join/reconnect for `citizenid` at `src` --
+        --- fires THIS file's own 'QBCore:Server:PlayerLoaded' handler
+        --- directly (the same shape server/permissions.lua's own tests use
+        --- for the identical event), independent of onlineSources (a test
+        --- may register the citizenid there separately if it also needs
+        --- exports.qbx_core:GetPlayer/GetPlayerByCitizenId to resolve them
+        --- afterward).
+        --- @param src number
+        --- @param citizenid string
+        firePlayerLoaded = function(src, citizenid)
+            for _, handler in ipairs(eventHandlers['QBCore:Server:PlayerLoaded'] or {}) do
+                handler({ PlayerData = { source = src, citizenid = citizenid } })
+            end
+        end,
     }
 end
 
@@ -701,6 +778,12 @@ local function bootWithRacingMySQL(opts)
         print = printStub,
         IsHighCommand = function() return true end,
         exports = { qbx_core = { GetPlayer = function(_self, _src) return nil end } },
+        -- GAP 1, PART 2 -- this file's own onResourceStart handler now
+        -- backfills speed-override status for every online player after
+        -- RefreshOverrideCache(); nobody is online in this fixture at all
+        -- (GetPlayer above always answers nil), so an empty list is both
+        -- sufficient and correct here.
+        GetPlayers = function() return {} end,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -855,14 +938,19 @@ t.test('CEILING IS GENUINELY CONFIG-DRIVEN: Config.MaxSpeedScentMultiplier = 5.0
     t.equals(rejected.reason, 'invalid_speed_multiplier')
 end)
 
-t.test('CEILING IS GENUINELY CONFIG-DRIVEN: a simulated reboot at Config.MaxSpeedScentMultiplier = 50.0 now accepts 40.0', function()
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN FOR SCENT (no engine ceiling of its own): a simulated reboot at Config.MaxSpeedScentMultiplier = 50.0 now accepts a scentRangeMultiplier of 40.0', function()
     -- Simulates a resource restart: a brand-new boot() with a different
     -- Config.MaxSpeedScentMultiplier, exactly like an operator editing
-    -- config.lua and restarting the resource.
+    -- config.lua and restarting the resource. scentRangeMultiplier, UNLIKE
+    -- speedMultiplier (see GAP 1 PART 2 section below), never touches a
+    -- game native at all -- server/tracking.lua applies it as a bare
+    -- multiplication against a search radius -- so it has no reason to be
+    -- capped by anything BUT the owner's own chosen ceiling, and this test
+    -- proves it still is not.
     local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 50.0 })
-    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 40.0 })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', scentRangeMultiplier = 40.0 })
     t.isTrue(result.ok, 'a value that would have been rejected under the 10.0/3.0 defaults must be accepted once the operator raises the ceiling to 50.0')
-    t.equals(result.effective.speedMultiplier, 40.0)
+    t.equals(result.effective.scentRangeMultiplier, 40.0)
 end)
 
 t.test('CEILING SANITY CHECK (temporarily hardcode 3.0 back to prove the test above is real): a stale 3.0 ceiling would reject 40.0', function()
@@ -876,6 +964,71 @@ t.test('CEILING SANITY CHECK (temporarily hardcode 3.0 back to prove the test ab
     -- unrelated reason.
     local wouldPassAtOldHardcodedCeiling = 40.0 > 0 and 40.0 <= 3.0
     t.isFalse(wouldPassAtOldHardcodedCeiling, '40.0 must be above the OLD hardcoded 3.0 ceiling for the test above to be a meaningful proof of config-drivenness')
+end)
+
+-- ============================================================================
+-- GAP 1, PART 2 -- speedMultiplier's OWN ceiling: unlike scentRangeMultiplier
+-- above, capped at whichever is SMALLER of Config.MaxSpeedScentMultiplier
+-- and the real SET_PED_MOVE_RATE_OVERRIDE engine maximum (10.0) -- see
+-- server/k9profiles.lua's own header "GAP 1, PART 2" for the full research
+-- writeup this is grounded in. RED-THEN-GREEN, WITH A CONTROL: the FLOOR
+-- half (0.1) and the CEILING half (10.0) are each proven with their own
+-- positive (just-inside, accepted) and negative (just-outside, rejected)
+-- pair, per this task's own "two things a passing test can mean" caution.
+-- ============================================================================
+
+t.test('GAP 1 PART 2 -- SPEED CEILING IS ENGINE-CAPPED, NOT CONFIG-UNBOUNDED: at Config.MaxSpeedScentMultiplier = 50.0, a speedMultiplier of 40.0 is REJECTED (engine max is 10.0) even though the identical 40.0 is accepted for scentRangeMultiplier above', function()
+    local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 50.0 })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 40.0 })
+    t.isFalse(result.ok, 'speedMultiplier must never be allowed to exceed what SET_PED_MOVE_RATE_OVERRIDE can physically do, no matter how high the owner raises the shared config ceiling')
+    t.equals(result.reason, 'invalid_speed_multiplier')
+end)
+
+t.test('GAP 1 PART 2 CONTROL: exactly at the engine ceiling (10.0) still succeeds, even with a much higher config value -- proves the rejection above is a REAL 10.0 cap, not an accidental full rejection of every high value', function()
+    local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 50.0 })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 10.0 })
+    t.isTrue(result.ok, '10.0 itself -- the documented SET_PED_MOVE_RATE_OVERRIDE maximum -- must remain acceptable')
+    t.equals(result.effective.speedMultiplier, 10.0)
+
+    advance(f)
+    local justOver = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 10.01 })
+    t.isFalse(justOver.ok, 'one hundredth over the real engine ceiling must still be rejected -- the boundary is exact, not a rounded-off approximation')
+    t.equals(justOver.reason, 'invalid_speed_multiplier')
+end)
+
+t.test('GAP 1 PART 2 -- speedMultiplier still respects a TIGHTER owner-chosen ceiling below 10.0 (an owner\'s own deliberate policy choice is never widened by this fix)', function()
+    local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 3.0 })
+    local overCeiling = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 5.0 })
+    t.isFalse(overCeiling.ok, 'an owner who deliberately keeps the ceiling at 3.0 must still be respected -- this fix only ever REMOVES a mismatch against a HIGHER config value, it does not grant a floor of 10.0 regardless of policy')
+    t.equals(overCeiling.reason, 'invalid_speed_multiplier')
+end)
+
+t.test('GAP 1 PART 2 -- SPEED FLOOR: a speedMultiplier at or under 0.1 is REJECTED outright (deterministically guaranteed to be floor-clamped away from whatever was typed), but scentRangeMultiplier has no such floor', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local atFloor = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 0.1 })
+    t.isFalse(atFloor.ok, 'exactly 0.1 must be rejected -- IsValidSpeedMultiplier requires STRICTLY greater than the floor')
+    t.equals(atFloor.reason, 'invalid_speed_multiplier')
+
+    advance(f)
+    local belowFloor = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 0.05 })
+    t.isFalse(belowFloor.ok, 'a value below the floor must also be rejected')
+    t.equals(belowFloor.reason, 'invalid_speed_multiplier')
+
+    -- CONTROL: scentRangeMultiplier has no engine-driven floor concern at
+    -- all (it never reaches SET_PED_MOVE_RATE_OVERRIDE) -- the SAME 0.05
+    -- value must still be accepted for that field, proving the rejection
+    -- above is specific to speedMultiplier's own new validator, not a
+    -- blanket "reject small numbers" regression in the shared one.
+    advance(f)
+    local scentAtSameValue = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', scentRangeMultiplier = 0.05 })
+    t.isTrue(scentAtSameValue.ok, 'scentRangeMultiplier must still accept the identical 0.05 value -- confirms the floor is speed-specific, not shared')
+end)
+
+t.test('GAP 1 PART 2 CONTROL: just above the floor (0.11) is accepted for speedMultiplier -- proves the rejection above is a real, tight boundary, not an accidental rejection of every small value', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 0.11 })
+    t.isTrue(result.ok, '0.11 is a real, legitimate speedMultiplier just above the floor and must be accepted')
+    t.equals(result.effective.speedMultiplier, 0.11)
 end)
 
 t.test('CEILING: 0, negative, NaN, infinity and a string are each rejected at a NON-DEFAULT ceiling too, and the call never errors (pcall)', function()
@@ -1274,6 +1427,210 @@ t.test('STAMINA CEILING: raising Config.MaxStaminaDrainPerTick never moves Confi
     local speedRejected = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 50.0 })
     t.isFalse(speedRejected.ok, 'speedMultiplier must still be bound by its OWN 5.0 ceiling, unaffected by stamina\'s own 100.0')
     t.equals(speedRejected.reason, 'invalid_speed_multiplier')
+end)
+
+-- ============================================================================
+-- SECTION 13 -- GAP 1, PART 2: THE SPEED-OVERRIDE STATUS PUSH. Covers the
+-- boolean signal 'qbx_k9unit:client:k9SpeedOverrideStatus' this file now
+-- pushes so client/movement.lua's composer can tell an audited individual
+-- override apart from an automatic tier value -- see this file's own header
+-- "GAP 1, PART 2" for the full design. Also covers the plain-English
+-- DescribeSpeedOverrideCeiling honesty text on both k9ProfileUpsert
+-- (write time) and k9ProfileGet (later inspection).
+-- ============================================================================
+
+local function lastClientEventTo(f, targetSrc)
+    for i = #f.capturedClientEvents, 1, -1 do
+        if f.capturedClientEvents[i].target == targetSrc then return f.capturedClientEvents[i] end
+    end
+    return nil
+end
+
+t.test('SPEED-OVERRIDE STATUS PUSH: setting a speedMultiplier for an ONLINE citizenid immediately pushes {active = true} to their own client, over the dedicated event, alongside the (unrelated, soft-guarded/absent-here) xpTierChanged snapshot', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [42] = 'CIT1' } })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 3.0 })
+    t.isTrue(result.ok)
+
+    local pushed = lastClientEventTo(f, 42)
+    t.isNotNil(pushed, 'an online citizenid whose speed override just changed must receive a push')
+    t.equals(pushed.event, 'qbx_k9unit:client:k9SpeedOverrideStatus')
+    t.isTrue(pushed.payload.active, 'a live speedMultiplier override must report active = true')
+end)
+
+t.test('SPEED-OVERRIDE STATUS PUSH CONTROL: an edit to an OFFLINE citizenid pushes NOTHING (nobody to push to) -- proves the push above is really keyed on being online, not unconditional', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = {} })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT_OFFLINE', speedMultiplier = 3.0 })
+    t.isTrue(result.ok, 'the write itself must still succeed regardless of whether anyone is online to notify')
+    t.equals(#f.capturedClientEvents, 0, 'nobody online -- nothing pushed')
+end)
+
+t.test('SPEED-OVERRIDE STATUS PUSH: a RESET pushes {active = false} to an online citizenid who previously had one, snapping the composer\'s ceiling back down immediately', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [42] = 'CIT1' } })
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 3.0 })
+    advance(f)
+    local reset = f.callbacks['qbx_k9unit:server:k9ProfileReset'](HC_SOURCE, 'CIT1')
+    t.isTrue(reset.ok)
+
+    local pushed = lastClientEventTo(f, 42)
+    t.isNotNil(pushed)
+    t.isFalse(pushed.payload.active, 'once reset, this citizenid no longer carries a live override -- the push must say so')
+end)
+
+t.test('SPEED-OVERRIDE STATUS PUSH CONTROL: editing an UNRELATED field (note only) on a citizenid with NO speed override still pushes {active = false} -- correct, not a false positive, since GetK9EffectiveMultipliers is recomputed fresh every push regardless of which field changed', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [42] = 'CIT1' } })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', note = 'a note, nothing about speed' })
+    t.isTrue(result.ok)
+
+    local pushed = lastClientEventTo(f, 42)
+    t.isNotNil(pushed)
+    t.isFalse(pushed.payload.active)
+end)
+
+t.test('INITIAL-CONNECT PUSH: a citizenid who ALREADY carries a live speed override gets {active = true} pushed the moment QBCore:Server:PlayerLoaded fires for them -- closes the "already had one before this session started" gap', function()
+    local f = boot({ isHighCommand = function() return true end })
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 3.0 })
+    -- Nobody was online when the edit above landed (onlineSources starts
+    -- empty), so no push happened yet -- confirmed by the control below.
+    t.equals(#f.capturedClientEvents, 0, 'sanity: no push yet, CIT1 was offline for the edit itself')
+
+    f.firePlayerLoaded(99, 'CIT1')
+
+    local pushed = lastClientEventTo(f, 99)
+    t.isNotNil(pushed, 'PlayerLoaded must push this citizenid\'s CURRENT override status, not require a fresh edit this session')
+    t.isTrue(pushed.payload.active)
+end)
+
+t.test('INITIAL-CONNECT PUSH CONTROL: a citizenid with NO override gets {active = false} pushed on PlayerLoaded -- never left unset/omitted', function()
+    local f = boot({ isHighCommand = function() return true end })
+    f.firePlayerLoaded(99, 'CIT_NEVER_EDITED')
+    local pushed = lastClientEventTo(f, 99)
+    t.isNotNil(pushed)
+    t.isFalse(pushed.payload.active)
+end)
+
+t.test('RESTART BACKFILL: a citizenid ALREADY online (in onlineSources) BEFORE this resource\'s own onResourceStart handler runs gets their current override status pushed by the backfill loop, without needing PlayerLoaded to fire again', function()
+    -- boot() already runs onResourceStart as part of its own setup -- this
+    -- test seeds a pre-existing DB row (via the SAME world table two
+    -- successive boot() calls can share) so the SECOND boot (simulating a
+    -- resource restart with the citizenid already connected) picks it up
+    -- fresh from a cold RefreshOverrideCache(), not from an edit made this
+    -- session.
+    local world = newWorld()
+    local firstBoot = boot({ isHighCommand = function() return true end, world = world })
+    firstBoot.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 4.0 })
+
+    local restarted = boot({ isHighCommand = function() return true end, world = world, onlineSources = { [7] = 'CIT1' } })
+    local pushed = lastClientEventTo(restarted, 7)
+    t.isNotNil(pushed, 'the restart backfill loop must push status to every already-online citizenid, not just ones who edit or reconnect afterward')
+    t.isTrue(pushed.payload.active, 'the override persisted across the simulated restart (a real DB-backed world), so status must read active = true immediately')
+end)
+
+t.test('RESTART BACKFILL CONTROL: an already-online citizenid with NO override gets active = false from the very same backfill loop, and a citizenid who is NOT online gets nothing pushed at all', function()
+    local world = newWorld()
+    boot({ isHighCommand = function() return true end, world = world })
+    local restarted = boot({ isHighCommand = function() return true end, world = world, onlineSources = { [7] = 'CIT_NO_OVERRIDE' } })
+    local pushed = lastClientEventTo(restarted, 7)
+    t.isNotNil(pushed)
+    t.isFalse(pushed.payload.active)
+
+    -- Nobody registered at source 8 -- GetPlayers() only enumerates
+    -- onlineSources, so there is nothing for the backfill loop to have
+    -- pushed to that target at all.
+    t.isNil(lastClientEventTo(restarted, 8))
+end)
+
+t.test('SOFT-GUARD: exports.qbx_core.GetPlayerByCitizenId genuinely ABSENT (not merely nil-returning) -- k9ProfileUpsert/k9ProfileReset still succeed, they just cannot push to an online citizenid this way', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [42] = 'CIT1' }, omitGetPlayerByCitizenId = true })
+    -- boot()'s own onResourceStart RESTART BACKFILL loop (a DIFFERENT code
+    -- path, keyed on exports.qbx_core.GetPlayer, not GetPlayerByCitizenId)
+    -- already pushed once for CIT1 during boot() itself -- captured here so
+    -- this test asserts the DELTA the upsert call itself causes, not a raw
+    -- total that would otherwise double-count that unrelated push.
+    local before = #f.capturedClientEvents
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 3.0 })
+    t.isTrue(result.ok, 'the real database write must not depend on this framework export existing')
+    t.equals(#f.capturedClientEvents - before, 0, 'with the export absent, PushK9SpeedOverrideStatusIfOnline must degrade to a no-op, never error')
+end)
+
+t.test('SOFT-GUARD CONTROL: the SAME edit, with GetPlayerByCitizenId genuinely present, DOES push -- proves the no-op above is caused by the missing export, not some other reason', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [42] = 'CIT1' } })
+    local before = #f.capturedClientEvents
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 3.0 })
+    t.equals(#f.capturedClientEvents - before, 1)
+end)
+
+t.test('SOFT-GUARD: TriggerClientEvent genuinely ABSENT -- k9ProfileUpsert still succeeds and PushK9SpeedOverrideStatus degrades to a no-op rather than erroring', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [42] = 'CIT1' }, omitTriggerClientEvent = true })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 3.0 })
+    t.isTrue(result.ok, 'the real database write must not depend on this native existing (defensive for the several OTHER specs that soft-load this file without stubbing it)')
+    -- No assertion possible on capturedClientEvents here (the stub itself
+    -- is absent) -- the assertion IS that the call above did not throw.
+end)
+
+-- ============================================================================
+-- GAP 1, PART 2 -- PLAIN-ENGLISH HONESTY TEXT. `warning` (k9ProfileUpsert,
+-- at the moment of save, ONLY when speedMultiplier is being set/changed
+-- THIS call) and `speedOverrideCeilingNote` (k9ProfileGet, "not just at
+-- write time" -- an officer inspecting an already-set override later must
+-- be told the same truth a fresh save would have told them).
+-- ============================================================================
+
+t.test('HONESTY: setting a speedMultiplier ABOVE 2.0 (this resource\'s own former, undocumented ceiling) returns a plain-English warning naming the actual number, the real engine limit, and why -- never a bare number, never jargon', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 5.0 })
+    t.isTrue(result.ok)
+    t.isNotNil(result.warning, 'a value above the old silent ceiling must be disclosed, not left to speak for itself')
+    t.isTrue(result.warning:find('5.00', 1, true) ~= nil, 'must name the EXACT number the officer typed, not a vague description')
+    t.isTrue(result.warning:find('10.0', 1, true) ~= nil, 'must name the real engine ceiling, so the officer knows the true upper bound too')
+end)
+
+t.test('HONESTY CONTROL: setting a speedMultiplier AT OR BELOW 2.0 gets no such note at all -- nothing changed for that range, nothing new to say', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 2.0 })
+    t.isTrue(result.ok)
+    t.isNil(result.warning, 'a value that always worked, even before this pass, must not get a "this now works" note -- it would be noise, not honesty')
+end)
+
+t.test('HONESTY CONTROL: editing a DIFFERENT field (note only) on a citizenid whose EXISTING override already has a high speedMultiplier does NOT repeat the note -- "at the moment they save it" means THIS field, THIS call, not every future unrelated edit', function()
+    local f = boot({ isHighCommand = function() return true end })
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 6.0 })
+    advance(f)
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', note = 'unrelated note edit' })
+    t.isTrue(result.ok)
+    t.isNil(result.warning, 'this call never touched speedMultiplier -- it must not manufacture a speed-related warning out of an untouched field')
+end)
+
+t.test('HONESTY: self-override AND the high-speed note can BOTH apply at once, joined, neither one clobbering the other', function()
+    -- ResolveCitizenId(HC_SOURCE) resolves via exports.qbx_core:GetPlayer --
+    -- register HC_SOURCE itself as online, as CIT_SELF, so this edit is
+    -- genuinely a self-override.
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end, onlineSources = { [HC_SOURCE] = 'CIT_SELF' } })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT_SELF', speedMultiplier = 5.0 })
+    t.isTrue(result.ok)
+    t.isNotNil(result.warning)
+    t.isTrue(result.warning:find('YOUR OWN', 1, true) ~= nil, 'the self-override sentence must still be present')
+    t.isTrue(result.warning:find('5.00', 1, true) ~= nil, 'the speed-ceiling sentence must ALSO still be present, joined, not overwritten')
+end)
+
+t.test('HONESTY, NOT JUST AT WRITE TIME: k9ProfileGet on an ALREADY-set high override (from a previous session/edit) carries the SAME honest note as a fresh save would -- an officer inspecting later must not be misled', function()
+    local f = boot({ isHighCommand = function() return true end })
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 7.0 })
+    local getResult = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1')
+    t.isTrue(getResult.ok)
+    t.isNotNil(getResult.speedOverrideCeilingNote)
+    t.isTrue(getResult.speedOverrideCeilingNote:find('7.00', 1, true) ~= nil)
+end)
+
+t.test('HONESTY CONTROL: k9ProfileGet on a citizenid with NO override, or an override at/below 2.0, carries no speedOverrideCeilingNote at all', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local neverEdited = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT_NEVER_EDITED')
+    t.isTrue(neverEdited.ok)
+    t.isNil(neverEdited.speedOverrideCeilingNote)
+
+    f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 1.5 })
+    local lowOverride = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1')
+    t.isTrue(lowOverride.ok)
+    t.isNil(lowOverride.speedOverrideCeilingNote)
 end)
 
 os.exit(t.summary())

@@ -20,8 +20,12 @@
     - `ConfirmHandlerDownDefense` below is the "manual confirmation" step --
       nothing in this file ever fires a bite/takedown request without an
       explicit call to it (a keypress or a future radial selection), and
-      that call still runs through `CanShowK9UI()` first, exactly like
-      every other self-initiated K9 action in this resource.
+      that call still runs through an access check first (permission audit
+      follow-up, this pass: `HasK9Access()` alone, NOT the broader
+      `CanShowK9UI()` this used to call -- see that function's own doc
+      comment below for the full reasoning), matching the gate
+      server/combat.lua's shared ValidateCombatRequest actually enforces on
+      the requestBiteHold/requestTakedown events this file fires directly.
     - The K9 player's own movement/camera are never touched -- this file
       contains zero calls to SetEntityCoords/SetEntityHeading/
       SetFollowPedCamViewMode/TaskPlayAnim/DisableControlAction/etc.
@@ -143,10 +147,14 @@
         ConfirmHandlerDownDefense(actionType: 'bite'|'takedown')
         HasFreshDefensePrompt() -> boolean
         GetDefenseSuggestedTargetNetId() -> number?
-    - Calls CanShowK9UI()/DenyK9UIAccess() (client/main.lua) before
-      ConfirmHandlerDownDefense acts -- same "display gate only, server is
-      the real boundary" posture as every other gated client action in this
-      resource.
+    - Calls HasK9Access()/DenyK9UIAccess() (client/main.lua) before
+      ConfirmHandlerDownDefense acts -- UPDATED, permission audit follow-up
+      this pass: was CanShowK9UI(), widened to match server/combat.lua's
+      shared ValidateCombatRequest (the validator behind requestBiteHold/
+      requestTakedown, which this file fires directly -- see "PURE
+      CONSUMER" above), which gates access on HasK9Access(src) alone -- same
+      "display gate only, server is the real boundary" posture as every
+      other gated client action in this resource.
     - Calls ResolveNetworkEntity(netId) (client/main.lua, ONE-argument
       client-side signature -- distinct from server/entities.lua's
       two-argument version, per that global's own documented "same name,
@@ -333,10 +341,39 @@ end)
 --- `not_fleeing` for no reason apparent from this feature's own UI.
 --- `ConfirmHandlerDownDefense('takedown')` remains fully available for a
 --- future radial/second-keybind entry that wants it explicitly.
+---
+--- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
+--- finding, this pass): this function's only downstream effect is firing
+--- the raw 'qbx_k9unit:server:requestBiteHold'/'requestTakedown' events
+--- directly (see this file's own "PURE CONSUMER" header section) -- the
+--- SAME events client/combat.lua's own RequestBiteHold()/RequestTakedown()
+--- fire, which land on the SAME shared server/combat.lua ValidateCombatRequest
+--- (confirmed by reading it directly, ~line 1428: `if not HasK9Access(src)
+--- then return false, ..., 'no_access' end`, with no model/role check
+--- anywhere in that validator). This function used to gate on the broader
+--- CanShowK9UI() combinator (IsOwnModelK9() AND HasK9Access(), or IsK9Role()
+--- AND HasK9Access() depending on config -- either way, the model/role half
+--- deliberately EXCLUDES the High Command/autoAccessGrade bypass, per
+--- server/appearance.lua's own header), so a High Command officer whose
+--- ONLY access came from that bypass could never confirm a handler-down
+--- defense through ANY route (keybind, radial, or tablet) even though the
+--- server would gladly have granted it -- exactly the emergency moment this
+--- feature exists for. Matches the identical, already-shipped precedent
+--- client/combat.lua's own RequestBiteHold()/RequestTakedown() (which fire
+--- the very same two server events) already use on themselves -- not a new
+--- idiom. NOTE FOR THE NEXT READER: client/radial.lua's 'k9unit_defense'
+--- submenu (k9_defense_bite/k9_defense_takedown) and client/tablet.lua's
+--- own HandlerDownDefense trigger BOTH still carry their own separate,
+--- redundant CanShowK9UI() pre-check ahead of calling this function,
+--- written and justified at the time as "widening only here would be a
+--- no-op because the callee re-gates anyway" -- that justification no
+--- longer holds now that THIS gate is widened, so those two are a residual
+--- instance of the same bug, in files this pass does not own; reported
+--- upstream rather than fixed here.
 --- @param actionType 'bite'|'takedown'
 function ConfirmHandlerDownDefense(actionType)
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 

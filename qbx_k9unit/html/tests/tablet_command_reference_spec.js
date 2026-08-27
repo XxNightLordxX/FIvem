@@ -195,6 +195,20 @@ t.test('a HANDLER (certified, no special capability) sees a restricted admin-tie
         fetchImpl: routeFetch({
             'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, [
                 { key: 'DeployableKennel', label: null, category: null, actionable: false, state: 'available' },
+                // AdminAuditCommands ships `true` in config.lua and carries no
+                // block for this viewer -- 'requires_grant_missing' is the
+                // REALISTIC resolved state for a handler with K9 access but no
+                // personal feature.AdminAuditCommands grant (see
+                // Config.FeatureControl.RequireGrant in config.lua and
+                // ResolveFeatureState in server/tablet.lua). Present here
+                // deliberately, not omitted: an omitted entry now resolves to
+                // 'global_off' (see html/tablet.js's own myFeatureState() doc
+                // comment for why an absent key must mean off, not "no
+                // opinion"), which would make this assertion pass for the
+                // wrong reason (a feature the test never intended to claim is
+                // globally disabled) instead of the real one under test here
+                // (insufficient personal authorization).
+                { key: 'AdminAuditCommands', label: null, category: null, actionable: false, state: 'requires_grant_missing' },
             ]),
         }),
     });
@@ -226,7 +240,20 @@ t.test('an UNCERTIFIED viewer (no k9.access at all) sees a handler-tier command 
 t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge -- shown to high command too, not hidden -- and Available when nothing else blocks it', async () => {
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, []),
+            // AdminAuditCommands ships `true` in config.lua -- realistically
+            // present here, resolved 'available' via the high-command bypass
+            // (server/tablet.lua's ResolveFeatureState: RequireGrant applies,
+            // this viewer holds no explicit feature.AdminAuditCommands grant,
+            // but isHighCommandBypass wins). An OMITTED entry now resolves to
+            // 'global_off' instead (see html/tablet.js's own myFeatureState()
+            // doc comment), which would make the 'Available' assertion below
+            // fail for the right reason on the wrong fixture -- this suite's
+            // synthetic myFeatures lists must reflect what a real config
+            // actually produces, not merely omit whatever the assertion
+            // doesn't otherwise require.
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, [
+                { key: 'AdminAuditCommands', label: null, category: null, actionable: false, state: 'available' },
+            ]),
         }),
     });
     await openCommandsScreen(h);
@@ -293,6 +320,72 @@ t.test('a blocked handler-tier feature shows Blocked for a certified handler who
 
     const badge = statusBadgeFor(h, '/k9propattach');
     t.equals(badge._textContent, 'Blocked');
+});
+
+t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFeatures[] -- the real shape of a Config.Features key that was removed or never added, e.g. real production ScentTrailHunt/ApprehensionAnnouncement -- must report unavailable, never fall through to Available', async () => {
+    // THE SHAPE THAT MATTERS, per this bug's own root cause: server/tablet.lua's
+    // BuildMyFeaturesArray enumerates `pairs(Config.Features)` fresh every
+    // call, so a key that does not exist in Config.Features AT ALL (not
+    // even set to `false`) never gets an array entry -- it is not sent as
+    // some other falsy value, it is simply ABSENT from the array. That is
+    // reproduced here by omitting 'ScentTrailHunt'/'ApprehensionAnnouncement'
+    // from myFeatures entirely -- NOT by adding an entry with `state: false`
+    // or `state: 'global_off'` (a synthetic Config table with the key
+    // manually set, which is exactly the shape every prior test for these
+    // two commands used, and exactly why none of them ever caught this).
+    //
+    // A HANDLER_VIEWER (real K9 access) is used deliberately: the bug only
+    // ever manifested when `hasAccess` is true -- commandReferenceStatus's
+    // own 'access' branch already returns 'not_certified' before ever
+    // consulting a featureKey when the viewer lacks access, so an
+    // uncertified viewer could never have exposed this fallthrough.
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, [
+                // CONTROL 1 -- a featureKey that IS present and true. Proves
+                // this test's own harness can still show 'Available' for a
+                // real on switch, so a fix that reported "unavailable" for
+                // EVERY command (not just an absent key) would fail this
+                // control and be caught here.
+                { key: 'DeployableKennel', label: null, category: null, actionable: false, state: 'available' },
+                // 'ScentTrailHunt' and 'ApprehensionAnnouncement' are
+                // DELIBERATELY ABSENT from this array -- see this test's own
+                // header comment above.
+            ]),
+        }),
+    });
+    await openCommandsScreen(h);
+
+    // CONTROL 2 -- an ungated command (no featureKey at all) must stay
+    // Available regardless of anything myFeatures does or does not contain.
+    // Without this control, a fix that collapsed "no featureKey" and
+    // "featureKey absent from config" into the same "unavailable" answer
+    // would pass every assertion below it and still be a real, different bug.
+    const dropBadge = statusBadgeFor(h, '/k9dropfetchball');
+    t.equals(dropBadge._textContent, 'Available', 'CONTROL: an ungated (no featureKey) command stays Available no matter what myFeatures contains');
+
+    // CONTROL 1's assertion.
+    const kennelBadge = statusBadgeFor(h, '/k9deploykennel');
+    t.equals(kennelBadge._textContent, 'Available', 'CONTROL: a featureKey present and available in myFeatures still reports Available');
+
+    // THE BUG ITSELF -- both real, live COMMAND_REFERENCE entries whose
+    // gate.featureKey names a Config.Features key that genuinely does not
+    // exist in config.lua today (ScentTrailHunt was removed; Apprehension
+    // Announcement was never added). Before this fix, myFeatureState(key)
+    // returned null for a key not found in myFeatures[], and both the
+    // 'access' and 'capability'/'highCommandOnly' branches of
+    // commandReferenceStatus treated that null as "no gate matched" and
+    // fell through to 'available' -- reporting the tablet's own trusted
+    // Command Reference as usable for two commands that are permanently,
+    // unconditionally off. Both must now show the SAME 'Disabled
+    // server-wide' reading a `state: 'global_off'` entry produces.
+    const nosehuntBadge = statusBadgeFor(h, '/k9nosehunt [stop]');
+    t.equals(nosehuntBadge._textContent, 'Disabled server-wide', 'THE BUG: /k9nosehunt\'s gate.featureKey (ScentTrailHunt) is absent from Config.Features entirely -- this must read as off, not Available');
+    t.isTrue(nosehuntBadge.classList.contains('k9tablet-feature-state--global_off'), 'reuses the existing global_off CSS bucket -- no new CSS class needed for "absent from config"');
+
+    const announceBadge = statusBadgeFor(h, '/k9announce');
+    t.equals(announceBadge._textContent, 'Disabled server-wide', 'THE BUG: /k9announce\'s gate.featureKey (ApprehensionAnnouncement) has never existed in config.lua -- this must read as off, not Available');
+    t.isTrue(announceBadge.classList.contains('k9tablet-feature-state--global_off'), 'reuses the existing global_off CSS bucket -- no new CSS class needed for "absent from config"');
 });
 
 t.test('a hostile string arriving via data.strings for a Command Reference key reaches the DOM only via textContent, never innerHTML', async () => {

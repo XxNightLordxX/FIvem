@@ -2211,6 +2211,97 @@ local function RegisterK9RadialMenu()
                 end
             end,
         }
+
+        --- Join Nearest SAR Call -- closes the second half of the same gap
+        --- the toggle above closed for STARTING a call: '/k9sarcall join
+        --- <serverId>' was the ONLY way to join someone else's call, and it
+        --- required already knowing a specific colleague's numeric server id
+        --- -- effectively command-console-only in practice. See
+        --- server/sarcalls.lua's own header section "RADIAL JOIN ENTRY
+        --- POINT" for the full design writeup this item is the client half
+        --- of; restated here only as far as THIS file's own share of it.
+        ---
+        --- THE DESIGN PROBLEM: joining needs a TARGET (whose call?) and a
+        --- radial item cannot take an argument. THE ANSWER: join the
+        --- NEAREST joinable active call within
+        --- Config.SARCalls.joinProximityMeters -- needs no argument at all,
+        --- and matches the exact proximity check the server already
+        --- enforces authoritatively at accept time, not a looser rule
+        --- invented just for this item. server/sarcalls.lua's own
+        --- findNearestJoinableSarCall callback (registered alongside
+        --- requestJoinSarCall/respondJoinSarCall) resolves that target
+        --- server-side, from the requester's own live position -- this
+        --- client has no visibility of its own into who else is currently
+        --- running a call, by design (that state has never left
+        --- server/sarcalls.lua).
+        ---
+        --- NEVER A TRUST BOUNDARY OF ITS OWN: findNearestJoinableSarCall
+        --- filters every candidate through CheckSarJoinEligibility (the SAME
+        --- function the real accept step uses), so it can never recommend a
+        --- target the real request would then reject for a reason this
+        --- lookup could have caught first. Whatever serverId it returns is
+        --- fed into the EXACT SAME 'qbx_k9unit:server:requestJoinSarCall'
+        --- event '/k9sarcall join <id>' already sends, which the server
+        --- re-validates from scratch (proximity, access, grants, call-full,
+        --- ownership, TOCTOU at accept time) exactly as before this item
+        --- existed -- a forged or stale answer from the lookup callback
+        --- could not grant anything a modified client already could not
+        --- already attempt directly.
+        ---
+        --- SELF-CONTAINED, DELIBERATELY NOT ROUTED THROUGH A NEW
+        --- client/sarcalls.lua RESOURCE-GLOBAL -- see server/sarcalls.lua's
+        --- own "RADIAL JOIN ENTRY POINT" header section for the full
+        --- reasoning: client/sarcalls.lua's own RequestJoinSarCall stays
+        --- `local` (that file's own header already says to widen it to a
+        --- global "the same day such a call site actually lands," which
+        --- would also need a repo-root .luacheckrc `globals` entry -- a file
+        --- outside THIS pass's own file-ownership boundary). This item
+        --- therefore awaits findNearestJoinableSarCall and fires the join
+        --- request itself, using only natives and globals THIS file already
+        --- calls directly for the toggle item immediately above
+        --- (HasK9Access/DenyK9UIAccess/IsSarCallActive) -- an extension of
+        --- an already-established pattern in this exact file, not a new one.
+        ---
+        --- Gated identically to the toggle above: HasK9Access() checked
+        --- directly (matches server/sarcalls.lua's own requestJoinSarCall
+        --- handler, which gates on HasK9Access(source) alone), and
+        --- IsSarCallActive() guards the same "already busy" case client-side
+        --- before ever bothering the server -- same posture as
+        --- RequestJoinSarCall's own doc comment in client/sarcalls.lua.
+        --- FAIL-CLOSED: lib.callback.await is pcall-wrapped (it throws
+        --- rather than returning nil on a timeout/rejection, same posture as
+        --- client/sarcalls.lua's own RequestStartSarCall), and a thrown or
+        --- empty result degrades to the SAME "no nearby call" notify a
+        --- genuine "found nobody" answer gets -- never a crash, never a
+        --- silent no-op with no feedback at all.
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_sar_call_join_nearest',
+            label = locale('radial.sar_call_join_nearest_label'),
+            icon = 'user-plus',
+            onSelect = function()
+                if type(IsSarCallActive) == 'function' and IsSarCallActive() then
+                    lib.notify({ title = locale('common.notify_title'), description = locale('sar.already_active'), type = 'error' })
+                    return
+                end
+
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
+                    return
+                end
+
+                local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestJoinableSarCall', false)
+                if not ok or not result or not result.targetServerId then
+                    lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_no_nearby_call'), type = 'error' })
+                    return
+                end
+
+                -- Same event, same payload shape, '/k9sarcall join <id>'
+                -- already sends -- the server re-validates everything from
+                -- scratch regardless of which surface sent it.
+                TriggerServerEvent('qbx_k9unit:server:requestJoinSarCall', result.targetServerId)
+                lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_request_sent'), type = 'info' })
+            end,
+        }
     end
 
     --- Training -- closes a real gap: Training Mode and its two practice

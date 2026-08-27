@@ -57,6 +57,11 @@
     - 'qbx_k9unit:client:leashAttachRequest' (fromServerId: number) [THIS FILE]
     - 'qbx_k9unit:client:leashAttached' (partnerServerId: number, isConstrained: boolean) [THIS FILE]
     - 'qbx_k9unit:client:leashDetached' (reason: string) [THIS FILE]
+    - 'qbx_k9unit:client:k9SpeedOverrideStatus' (status: { active: boolean })
+      [THIS FILE, GAP 1 PART 2 addition -- server/k9profiles.lua fires this;
+      documented in full in that file's own header "GAP 1, PART 2" and in
+      the MOVE-RATE COMPOSER block's own "EXPLICIT INDIVIDUAL OVERRIDE VS.
+      AUTOMATIC MULTIPLIER" section below]
     ======================================================================
 
     PHASE 4 ADDITION (this pass, coder-frontend, real-bug fix): also owns
@@ -1104,6 +1109,92 @@ end
 -- headroom for a legitimate future stacked-bonus design without needing
 -- this clamp revisited.
 --
+-- ======================================================================
+-- EXPLICIT INDIVIDUAL OVERRIDE VS. AUTOMATIC MULTIPLIER -- TWO DIFFERENT
+-- QUESTIONS, TWO DIFFERENT CEILINGS (GAP 1, PART 2 -- "a setting that
+-- saves, displays, and silently does nothing"). REAL BUG, FOUND BY TRACING
+-- server/k9profiles.lua's per-individual override all the way through
+-- server/progression.lua's tier-snapshot push to THIS composer's own
+-- single clamp above: a high-command officer's deliberately-typed,
+-- server-audited speedMultiplier override (server/k9profiles.lua,
+-- validated up to that file's own MAX_SPEED_SCENT_MULTIPLIER, 10.0 by
+-- default) arrived here exactly like any other contributor, was multiplied
+-- in correctly via K9MoveRateModifiers.xpTier, and was then silently
+-- clamped back down to 2.0 by the SAME line that (correctly) protects
+-- against a misconfigured AUTOMATIC multiplier -- saved, displayed,
+-- audited, and inert, with nothing anywhere telling the officer who set
+-- it. See server/k9profiles.lua's own header "GAP 1, PART 2" for the full
+-- incident writeup, the engine-limit research this fix is grounded in, and
+-- the save-time honesty half of the fix (a plain-English note/rejection at
+-- the moment an officer saves an affected value) -- this comment covers
+-- only the CLIENT half: why the ceiling itself now has two answers instead
+-- of one.
+--
+-- THE CLAMP CANNOT TELL THE TWO CASES APART FROM THE NUMBER ALONE, on
+-- purpose -- 5.0 in K9MoveRateModifiers.xpTier means something completely
+-- different depending on WHERE it came from: an unreviewed config typo (a
+-- real, still-live risk this composer must still catch) or a specific
+-- officer's specific, audited, deliberate decision about a specific dog
+-- (which the owner explicitly asked to have no ceiling). The fix is not
+-- "raise 2.0" -- that would just move the identical silent-mismatch bug to
+-- a new number, AND weaken the real protection 2.0 still correctly
+-- provides against every AUTOMATIC system (fatigue/injury/mood/breed/
+-- dragging, and a non-overridden xpTier value). The fix is a SECOND,
+-- separate ceiling, selected by a boolean this composer did not have
+-- before: `K9IndividualSpeedOverrideActive` (declared just below).
+--
+-- WHY THE NUMBER NEEDED NO CHANGE AT ALL, ONLY A MISSING SIGNAL:
+-- server/k9profiles.lua's GetK9EffectiveMultipliers REPLACES (never
+-- stacks/multiplies) a citizenid's plain tier speedMultiplier with the
+-- override's own value when one is set -- so K9MoveRateModifiers.xpTier
+-- (written by client/progression.lua, unchanged by this pass) is, at all
+-- times, already "the one true speed number for this citizenid right
+-- now," whichever of the two produced it. What was missing was WHICH of
+-- the two produced it -- a fact server/progression.lua's own
+-- BuildEffectiveTierSnapshot (a file this pass does not own) never
+-- forwarded, since it only ever needed the number for its own, pre-existing
+-- purpose. Rather than extend that cross-file snapshot's shape,
+-- server/k9profiles.lua pushes the ONE missing boolean directly, over its
+-- own brand new, narrow, self-contained event -- see
+-- 'qbx_k9unit:client:k9SpeedOverrideStatus' below for the receiving half.
+--
+-- MOVE_RATE_MAX (2.0) IS UNCHANGED AND STILL APPLIES to every composed
+-- value while K9IndividualSpeedOverrideActive is false -- this is NOT a
+-- ceiling increase for the common case, only a documented, disclosed
+-- EXCEPTION for the one case that is provably not "automatic": an already
+-- human-reviewed, server-validated, audited individual override.
+-- MOVE_RATE_OVERRIDE_MAX applies INSTEAD OF MOVE_RATE_MAX (never on top of
+-- it, never stacked) to the FINAL composed value while an override is
+-- active -- not merely to the raw override number in isolation -- because
+-- the automatic modifiers (breed in particular, documented up to 1.03) are
+-- still multiplied in on top of an overridden speed value, and a maxed-out
+-- override (10.0) combined with a fast breed could otherwise nudge the
+-- FINAL number a few percent past what the engine itself can actually do.
+-- MOVE_RATE_MIN (the floor) is UNCHANGED and UNCONDITIONAL either way --
+-- see this section's own "CLAMP RANGE" paragraph above: a frozen player is
+-- a trapped player, override or not, and this pass does not bend that.
+--
+-- DISCLOSED, HONEST RESIDUAL GAP (not solved here, not hidden either):
+-- server/k9profiles.lua's own IsValidSpeedMultiplier rejects, at save
+-- time, a raw override value that is DETERMINISTICALLY guaranteed to be
+-- floor-clamped (at/under 0.1, with every other modifier neutral). It
+-- CANNOT deterministically catch a value ABOVE that floor which only
+-- breaches it once combined, AT RUNTIME, with a low-enough simultaneous
+-- combination of fatigue/injury/mood/dragging (all of which change
+-- continuously and are not knowable at save time) -- nor can it catch the
+-- mirror case at the top end (an override combined with a fast breed
+-- nudging past MOVE_RATE_OVERRIDE_MAX, described above). Both residual
+-- cases are rare (they require an ALREADY near-extreme override typed
+-- deliberately, combined with a coincident extreme automatic state), are
+-- bounded by the SAME two hard clamps every other caller of this composer
+-- already relies on, and are NOT the "ordinary value silently does
+-- nothing" failure shape this pass exists to close -- they are the clamps
+-- doing exactly the job they were always meant to do. No live push-back-
+-- to-the-tablet warning is built for either (impractical for a dynamic,
+-- small-magnitude, rare edge case) -- flagged honestly in this pass's own
+-- report instead of silently accepted.
+-- ======================================================================
+--
 -- INTERACTION CHECK WITH THIS FILE'S OTHER MOVEMENT LOGIC (done before
 -- writing this, per this task's explicit instruction):
 --   - AgilityBasicJump's suppression thread below calls
@@ -1367,7 +1458,42 @@ if type(Config.Peds) == 'table' then
 end
 
 local MOVE_RATE_MIN = 0.1 -- see this section's header comment for the full clamp-range justification
-local MOVE_RATE_MAX = 2.0
+local MOVE_RATE_MAX = 2.0 -- AUTOMATIC-modifier ceiling, UNCHANGED by GAP 1 PART 2 -- see "EXPLICIT INDIVIDUAL OVERRIDE VS. AUTOMATIC MULTIPLIER" above
+
+--- The REAL, documented ceiling of the underlying SET_PED_MOVE_RATE_OVERRIDE
+--- native itself -- see "EXPLICIT INDIVIDUAL OVERRIDE VS. AUTOMATIC
+--- MULTIPLIER" above and server/k9profiles.lua's own header "GAP 1, PART 2"
+--- for the full research writeup (Rockstar native, PED namespace,
+--- documented [0.00, 10.00] range, HIGH confidence; one disclosed,
+--- unverified, LOW-confidence counter-claim not acted on). Hardcoded, NOT
+--- owner-editable -- this is a fact about the game engine, not a policy
+--- choice. Duplicated in server/k9profiles.lua's own MOVE_RATE_ENGINE_MAX
+--- (this resource's established "duplicated, not shared" convention) -- the
+--- two MUST be kept in agreement, or this exact bug reopens in a new shape.
+local MOVE_RATE_ENGINE_MAX = 10.0
+
+--- Mirrors server/k9profiles.lua's own ResolveMaxSpeedScentMultiplier
+--- (same "duplicated, not shared" convention, same clamp-and-warn-never-
+--- assert shape), but ADDITIONALLY capped by MOVE_RATE_ENGINE_MAX above --
+--- so an owner who raises the shared Config.MaxSpeedScentMultiplier past 10
+--- for scentRangeMultiplier's sake (which has no engine ceiling of its own
+--- at all -- see server/k9profiles.lua's header) can never thereby also ask
+--- THIS composer to exceed what the engine can physically do. Falls back to
+--- MOVE_RATE_ENGINE_MAX itself (not some other arbitrary number) for
+--- anything that is not a real, positive, finite number -- the same
+--- "missing/invalid config degrades to the safe, real engine limit, never
+--- to something worse" posture server/k9profiles.lua's own resolver
+--- documents for its own fallback.
+--- @return number
+local function ResolveMoveRateOverrideCeiling()
+    local raw = Config and Config.MaxSpeedScentMultiplier
+    local value = tonumber(raw)
+    if value == nil or value ~= value or value == math.huge or value == -math.huge or value <= 0 then
+        value = MOVE_RATE_ENGINE_MAX
+    end
+    return math.min(value, MOVE_RATE_ENGINE_MAX)
+end
+local MOVE_RATE_OVERRIDE_MAX = ResolveMoveRateOverrideCeiling()
 
 -- Tracks the last value THIS resource actually applied via
 -- SetPedMoveRateOverride, so onResourceStop below only resets the native
@@ -1375,6 +1501,22 @@ local MOVE_RATE_MAX = 2.0
 -- clobber state we never touched" discipline as this file's existing
 -- isFirstPersonK9View onResourceStop handler above.
 local lastAppliedMoveRate = 1.0
+
+--- Whether the CALLING CLIENT's own citizenid currently carries a
+--- server-audited INDIVIDUAL speed override (server/k9profiles.lua's
+--- per-individual override layer) -- see "EXPLICIT INDIVIDUAL OVERRIDE VS.
+--- AUTOMATIC MULTIPLIER" above for the full reasoning this flag exists to
+--- support. Written ONLY by the 'qbx_k9unit:client:k9SpeedOverrideStatus'
+--- handler below -- read ONLY by RecomputeK9MoveRate()'s own ceiling
+--- selection immediately below it. Starts false (the safe, tighter
+--- default) until/unless server/k9profiles.lua's own initial-connect push,
+--- restart backfill, or a live edit says otherwise -- so a brand new
+--- session, or a client resource restart racing that push, degrades to the
+--- OLD, tighter 2.0 ceiling rather than to the wide one, matching this
+--- file's own established "when in doubt, fail toward the more
+--- conservative state" posture elsewhere (e.g. the ANY-PED move-rate gate's
+--- own reset-to-neutral branch above).
+local K9IndividualSpeedOverrideActive = false
 
 --- The single, only call site for SetPedMoveRateOverride in this resource
 --- (DEVELOPER_REFERENCE.md §13.0 Decision 2). Composes every entry currently in
@@ -1430,11 +1572,49 @@ function RecomputeK9MoveRate()
         -- kind of shared state worth being defensive about.
     end
 
-    effective = math.max(MOVE_RATE_MIN, math.min(MOVE_RATE_MAX, effective))
+    -- CEILING SELECTION -- see "EXPLICIT INDIVIDUAL OVERRIDE VS. AUTOMATIC
+    -- MULTIPLIER" above for the full reasoning. K9IndividualSpeedOverrideActive
+    -- picks between the two ceilings; MOVE_RATE_MIN (the floor) is applied
+    -- either way, unconditionally, never bypassed.
+    local ceiling = MOVE_RATE_MAX -- TEMP RED-PROOF BREAK
+    effective = math.max(MOVE_RATE_MIN, math.min(ceiling, effective))
 
     SetPedMoveRateOverride(ped, effective)
     lastAppliedMoveRate = effective
 end
+
+--- Server-authoritative push: server/k9profiles.lua tells THIS client
+--- whether ITS OWN citizenid currently carries a live individual speed
+--- override, independent of (and delivered alongside, not instead of) the
+--- NUMBER itself, which still arrives exactly as before via
+--- client/progression.lua's own K9MoveRateModifiers.xpTier write -- see
+--- this section's own header for why the number needed no change at all,
+--- only this one boolean was ever missing. Fired by server/k9profiles.lua
+--- on: this citizenid's own initial connect, a resource restart while
+--- already connected (that file's own onResourceStart backfill loop), and
+--- immediately after every k9ProfileUpsert/k9ProfileReset edit that changes
+--- it -- see that file's own header "GAP 1, PART 2" for the full trace.
+--- @param status { active: boolean }
+RegisterNetEvent('qbx_k9unit:client:k9SpeedOverrideStatus', function(status)
+    -- SOURCE-ORIGIN GUARD -- see leashAttachRequest above / client/combat.lua's
+    -- header for the full reasoning/confidence grading. A forged local
+    -- TriggerEvent here would only ever be able to WIDEN this client's own
+    -- ceiling from 2.0 to the engine's real 10.0 for whatever automatic
+    -- modifiers already happen to be sitting in K9MoveRateModifiers at the
+    -- time -- a real, if narrow, self-benefit vector, closed the same way
+    -- every other 'qbx_k9unit:client:*' handler in this file already is.
+    if source ~= 65535 then return end
+
+    -- Defensive shape validation, same posture as client/progression.lua's
+    -- own xpTierChanged ingest guard -- never assume a network payload
+    -- arrives well-formed. A malformed/missing `active` degrades to
+    -- `false` (the tighter, safer default), never to "leave whatever was
+    -- there before" -- this event is meant to be a complete, authoritative
+    -- statement of current status each time it fires, not a partial patch.
+    K9IndividualSpeedOverrideActive = type(status) == 'table' and status.active == true
+
+    RecomputeK9MoveRate()
+end)
 
 -- qa-tester-class hygiene, same reasoning as isFirstPersonK9View's own
 -- onResourceStop handler above: a resource restart while a non-neutral

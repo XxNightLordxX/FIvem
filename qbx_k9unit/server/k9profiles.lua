@@ -319,6 +319,122 @@
 ]]
 
 -- ======================================================================
+-- GAP 1, PART 2 (this pass) -- "A SETTING THAT SAVES, DISPLAYS, AND
+-- SILENTLY DOES NOTHING": GAP 1 above closed the pipe end to end (an
+-- individual override reaches an online K9's client). What it did NOT
+-- close, found only by tracing that pipe all the way to the one real
+-- native call at the end of it: client/movement.lua's own move-rate
+-- composer (RecomputeK9MoveRate) clamped EVERY composed value, override or
+-- not, to [0.1, 2.0] -- so a speedMultiplier override above roughly 2 (a
+-- perfectly valid, saved, audited value by every check THIS file performs)
+-- reached that composer, was multiplied in correctly, and was then
+-- silently rendered back down to 2.0 before ever reaching
+-- SetPedMoveRateOverride. Saved, displayed, audited, and inert -- with
+-- nothing anywhere telling the officer who set it.
+--
+-- THE ROOT CAUSE, STATED PLAINLY: that 2.0 ceiling was written (see
+-- client/movement.lua's own "CLAMP RANGE [0.1, 2.0]" header comment) as a
+-- defensive backstop against a MISCONFIGURED AUTOMATIC multiplier --
+-- fatigue, injury, mood, breed, dragging, or an XP-tier config typo --
+-- launching a K9 to an absurd speed with no human review involved at all.
+-- It was never reasoned about against a DELIBERATE, per-individual,
+-- high-command-typed, server-AUDITED override -- a fundamentally different
+-- kind of number, entering through a fundamentally different, already
+-- human-reviewed path (CanManageK9Profiles, the action cooldown, the
+-- override audit trail below). The fix is not "raise the ceiling" (that
+-- would just move the same silent-mismatch bug to a new number, and would
+-- ALSO weaken the real protection the 2.0 ceiling still correctly provides
+-- against a misconfigured AUTOMATIC system) -- it is teaching the composer
+-- to tell the two cases apart and give each its own, honest ceiling.
+--
+-- THE ENGINE'S OWN REAL LIMIT, RESEARCHED, NOT GUESSED: SET_PED_MOVE_RATE_
+-- OVERRIDE is a base-game Rockstar native (hash 0x085BF80FA50A39D1, PED
+-- namespace), so runtime.fivem.net/doc/natives.json -- the correct
+-- authoritative source SPECIFICALLY for a Rockstar native, not for a CFX
+-- one -- is a real, citable answer, not a guess. Its own documented range
+-- is [0.00, 10.00], with a worked example AT that maximum ("Sprinting
+-- without fast run cheat: 66 m/s. Sprinting with fast run cheat: 77 m/s"),
+-- which is itself strong evidence the native genuinely differentiates
+-- speeds across that whole range (a real internal clamp anywhere below
+-- 10.0 would make that example self-contradictory). HIGH confidence. That
+-- same entry also carries ONE unverified, disclosed caveat, kept honest
+-- rather than hidden: an IDA disassembly note against an old Xbox 360
+-- build claims an internal comparison clamps at 1.15, not 10.0 -- LOW
+-- confidence (a single decade-plus-old, platform-specific, unverified
+-- observation, and self-contradictory against the same entry's own 66 m/s
+-- figure) -- disclosed here, not acted on. `MOVE_RATE_ENGINE_MAX` below is
+-- 10.0, the documented figure, not the disputed one.
+--
+-- Config.MaxSpeedScentMultiplier ALREADY ships at 10.0 by default
+-- (config.lua) -- almost certainly not a coincidence; whoever set that
+-- value already picked the native's own real ceiling. That means an
+-- UNCHANGED, stock install has ZERO daylight between what an officer can
+-- save here and what the engine can actually do -- this pass does not need
+-- to invent a new number for the common case, only to stop
+-- client/movement.lua's own SEPARATE, undocumented 2.0 from silently
+-- overriding it.
+--
+-- WHAT THIS FILE DOES ABOUT IT (see MOVE_RATE_ENGINE_MAX/
+-- IsValidSpeedMultiplier below for the exact code): speedMultiplier gets
+-- its OWN validator, distinct from scentRangeMultiplier/
+-- medkitCooldownMultiplier's shared IsValidMultiplier, because it is the
+-- ONLY one of the three that ever reaches a real game native --
+-- scentRangeMultiplier is pure server-side arithmetic against a search
+-- radius (server/tracking.lua's ResolveMaxRangeForCitizenId, confirmed by
+-- direct read: `maxRange = baseMaxRange * scentRangeMultiplier`, no native
+-- involved, no ceiling the engine could ever silently enforce) and
+-- medkitCooldownMultiplier is a cooldown scalar (also no native). Only
+-- speedMultiplier needed a second, engine-aware bound layered under the
+-- owner's own Config.MaxSpeedScentMultiplier ceiling, so that an owner who
+-- raises that shared config value ABOVE 10 for scentRangeMultiplier's sake
+-- (which has every right to go that high) can never thereby also ask the
+-- movement composer to exceed what the engine can physically do.
+--
+-- THE FLOOR, UNCHANGED IN SPIRIT, NOW ALSO ENFORCED HERE: client/movement.lua's
+-- OWN 0.1 floor on the FINAL composed rate is a hard, non-negotiable safety
+-- rule (a frozen player is a trapped player) -- and, unlike the ceiling,
+-- it was never wrong to keep it, override or not: this pass does not
+-- change it, does not bypass it for an override, and never will.
+-- IsValidSpeedMultiplier below additionally REJECTS (never silently
+-- clamps) a speedMultiplier at or under that exact floor, because with
+-- every other modifier at its own neutral 1.0, such a value is
+-- DETERMINISTICALLY guaranteed, right now, to be floor-clamped away from
+-- whatever was typed -- the identical "saves a number that will not
+-- happen" failure shape this whole pass exists to close, just at the
+-- opposite end of the number line from the one the owner actually
+-- reported. A raw value ABOVE the floor can still end up floor-clamped
+-- once combined, AT RUNTIME, with a low enough combination of fatigue/
+-- injury/mood/dragging (all of which change continuously and are not
+-- knowable at save time) -- that residual case is disclosed, not silently
+-- accepted as fine: see client/movement.lua's own updated composer header
+-- for the honest, full writeup of why it is not solved here.
+--
+-- THE MISSING SIGNAL, AND WHY IT NEEDED A NEW EVENT, NOT A BIGGER PAYLOAD:
+-- GetK9EffectiveMultipliers already returns `overridden.speedMultiplier`
+-- (true/false) -- the ONE piece of information client/movement.lua's
+-- composer needs to pick the right ceiling. But that boolean was NEVER
+-- forwarded past this file: server/progression.lua's BuildEffectiveTierSnapshot
+-- (a file this pass does not own) folds the override's NUMBER into its
+-- snapshot's speedMultiplier field (correctly -- see that function's own
+-- doc comment, "REPLACE, never stack" -- so the NUMBER client/progression.lua
+-- writes into K9MoveRateModifiers.xpTier was always right), but forwards no
+-- flag distinguishing "this number came from an audited override" from
+-- "this number is this citizenid's ordinary tier value." Rather than
+-- extend that cross-file contract (server/progression.lua/client/progression.lua,
+-- both owned by other work this pass), this file pushes the ONE missing
+-- boolean directly and separately, over a brand NEW, narrow,
+-- self-contained event this file owns start to finish:
+-- 'qbx_k9unit:client:k9SpeedOverrideStatus' ({ active: boolean }) -- see
+-- PushK9SpeedOverrideStatus/PushK9SpeedOverrideStatusIfOnline below for the
+-- three moments it fires (an edit here, this citizenid's own
+-- 'QBCore:Server:PlayerLoaded', and this file's own onResourceStart
+-- backfill for anyone already online across a restart -- the same three
+-- moments GAP 1's own PushXPTierSnapshotIfOnline needed for the NUMBER,
+-- restated here for the BOOLEAN). client/movement.lua's own updated
+-- composer header documents the receiving half.
+-- ======================================================================
+
+-- ======================================================================
 -- BOUNDS -- see header "BOUNDS -- REUSED, NOT REINVENTED".
 -- ======================================================================
 
@@ -448,6 +564,74 @@ local function IsValidNote(value)
         if byte < 0x20 or byte == 0x7F then return false end
     end
     return true
+end
+
+-- ======================================================================
+-- SPEED-SPECIFIC BOUNDS -- see header "GAP 1, PART 2" above for the full
+-- writeup of why speedMultiplier needs its OWN validator instead of the
+-- shared IsValidMultiplier scentRangeMultiplier/medkitCooldownMultiplier
+-- still use unchanged.
+-- ======================================================================
+
+--- The REAL, documented ceiling of the underlying SET_PED_MOVE_RATE_OVERRIDE
+--- native (Rockstar native, PED namespace, hash 0x085BF80FA50A39D1) --
+--- confirmed via runtime.fivem.net/doc/natives.json (the correct
+--- authoritative source for a ROCKSTAR native specifically), which
+--- documents the native's own range as [0.00, 10.00] with a worked example
+--- AT 10.00 (66 m/s sprinting, 77 m/s combined with the "fast run" cheat).
+--- HIGH confidence. See header "GAP 1, PART 2" for the one disclosed,
+--- UNVERIFIED, LOW-confidence counter-claim (an old Xbox 360 IDA note
+--- suggesting an internal 1.15 clamp) and why it is not acted on here.
+--- Hardcoded, NOT owner-editable -- this is a fact about the game engine,
+--- not a policy choice (same posture as MAX_MEDKIT_COOLDOWN_MULTIPLIER
+--- above). Duplicated in client/movement.lua's own
+--- ResolveMoveRateOverrideCeiling() (this resource's established
+--- "duplicated, not shared" convention for a cross-file constant, per this
+--- file's own header "BOUNDS -- REUSED, NOT REINVENTED") -- the two MUST
+--- be kept in agreement; see that function's own doc comment for why.
+local MOVE_RATE_ENGINE_MAX = 10.0
+
+--- Mirrors client/movement.lua's own MOVE_RATE_MIN EXACTLY (same
+--- "duplicated, not shared" convention) -- the floor that composer's FINAL
+--- composed rate is unconditionally clamped to, override or not. Used here
+--- ONLY to reject, at save time, a speedMultiplier that is deterministically
+--- guaranteed to already be at or under that floor with every other
+--- modifier at its own neutral 1.0 -- see header "GAP 1, PART 2" for the
+--- full reasoning and its own disclosed limits.
+local MOVE_RATE_FLOOR = 0.1
+
+--- speedMultiplier-specific validator -- see header "GAP 1, PART 2" for the
+--- full "why this one field, why these two bounds" writeup. Rejects
+--- (never silently clamps) anything at/under MOVE_RATE_FLOOR, or above
+--- whichever is SMALLER of the owner's own Config.MaxSpeedScentMultiplier
+--- and the engine's real MOVE_RATE_ENGINE_MAX -- an owner who raises the
+--- shared config value past 10 for scentRangeMultiplier's sake (which has
+--- no engine ceiling of its own at all) can never thereby also ask
+--- SET_PED_MOVE_RATE_OVERRIDE to exceed what it can physically do.
+--- @param value any
+--- @return boolean
+local function IsValidSpeedMultiplier(value)
+    if not IsFiniteNumber(value) then return false end
+    if value <= MOVE_RATE_FLOOR then return false end
+    return value <= math.min(MAX_SPEED_SCENT_MULTIPLIER, MOVE_RATE_ENGINE_MAX)
+end
+
+--- Plain-English, save-time (and later-inspection) HONESTY for exactly the
+--- number range this pass exists to fix -- see header "GAP 1, PART 2" for
+--- the full incident. Returns nil for any value at or below 2.0 (this
+--- resource's own OLD, undocumented client/movement.lua ceiling before this
+--- pass) -- nothing new to say for those, they always genuinely applied.
+--- Never a bare number: states what was asked for, what happens now, and
+--- why that is a change from this resource's own previous, silently
+--- incomplete behavior -- Rule "never save a number that will not happen
+--- without saying so", satisfied for the success/altered-behavior case the
+--- same way IsValidSpeedMultiplier above satisfies it for the
+--- rejected-outright case.
+--- @param speedMultiplier any
+--- @return string?
+local function DescribeSpeedOverrideCeiling(speedMultiplier)
+    if type(speedMultiplier) ~= 'number' or speedMultiplier <= 2.0 then return nil end
+    return ("This K9's speed multiplier is %.2fx. That genuinely applies in-game, up to this server's real movement-engine limit of %.1fx (SET_PED_MOVE_RATE_OVERRIDE's own documented maximum) -- earlier, this resource accepted, saved, and displayed any value above 2x without that top end ever actually reaching the dog in-game. That silent internal cap has been removed; this number is now real."):format(speedMultiplier, math.min(MAX_SPEED_SCENT_MULTIPLIER, MOVE_RATE_ENGINE_MAX))
 end
 
 -- ======================================================================
@@ -773,6 +957,79 @@ local function WriteOverrideAudit(action, citizenid, detail, changedBy)
 end
 
 -- ======================================================================
+-- SPEED-OVERRIDE STATUS PUSH -- see header "GAP 1, PART 2" for the full
+-- writeup of why this is a brand new, narrow, SELF-CONTAINED event (never
+-- routed through server/progression.lua's own xpTierChanged snapshot,
+-- which already carries the right NUMBER but no flag for which of the two
+-- possible sources produced it). Fires the ONE boolean client/movement.lua's
+-- composer needs to pick the right ceiling for THIS citizenid's speed
+-- value -- never the value itself, which client/progression.lua already
+-- receives correctly, unchanged, via the existing snapshot pipeline.
+-- ======================================================================
+
+--- Soft-guarded on TriggerClientEvent's own existence (`type(...) ==
+--- 'function'`) for the SAME reason PushK9SpeedOverrideStatusIfOnline below
+--- guards exports.qbx_core.GetPlayerByCitizenId -- this function is called
+--- from THIS file's own 'QBCore:Server:PlayerLoaded' handler and
+--- onResourceStart backfill loop unconditionally (no per-call-site pcall of
+--- their own), and is exercised as a secondary, soft-loaded dependency by
+--- several other specs (tests/tracking_spec.lua among them) that do not
+--- stub every native this file might call. TriggerClientEvent is a
+--- fundamental, always-present FXServer native in real production -- this
+--- guard costs nothing there and only matters in a test sandbox that never
+--- needed it before this pass.
+--- @param targetSrc number
+--- @param citizenid string
+local function PushK9SpeedOverrideStatus(targetSrc, citizenid)
+    if type(TriggerClientEvent) ~= 'function' then return end
+    local active = false
+    local ok, effective = pcall(GetK9EffectiveMultipliers, citizenid)
+    if ok and type(effective) == 'table' and type(effective.overridden) == 'table' then
+        active = effective.overridden.speedMultiplier == true
+    end
+    TriggerClientEvent('qbx_k9unit:client:k9SpeedOverrideStatus', targetSrc, { active = active })
+end
+
+--- Citizenid-keyed wrapper -- mirrors server/progression.lua's own
+--- PushXPTierSnapshotIfOnline naming/shape exactly (same "resolve the
+--- online source, then push" idiom), but fully SELF-CONTAINED: this file
+--- never calls into server/progression.lua for this, and that file never
+--- needs to know this event exists. No-op (never throws) when `citizenid`
+--- cannot be resolved to a CURRENTLY connected player -- the next real
+--- 'QBCore:Server:PlayerLoaded'/onResourceStart backfill already re-checks
+--- the live override state fresh when they do connect, so nothing is lost,
+--- only deferred, exactly like PushXPTierSnapshotIfOnline's own contract.
+--- SOFT-GUARDED on exports.qbx_core.GetPlayerByCitizenId specifically
+--- (`type(...) == 'function'`, pcall-wrapped besides) -- UNLIKE
+--- server/progression.lua's own PushXPTierSnapshotIfOnline, which calls the
+--- identical export unguarded. That asymmetry is deliberate, not an
+--- inconsistency: this exact function is exercised as a SECONDARY,
+--- soft-loaded dependency by several other specs (tests/xptiereditor_spec.lua,
+--- tests/medkit_spec.lua, tests/tracking_spec.lua, tests/wellbeing_spec.lua)
+--- that each stub only what THEIR OWN production file needs from
+--- exports.qbx_core, not this one's -- a hard, unguarded call here would
+--- make a live-push SIDE EFFECT (best-effort by nature) capable of crashing
+--- an upsert/reset whose real database write has ALREADY succeeded, in
+--- every one of those environments. Matches this file's own established
+--- "never let a cross-file/cross-resource soft dependency crash a caller"
+--- convention (e.g. `type(GetXPTier) == 'function'` above) applied here to
+--- a FRAMEWORK export instead of a sibling resource file, for the same
+--- reason.
+--- @param citizenid string
+local function PushK9SpeedOverrideStatusIfOnline(citizenid)
+    if type(citizenid) ~= 'string' or citizenid == '' then return end
+    if type(exports) ~= 'table' or type(exports.qbx_core) ~= 'table'
+        or type(exports.qbx_core.GetPlayerByCitizenId) ~= 'function' then
+        return
+    end
+    local ok, onlinePlayer = pcall(exports.qbx_core.GetPlayerByCitizenId, exports.qbx_core, citizenid)
+    if not ok then return end
+    local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+    if type(onlineSrc) ~= 'number' then return end
+    PushK9SpeedOverrideStatus(onlineSrc, citizenid)
+end
+
+-- ======================================================================
 -- CALLBACKS -- all four re-verify CanManageK9Profiles(source) as their own
 -- first action. Response shape mirrors server/certtiers.lua's /
 -- server/xptiers.lua's own `{ ok, reason, ... }` convention exactly, for
@@ -827,6 +1084,12 @@ lib.callback.register('qbx_k9unit:server:k9ProfileGet', function(source, citizen
         staminaPersistenceWarning = (override and override.sprintDecayPerTick ~= nil)
             and ResolveStaminaPersistenceWarning()
             or nil,
+        -- GAP 1, PART 2 -- SAME "not just at write time" posture as
+        -- staminaPersistenceWarning immediately above: an officer opening
+        -- the tablet to INSPECT an already-set high override (set in a
+        -- previous session, or by someone else) gets told the same honest
+        -- truth a fresh save would have told them, not just silence.
+        speedOverrideCeilingNote = override and DescribeSpeedOverrideCeiling(override.speedMultiplier) or nil,
     }
 end)
 
@@ -867,7 +1130,14 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
 
     if hasSpeed then
         speedMultiplier = tonumber(payload.speedMultiplier)
-        if not IsValidMultiplier(speedMultiplier, MAX_SPEED_SCENT_MULTIPLIER) then
+        -- IsValidSpeedMultiplier, NOT the shared IsValidMultiplier below --
+        -- see header "GAP 1, PART 2" for the full "why speed is different"
+        -- writeup. Same reason code as before ('invalid_speed_multiplier')
+        -- so no tablet-side wiring changes are required for THIS to reject
+        -- correctly; flagged separately (see this pass's own report) that
+        -- the WORDING behind that code needs an update to state the real,
+        -- current bounds.
+        if not IsValidSpeedMultiplier(speedMultiplier) then
             return { ok = false, reason = 'invalid_speed_multiplier' }
         end
     end
@@ -981,6 +1251,15 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
         pcall(PushXPTierSnapshotIfOnline, citizenid)
     end
 
+    -- SPEED-OVERRIDE STATUS PUSH (GAP 1, PART 2) -- the BOOLEAN half of the
+    -- live push above; see this file's own "SPEED-OVERRIDE STATUS PUSH"
+    -- header for why this is a separate call rather than a field folded
+    -- into the snapshot push. Unguarded (not a `type(...) == 'function'`
+    -- soft check like PushXPTierSnapshotIfOnline above) because this is a
+    -- LOCAL function defined earlier in THIS SAME file, not a cross-file
+    -- soft dependency.
+    PushK9SpeedOverrideStatusIfOnline(citizenid)
+
     -- SELF-SERVICE VISIBILITY (same posture server/certtiers.lua's own
     -- "SELF-TIER CAPABILITY EDIT" / server/xptiers.lua's own
     -- "SELF-PROMOTION" sections already establish for their own surfaces):
@@ -997,10 +1276,23 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     end
     WriteOverrideAudit(action, citizenid, detail, actingCitizenid or 'unknown')
 
-    local warning
+    -- WARNING CHANNEL -- MULTIPLE, INDEPENDENT NOTES CAN APPLY AT ONCE, now
+    -- that GAP 1, PART 2 adds a second one alongside the pre-existing
+    -- self-override disclosure: built as a LIST and joined, never one
+    -- overwriting the other. Rule "never save a number that will not
+    -- happen without saying so" is satisfied for speedMultiplier by
+    -- DescribeSpeedOverrideCeiling below -- gated on `hasSpeed` (THIS call
+    -- actually set/changed it) so this is said "at the moment they save
+    -- it", not on every unrelated future edit to the same citizenid.
+    local warningParts = {}
     if isSelfOverride then
-        warning = 'This edit changes YOUR OWN K9\'s speed/scent/medkit-cooldown values. This is logged distinctly in the individual-override audit trail for review.'
+        warningParts[#warningParts + 1] = 'This edit changes YOUR OWN K9\'s speed/scent/medkit-cooldown values. This is logged distinctly in the individual-override audit trail for review.'
     end
+    if hasSpeed then
+        local speedNote = DescribeSpeedOverrideCeiling(finalSpeed)
+        if speedNote then warningParts[#warningParts + 1] = speedNote end
+    end
+    local warning = #warningParts > 0 and table.concat(warningParts, ' ') or nil
 
     -- DISCLOSED, NOT HIDDEN -- see StaminaOverrideByCitizenId's own
     -- declaration comment. Present whenever this citizenid currently
@@ -1094,6 +1386,14 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
         pcall(PushXPTierSnapshotIfOnline, citizenid)
     end
 
+    -- SPEED-OVERRIDE STATUS PUSH (GAP 1, PART 2) -- see k9ProfileUpsert's
+    -- own identical call above for the full writeup. A reset that clears a
+    -- speed override must snap this flag back to `false` for an
+    -- already-online K9 just as immediately as the NUMBER snaps back to the
+    -- plain tier value above -- otherwise the composer would keep applying
+    -- the wide, override-only ceiling to a citizenid who no longer has one.
+    PushK9SpeedOverrideStatusIfOnline(citizenid)
+
     local detail = 'individual override reset -- K9 now uses its plain XP-tier values with no override'
     if hadStaminaOverride then
         detail = detail .. ' (including its session-only stamina override)'
@@ -1101,6 +1401,34 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
     WriteOverrideAudit('override_reset', citizenid, detail, actingCitizenid or 'unknown')
 
     return { ok = true, citizenid = citizenid, effective = GetK9EffectiveMultipliers(citizenid) }
+end)
+
+-- ======================================================================
+-- INITIAL-CONNECT PUSH (GAP 1, PART 2) -- closes the "already had an
+-- override before this session even started" gap the edit-triggered push
+-- above cannot reach on its own: without this, a citizenid who ALREADY
+-- carries a live speed override at the moment they connect would still get
+-- the correct NUMBER (server/progression.lua's own PlayerLoaded-time
+-- xpTierChanged snapshot already composes it in, unaffected by this file),
+-- but this file's own boolean would sit at client/movement.lua's own
+-- startup default (false, "no override") until/unless a NEW edit happened
+-- to fire THIS session -- so the composer would (wrongly) treat that
+-- number as an ordinary automatic tier value and clamp it straight back
+-- down to 2.0. Fires unconditionally on every join/reconnect -- this event
+-- name is used identically, independently, by many OTHER files in this
+-- resource; AddEventHandler supports any number of listeners for the same
+-- event name, this is not a second/competing definition of PlayerLoaded.
+-- Same "PlayerLoaded-time push is safe, client-side handlers are already
+-- registered well before a connecting player finishes loading in" posture
+-- server/permissions.lua's own identical PlayerLoaded push already
+-- documents (see that file's own header) -- not re-derived here.
+-- ======================================================================
+AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
+    if not Player or not Player.PlayerData then return end
+    local citizenid = Player.PlayerData.citizenid
+    local src = Player.PlayerData.source
+    if type(citizenid) ~= 'string' or citizenid == '' or type(src) ~= 'number' then return end
+    PushK9SpeedOverrideStatus(src, citizenid)
 end)
 
 -- ======================================================================
@@ -1112,6 +1440,26 @@ end)
 -- server/xptiers.lua/server/equipmentshop.lua's own onResourceStart
 -- handlers, all four now named together in server/datastore.lua's own
 -- updated header.
+--
+-- RESTART BACKFILL (GAP 1, PART 2, added this pass) -- 'QBCore:Server:
+-- PlayerLoaded' above never fires again for a citizenid who was ALREADY
+-- connected BEFORE this resource (re)started -- this loop is their only
+-- immediate re-sync opportunity, mirroring server/permissions.lua's own
+-- identical GetPlayers()/exports.qbx_core:GetPlayer backfill idiom
+-- exactly. DISCLOSED, HONEST RESIDUAL RACE: this resource's client and
+-- server halves restart together, so it is possible for this push to
+-- reach client/movement.lua's own 'qbx_k9unit:client:k9SpeedOverrideStatus'
+-- RegisterNetEvent before that file has finished re-registering it on this
+-- same restart. Worst case, exactly like this file's own PushXPTierSnapshotIfOnline
+-- sibling call already accepts for the NUMBER half, is bounded and
+-- self-correcting, never silently wrong forever: a citizenid caught in
+-- that exact window keeps the tighter 2.0 ceiling applied to their own
+-- already-correct number until their NEXT edit or a full reconnect, not
+-- until the heat death of the universe. Not mitigated with a second,
+-- client-initiated pull this pass, for the same cost/benefit reason
+-- server/permissions.lua's own FEATURE-BLOCK PUSH section gives for
+-- choosing not to build one everywhere this shape appears -- flagged
+-- honestly in this pass's own report instead of silently accepted.
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
@@ -1120,4 +1468,14 @@ AddEventHandler('onResourceStart', function(resourceName)
         return
     end
     RefreshOverrideCache()
+
+    for _, playerId in ipairs(GetPlayers()) do
+        local src = tonumber(playerId)
+        if src then
+            local Player = exports.qbx_core:GetPlayer(src)
+            if Player and Player.PlayerData and Player.PlayerData.citizenid then
+                PushK9SpeedOverrideStatus(src, Player.PlayerData.citizenid)
+            end
+        end
+    end
 end)

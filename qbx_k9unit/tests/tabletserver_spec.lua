@@ -900,6 +900,42 @@ t.test('myFeatures: a globally-disabled feature reports global_off regardless of
     t.equals(row.state, 'global_off')
 end)
 
+t.test('myFeatures: a Config.Features key entirely ABSENT from Config.Features (never set, not even to false) produces NO myFeatures[] entry at all -- the exact server-side shape html/tablet.js\'s own myFeatureState() must resolve to off, not "no gate matched" (pins the fact behind this pass\'s Command Reference fix)', function()
+    local f = newFixture({
+        hasK9Access = function() return true end,
+        config = {
+            -- 'BiteAndHold' is DELIBERATELY not listed here at all -- not
+            -- `BiteAndHold = false` (already covered by the test immediately
+            -- above, which was already handled correctly before this pass).
+            -- This is the real shape a removed/never-added feature key takes
+            -- in production config.lua: this resource's own real
+            -- ScentTrailHunt (removed entirely) and ApprehensionAnnouncement
+            -- (never added at all) are both genuinely absent keys, not
+            -- `= false` ones -- see config.lua's own Config.Features comment
+            -- and server/announce.lua's header for both.
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+
+    local absentRow
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'BiteAndHold' then absentRow = entry end end
+    t.isNil(absentRow, 'BuildMyFeaturesArray enumerates pairs(Config.Features) fresh -- a key that was never set there gets NO array entry at all, never an entry with some off-flavored state string. This is the exact server-side fact html/tablet.js\'s own myFeatureState() must treat an absent lookup as equivalent to global_off for, instead of falling through to "available" (the client-side bug this pass fixed -- see that file\'s own myFeatureState() doc comment).')
+
+    -- CONTROL -- a key that IS present in Config.Features still gets a real
+    -- entry with a real resolved state, proving the loop above genuinely
+    -- distinguishes "absent" from "present" rather than this test passing
+    -- vacuously because myFeatures came back empty for some unrelated reason.
+    local presentRow
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then presentRow = entry end end
+    t.isNotNil(presentRow, 'CONTROL: a Config.Features key that IS present still produces a real myFeatures[] entry')
+    t.equals(presentRow.state, 'available', 'CONTROL: that present key resolves its real state as normal, not swallowed by the same loop')
+end)
+
 t.test('myFeatures: an explicit block row wins over everything below it (has access, no grant needed)', function()
     local f = newFixture({
         hasK9Access = function() return true end,

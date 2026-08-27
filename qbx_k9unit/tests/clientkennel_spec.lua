@@ -545,12 +545,28 @@ t.test('feature on: registers exactly 2 commands (k9deploykennel + the additive 
     t.equals(f.watchdogThreadCount(), 1)
 end)
 
-t.test('RequestDeployKennel: CanShowK9UI false denies locally, no server contact', function()
+-- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
+-- finding, this pass) -- see RequestDeployKennel()'s own "GATE WIDENED" doc
+-- comment. Deploying a kennel is a HUMAN HANDLER action, gated the same way
+-- "Pick Up Kennel" already is (see that option's own HasK9Access()-only
+-- tests further below).
+
+t.test('CONTROL: RequestDeployKennel: HasK9Access() false denies locally with reason combat.no_access, no server contact', function()
     local f = newKennelFixture()
-    f.setCanShowK9UI(false)
+    f.setHasK9Access(false)
     f.env.RequestDeployKennel()
     t.equals(f.denyCallCount(), 1)
     t.equals(#f.serverEvents, 0)
+end)
+
+t.test('GATE WIDENED: RequestDeployKennel: HasK9Access() true with CanShowK9UI() false (High Command/autoAccessGrade-bypass shape) still reaches the server', function()
+    local f = newKennelFixture()
+    f.setHasK9Access(true)
+    f.setCanShowK9UI(false)
+    f.env.RequestDeployKennel()
+    t.equals(f.denyCallCount(), 0, 'a HasK9Access()-true bypass holder must never be denied even though CanShowK9UI() would have refused them')
+    t.equals(#f.serverEvents, 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDeployKennel')
 end)
 
 t.test('RequestDeployKennel: happy path sends the real requestDeployKennel event', function()
@@ -1653,10 +1669,18 @@ t.test('/k9kennel close|open with nothing deployed and nothing entered is a sile
     t.equals(#f.serverEvents, 0)
 end)
 
-t.test('GATE NEVER WIDENED BY THE MERGE: bare /k9kennel (deploy branch) still refuses without CanShowK9UI, identically to /k9deploykennel', function()
+-- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, this
+-- pass) -- these three used to set CanShowK9UI() false to prove a refusal;
+-- that is no longer this gate (see RequestDeployKennel()'s own "GATE
+-- WIDENED" doc comment), so the CONTROL below opts out via HasK9Access()
+-- instead, and a new companion test proves the bypass shape reaches the
+-- server through THIS dispatch path too, not just the direct call already
+-- covered above.
+
+t.test('GATE MATCHES RequestDeployKennel(): bare /k9kennel (deploy branch) still refuses without HasK9Access, identically to /k9deploykennel', function()
     local f = newKennelFixture()
     local k9kennel = findK9Kennel(f)
-    f.setCanShowK9UI(false)
+    f.setHasK9Access(false)
 
     k9kennel(nil, {})
 
@@ -1664,15 +1688,28 @@ t.test('GATE NEVER WIDENED BY THE MERGE: bare /k9kennel (deploy branch) still re
     t.equals(f.denyCallCount(), 1)
 end)
 
-t.test('GATE NEVER WIDENED BY THE MERGE: explicit /k9kennel deploy ALSO refuses without CanShowK9UI, identically to /k9deploykennel', function()
+t.test('GATE MATCHES RequestDeployKennel(): explicit /k9kennel deploy ALSO refuses without HasK9Access, identically to /k9deploykennel', function()
     local f = newKennelFixture()
     local k9kennel = findK9Kennel(f)
-    f.setCanShowK9UI(false)
+    f.setHasK9Access(false)
 
     k9kennel(nil, { 'deploy' })
 
     t.equals(#f.serverEvents, 0)
     t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('GATE WIDENED, REACHABLE THROUGH THE MERGE TOO: bare /k9kennel (deploy branch) succeeds for a HasK9Access()-true bypass holder even with CanShowK9UI() false', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.setHasK9Access(true)
+    f.setCanShowK9UI(false)
+
+    k9kennel(nil, {})
+
+    t.equals(f.denyCallCount(), 0, 'a HasK9Access()-true bypass holder must never be denied even though CanShowK9UI() would have refused them')
+    t.equals(#f.serverEvents, 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDeployKennel')
 end)
 
 t.test('GATE NEVER WIDENED: exiting via bare /k9kennel while resting stays UNGATED even with CanShowK9UI false (never gate the stop)', function()

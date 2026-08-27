@@ -1454,6 +1454,25 @@ local FEATURE_DOMAINS = {
     PursuitSprint      = 'combat',
     PropDragging       = 'combat',
     DangerWarn         = 'combat',
+    -- PRE-WIRED, DELIBERATELY ORPHANED (same tolerated shape
+    -- ScentTrailHunt's own entry below 'training' demonstrates in the
+    -- opposite direction -- see tests/runtimefeaturetiers_spec.lua's own
+    -- documented "an orphaned entry has zero behavioural consequence"
+    -- guarantee, and tests/tabletfeaturedomains_spec.lua's own header,
+    -- which only ever asserts the FORWARD direction: every REAL
+    -- Config.Features key must resolve to a domain, never the reverse).
+    -- Config.Features.ApprehensionAnnouncement (server/announce.lua +
+    -- client/announce.lua, gated on it and on Config.Combat.
+    -- ApprehensionAnnouncement) has never existed in config.lua at all --
+    -- see README.md's own "Known limitations" entry and html/tablet.js's
+    -- cmdref_k9announce_needs string for the full disclosure. This entry
+    -- costs nothing while that key is absent (ResolveFeatureDomain is only
+    -- ever consulted for a key BuildMyFeaturesArray/BuildPersonFeaturesArray
+    -- already found in the real, live Config.Features -- see
+    -- ListFeatureKeys' own doc comment), and saves the operator who
+    -- eventually adds the flag one less piece of governance-stack wiring to
+    -- remember.
+    ApprehensionAnnouncement = 'combat',
 
     -- 'movement' -- core K9 control and mobility: the basic actions of
     -- having and directing a dog (leash, recall, barking, agility,

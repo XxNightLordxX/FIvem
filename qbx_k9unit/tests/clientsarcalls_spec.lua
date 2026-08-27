@@ -223,6 +223,19 @@ local function newSarCallsFixture(opts)
     local scenarioCalls = {}
     local function TaskStartScenarioInPlace(entity, name, p2, playEnter) scenarioCalls[#scenarioCalls + 1] = { entity = entity, name = name } end
     local function GetOffsetFromEntityInWorldCoords(_entity, x, y, z) return { x = x, y = y, z = z } end
+
+    -- SHARED FOUND MARKER (this pass) -- ShowFoundMarker's own two natives.
+    -- GetEntityCoords is a fixed stub (this file never needed it before this
+    -- pass): the marker's own Z is APPROXIMATED from this client's own
+    -- current position every frame -- see client/sarcalls.lua's own header
+    -- "SHARED FOUND MARKER" section -- a fixed z = 42.0 makes that
+    -- approximation trivially distinguishable in assertions from the real
+    -- target x/y server/sarcalls.lua now sends.
+    local function GetEntityCoords(_entity) return { x = 0.0, y = 0.0, z = 42.0 } end
+    local drawMarkerCalls = {}
+    local function DrawMarker(markerType, x, y, z, dirX, dirY, dirZ, rotX, rotY, rotZ, scaleX, scaleY, scaleZ, r, g, b, a, bobUpAndDown, faceCamera, p19, rotate, textureDict, textureName, drawOnEnts)
+        drawMarkerCalls[#drawMarkerCalls + 1] = { markerType = markerType, x = x, y = y, z = z, r = r, g = g, b = b, a = a }
+    end
     local function GetEntityHeading(_entity) return 0.0 end
 
     -- Reveal auto-clear thread capture -- see this file's header "WAIT IS A
@@ -271,6 +284,8 @@ local function newSarCallsFixture(opts)
         GetEntityHeading = GetEntityHeading,
         GetPlayerFromServerId = GetPlayerFromServerId,
         GetPlayerName = GetPlayerName,
+        GetEntityCoords = GetEntityCoords,
+        DrawMarker = DrawMarker,
         source = 65535,
     }
     if providePlayK9Sound then
@@ -318,6 +333,7 @@ local function newSarCallsFixture(opts)
         scenarioCalls = scenarioCalls,
         modelAsNoLongerNeededCalls = modelAsNoLongerNeededCalls,
         revealThreads = revealThreads,
+        drawMarkerCalls = drawMarkerCalls,
         entityExists = function(handle) return existingEntities[handle] == true end,
         commandCount = function()
             local n = 0
@@ -340,9 +356,9 @@ local function newSarCallsFixture(opts)
             env.source = forged and 999 or 65535
             netEventHandlers['qbx_k9unit:client:sarHintTierChanged'](tier, callId)
         end,
-        fireCallEnded = function(forged, reason, callType, callId)
+        fireCallEnded = function(forged, reason, callType, callId, targetX, targetY)
             env.source = forged and 999 or 65535
-            netEventHandlers['qbx_k9unit:client:sarCallEnded'](reason, callType, callId)
+            netEventHandlers['qbx_k9unit:client:sarCallEnded'](reason, callType, callId, targetX, targetY)
         end,
         -- TWO OFFICERS, ONE CALL (this pass) below.
         alertDialogCalls = alertDialogCalls,
@@ -606,14 +622,38 @@ t.test('found, callType = person: sits, plays Bark_Alert, and spawns a NON-NETWO
     f.queueCallbackResponse({ started = true, callId = 1 })
     f.startCommand({})
 
-    f.fireCallEnded(false, 'found', 'person', 1)
+    f.fireCallEnded(false, 'found', 'person', 1, 123.0, 456.0)
 
     t.equals(f.k9SitCallCount(), 1)
     t.equals(f.playK9SoundCalls[#f.playK9SoundCalls].soundName, 'Bark_Alert')
     t.equals(#f.createdPeds, 1)
     t.isFalse(f.createdPeds[1].isNetwork, 'the reveal ped must NEVER be networked -- see this file own header')
     t.equals(#f.scenarioCalls, 1)
-    t.equals(#f.revealThreads, 1, 'exactly one auto-clear timer thread is captured')
+    -- TWO threads now (was 1): the entity's own auto-clear timer (still
+    -- first, since ShowReveal is still called before ShowFoundMarker in the
+    -- handler) PLUS the SHARED FOUND MARKER's own draw loop (this pass) --
+    -- see this file's header section of the same name.
+    t.equals(#f.revealThreads, 2, 'the entity auto-clear timer AND the found-marker draw loop are each captured as their own thread')
+end)
+
+t.test('SHARED FOUND MARKER (this pass): found ALSO draws a shared, non-entity marker at the real target coordinates, in ADDITION to the finder-only entity reveal above', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({})
+
+    f.fireCallEnded(false, 'found', 'person', 1, 123.0, 456.0)
+
+    -- The marker draw loop is captured as the SECOND thread (ShowReveal's
+    -- own auto-clear timer is first) -- bounded by a LOCAL counter (same
+    -- idiom as LoadModelWithTimeout), so running it directly here is safe
+    -- and terminates quickly, never hanging this test.
+    t.equals(#f.revealThreads, 2)
+    f.revealThreads[2]()
+
+    t.isTrue(#f.drawMarkerCalls > 0, 'DrawMarker must have been called at least once')
+    t.equals(f.drawMarkerCalls[1].x, 123.0, 'the marker must be drawn at the REAL target x, not the finder own position')
+    t.equals(f.drawMarkerCalls[1].y, 456.0, 'the marker must be drawn at the REAL target y, not the finder own position')
+    t.equals(f.drawMarkerCalls[1].z, 42.0, "z is approximated from this client's own live position (this fixture's GetEntityCoords stub) -- see this file's header disclosed limitation")
 end)
 
 t.test('found, callType = property: spawns a NON-NETWORKED, frozen object instead of a ped', function()
@@ -987,11 +1027,11 @@ t.test('sarCallJoined: RequestAbandonSarCall() works identically after joining a
     t.equals(f.serverEvents[#f.serverEvents].event, 'qbx_k9unit:server:abandonSarCall')
 end)
 
-t.test("sarCallEnded(found_by_teammate): resets local state exactly like timeout/abandoned -- never spawns a reveal, never sits, never plays the found sound -- only the ACTUAL finder's own client does that", function()
+t.test("sarCallEnded(found_by_teammate): resets local state exactly like timeout/abandoned -- never spawns the entity reveal, never sits, never plays the found sound -- only the ACTUAL finder's own client does that", function()
     local f = newSarCallsFixture()
     f.fireCallJoined(false, 42, 'warm')
 
-    f.fireCallEnded(false, 'found_by_teammate', nil, 42)
+    f.fireCallEnded(false, 'found_by_teammate', nil, 42, 789.0, 321.0)
 
     t.isFalse(f.env.IsSarCallActive(), "this member's own session must still end -- the call resolved either way")
     t.equals(f.k9SitCallCount(), 0, "K9Sit is the finder's own trained-response cue -- a teammate who did not find it never gets it")
@@ -1002,6 +1042,59 @@ t.test("sarCallEnded(found_by_teammate): resets local state exactly like timeout
         if call.soundName == 'Bark_Alert' then barkAlertPlayed = true end
     end
     t.isFalse(barkAlertPlayed, 'the found-specific Bark_Alert must never play for found_by_teammate')
+end)
+
+-- ----------------------------------------------------------------------
+-- SHARED FOUND MARKER (this pass) -- see this file's header section of the
+-- same name for the full design writeup this section pins: KNOWN_ISSUES.md's
+-- "found reveal is visible only to the finder" was written back when a call
+-- had exactly one officer -- now that a call has genuine MEMBERS, a member
+-- who never sees the entity-level reveal still gets a real, shared,
+-- in-world cue that the search is over and where it ended, via a plain
+-- DrawMarker call that creates no entity of any kind (so none of ShowReveal's
+-- own "ghost-entity" concern applies).
+-- ----------------------------------------------------------------------
+
+t.test('SHARED FOUND MARKER: found_by_teammate ALSO draws the shared marker at the real target coordinates, even though it never gets the entity-level reveal', function()
+    local f = newSarCallsFixture()
+    f.fireCallJoined(false, 42, 'warm')
+
+    f.fireCallEnded(false, 'found_by_teammate', nil, 42, 789.0, 321.0)
+
+    -- found_by_teammate never calls ShowReveal, so this is the ONLY thread
+    -- this push could have created -- captured, never auto-run (see this
+    -- file's header "WAIT IS A PLAIN NO-OP HERE"), and bounded by a local
+    -- counter, so running it directly here is safe.
+    t.equals(#f.revealThreads, 1, 'found_by_teammate creates exactly one thread: the marker draw loop -- no entity, no auto-clear timer')
+    f.revealThreads[1]()
+
+    t.isTrue(#f.drawMarkerCalls > 0, 'DrawMarker must have been called at least once for a teammate too')
+    t.equals(f.drawMarkerCalls[1].x, 789.0)
+    t.equals(f.drawMarkerCalls[1].y, 321.0)
+end)
+
+t.test('SHARED FOUND MARKER: a stale/back-compat sarCallEnded push carrying NO coordinates at all degrades silently -- no marker, no error', function()
+    local f = newSarCallsFixture()
+    f.fireCallJoined(false, 42, 'warm')
+
+    f.fireCallEnded(false, 'found_by_teammate', nil, 42) -- targetX/targetY omitted entirely
+
+    t.equals(#f.revealThreads, 0, 'no coordinates -- ShowFoundMarker must no-op before ever spawning a thread')
+    t.equals(#f.drawMarkerCalls, 0)
+end)
+
+t.test('SHARED FOUND MARKER: timeout/abandoned never draw a marker either -- neither reason ever carries a target coordinate', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({})
+
+    f.fireCallEnded(false, 'timeout', nil, 1)
+    t.equals(#f.drawMarkerCalls, 0)
+
+    f.queueCallbackResponse({ started = true, callId = 2 })
+    f.startCommand({})
+    f.fireCallEnded(false, 'abandoned', nil, 2)
+    t.equals(#f.drawMarkerCalls, 0)
 end)
 
 os.exit(t.summary())

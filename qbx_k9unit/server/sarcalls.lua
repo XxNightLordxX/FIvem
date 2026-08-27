@@ -232,6 +232,16 @@
        [TriggerClientEvent, THIS FILE only ever SENDS this, to the call
        OWNER's own client only] -- shown as an accept/decline prompt,
        mirroring server/partnership.lua's partnerUpRequest push.
+    9. 'qbx_k9unit:server:findNearestJoinableSarCall' (source) ->
+       { targetServerId: number? } [lib.callback] -- see "RADIAL JOIN ENTRY
+       POINT" below. A read-only convenience lookup for client/radial.lua's
+       "Join Nearest SAR Call" item, which (unlike '/k9sarcall join
+       <serverId>') has no argument of its own to supply -- NEVER a trust
+       boundary: every candidate is filtered through the SAME
+       CheckSarJoinEligibility function requestJoinSarCall/respondJoinSarCall
+       already use, and whatever `targetServerId` this returns is fed
+       straight back into the exact same requestJoinSarCall event the
+       command path already sends, re-validated from scratch regardless.
 
     Outbound integration events (server/exports.lua's `qbx_k9unit:events:*`
     namespace, server/integrations.lua's OUTBOUND-only convention -- this
@@ -644,6 +654,67 @@
     against targetSrc's own live position in every case, ownership or not,
     which is unchanged from before this pass -- only the ORDER of the two
     checks moved.
+
+    ======================================================================
+
+    RADIAL JOIN ENTRY POINT (this pass) -- closes the second UI-footprint
+    gap this feature's own client/sarcalls.lua header disclosed: '/k9sarcall
+    join <serverId>' was the ONLY way in, and required already knowing a
+    specific colleague's numeric server id -- effectively command-console-
+    only in practice for anyone who has not memorized or been told that id.
+    The owner's own standing direction for this whole overhaul is that every
+    feature is reachable from chat command, radial menu, AND third-eye/
+    ox_target alike; this pass adds the radial entry.
+
+    THE DESIGN PROBLEM A RADIAL ITEM HAS THAT THE COMMAND DOES NOT: joining
+    needs a TARGET (whose call?) and a radial item cannot take an argument.
+    THE ANSWER: "join the nearest joinable active call within
+    Config.SARCalls.joinProximityMeters" -- this needs no argument at all,
+    and it is EXACTLY the proximity check this file already enforces
+    authoritatively at accept time (CheckSarJoinEligibility), not a new or
+    looser rule invented for the radial specifically. findNearestJoinableSarCall
+    above is the read-only lookup that resolves this server-side, since the
+    requesting client has no visibility of its own into who else is
+    currently running a call -- that state (ActiveSarCalls, MemberToCallId,
+    ownerSrc) has never left this file, by design, and this pass does not
+    change that: the lookup returns a bare serverId or nil, never any call
+    detail (type, position, member count, tier).
+
+    NEVER A TRUST BOUNDARY, TWICE OVER: (1) the lookup itself filters every
+    candidate through CheckSarJoinEligibility, so it cannot recommend a
+    target the real request would then reject; (2) even a maximally hostile
+    client that ignores the lookup entirely and calls
+    'qbx_k9unit:server:requestJoinSarCall' directly with a forged/guessed
+    serverId gains nothing beyond what '/k9sarcall join <serverId>' already
+    let a modified client attempt before this pass -- requestJoinSarCall and
+    respondJoinSarCall both re-validate everything from scratch (proximity,
+    access, grants, call-full, ownership, TOCTOU at accept time), completely
+    unchanged by this pass, exactly as this feature's own header already
+    states the radial "is a convenience, never a trust boundary."
+
+    WHY NOT SHIP THIS AS A NEW client/sarcalls.lua RESOURCE-GLOBAL (the
+    shape client/sarcalls.lua's own header explicitly invites for
+    RequestJoinSarCall's eventual first cross-file caller): doing so would
+    also require adding that new global's name to the repo-root
+    .luacheckrc's `globals` allowlist (the same file already lists
+    RequestStartSarCall/RequestAbandonSarCall/IsSarCallActive for exactly
+    this reason) -- a file OUTSIDE this pass's own file-ownership boundary.
+    Rather than touch a shared config file this pass was not scoped to
+    touch, client/radial.lua's own new item is SELF-CONTAINED: it awaits
+    findNearestJoinableSarCall directly and fires
+    'qbx_k9unit:server:requestJoinSarCall' itself, using only natives and
+    globals already allowlisted (HasK9Access/DenyK9UIAccess/IsSarCallActive
+    are already called directly from that exact file's own pre-existing
+    k9_sar_call toggle item, so this is an extension of an already-
+    established pattern in that file, not a new one). See
+    client/radial.lua's own comment on the new item for the full writeup.
+    DISCLOSED, NOT HIDDEN: a future pass that DOES get to touch .luacheckrc
+    could still widen RequestJoinSarCall to a resource-global and have
+    client/radial.lua call that instead, collapsing the small duplication
+    (HasK9Access/IsSarCallActive checks, the "request sent" notify) this
+    pass's self-contained item carries -- not attempted here, and not
+    required for correctness: both shapes reach the exact same server event
+    with the exact same re-validation on the other end.
 
     ======================================================================
 
@@ -1626,6 +1697,65 @@ local SAR_JOIN_REJECT_MESSAGES = {
 local function SarJoinRejectReasonMessage(reason)
     return reason and SAR_JOIN_REJECT_MESSAGES[reason] or nil
 end
+
+-- ======================================================================
+-- RADIAL JOIN ENTRY POINT (this pass) -- see this file's header section of
+-- the same name for the full design writeup. '/k9sarcall join <serverId>'
+-- was the only way in; a radial item cannot take an argument, so this
+-- read-only lookup resolves the ONE thing a join actually needs (which
+-- call) FOR the client, from the requester's own live position, so
+-- client/radial.lua's own item needs no argument at all.
+-- ======================================================================
+
+--- Resolves the NEAREST currently-joinable active call for `source`, or nil
+--- if none qualify. NEVER a trust boundary of its own -- see this file's
+--- header "RADIAL JOIN ENTRY POINT": every candidate is filtered through
+--- CheckSarJoinEligibility, the SAME function requestJoinSarCall/
+--- respondJoinSarCall below already use to authoritatively decide who may
+--- join whom, so this can never recommend a target the real request would
+--- then reject for a reason this lookup could have caught first -- and,
+--- symmetrically, a forged/stale/made-up `targetServerId` fed into
+--- requestJoinSarCall by a modified client BYPASSING this lookup entirely
+--- gains nothing either, since that event re-validates from scratch
+--- regardless of where its argument came from.
+---
+--- Cheap early exit before scanning ActiveSarCalls at all: a source with no
+--- K9 access, the feature off, or already a member of ANY call (owner or
+--- joiner) can never have an eligible candidate, for any target -- see
+--- CheckSarJoinEligibility's own identical checks, which do not depend on
+--- WHICH target is being asked about, so failing them once here up front is
+--- exactly equivalent to (and cheaper than) failing them once per candidate
+--- inside the loop below.
+---
+--- NOT RATE-LIMITED, unlike requestJoinSarCall's own SarJoinRequestCooldown
+--- -- this callback is a pure read (no PendingSarJoinRequests write, no
+--- NotifyPlayer, no state mutation of any kind), so repeated calls cost
+--- only a cheap scan of however many calls are currently active, never a
+--- second chance at anything requestJoinSarCall's own cooldown exists to
+--- throttle (the actual join REQUEST this feeds into is still fully rate-
+--- limited exactly as before this pass).
+lib.callback.register('qbx_k9unit:server:findNearestJoinableSarCall', function(source)
+    if not Config.Features.SARCalls or not HasK9Access(source) or MemberToCallId[source] then
+        return { targetServerId = nil }
+    end
+
+    local nearestSrc, nearestDist
+    for _, call in pairs(ActiveSarCalls) do
+        local ok = CheckSarJoinEligibility(source, call.ownerSrc)
+        if ok then
+            local requesterPed = GetPlayerPed(source)
+            local ownerPed = GetPlayerPed(call.ownerSrc)
+            if requesterPed ~= 0 and ownerPed ~= 0 then
+                local dist = Distance3D(GetEntityCoords(requesterPed), GetEntityCoords(ownerPed))
+                if not nearestDist or dist < nearestDist then
+                    nearestSrc, nearestDist = call.ownerSrc, dist
+                end
+            end
+        end
+    end
+
+    return { targetServerId = nearestSrc }
+end)
 
 --- Step 1 of the join consent handshake: the would-be joiner asks. Does
 --- NOT add anyone to the call -- only relays a prompt if the request

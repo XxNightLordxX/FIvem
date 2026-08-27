@@ -126,15 +126,18 @@
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes FOUR resource-globals (no `local`):
         RequestDeployKennel()
-            Runs the command's own gating (feature flag, CanShowK9UI(),
+            Runs the command's own gating (feature flag, HasK9Access(),
             "already have one deployed" local check) and sends the deploy
             request — UNLESS this client is CURRENTLY CARRYING a kennel, in
             which case it means "put it back down instead" (see that
             function's own doc comment for why one entry point correctly
             serves both meanings, and why the carry branch is checked
-            FIRST, ahead of even the feature-flag/CanShowK9UI() gates, the
+            FIRST, ahead of even the feature-flag/HasK9Access() gates, the
             same "never gate an exit-adjacent action" doctrine
             client/vehicle.lua's own ExitK9Vehicle() already establishes).
+            GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() --
+            permission audit finding, this pass; see that function's own
+            "GATE WIDENED" doc comment for the full reasoning.
             Exposed globally, not kept as a command-local closure, so a
             future radial item can call it directly — client/radial.lua's
             EXISTING "Deploy Kennel" item already does, unmodified, and
@@ -171,13 +174,25 @@
             HasK9Access, certification, or any cooldown); this function
             must never add a gate of its own, on purpose.
     - THIS FILE calls client/main.lua's CanShowK9UI() and DenyK9UIAccess()
-      before acting, same as every other gated client action in this
-      resource. ANY PED (this resource's own established convention): this
-      file never calls IsOwnModelK9() anywhere, confirmed by this file's
-      own test suite — CanShowK9UI() alone already internally decouples
-      role from model (Config.K9Appearance.requireK9ModelForRole), so a
-      second, redundant model check here would wrongly hide the "Rest in
-      Kennel" option from a K9-role holder on a non-dog body.
+      before every SELF-ADMINISTERED K9 action (RequestEnterOwnKennel(), the
+      "Rest in Kennel"/"Exit Kennel" ox_target options) -- ANY PED (this
+      resource's own established convention): this file never calls
+      IsOwnModelK9() anywhere, confirmed by this file's own test suite —
+      CanShowK9UI() alone already internally decouples role from model
+      (Config.K9Appearance.requireK9ModelForRole), so a second, redundant
+      model check here would wrongly hide the "Rest in Kennel" option from a
+      K9-role holder on a non-dog body. This is CORRECT and left unchanged:
+      server/kennel.lua's own requestEnterKennel handler (via
+      ResolveK9PedForKennelRest) gates on the SAME "looks like a K9 model OR
+      holds the K9 role, AND HasK9Access" shape, because resting IN a kennel
+      as a K9 genuinely requires being one.
+      HUMAN HANDLER actions (RequestDeployKennel()'s deploy branch, "Pick Up
+      Kennel") are gated on the lighter HasK9Access() alone instead, NOT
+      CanShowK9UI() -- placing or carrying a kennel does not require
+      currently being a dog. RequestDeployKennel()'s own "GATE WIDENED" doc
+      comment (permission audit finding, this pass) has the full reasoning
+      for its half of this; "Pick Up Kennel"'s own fa-user-tie/HasK9Access()
+      comment below is the pre-existing precedent it matches.
     - THIS FILE calls client/main.lua's ResolveNetworkEntity(netId)
       (DEVELOPER_REFERENCE.md item 2) everywhere an entity needs to be
       resolved from a netId — do not re-implement the
@@ -369,7 +384,7 @@ end
 function RequestDeployKennel()
     if carriedKennelNetId then
         -- "Put it back down" -- deliberately checked FIRST, ahead of even
-        -- the feature-flag/CanShowK9UI() gates below, mirroring
+        -- the feature-flag/HasK9Access() gates below, mirroring
         -- client/vehicle.lua's own ExitK9Vehicle() precedent ("a handler
         -- whose certification lapses mid-ride must always be able to
         -- un-freeze/set down themselves"). server/kennel.lua's own
@@ -381,8 +396,28 @@ function RequestDeployKennel()
 
     if not Config.Features.DeployableKennel then return end
 
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    -- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission
+    -- audit finding, this pass): server/kennel.lua's requestDeployKennel
+    -- handler gates access on `HasK9Access(src)` alone (confirmed by
+    -- reading it directly, ~line 764: `if not HasK9Access(src) then
+    -- NotifyPlayer(...); return end`) -- no model/role check anywhere in
+    -- that handler. Deploying a kennel is a HUMAN HANDLER action (placing
+    -- an object on the ground near yourself), not a self-administered K9
+    -- action -- the exact same distinction this file's own "Pick Up
+    -- Kennel" ox_target option (icon 'fas fa-user-tie', HasK9Access() only)
+    -- already draws against "Rest in Kennel"/"Exit Kennel"
+    -- (icon 'fas fa-dog' + CanShowK9UI(), which genuinely does require
+    -- being the dog -- see ResolveK9PedForKennelRest, server/kennel.lua,
+    -- backing requestEnterKennel's own gate, deliberately left unchanged
+    -- above). This branch used to gate on the broader CanShowK9UI()
+    -- combinator, so a High Command officer whose ONLY access came from the
+    -- autoAccessGrade bypass (which CanShowK9UI()'s own IsOwnModelK9()/
+    -- IsK9Role() component deliberately excludes) could never deploy a
+    -- kennel through ANY route even though the server would gladly have
+    -- granted it. Matches the identical, already-shipped "Pick Up Kennel"
+    -- precedent in this same file -- not a new idiom.
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 

@@ -4769,6 +4769,67 @@ Config.Wellbeing = {
         -- restSources model match.
         bowlSources            = { 'water_bowl' },
     },
+
+    -- ==================================================================
+    -- PERSISTENCE (this pass, coder-backend) -- see server/wellbeing.lua's
+    -- own header "DATABASE PERSISTENCE" section for the full design. Fixes
+    -- a real, confirmed gap: every one of the six stats above used to live
+    -- ONLY in that file's own in-memory table, with no database write of
+    -- any kind ever existing for it -- a routine restart silently reset
+    -- every K9's fatigue/mood/fearStress/injury/hunger/thirst to fresh,
+    -- every time, no matter what happened in-game before it. Routed
+    -- through the SAME K9Store/Config.Database.enabled machinery every
+    -- other persisted table in this resource already uses -- `enabled =
+    -- false` here (or resource-wide) degrades to exactly the OLD
+    -- behaviour (memory for this session only), never an error.
+    -- ==================================================================
+    Persistence = {
+        -- Master switch for THIS feature specifically -- only a literal
+        -- `false` turns it off; leave this alone (`true`, the default) on
+        -- an ordinary server. Independent of Config.Database.enabled
+        -- above: turning THAT off already makes every write here a no-op
+        -- (session-memory only, same as every other K9Store-backed table
+        -- in this resource) -- this flag exists for the rarer case where
+        -- an operator wants the database on for every OTHER feature but
+        -- specifically does not want K9 wellbeing saved (e.g. a server
+        -- that intentionally treats every dog's condition as a fresh
+        -- daily reset).
+        enabled = true,
+
+        -- How often unsaved wellbeing changes are written to the
+        -- database, in milliseconds. Deliberately NOT every tick
+        -- (tickIntervalMs above, 5000ms by default) -- that would mean a
+        -- real database write per online K9 every 5 seconds, a rate this
+        -- resource has never asked a database to sustain for anything
+        -- else. 60000 (one minute) means a crash loses at most one
+        -- minute's worth of drift for a K9 that never disconnected
+        -- cleanly -- an ordinary clean disconnect (a relog, a server
+        -- restart initiated normally) saves immediately regardless, via a
+        -- separate write-on-disconnect this value does not affect.
+        flushIntervalMs = 60000,
+
+        -- How long a citizenid must have been OFFLINE before its
+        -- in-memory wellbeing entry is dropped, in milliseconds. Only
+        -- ever applies to an entry with NOTHING unsaved (this file's own
+        -- server/wellbeing.lua never drops a change that has not been
+        -- confirmed written) -- raising this only delays reclaiming
+        -- memory for a player who is genuinely gone; it can never cause a
+        -- returning player to lose progress, since a reconnect always
+        -- reloads from the database regardless of whether this window has
+        -- elapsed. 900000 (15 minutes) comfortably outlasts an ordinary
+        -- reconnect (a crash, a relog, a brief disconnect) without ever
+        -- holding memory for a player who is truly done for the day.
+        evictAfterMs = 900000,
+
+        -- How often the eviction check above actually runs, in
+        -- milliseconds. A larger number here means slightly slower memory
+        -- reclamation, never a correctness difference (a citizenid is
+        -- only ever evicted once it has ALREADY been offline for at least
+        -- evictAfterMs, however late this check happens to run). 300000
+        -- (5 minutes) keeps this cheap without leaving evictable memory
+        -- sitting around for hours.
+        evictSweepIntervalMs = 300000,
+    },
 }
 
 -- ======================================================================

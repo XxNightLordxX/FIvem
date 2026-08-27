@@ -269,6 +269,31 @@ local function newRadialFixture(opts)
     local notifyCalls = {}
     local function lib_notify(payload) notifyCalls[#notifyCalls + 1] = payload end
 
+    -- lib.callback.await stub -- SHARED FOUND MARKER / RADIAL JOIN ENTRY
+    -- POINT (this pass): the 'k9_sar_call_join_nearest' item is the FIRST
+    -- item in this whole file to await a server callback directly from its
+    -- own onSelect (every other item either records a plain cross-file
+    -- global call, per `record`/`queryFn` above, or fires TriggerServerEvent
+    -- directly) -- see client/radial.lua's own comment on that item for why
+    -- it is self-contained rather than routed through a new
+    -- client/sarcalls.lua resource-global. Same controllable-response-queue
+    -- + FAIL-CLOSED-throw shape as tests/clientsarcalls_spec.lua's own
+    -- callbackAwait fixture, trimmed to what this one item needs (no
+    -- reentrancy/generation concerns here -- this item never awaits twice in
+    -- flight the way RequestStartSarCall's own in-flight guard has to worry
+    -- about).
+    local callbackCallLog = {}
+    local callbackResponses = {}
+    local shouldThrowNextCallback = false
+    local function callbackAwait(eventName, _timeout, ...)
+        callbackCallLog[#callbackCallLog + 1] = { event = eventName, args = { ... } }
+        if shouldThrowNextCallback then
+            shouldThrowNextCallback = false
+            error('simulated lib.callback.await timeout/rejection')
+        end
+        return table.remove(callbackResponses, 1)
+    end
+
     -- LIVE ox_lib STATE MODEL -- see this file's header ("LIVE-STATE
     -- MODELING") for why this exists alongside the raw call-log arrays
     -- below. `liveMenus[id]` mirrors ox_lib's real `menus[radial.id] =
@@ -479,7 +504,7 @@ local function newRadialFixture(opts)
         GetPlayerServerId = GetPlayerServerId,
         AddEventHandler = AddEventHandler,
         GetCurrentResourceName = GetCurrentResourceName,
-        lib = { registerRadial = lib_registerRadial, addRadialItem = lib_addRadialItem, notify = lib_notify },
+        lib = { registerRadial = lib_registerRadial, addRadialItem = lib_addRadialItem, notify = lib_notify, callback = { await = callbackAwait } },
         -- TEMPORARY -- see this file's own "PENDING LOCALE KEYS" header
         -- comment. Overrides Sandbox.newEnv's own default `env.locale =
         -- Sandbox.locale` assignment (the overrides loop in
@@ -645,6 +670,12 @@ local function newRadialFixture(opts)
 
         setCanShowK9UI = function(v) canShowK9UI = v end,
         setHasK9Access = function(v) hasK9Access = v end,
+        -- lib.callback.await helpers -- see this fixture's own
+        -- "lib.callback.await stub" comment above.
+        queueCallbackResponse = function(v) callbackResponses[#callbackResponses + 1] = v end,
+        setThrowNextCallback = function() shouldThrowNextCallback = true end,
+        callbackCallCount = function() return #callbackCallLog end,
+        lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
         canShowK9UICallCount = function() return canShowK9UICalls end,
         denyCallCount = function() return denyCalls end,
         lastDenyReason = function() return denyReasons[#denyReasons] end,
@@ -724,7 +755,7 @@ t.test('this spec\'s baseline flags: Bark, Leash, Vehicle, Utility (Phase 1 + re
         -- 'k9unit' child anymore, regardless of their own feature flags;
         -- see the dedicated 'k9unit_utility' presence tests below.
         'k9_prop_attachment', 'k9_open_inventory', 'k9_treat_nearest',
-        'k9_sar_call', 'k9_training',
+        'k9_sar_call', 'k9_sar_call_join_nearest', 'k9_training',
         'k9_thermal_vision', -- gated on ThermalVision, pinned false in this file's own baseline above
         'k9_night_vision', -- gated on NightVision, pinned false in this file's own baseline above
         'k9_vision_cycle', -- gated on NightVision/ThermalVision, both pinned false in this file's own baseline above
@@ -788,6 +819,10 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
     -- client/radial.lua by this pass") -- same generic mechanism, nothing
     -- special-cased.
     { flag = 'SARCalls', itemId = 'k9_sar_call' },
+    -- RADIAL JOIN ENTRY POINT (this pass) -- same flag gates BOTH the
+    -- toggle above and this new item, since joining is using the same
+    -- feature starting one is.
+    { flag = 'SARCalls', itemId = 'k9_sar_call_join_nearest' },
 }
 
 for _, case in ipairs(FALSE_BY_DEFAULT_SINGLE_ITEM_CASES) do
@@ -1475,6 +1510,80 @@ t.test('k9_sar_call: while no call is active, HasK9Access() false denies (never 
     fGranted.findInMenu('k9unit', 'k9_sar_call').onSelect()
     t.equals(#fGranted.calls.RequestStartSarCall, 1)
     t.equals(fGranted.findInMenu('k9unit', 'k9_sar_call').label, pendingLocale('radial.sar_call_toggle_label'))
+end)
+
+-- ----------------------------------------------------------------------
+-- RADIAL JOIN ENTRY POINT (this pass) -- 'k9_sar_call_join_nearest'.
+-- '/k9sarcall join <serverId>' was the ONLY way to join someone else's
+-- call; a radial item cannot take an argument, so this item resolves the
+-- NEAREST joinable call server-side (server/sarcalls.lua's own
+-- findNearestJoinableSarCall, exercised directly in tests/sarcalls_spec.lua
+-- -- this file only proves THIS item's own half: gating, the await, and
+-- what it does with the result). This is the FIRST item in this whole file
+-- to await a server callback directly rather than delegate through a
+-- client/sarcalls.lua resource-global -- see client/radial.lua's own
+-- comment on the item for the full "why self-contained" writeup.
+-- ----------------------------------------------------------------------
+
+t.test('k9_sar_call_join_nearest: guarded IsSarCallActive absent does not throw -- falls through to the join attempt exactly as "not currently active" would', function()
+    local fAbsent = newRadialFixture({ features = { SARCalls = true }, omit = { 'IsSarCallActive' } })
+    fAbsent.queueCallbackResponse({ targetServerId = nil })
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_sar_call_join_nearest'))
+end)
+
+t.test('k9_sar_call_join_nearest: while a call is already active, selecting it notifies already_active and never even asks HasK9Access or awaits the server', function()
+    local f = newRadialFixture({ features = { SARCalls = true } })
+    f.setState('isSarCallActive', true)
+    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
+
+    t.equals(f.hasK9AccessCallCount(), 0, 'already active locally -- must never even ask HasK9Access')
+    t.equals(f.callbackCallCount(), 0, 'already active locally -- must never even await the lookup')
+    t.equals(#f.triggerServerEventCalls, 0)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.already_active'))
+end)
+
+t.test('k9_sar_call_join_nearest: HasK9Access() false denies with the specific combat.no_access reason, and never awaits the lookup callback', function()
+    local f = newRadialFixture({ features = { SARCalls = true }, hasK9Access = false })
+    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
+
+    t.equals(f.denyCallCount(), 1)
+    t.equals(f.lastDenyReason(), 'combat.no_access')
+    t.equals(f.callbackCallCount(), 0)
+    t.equals(#f.triggerServerEventCalls, 0)
+end)
+
+t.test('k9_sar_call_join_nearest: HasK9Access() true awaits findNearestJoinableSarCall, and when a target is found fires requestJoinSarCall with EXACTLY that target', function()
+    local f = newRadialFixture({ features = { SARCalls = true } })
+    f.queueCallbackResponse({ targetServerId = 42 })
+    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
+
+    t.equals(f.denyCallCount(), 0)
+    t.equals(f.callbackCallCount(), 1)
+    t.equals(f.lastCallbackCall().event, 'qbx_k9unit:server:findNearestJoinableSarCall')
+    t.equals(#f.triggerServerEventCalls, 1, 'exactly the SAME event the /k9sarcall join <id> command path sends')
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:requestJoinSarCall')
+    t.equals(f.triggerServerEventCalls[1].args[1], 42)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_request_sent'))
+end)
+
+t.test('k9_sar_call_join_nearest: no eligible nearby call -- notifies join_no_nearby_call and never fires requestJoinSarCall', function()
+    local f = newRadialFixture({ features = { SARCalls = true } })
+    f.queueCallbackResponse({ targetServerId = nil })
+    f.findInMenu('k9unit', 'k9_sar_call_join_nearest').onSelect()
+
+    t.equals(#f.triggerServerEventCalls, 0)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_no_nearby_call'))
+end)
+
+t.test('k9_sar_call_join_nearest: FAIL-CLOSED -- lib.callback.await throwing (timeout/rejection) degrades to the SAME "no nearby call" notify, never crashes the click', function()
+    local f = newRadialFixture({ features = { SARCalls = true } })
+    f.setThrowNextCallback()
+    local item = f.findInMenu('k9unit', 'k9_sar_call_join_nearest')
+
+    local ok = pcall(item.onSelect)
+    t.isTrue(ok, 'onSelect itself must not throw even though the awaited callback did')
+    t.equals(#f.triggerServerEventCalls, 0)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_no_nearby_call'))
 end)
 
 -- ----------------------------------------------------------------------

@@ -515,6 +515,17 @@ local function newWellbeingFixture(opts)
         GetEntityType        = GetEntityType,
         GetCurrentResourceName = GetCurrentResourceName,
         Config               = config,
+        -- DATABASE PERSISTENCE (this pass, coder-backend) -- ABSENT from
+        -- `env` by default (mirrors GetActivePartnerCitizenId's own
+        -- "soft-dependency, not loaded" convention just above), so every
+        -- PRE-EXISTING test in this file -- none of which passes
+        -- opts.k9Store -- keeps observing
+        -- `type(K9Store) == 'table'` as false, exactly reproducing
+        -- today's real "server/datastore.lua has not yet grown
+        -- Wellbeing_Get/Wellbeing_Upsert" state with zero behavior
+        -- change. Only tests that explicitly pass opts.k9Store below ever
+        -- populate this.
+        K9Store              = opts.k9Store,
         -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
         -- always reports 'started' (this file never tests an
         -- undetected-inventory scenario -- covered by shared/compat/
@@ -749,29 +760,35 @@ t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at 
     -- would reopen the exact unbounded-staleness gap the LIVE-FLIP FIX test
     -- below exists to prove closed.
     local f = newWellbeingFixture() -- all features false
-    -- UPDATED THIS PASS (coder-backend, Hunger/Thirst): the count moved from
-    -- 2 to 4. Named exhaustively, so nobody has to re-derive this later:
+    -- UPDATED THIS PASS (coder-backend, DATABASE PERSISTENCE): the count
+    -- moved from 4 to 6. Named exhaustively, so nobody has to re-derive
+    -- this later:
     -- (1) DistractionCooldown's own always-on sweep (pre-existing),
     -- (2) the now-unconditional TickWellbeing loop (pre-existing),
-    -- (3) HungerFeedCooldown's own always-on sweep (NEW, this pass -- keyed
-    --     by citizenid, exactly DistractionCooldown's own shape, so it needs
-    --     the identical always-on :StartSweep cleanup strategy),
-    -- (4) ThirstReliefCooldown's own always-on sweep (NEW, this pass --
-    --     shared between giveK9Water and drinkFromBowl, same reasoning).
-    -- Both new sweeps run unconditionally regardless of HungerThirstSystem's
-    -- own flag, same as DistractionCooldown's sweep already does regardless
-    -- of DistractionSystem -- see server/wellbeing.lua's own HungerFeedCooldown/
-    -- ThirstReliefCooldown declarations for why an empty store costs nothing
-    -- observable while the feature is off.
-    t.equals(f.createThreadCallCount(), 4, "four CreateThread calls happen at file-load time even with every feature off -- DistractionCooldown/HungerFeedCooldown/ThirstReliefCooldown's own always-on sweeps, AND the now-unconditional TickWellbeing loop")
+    -- (3) HungerFeedCooldown's own always-on sweep (pre-existing),
+    -- (4) ThirstReliefCooldown's own always-on sweep (pre-existing),
+    -- (5) WellbeingLastSeenOnline's own always-on :StartSweep (NEW, this
+    --     pass -- bounds that tracker's own table the same proven way
+    --     every other sweep in this list already does; see
+    --     EvictStaleWellbeingEntries' own doc comment in server/wellbeing.lua
+    --     for why this is a SEPARATE tracker from WellbeingStats itself),
+    -- (6) the new periodic persistence-flush thread (NEW, this pass --
+    --     mirrors server/webhook.lua's own FlushQueue thread shape; see
+    --     this file's header "DATABASE PERSISTENCE" section for the full
+    --     "why a periodic flush" writeup).
+    -- Both new threads run unconditionally at file load, same as every
+    -- other entry in this list -- see PersistenceCfg's own doc comment for
+    -- why an all-off Config.Wellbeing.Persistence (the sub-block does not
+    -- even need to exist) still costs nothing observable while idle.
+    t.equals(f.createThreadCallCount(), 6, "six CreateThread calls happen at file-load time even with every feature off -- the four pre-existing always-on sweeps/tick loop, plus WellbeingLastSeenOnline's own sweep and the new persistence-flush thread")
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, "the now-unconditional tick thread must idle cleanly with every flag off, no error")
     t.equals(#f.clientEvents, 0, "no wellbeingUpdate is ever pushed while every flag is off, even though the thread is now genuinely running")
 end)
 
-t.test('With any one wellbeing feature on, exactly four threads are created: the (now-unconditional) TickWellbeing loop, plus the three always-on cooldown sweeps (DistractionCooldown, HungerFeedCooldown, ThirstReliefCooldown)', function()
+t.test('With any one wellbeing feature on, exactly six threads are created: the (now-unconditional) TickWellbeing loop, the three always-on cooldown sweeps (DistractionCooldown, HungerFeedCooldown, ThirstReliefCooldown), WellbeingLastSeenOnline\'s own sweep, and the persistence-flush thread', function()
     local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
-    t.equals(f.createThreadCallCount(), 4)
+    t.equals(f.createThreadCallCount(), 6)
 end)
 
 -- ========================================================================

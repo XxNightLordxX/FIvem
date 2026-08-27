@@ -548,6 +548,17 @@ local function newMovementFixture(opts)
             env.source = sourceValue
             handler(fromServerId)
         end,
+        --- GAP 1, PART 2 -- fires the new
+        --- 'qbx_k9unit:client:k9SpeedOverrideStatus' handler, mirroring the
+        --- three triggerLeashXxx helpers above exactly.
+        --- @param sourceValue number
+        --- @param status any
+        triggerSpeedOverrideStatus = function(sourceValue, status)
+            local handler = assert(netEvents['qbx_k9unit:client:k9SpeedOverrideStatus'],
+                'client/movement.lua did not register a qbx_k9unit:client:k9SpeedOverrideStatus handler')
+            env.source = sourceValue
+            handler(status)
+        end,
     }
 end
 
@@ -582,11 +593,12 @@ t.test('creates exactly 2 threads (the elastic leash pull-back thread, and the a
     t.equals(f.threadCount(), 2, 'leash pull-back + move-rate watchdog (see PRIORITY #5, the watchdog is unconditional -- it registers regardless of AgilityBasicJump)')
 end)
 
-t.test('registers exactly 4 RegisterNetEvent handlers (leashAttachRequest, leashAttached, leashDetached, playDoorScratch)', function()
+t.test('registers exactly 5 RegisterNetEvent handlers (leashAttachRequest, leashAttached, leashDetached, playDoorScratch, k9SpeedOverrideStatus)', function()
     local f = newMovementFixture()
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
-    t.equals(count, 4)
+    t.equals(count, 5, 'GAP 1 PART 2 added qbx_k9unit:client:k9SpeedOverrideStatus -- this count must move in lockstep with every new RegisterNetEvent this file adds, per this test\'s own name')
+    t.isNotNil(f.netEventNames['qbx_k9unit:client:k9SpeedOverrideStatus'], 'the new handler must be registered under this exact event name')
 end)
 
 -- ========================================================================
@@ -956,12 +968,107 @@ t.test('RecomputeK9MoveRate: clamps a product below 0.1 up to the floor', functi
     t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 0.1)
 end)
 
-t.test('RecomputeK9MoveRate: clamps a product above 2.0 down to the ceiling', function()
+t.test('RecomputeK9MoveRate: AUTOMATIC (no individual override signaled) clamps a product above 2.0 down to the tight defensive ceiling -- UNCHANGED by GAP 1 PART 2, this is the control every override-specific test below is measured against', function()
     local f = newMovementFixture()
     f.setIsOwnModelK9(true)
     f.env.K9MoveRateModifiers.xpTier = 5.0
     f.env.RecomputeK9MoveRate()
     t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 2.0)
+end)
+
+-- ========================================================================
+-- GAP 1, PART 2 -- "EXPLICIT INDIVIDUAL OVERRIDE VS. AUTOMATIC MULTIPLIER".
+-- RED-THEN-GREEN, WITH A CONTROL: the test immediately above IS the
+-- control (same 5.0 xpTier value, same fixture, override NOT signaled --
+-- still clamps to 2.0, proving this fix did not just raise the ceiling for
+-- everyone). The tests below flip ONLY the new signal
+-- (K9IndividualSpeedOverrideActive, via the new
+-- 'qbx_k9unit:client:k9SpeedOverrideStatus' handler) and prove the SAME
+-- 5.0 value now genuinely reaches SetPedMoveRateOverride, up to the real
+-- engine ceiling (10.0) -- never beyond it, and never bypassing the floor.
+-- ========================================================================
+
+t.test('RecomputeK9MoveRate: an ACTIVE individual speed override lets the SAME composed value that the control above clamped to 2.0 genuinely reach SetPedMoveRateOverride uncapped by the tight ceiling', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.triggerSpeedOverrideStatus(65535, { active = true })
+    f.env.K9MoveRateModifiers.xpTier = 5.0
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 5.0, 'THE FIX: this used to be 2.0 -- an audited individual override must not be silently rendered down to the automatic-multiplier defensive ceiling')
+end)
+
+t.test('RecomputeK9MoveRate: an ACTIVE override still respects the REAL engine ceiling (10.0) -- an extreme/bogus value is clamped there, never passed through raw', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.triggerSpeedOverrideStatus(65535, { active = true })
+    f.env.K9MoveRateModifiers.xpTier = 50.0
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 10.0, 'even an override-active composition must never exceed SET_PED_MOVE_RATE_OVERRIDE\'s own documented real maximum')
+end)
+
+t.test('RecomputeK9MoveRate: an ACTIVE override does NOT bypass the floor -- Rule "the floor stays meaningful" holds regardless of override status', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.triggerSpeedOverrideStatus(65535, { active = true })
+    f.env.K9MoveRateModifiers.xpTier = 0.01
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 0.1, 'a frozen player is a trapped player -- the floor is never bent, override or not')
+end)
+
+t.test('qbx_k9unit:client:k9SpeedOverrideStatus: source == 65535 sets the flag AND immediately re-applies via RecomputeK9MoveRate(), with no other trigger involved', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.env.K9MoveRateModifiers.xpTier = 5.0
+    -- Established at 2.0 first (override not yet active) -- proves the
+    -- event handler itself is what re-applies, not merely a value already
+    -- sitting there from some earlier call.
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 2.0)
+
+    f.triggerSpeedOverrideStatus(65535, { active = true })
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 5.0, 'receiving the event alone, with no separate RecomputeK9MoveRate() call from the test, must re-apply the wider ceiling immediately')
+end)
+
+t.test('qbx_k9unit:client:k9SpeedOverrideStatus: {active = false} (a reset) snaps the ceiling back down to 2.0 immediately, even with no change to the underlying number', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.env.K9MoveRateModifiers.xpTier = 5.0
+    f.triggerSpeedOverrideStatus(65535, { active = true })
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 5.0)
+
+    f.triggerSpeedOverrideStatus(65535, { active = false })
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 2.0, 'once server/k9profiles.lua reports the override is gone, this client must go back to treating the SAME number as automatic')
+end)
+
+t.test('qbx_k9unit:client:k9SpeedOverrideStatus: SOURCE-ORIGIN GUARD -- a forged local event (source ~= 65535) is ignored outright, the flag never changes', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.env.K9MoveRateModifiers.xpTier = 5.0
+    f.env.RecomputeK9MoveRate() -- establishes the 2.0-clamped baseline
+    local callsBefore = #f.setMoveRateCalls
+
+    f.triggerSpeedOverrideStatus(1234, { active = true })
+
+    t.equals(#f.setMoveRateCalls, callsBefore, 'a forged event must not even trigger a re-apply, let alone widen the ceiling')
+    f.env.RecomputeK9MoveRate()
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 2.0, 'a REAL subsequent recompute proves the flag itself was never set by the forged event')
+end)
+
+t.test('qbx_k9unit:client:k9SpeedOverrideStatus: a malformed payload (missing/non-boolean active, or not a table at all) degrades to false -- the tighter, safer default -- never errors', function()
+    local f = newMovementFixture()
+    f.setIsOwnModelK9(true)
+    f.env.K9MoveRateModifiers.xpTier = 5.0
+    f.triggerSpeedOverrideStatus(65535, { active = true })
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 5.0, 'sanity: override genuinely active before the malformed payload below arrives')
+
+    local ok = pcall(f.triggerSpeedOverrideStatus, 65535, {})
+    t.isTrue(ok, 'a table with no `active` key at all must never error')
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 2.0, 'missing `active` must be treated as false, not as "leave the previous value alone"')
+
+    f.triggerSpeedOverrideStatus(65535, { active = true }) -- re-arm
+    local ok2 = pcall(f.triggerSpeedOverrideStatus, 65535, 'not a table')
+    t.isTrue(ok2, 'a non-table payload must never error')
+    t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 2.0, 'a non-table payload must also degrade to false')
 end)
 
 t.test('RecomputeK9MoveRate: a non-number entry in K9MoveRateModifiers is ignored defensively, never errors, never contributes to the product', function()

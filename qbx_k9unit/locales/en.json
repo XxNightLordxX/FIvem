@@ -1638,6 +1638,7 @@
         "sit_keybind_label": "K9: Sit",
         "bark_keybind_label": "K9: Bark",
         "sar_call_toggle_label": "Search & Rescue Call",
+        "sar_call_join_nearest_label": "Join Nearest Search & Rescue Call",
         "training_menu_label": "Training",
         "training_toggle_label": "Start/Stop Training",
         "training_search_label": "Practice Search",
@@ -1716,7 +1717,8 @@
         "joined_call": "You joined the search-and-rescue call. Your dog will react as you get closer.",
         "member_joined": "Another officer joined your search-and-rescue call.",
         "join_request_header": "Join Search & Rescue Call",
-        "join_request_content": "%s wants to join your search-and-rescue call. Accept?"
+        "join_request_content": "%s wants to join your search-and-rescue call. Accept?",
+        "join_no_nearby_call": "No nearby officer has a search-and-rescue call for you to join right now."
     },
     "scenttrail": {
         "already_active": "You're already following a scent — stop the current hunt first.",

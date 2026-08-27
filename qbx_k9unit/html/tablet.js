@@ -1575,7 +1575,7 @@
         cmdref_k9lineupcancel_needs: 'Nothing -- always available, so nobody is ever stuck in a line-up.',
         cmdref_k9nosehunt_usage: '/k9nosehunt [stop]',
         cmdref_k9nosehunt_does: 'Starts a scent-trail hunt for your K9 (a follow-the-growl guessing game, no marker). Add "stop" to abandon a hunt already running.',
-        cmdref_k9nosehunt_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server. ("stop" is always available.)',
+        cmdref_k9nosehunt_needs: 'An active K9 certification, and you must currently be controlling your K9 -- IF this feature were switched on. It is not: Scent Trail Hunt was removed from this server\'s configuration entirely (judged redundant with the scent-tracking action above), not merely toggled off, and there is currently no setting anywhere to bring it back. This also means "stop" is not available either -- neither form of this command currently does anything.',
 
         cmdref_k9sarcall_usage: '/k9sarcall [stop]',
         cmdref_k9sarcall_does: 'Starts a search-and-rescue call for your K9 to work (a missing person or lost property). Add "stop" to abandon a call already running.',
@@ -1641,7 +1641,7 @@
         cmdref_k9audit_needs: 'Same as /k9auditcert.',
         cmdref_k9announce_usage: '/k9announce',
         cmdref_k9announce_does: 'Warns the person in front of you that a dog will be released if they do not comply.',
-        cmdref_k9announce_needs: 'K9 access. The Apprehension Announcement feature must be turned on for your server.',
+        cmdref_k9announce_needs: 'K9 access. This feature has no on/off switch in this server\'s configuration at all right now -- it is unavailable on every install until server staff add one, not merely switched off.',
         cmdref_danger_warn_alert_usage: '/qbx_k9unit:dangerWarnAlert',
         cmdref_danger_warn_alert_does: 'Tells your partnered handler you have spotted trouble, with a rough direction and distance.',
         cmdref_danger_warn_alert_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
@@ -2472,7 +2472,49 @@
             for (var i = 0; i < list.length; i++) {
                 if (list[i] && list[i].key === key) return list[i].state;
             }
-            return null;
+            // THE FIX: a featureKey not found in myFeatures[] is a key that is
+            // entirely ABSENT from Config.Features server-side --
+            // BuildMyFeaturesArray (server/tablet.lua) enumerates
+            // `pairs(Config.Features)` FRESH on every call, so a key that was
+            // never set (not even to `false`) never gets an array entry at
+            // all; it does not arrive here as some other falsy state, it
+            // simply never shows up. In Lua, that same missing key reads as
+            // `nil`, and `Config.Features[key] == true` -- the very first
+            // check in ResolveFeatureState, the real server gate every
+            // command using this gate kind mirrors -- is false for `nil`
+            // exactly the same as for an explicit `false`. So "not found
+            // here" MUST resolve the same as an explicit 'global_off', never
+            // fall through to "no opinion" -- that fallthrough (returning
+            // null, which every caller below then treats as "no gate
+            // matched, must be open") is THE bug this closes: it is what let
+            // a permanently-removed/never-configured feature (ScentTrailHunt
+            // removed from config.lua; ApprehensionAnnouncement never added
+            // to it) report 'available' on this screen while being
+            // unconditionally OFF for real.
+            //
+            // This does NOT blur the THREE separate states this file's own
+            // callers must keep apart:
+            //   1. A command with no featureKey at all -- genuinely ungated,
+            //      really available. Never reaches this function: every call
+            //      site below is already guarded by `gate.featureKey ? ... :
+            //      null`, so an absent featureKey short-circuits to `null`
+            //      BEFORE myFeatureState is ever invoked, and that branch is
+            //      untouched by this change.
+            //   2. A featureKey present and `true` -- ResolveFeatureState
+            //      resolves it to a real state (often 'available'), and
+            //      BuildMyFeaturesArray gives it a real array entry, so the
+            //      loop above finds and returns THAT resolved state,
+            //      unaffected by this fallback.
+            //   3. A featureKey present and `false`, OR absent entirely --
+            //      both mean OFF. `false` was already handled correctly
+            //      before this fix (ResolveFeatureState already returns
+            //      'global_off' for it, and it DOES get an array entry
+            //      because `pairs()` iterates an explicit `false` value just
+            //      fine) -- only "entirely absent" was falling through. This
+            //      fallback makes the "absent" half of case 3 match the
+            //      "present and false" half, which is the one and only
+            //      change this function makes.
+            return 'global_off';
         }
 
         if (gate.kind === 'open') {
