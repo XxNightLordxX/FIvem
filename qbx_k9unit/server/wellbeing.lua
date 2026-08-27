@@ -2172,8 +2172,49 @@ local MOOD_INTERACT_RANGE = 3.0
 -- reuses this SAME tracker instance, not a second independent one -- see
 -- that call site's own comment for why this instance identity is the whole
 -- point, not just the threshold value).
+--
+-- KEYED BY THE ACTOR'S OWN CITIZENID, NOT THEIR CONNECTION SOURCE (QA
+-- finding, this pass). This used to be keyed (source, targetCitizenid) with
+-- .RegisterPlayerDropped(), which wiped the actor's entry the instant they
+-- disconnected -- so a reconnect minted a fresh source and the throttle that
+-- was holding them simply no longer existed. A cooldown a relog clears is
+-- not a cooldown, which is the exact wording server/certifications.lua and
+-- server/medkit.lua already use for this same mistake, and which
+-- HungerFeedCooldown/ThirstReliefCooldown further down THIS FILE already
+-- follow correctly. These two were the ones still on the older, weaker
+-- pattern, with nothing acknowledging it as a known gap.
+--
+-- What that actually bought an exploiter is small but real: petK9 is free
+-- (no item), +10 Mood on a 30s cooldown, and calm-down is -40 FearStress on
+-- 15s. Neither mints XP or currency. What it defeated was RECOVERY PACING --
+-- a K9 whose Mood or FearStress had cratered from real combat is meant to
+-- come back gradually (three pets over 90s, three calm-downs over 45s), and
+-- a scripted reconnect loop compressed that into a handful of rejoins on any
+-- server where rejoining is fast. The point of the stat is that the dog
+-- needs time to settle; a relog should not skip that.
+--
+-- Bounded by a TTL sweep instead of the disconnect hook, mirroring
+-- HungerFeedCooldown's own shape exactly -- a durable key has no
+-- playerDropped moment to clean up on, so without a sweep the table would
+-- grow without a ceiling. NewNestedCooldown had no :StartSweep until this
+-- pass; it does now (server/cooldowns.lua), pruning stale secondary entries
+-- and then any primary bucket those left empty.
 local AffectionCooldown = NewNestedCooldown()
-AffectionCooldown.RegisterPlayerDropped()
+local AFFECTION_COOLDOWN_PRUNE_INTERVAL_MS = 60000
+AffectionCooldown.StartSweep(AFFECTION_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    -- BOTH sharers (petK9 and feedK9) check this tracker against the SAME
+    -- Config.Wellbeing.Mood.petCooldownMs -- that shared threshold is the
+    -- entire point of them sharing one tracker instance rather than owning
+    -- two, so there is deliberately no second value to take a max against
+    -- here (unlike ThirstReliefCooldown, whose two sharers genuinely differ).
+    -- CLAMP AND CARRY ON, never assert: a malformed config must not make
+    -- this sweep evict live entries, which would silently restore the exact
+    -- bypass this change closes.
+    local mood = (Config.Wellbeing and Config.Wellbeing.Mood) or {}
+    local threshold = type(mood.petCooldownMs) == 'number' and mood.petCooldownMs or 0
+    if threshold <= 0 then threshold = 60000 end
+    return (now - loggedAt) > (threshold * 2)
+end)
 
 --- DEVELOPER_REFERENCE.md §13.4.3.2. Server-authoritative "Pet K9" interaction.
 lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId)
@@ -2200,10 +2241,18 @@ lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId
     local targetCitizenid = ResolveCitizenid(targetServerId)
     if not targetCitizenid then return { ok = false, reason = 'invalid_target' } end
 
-    if AffectionCooldown.IsOnCooldown(source, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
+    -- ACTOR'S OWN DURABLE IDENTITY, not their connection source -- see
+    -- AffectionCooldown's own declaration for why. Resolved BEFORE the
+    -- cooldown check and failing closed if it cannot be resolved: an
+    -- unresolvable actor has no key to throttle, and letting the action
+    -- through unthrottled is the one outcome this change exists to prevent.
+    local actorCitizenid = ResolveCitizenid(source)
+    if not actorCitizenid then return { ok = false, reason = 'invalid_target' } end
+
+    if AffectionCooldown.IsOnCooldown(actorCitizenid, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
         return { ok = false, reason = 'on_cooldown' }
     end
-    AffectionCooldown.Touch(source, targetCitizenid)
+    AffectionCooldown.Touch(actorCitizenid, targetCitizenid)
 
     local stats = EnsureStats(targetCitizenid)
     stats.mood = Clamp(stats.mood + Config.Wellbeing.Mood.petRegenAmount, 0, Config.Wellbeing.Mood.max)
@@ -2257,7 +2306,15 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
     local targetCitizenid = ResolveCitizenid(targetServerId)
     if not targetCitizenid then return { ok = false, reason = 'invalid_target' } end
 
-    if AffectionCooldown.IsOnCooldown(source, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
+    -- ACTOR'S OWN DURABLE IDENTITY, not their connection source -- see
+    -- AffectionCooldown's own declaration for why. Resolved BEFORE the
+    -- cooldown check and failing closed if it cannot be resolved: an
+    -- unresolvable actor has no key to throttle, and letting the action
+    -- through unthrottled is the one outcome this change exists to prevent.
+    local actorCitizenid = ResolveCitizenid(source)
+    if not actorCitizenid then return { ok = false, reason = 'invalid_target' } end
+
+    if AffectionCooldown.IsOnCooldown(actorCitizenid, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
         return { ok = false, reason = 'on_cooldown' }
     end
 
@@ -2276,7 +2333,7 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
         return { ok = false, reason = 'no_item' }
     end
 
-    AffectionCooldown.Touch(source, targetCitizenid)
+    AffectionCooldown.Touch(actorCitizenid, targetCitizenid)
 
     local removed = K9Compat.Get('inventory').RemoveItem(source, Config.Wellbeing.Mood.feedItemName, 1)
     if not removed then
@@ -2296,8 +2353,18 @@ end)
 -- here — no target parameter exists at all, so there is no "force another
 -- player's K9 to calm down" vector to guard against.
 -- ======================================================================
+-- KEYED BY CITIZENID, NOT SOURCE -- same QA finding, same reasoning, as
+-- AffectionCooldown's own declaration above; see that comment for the full
+-- writeup of why a source-keyed cooldown with .RegisterPlayerDropped() is
+-- cleared by the very reconnect it exists to throttle.
 local CalmDownCooldown = NewCooldown()
-CalmDownCooldown.RegisterPlayerDropped()
+local CALM_DOWN_COOLDOWN_PRUNE_INTERVAL_MS = 60000
+CalmDownCooldown.StartSweep(CALM_DOWN_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    local fs = (Config.Wellbeing and Config.Wellbeing.FearStress) or {}
+    local threshold = type(fs.calmDownCooldownMs) == 'number' and fs.calmDownCooldownMs or 0
+    if threshold <= 0 then threshold = 60000 end
+    return (now - loggedAt) > (threshold * 2)
+end)
 
 RegisterNetEvent('qbx_k9unit:server:calmDownK9', function()
     local src = source
@@ -2306,14 +2373,20 @@ RegisterNetEvent('qbx_k9unit:server:calmDownK9', function()
     local ped, isK9 = ResolveK9Ped(src)
     if ped == 0 or not isK9 then return end
 
-    if CalmDownCooldown.IsOnCooldown(src, Config.Wellbeing.FearStress.calmDownCooldownMs) then
+    -- CITIZENID RESOLVED FIRST, then used as the cooldown key -- this used
+    -- to resolve AFTER the check and key the cooldown on `src`, so a relog
+    -- (fresh source, plus .RegisterPlayerDropped clearing the old entry)
+    -- cleared the throttle entirely. Failing closed on an unresolvable
+    -- citizenid keeps the old behaviour for that case (silent return, no
+    -- stat change); it simply happens a few lines earlier now.
+    local citizenid = ResolveCitizenid(src)
+    if not citizenid then return end
+
+    if CalmDownCooldown.IsOnCooldown(citizenid, Config.Wellbeing.FearStress.calmDownCooldownMs) then
         NotifyPlayer(src, locale('wellbeing.calm_down_on_cooldown'), 'error')
         return
     end
-    CalmDownCooldown.Touch(src)
-
-    local citizenid = ResolveCitizenid(src)
-    if not citizenid then return end
+    CalmDownCooldown.Touch(citizenid)
 
     local stats = EnsureStats(citizenid)
     stats.fearStress = Clamp(stats.fearStress - Config.Wellbeing.FearStress.calmDownReduceAmount, 0, Config.Wellbeing.FearStress.max)

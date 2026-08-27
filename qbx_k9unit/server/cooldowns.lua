@@ -786,6 +786,66 @@ function NewNestedCooldown(defaultThresholdMs)
         end)
     end
 
+    --- Two-level counterpart to NewCooldown's own :StartSweep -- added
+    --- because a nested tracker keyed by something DURABLE (a citizenid
+    --- pair, a plate, a netId) has no `playerDropped` moment to clean up
+    --- on, exactly like the flat case that constructor's own doc comment
+    --- describes. Without this, the only bounded option for a nested
+    --- tracker was :RegisterPlayerDropped(), which forces the key to be a
+    --- connection `source` -- and a source-keyed cooldown is not a
+    --- cooldown, because a reconnect mints a fresh source and the entry
+    --- that was throttling that player is dropped on the way out.
+    ---
+    --- Prunes at BOTH levels: a stale secondary entry is removed, and a
+    --- primary bucket left empty by that removal is removed too. Without
+    --- the second half the outer table would keep one empty sub-table per
+    --- primary key it had ever seen, which is a slower leak rather than no
+    --- leak.
+    ---
+    --- isStaleFn/eviction semantics, and the loud-once-per-tracker warning
+    --- when the predicate throws, are deliberately identical to the flat
+    --- version's -- see that function's own doc comment for the full
+    --- reasoning on why a throwing predicate evicts rather than retains.
+    --- @param intervalMs number
+    --- @param isStaleFn fun(now: number, loggedAt: number): boolean
+    function tracker.StartSweep(intervalMs, isStaleFn)
+        local warnedPredicateThrew = false
+        CreateThread(function()
+            while true do
+                Wait(intervalMs)
+                local now = GetGameTimer()
+                for primaryKey, bucket in pairs(store) do
+                    local remaining = 0
+                    for secondaryKey, loggedAt in pairs(bucket) do
+                        local ok, staleOrErr = pcall(isStaleFn, now, loggedAt)
+                        if not ok then
+                            if not warnedPredicateThrew then
+                                warnedPredicateThrew = true
+                                print(
+                                    ('[qbx_k9unit] cooldowns.lua: nested StartSweep isStaleFn threw (%s) while checking ' ..
+                                     'key=%s/%s -- evicting this entry rather than leaving this tracker\'s memory ceiling ' ..
+                                     'silently disabled (see :StartSweep\'s own doc comment for the full reasoning). This ' ..
+                                     'predicate is now broken for EVERY entry it is ever asked about again -- the same ' ..
+                                     'closure/Config bug applies to all of them, not just this one -- find and fix ' ..
+                                     'whatever Config field this sweep\'s staleness check reads.')
+                                        :format(tostring(staleOrErr), tostring(primaryKey), tostring(secondaryKey))
+                                )
+                            end
+                            bucket[secondaryKey] = nil
+                        elseif staleOrErr then
+                            bucket[secondaryKey] = nil
+                        else
+                            remaining = remaining + 1
+                        end
+                    end
+                    if remaining == 0 then
+                        store[primaryKey] = nil
+                    end
+                end
+            end
+        end)
+    end
+
     return tracker
 end
 

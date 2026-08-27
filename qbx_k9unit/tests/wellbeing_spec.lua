@@ -780,15 +780,23 @@ t.test("RESOLVED: the shared TickWellbeing thread now starts unconditionally at 
     -- other entry in this list -- see PersistenceCfg's own doc comment for
     -- why an all-off Config.Wellbeing.Persistence (the sub-block does not
     -- even need to exist) still costs nothing observable while idle.
-    t.equals(f.createThreadCallCount(), 6, "six CreateThread calls happen at file-load time even with every feature off -- the four pre-existing always-on sweeps/tick loop, plus WellbeingLastSeenOnline's own sweep and the new persistence-flush thread")
+    -- (7) AffectionCooldown's own sweep and (8) CalmDownCooldown's own
+    --     sweep (QA finding, this pass). Both trackers used to be keyed on
+    --     a connection `source` and bounded by .RegisterPlayerDropped(),
+    --     which is what made a relog clear them -- they are now keyed on
+    --     the actor's durable citizenid and bounded by a TTL sweep instead,
+    --     exactly like HungerFeedCooldown/ThirstReliefCooldown above. Two
+    --     more always-on threads is the whole cost of that fix, and it is
+    --     the same cost the other sweeps in this list already pay.
+    t.equals(f.createThreadCallCount(), 8, "eight CreateThread calls happen at file-load time even with every feature off -- the four pre-existing always-on sweeps/tick loop, WellbeingLastSeenOnline's own sweep, the persistence-flush thread, and the two new citizenid-keyed cooldown sweeps (AffectionCooldown, CalmDownCooldown)")
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, "the now-unconditional tick thread must idle cleanly with every flag off, no error")
     t.equals(#f.clientEvents, 0, "no wellbeingUpdate is ever pushed while every flag is off, even though the thread is now genuinely running")
 end)
 
-t.test('With any one wellbeing feature on, exactly six threads are created: the (now-unconditional) TickWellbeing loop, the three always-on cooldown sweeps (DistractionCooldown, HungerFeedCooldown, ThirstReliefCooldown), WellbeingLastSeenOnline\'s own sweep, and the persistence-flush thread', function()
+t.test('With any one wellbeing feature on, exactly eight threads are created: the (now-unconditional) TickWellbeing loop, the five always-on cooldown sweeps (DistractionCooldown, HungerFeedCooldown, ThirstReliefCooldown, and -- this pass -- AffectionCooldown and CalmDownCooldown), WellbeingLastSeenOnline\'s own sweep, and the persistence-flush thread', function()
     local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
-    t.equals(f.createThreadCallCount(), 6)
+    t.equals(f.createThreadCallCount(), 8)
 end)
 
 -- ========================================================================
@@ -932,6 +940,91 @@ t.test('The shared cooldown is keyed per (interactor, target) -- a DIFFERENT int
     t.isTrue(r1.ok)
     local r2 = f.invokeCallback('qbx_k9unit:server:petK9', interactor2Src, targetSrc)
     t.isTrue(r2.ok, "a second, different interactor petting the same K9 immediately afterward must not be blocked by the first interactor's own cooldown entry")
+end)
+
+-- ========================================================================
+-- RELOG BYPASS, CLOSED (QA finding, this pass). AffectionCooldown and
+-- CalmDownCooldown were keyed on the actor's connection `source` and
+-- bounded by .RegisterPlayerDropped(), so disconnecting wiped the very
+-- entry that was throttling that player, and reconnecting handed them a
+-- fresh source that had never been stamped. A cooldown a relog clears is
+-- not a cooldown -- the same wording server/certifications.lua and
+-- server/medkit.lua already use for this exact mistake, and the discipline
+-- HungerFeedCooldown/ThirstReliefCooldown in this same file already
+-- followed. Both are now keyed on the actor's durable citizenid and
+-- bounded by a TTL sweep instead.
+--
+-- These tests reconnect the SAME character on a DIFFERENT source, which is
+-- what a real relog looks like to the server: the connection number is new,
+-- the citizenid is not.
+-- ========================================================================
+t.test('RELOG BYPASS CLOSED: petK9 -- the same character reconnecting on a NEW source is still on cooldown, because the key is their citizenid and not their connection number', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
+    local interactorSrc, targetSrc = wireMoodPair(f)
+
+    local first = f.invokeCallback('qbx_k9unit:server:petK9', interactorSrc, targetSrc)
+    t.isTrue(first.ok)
+
+    -- The relog: same character, gone and back on a fresh connection.
+    f.firePlayerDropped(interactorSrc)
+    f.clearPlayer(interactorSrc)
+    local rejoinedSrc, rejoinedPed = 77, 9077
+    f.setPlayer(rejoinedSrc, 'HANDLER-CID') -- SAME citizenid, new source
+    f.setPed(rejoinedSrc, rejoinedPed)
+    f.setCoords(rejoinedPed, 0, 0, 0)
+
+    local second = f.invokeCallback('qbx_k9unit:server:petK9', rejoinedSrc, targetSrc)
+    t.isFalse(second.ok, 'a relog must not clear the throttle')
+    t.equals(second.reason, 'on_cooldown')
+end)
+
+t.test('RELOG BYPASS CLOSED: calmDownK9 -- same character, new source, still on cooldown', function()
+    local f = newWellbeingFixture({ featuresOverride = { FearStressSystem = true } })
+    local src, ped = 1, 9001
+    f.setPlayer(src, 'K9-CID')
+    f.setOnline({ src })
+    f.setPed(src, ped)
+    f.setModel(ped, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(ped, 0, 0, 0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:calmDownK9', src)
+    t.equals(#f.notifyCalls, 1, 'the first calm-down must genuinely succeed -- a test whose first call silently no-ops proves nothing about the second')
+    t.equals(f.notifyCalls[1].notifyType, 'success')
+    local notifiesAfterFirst = #f.notifyCalls
+
+    f.firePlayerDropped(src)
+    f.clearPlayer(src)
+    local rejoinedSrc, rejoinedPed = 88, 9088
+    f.setPlayer(rejoinedSrc, 'K9-CID') -- SAME citizenid, new source
+    f.setOnline({ rejoinedSrc })
+    f.setPed(rejoinedSrc, rejoinedPed)
+    f.setModel(rejoinedPed, 555)
+    f.setCoords(rejoinedPed, 0, 0, 0)
+
+    f.dispatchNetEvent('qbx_k9unit:server:calmDownK9', rejoinedSrc)
+    t.equals(#f.notifyCalls, notifiesAfterFirst + 1, 'the second attempt must produce exactly one more notify')
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'error', 'and it must be the refusal, not a second success -- a relog must not clear the throttle')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, Sandbox.locale('wellbeing.calm_down_on_cooldown'))
+end)
+
+t.test('CONTROL: the citizenid key did not make the cooldown global -- a genuinely DIFFERENT character is still unaffected by the first one\'s entry', function()
+    -- Without this, a fixture where every actor collapsed to one key would
+    -- pass both relog tests above while having broken the feature for
+    -- everyone else on the server.
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
+    local interactorSrc, targetSrc = wireMoodPair(f)
+
+    local first = f.invokeCallback('qbx_k9unit:server:petK9', interactorSrc, targetSrc)
+    t.isTrue(first.ok)
+
+    local otherSrc, otherPed = 99, 9099
+    f.setPlayer(otherSrc, 'A-DIFFERENT-HANDLER-CID')
+    f.setPed(otherSrc, otherPed)
+    f.setCoords(otherPed, 0, 0, 0)
+
+    local second = f.invokeCallback('qbx_k9unit:server:petK9', otherSrc, targetSrc)
+    t.isTrue(second.ok, 'a different person petting the same K9 must still be allowed')
 end)
 
 t.test('petK9: a non-number targetServerId is rejected as invalid_target before any other check', function()
