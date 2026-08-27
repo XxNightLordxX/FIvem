@@ -433,21 +433,19 @@ SearchMutex.RegisterPlayerDropped()
 --- searchTarget call? Read-only accessor over this file's own file-local
 --- SearchMutex — same "global helper, private per-file state" convention
 --- as server/combat.lua's own CountActiveHoldsByEffectType/
---- EndActiveEffectForHolder. Exposed for a FUTURE combat.lua consumer
---- (NOT yet wired anywhere — server/combat.lua is a different file's
---- ownership, and gating ITS OWN request validators on this accessor is
---- that file's own call to make, not this one's): the "search remains
---- chainable with combat while the progress bar is running" question this
---- pass investigated has TWO directions —
+--- EndActiveEffectForHolder. NOW WIRED (verified by reading
+--- server/combat.lua directly): the "search remains chainable with combat
+--- while the progress bar is running" question this section investigated
+--- had TWO directions —
 ---   1. block a search from STARTING while the K9 is already mid-bite/
----      mid-takedown/mid-drag — CLOSED this pass, see
----      IsSearcherBusyElsewhere above (IsK9CurrentlyHolding).
+---      mid-takedown/mid-drag — CLOSED, see IsSearcherBusyElsewhere above
+---      (IsK9CurrentlyHolding).
 ---   2. block a bite/takedown/drag from STARTING while a search is
 ---      genuinely mid-flight server-side (SearchMutex held for that
----      source) — NOT closed this pass (would require an edit inside
----      server/combat.lua's ValidateCombatRequest, outside this file's
----      ownership). This accessor is the read half that edit would need:
----      `if type(IsSearchInProgressForSource) == 'function' and
+---      source) — this used to say NOT closed, pending an edit inside
+---      server/combat.lua's ValidateCombatRequest outside this file's
+---      ownership. That edit has since landed there verbatim: `if
+---      type(IsSearchInProgressForSource) == 'function' and
 ---      IsSearchInProgressForSource(src) then return false, ...,
 ---      'busy_searching' end`, same soft-dependency-guard convention as
 ---      every other cross-file read in this codebase.

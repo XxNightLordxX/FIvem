@@ -63,13 +63,14 @@
         process level. High command bypasses the RANK check only, exactly
         like it bypasses auditGrade/certifierGrade and no more.
       - server/combat.lua's IsAuthorizedForNonComplianceAlert
-        (nonComplianceAlertGrade) does NOT currently include a High Command
-        bypass, unlike every other gate in this list -- this is a known gap
-        in the rollout, not an intentional exclusion. The needed edit is a
-        one-liner (`if type(IsHighCommand) == 'function' and
-        IsHighCommand(playerId) then return true end`), inserted the same
-        place every other bypass in this list was, immediately after the
-        `job.isboss` check and before the `dept.<threshold>` type guard.
+        (nonComplianceAlertGrade) now includes a High Command bypass too
+        (verified by reading that file directly): `if type(IsHighCommand)
+        == 'function' and IsHighCommand(playerId) then return true end`,
+        inserted the same place every other bypass in this list was,
+        immediately after the `job.isboss` check and before the
+        `dept.nonComplianceAlertGrade` type guard. This used to be a known
+        gap in the rollout, not an intentional exclusion; it has since been
+        closed.
       - Every `RegisterCommand` in this resource was independently
         enumerated (server/admin.lua x5, server/bonetool.lua x1,
         server/certifications.lua x3) and cross-checked against the four
@@ -112,17 +113,21 @@
     command needs a genuinely different, explicitly-labelled entry point --
     see AwardXPDirect below.
 
-    AwardXPDirect(citizenid, amount, reason) is REQUESTED but not yet added
-    to server/progression.lua. Called here through the SAME `type(...) ==
-    'function'` soft-dependency guard every other cross-file call in this
-    resource already uses for a forward/optional reference -- if
-    progression.lua has not yet landed it, '/k9givexp' fails CLOSED with a
-    clear, player-facing "XP system currently unavailable" message and an
-    audited 'xp_unavailable' outcome, rather than either (a) silently
-    no-opping (indistinguishable from a bug) or (b) reaching around
-    progression.lua's own private K9XP cache/UPSERT logic with a parallel,
-    hand-rolled SQL write here, which would correctly update
-    `k9_progression` but leave the in-memory K9XP cache (and therefore
+    AwardXPDirect(citizenid, amount, reason) -- LANDED (verified by reading
+    server/progression.lua directly: a real, complete function with that
+    exact signature). This comment used to say it was REQUESTED but not
+    yet added to server/progression.lua; it has since been added there.
+    Called here through the SAME `type(...) == 'function'` soft-dependency
+    guard every other cross-file call in this resource already uses for a
+    forward/optional reference -- that guard is kept even though the
+    function is now confirmed present, so if a future removal ever drops
+    it again, '/k9givexp' still fails CLOSED with a clear, player-facing
+    "XP system currently unavailable" message and an audited
+    'xp_unavailable' outcome, rather than either (a) silently no-opping
+    (indistinguishable from a bug) or (b) reaching around progression.lua's
+    own private K9XP cache/UPSERT logic with a parallel, hand-rolled SQL
+    write here, which would correctly update `k9_progression` but leave the
+    in-memory K9XP cache (and therefore
     GetXPTier's live speedMultiplier/scentRangeMultiplier effect, and the
     xpTierChanged client push) stale until that citizenid's next
     PlayerLoaded/resource-restart backfill -- a real, silent-until-reported
@@ -248,12 +253,12 @@
     - THIS FILE exposes ONE resource-global (no `local`) function:
         IsHighCommand(source) -> boolean
       Consulted by server/certifications.lua, server/admin.lua,
-      server/bonetool.lua, each behind a `type(IsHighCommand) == 'function'`
-      guard -- this resource's established soft-dependency convention -- so
-      each of those three files still works exactly as before if this file
-      is ever removed or Config.Features.HighCommand is false. Should
-      eventually also be consulted by server/combat.lua (see the known gap
-      noted above), which does not yet check it.
+      server/bonetool.lua, and now also server/combat.lua (see the
+      once-known, now-closed gap noted above), each behind a
+      `type(IsHighCommand) == 'function'` guard -- this resource's
+      established soft-dependency convention -- so each of those files
+      still works exactly as before if this file is ever removed or
+      Config.Features.HighCommand is false.
     - THIS FILE calls `NewCooldown()` (server/cooldowns.lua) at this file's
       own file-load time -- MUST load after server/cooldowns.lua.
     - THIS FILE calls `NotifyPlayer` (server/notify.lua) at command-handler
@@ -263,8 +268,9 @@
       after server/notify.lua needs no runtime existence guard), not
       because run-time placement is actually load-bearing.
     - THIS FILE calls `GetActivePartnerCitizenId` (server/partnership.lua)
-      and `AwardXPDirect` (server/progression.lua, requested, not yet
-      present) at command-handler RUN time, both behind a
+      and `AwardXPDirect` (server/progression.lua -- LANDED, verified by
+      reading that file directly; this used to say "requested, not yet
+      present") at command-handler RUN time, both behind a
       `type(...) == 'function'` guard -- genuine soft/forward dependencies,
       no load-order requirement either way (both files may load before or
       after this one; by the time '/k9givexp' can actually be invoked,

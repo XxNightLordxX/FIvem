@@ -42,8 +42,9 @@
     opposite, hiring, direction).
 
     Similarly, `RevokeCertificationForTablet` (ROSTER_SPEC.md §1/§6's
-    "closes the dead Decertify button gap" -- a NEW wrapper, not yet
-    written, since it also lives in server/certifications.lua) should call
+    "closes the dead Decertify button gap") -- LANDED (verified by reading
+    server/certifications.lua directly): the wrapper this comment used to
+    say was not yet written now exists there, and it does call
     `ClearPersonnelRowForCitizenJob` (below) immediately AFTER its own
     revoke succeeds, never before -- see that function's own doc comment.
 

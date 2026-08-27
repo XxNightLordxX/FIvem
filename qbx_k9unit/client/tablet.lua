@@ -1057,14 +1057,13 @@ local TABLET_STRING_KEYS = {
     -- other TABLET_STRING_KEYS entry, so it belongs here.
     'runtime_tunable_column_setting',
     -- K9 Audit Trail viewer (its own tab -- see this file's own NUI
-    -- CONTRACT section on tablet:auditCert/Partner/Search/Xp/Dept). NOT
-    -- YET present in locales/en.json's `tablet` group as of this pass --
-    -- flagged to that file's owner (see this pass's own report for the
-    -- full key -> English-string list); BuildTabletStrings()'s own
-    -- pcall-per-key guard means each is simply omitted from `strings`
-    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
-    -- that exact gap in the meantime, same resilience-net role it already
-    -- documents for every other key.
+    -- CONTRACT section on tablet:auditCert/Partner/Search/Xp/Dept). LANDED
+    -- (verified directly against locales/en.json's `tablet` group): this
+    -- comment used to say these keys were NOT YET present as of the pass
+    -- that added them, flagged to that file's owner -- they have since
+    -- been added, so BuildTabletStrings() now resolves every one of them
+    -- for real instead of falling through to html/tablet.js's own
+    -- DEFAULT_STRINGS fallback.
     'tab_audit', 'audit_heading', 'audit_intro', 'audit_disabled_note',
     'audit_mode_cert', 'audit_mode_partner', 'audit_mode_search', 'audit_mode_xp',
     'audit_mode_dept', 'audit_citizenid_label', 'audit_citizenid_placeholder',
@@ -1111,27 +1110,22 @@ local TABLET_STRING_KEYS = {
     -- CERTIFICATION TIER / RENEWAL / SPECIALIZATION (this pass) -- the
     -- person screen's certification row grows a tier control, a renew
     -- button, and a specializations sub-list (buildCertificationRow).
-    -- SAME disclosed-gap posture as the 'tab_audit'/'audit_*' block
-    -- immediately above (added by a concurrent pass): these 7 keys are
-    -- NOT YET present in locales/en.json's `tablet` group as of this pass
-    -- -- flagged to that file's owner (see this pass's own report for the
-    -- exact key -> English-string list). BuildTabletStrings()'s own
-    -- pcall-per-key guard means each is simply omitted from `strings`
-    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
-    -- that exact gap in the meantime.
+    -- LANDED (verified directly against locales/en.json's `tablet` group,
+    -- same as the 'tab_audit'/'audit_*' block immediately above): these 7
+    -- keys used to be NOT YET present as of the pass that added them,
+    -- flagged to that file's owner -- they have since been added, so
+    -- BuildTabletStrings() now resolves every one of them for real.
     'tier_label', 'tier_set_label', 'renew_label', 'specializations_heading',
     'no_specializations', 'expires_label', 'expired_badge',
     -- XP RANK EDITOR (owner-directed "...set experience level for each
     -- rank up" pass, server/xptiers.lua) -- sits alongside the
     -- cert-tier/permission-key/shop-location/runtime-control tabs above.
-    -- SAME disclosed-gap posture as the 'tab_audit'/'audit_*' and
-    -- 'tier_label'..'expired_badge' blocks above: these 35 keys are NOT
-    -- YET present in locales/en.json's `tablet` group as of this pass --
-    -- flagged to that file's owner (see this pass's own report for the
-    -- exact key -> English-string list). BuildTabletStrings()'s own
-    -- pcall-per-key guard means each is simply omitted from `strings`
-    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
-    -- that exact gap in the meantime.
+    -- LANDED (verified directly against locales/en.json's `tablet` group,
+    -- same as the 'tab_audit'/'audit_*' and 'tier_label'..'expired_badge'
+    -- blocks above): these 35 keys used to be NOT YET present as of the
+    -- pass that added them, flagged to that file's owner -- they have
+    -- since been added, so BuildTabletStrings() now resolves every one of
+    -- them for real.
     'tab_xp_tiers', 'xp_tiers_heading', 'xp_tiers_empty', 'column_rank',
     'column_xp_threshold', 'column_speed_multiplier', 'column_scent_range_multiplier',
     'column_medkit_cooldown_multiplier', 'column_badge', 'xp_tier_edit_label',
@@ -1184,14 +1178,12 @@ local TABLET_STRING_KEYS = {
     -- shop_location_*/tab_shop_locations keys above, same "K9 Supply
     -- Shop" domain, split into its own tab since WHICH items are sold is
     -- a separate server-side authorization key from WHERE the shop ped
-    -- stands. SAME disclosed-gap posture as the 'tab_audit'/'audit_*' and
-    -- 'tab_xp_tiers'/'xp_tier_*' blocks above: these 44 keys are NOT YET
-    -- present in locales/en.json's `tablet` group as of this pass --
-    -- flagged to that file's owner (see this pass's own report for the
-    -- exact key -> English-string list). BuildTabletStrings()'s own
-    -- pcall-per-key guard means each is simply omitted from `strings`
-    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
-    -- that exact gap in the meantime.
+    -- stands. LANDED (verified directly against locales/en.json's
+    -- `tablet` group, same as the 'tab_audit'/'audit_*' and
+    -- 'tab_xp_tiers'/'xp_tier_*' blocks above): these 44 keys used to be
+    -- NOT YET present as of the pass that added them, flagged to that
+    -- file's owner -- they have since been added, so BuildTabletStrings()
+    -- now resolves every one of them for real.
     'tab_shop_items', 'shop_items_heading', 'shop_items_add_label', 'shop_items_empty',
     'column_price', 'column_currency', 'column_required_tier', 'column_required_specialization',
     'shop_item_key_label', 'shop_item_key_placeholder', 'shop_item_price_label',
@@ -1214,14 +1206,12 @@ local TABLET_STRING_KEYS = {
     -- nothing should open this and know what to do within seconds") --
     -- see html/tablet.js's own buildHomeScreen() for the full writeup on
     -- why this is now the DEFAULT screen on open, ahead of every existing
-    -- tab, none of which this pass removed or renamed. SAME disclosed-gap
-    -- posture as every other block above: these 22 keys are NOT YET
-    -- present in locales/en.json's `tablet` group as of this pass --
-    -- flagged to that file's owner (see this pass's own report for the
-    -- exact key -> English-string list). BuildTabletStrings()'s own
-    -- pcall-per-key guard means each is simply omitted from `strings`
-    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
-    -- that exact gap in the meantime.
+    -- tab, none of which this pass removed or renamed. LANDED (verified
+    -- directly against locales/en.json's `tablet` group, same posture as
+    -- every other block above): these 22 keys used to be NOT YET present
+    -- as of the pass that added them, flagged to that file's owner -- they
+    -- have since been added, so BuildTabletStrings() now resolves every
+    -- one of them for real.
     'tab_home', 'home_welcome_template', 'home_role_high_command', 'home_role_k9',
     'home_role_handler', 'home_role_uncertified', 'home_partnered_badge',
     'home_not_partnered_badge', 'home_certified_count_template',
@@ -1245,14 +1235,12 @@ local TABLET_STRING_KEYS = {
     -- html/tablet.js's own COMMAND_REFERENCE/buildCommandReferenceScreen()
     -- for the full catalog, its drift guard
     -- (tests/commandreferenceregistry_spec.lua), and exactly what each
-    -- entry's `gate` does and does not promise. SAME disclosed-gap posture
-    -- as every other block above: these 135 keys are NOT YET present in
-    -- locales/en.json's `tablet` group as of this pass -- flagged to that
-    -- file's owner (see this pass's own report for the exact key ->
-    -- English-string list). BuildTabletStrings()'s own pcall-per-key guard
-    -- means each is simply omitted from `strings` until added there, and
-    -- html/tablet.js's own DEFAULT_STRINGS covers that exact gap in the
-    -- meantime. (k9grantpermission/k9revokepermission and their own
+    -- entry's `gate` does and does not promise. LANDED (verified directly
+    -- against locales/en.json's `tablet` group, same posture as every
+    -- other block above): these 135 keys used to be NOT YET present as of
+    -- the pass that added them, flagged to that file's owner -- they have
+    -- since been added, so BuildTabletStrings() now resolves every one of
+    -- them for real. (k9grantpermission/k9revokepermission and their own
     -- their own "permissions" category, at the end of this list, were added
     -- mid-pass -- server/permissions.lua registered both concurrently
     -- while this list was being written; tests/commandreferenceregistry_spec.lua
@@ -1399,14 +1387,12 @@ local TABLET_STRING_KEYS = {
     -- paths for all the features to make them smoother, easier to
     -- understand") -- high command only, html/tablet.js's own
     -- buildFlowsHubScreen()/buildFlowOnboardScreen()/buildFlowOffboardScreen()/
-    -- buildFlowProblemScreen()/buildFlowTuningScreen(). SAME disclosed-gap
-    -- posture as every other block above: these 88 keys are NOT YET
-    -- present in locales/en.json's `tablet` group as of this pass --
-    -- flagged to that file's owner (see this pass's own report for the
-    -- exact key -> English-string list). BuildTabletStrings()'s own
-    -- pcall-per-key guard means each is simply omitted from `strings`
-    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
-    -- that exact gap in the meantime.
+    -- buildFlowProblemScreen()/buildFlowTuningScreen(). LANDED (verified
+    -- directly against locales/en.json's `tablet` group, same posture as
+    -- every other block above): these 88 keys used to be NOT YET present
+    -- as of the pass that added them, flagged to that file's owner -- they
+    -- have since been added, so BuildTabletStrings() now resolves every
+    -- one of them for real.
     'tab_flows', 'flows_heading', 'flows_intro', 'flow_onboard_card_label',
     'flow_onboard_card_hint', 'flow_offboard_card_label', 'flow_offboard_card_hint', 'flow_problem_card_label',
     'flow_problem_card_hint', 'flow_tuning_card_label', 'flow_tuning_card_hint', 'flow_back_to_flows_label',
@@ -1436,13 +1422,11 @@ local TABLET_STRING_KEYS = {
     -- per-`error`-code mapping runMutation() now uses instead of a single
     -- generic 'action_failed' line for every certify/decertify/tier/
     -- renewal/specialization/givexp/permission/feature/role-mutation
-    -- refusal. SAME disclosed-gap posture as the GUIDED FLOWS block just
-    -- above: these 35 keys are NOT YET present in locales/en.json's
-    -- `tablet` group as of this pass -- flagged to that file's owner (see
-    -- this pass's own report for the exact key -> English-string list).
-    -- BuildTabletStrings()'s own pcall-per-key guard means each is simply
-    -- omitted from `strings` until added there, and html/tablet.js's own
-    -- DEFAULT_STRINGS covers that exact gap in the meantime.
+    -- refusal. LANDED (verified directly against locales/en.json's
+    -- `tablet` group, same posture as the GUIDED FLOWS block just above):
+    -- these 35 keys used to be NOT YET present as of the pass that added
+    -- them, flagged to that file's owner -- they have since been added, so
+    -- BuildTabletStrings() now resolves every one of them for real.
     'action_submitted', 'mutation_error_invalid_target', 'mutation_error_invalid_department', 'mutation_error_department_mismatch',
     'mutation_error_not_eligible', 'mutation_error_denied', 'mutation_error_rate_limited', 'mutation_error_busy',
     'mutation_error_self_certification_disabled', 'mutation_error_self_grant_blocked', 'mutation_error_target_must_be_online', 'mutation_error_target_not_in_department',

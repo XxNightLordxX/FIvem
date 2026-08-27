@@ -2261,14 +2261,19 @@ end
 -- to the invoker for that one themselves (see either function's own
 -- body), so adding a second message here would double-notify.
 --
--- LOCALE KEYS THIS SECTION NEEDS -- NOT yet in locales/en.json (this file
--- is told not to edit that file -- reported, not added, matching this
--- file's own header precedent for permissions.grant_notify_target/
--- permissions.revoke_notify_target). Resolved LAZILY, one `locale()` call
--- per actual outcome -- never built as one eagerly-evaluated table -- so a
--- key that is merely UNREACHABLE in a given call never forces every OTHER
--- key to already exist. Every value below is the exact English text
--- requested:
+-- LOCALE KEYS THIS SECTION NEEDS -- LANDED (verified directly against
+-- locales/en.json, and against this file's own real `locale(...)` call
+-- sites below, e.g. `locale('permissions.command_usage_grant')`). This
+-- comment used to say these keys were NOT yet in locales/en.json (this
+-- file being told not to edit that file directly -- reported, not added,
+-- matching this file's own header precedent for
+-- permissions.grant_notify_target/permissions.revoke_notify_target, which
+-- have likewise since landed) -- every key below now resolves for real.
+-- Resolved LAZILY, one `locale()` call per actual outcome -- never built
+-- as one eagerly-evaluated table -- so a key that is merely UNREACHABLE in
+-- a given call never forces every OTHER key to already exist. Every value
+-- below is the exact English text that was requested and has since
+-- landed:
 --   permissions.command_usage_grant        = "Usage: /k9grantpermission [citizenid] [permissionKey]"
 --   permissions.command_usage_revoke       = "Usage: /k9revokepermission [citizenid] [permissionKey]"
 --   permissions.command_not_authorized     = "You are not authorized to grant or revoke K9 permissions."

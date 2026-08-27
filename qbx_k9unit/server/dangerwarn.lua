@@ -209,20 +209,21 @@
       manifest order.
     ======================================================================
 
-    LOCALE: every player-facing string below is proposed, not yet in
-    locales/en.json (this file may not edit that file directly) -- each is
-    resolved through `pcall(locale, 'dangerwarn.<key>', ...)` with a
-    hardcoded English last-resort fallback BYTE-IDENTICAL to the proposed
-    text, exactly mirroring server/runtimecontrol.lua's own
+    LOCALE: LANDED (verified directly against locales/en.json's own
+    `dangerwarn` group, and against this file's own real `SafeLocale`
+    call sites below). This comment used to say every player-facing string
+    below was proposed, not yet in locales/en.json (this file being told it
+    may not edit that file directly) -- every one of those keys has since
+    been added. Each is still resolved through
+    `pcall(locale, 'dangerwarn.<key>', ...)` with a hardcoded English
+    last-resort fallback BYTE-IDENTICAL to the originally-proposed text,
+    exactly mirroring server/runtimecontrol.lua's own
     GetFeatureLockoutWarning/GetActiveUsageWarning pattern and
     server/tenure.lua's TenureMilestoneNotificationText pattern -- so this
-    feature is fully functional today and upgrades to a real localized
-    string automatically, with no further code change, the moment each key
-    lands. See this file's own closing report for the exact proposed key
-    list, forwarded verbatim to whoever owns locales/en.json.
+    feature was already fully functional before the keys landed, and now
+    resolves the real localized string instead of falling back.
 
-    Config surface: PROPOSED (this file may not edit config.lua directly).
-    `Config.Features.DangerWarn` (recommended default `false`, per this
+    Config surface: LANDED. `Config.Features.DangerWarn` (default `false`, per this
     resource's own stated convention that a brand-new mechanic stays off
     until its own balance/security review, mirroring how
     Config.Features.HandlerPartnership originally shipped) and
@@ -349,10 +350,11 @@ end
 
 -- ======================================================================
 -- LOCALE -- see this file's own header closing section. Every key below
--- is PROPOSED, not yet in locales/en.json; `SafeLocale` tries the real key
--- first and falls back to the literal, byte-identical proposed English
--- text the instant that lookup fails for any reason, so this feature is
--- fully functional today and upgrades automatically once each key lands.
+-- has since LANDED in locales/en.json (verified directly); `SafeLocale`
+-- still tries the real key first and falls back to the literal,
+-- byte-identical originally-proposed English text if that lookup ever
+-- fails for any reason, so this feature stays functional even if a key is
+-- later removed or renamed out from under it.
 -- ======================================================================
 --- @param key string
 --- @param fallback string

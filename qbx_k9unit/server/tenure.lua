@@ -741,8 +741,10 @@ end
 -- section only makes the WORDING match reality.
 --
 -- LOCALE, soft-dependency shape identical to TenureMilestoneNotificationText
--- immediately above -- FOUR PROPOSED, self-contained, WHOLE-SENTENCE keys,
--- not yet in locales/en.json. DELIBERATELY NOT built by gluing a separate
+-- immediately above -- FOUR self-contained, WHOLE-SENTENCE keys. LANDED
+-- (verified directly against locales/en.json): this comment used to say
+-- these were proposed and not yet in locales/en.json; they have since been
+-- added. DELIBERATELY NOT built by gluing a separate
 -- "you earned N XP" fragment onto TenureMilestoneNotificationText's own
 -- output with Lua string concatenation -- an earlier draft of this fix did
 -- exactly that, and it is wrong for the same reason every OTHER soft
@@ -764,15 +766,19 @@ end
 --   `tenure.milestone_reached_no_xp` -- neither known -- no args --
 --     proposed text: "Your partnership has reached a new tenure milestone,
 --     but you did not earn any XP from it."
--- FALLBACK, when none of the four above exist yet (true today): degrades
--- to TenureMilestoneNotificationText(tierTitle) UNCHANGED -- the EXACT,
--- already-shipped/tested text, for BOTH parties, regardless of what either
--- actually earned. This makes the whole honesty fix a TOTAL NO-OP until
--- the four keys above are landed -- deliberately, per the same "soft
+-- FALLBACK, for if any of the four above is ever missing again (e.g. a
+-- future removal/rename): degrades to TenureMilestoneNotificationText(tierTitle)
+-- UNCHANGED -- the EXACT, already-shipped/tested text, for BOTH parties,
+-- regardless of what either actually earned. This comment used to say the
+-- four keys above did not exist yet and that this made the whole honesty
+-- fix a TOTAL NO-OP -- that was true when written; the four keys have
+-- since landed (verified directly against locales/en.json), so each party
+-- now gets the real, tier-aware, XP-aware message instead of falling back.
+-- The fallback path itself is kept regardless, per the same "soft
 -- dependency, degrade to what already ships, upgrade automatically with no
 -- further code change" discipline this file already applies everywhere
--- else, rather than ship a half-measure (correct information, broken
--- localization) in the meantime.
+-- else, rather than let a future missing/renamed key throw instead of
+-- degrading gracefully.
 -- ======================================================================
 
 --- @param tierTitle string?
@@ -1438,10 +1444,14 @@ end
        integration, below) -- still a genuinely open enhancement, not a
        correctness gap in the guard itself.
 
-    4. LOCALE KEY (locales/en.json) -- exact English text needed for the
-       tier-aware notification server/tenure.lua's own
-       TenureMilestoneNotificationText already tries first and silently
-       falls back from today:
+    4. LOCALE KEY (locales/en.json) -- LANDED (verified directly against
+       locales/en.json, and against this file's own real `pcall(locale,
+       'tenure.milestone_reached...', ...)` call sites). What follows is
+       the ORIGINAL proposal, kept verbatim as the design record; the
+       shipped keys match it exactly. Exact English text that was needed
+       for the tier-aware notification server/tenure.lua's own
+       TenureMilestoneNotificationText used to try first and silently fall
+       back from:
 
            "tenure": {
                "milestone_reached": "Your partnership has reached a new tenure milestone.",
@@ -1467,10 +1477,11 @@ end
        take their own ONE placeholder (%d xp, or %s title, respectively);
        `milestone_reached_no_xp` takes none. All four are tried via the
        identical pcall-guarded soft-dependency shape `milestone_reached_named`
-       already uses, so this whole feature is a TOTAL NO-OP until all four
-       land (degrades to the exact, unchanged `milestone_reached[_named]`
-       text for BOTH parties, exactly like before this pass) and upgrades
-       automatically the moment they do, no further code change needed.
+       already uses. This whole feature used to be a TOTAL NO-OP before all
+       four keys landed (degrading to the exact, unchanged
+       `milestone_reached[_named]` text for BOTH parties) -- now that they
+       have, each party gets the tier-aware, XP-aware message described
+       above instead of the generic fallback.
        The XP amount is the REAL value AwardXP/AwardHandlerXP reported back
        for that SPECIFIC party this crossing -- it can differ between the
        K9 and handler messages for the SAME crossing, which is the whole

@@ -144,12 +144,13 @@
             gains the put-down behavior for free.
         IsRestingInKennel() -> boolean
             Whether THIS client's own ped is currently attached to a
-            kennel as an occupant. Exposed for a future cross-file guard
-            (client/appearance.lua's own K9 model-swap refusal list already
-            checks the equivalently-shaped IsInK9Vehicle()/
-            IsPropAttachmentEngaged() — this is the SAME shape, for a
-            future consumer to wire in; not wired into that file by this
-            pass, which does not own it).
+            kennel as an occupant. WIRED (verified by reading
+            client/appearance.lua directly): that file's own K9 model-swap
+            refusal list (IsCurrentlyEngaged()) already checked the
+            equivalently-shaped IsInK9Vehicle()/IsPropAttachmentEngaged() —
+            this is the SAME shape, and client/appearance.lua has since
+            added its own call to this function too, so a dog resting in a
+            kennel now also refuses a mid-rest model swap.
         IsCarryingKennel() -> boolean
             Whether THIS client is currently carrying (has attached to
             its own hands) a kennel object.
