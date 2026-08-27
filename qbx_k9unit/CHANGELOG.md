@@ -25,6 +25,44 @@ tagged release will draw a line under this section.
 
 ### Fixed — things that were broken for players
 
+- **Thermal and night vision could be switched on but never off.** Both
+  "is it currently on" checks asked the game a question it has never had an
+  answer to — the two names were invented and had been there since the
+  feature was written. An unknown question is not an error in FiveM; it just
+  answers nothing, forever. So the toggle always believed vision was off,
+  turned it on again, and left you stuck looking through walls until you
+  reconnected. The tests passed the whole time, because the test invented
+  the same two names in its own sandbox.
+- **An unarmed player could switch off the dog chasing them.** Reporting
+  "gunfire happened near me" required nothing at all — no weapon, no
+  gunfire, just the ability to send it. Doing it repeatedly near a dog drove
+  its fear up until it hesitated, and a hesitating dog refuses to bite, take
+  down or drag. A suspect being chased could therefore disable their pursuer
+  on demand, at no risk. Reporting it now requires actually holding a
+  weapon, checked on the server rather than taken on trust.
+- **A vest could not be taken off once your certification lapsed.** Every
+  route to removing one — command, radial, tablet — ran through a single
+  check meant to stop you putting one ON. And because the model swap refuses
+  to run while a vest is attached, you could not undo it that way either.
+  There was no way out short of dying.
+- **The tablet's Decertify button silently did nothing to anyone online.**
+  It routed through a command that explicitly refuses whenever the target is
+  connected, so it worked only on people who were logged off — the opposite
+  of what the button's own documentation promised.
+- **Pinning a character as a permanent dog had never worked on a new
+  server.** The table it writes to was only created by a numbered migration,
+  while the setup guide tells first-time owners they need only two files and
+  none of the numbered ones. Follow those instructions and that one table is
+  skipped forever, so the feature looked wired and quietly failed every
+  time.
+- **High command's rank threshold asked for a rank most servers do not
+  have.** A stock police job stops at grade 4 and this shipped asking for 6,
+  so no rank qualified and the only thing letting anyone in was the "is this
+  person the boss" fallback. It looked configured and did nothing.
+- **Firing somebody left their roster row behind**, so re-hiring them
+  brought back their old role and their old callsign instead of putting
+  them back in Unassigned.
+
 - **A certified dog was invisible.** Changing to a dog model gives you a
   new body with none of its parts switched on. A human survives that; a
   dog does not, because every part of the dog is one of those parts. Nobody
@@ -78,6 +116,21 @@ tagged release will draw a line under this section.
 
 ### Added
 
+- **A K9 roster and a handler roster.** Two lists, sortable by rank, showing
+  callsign, department, tier, XP and current partner. Clicking Manage opens
+  the person screen that already existed rather than a second one that would
+  drift from it. Roles and callsigns are set there; changing somebody's role
+  warns you their callsign will be cleared before you commit to it, not
+  after. Everyone certified starts under "Unassigned" until you sort them,
+  and both lists say so plainly — on day one that is everybody, and an empty
+  screen would read as broken.
+- **Refusals say why.** One sentence — "You cannot use K9 features right
+  now" — used to answer about a hundred different situations: not certified,
+  wrong department, certification lapsed, feature switched off, deliberately
+  blocked. It was the most-seen message in the whole resource and told you
+  nothing, which made it the largest single reason to go and ask an admin.
+  Where the game knows the reason, it now gives it.
+
 - **Every command now appears in your chat autocomplete.** Before this
   there were none at all — the tablet's Commands tab was the only place any
   of the resource's commands were written down. Type `/` and they are
@@ -129,6 +182,24 @@ tagged release will draw a line under this section.
 - Two officers cannot work one search-and-rescue call together. The whole
   mechanic belongs to the officer who started it.
 - `html/images/logo.png` is still a placeholder.
+- **Setting a dog faster than about double speed is accepted, saved and
+  shown, and will not look any faster.** The movement code clamps the final
+  figure, so the number you typed is real everywhere except in the game. The
+  setting says so where you set it; raising that clamp is a deliberate
+  decision nobody has taken yet, because it is also what keeps a dog's speed
+  inside what anti-cheat software considers normal.
+- **Blood and gunpowder tracking now need a specialization**, where any
+  certified dog could do them before. That is the change that was asked for,
+  but an existing server does lose those two until specializations are
+  granted. The startup check says so rather than letting you find out
+  mid-shift.
+- **High command in one department can certify and decertify people in
+  another.** Deliberate, and right if you treat police and sheriff as one K9
+  programme — wrong if you want them separate. It is a one-line change
+  either way, and it needs an owner's decision rather than a guess.
+- **`water_bowl` is an unverified prop name.** If it does not match a real
+  model on your server the "Drink from Bowl" option simply never appears,
+  with nothing in the console. Thirst still works through the item.
 
 See `KNOWN_ISSUES.md` for the full list, including the ones that are
 deliberate.
