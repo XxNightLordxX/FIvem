@@ -201,6 +201,40 @@ end
 --- RequestDeployKennel() — so a future radial entry can call this directly
 --- without this file needing to change.
 function RequestToggleK9PropAttachment()
+    -- RESOLVE INTENT BEFORE GATING — "gate the START of a thing, never the
+    -- STOP", and this function used to break that rule in the one way that
+    -- was easy to miss. Both gates below sit above a call whose MEANING is
+    -- decided server-side: add if you have no vest, REMOVE if you do. So
+    -- gating the call gated the removal too.
+    --
+    -- The trap that produced, found by a trap-hunt pass: a handler puts the
+    -- vest on, then loses their certification (an ordinary thing — a
+    -- revoke, a department change). CanShowK9UI() is a live server-backed
+    -- check with about a one-second cache, so within a second every route
+    -- to taking the vest off — this command, the radial item, and the
+    -- tablet button, all three of which call this one function — returned
+    -- here without ever telling the server. server/propattachment.lua's own
+    -- REMOVE branch is deliberately unconditional and was itself a fix for
+    -- exactly this bug class; the gate up here quietly reinstated it one
+    -- layer above. Worse, client/appearance.lua refuses to swap a K9 back to
+    -- a human model while a vest is attached, so the player could not undo
+    -- it that way either. There was no self-service way out short of dying.
+    --
+    -- So: if a vest is already on, the request goes through unconditionally.
+    -- Same shape client/kennel.lua's RequestDeployKennel() uses (resolve
+    -- "am I already carrying something" before any flag or access gate) and
+    -- client/training.lua's RequestSetTrainingMode() uses (only check access
+    -- when switching ON, never when switching OFF).
+    --
+    -- This grants nothing. Taking off a vest you are already wearing is not
+    -- a capability, and the server re-derives add-vs-remove from its own
+    -- PropAttachmentState either way — a client claiming to be removing one
+    -- it does not have simply lands in the add branch and is gated there.
+    if IsPropAttachmentEngaged() then
+        TriggerServerEvent('qbx_k9unit:server:requestToggleK9PropAttachment')
+        return
+    end
+
     if not Config.Features.PropAttachments then return end
 
     if not CanShowK9UI() then

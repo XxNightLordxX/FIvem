@@ -75,15 +75,18 @@
     ======================================================================
 
     FILE-TO-FILE CONTRACT (client side):
-    - THIS FILE exposes five resource-global (no `local`) functions,
-      consumed by client/radial.lua's "Track Scent" / "Track Blood" /
-      "Track Gunpowder" items per §11.3's radial.lua row. UPDATED (stale
-      "not wired yet" note removed, integration-verifier finding): all five
-      are confirmed called from client/radial.lua as of this pass — see
-      that file's Track Scent/Blood/Gunpowder item handlers, which use
-      GetActiveTrackType()/StopTracking() to distinguish "toggle off THIS
-      type" from "a DIFFERENT type is active, defer to StartTrack()'s own
-      rejection" before calling the matching Start*Track():
+    - THIS FILE exposes five resource-global (no `local`) functions.
+      STALE AS OF THE 2026-08-26 MERGE (see StartTrack()'s own doc comment
+      below): client/radial.lua's three former "Track Scent" / "Track
+      Blood" / "Track Gunpowder" items are GONE — collapsed into the one
+      certification-driven radial item that calls StartCertifiedTrack()/
+      StopTracking() (client/tracking.lua's own StartTrack(nil) path), so
+      radial.lua no longer calls StartScentTrack()/StartBloodTrack()/
+      StartGunpowderTrack() at all. Those three per-type globals are still
+      reachable, but only via client/tablet.lua's FEATURE_TRIGGERS table
+      (ScentTracking/BloodTracking/GunpowderSniffing entries), which uses
+      the same GetActiveTrackType()/StopTracking() toggle-off-vs-reject
+      pattern described below before calling the matching Start*Track():
         StartScentTrack()
         StartBloodTrack()
         StartGunpowderTrack()

@@ -243,6 +243,15 @@ read_globals = {
     -- Player / entity queries
     "GetPlayers", "GetActivePlayers", "GetPlayerFromServerId",
     "GetPlayerServerId", "GetPlayerName", "GetPlayerPed", "PlayerId",
+    -- GetSelectedPedWeapon: a genuine SERVER native (CFX, apiset: server),
+    -- verified against ext/native-decls/GetSelectedPedWeapon.md, where it
+    -- is documented as an alias of GET_CURRENT_PED_WEAPON. That page also
+    -- states plainly that the SEPARATE client native of the same name --
+    -- the one that reads the weapon wheel -- is NOT available to FXServer,
+    -- so do not "correct" a server-side call here into the client one.
+    -- Used by server/wellbeing.lua to require that whoever reports nearby
+    -- gunfire is actually holding a weapon.
+    "GetSelectedPedWeapon",
     "PlayerPedId", "NetworkGetPlayerIndexFromPed",
     "GetCurrentResourceName",
     -- Entity / world

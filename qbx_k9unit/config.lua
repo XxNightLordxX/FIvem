@@ -1231,7 +1231,21 @@ Config.Departments = {
         -- nil disables the tier entirely for this department. nil means
         -- "no such rank exists here", NEVER "everybody qualifies" -- the
         -- check fails closed on a nil, a non-number, or a malformed grade.
-        highCommandGrade = 6,
+        --
+        -- THE NUMBER MUST EXIST ON YOUR OWN RANK LADDER. This used to
+        -- default to 6, and a stock qbx_core police job only goes up to
+        -- grade 4 -- so on a default install NO numeric grade qualified and
+        -- the only thing getting anyone in was the job.isboss bypass just
+        -- below. It looked configured and did nothing. Check your own
+        -- qbx_core jobs file for the highest grade your department has, and
+        -- set this to the rank you actually mean.
+        --
+        -- ANYONE FLAGGED job.isboss ALWAYS QUALIFIES, whatever this says.
+        -- That is deliberate and it is what stops a brand-new server
+        -- locking its own owner out on the first boot -- but do not rely on
+        -- it as your only route in, because a senior officer who is not
+        -- flagged isboss would then have no way to reach this tier at all.
+        highCommandGrade = 4,
         -- job.grade.level required to RECEIVE non-compliance alerts (a K9's
         -- target resisting or fleeing). Deliberately a separate, much lower
         -- bar than auditGrade: an audit pull exposes who searched whom and
@@ -1249,7 +1263,7 @@ Config.Departments = {
         label           = 'Blaine County Sheriff',
         certifierGrade  = 3,
         auditGrade      = 3,
-        highCommandGrade = 5, -- see police.highCommandGrade above for what this unlocks
+        highCommandGrade = 4, -- see police.highCommandGrade above -- and check this number exists on YOUR ladder
         nonComplianceAlertGrade = 0, -- see police.nonComplianceAlertGrade above
         autoAccessGrade = nil,
     },
@@ -1257,7 +1271,7 @@ Config.Departments = {
         label           = 'Blaine County Sheriff (legacy job name)',
         certifierGrade  = 3,
         auditGrade      = 3,
-        highCommandGrade = 5, -- see police.highCommandGrade above for what this unlocks
+        highCommandGrade = 4, -- see police.highCommandGrade above -- and check this number exists on YOUR ladder
         nonComplianceAlertGrade = 0, -- see police.nonComplianceAlertGrade above
         autoAccessGrade = nil,
     },

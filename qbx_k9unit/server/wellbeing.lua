@@ -1405,6 +1405,46 @@ AddEventHandler('qbx_k9unit:server:relayWeaponFire', function()
     local ped = GetPlayerPed(src)
     if ped == 0 then return end
 
+    -- THE REPORTER MUST ACTUALLY BE ARMED (red-team finding). This event
+    -- carries NO PAYLOAD, so before this check the only thing it required
+    -- was the ability to send it — a modified client could fire it on the
+    -- relay cooldown while standing near a K9 and drive that K9's
+    -- fearStress past hesitationThreshold, at which point
+    -- server/combat.lua's ValidateCombatRequest hard-rejects that K9's
+    -- bite-hold, takedown and drag with 'hesitating'. A suspect being
+    -- chased could therefore switch off the abilities of the dog chasing
+    -- them, from an unarmed character, at no risk, and hold them off for
+    -- as long as they stayed nearby.
+    --
+    -- GET_SELECTED_PED_WEAPON is a genuine SERVER native (CFX, apiset:
+    -- server -- verified against ext/native-decls/GetSelectedPedWeapon.md,
+    -- where it is documented as an alias of GET_CURRENT_PED_WEAPON; note
+    -- the SEPARATE client native of the same name, which reads the weapon
+    -- wheel, is explicitly NOT available to FXServer). It reads the
+    -- server's own replicated view of the ped, not anything this client
+    -- said, so it cannot be forged by the caller.
+    --
+    -- This does not make the signal trustworthy -- a genuinely armed
+    -- attacker can still spam it, and the server still cannot tell one real
+    -- continuously-firing shooter from one liar, which is why
+    -- HESITATION_MAX_CONTINUOUS_MS below caps the CONSEQUENCE rather than
+    -- trying to perfect the signal. What it does is stop the attack being
+    -- free: the attacker must be visibly holding a weapon in a world full
+    -- of police, which is a real cost and a thing other players can see and
+    -- respond to.
+    --
+    -- Fails CLOSED but quietly: an unarmed reporter is simply ignored, with
+    -- no notification and no log line. This fires on an ordinary
+    -- 300ms-cooldown relay path, so anything noisier would flood the
+    -- console during normal play, and telling a prospective attacker which
+    -- check refused them only helps them.
+    -- GetHashKey rather than a backtick hash literal: the backtick form is
+    -- a CitizenFX compiler extension that luacheck and luac cannot parse,
+    -- and this repository lints and syntax-checks every file.
+    local WEAPON_UNARMED = GetHashKey('WEAPON_UNARMED')
+    local selectedWeapon = GetSelectedPedWeapon(ped)
+    if selectedWeapon == nil or selectedWeapon == 0 or selectedWeapon == WEAPON_UNARMED then return end
+
     -- Deliberately NOT restricted to a K9-modeled shooter — FearStress
     -- reacts to ANY nearby gunfire (DEVELOPER_REFERENCE.md §13.4.3.3's own
     -- "gunfire happened nearby" framing), not just gunfire a K9 itself

@@ -596,10 +596,12 @@ end
 --- Bare-dispatch body, extracted as its own resource-global -- same
 --- "global helper, private per-file state" convention as
 --- RequestDeployKennel()/ExitKennelRest()/RequestEnterOwnKennel() above,
---- specifically so client/radial.lua can call this EXACT SAME path once
---- it replaces its own current two flat 'k9_deploy_kennel'/'k9_exit_kennel'
---- items with one entry (reported to project-lead separately -- see this
---- pass's own report for the exact item definition). Declared OUTSIDE the
+--- specifically so client/radial.lua can call this EXACT SAME path.
+--- DONE (verified against client/radial.lua as of this pass): its former
+--- two flat 'k9_deploy_kennel'/'k9_exit_kennel' items are now the single
+--- 'k9_kennel' entry that calls this function -- see that file's own
+--- "MERGED, owner-directed decluttering pass" comment for the item
+--- definition. Declared OUTSIDE the
 --- REGISTRATION-TIME FEATURE GATE further down, same as every other
 --- function in this block -- reachable-but-inert with the feature off (the
 --- exit branch below still works regardless, matching every other

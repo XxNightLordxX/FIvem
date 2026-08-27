@@ -348,6 +348,24 @@ local function newWellbeingFixture(opts)
     local function GetAllVehicles() return {} end
     local function GetHashKey(name) return name end
 
+    -- GetSelectedPedWeapon: server/wellbeing.lua's relayWeaponFire handler
+    -- requires the reporter to actually be holding a weapon before it will
+    -- log nearby gunfire -- a red-team finding, since that event carries no
+    -- payload and was otherwise reportable by anyone who could send it.
+    -- GetHashKey above is identity, so a weapon "hash" here is just its
+    -- name string. Defaults to armed, because every pre-existing test in
+    -- this file was written when any reporter was accepted and is about
+    -- something else entirely; the unarmed case gets its own explicit
+    -- tests. Set weaponBySource[src] = 'WEAPON_UNARMED' (or 0) to make a
+    -- specific reporter unarmed.
+    local weaponBySource = {}
+    local function GetSelectedPedWeapon(ped)
+        for src, p in pairs(pedBySource) do
+            if p == ped then return weaponBySource[src] or 'WEAPON_PISTOL' end
+        end
+        return 'WEAPON_PISTOL'
+    end
+
     -- HUNGER/THIRST -- drinkFromBowl's own netId -> entity resolution goes
     -- through the REAL, unmodified server/entities.lua's ResolveNetworkEntity
     -- (loaded below), which itself calls these three raw natives. Keyed by
@@ -460,6 +478,7 @@ local function newWellbeingFixture(opts)
         GetAllObjects        = GetAllObjects,
         GetAllVehicles       = GetAllVehicles,
         GetHashKey           = GetHashKey,
+        GetSelectedPedWeapon = GetSelectedPedWeapon,
         NetworkGetEntityFromNetworkId = NetworkGetEntityFromNetworkId,
         DoesEntityExist      = DoesEntityExist,
         GetEntityType        = GetEntityType,
@@ -504,6 +523,10 @@ local function newWellbeingFixture(opts)
         clearPlayer = function(src) citizenidBySource[src] = nil end,
         setOnline = function(ids) onlinePlayerIds = ids end,
         setPed = function(src, ped) pedBySource[src] = ped end,
+        -- Makes a reporting source unarmed (or arms them with a specific
+        -- weapon). server/wellbeing.lua's relayWeaponFire ignores an
+        -- unarmed reporter -- see the GetSelectedPedWeapon stub above.
+        setWeapon = function(src, weapon) weaponBySource[src] = weapon end,
         setModel = function(ped, model) modelByPed[ped] = model end,
         setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
         setHasK9Access = function(source, v) hasK9AccessBySource[source] = v end,
@@ -1182,6 +1205,52 @@ t.test('relayWeaponFire: a disconnected/invalid reporting source (GetPlayerPed r
     f.runOneTick()
     local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
     t.equals(snap.fearStress, 0, 'no real report was ever logged, and passiveDecayPerTick cannot push an already-zero value below its own floor clamp')
+end)
+
+t.test('relayWeaponFire: an UNARMED reporter is ignored entirely -- the payload-less griefing path that could switch off a K9\'s bite/takedown/drag on demand', function()
+    local f = newWellbeingFixture({ featuresOverride = { FearStressSystem = true } })
+    f.setOnline({ 1, 2 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+    -- The attacker: standing right next to the K9, carrying nothing.
+    f.setPlayer(2, 'GRIEFER-CID')
+    f.setPed(2, 9002)
+    f.setCoords(9002, 1, 0, 0)
+    f.setWeapon(2, 'WEAPON_UNARMED')
+
+    -- Spam it. Every one of these must be discarded before it is logged.
+    for _ = 1, 40 do
+        f.dispatchNetEvent('qbx_k9unit:server:relayWeaponFire', 2)
+        f.runOneTick()
+    end
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.fearStress, 0, 'an unarmed reporter can never raise a nearby K9 fearStress at all, however many times they fire the event')
+end)
+
+t.test('relayWeaponFire: an ARMED reporter at the same spot IS counted -- proving the unarmed rejection is the weapon check and not the fixture failing to reach the handler', function()
+    local f = newWellbeingFixture({ featuresOverride = { FearStressSystem = true } })
+    f.setOnline({ 1, 2 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+    f.setPlayer(2, 'SHOOTER-CID')
+    f.setPed(2, 9002)
+    f.setCoords(9002, 1, 0, 0)
+    f.setWeapon(2, 'WEAPON_PISTOL')
+
+    for _ = 1, 40 do
+        f.dispatchNetEvent('qbx_k9unit:server:relayWeaponFire', 2)
+        f.runOneTick()
+    end
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.isTrue(snap.fearStress > 0, 'a genuinely armed reporter at the identical position still raises fearStress -- the unarmed case above is rejected by the weapon check specifically, not by the fixture never reaching the handler')
 end)
 
 t.test('relayWeaponFire: extra/garbage call arguments (a forged payload on an event this file documents as payload-less) are ignored -- only the reporter\'s own real, server-resolved position is ever logged', function()

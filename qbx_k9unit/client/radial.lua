@@ -1580,7 +1580,19 @@ local function RegisterK9RadialMenu()
     --- client/kennel.lua exposes RequestDeployKennel() specifically "so a
     --- future radial item can call it directly once client/radial.lua is
     --- available to extend again" (that function's own doc comment); this item
-    --- is that entry point, alongside the existing '/k9deploykennel' command.
+    --- was originally that entry point, alongside the existing
+    --- '/k9deploykennel' command.
+    ---
+    --- HISTORICAL, NO LONGER CURRENT -- the two paragraphs immediately below
+    --- ("DEPLOY-ONLY, BY DESIGN" and "GATED ON CanShowK9UI() here too")
+    --- describe the item as it existed BEFORE the "MERGED" paragraph further
+    --- down. Both are now false of the actual k9SubmenuItems entry
+    --- registered below: it is no longer deploy-only (it also handles enter/
+    --- exit/close/open) and it is no longer gated on CanShowK9UI() at all
+    --- (see the "MERGED"/"NOW REGISTERED UNCONDITIONALLY"/"NO CanShowK9UI()
+    --- GATE HERE EITHER" paragraphs, which are the current, accurate
+    --- description). Left in place for the "why deploy-only was originally
+    --- chosen" context, not as a description of current behavior.
     ---
     --- DEPLOY-ONLY, BY DESIGN, NOT A DISCLOSED OMISSION -- "Pick Up Kennel"
     --- stays client/kennel.lua's own established ox_target option on the

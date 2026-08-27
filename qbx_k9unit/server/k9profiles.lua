@@ -641,9 +641,13 @@ function GetK9EffectiveMultipliers(citizenid)
         end
     end
 
-    -- STAMINA OVERRIDE -- read from the SEPARATE, session-only
-    -- StaminaOverrideByCitizenId table (see that table's own declaration
-    -- comment for why it is not part of `override` above).
+    -- STAMINA OVERRIDE -- read from the SEPARATE
+    -- StaminaOverrideByCitizenId table. STALE AS OF MIGRATION 0021: this
+    -- table persists exactly like `override` above now (both are rebuilt
+    -- from the same `k9_individual_overrides` row) -- it is kept separate
+    -- for a structural reason only (a bare number vs. one multi-field
+    -- record; see that table's own declaration comment), not because it is
+    -- session-only.
     local staminaOverride = type(citizenid) == 'string' and StaminaOverrideByCitizenId[citizenid] or nil
     if type(staminaOverride) == 'number' then
         stamina, overriddenStamina = staminaOverride, true
@@ -679,9 +683,10 @@ local function GetK9IndividualOverride(citizenid)
         scentRangeMultiplier = entry and entry.scentRangeMultiplier,
         medkitCooldownMultiplier = entry and entry.medkitCooldownMultiplier,
         note = entry and entry.note,
-        -- SESSION-ONLY -- see StaminaOverrideByCitizenId's own declaration
-        -- comment. Present here whenever a stamina override is currently
-        -- live, regardless of whether the OTHER three fields have one.
+        -- Persists exactly like the other three fields as of migration
+        -- 0021 -- see StaminaOverrideByCitizenId's own declaration comment.
+        -- Present here whenever a stamina override is currently live,
+        -- regardless of whether the OTHER three fields have one.
         sprintDecayPerTick = stamina,
     }
 end
@@ -691,9 +696,11 @@ end
 --- medkitCooldownMultiplier?, note?, sprintDecayPerTick? } -- the tablet's
 --- own "which dogs have a bespoke override" listing. A COPY, same
 --- reasoning as GetK9IndividualOverride above. Includes a citizenid that
---- has ONLY a session-only stamina override and nothing in
---- OverrideByCitizenId at all -- the union of both tables' keys, never
---- just the DB-backed one.
+--- has ONLY a stamina override and nothing in OverrideByCitizenId at all
+--- -- the union of both tables' keys, never just one of them. Both tables
+--- persist identically (migration 0021) -- this is a structural split
+--- (bare number vs. multi-field record), not a persisted-vs-session-only
+--- split.
 --- @return table[] overrides
 local function ListK9IndividualOverrides()
     local list = {}
@@ -895,11 +902,11 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
 
     local existingBefore = OverrideByCitizenId[citizenid]
     local existingStaminaBefore = StaminaOverrideByCitizenId[citizenid]
-    -- "New" means "this citizenid has NEITHER a persisted override NOR a
-    -- session-only stamina override yet" -- a stamina-only override for a
+    -- "New" means "this citizenid has NEITHER a speed/scent/medkit override
+    -- NOR a stamina override yet" -- a stamina-only override for a
     -- brand-new citizenid must be counted as new too (see cap check
     -- below), or the field would be a free way to add an override past
-    -- MAX_INDIVIDUAL_OVERRIDES that the persisted-only check would never see.
+    -- MAX_INDIVIDUAL_OVERRIDES that a check ignoring stamina would never see.
     local isNew = existingBefore == nil and existingStaminaBefore == nil
 
     if isNew then
@@ -1043,11 +1050,19 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
         return { ok = true, citizenid = citizenid, reason = 'no_override_existed', effective = GetK9EffectiveMultipliers(citizenid) }
     end
 
-    -- The DB tombstone only applies (and is only needed) when a PERSISTED
-    -- override actually exists -- a citizenid with ONLY a session-only
-    -- stamina override has never written a `k9_individual_overrides` row
-    -- at all (see k9ProfileUpsert's own "PERSISTED FIELDS ONLY" comment),
-    -- so there is nothing there to tombstone.
+    -- STALE PREMISE, CORRECTED BEHAVIOR: this used to gate on
+    -- hadPersistedOverride because a stamina-only edit never wrote a
+    -- `k9_individual_overrides` row (pre-migration-0021) and so had nothing
+    -- to tombstone. As of migration 0021, k9ProfileUpsert writes/upserts the
+    -- row for a stamina-only edit too (see that function's "EVERY FIELD IS
+    -- PERSISTED NOW" comment), and RefreshOverrideCache always populates
+    -- OverrideByCitizenId and StaminaOverrideByCitizenId from the SAME row
+    -- in the SAME pass -- so `hadStaminaOverride` can no longer be true
+    -- while `hadPersistedOverride` is false; this `if` is effectively
+    -- always taken whenever there is anything to reset at all. Left as an
+    -- explicit `if`, not simplified away, so a future regression in that
+    -- invariant fails safe (skips a redundant tombstone) rather than
+    -- erroring.
     if hadPersistedOverride then
         local wrote = K9Store.IndividualOverride_Tombstone(citizenid, actingCitizenid or 'unknown')
         if not wrote then
@@ -1057,10 +1072,15 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
         RefreshOverrideCache()
     end
 
-    -- SESSION-ONLY -- always cleared on reset, regardless of whether a
-    -- persisted override also existed, so "reset" genuinely means "back to
-    -- this citizenid's plain XP-tier/global-default values" for EVERY
-    -- overridable field, stamina included.
+    -- Clears the in-memory cache entry -- always, regardless of whether a
+    -- speed/scent/medkit override also existed -- so "reset" genuinely
+    -- means "back to this citizenid's plain XP-tier/global-default values"
+    -- for EVERY overridable field, stamina included. The tombstone above
+    -- (migration 0021, when it fired) already marks the same row `deleted`
+    -- without touching its column values, so RefreshOverrideCache would
+    -- exclude this citizenid from StaminaOverrideByCitizenId on its own
+    -- next run anyway -- this line just makes that immediate rather than
+    -- waiting on it.
     StaminaOverrideByCitizenId[citizenid] = nil
 
     K9ProfileEditMutex.Release(citizenid)
