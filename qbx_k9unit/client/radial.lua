@@ -503,7 +503,7 @@ end
 --        "Attach Leash" ox_target option explicitly refuses to show while
 --        already leashed (`if IsLeashed() then return false end`), there
 --        is no detach keybind/command, and client/tablet.lua's own Detach
---        action (~line 1713) is reachable only when
+--        action (~line 1907) is reachable only when
 --        Config.Features.CommandTablet is ALSO on. LOAD-BEARING.
 --      - Break Partnership: NO other surface besides the tablet (same
 --        CommandTablet caveat) -- no keybind/command of its own.

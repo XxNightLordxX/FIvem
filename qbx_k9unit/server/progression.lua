@@ -2957,7 +2957,7 @@ end)
 --
 -- ALWAYS RUNS, UNCONDITIONALLY -- not gated behind Config.Features.
 -- XPProgression/HandlerXPProgression: LoadXPForCitizenid is already called
--- unconditionally from PlayerLoaded (line ~1989 above) regardless of
+-- unconditionally from PlayerLoaded (line ~2759 above) regardless of
 -- either flag, so XPLoadUnresolved can gain entries on any install
 -- regardless of which optional features are on. Matches this resource's
 -- own established "a thread governed by something that can change at

@@ -446,8 +446,8 @@
     that wrote this paragraph. This originally described both as NOT YET
     WIRED, both files off-limits to that pass, with only a proposed diff on
     file; that is no longer true. Both are live now — see
-    server/certifications.lua's GrantSpecialization (~line 3002) and
-    server/combat.lua's ValidateCombatRequest (~line 1408) for the actual
+    server/certifications.lua's GrantSpecialization (~line 4347) and
+    server/combat.lua's ValidateCombatRequest (~line 1650) for the actual
     call sites, and the CAPABILITY_CATALOG labels above, which already say
     ENFORCED for both. The original per-consumer writeup is kept below,
     updated from proposed to landed, for the design reasoning:
@@ -509,8 +509,8 @@
     granted outside a test), with zero consumer call sites outside this
     file's own tests, so there was doubly no trap to build — held at the
     time this paragraph was written. It no longer does:
-    server/certifications.lua (~line 3002) and server/combat.lua (~line
-    1408) both now call TierCapabilityPermits for real, gating
+    server/certifications.lua (~line 4347) and server/combat.lua (~line
+    1650) both now call TierCapabilityPermits for real, gating
     specializations_eligible and bite_hold_and_takedown respectively. The
     invariant this section states still holds regardless, because it no
     longer rests on that absence — it rests on the EXPLICIT rule above,

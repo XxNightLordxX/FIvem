@@ -711,7 +711,7 @@ local FEATURE_TIERS = {
     -- highcommand.lua's IsHighCommand, line 382-383, `if not
     -- (Config.Features and Config.Features.HighCommand == true) then
     -- return false end`; server/permissions.lua's HasPermission, line
-    -- 1039-1040, the identical shape for PermissionGrants -- both
+    -- 1391-1392, the identical shape for PermissionGrants -- both
     -- re-confirmed by direct read this pass), gated by two new mechanisms
     -- documented in full immediately below this table ("LOCKOUT-RISK
     -- FEATURES"):

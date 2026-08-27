@@ -1619,22 +1619,17 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- rather than reusing 'specialization_requires_active_cert' for the
     -- identical reason.
     --
-    -- LOCALE KEY, NOT YET LANDED: locales/en.json is off-limits to this
-    -- file's own pass. Proposed key/wording sent to main directly:
-    -- combat.tier_capability_denied = "Your certification tier does not
-    -- permit bite-and-hold or non-lethal takedown." NOT mapped into
-    -- COMBAT_REJECT_MESSAGES below yet, deliberately -- that table is a
-    -- top-level literal evaluated at THIS FILE'S OWN LOAD TIME, so a
-    -- locale() call there for a key that does not exist yet would hard-fail
-    -- loading this file for every test that loads it, not just the ones
-    -- exercising this one reason (confirmed against tests/fixtures/
-    -- sandbox.lua's own locale() implementation, which asserts on a missing
-    -- key rather than degrading). Until main lands that key,
-    -- CombatRejectMessage('tier_capability_denied') falls through to its
-    -- own existing generic fallback (locale('combat.reject_fallback'),
-    -- "Unable to complete that action.") automatically -- not factually
-    -- wrong, just less specific than intended; swap this comment's mapping
-    -- into COMBAT_REJECT_MESSAGES once the real key exists.
+    -- LOCALE KEY -- LANDED (STALE-COMMENT FIX, re-verified against the
+    -- actual current locales/en.json before rewriting this paragraph):
+    -- this comment used to say combat.tier_capability_denied was "NOT YET
+    -- LANDED" / "proposed... sent to main directly" and that
+    -- COMBAT_REJECT_MESSAGES deliberately left it unmapped, falling through
+    -- to the generic reject_fallback string. That already happened -- the
+    -- key exists in locales/en.json and COMBAT_REJECT_MESSAGES maps it
+    -- directly (see that table's own 'tier_capability_denied' entry above,
+    -- with its own "the real key landed... on 2026-08-26" note) -- so
+    -- CombatRejectMessage('tier_capability_denied') now returns the real,
+    -- specific message, not the fallback.
     --
     -- REQUEST-TIME ONLY: this is ValidateCombatRequest, called only from
     -- requestBiteHold/requestTakedown's own opening checks -- never from

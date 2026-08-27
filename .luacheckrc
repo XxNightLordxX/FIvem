@@ -1147,16 +1147,21 @@ globals = {
     "K9Compat",
     "HasK9Role", "GetAssignedK9Model", "ApplyK9PedRole",
     "ApplyK9AppearanceOnGrant", "MaybeRevertK9Appearance",
-    -- ForceRevertK9Appearance -- PENDING, and listed here deliberately
-    -- rather than left to redden lint for everyone: server/tablet.lua
-    -- already calls it (lines 250/967/971) so high command can strip
-    -- someone's K9 ped and put them back to a human from the tablet, but
-    -- server/appearance.lua has not defined it yet. The call site guards
-    -- with `type(fn) == 'function'` and fails closed, so today it is a
-    -- clean no-op rather than an error. REMOVE THIS ENTRY if the function
-    -- is ever abandoned -- an allowlisted name that nothing defines is how
-    -- a missing function stops being visible, which is the failure class
-    -- this project keeps finding.
+    -- ForceRevertK9Appearance -- LANDED (verified by reading
+    -- server/appearance.lua directly: a real, complete function at that
+    -- file's own ForceRevertK9Appearance definition). This entry used to be
+    -- PENDING: server/tablet.lua already called it so high command could
+    -- strip someone's K9 ped and put them back to a human from the tablet,
+    -- but server/appearance.lua had not defined it yet, so the call site's
+    -- `type(fn) == 'function'` guard failed closed to a clean no-op.
+    -- server/appearance.lua has since defined it (see that file's own
+    -- ForceRevertK9Appearance doc comment, and server/tablet.lua's own
+    -- "HAS NOW LANDED" note at its call site), so the guard now genuinely
+    -- fires. Still listed here (same reason IsPinnedDogCharacter/
+    -- GetPinnedDogCharacterModel above stay listed after landing): luacheck
+    -- checks each file independently and does not infer this global from
+    -- server/appearance.lua while linting server/tablet.lua. REMOVE THIS
+    -- ENTRY only if the function is ever abandoned.
     "ForceRevertK9Appearance",
     -- MANA_POLICEDOGS FEATURE-PARITY PASS (server/dogcharacter.lua, NEW
     -- FILE) -- an explicit, admin-pinned "this citizenid is a dog" record,
@@ -1185,21 +1190,24 @@ globals = {
     -- missing function stops being visible, which is the failure class
     -- this project keeps finding.
     "ApplyK9AppearanceDirect",
-    -- IsBiteHoldTargetEngaged -- PENDING, same precedent as
-    -- ForceRevertK9Appearance immediately above, listed here deliberately
-    -- rather than left to redden lint for everyone: client/appearance.lua's
-    -- IsCurrentlyEngaged() (this pass, mutual-guard sweep) already calls it
-    -- so a bite-hold TARGET refuses a mid-hold model swap, mirroring the
-    -- sibling IsDragTargetEngaged()/IsLocalPlayerForceRagdolled() checks
-    -- right beside it in that same function -- but client/combat.lua has
-    -- not defined it yet (its own ActiveBiteHold target-side state is
-    -- currently a bare file `local` with no exposed predicate at all,
-    -- unlike ActiveDragSpeedLimit/ActiveForcedRagdoll, which both already
-    -- have one). The call site guards with `type(fn) == 'function'` and is a
-    -- clean no-op today, not an error. REMOVE THIS ENTRY if the function is
-    -- ever abandoned -- an allowlisted name that nothing defines is how a
-    -- missing function stops being visible, which is the failure class this
-    -- project keeps finding.
+    -- IsBiteHoldTargetEngaged -- LANDED (verified by reading
+    -- client/combat.lua directly: a real, complete function, `return
+    -- ActiveBiteHold ~= nil`). This entry used to be PENDING, same
+    -- precedent as ForceRevertK9Appearance above: client/appearance.lua's
+    -- IsCurrentlyEngaged() calls it so a bite-hold TARGET refuses a
+    -- mid-hold model swap, mirroring the sibling
+    -- IsDragTargetEngaged()/IsLocalPlayerForceRagdolled() checks right
+    -- beside it in that same function, but client/combat.lua had not yet
+    -- defined it (its own ActiveBiteHold target-side state was a bare file
+    -- `local` with no exposed predicate, unlike ActiveDragSpeedLimit/
+    -- ActiveForcedRagdoll, which both already had one). client/combat.lua
+    -- has since defined it, so the `type(fn) == 'function'` guard at that
+    -- call site now genuinely fires. Still listed here (same reason
+    -- IsPinnedDogCharacter/GetPinnedDogCharacterModel above stay listed
+    -- after landing): luacheck checks each file independently and does not
+    -- infer this global from client/combat.lua while linting
+    -- client/appearance.lua. REMOVE THIS ENTRY only if the function is ever
+    -- abandoned.
     "IsBiteHoldTargetEngaged",
     -- server/main.lua
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",

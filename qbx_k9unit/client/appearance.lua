@@ -232,21 +232,20 @@ local function IsCurrentlyEngaged()
     -- damage-immunity bracket running against a ped the server's own hold no
     -- longer coherently describes.
     if type(IsLocalPlayerForceRagdolled) == 'function' and IsLocalPlayerForceRagdolled() then return true end
-    -- IsBiteHoldTargetEngaged() -- DOES NOT EXIST YET. BiteAndHold's own
-    -- target-side state (ActiveBiteHold, client/combat.lua) is currently a
-    -- bare file `local` with no exposed predicate at all -- unlike
-    -- ActiveDragSpeedLimit/ActiveForcedRagdoll above, which both already
-    -- have one. This call site is wired in now, ahead of that function
-    -- existing, the same way server/tablet.lua's own call to the
-    -- not-yet-defined ForceRevertK9Appearance was wired in ahead of
-    -- server/appearance.lua defining it (see .luacheckrc's own "PENDING"
-    -- comment on that entry for the identical precedent this follows): the
-    -- `type(...) == 'function'` guard makes an absent global a skipped
-    -- check, never an error, so this is a genuine no-op today and activates
-    -- itself the instant client/combat.lua's owner adds the function --
-    -- no second appearance.lua patch needed. Flagged to the team (see this
-    -- pass's own report) rather than defined here: client/combat.lua is not
-    -- this file's file to edit.
+    -- IsBiteHoldTargetEngaged() -- LANDED (verified by reading
+    -- client/combat.lua directly: a real, complete function, `return
+    -- ActiveBiteHold ~= nil`, with its own doc comment explaining exactly
+    -- this target-side gap). This paragraph used to say the function DID
+    -- NOT EXIST YET -- that BiteAndHold's target-side state (ActiveBiteHold,
+    -- client/combat.lua) was a bare file `local` with no exposed predicate,
+    -- unlike ActiveDragSpeedLimit/ActiveForcedRagdoll above -- and that this
+    -- call site was wired in ahead of the function existing, the same way
+    -- server/tablet.lua's own call to the not-yet-defined
+    -- ForceRevertK9Appearance was wired in ahead of server/appearance.lua
+    -- defining it. client/combat.lua's owner has since added the function,
+    -- so the `type(...) == 'function'` guard below now genuinely fires
+    -- rather than skipping -- no further patch was needed here, exactly as
+    -- designed.
     if type(IsBiteHoldTargetEngaged) == 'function' and IsBiteHoldTargetEngaged() then return true end
     -- IsRestingInKennel() (client/kennel.lua) -- a dog attached inside a
     -- kennel object (AttachEntityToEntity, client/kennel.lua's

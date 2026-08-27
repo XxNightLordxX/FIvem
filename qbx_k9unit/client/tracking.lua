@@ -587,7 +587,7 @@ local function FindWaterCrossingDistance(startCoords, endCoords)
 
     local dir = (endCoords - startCoords) / total
     -- Clamped defensively, mirroring client/movement.lua's leash thread
-    -- precedent (math.max(_, 0.1), line ~388): a misconfigured
+    -- precedent (math.max(_, 0.1), line ~751): a misconfigured
     -- Config.WaterTrackingDecay.sampleIntervalMeters of 0 (or negative)
     -- would otherwise spin this while loop forever with no Wait() inside
     -- it, freezing this thread until FiveM's watchdog intervenes.

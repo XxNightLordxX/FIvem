@@ -194,7 +194,7 @@ if not Config.Features.HandlerDownDefense then return end
 -- which meant each side assumed the other was not responsible for it and
 -- neither validated it.
 --
--- A non-positive value here is a SILENT, WHOLE-FEATURE failure. Line ~227
+-- A non-positive value here is a SILENT, WHOLE-FEATURE failure. Line ~281
 -- sets `expiresAt = GetGameTimer() + promptTtlMs`, so a 0 or negative
 -- makes the prompt already expired the instant it is created:
 -- ClearExpiredPrompt drops it immediately, HasFreshDefensePrompt reads
@@ -348,7 +348,7 @@ end)
 --- directly (see this file's own "PURE CONSUMER" header section) -- the
 --- SAME events client/combat.lua's own RequestBiteHold()/RequestTakedown()
 --- fire, which land on the SAME shared server/combat.lua ValidateCombatRequest
---- (confirmed by reading it directly, ~line 1428: `if not HasK9Access(src)
+--- (confirmed by reading it directly, ~line 1503: `if not HasK9Access(src)
 --- then return false, ..., 'no_access' end`, with no model/role check
 --- anywhere in that validator). This function used to gate on the broader
 --- CanShowK9UI() combinator (IsOwnModelK9() AND HasK9Access(), or IsK9Role()

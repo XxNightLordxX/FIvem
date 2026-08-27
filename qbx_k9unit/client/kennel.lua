@@ -517,7 +517,7 @@ function RequestDeployKennel()
     -- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission
     -- audit finding, this pass): server/kennel.lua's requestDeployKennel
     -- handler gates access on `HasK9Access(src)` alone (confirmed by
-    -- reading it directly, ~line 764: `if not HasK9Access(src) then
+    -- reading it directly, ~line 782: `if not HasK9Access(src) then
     -- NotifyPlayer(...); return end`) -- no model/role check anywhere in
     -- that handler. Deploying a kennel is a HUMAN HANDLER action (placing
     -- an object on the ground near yourself), not a self-administered K9
