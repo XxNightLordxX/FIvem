@@ -275,11 +275,19 @@ itself, not only in a comment three files away.
 A backlog of gameplay ideas was written up aimed specifically at what
 makes *playing the dog* better — not the more common "officer commands a
 computer-controlled dog" style of K9 script, which this resource
-deliberately isn't. **All five of its top recommendations have since been
-built and now ship on by default** — worth stating plainly, because the
+deliberately isn't. **All five of its top recommendations were built and,
+for a time, all shipped on by default** — worth stating plainly, because the
 backlog document itself was never updated to say so, and describing
 shipped, working features as unbuilt ideas is exactly the kind of stale
-claim this history exists to correct rather than repeat.
+claim this history exists to correct rather than repeat. STALE AS OF
+2026-08-26 FOR ITEM 2 SPECIFICALLY: `Config.Features.ScentTrailHunt` was
+later removed (owner-approved, judged redundant with Detection's own
+"walk toward a fading signal" interaction shape — see
+`FEATURE_STRUCTURE_SPEC.md` §2.2.1/§9 and `config.lua`'s own
+`Config.Features` comment for the full reasoning and how to bring it back).
+`client/scenttrail.lua`/`server/scenttrail.lua` are untouched and still
+correctly go inert the instant that flag reads `nil` — the other four items
+below are unaffected and still ship on by default.
 
 1. **Real alerts instead of a pop-up** → shipped as **find alerts**
    (`Config.Features.FindAlerts`). The dog sits and barks on its own the
