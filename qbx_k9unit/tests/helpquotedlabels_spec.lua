@@ -67,7 +67,15 @@ local QUOTED_LABEL_CHECKS = {
     { helpKeys = { 'help_trouble_no_k9_access_title' }, namespace = 'common', key = 'no_k9_access' },
     -- ADDED (this pass): Deploy a Kennel / Use Scent Vision walkthroughs --
     -- see html/tablet.js's own DEFAULT_STRINGS comment at these same keys.
-    { helpKeys = { 'help_task_kennel_1' }, namespace = 'radial', key = 'deploy_kennel_label' },
+    -- REPOINTED (menu-parity/menu-audit pass): the radial item this
+    -- walkthrough quotes was merged into 'k9_kennel'
+    -- (locale('radial.kennel_label'), "Kennel (Deploy/Enter/Exit)") --
+    -- see html/tablet.js's own comment at help_task_kennel_1/_4 for the
+    -- full writeup. This row now checks against the LIVE key; the old
+    -- 'radial.deploy_kennel_label' this used to point at is fully orphaned
+    -- (no code or test reference left anywhere) and reported for removal to
+    -- whoever owns the `radial` locale group.
+    { helpKeys = { 'help_task_kennel_1', 'help_task_kennel_4' }, namespace = 'radial', key = 'kennel_label' },
     { helpKeys = { 'help_task_kennel_2' }, namespace = 'kennel', key = 'pickup_target_label' },
     { helpKeys = { 'help_task_kennel_3' }, namespace = 'kennel', key = 'enter_target_label' },
     { helpKeys = { 'help_task_kennel_3' }, namespace = 'kennel', key = 'exit_target_label' },

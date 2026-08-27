@@ -1311,8 +1311,33 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9givexp_usage', 'cmdref_k9givexp_does', 'cmdref_k9givexp_needs',
     'cmdref_k9announce_usage', 'cmdref_k9announce_does', 'cmdref_k9announce_needs',
     'cmdref_danger_warn_alert_usage', 'cmdref_danger_warn_alert_does', 'cmdref_danger_warn_alert_needs',
+    -- Threat, added 2026-08-27 alongside its new command. Alert had a
+    -- command AND a keybind while Threat had neither, so the two halves of
+    -- one feature were reachable in completely different ways -- Threat is
+    -- now a command, and deliberately NOT a keybind, because every letter
+    -- this resource ships is already taken and the gap that mattered was
+    -- discoverability rather than a missing key.
+    'cmdref_danger_warn_threat_usage', 'cmdref_danger_warn_threat_does', 'cmdref_danger_warn_threat_needs',
     'cmdref_k9audit_usage', 'cmdref_k9audit_does', 'cmdref_k9audit_needs',
     'cmdref_k9track_usage', 'cmdref_k9track_does', 'cmdref_k9track_needs',
+    -- ADDED 2026-08-27, for the five commands that close the owner's
+    -- "chat commands 3rd eye and radial menus" requirement. Leash,
+    -- vehicle, partnership, gear and treating a K9 were reachable ONLY by
+    -- the radial menu and the third eye -- an audit of all three surfaces
+    -- found they had no chat command at all, so they never appeared in
+    -- this reference either.
+    --
+    -- This side of the three-way string contract is the one that is easy
+    -- to forget, and forgetting it is silent in the worst way: the
+    -- enforcing test only fails when two sides DISAGREE, so a key missing
+    -- from TWO sides passes forever and a player sees the raw key name on
+    -- screen. html/tablet.js carried these first; this list and the
+    -- `tablet` group in locales/en.json are the other two sides.
+    'cmdref_k9leash_usage', 'cmdref_k9leash_does', 'cmdref_k9leash_needs',
+    'cmdref_k9vehicle_usage', 'cmdref_k9vehicle_does', 'cmdref_k9vehicle_needs',
+    'cmdref_k9partner_usage', 'cmdref_k9partner_does', 'cmdref_k9partner_needs',
+    'cmdref_k9gear_usage', 'cmdref_k9gear_does', 'cmdref_k9gear_needs',
+    'cmdref_k9treat_usage', 'cmdref_k9treat_does', 'cmdref_k9treat_needs',
     'cmdref_k9auditcert_usage', 'cmdref_k9auditcert_does', 'cmdref_k9auditcert_needs',
     'cmdref_k9auditpartner_usage', 'cmdref_k9auditpartner_does', 'cmdref_k9auditpartner_needs',
     'cmdref_k9auditsearch_usage', 'cmdref_k9auditsearch_does', 'cmdref_k9auditsearch_needs',

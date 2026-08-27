@@ -174,6 +174,13 @@ local function newPartnershipFixture(opts)
         GetPlayerServerId = GetPlayerServerId,
         ResolvePlayerServerIdFromPed = ResolvePlayerServerIdFromPed,
         GetCurrentResourceName = function() return RESOURCE_NAME end,
+        -- Menu-parity pass (this session): client/partnership.lua now also
+        -- registers a 'k9partner' chat command (RegisterCommand) alongside
+        -- its existing ox_target option / resource-globals -- a plain no-op
+        -- stub, same shape as every other fixture in this suite that loads a
+        -- production file registering a command it does not itself need to
+        -- exercise.
+        RegisterCommand = function(_name, _handler, _restricted) end,
     })
 
     Sandbox.loadInto('../client/partnership.lua', env)

@@ -307,11 +307,35 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9recall', keySuffix = 'k9recall' },
     -- client/movement.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCamera', keySuffix = 'toggle_camera' },
+    -- client/movement.lua -- menu-parity pass ("chat commands, 3rd eye, and
+    -- radial menus"): Attach/Detach Leash previously had an ox_target option
+    -- and a client/radial.lua item, but no chat command.
+    { command = 'k9leash', keySuffix = 'k9leash' },
+    -- client/vehicle.lua -- menu-parity pass: Enter/Exit K9 Vehicle
+    -- previously had an ox_target option and a client/radial.lua item, but
+    -- no chat command.
+    { command = 'k9vehicle', keySuffix = 'k9vehicle' },
+    -- client/partnership.lua -- menu-parity pass: Partner Up/Break
+    -- Partnership previously had an ox_target option and two
+    -- client/radial.lua items, but no chat command.
+    { command = 'k9partner', keySuffix = 'k9partner' },
+    -- client/inventory.lua -- menu-parity pass: Open My Gear (own K9
+    -- inventory) previously had an ox_target option and a
+    -- client/radial.lua Utility item, but no chat command.
+    { command = 'k9gear', keySuffix = 'k9gear' },
+    -- client/medkit.lua -- menu-parity pass: Treat K9's self-service path
+    -- previously had an ox_target option and a client/radial.lua Utility
+    -- item, but no chat command.
+    { command = 'k9treat', keySuffix = 'k9treat' },
     -- client/sarcalls.lua
     { command = 'k9sarcall', keySuffix = 'k9sarcall' },
     -- client/defense.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:confirmHandlerDownDefense', keySuffix = 'confirm_handler_down_defense' },
+    -- client/dangerwarn.lua (qbx_k9unit: namespace) -- Alert already had a
+    -- command/keybind; Threat is the menu-parity pass addition (its sibling
+    -- Alert's own asymmetry) sharing the same RequestDangerWarn() function.
     { command = 'qbx_k9unit:dangerWarnAlert', keySuffix = 'danger_warn_alert' },
+    { command = 'qbx_k9unit:dangerWarnThreat', keySuffix = 'danger_warn_threat' },
     -- client/fetch.lua -- COMMAND_CONSOLIDATION_SPEC.md #3:
     -- k9throwfetchball/k9dropfetchball/k9recallfetchball are now HIDDEN
     -- ALIASES of 'k9fetch' (still real, working RegisterCommand calls --

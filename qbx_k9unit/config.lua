@@ -796,9 +796,8 @@ Config.Features = {
 -- every version of this resource before this table existed. A console
 -- line at boot says which mode is active. Every value below was chosen to
 -- be a NO-OP against Config.Features' own shipped defaults above --
--- tests/featuregroups_spec.lua pins this for all 60 keys, including the
--- four that ship `false` (HandlerXPProgression, DiscordWebhook,
--- CertificationExpiry, DangerWarn) -- so simply adding this table to an
+-- tests/featuregroups_spec.lua pins this for every key, including the
+-- ones that ship `false` -- so simply adding this table to an
 -- existing install changes nothing on its own; only editing a value in it
 -- does.
 --
@@ -3704,6 +3703,43 @@ Config.Combat = {
     -- actions together. If you want dragging allowed but biting not, say
     -- so and it can be split per action.
     ExcludeVehicleSeatedTargets = true,
+
+    -- ==================================================================
+    -- APPREHENSION ANNOUNCEMENT TUNING -- the "warn them before you
+    -- release the dog" step. Only does anything while
+    -- Config.Features.ApprehensionAnnouncement is `true` (it ships
+    -- `false`; see that switch's own comment for why that is a policy
+    -- choice rather than a default).
+    --
+    -- ADDED 2026-08-27. Config.Features.ApprehensionAnnouncement's comment
+    -- said "Tuning is optional -- see Config.Combat.ApprehensionAnnouncement"
+    -- and this table did not exist anywhere in the resource. So an owner
+    -- who turned the feature on, read the invitation, and came looking for
+    -- these three numbers would simply not have found them. Nothing broke,
+    -- because server/announce.lua falls back to exactly the values below
+    -- when the table is absent -- which is also why adding it changes
+    -- nothing on defaults. It just makes the promise true.
+    --
+    -- These three ARE the code's own fallbacks, copied deliberately rather
+    -- than re-picked: server/announce.lua's ResolvedAnnouncementTuning()
+    -- for range and windowMs, and its AnnounceActionCooldown construction
+    -- for the cooldown. If you change one here, the code uses yours; if
+    -- you delete the table, it goes back to these same numbers.
+    ApprehensionAnnouncement = {
+        -- How close the announcing officer must be to the suspect, in
+        -- metres, for the warning to count against that person.
+        range = 8.0,
+
+        -- How long the warning stays good for, in milliseconds. Inside
+        -- this window a bite or takedown against THAT suspect is allowed;
+        -- outside it, refused. 20000 is twenty seconds.
+        windowMs = 20000,
+
+        -- Minimum gap between one officer's announcements, in
+        -- milliseconds, so the warning cannot be spammed. Per announcer,
+        -- not per suspect.
+        announceCooldownMs = 5000,
+    },
 
     -- Applies to BiteAndHold and NonLethalTakedown's player-target paths
     -- below (and would apply to PropDragging's, if/when that's built).

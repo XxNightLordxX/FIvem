@@ -159,6 +159,13 @@ local function newMedkitFixture(opts)
         ResolvePlayerServerIdFromPed = ResolvePlayerServerIdFromPed,
         lib = libStub,
         source = 65535,
+        -- Menu-parity pass (this session): client/medkit.lua now also
+        -- registers a 'k9treat' chat command (RegisterCommand) alongside its
+        -- existing ox_target option / resource-global -- a plain no-op
+        -- stub, same shape as every other fixture in this suite that loads a
+        -- production file registering a command it does not itself need to
+        -- exercise.
+        RegisterCommand = function(_name, _handler, _restricted) end,
     }
 
     local env = Sandbox.newEnv(overrides)

@@ -139,7 +139,13 @@ t.test('"How to Do the Common Things" now includes walkthroughs for Deploy a Ken
     await openHelpScreen(h);
 
     t.equals(findByText(h.getRoot(), 'Deploy a Kennel').length, 1);
-    t.isTrue(findByTextContaining(h.getRoot(), 'Deploy Kennel').length >= 1, 'quotes the real radial menu label');
+    // Menu-parity/menu-audit pass: the radial item this walkthrough quotes
+    // was merged into 'k9_kennel' ("Kennel (Deploy/Enter/Exit)") -- the old
+    // "Deploy Kennel" label no longer exists anywhere in this resource.
+    // Checking for the OLD text here would now pass for the wrong reason
+    // (the new sentence also contains the word "Deploy"), so this asserts
+    // the full, real, current label instead.
+    t.isTrue(findByTextContaining(h.getRoot(), 'Kennel (Deploy/Enter/Exit)').length >= 1, 'quotes the real, current radial menu label');
     t.isTrue(findByTextContaining(h.getRoot(), 'Rest in Kennel').length >= 1, 'quotes the real ox_target label for resting');
     t.isTrue(findByTextContaining(h.getRoot(), 'Pick Up Kennel').length >= 1, 'quotes the real ox_target label for reclaiming it');
 

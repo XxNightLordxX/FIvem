@@ -327,6 +327,38 @@ function RequestTreatNearestK9()
 end
 
 -- ======================================================================
+-- CHAT COMMAND -- Treat K9, self-service path (menu-parity pass: "chat
+-- commands, 3rd eye, and radial menus" -- every feature reachable from all
+-- three). Before this pass, a handler with no visible nearby K9 (or who
+-- simply preferred typing) had no self-initiated entry point at all -- only
+-- the targeted "Treat K9" ox_target option on a specific K9 and
+-- client/radial.lua's own 'k9_treat_nearest' Utility item existed.
+--
+-- A single one-shot action, not a toggle -- dispatches straight into the
+-- SAME resource-global client/radial.lua's own item already calls, with no
+-- pre-check of its own added here: RequestTreatNearestK9() is deliberately
+-- UNGATED on CanShowK9UI() (see its own doc comment above -- "Treat K9" is a
+-- human-handler action, authorized server-side on job/department membership
+-- alone, never on K9 access/model/role for the TREATER), matching
+-- client/radial.lua's own item and client/tablet.lua's own K9Medkit trigger
+-- exactly. Adding a gate here would reintroduce the exact "refused a plain
+-- officer the server would have granted" bug this file's own permission
+-- audit already closed elsewhere -- not a safety improvement, just a
+-- redundant permission check this pass was told to avoid writing.
+--
+-- REGISTERED UNCONDITIONALLY, outside the REGISTRATION-TIME FEATURE GATE
+-- immediately below -- same "reachable-but-inert" posture that block's own
+-- opening comment already establishes for the ox_target option/
+-- RequestTreatNearestK9()/FindNearestTreatableK9() above: RequestTreatNearestK9()
+-- itself already checks Config.Features.K9Medkit and notifies
+-- 'feature_disabled' when it's off, so this command needs no flag check of
+-- its own either.
+-- ======================================================================
+RegisterCommand('k9treat', function()
+    RequestTreatNearestK9()
+end, false)
+
+-- ======================================================================
 -- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) -- mirrors
 -- client/kennel.lua's own identically-shaped "REGISTRATION-TIME FEATURE
 -- GATE" block (read that file's header before changing this one -- this

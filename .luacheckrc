@@ -1273,6 +1273,17 @@ globals = {
     -- client/wellbeing.lua (Phase 4) -- the calm-down action a future
     -- radial entry calls rather than re-deriving its own validation.
     "RequestK9CalmDown",
+    -- client/wellbeing.lua -- MOOD MERGE (this pass, coder-backend):
+    -- COMMAND_CONSOLIDATION_SPEC.md §7 / FEATURE_STRUCTURE_SPEC.md §5's own
+    -- deferred "Pet K9"/"Feed K9" ox_target consolidation, picked up once
+    -- both specs' own "revisit once wellbeing.lua is quiet" condition held.
+    -- RequestCareForK9 is the one merged entry point the ox_target option
+    -- itself now calls, resolving between the other two. RequestPetK9/
+    -- RequestFeedK9 are the two former standalone onSelect bodies,
+    -- preserved as callable resource-globals (HIDDEN ALIASES -- see that
+    -- file's own header note on this section) after their own ox_target
+    -- table entries were folded into the merged option above.
+    "RequestCareForK9", "RequestPetK9", "RequestFeedK9",
     -- server/progression.lua (Phase 4, PHASE4_SPEC.md §13.4.1,
     -- XPProgression) -- real, implemented this pass. AwardXP/GetXPTier are
     -- read from server/tracking.lua (the only current call sites) behind a

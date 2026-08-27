@@ -908,6 +908,43 @@ function ExitK9Vehicle()
     lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.released'), type = 'success' })
 end
 
+-- ======================================================================
+-- CHAT COMMAND -- Enter/Exit K9 Vehicle (menu-parity pass: "chat commands,
+-- 3rd eye, and radial menus" -- every feature reachable from all three).
+-- Before this pass, this mechanic had the "Load Into Vehicle" ox_target
+-- option AND client/radial.lua's own 'k9_vehicle' item, but no chat command
+-- at all.
+--
+-- SAME CONTEXTUAL-DISPATCH SHAPE AS client/radial.lua's own 'k9_vehicle'
+-- item AND client/tablet.lua's FEATURE_TRIGGERS.VehicleEntryExit (read both
+-- before changing this) -- ONE command: IsInK9Vehicle() resolved FIRST,
+-- UNGATED, before ever touching HasK9Access(). ExitK9Vehicle() itself is
+-- deliberately never gated (see its own doc comment: "a K9 whose
+-- certification lapses mid-ride must always be able to get out") -- this is
+-- the exact ordering mistake this resource already shipped once in a
+-- wrapper just like this one (client/radial.lua's own "ORDERING FIX, THIS
+-- PASS" note), so Exit is checked first here on purpose, not as an
+-- afterthought. The Enter branch below matches client/tablet.lua's own
+-- VehicleEntryExit trigger (same 'combat.no_access' reason). Reaches the
+-- SAME two resource-globals (ExitK9Vehicle()/EnterNearestK9Vehicle())
+-- either way -- neither is reimplemented, and EnterNearestK9Vehicle()
+-- performs its own real HasK9Access() gate internally regardless of this
+-- pre-check.
+-- ======================================================================
+RegisterCommand('k9vehicle', function()
+    if IsInK9Vehicle() then
+        ExitK9Vehicle()
+        return
+    end
+
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
+        return
+    end
+
+    EnterNearestK9Vehicle()
+end, false)
+
 -- Resource-restart safety net (adapted for real seating): vehicleState is
 -- a plain Lua local, so it resets to nil on `restart qbx_k9unit`, but a
 -- ped SET_PED_INTO_VEHICLE'd into a real seat does NOT get magically

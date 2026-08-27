@@ -892,15 +892,109 @@ do
         lib.notify({ title = locale('common.notify_title'), description = reasonLabel, type = 'error' })
     end
 
+    --- Raw round trip only, no notification -- shared by RequestPetK9()
+    --- below and RequestCareForK9()'s own fallback path, so the exact same
+    --- FAIL-CLOSED GUARD (see the doc comment this replaces, below) is
+    --- written once, not copy-pasted per caller.
+    --- @param targetServerId number
+    --- @return table? result
+    local function AttemptPetK9(targetServerId)
+        -- FAIL-CLOSED GUARD: `lib.callback.await` throws rather than
+        -- returning nil on a timeout/unregistered-callback rejection (see
+        -- client/main.lua's HasK9Access() doc comment for the full
+        -- citation). pcall it; every caller already treats a nil/falsy
+        -- `result` as a silent no-op (NotifyResult's own
+        -- `if not result then return end`), so a thrown failure degrades to
+        -- that exact same, already-established path instead of aborting
+        -- whichever onSelect/resolution handler called this uncaught.
+        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:petK9', false, targetServerId)
+        if not ok then result = nil end
+        return result
+    end
+
+    --- Raw round trip only, no notification -- see AttemptPetK9's own doc
+    --- comment immediately above for the shared FAIL-CLOSED reasoning.
+    --- @param targetServerId number
+    --- @return table? result
+    local function AttemptFeedK9(targetServerId)
+        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:feedK9', false, targetServerId)
+        if not ok then result = nil end
+        return result
+    end
+
+    --- Resource-global (no `local`) -- HIDDEN ALIAS for the former
+    --- standalone "Pet K9" ox_target option: no longer independently
+    --- registered below (folded into the merged "Care for K9" option), but
+    --- this exact former onSelect body survives here, unchanged, reachable
+    --- by anything that wants an unambiguous, no-resolution pet action --
+    --- see this section's own header "HIDDEN ALIASES" note for the full
+    --- precedent this follows (client/tracking.lua's
+    --- StartScentTrack()/StartBloodTrack()/StartGunpowderTrack()).
+    --- @param targetServerId number
+    function RequestPetK9(targetServerId)
+        NotifyResult(AttemptPetK9(targetServerId), locale('wellbeing.pet_success'))
+    end
+
+    --- Resource-global (no `local`) -- HIDDEN ALIAS for the former
+    --- standalone "Feed K9" ox_target option. Same shape and same reasoning
+    --- as RequestPetK9() immediately above.
+    --- @param targetServerId number
+    function RequestFeedK9(targetServerId)
+        NotifyResult(AttemptFeedK9(targetServerId), locale('wellbeing.feed_success'))
+    end
+
+    --- THE MERGED ENTRY POINT. See this section's own header comment (above
+    --- the `do` this lives inside) for the full "why Feed first, why this
+    --- ONE fallback condition and no other" design writeup -- restated here
+    --- only as the short, call-site version:
+    ---
+    --- Feed is attempted first (the strictly better outcome when possible).
+    --- Exactly ONE fallback condition sends this to Pet instead:
+    --- `feedResult.reason == 'no_item'` -- a WELL-FORMED, CONFIRMED answer
+    --- from the server that the SPECIFIC thing blocking Feed was the missing
+    --- item, nothing else. Every other outcome is reported directly, never
+    --- triggering a second round trip:
+    ---   - `feedResult.ok == true` -- Feed succeeded, done.
+    ---   - any OTHER failure reason (`feature_disabled`/`invalid_target`/
+    ---     `too_far`/`on_cooldown`) -- Pet would fail for the IDENTICAL
+    ---     reason (both callbacks share `Config.Features.MoodSystem`,
+    ---     `ResolveK9Ped`, `MOOD_INTERACT_RANGE`, and the same
+    ---     `AffectionCooldown` instance/key -- confirmed by reading both
+    ---     server-side callbacks directly before writing this) -- retrying
+    ---     would be a guaranteed-redundant round trip for the exact same
+    ---     verdict, not a genuine second chance.
+    ---   - `feedResult == nil` (the round trip itself threw/timed out) --
+    ---     no confirmed answer exists to act on; guessing that Pet would
+    ---     have fared differently is not something this file's own
+    ---     established FAIL-CLOSED discipline does anywhere else. Reported
+    ---     via the same silent-no-op path NotifyResult already gives a nil
+    ---     result (see the FAIL-CLOSED GUARD test coverage this mirrors).
+    --- Neither branch can double-spend `AffectionCooldown`: Feed's own
+    --- server-side check-before-touch ordering (server/wellbeing.lua's own
+    --- feedK9 callback, confirmed by reading it directly) means a `no_item`
+    --- failure NEVER stamps the cooldown, so Pet's own fresh cooldown check
+    --- in the fallback path is judging real, untouched state, not state this
+    --- same click already altered.
+    --- @param targetServerId number
+    function RequestCareForK9(targetServerId)
+        local feedResult = AttemptFeedK9(targetServerId)
+
+        if feedResult and feedResult.reason == 'no_item' then
+            NotifyResult(AttemptPetK9(targetServerId), locale('wellbeing.pet_success'))
+            return
+        end
+
+        NotifyResult(feedResult, locale('wellbeing.feed_success'))
+    end
+
     -- ROUTED THROUGH K9Compat.Get('target') (shared/compat/target.lua),
-    -- never a direct `exports.ox_target` call -- both canInteract/onSelect
-    -- pairs below are unchanged (still authored against ox_target's own
-    -- convention), so an operator running a different supported target
-    -- script gets both options translated automatically instead of losing
-    -- them outright.
+    -- never a direct `exports.ox_target` call -- the canInteract/onSelect
+    -- pair below is unchanged in shape (still authored against ox_target's
+    -- own convention), so an operator running a different supported target
+    -- script gets it translated automatically instead of losing it outright.
     --
     -- LIFECYCLE FIX: extracted into a named function, sole call site the
-    -- AddEventHandler('onResourceStart', ...) below, so both options come
+    -- AddEventHandler('onResourceStart', ...) below, so this option comes
     -- back after a bare restart of whatever resource actually backs the
     -- 'target' system, not just after this resource's own restart -- every
     -- supported target script keeps its own registry in a plain file-local
@@ -909,16 +1003,25 @@ do
     -- server/tracking.lua's RegisterScentInventoryHook /
     -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for
     -- the identical bug class against ox_inventory. DUPLICATE-VS-REPLACE:
-    -- both options below always set `name`, and every adapter's own
+    -- the option below always sets `name`, and every adapter's own
     -- registration primitive dedups/replaces by that same name (or label,
     -- per shared/compat/target.lua's own per-adapter notes), so re-running
-    -- this never duplicates either entry.
+    -- this never duplicates the entry.
     local function RegisterMoodOxTargetOptions()
         K9Compat.Get('target').AddGlobalPlayer({
             {
-                name = 'qbx_k9unit:petK9',
+                -- RENAMED from 'qbx_k9unit:petK9'/'qbx_k9unit:feedK9' (two
+                -- separate entries) to this one merged name -- see this
+                -- section's own header "HIDDEN ALIASES" note for why the
+                -- OLD names are not kept as no-op registrations: an
+                -- ox_target option has no "still reachable, just
+                -- unadvertised" state the way a RegisterCommand call does,
+                -- so the two former onSelect bodies survive as
+                -- RequestPetK9()/RequestFeedK9() instead (above), not as
+                -- dead, permanently-`canInteract=false` table entries.
+                name = 'qbx_k9unit:careForK9',
                 icon = 'fas fa-hand-holding-heart',
-                label = locale('wellbeing.pet_target_label'),
+                label = locale('wellbeing.care_target_label'),
                 distance = 3.0,
                 canInteract = function(entity)
                     if not LiveFeatureFlags.MoodSystem then return false end
@@ -927,52 +1030,20 @@ do
                     -- per-target-cached (1s TTL) server round trip for
                     -- "does THAT player hold the K9 role" -- so a target on
                     -- a human/custom model who already holds the role can
-                    -- still be petted. Matches server/wellbeing.lua's own
+                    -- still be cared for. Matches server/wellbeing.lua's own
                     -- ResolveK9Ped, which already accepts
-                    -- (looksLikeK9 or holdsK9Role) server-side.
+                    -- (looksLikeK9 or holdsK9Role) server-side. UNCHANGED
+                    -- from both former options' own identical predicate
+                    -- (confirmed byte-identical before merging) -- this
+                    -- option appears in exactly the same circumstances
+                    -- either of them did.
                     return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
                 end,
                 onSelect = function(data)
                     local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
                     if not targetServerId then return end
 
-                    -- FAIL-CLOSED GUARD: `lib.callback.await` throws rather
-                    -- than returning nil on a timeout/unregistered-callback
-                    -- rejection (see client/main.lua's HasK9Access() doc
-                    -- comment for the full citation). pcall it; NotifyResult
-                    -- already treats a nil/falsy `result` as a silent no-op
-                    -- (`if not result then return end`), so a thrown
-                    -- failure now degrades to that exact same, already-
-                    -- established path instead of aborting the onSelect
-                    -- handler uncaught.
-                    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:petK9', false, targetServerId)
-                    if not ok then result = nil end
-                    NotifyResult(result, locale('wellbeing.pet_success'))
-                end,
-            },
-            {
-                name = 'qbx_k9unit:feedK9',
-                icon = 'fas fa-bone',
-                label = locale('wellbeing.feed_target_label'),
-                distance = 3.0,
-                canInteract = function(entity)
-                    if not LiveFeatureFlags.MoodSystem then return false end
-                    -- WIDENED (K9 role/model decoupling) -- same
-                    -- IsK9RoleForPlayer(...) reasoning as "Pet K9" above.
-                    return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
-                end,
-                onSelect = function(data)
-                    local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
-                    if not targetServerId then return end
-
-                    -- FAIL-CLOSED GUARD -- same reasoning as the "Pet K9"
-                    -- onSelect handler above (see its comment for the
-                    -- ox_lib/FiveM source citation); NotifyResult's own
-                    -- `if not result then return end` already covers a
-                    -- pcall-caught nil `result`.
-                    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:feedK9', false, targetServerId)
-                    if not ok then result = nil end
-                    NotifyResult(result, locale('wellbeing.feed_success'))
+                    RequestCareForK9(targetServerId)
                 end,
             },
         })

@@ -13,10 +13,20 @@
     Five things this file exists to prove, matching the task's own
     non-negotiables:
       1. NO-OP ON DEFAULTS -- the shipped Config.FeatureGroups resolves to
-         EXACTLY today's shipped Config.Features values, for all 60 keys,
-         including the four that ship `false`.
+         EXACTLY today's shipped Config.Features values, for every key,
+         including the ones that ship `false`.
       2. NEVER SILENTLY RE-ENABLE -- covered by (1) plus an explicit named
-         check on the four ships-false keys.
+         check on the ships-false keys.
+
+         This header said "the four ships-false keys" until 2026-08-27,
+         and by then the body below pinned three -- HandlerXPProgression
+         was deliberately flipped to ship `true` that day, and the test
+         bodies were correctly updated while this prose was not. So the
+         file contradicted itself: header four, body three. Deliberately
+         written without a count now, because a count in prose is a fact
+         that goes stale silently while the assertions underneath it stay
+         correct, and a reader who trusts the summary over the code is
+         exactly who this whole file exists to protect.
       3. DRIFT GUARD -- every real Config.Features key is accounted for by
          exactly one family or the standalone list (this is the exact
          mechanism that would have caught HungerThirstSystem landing

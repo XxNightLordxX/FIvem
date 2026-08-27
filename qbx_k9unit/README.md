@@ -381,12 +381,32 @@ place on a live server.
 
 ### `CertificationExpiry` and `CameraFeedPiP` — the two flags whose names need a word of explanation
 
-**`CertificationExpiry` is the one feature that ships off.** Turning it
-on is *not* destructive — every certification that already exists keeps
-no expiry date, ever, unless a certifier explicitly renews it; only new
-grants and renewals get one. It's off because starting a recertification
-schedule at all is a policy call worth making on purpose, not something
-to inherit by accident.
+**Four features ship switched off, and each one is a policy call rather
+than a default.** They are `CertificationExpiry`, `DiscordWebhook`,
+`DangerWarn` and `ApprehensionAnnouncement`. Nothing is wrong with any
+of them; each just decides something about how your server runs that
+you should decide on purpose rather than inherit.
+
+- **`CertificationExpiry`** — turning it on is *not* destructive. Every
+  certification that already exists keeps no expiry date, ever, unless a
+  certifier explicitly renews it; only new grants and renewals get one.
+  It is off because starting a recertification schedule at all is worth
+  choosing deliberately.
+- **`DiscordWebhook`** — off because it needs a webhook address from you
+  before it can do anything, and because sending your server's activity
+  to an outside service is your call to make.
+- **`DangerWarn`** — lets a K9 signal its handler that something is
+  wrong. Off pending your own review of how it fits your roleplay.
+- **`ApprehensionAnnouncement`** — requires a warning before a dog can
+  be released on somebody. See the note further down.
+
+Remember that a feature switch lives in **two** places: `Config.Features`
+and `Config.FeatureGroups`. If they disagree, the second one silently
+wins — so turn a feature on in both. The resource prints a plain-English
+warning at startup naming any pair that disagrees.
+
+*This section used to say `CertificationExpiry` was the only feature
+shipping off, and never mentioned `DangerWarn` at all.*
 
 **`CameraFeedPiP` ships on, but its name overpromises.** A true
 picture-in-picture — two live camera views on screen at once — isn't
@@ -572,17 +592,24 @@ a stopgap only.
   after roughly 64 seconds), but the repeatable part can't be closed in
   code — there is no way to verify who actually fired a gun. It's a
   policy call about the kind of server you want, not a bug.
-- **Apprehension Announcement (`/k9announce`) is fully built but cannot
-  be turned on, on any install.** The code is real and complete — a
-  keybind (`M` by default), a chat command, a server-side warning
-  window, its own tests — but the switch it's gated on,
-  `Config.Features.ApprehensionAnnouncement`, has never existed in
-  `config.lua`, in this resource's entire history. There is no setting
-  anywhere for you to flip. The command tablet's own Command Reference
-  now says this plainly instead of telling you to "turn it on" for a
-  switch that isn't there. If you want this feature, it needs a small
-  config addition from whoever maintains your `config.lua`, not a
-  toggle — ask them to add the missing flag.
+- **Apprehension Announcement (`/k9announce`) ships switched off, and
+  that is a choice you get to make.** Requiring a warning before a dog
+  can be released is a decision about how use of force works on your
+  server, not a safety default, so it is off until you say otherwise.
+  Set `Config.Features.ApprehensionAnnouncement` to `true` — and its
+  matching entry under `Config.FeatureGroups.Combat`, because a feature
+  switch lives in two places here and the second one silently wins if
+  they disagree. `Config.Combat.ApprehensionAnnouncement` holds the
+  three numbers you can tune (how close you must be, how long the
+  warning lasts, how often it can be given); leaving that table alone
+  keeps the sensible defaults.
+
+  *This entry used to say the opposite — that the feature was fully
+  built but impossible to enable, because its switch had never existed.
+  That was true, and was fixed on 2026-08-27 when the switch and its
+  tuning table were added. The note is corrected here rather than
+  deleted, because if you read the old version you were told to go and
+  ask a developer for something you can now do yourself in two lines.*
 
 ---
 

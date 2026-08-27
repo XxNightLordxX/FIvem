@@ -352,6 +352,14 @@ local function newVehicleFixture(opts)
         exports = exportsTable,
         IsDuplicityVersion = IsDuplicityVersion,
         GetResourceState = GetResourceState,
+        -- Menu-parity pass (this session): client/vehicle.lua now also
+        -- registers a 'k9vehicle' chat command (RegisterCommand) alongside
+        -- its existing ox_target option / resource-globals -- a plain no-op
+        -- stub, same shape as every other fixture in this suite that loads a
+        -- production file registering a command it does not itself need to
+        -- exercise (e.g. tests/tabletlocalization_spec.lua's own
+        -- newFixture()).
+        RegisterCommand = function(_name, _handler, _restricted) end,
     }
 
     if not opts.omitCombatGlobals then

@@ -341,3 +341,25 @@ function RequestOpenOwnK9Inventory()
     local netId = NetworkGetNetworkIdFromEntity(PlayerPedId())
     OpenK9InventoryForNetId(netId)
 end
+
+-- ======================================================================
+-- CHAT COMMAND -- Open My Gear (menu-parity pass: "chat commands, 3rd eye,
+-- and radial menus" -- every feature reachable from all three). Before this
+-- pass, a K9 player's own gear stash was reachable ONLY via the "Open K9
+-- Gear" ox_target option on one's own ped (awkward self-targeting UX, per
+-- this file's own header) and client/radial.lua's own 'k9_open_inventory'
+-- Utility item -- no chat command existed.
+--
+-- A single one-shot action, not a toggle -- RequestOpenOwnK9Inventory()
+-- opens the same stash UI every time it succeeds; there is no "close" half
+-- to resolve, so there is no context to dispatch on. This command therefore
+-- adds NO pre-check of its own: RequestOpenOwnK9Inventory() already performs
+-- its own real CanShowK9UI() gate internally (see its own doc comment a few
+-- lines above) -- adding a second copy of that same check here would only
+-- be a redundant permission check this pass was told to avoid writing, not
+-- a safety improvement, and this command reaches the exact same
+-- resource-global client/radial.lua's own item already calls.
+-- ======================================================================
+RegisterCommand('k9gear', function()
+    RequestOpenOwnK9Inventory()
+end, false)

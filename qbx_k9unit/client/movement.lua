@@ -490,6 +490,61 @@ function DetachLeash()
     TriggerServerEvent('qbx_k9unit:server:detachLeash')
 end
 
+-- ======================================================================
+-- CHAT COMMAND -- Attach/Detach Leash (menu-parity pass: "chat commands,
+-- 3rd eye, and radial menus" -- every feature reachable from all three).
+-- Before this pass, this mechanic had an ox_target entry point AND a
+-- client/radial.lua item, but no chat command at all.
+--
+-- SAME CONTEXTUAL-DISPATCH SHAPE AS client/radial.lua's own 'k9_leash' item
+-- AND client/tablet.lua's FEATURE_TRIGGERS.LeashMechanics (read both before
+-- changing this) -- ONE command, not two, matching the owner's own
+-- direction that a family like this "should all work together like the
+-- scen[t] command does." IsLeashed() is resolved FIRST, UNGATED, exactly
+-- like those two surfaces -- "gate the start, never the stop" applies here
+-- identically. The Attach branch below is the same shape as
+-- client/tablet.lua's own LeashMechanics trigger (same
+-- 'common.no_k9_role_or_access' reason, same 'radial.no_leash_candidate'
+-- notify on no candidate) -- not a fourth, independently-derived copy of
+-- this decision. Reaches the SAME two resource-globals
+-- (DetachLeash()/RequestLeashAttach()) either way; neither is reimplemented
+-- here and no new access rule is introduced -- both already perform their
+-- own real gating internally (DetachLeash() unconditionally;
+-- RequestLeashAttach() via its own IsOwnModelK9()-and-CanShowK9UI() check
+-- a few lines above). This command only decides WHICH of the two to call
+-- and, for Attach, which nearby candidate to send.
+--
+-- FindNearestLeashCandidate() is client/radial.lua's own resource-global
+-- (promoted from `local` specifically so a second caller like this one, or
+-- client/tablet.lua, can reuse it rather than carrying a second, drifting
+-- copy -- see that function's own "SEAM OPENED" doc comment). Reached here
+-- behind a `type(...) == 'function'` runtime existence guard: client/radial.lua
+-- loads AFTER this file (fxmanifest.lua's client_scripts order), but by the
+-- time a player can type this command every client script has already
+-- finished loading regardless -- a runtime existence guard, not a
+-- load-order assumption, matching this resource's established convention.
+-- ======================================================================
+RegisterCommand('k9leash', function()
+    if IsLeashed() then
+        DetachLeash()
+        return
+    end
+
+    if not CanShowK9UI() then
+        DenyK9UIAccess('common.no_k9_role_or_access')
+        return
+    end
+
+    if type(FindNearestLeashCandidate) ~= 'function' then return end
+    local candidateServerId = FindNearestLeashCandidate()
+    if not candidateServerId then
+        lib.notify({ title = locale('common.notify_title'), description = locale('radial.no_leash_candidate'), type = 'error' })
+        return
+    end
+
+    RequestLeashAttach(candidateServerId)
+end, false)
+
 --- Step 1 of the consent handshake, received on the TARGET's client.
 --- @param fromServerId number
 RegisterNetEvent('qbx_k9unit:client:leashAttachRequest', function(fromServerId)

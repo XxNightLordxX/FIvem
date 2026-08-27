@@ -30,14 +30,18 @@
       GUARD" below.
 
     Commands / keybinds (THIS FILE):
-    - 'qbx_k9unit:dangerWarnAlert' -- calls RequestDangerWarn('Alert'), the
-      lower-urgency default (mirrors client/defense.lua's
-      ConfirmHandlerDownDefense choosing 'bite' as its single-keybind
-      default for the identical reason: it is the option with no
-      additional precondition, so a single keypress cannot silently fail
-      for a reason the UI never explained). 'Threat' remains fully
-      reachable via RequestDangerWarn('Threat') for a future second
-      keybind or radial entry -- see RADIAL/KEYBIND CONTRACT below.
+    - 'qbx_k9unit:dangerWarnAlert' -- command + keybind. Calls
+      RequestDangerWarn('Alert'), the lower-urgency default (mirrors
+      client/defense.lua's ConfirmHandlerDownDefense choosing 'bite' as its
+      single-keybind default for the identical reason: it is the option
+      with no additional precondition, so a single keypress cannot silently
+      fail for a reason the UI never explained).
+    - 'qbx_k9unit:dangerWarnThreat' -- command ONLY, no keybind (menu-parity
+      pass -- see this command's own RegisterCommand comment below for the
+      full "every letter is taken" writeup). Calls
+      RequestDangerWarn('Threat') -- the SAME function as Alert, same gate,
+      different string literal. Also reachable via the
+      'k9unit_dangerwarn' radial submenu, unchanged.
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
@@ -121,6 +125,53 @@ end, false)
 RegisterKeyMapping('qbx_k9unit:dangerWarnAlert',
     SafeLocale('dangerwarn.keybind_label', 'K9: Danger Warning (Alert)'),
     'keyboard', (type(Config.DangerWarn) == 'table' and Config.DangerWarn.keybind) or 'N')
+
+-- ======================================================================
+-- CHAT COMMAND ONLY, DELIBERATELY NO KEYBIND -- Danger Warn "Threat"
+-- (menu-parity pass). Its sibling "Alert" immediately above already has
+-- both a command and a keybind -- "Threat" had neither, even though
+-- RequestDangerWarn('Threat') is the exact same function, with the exact
+-- same gating, just a different string literal. The COMMAND half of that
+-- asymmetry is what this closes.
+--
+-- THE KEYBIND HALF WAS ATTEMPTED AND REVERTED, THIS SAME PASS: a first
+-- version of this block also shipped `RegisterKeyMapping(...,
+-- 'keyboard', 'P')`. At the moment that was written, 'P' was verified free
+-- by grepping every client/*.lua literal and config.lua default. It did
+-- not stay free: Config.DangerWarn.keybind (Alert's own default) was
+-- independently changed from 'N' to 'P' later in this same session --
+-- 'N' collided with client/pursuitsprint.lua's own hardcoded default,
+-- a real bug tests/keybindcollisions_spec.lua (new, this session) was
+-- written specifically to catch, and that fix landed on 'P' without this
+-- file's own addition having happened yet. Net result, caught by that same
+-- new test: Alert and Threat would have shared one default key, so a
+-- single keypress would have fired BOTH danger-warn types at once --
+-- exactly the "one press, two actions the player never asked for" failure
+-- that guard exists to prevent, not a cosmetic clash.
+--
+-- Re-checked properly this time (config.lua's own DangerWarn header now
+-- lists every taken letter): every single-letter key this resource's own
+-- convention would reach for is already a shipped default somewhere in
+-- this codebase, and the remaining unused letters (A, D, E, F, Q, R, S, W)
+-- are core GTA movement/interact/vehicle/cover/reload controls this
+-- resource's own convention says never to bind over. There is no letter
+-- left to give this a keybind without either colliding with something
+-- real or fighting the base game.
+--
+-- DECISION: skip the keybind. The gap this pass was actually asked to
+-- close is DISCOVERABILITY (Alert had two entry points and Threat had
+-- zero) -- a chat command already fixes that in full; Threat also remains
+-- reachable via the 'k9unit_dangerwarn' radial submenu, unchanged. A
+-- keybind is a convenience on top of an already-reachable action, and
+-- this resource's own stated direction is LESS clutter, not a forced
+-- keybind purchased at the cost of a real double-fire bug or a
+-- non-letter/function-key default with no precedent anywhere else in this
+-- resource. If a future pass frees a letter (a feature removed, a keybind
+-- retired), Threat is the natural candidate to receive it.
+-- ======================================================================
+RegisterCommand('qbx_k9unit:dangerWarnThreat', function()
+    RequestDangerWarn('Threat')
+end, false)
 
 --- Audio-only bystander/handler-in-range bark relay -- see
 --- server/dangerwarn.lua's header "WHO HEARS WHAT". Applies nothing beyond

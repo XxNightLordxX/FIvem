@@ -1526,6 +1526,24 @@
         cmdref_k9dragtoggle_does: 'Toggles dragging the nearest downed target, or releases it if your K9 is already dragging one.',
         cmdref_k9dragtoggle_needs: 'K9 access, and Prop Dragging enabled on this server.',
 
+        // k9leash/k9vehicle/k9partner/k9gear/k9treat -- menu-parity pass,
+        // see this file's own COMMAND_REFERENCE entries for these five for
+        // the full "why this gate" writeup.
+        cmdref_k9leash_usage: '/k9leash',
+        cmdref_k9leash_does: 'Attaches a leash to the nearest eligible player, or detaches your current leash if you already have one.',
+        cmdref_k9leash_needs: 'K9 access to attach a leash to someone. Detaching is always available, with no certification needed. Leash Mechanics must be turned on for your server.',
+        cmdref_k9vehicle_usage: '/k9vehicle',
+        cmdref_k9vehicle_does: 'Gets your K9 into the nearest K9 vehicle\'s free seat, or gets it back out if it is already riding in one.',
+        cmdref_k9vehicle_needs: 'K9 access to get in. Getting out is always available. Vehicle Entry/Exit must be turned on for your server.',
+        cmdref_k9partner_usage: '/k9partner',
+        cmdref_k9partner_does: 'Sends a Partner Up request to the nearest eligible player, or breaks your current partnership if you already have one.',
+        cmdref_k9partner_needs: 'K9 access to send a Partner Up request. Breaking a partnership is always available, even right after a reconnect. Handler Partnership must be turned on for your server.',
+        cmdref_k9gear_usage: '/k9gear',
+        cmdref_k9gear_does: 'Opens your own K9 gear stash.',
+        cmdref_k9gear_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
+        cmdref_k9treat_usage: '/k9treat',
+        cmdref_k9treat_does: 'Treats the nearest eligible K9 using a medkit from your own inventory.',
+        cmdref_k9treat_needs: 'Your job must be permitted to use K9 medkits (not K9 access or certification of your own), and on some servers an individual grant for this feature too. You must be holding the item this server has configured as a K9 medkit, and there must be an eligible K9 nearby. This feature must be turned on for your server.',
         cmdref_k9deploykennel_usage: '/k9deploykennel',
         cmdref_k9deploykennel_does: 'Places a portable kennel at your feet.',
         cmdref_k9deploykennel_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
@@ -1645,6 +1663,12 @@
         cmdref_danger_warn_alert_usage: '/qbx_k9unit:dangerWarnAlert',
         cmdref_danger_warn_alert_does: 'Tells your partnered handler you have spotted trouble, with a rough direction and distance.',
         cmdref_danger_warn_alert_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
+        // qbx_k9unit:dangerWarnThreat -- menu-parity pass. Same
+        // RequestDangerWarn() function as Alert above, same gate, only the
+        // warning type and urgency differ.
+        cmdref_danger_warn_threat_usage: '/qbx_k9unit:dangerWarnThreat',
+        cmdref_danger_warn_threat_does: 'Tells your partnered handler your K9 is barking at a real, active threat, with a rough direction and distance.',
+        cmdref_danger_warn_threat_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
         cmdref_k9track_usage: '/k9track',
         cmdref_k9track_does: 'Starts a track. Your dog follows whichever trail it is trained to find -- you do not pick the type.',
         cmdref_k9track_needs: 'K9 access. Which trails your dog can follow depends on its specializations.',
@@ -1944,16 +1968,36 @@
         // unlike every other common task on this screen -- reported as a
         // gap in this same pass's own report and closed here to match this
         // section's existing shape. Quoted button/menu/keybind labels below
-        // ("Deploy Kennel", "Rest in Kennel", "Pick Up Kennel", "K9: Toggle
-        // Scent Vision") are each drift-guarded against their real
-        // radial/target/keybind locale values by
+        // ("Kennel (Deploy/Enter/Exit)", "Rest in Kennel", "Pick Up Kennel",
+        // "K9: Toggle Scent Vision") are each drift-guarded against their
+        // real radial/target/keybind locale values by
         // tests/helpquotedlabels_spec.lua, same posture as every other
         // quoted label already on this screen.
+        //
+        // RENAMED, THIS PASS (menu-parity/menu-audit fix): the radial item
+        // this walkthrough describes used to be a standalone "Deploy Kennel"
+        // action with a separate, ungated "Exit Kennel" item beside it. An
+        // owner-directed decluttering pass merged BOTH (plus enter/close/
+        // open) into the ONE 'k9_kennel' item, whose real label is now
+        // "Kennel (Deploy/Enter/Exit)" (locale('radial.kennel_label')) --
+        // see client/radial.lua's own "MERGED, owner-directed decluttering
+        // pass" comment. This walkthrough kept quoting the old, pre-merge
+        // name -- exactly the "guide names a button that does not exist"
+        // bug class this pass's own task flagged by name (the same class as
+        // the tablet-reporting-dead-commands-as-available bug fixed
+        // earlier). Fixed below to quote the real, current label;
+        // tests/helpquotedlabels_spec.lua's own QUOTED_LABEL_CHECKS row was
+        // repointed at 'radial.kennel_label' (the live key) in the same
+        // change -- 'radial.deploy_kennel_label' (the now fully orphaned old
+        // key, still present in locales/en.json's `radial` group, which
+        // this file's own owner cannot edit this pass) has no code or test
+        // reference left anywhere and is reported for removal by whoever
+        // owns that group.
         help_task_kennel_heading: "Deploy a Kennel",
-        help_task_kennel_1: "1. As the K9, open your K9 Unit radial menu and choose \"Deploy Kennel\". It is placed on the ground just in front of you.",
-        help_task_kennel_2: "2. You can only have one active kennel at a time -- pick it back up (open the radial menu again, or use the \"Pick Up Kennel\" option on it) before deploying another.",
+        help_task_kennel_1: "1. As the K9, open your K9 Unit radial menu and choose \"Kennel (Deploy/Enter/Exit)\". It is placed on the ground just in front of you.",
+        help_task_kennel_2: "2. You can only have one active kennel at a time -- pick it back up (walk up to it and use the \"Pick Up Kennel\" option) before deploying another.",
         help_task_kennel_3: "3. Any K9 can use a deployed kennel to rest: walk up to it and choose \"Rest in Kennel\". Choose \"Exit Kennel\" (or use its own keybind) to get back out.",
-        help_task_kennel_4: "4. If \"Deploy Kennel\" is not in the radial menu at all, this feature is turned off on this server -- ask High Command.",
+        help_task_kennel_4: "4. This same \"Kennel (Deploy/Enter/Exit)\" option always appears in the radial menu, even when deploying is turned off -- if choosing it does nothing while you have no kennel out, this feature is disabled on this server -- ask High Command.",
         help_task_scent_vision_heading: "Use Scent Vision",
         help_task_scent_vision_1: "1. As the K9, press the \"K9: Toggle Scent Vision\" key (Z by default, rebindable in Settings > Key Bindings > FiveM) to show coloured dots marking where nearby people have recently walked. Press it again to turn it off.",
         help_task_scent_vision_2: "2. Only a handful of the closest people's trails are shown at once, each its own colour, and the dots fade out and disappear as they get older.",
@@ -2263,7 +2307,24 @@
         { command: 'qbx_k9unit:vault', category: 'combat', adminOnly: false, usageKey: 'cmdref_vault_usage', doesKey: 'cmdref_vault_does', needsKey: 'cmdref_vault_needs', gate: { kind: 'access', featureKey: 'AgilityAdvanced' }, defaultKeybind: 'X' },
         { command: 'qbx_k9unit:pursuitsprint', category: 'combat', adminOnly: false, usageKey: 'cmdref_pursuitsprint_usage', doesKey: 'cmdref_pursuitsprint_does', needsKey: 'cmdref_pursuitsprint_needs', gate: { kind: 'access', featureKey: 'PursuitSprint' }, defaultKeybind: 'N' },
         { command: 'k9announce', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9announce_usage', doesKey: 'cmdref_k9announce_does', needsKey: 'cmdref_k9announce_needs', gate: { kind: 'access', featureKey: 'ApprehensionAnnouncement' }, defaultKeybind: 'M', defaultKeybindConfigurable: true },
-        { command: 'qbx_k9unit:dangerWarnAlert', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_alert_usage', doesKey: 'cmdref_danger_warn_alert_does', needsKey: 'cmdref_danger_warn_alert_needs', gate: { kind: 'access', featureKey: 'DangerWarn' }, defaultKeybind: 'N', defaultKeybindConfigurable: true },
+        // defaultKeybind CORRECTED, this pass: was 'N', now stale --
+        // Config.DangerWarn.keybind was changed to 'P' (config.lua's own
+        // comment on that field: 'N' collided with
+        // client/pursuitsprint.lua's own hardcoded default the moment
+        // DangerWarn was ever switched on). Read directly from config.lua's
+        // current value, not assumed from this entry's own prior text.
+        { command: 'qbx_k9unit:dangerWarnAlert', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_alert_usage', doesKey: 'cmdref_danger_warn_alert_does', needsKey: 'cmdref_danger_warn_alert_needs', gate: { kind: 'access', featureKey: 'DangerWarn' }, defaultKeybind: 'P', defaultKeybindConfigurable: true },
+        // qbx_k9unit:dangerWarnThreat -- menu-parity pass: its sibling Alert
+        // (immediately above) already had a command/keybind; Threat had
+        // neither. This closes the COMMAND half only -- NO defaultKeybind
+        // field here, deliberately: a keybind was attempted and reverted in
+        // the same pass once it collided with Alert's own default (see
+        // client/dangerwarn.lua's own comment on this command for the full
+        // writeup) -- every single-letter default this resource's own
+        // convention would reach for is already spoken for, so this stays
+        // command-only rather than either double-firing with Alert or
+        // binding a non-letter key with no precedent anywhere else here.
+        { command: 'qbx_k9unit:dangerWarnThreat', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_threat_usage', doesKey: 'cmdref_danger_warn_threat_does', needsKey: 'cmdref_danger_warn_threat_needs', gate: { kind: 'access', featureKey: 'DangerWarn' } },
         { command: 'qbx_k9unit:confirmHandlerDownDefense', category: 'combat', adminOnly: false, usageKey: 'cmdref_confirm_handler_down_defense_usage', doesKey: 'cmdref_confirm_handler_down_defense_does', needsKey: 'cmdref_confirm_handler_down_defense_needs', gate: { kind: 'access', featureKey: 'HandlerDownDefense' }, defaultKeybind: 'G', defaultKeybindConfigurable: true },
 
         // ---- Cameras & Vision (this pass, same integration-sweep fix as
@@ -2317,6 +2378,27 @@
         { command: 'k9vision', category: 'vision', adminOnly: false, usageKey: 'cmdref_k9vision_usage', doesKey: 'cmdref_k9vision_does', needsKey: 'cmdref_k9vision_needs', gate: { kind: 'open' }, defaultKeybind: 'I' },
 
         // ---- Field Gear & Equipment ----
+        // k9leash/k9vehicle/k9partner/k9gear/k9treat -- menu-parity pass
+        // ("chat commands, 3rd eye, and radial menus" -- every feature
+        // reachable from all three, a menu audit found these five reachable
+        // only via ox_target and/or the radial menu). Each is a single,
+        // contextual-dispatch command reaching the SAME resource-global(s)
+        // its client/radial.lua item already calls -- see each command's own
+        // RegisterCommand in its owning client/*.lua file for the full
+        // writeup. Grouped here with kennel/propattach/fetch ball/eat/drink
+        // above and below: self-service field actions with no keybind of
+        // their own, the same bucket those already live in.
+        { command: 'k9leash', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9leash_usage', doesKey: 'cmdref_k9leash_does', needsKey: 'cmdref_k9leash_needs', gate: { kind: 'access', featureKey: 'LeashMechanics' } },
+        { command: 'k9vehicle', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9vehicle_usage', doesKey: 'cmdref_k9vehicle_does', needsKey: 'cmdref_k9vehicle_needs', gate: { kind: 'access', featureKey: 'VehicleEntryExit' } },
+        { command: 'k9partner', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9partner_usage', doesKey: 'cmdref_k9partner_does', needsKey: 'cmdref_k9partner_needs', gate: { kind: 'access', featureKey: 'HandlerPartnership' } },
+        { command: 'k9gear', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9gear_usage', doesKey: 'cmdref_k9gear_does', needsKey: 'cmdref_k9gear_needs', gate: { kind: 'access', featureKey: 'K9Inventory' } },
+        // k9treat -- gate: 'open', NOT 'access': server/medkit.lua's real
+        // authorization for the TREATER is job/department membership alone
+        // (IsMedkitUserAuthorized), never k9.access -- see
+        // client/medkit.lua's own header. 'access' would show a wrong badge
+        // (a certified K9 with the wrong job would read "Available"; a
+        // non-K9 EMS officer with the right job would read "Not certified").
+        { command: 'k9treat', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9treat_usage', doesKey: 'cmdref_k9treat_does', needsKey: 'cmdref_k9treat_needs', gate: { kind: 'open', featureKey: 'K9Medkit' } },
         { command: 'k9deploykennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9deploykennel_usage', doesKey: 'cmdref_k9deploykennel_does', needsKey: 'cmdref_k9deploykennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
         // k9exitkennel -- trap-hunt fix. UNCONDITIONAL (gate: 'open', no
         // featureKey at all) on purpose, matching k9dropfetchball/

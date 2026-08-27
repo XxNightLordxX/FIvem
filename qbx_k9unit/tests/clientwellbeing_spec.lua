@@ -452,18 +452,25 @@ local function newWellbeingFixture(opts)
         queueCallbackThrow = function() callbackResponses[#callbackResponses + 1] = THROW end,
         callbackCallCount = function() return #callbackCallLog end,
         lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
+        -- MOOD MERGE (this pass, coder-backend) -- RequestCareForK9() can
+        -- make up to TWO sequential lib.callback.await calls (feedK9, then a
+        -- conditional petK9 fallback); this exposes the full ordered log so
+        -- a test can pin exactly which callback(s) fired, in what order,
+        -- not merely the last one.
+        callbackCallAt = function(n) return callbackCallLog[n] and callbackCallLog[n].event end,
 
-        petOption = function()
+        -- MOOD MERGE (this pass, coder-backend) -- "Pet K9"/"Feed K9" are no
+        -- longer separate ox_target table entries (see
+        -- client/wellbeing.lua's own "HIDDEN ALIASES" header note) -- both
+        -- former onSelect bodies survive as the resource-globals
+        -- RequestPetK9()/RequestFeedK9(), exercised directly in SECTION E
+        -- below rather than through a `def.name` lookup that no longer
+        -- exists. `careOption()` is the ONE real ox_target entry this file
+        -- now registers for Mood.
+        careOption = function()
             for _, defs in ipairs(addGlobalPlayerCalls) do
                 for _, def in ipairs(defs) do
-                    if def.name == 'qbx_k9unit:petK9' then return def end
-                end
-            end
-        end,
-        feedOption = function()
-            for _, defs in ipairs(addGlobalPlayerCalls) do
-                for _, def in ipairs(defs) do
-                    if def.name == 'qbx_k9unit:feedK9' then return def end
+                    if def.name == 'qbx_k9unit:careForK9' then return def end
                 end
             end
         end,
@@ -527,7 +534,10 @@ t.test('every wellbeing flag off: the InjuryLimping thread and all commands/ox_t
     -- loads client/appearance.lua (see the loadInto list above), which now
     -- registers its own global-player option for the K9 Identity feature --
     -- the "who is this dog" lookup. client/wellbeing.lua itself still makes
-    -- exactly ONE AddGlobalPlayer call, for Pet K9/Feed K9, unchanged.
+    -- exactly ONE AddGlobalPlayer call -- for the merged "Care for K9"
+    -- option (MOOD MERGE, this pass -- was two separate defs, Pet K9/Feed
+    -- K9, in that same one call; still one call either way, unchanged by
+    -- the merge).
     -- Counted here rather than filtered because the count is what the
     -- assertion below is really about: registration always happens, and the
     -- refusal lives at the point of use.
@@ -842,33 +852,78 @@ t.test('wellbeingUpdate: source left nil (a bare local TriggerEvent() carrying n
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION E -- "Pet K9" / "Feed K9" (MoodSystem), including the
--- FAIL-CLOSED GUARD around lib.callback.await added the same session this
--- spec was written, and the full NotifyResult reason-label coverage.
+-- SECTION E -- "Care for K9" (MoodSystem), the MOOD MERGE (this pass,
+-- coder-backend): what used to be two separate ox_target options, "Pet K9"
+-- and "Feed K9", is now the one 'qbx_k9unit:careForK9' option, resolving
+-- between the two former server callbacks via RequestCareForK9(). The two
+-- former onSelect bodies themselves survive as RequestPetK9()/
+-- RequestFeedK9(), tested directly below (SECTION E2) rather than through
+-- a `def.name` lookup that no longer exists -- see client/wellbeing.lua's
+-- own "HIDDEN ALIASES" header note.
 -- ----------------------------------------------------------------------
 
-t.test('MoodSystem on: Pet K9/Feed K9 are registered, gated on IsEntityModelK9, and resolve to a real target server id before ever awaiting the server', function()
+t.test('MoodSystem on: the merged "Care for K9" option is registered, gated on IsEntityModelK9, and resolves to a real target server id before ever awaiting the server', function()
     local f = newWellbeingFixture({ features = { MoodSystem = true } })
-    t.isNotNil(f.petOption())
-    t.isNotNil(f.feedOption())
+    t.isNotNil(f.careOption())
 
-    t.isFalse(f.petOption().canInteract(500), 'canInteract must consult IsEntityModelK9, not just the flag')
+    t.isFalse(f.careOption().canInteract(500), 'canInteract must consult IsEntityModelK9, not just the flag')
     f.setEntityIsK9Model(500, true)
-    t.isTrue(f.petOption().canInteract(500))
+    t.isTrue(f.careOption().canInteract(500))
 
     -- ResolvePlayerServerIdFromPed returning nil (e.g. a non-player ped)
     -- must abort before ever touching the server.
-    f.petOption().onSelect({ entity = 501 })
+    f.careOption().onSelect({ entity = 501 })
     t.equals(f.callbackCallCount(), 0)
 end)
 
-t.test('Pet K9: success notifies wellbeing.pet_success; every documented rejection reason gets its OWN distinct label, and an unrecognized reason falls back to reason_generic', function()
+t.test('RESOLUTION: Feed succeeds -> exactly ONE round trip (feedK9 only), notifies wellbeing.feed_success -- the strictly better outcome is taken without ever trying Pet', function()
+    local f = newWellbeingFixture({ features = { MoodSystem = true } })
+    f.setEntityIsK9Model(500, true)
+    f.setServerIdForPed(500, 42)
+    f.queueCallbackResponse({ ok = true })
+    f.careOption().onSelect({ entity = 500 })
+
+    t.equals(f.callbackCallCount(), 1, 'must never attempt Pet once Feed already succeeded')
+    t.equals(f.callbackCallAt(1), 'qbx_k9unit:server:feedK9')
+    t.equals(f.notifyCalls[1].description, locale('wellbeing.feed_success'))
+    t.equals(f.notifyCalls[1].type, 'success')
+end)
+
+t.test('RESOLUTION, THE HARD PART: Feed fails with reason "no_item" -> falls back to Pet automatically, and Pet succeeding is reported as a pet, not a refusal -- THE control that proves this never lands on a bare refusal when a fallback was available', function()
+    local f = newWellbeingFixture({ features = { MoodSystem = true } })
+    f.setEntityIsK9Model(500, true)
+    f.setServerIdForPed(500, 42)
+    f.queueCallbackResponse({ ok = false, reason = 'no_item' }) -- feedK9's answer
+    f.queueCallbackResponse({ ok = true }) -- petK9's answer
+    f.careOption().onSelect({ entity = 500 })
+
+    t.equals(f.callbackCallCount(), 2, 'no_item is the ONE reason that triggers the Pet fallback')
+    t.equals(f.callbackCallAt(1), 'qbx_k9unit:server:feedK9')
+    t.equals(f.callbackCallAt(2), 'qbx_k9unit:server:petK9')
+    t.equals(#f.notifyCalls, 1, 'exactly one final notification -- the intermediate feedK9 failure is never separately surfaced')
+    t.equals(f.notifyCalls[1].description, locale('wellbeing.pet_success'), 'the player sees they PET the K9, never a leftover "you do not have the right item" message for an action they never asked for by name')
+    t.equals(f.notifyCalls[1].type, 'success')
+end)
+
+t.test('RESOLUTION: Feed fails with reason "no_item" and the Pet fallback ALSO fails -- the Pet failure reason is what gets reported, not Feed\'s', function()
+    local f = newWellbeingFixture({ features = { MoodSystem = true } })
+    f.setEntityIsK9Model(500, true)
+    f.setServerIdForPed(500, 42)
+    f.queueCallbackResponse({ ok = false, reason = 'no_item' })
+    f.queueCallbackResponse({ ok = false, reason = 'on_cooldown' })
+    f.careOption().onSelect({ entity = 500 })
+
+    t.equals(f.callbackCallCount(), 2)
+    t.equals(f.notifyCalls[1].description, locale('wellbeing.reason_on_cooldown'))
+    t.equals(f.notifyCalls[1].type, 'error')
+end)
+
+t.test('RESOLUTION: every Feed failure reason OTHER than "no_item" is reported directly -- NEVER a second, guaranteed-redundant round trip against Pet for a reason Pet would fail identically for', function()
     local REASON_LABELS = {
         feature_disabled = locale('wellbeing.reason_feature_disabled'),
         invalid_target = locale('wellbeing.reason_invalid_target'),
         too_far = locale('common.too_far_from_k9'),
         on_cooldown = locale('wellbeing.reason_on_cooldown'),
-        no_item = locale('wellbeing.reason_no_item'),
     }
 
     for reason, expectedLabel in pairs(REASON_LABELS) do
@@ -876,52 +931,64 @@ t.test('Pet K9: success notifies wellbeing.pet_success; every documented rejecti
         f.setEntityIsK9Model(500, true)
         f.setServerIdForPed(500, 42)
         f.queueCallbackResponse({ ok = false, reason = reason })
-        f.petOption().onSelect({ entity = 500 })
+        f.careOption().onSelect({ entity = 500 })
+        t.equals(f.callbackCallCount(), 1, ('reason %q must NOT trigger a Pet fallback round trip'):format(reason))
         t.equals(#f.notifyCalls, 1, ('reason %q must produce exactly one notification'):format(reason))
         t.equals(f.notifyCalls[1].description, expectedLabel, ('reason %q must map to its own documented label'):format(reason))
         t.equals(f.notifyCalls[1].type, 'error')
     end
-
-    local fUnknown = newWellbeingFixture({ features = { MoodSystem = true } })
-    fUnknown.setEntityIsK9Model(500, true)
-    fUnknown.setServerIdForPed(500, 42)
-    fUnknown.queueCallbackResponse({ ok = false, reason = 'a_totally_unrecognized_future_reason' })
-    fUnknown.petOption().onSelect({ entity = 500 })
-    t.equals(fUnknown.notifyCalls[1].description, locale('wellbeing.reason_generic'))
-
-    local fOk = newWellbeingFixture({ features = { MoodSystem = true } })
-    fOk.setEntityIsK9Model(500, true)
-    fOk.setServerIdForPed(500, 42)
-    fOk.queueCallbackResponse({ ok = true })
-    fOk.petOption().onSelect({ entity = 500 })
-    t.equals(fOk.notifyCalls[1].description, locale('wellbeing.pet_success'))
-    t.equals(fOk.notifyCalls[1].type, 'success')
 end)
 
-t.test('Feed K9: shares the SAME reason table as Pet K9, but its own success label (wellbeing.feed_success)', function()
+t.test('RESOLUTION: an unrecognized Feed failure reason falls back to reason_generic and is NOT treated as "no_item"', function()
     local f = newWellbeingFixture({ features = { MoodSystem = true } })
     f.setEntityIsK9Model(500, true)
     f.setServerIdForPed(500, 42)
-    f.queueCallbackResponse({ ok = true })
-    f.feedOption().onSelect({ entity = 500 })
-    t.equals(f.notifyCalls[1].description, locale('wellbeing.feed_success'))
-
-    local fDenied = newWellbeingFixture({ features = { MoodSystem = true } })
-    fDenied.setEntityIsK9Model(500, true)
-    fDenied.setServerIdForPed(500, 42)
-    fDenied.queueCallbackResponse({ ok = false, reason = 'no_item' })
-    fDenied.feedOption().onSelect({ entity = 500 })
-    t.equals(fDenied.notifyCalls[1].description, locale('wellbeing.reason_no_item'))
+    f.queueCallbackResponse({ ok = false, reason = 'a_totally_unrecognized_future_reason' })
+    f.careOption().onSelect({ entity = 500 })
+    t.equals(f.callbackCallCount(), 1)
+    t.equals(f.notifyCalls[1].description, locale('wellbeing.reason_generic'))
 end)
 
-t.test('FAIL-CLOSED GUARD: lib.callback.await throwing on Pet K9 is caught and degrades to a silent no-op (NotifyResult\'s own "if not result then return" path), never an uncaught error', function()
+t.test('FAIL-CLOSED GUARD: lib.callback.await throwing on feedK9 is caught, does NOT trigger a Pet fallback (no confirmed "no_item" answer to act on), and degrades to a silent no-op -- never an uncaught error', function()
     local f = newWellbeingFixture({ features = { MoodSystem = true } })
     f.setEntityIsK9Model(500, true)
     f.setServerIdForPed(500, 42)
     f.queueCallbackThrow()
-    local ok = pcall(function() f.petOption().onSelect({ entity = 500 }) end)
+    local ok = pcall(function() f.careOption().onSelect({ entity = 500 }) end)
     t.isTrue(ok, 'a thrown lib.callback.await must never escape the onSelect handler uncaught')
-    t.equals(#f.notifyCalls, 0, 'DISCLOSED, DELIBERATE ASYMMETRY vs. client/search.lua: a failed pet/feed round trip degrades SILENTLY here (NotifyResult\'s own `if not result then return end`), unlike client/search.lua\'s catch-all error notify for the same class of failure -- both are defined, non-crashing paths, just different UX choices by design')
+    t.equals(f.callbackCallCount(), 1, 'a throw is not a confirmed no_item answer -- must not guess a Pet fallback would have fared differently')
+    t.equals(#f.notifyCalls, 0, 'DISCLOSED, DELIBERATE ASYMMETRY vs. client/search.lua: a failed care round trip degrades SILENTLY here (NotifyResult\'s own `if not result then return end`), unlike client/search.lua\'s catch-all error notify for the same class of failure -- both are defined, non-crashing paths, just different UX choices by design')
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION E2 -- the surviving hidden-alias globals, RequestPetK9()/
+-- RequestFeedK9(): the exact former "Pet K9"/"Feed K9" onSelect bodies,
+-- unchanged, no longer wired to their own ox_target table entry but still
+-- reachable directly -- see client/wellbeing.lua's own "HIDDEN ALIASES"
+-- header note (mirrors client/tracking.lua's StartScentTrack() surviving
+-- the identical class of radial-item merge).
+-- ----------------------------------------------------------------------
+
+t.test('RequestPetK9()/RequestFeedK9() survive as callable resource-globals with their exact former single-action behavior, independent of the merged resolution', function()
+    local f = newWellbeingFixture({ features = { MoodSystem = true } })
+    t.isNotNil(f.env.RequestPetK9, 'RequestPetK9 must survive the Mood merge as a resource-global')
+    t.isNotNil(f.env.RequestFeedK9, 'RequestFeedK9 must survive the Mood merge as a resource-global')
+
+    f.queueCallbackResponse({ ok = true })
+    f.env.RequestPetK9(42)
+    t.equals(f.callbackCallCount(), 1)
+    t.equals(f.callbackCallAt(1), 'qbx_k9unit:server:petK9')
+    t.equals(f.notifyCalls[1].description, locale('wellbeing.pet_success'))
+
+    -- RequestFeedK9 must NEVER fall back to Pet on its own -- that
+    -- resolution behavior belongs ONLY to RequestCareForK9(); a caller who
+    -- deliberately reached for the single-action alias wants exactly that
+    -- one action attempted, nothing else.
+    f.queueCallbackResponse({ ok = false, reason = 'no_item' })
+    f.env.RequestFeedK9(42)
+    t.equals(f.callbackCallCount(), 2, 'RequestFeedK9 alone must make exactly one more call, never a Pet fallback')
+    t.equals(f.callbackCallAt(2), 'qbx_k9unit:server:feedK9')
+    t.equals(f.notifyCalls[2].description, locale('wellbeing.reason_no_item'))
 end)
 
 -- ----------------------------------------------------------------------
