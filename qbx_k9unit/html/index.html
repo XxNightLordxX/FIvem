@@ -165,6 +165,24 @@
         </div>
     </div>
 
+    <!--
+        HANDLER CONDITION BADGE (this pass) -- see app.js's own header
+        "HANDLER CONDITION BADGE CONTRACT" section, and server/wellbeing.lua's
+        "HANDLER CONDITION BADGE" header section, for the full design.
+        Deliberately a SEPARATE element from #k9hud above, not one more row
+        inside it: #k9hud's own visibility is driven by CanShowK9UI() --
+        true only for the LOCAL player's OWN K9 vitals -- which is false for
+        the overwhelming common case this badge exists for (a human handler
+        who is not themselves K9-modeled). Starts hidden; only unhidden by a
+        `hud:partnerCondition` push carrying `visible: true` (see app.js's
+        applyPartnerCondition()) -- independent of #k9hud.hidden, and never
+        toggled by anything in this file's own `hud:updateVitals` handling.
+    -->
+    <div id="k9partner-badge" class="k9partner-badge hidden" aria-hidden="true">
+        <span class="k9partner-badge-label" data-partner="label">K9 Partner</span>
+        <span class="k9partner-badge-value" data-partner="value">--</span>
+    </div>
+
     <script src="app.js"></script>
 
     <!--

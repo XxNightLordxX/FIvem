@@ -660,6 +660,49 @@ end
 --- the catalog file let it be manufactured at runtime. Nothing in THIS
 --- function changed to close that hole -- the fix is a refusal one layer
 --- up, in the only place a brand-new catalog key can ever be created.
+-- ADMIN-CAPABILITY BLOCK NAMESPACE (security-audit pass, this pass --
+-- "assess, then decide" -- see server/certifications.lua's HasK9Access/
+-- IsEligibleCertifier and server/admin.lua's IsAuthorizedAdmin, all three
+-- of which now consult 'block.k9.access'/'block.k9.certify'/'block.k9.audit'
+-- respectively, for the full "why" writeup this table exists to name).
+--
+-- THE GAP THIS CLOSES: 'k9.access'/'k9.certify'/'k9.audit'/'k9.givexp' each
+-- have an INDEPENDENT, non-grant-based qualification route -- HasK9Access's
+-- own autoAccessGrade/certification-cache bypasses, IsEligibleCertifier's
+-- own certifierGrade/job.isboss bypasses, IsAuthorizedAdmin's own
+-- auditGrade/job.isboss bypasses, every one of them ALSO reachable via
+-- Config.Features.HighCommand regardless of rank -- that RevokePermission
+-- can never touch, because there is no grant row to revoke in the first
+-- place. Before this pass, the ONLY lever available to restrain one such
+-- officer was demoting their rank or removing them from High Command,
+-- which this resource's own owner has repeatedly stated is NOT an
+-- acceptable substitute for a scoped, per-person restriction (see
+-- config.lua's own Config.FeatureControl header: "an explicit block...
+-- can never switch something on, only off" -- the identical principle,
+-- previously implemented for Config.Features keys only).
+--
+-- ONLY these four -- NOT every Config.Permissions/catalog key -- because a
+-- CUSTOM key (one with no rank-based bypass of its own, e.g.
+-- 'k9.runtimecontrol') is ALREADY fully controlled by RevokePermission
+-- alone: there is no independent route around a revoke for a key that is
+-- pure grant, so a second, parallel "block" for it would be redundant, not
+-- safer -- exactly IsValidPermissionKey's own established "narrower than
+-- it could be, on purpose" posture for the feature./block. namespace above.
+-- A small, explicit, hand-maintained set (this resource's own established
+-- pattern for a genuinely small, closed list -- see LEGACY_PERMISSION_KEYS,
+-- server/tablet.lua, for the near-identical precedent this mirrors; kept
+-- as its own copy here rather than a shared export for the same
+-- "each file keeps its own tiny copy of a genuinely small, self-contained
+-- check" reasoning server/permissions.lua's own IsDuplicateKeyError doc
+-- comment already names).
+--
+-- DELIBERATELY 'block.' ONLY, never 'feature.k9.access' etc: there is no
+-- POSITIVE-grant concept to add here -- the bare capability key itself
+-- ('k9.access') already IS the real, existing positive grant; a second,
+-- redundant 'feature.k9.access' grant would just be a confusing synonym
+-- for the same fact HasPermission(citizenid, 'k9.access') already answers.
+local ADMIN_CAPABILITY_BLOCKABLE_KEYS = { ['k9.access'] = true, ['k9.certify'] = true, ['k9.audit'] = true, ['k9.givexp'] = true }
+
 --- @param value any
 --- @return boolean
 local function IsValidPermissionKey(value)
@@ -672,6 +715,19 @@ local function IsValidPermissionKey(value)
     if type(Config.Features) == 'table' then
         local featureName = value:match('^feature%.(.+)$') or value:match('^block%.(.+)$')
         if featureName ~= nil and Config.Features[featureName] ~= nil then
+            return true
+        end
+    end
+
+    -- ADMIN-CAPABILITY BLOCK NAMESPACE (this pass) -- see
+    -- ADMIN_CAPABILITY_BLOCKABLE_KEYS' own doc comment immediately above
+    -- for the full "why only these four, why 'block.' only" writeup.
+    -- Checked here, alongside (not instead of) the feature./block. branch
+    -- above -- a literal 'block.k9.access' can never collide with that
+    -- branch since 'k9.access' is never a Config.Features key.
+    do
+        local capabilityName = value:match('^block%.(k9%..+)$')
+        if capabilityName ~= nil and ADMIN_CAPABILITY_BLOCKABLE_KEYS[capabilityName] == true then
             return true
         end
     end

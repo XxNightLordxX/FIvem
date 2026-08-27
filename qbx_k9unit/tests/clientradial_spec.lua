@@ -447,6 +447,11 @@ local function newRadialFixture(opts)
         -- 'k9_open_tablet' tests near the bottom of this file for the full
         -- writeup of the nesting bug this pass fixes.
         OpenTablet = record('OpenTablet'),
+        -- VISION MERGE (coder-architect, this pass) -- k9_vision_cycle's
+        -- only call target, client/vision.lua's CycleVision(). No
+        -- CanShowK9UI()/HasK9Access() gate of its own -- see that item's own
+        -- comment in client/radial.lua.
+        CycleVision = record('CycleVision'),
     }
 
     local overrides = {
@@ -527,6 +532,14 @@ local function newRadialFixture(opts)
         -- "flap for a reason that has nothing to do with client/radial.lua"
         -- failure mode this baseline exists to prevent.
         SARCalls = false, TrainingMode = false,
+        -- NightVision/ThermalVision -- ADDED THIS PASS (vision merge,
+        -- coder-architect), same reasoning as SARCalls/TrainingMode above:
+        -- both ship `true` in the real, live config.lua, and the new
+        -- k9_vision_cycle item is gated on an OR of the two -- left
+        -- unpinned here, every "absent under baseline" test in this file
+        -- would flap depending on the real file's live values, exactly the
+        -- failure mode this baseline table exists to prevent.
+        NightVision = false, ThermalVision = false,
     }
     for key, value in pairs(baseline) do
         env.Config.Features[key] = value
@@ -704,6 +717,7 @@ t.test('this spec\'s baseline flags: Bark, Leash, Vehicle, Utility (Phase 1 + re
         -- see the dedicated 'k9unit_utility' presence tests below.
         'k9_prop_attachment', 'k9_open_inventory', 'k9_treat_nearest',
         'k9_sar_call', 'k9_training',
+        'k9_vision_cycle', -- vision merge (this pass) -- gated on NightVision/ThermalVision, both pinned false in this file's own baseline above
     }
     for _, id in ipairs(shouldBeAbsent) do
         t.isFalse(presentIds[id] == true, ('%s must be absent from the top-level k9unit menu'):format(id))
@@ -801,6 +815,40 @@ for _, flag in ipairs({ 'ScentTracking', 'BloodTracking', 'GunpowderSniffing' })
         t.isNotNil(f.findInMenu('k9unit', 'k9_track_certified'), ('k9_track_certified must appear once %s alone is true'):format(flag))
     end)
 end
+
+-- ----------------------------------------------------------------------
+-- k9_vision_cycle (vision merge, coder-architect, this pass) -- the ONE
+-- merged item cycling Night/Thermal Vision. Same OR-of-flags shape as
+-- k9_track_certified above (display-only gate: "is at least one mode even
+-- switched on"), tested the identical way -- not folded into
+-- FALSE_BY_DEFAULT_SINGLE_ITEM_CASES since that helper assumes a strict
+-- one-flag-to-one-item mapping this item does not have.
+-- ----------------------------------------------------------------------
+t.test('k9_vision_cycle: absent when NightVision and ThermalVision are both false (this baseline)', function()
+    local f = newRadialFixture()
+    t.isNil(f.findInMenu('k9unit', 'k9_vision_cycle'))
+end)
+
+for _, flag in ipairs({ 'NightVision', 'ThermalVision' }) do
+    t.test(('k9_vision_cycle: appears when ONLY %s is true (gated on an OR of the two, not an AND)'):format(flag), function()
+        local f = newRadialFixture({ features = { [flag] = true } })
+        t.isNotNil(f.findInMenu('k9unit', 'k9_vision_cycle'), ('k9_vision_cycle must appear once %s alone is true'):format(flag))
+    end)
+end
+
+t.test('k9_vision_cycle: onSelect calls CycleVision() exactly once, and consults NEITHER CanShowK9UI NOR HasK9Access -- deliberately ungated, matching client/vision.lua\'s own IsOwnModelK9()-only philosophy', function()
+    local f = newRadialFixture({ features = { NightVision = true }, canShowK9UI = false, hasK9Access = false })
+    f.findInMenu('k9unit', 'k9_vision_cycle').onSelect()
+    t.equals(#f.calls.CycleVision, 1)
+    t.equals(f.canShowK9UICallCount(), 0, 'k9_vision_cycle must never call CanShowK9UI -- gating is CycleVision()/Toggle*Vision()\'s own job (IsOwnModelK9() only)')
+    t.equals(f.hasK9AccessCallCount(), 0, 'k9_vision_cycle must never call HasK9Access either, for the same reason')
+    t.equals(f.denyCallCount(), 0, 'no DenyK9UIAccess call either, since the gate it would guard is never consulted')
+end)
+
+t.test('FIXED-SHAPE GUARD: k9_vision_cycle does not throw when CycleVision is entirely absent', function()
+    local f = newRadialFixture({ features = { ThermalVision = true }, omit = { 'CycleVision' } })
+    assertGuardDoesNotThrow(f.findInMenu('k9unit', 'k9_vision_cycle'))
+end)
 
 -- ----------------------------------------------------------------------
 -- Per-flag presence: flags that ship TRUE (Phase 1) -- prove the item

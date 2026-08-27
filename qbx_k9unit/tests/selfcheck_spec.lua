@@ -291,7 +291,7 @@ end)
 -- tests/runtimefeaturetiers_spec.lua's own boot() helper.
 -- ----------------------------------------------------------------------
 
---- @param overrides table { resourceStates, resourceVersions, resourceFiles, config, k9Store }
+--- @param overrides table { resourceStates, resourceVersions, resourceFiles, config, k9Store, k9Compat }
 local function boot(overrides)
     overrides = overrides or {}
     local printedLines = {}
@@ -323,6 +323,7 @@ local function boot(overrides)
         print = printStub,
         Config = overrides.config or { Features = {} },
         K9Store = overrides.k9Store,
+        K9Compat = overrides.k9Compat,
     })
 
     Sandbox.loadInto('../server/selfcheck.lua', env)
@@ -508,6 +509,176 @@ t.test('SPECIALIZATION GATE: the result is always in ascending trail order, so t
         t.isTrue(gated[i - 1].trackType < gated[i].trackType,
             'entry ' .. i .. ' must sort after entry ' .. (i - 1))
     end
+end)
+
+-- ======================================================================
+-- K9 EQUIPMENT SHOP PURCHASE-ENFORCEMENT BACKEND CHECK (coder-security,
+-- this pass). The red-team finding this answers claimed that on a
+-- qb-inventory server, a modified client could buy a tier/specialization-
+-- gated K9 Supply shop item for free because the buyItem hook silently
+-- fails to register there. VERIFIED against the real code: it does not --
+-- server/equipmentshop.lua's own ActivateEquipmentShopIfEnabled already
+-- refuses to ever call RegisterShop unless BOTH the openShop and buyItem
+-- hooks confirm registered, so the real, current behavior on such a
+-- backend is "the shop is not offered at all", never "sold unenforced".
+-- These tests pin THAT fact (never re-litigate a bug that isn't there),
+-- and pin the NEW part: that fact is now also visible on the one line an
+-- owner actually reads (the boot summary), not just in scrollback.
+--
+-- RED/GREEN PROOF PERFORMED FOR THIS PASS: K9SelfCheck.EvaluateEquipmentShopEnforcement
+-- was temporarily changed to `return 'ok'` unconditionally (i.e. every
+-- backend "supported", the exact bug this check exists to prevent an owner
+-- from being told). Every test in this section named 'unsupported_backend'
+-- or 'unknown' immediately went red (clean, named assertion failures, never
+-- a whole-suite crash). The file was restored to its real, working form
+-- immediately afterward; the version in the working tree is the fixed one.
+-- ======================================================================
+
+--- @param inventoryBackendName string? -- nil = K9Compat.Which('inventory') itself returns nil (no usable backend detected)
+--- @return table -- a fake K9Compat exposing only Which(system), which is all this check ever calls
+local function fakeK9Compat(inventoryBackendName)
+    return {
+        Which = function(system)
+            if system == 'inventory' then return inventoryBackendName end
+            return nil
+        end,
+    }
+end
+
+t.test('EvaluateEquipmentShopEnforcement: feature off -- not_applicable, regardless of backend', function()
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(false, 'ox_inventory'), 'not_applicable')
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(nil, 'qb-inventory'), 'not_applicable')
+end)
+
+t.test('EvaluateEquipmentShopEnforcement: feature on, ox_inventory detected -- ok (the only CONFIRMED-capable backend)', function()
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(true, 'ox_inventory'), 'ok')
+end)
+
+t.test('EvaluateEquipmentShopEnforcement: feature on, qb-inventory detected -- unsupported_backend (the exact finding this check answers)', function()
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(true, 'qb-inventory'), 'unsupported_backend')
+end)
+
+t.test('EvaluateEquipmentShopEnforcement: feature on, no backend detected at all (nil) -- unsupported_backend, never treated as "unknown, say nothing"', function()
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(true, nil), 'unsupported_backend')
+end)
+
+t.test('EvaluateEquipmentShopEnforcement: feature on, some other named backend (e.g. ps-inventory) -- unsupported_backend', function()
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(true, 'ps-inventory'), 'unsupported_backend')
+end)
+
+t.test('EvaluateEquipmentShopEnforcement: feature on, an operator-authored custom adapter -- unknown, never a false "unsupported" alarm', function()
+    t.equals(K9SelfCheck.EvaluateEquipmentShopEnforcement(true, 'custom'), 'unknown')
+end)
+
+t.test('FormatEquipmentShopEnforcementWarning: ok/not_applicable print nothing -- the "say nothing" cases', function()
+    t.isNil(K9SelfCheck.FormatEquipmentShopEnforcementWarning('ok', 'ox_inventory'))
+    t.isNil(K9SelfCheck.FormatEquipmentShopEnforcementWarning('not_applicable', nil))
+end)
+
+t.test('FormatEquipmentShopEnforcementWarning: unsupported_backend names the detected backend and is LOUD ("!!")', function()
+    local line = K9SelfCheck.FormatEquipmentShopEnforcementWarning('unsupported_backend', 'qb-inventory')
+    t.isNotNil(line)
+    t.contains(line, '!!')
+    t.contains(line, 'qb-inventory')
+    t.contains(line, 'K9EquipmentShop')
+end)
+
+t.test('FormatEquipmentShopEnforcementWarning: unsupported_backend with no backend at all still names something readable, never "nil"', function()
+    local line = K9SelfCheck.FormatEquipmentShopEnforcementWarning('unsupported_backend', nil)
+    t.isNotNil(line)
+    t.notContains(line, 'nil')
+    t.contains(line, 'no inventory backend detected')
+end)
+
+t.test('FormatEquipmentShopEnforcementWarning: unknown (custom adapter) is informational, never alarming ("!!")', function()
+    local line = K9SelfCheck.FormatEquipmentShopEnforcementWarning('unknown', 'custom')
+    t.isNotNil(line)
+    t.notContains(line, '!!', 'an unverifiable custom adapter is not a confirmed problem -- must not read as one')
+end)
+
+t.test('BuildBootSummaryLine: equipmentShop clause is omitted entirely when not_applicable (feature off)', function()
+    local line = K9SelfCheck.BuildBootSummaryLine({
+        databaseState = 'connected',
+        equipmentShop = { status = 'not_applicable' },
+    })
+    t.notContains(line, 'K9 Supply shop')
+end)
+
+t.test('BuildBootSummaryLine: equipmentShop clause reports "enforced" when ok', function()
+    local line = K9SelfCheck.BuildBootSummaryLine({
+        databaseState = 'connected',
+        equipmentShop = { status = 'ok' },
+    })
+    t.contains(line, 'K9 Supply shop: enforced')
+end)
+
+t.test('BuildBootSummaryLine: equipmentShop clause reports NOT offered when unsupported_backend', function()
+    local line = K9SelfCheck.BuildBootSummaryLine({
+        databaseState = 'connected',
+        equipmentShop = { status = 'unsupported_backend' },
+    })
+    t.contains(line, 'K9 Supply shop: NOT offered')
+end)
+
+-- ----------------------------------------------------------------------
+-- END-TO-END: real onResourceStart wiring, real K9Compat.Which() call
+-- ----------------------------------------------------------------------
+
+t.test('END-TO-END: Config.Features.K9EquipmentShop on ox_inventory prints no equipment-shop warning, and the boot summary says enforced', function()
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB .. '\nK9EquipmentShop = { tier = \'onstart\' },' },
+        config = { Features = { RadialMenu = true, K9EquipmentShop = true } },
+        k9Compat = fakeK9Compat('ox_inventory'),
+    })
+    for _, line in ipairs(f.printedLines) do
+        t.notContains(line, 'cannot enforce', 'ox_inventory is the confirmed-capable backend -- no warning expected: ' .. line)
+    end
+    local lastLine = f.printedLines[#f.printedLines]
+    t.contains(lastLine, 'K9 Supply shop: enforced')
+end)
+
+t.test('END-TO-END: Config.Features.K9EquipmentShop on qb-inventory prints a loud, named warning, and the boot summary says NOT offered -- THE EXACT RED-TEAM SCENARIO', function()
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB .. '\nK9EquipmentShop = { tier = \'onstart\' },' },
+        config = { Features = { RadialMenu = true, K9EquipmentShop = true } },
+        k9Compat = fakeK9Compat('qb-inventory'),
+    })
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('!!', 1, true) and line:find('qb-inventory', 1, true) and line:find('K9EquipmentShop', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'expected a loud, named warning about qb-inventory being unable to enforce K9EquipmentShop')
+    local lastLine = f.printedLines[#f.printedLines]
+    t.contains(lastLine, 'K9 Supply shop: NOT offered')
+end)
+
+t.test('END-TO-END: Config.Features.K9EquipmentShop off prints no equipment-shop line at all, on any backend', function()
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB .. '\nK9EquipmentShop = { tier = \'onstart\' },' },
+        config = { Features = { RadialMenu = true, K9EquipmentShop = false } },
+        k9Compat = fakeK9Compat('qb-inventory'),
+    })
+    for _, line in ipairs(f.printedLines) do
+        t.notContains(line, 'cannot enforce', 'the feature is off -- nothing about equipment-shop enforcement should be mentioned at all: ' .. line)
+    end
+    local lastLine = f.printedLines[#f.printedLines]
+    t.notContains(lastLine, 'K9 Supply shop')
+end)
+
+t.test('END-TO-END: K9Compat entirely absent from the environment never throws -- degrades to nil backend, still reported honestly', function()
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB .. '\nK9EquipmentShop = { tier = \'onstart\' },' },
+        config = { Features = { RadialMenu = true, K9EquipmentShop = true } },
+        -- k9Compat deliberately omitted -- exactly the plain-Lua-sandbox shape
+    })
+    local lastLine = f.printedLines[#f.printedLines]
+    t.contains(lastLine, 'K9 Supply shop: NOT offered', 'no K9Compat at all means no usable backend either -- must still fail closed, never silently say nothing')
 end)
 
 os.exit(t.summary())

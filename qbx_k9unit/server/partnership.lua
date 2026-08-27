@@ -351,6 +351,21 @@
       the three partnership server events above -- same "keep the full
       subsystem confined to one client/one server file" discipline
       server/main.lua's own header establishes for leash.
+    - DELIBERATELY NO CALL INTO server/wellbeing.lua FROM DoBreakPartnership
+      (THIS PASS, coder-backend, "handler condition badge" feature -- see
+      that file's own header section of the same name): a genuine reverse
+      dependency here (server/wellbeing.lua loads AFTER this file in
+      fxmanifest.lua's server_scripts) would need a brand-new resource-
+      global name added to the repo-root .luacheckrc's `globals` allow-list,
+      a shared file this pass does not own (other agents are concurrently
+      editing it). Not needed anyway: server/wellbeing.lua's own
+      PushHandlerConditionUpdate already re-resolves
+      GetActivePartnerCitizenId(k9Citizenid) fresh on its own very next
+      tick and clears a stale badge itself the moment it finds no active
+      partnership -- self-healing, bounded to one
+      Config.Wellbeing.tickIntervalMs (default 5000ms), not "forever." A
+      direct hook here would only shave that bound down to "immediate,"
+      never fix a case that would otherwise go unfixed.
 ]]
 
 -- Partnerships[citizenid] = { partner = partnerCitizenid, isK9 = boolean,

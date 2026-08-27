@@ -37,6 +37,16 @@ const t = require('./testkit');
 const { createHarness, jsonResponse } = require('./tablet-sandbox');
 const { findByText } = require('./tablet-dom-stub');
 
+// Mirrors html/tablet.js's own DEFAULT_STRINGS.action_failed (kept in sync
+// with locales/en.json's tablet.action_failed -- see that key's own doc
+// comment / the three-way contract tests/tabletlocalization_spec.lua
+// enforces). None of these tests ever supply a `strings` payload on
+// `tablet:open`, so S('action_failed') always falls through to this exact
+// DEFAULT_STRINGS value -- hardcoded here, not derived, matching this
+// file's own established convention of spelling out every other expected
+// sentence (CERTIFY_REASON_TEXT below) literally rather than importing it.
+const GENERIC_ACTION_FAILED_TEXT = 'Action failed — try again, and if it keeps happening, tell an admin.';
+
 function routeFetch(handlers) {
     return function (url, init) {
         const name = url.split('/').pop();
@@ -117,7 +127,15 @@ for (const [reason, expectedText] of Object.entries(CERTIFY_REASON_TEXT)) {
         await new Promise((r) => setTimeout(r, 30));
 
         t.isTrue(findByText(h.getRoot(), expectedText).length >= 1, `expected distinct text for '${reason}': ${JSON.stringify(expectedText)}`);
-        t.equals(findByText(h.getRoot(), 'Action failed.').length, 0, `'${reason}' must not fall back to the generic failure line`);
+        // PERMISSION AUDIT FOLLOW-UP, SMALLER JOB (this pass): the generic
+        // fallback's own text was improved (locales/en.json's
+        // tablet.action_failed / html/tablet.js's own DEFAULT_STRINGS.
+        // action_failed, kept in sync) -- this must keep searching for
+        // whatever that generic text CURRENTLY is, not a stale literal, or
+        // this assertion would trivially pass for the wrong reason (the old
+        // literal simply never appearing any more, regardless of whether
+        // the code actually fell back to the new generic line).
+        t.equals(findByText(h.getRoot(), GENERIC_ACTION_FAILED_TEXT).length, 0, `'${reason}' must not fall back to the generic failure line`);
     });
 }
 
@@ -165,7 +183,7 @@ t.test('tablet:grantPermission refusal \'self_grant_blocked\' renders its own di
     await new Promise((r) => setTimeout(r, 30));
 
     t.isTrue(findByText(h.getRoot(), 'You cannot grant this to yourself.').length >= 1);
-    t.equals(findByText(h.getRoot(), 'Action failed.').length, 0);
+    t.equals(findByText(h.getRoot(), GENERIC_ACTION_FAILED_TEXT).length, 0);
 });
 
 t.test('tablet:revertK9Ped refusal \'no_fallback_configured\' renders its own distinct, actionable message', async () => {
@@ -186,7 +204,7 @@ t.test('tablet:revertK9Ped refusal \'no_fallback_configured\' renders its own di
     t.isTrue(
         findByText(h.getRoot(), 'No fallback human model is configured on this server. Contact an administrator before reverting this target.').length >= 1
     );
-    t.equals(findByText(h.getRoot(), 'Action failed.').length, 0);
+    t.equals(findByText(h.getRoot(), GENERIC_ACTION_FAILED_TEXT).length, 0);
 });
 
 // ======================================================================

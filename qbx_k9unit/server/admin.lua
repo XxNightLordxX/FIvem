@@ -682,6 +682,31 @@ local function IsAuthorizedAdmin(source)
     -- immediately below already reads from this exact field.
     local citizenid = Player.PlayerData.citizenid
 
+    -- EXPLICIT PER-PERSON CAPABILITY BLOCK (security-audit pass, this pass
+    -- -- see server/permissions.lua's own ADMIN_CAPABILITY_BLOCKABLE_KEYS
+    -- doc comment for the full "why", and server/certifications.lua's
+    -- HasK9Access/IsEligibleCertifier for the identical addition applied
+    -- there). Checked BEFORE job.isboss, deliberately -- this is the ONE
+    -- bypass in this function 'block.k9.audit' must beat too, matching the
+    -- owner's own "an explicit block beats everything, including High
+    -- Command" model, mirrored here for the boss short-circuit exactly as
+    -- IsEligibleCertifier now does for its own.
+    --
+    -- DISTINCT FROM, AND CHECKED SEPARATELY FROM, `block.AdminAuditCommands`
+    -- below (IsAdminFeaturePermittedForCitizenId) -- the two answer
+    -- different questions and are not a duplicate: this narrows whether
+    -- `citizenid` holds the 'k9.audit' CAPABILITY at all (the same fact
+    -- server/tablet.lua's own effectivePermissions listing and every other
+    -- 'k9.audit' consumer cares about), while `block.AdminAuditCommands`
+    -- narrows only whether THIS FILE's own five slash commands specifically
+    -- remain usable for someone who separately still holds the capability.
+    -- A citizenid can be blocked from one without the other, and both are
+    -- meaningful independently -- exactly why this is a NEW, additive
+    -- check rather than a replacement for the existing one.
+    if type(HasPermission) == 'function' and HasPermission(citizenid, 'block.k9.audit') then
+        return false
+    end
+
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold -- same rule, same reasoning, as
     -- server/certifications.lua's IsEligibleCertifier. PER-PERSON FEATURE

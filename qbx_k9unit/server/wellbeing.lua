@@ -252,6 +252,44 @@
        only ever seeing the value this client's OWN copy of config.lua
        shipped with at that client's own resource start. Same shape from
        `getWellbeingSnapshot` (item 1 above) for the on-demand fetch path.
+    12. 'qbx_k9unit:client:partnerConditionUpdate' (payload: { visible:
+       boolean, tags: string[] }) [server->client, THE BONDED HANDLER
+       ONLY, client/hud.lua] — THIS PASS. Closes the production-readiness
+       audit's own "a handler cannot tell how their own dog is doing" gap.
+       Every tick this file already runs for a tracked K9 (no second
+       thread — see PushHandlerConditionUpdate below, called from the
+       exact same per-K9 loop that already builds/sends item 11 above),
+       the K9's CURRENT PARTNER is resolved SERVER-SIDE via
+       server/partnership.lua's GetActivePartnerCitizenId(k9Citizenid) —
+       never from anything a client claims — and, only if that partner is
+       currently online, sent a small set of COARSE condition tags derived
+       from this file's OWN existing per-stat thresholds, never a new
+       number and never the raw 0-100 value: 'tired' (Fatigue <=
+       speedPenaltyThreshold), 'unhappy' (Mood <=
+       performancePenaltyThreshold), 'stressed' (FearStress >=
+       hesitationThreshold), 'injured' (Injury <= sprintBlockThreshold),
+       'hungry'/'thirsty' (Hunger/Thirst <= lowThreshold). `tags` is empty
+       (not omitted) when every enabled stat is currently in its healthy
+       band — client/hud.lua renders that as "Fine." Each tag is gated on
+       its OWN Config.Features flag (a disabled stat contributes no tag,
+       ever — see ComputeHandlerConditionTags), and the whole feature is
+       additionally gated on Config.Features.HandlerPartnership. Sent ONLY
+       on change (a new tagsKey, a partner change, or the resolved
+       handler reconnecting under a new source id — see
+       PushHandlerConditionUpdate's own comment), never every tick
+       regardless of whether anything moved. `visible = false` (`tags`
+       always `{}` alongside it) is this feature's explicit CLEAR signal,
+       sent whenever there is nothing left to report: no active
+       partnership, the partner just disconnected, the partnership just
+       ended, or every wellbeing stat system is off — see
+       ClearHandlerConditionBadge/ClearAllHandlerConditionBadges below for
+       the distinct stop paths this covers. NEVER carries a position, a
+       raw stat value, or
+       anything else that could be used to locate the K9 — see
+       ComputeHandlerConditionTags' own doc comment for the exact, closed
+       list of everything this payload can ever contain. Full design
+       writeup: this file's own "HANDLER CONDITION BADGE" header section,
+       further down.
 
     Resource-globals (no `local` — other files call these directly):
     - RestoreInjury(citizenid: string, amount: number) — the accessor
@@ -672,6 +710,106 @@
     point of activation," restated for a config SECTION that may not exist
     at all, not just a bad VALUE inside one that does.
     ======================================================================
+
+    ======================================================================
+    HANDLER CONDITION BADGE (this pass, coder-backend) -- closes a
+    production-readiness audit's own "the single best remaining thing to
+    build" finding: a handler (the human officer at the other end of a
+    partnership -- NEVER the player controlling the dog) had no way to
+    learn their own bonded K9 partner's wellbeing short of the other
+    player typing it out of character. See this file's EVENT/CALLBACK
+    CONTRACT item 12 above for the exact wire contract, and
+    client/hud.lua's own header for the client-side rendering half.
+
+    SERVER-AUTHORITATIVE PARTNER RESOLUTION, NEVER A CLIENT CLAIM: the
+    receiving handler is resolved via server/partnership.lua's
+    GetActivePartnerCitizenId(k9Citizenid) -- the SAME accessor
+    server/recall.lua's Recall actor and server/defense.lua's
+    HandlerDownDefense trigger already trust for the identical "who is
+    this K9's bonded partner, right now" question. A citizenid never
+    appears as a target here because a client asked for it; it appears
+    because THIS FILE's own TickWellbeing loop already knows, from
+    server-held state, that citizenid is a currently-connected,
+    currently-tracked K9.
+
+    COARSE, NEVER NUMERIC: ComputeHandlerConditionTags below returns a
+    small set of STRING TAGS ('tired'/'unhappy'/'stressed'/'injured'/
+    'hungry'/'thirsty'), never a 0-100 value, and derives every one of
+    them from a threshold this file's OWN Config.Wellbeing tables already
+    define for a real mechanical consequence (Fatigue's
+    speedPenaltyThreshold, Mood's performancePenaltyThreshold,
+    FearStress's hesitationThreshold, Injury's sprintBlockThreshold,
+    Hunger/Thirst's lowThreshold) -- never a new number invented for this
+    feature. The words a handler reads always agree with the mechanics
+    already governing their own dog's behavior; retuning one of those
+    existing thresholds in config.lua automatically retunes when the
+    matching word appears, with no second place to keep in sync.
+
+    NEVER A TRACKER: the only payload this feature ever sends is
+    `{ visible, tags }` -- no position, no distance, no direction, no raw
+    stat value, nothing that narrows where the K9 is. Contrast
+    Config.Features.DangerWarn (client/combat.lua), which deliberately
+    sends a COARSE direction+distance BAND for a genuine tactical-warning
+    use case -- this feature has no comparable need and sends no
+    positional information at all, not even a coarse one.
+
+    FEATURE-FLAG RESPECTING: gated on Config.Features.HandlerPartnership
+    (no partnership feature, nothing to resolve a handler from) AND, tag
+    by tag, on each stat's own OWNING Config.Features.* flag inside
+    ComputeHandlerConditionTags -- a disabled stat contributes no tag,
+    ever, exactly mirroring this file's own established "read at the point
+    of activation" discipline (this header's opening section) for every
+    other consumer of these six flags. Every one of these flags is already
+    correctly narrowed by config.lua's own Config.FeatureGroups
+    parent/child resolution (ResolveFeatureGroups) before this file ever
+    sees it, and server/runtimecontrol.lua's own IsFeatureGroupParentEnabled
+    gate already refuses to let a runtime tablet toggle turn a child flag
+    on while its parent family is off -- so reading Config.Features.<Name>
+    fresh (as every branch below already does) is already family-aware;
+    no second, redundant IsFeatureGroupParentEnabled call is needed here
+    on top of it.
+
+    CHEAP, ON THE EXISTING TICK, ON CHANGE ONLY: no second CreateThread --
+    PushHandlerConditionUpdate is called from the exact same per-K9 pass
+    inside TickWellbeing that already builds and sends item 11's
+    wellbeingUpdate payload, reusing the SAME `stats` table already in
+    hand. HandlerConditionCache (below) remembers, per TRACKED K9
+    CITIZENID (never per handler, never per source -- server ids are
+    recycled), the last tags actually pushed and to whom, so an unchanged
+    tick for an already-fine, already-seen K9 costs one table lookup and a
+    handful of comparisons -- no network message at all.
+
+    "GATE THE START, NEVER THE STOP": every path that can make this badge
+    go stale sends an explicit, unconditional CLEAR (`{ visible = false,
+    tags = {} }`), never merely "stops sending updates" and hopes the
+    client infers the rest:
+      1. Partnership ends (self-break, decertification, department
+         change) -- self-healing: PushHandlerConditionUpdate's own "no
+         active partnership" branch (below) re-resolves
+         GetActivePartnerCitizenId(k9Citizenid) fresh on this K9's very
+         next tick and clears the stale badge itself, bounded to one
+         Config.Wellbeing.tickIntervalMs (default 5000ms). NOT a direct
+         call from server/partnership.lua's DoBreakPartnership -- see that
+         file's own FILE-TO-FILE CONTRACT note on why (a real reverse
+         dependency would need a new name added to the repo-root
+         .luacheckrc, a shared file this pass does not own).
+      2. The K9 (not the handler) disconnects -- handled in the
+         playerDropped handler below: TickWellbeing's own GetPlayers()
+         loop will simply never visit that citizenid again this session,
+         so nothing else would ever fire the clear for them.
+      3. The handler disconnects -- no explicit push needed (nobody there
+         to receive one); PushHandlerConditionUpdate's own "handler not
+         currently online" branch leaves the cache alone so a LATER
+         reconnect (a new resolved source id) forces a fresh push rather
+         than silently relying on a tagsKey match that could otherwise
+         suppress the very first update a returning handler was ever meant
+         to see.
+      4. Every wellbeing stat system switched off at once -- the one shape
+         TickWellbeing itself is never even called for (see the
+         CreateThread loop below). ClearAllHandlerConditionBadges covers
+         this from that loop's own `else` branch, the one iteration that
+         would otherwise do nothing at all.
+    ======================================================================
 ]]
 
 -- WellbeingStats[citizenid] = {
@@ -739,6 +877,16 @@
 --      stats themselves.
 -- }
 local WellbeingStats = {}
+
+-- HandlerConditionCache[k9Citizenid] = { handlerCitizenid, lastHandlerSrc,
+-- tagsKey } -- see this file's own "HANDLER CONDITION BADGE" header
+-- section for the full design. ONE entry per K9 citizenid that currently
+-- has a VISIBLE (non-cleared) condition badge showing on some handler's
+-- screen; deleted the instant that badge is cleared for any reason.
+-- Bounded by however many online K9s currently have an online, partnered
+-- handler watching a non-default condition -- never "every player ever
+-- seen," unlike WellbeingStats above.
+local HandlerConditionCache = {}
 
 -- Ephemeral, in-memory FearStress-only gunfire log. Deliberately NOT
 -- server/tracking.lua's `TrackableLog.gunpowder` (that table is `local` to
@@ -2046,6 +2194,185 @@ local function GetRestSourceModelHashes()
 end
 
 -- ======================================================================
+-- HANDLER CONDITION BADGE — implementation. See this file's own header
+-- section of the same name for the full design writeup this code follows.
+-- ======================================================================
+local HANDLER_CONDITION_EVENT = 'qbx_k9unit:client:partnerConditionUpdate'
+
+--- Resolves the live server id currently backing `citizenid`, or nil if
+--- they are offline right now. Kept as its own tiny function purely so
+--- every call site below reads identically to
+--- server/partnership.lua's own TellCitizenIdPartnershipEnded shape — not
+--- because the logic itself is complex.
+--- @param citizenid string
+--- @return number? src
+local function ResolveOnlineSourceForCitizenid(citizenid)
+    local player = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    return player and player.PlayerData and player.PlayerData.source or nil
+end
+
+--- Derives the small set of COARSE condition tags a bonded handler is
+--- allowed to see for `stats` — see this file's "HANDLER CONDITION BADGE"
+--- header section for the full "coarse, never numeric" / "feature-flag
+--- respecting" reasoning. Fixed, deterministic emission order (also what
+--- table.concat below turns into this feature's own change-detection
+--- key) — NOT a severity ranking, just a stable order matching this
+--- file's own six-stat documentation order throughout (Fatigue, Mood,
+--- FearStress, Injury, Hunger, Thirst).
+---
+--- THE CLOSED LIST OF EVERYTHING THIS FUNCTION CAN EVER RETURN: exactly
+--- zero or more of 'tired'/'unhappy'/'stressed'/'injured'/'hungry'/
+--- 'thirsty' — six fixed strings, nothing derived from a raw stat value,
+--- a position, or anything else that could narrow where this K9 is.
+--- @param stats table -- the SAME per-citizenid stats table TickWellbeing already has in hand
+--- @return string[] tags
+local function ComputeHandlerConditionTags(stats)
+    local tags = {}
+
+    if Config.Features.FatigueSystem and stats.fatigue <= Config.Wellbeing.Fatigue.speedPenaltyThreshold then
+        tags[#tags + 1] = 'tired'
+    end
+    if Config.Features.MoodSystem and stats.mood <= Config.Wellbeing.Mood.performancePenaltyThreshold then
+        tags[#tags + 1] = 'unhappy'
+    end
+    if Config.Features.FearStressSystem and stats.fearStress >= Config.Wellbeing.FearStress.hesitationThreshold then
+        tags[#tags + 1] = 'stressed'
+    end
+    if Config.Features.InjuryLimping and stats.injury <= Config.Wellbeing.Injury.sprintBlockThreshold then
+        tags[#tags + 1] = 'injured'
+    end
+    if Config.Features.HungerThirstSystem then
+        -- CONFIG-DEFENSIVE, same posture as every other Config.Wellbeing.Hunger/
+        -- .Thirst read in this file (see this file's header, "HUNGER/THIRST"
+        -- section, "CONFIG DEFENSIVENESS" paragraph) — this file does not
+        -- own config.lua, so these two subtables may not exist yet.
+        local hungerLow = (type(Config.Wellbeing.Hunger) == 'table' and tonumber(Config.Wellbeing.Hunger.lowThreshold)) or 30
+        local thirstLow = (type(Config.Wellbeing.Thirst) == 'table' and tonumber(Config.Wellbeing.Thirst.lowThreshold)) or 30
+        if stats.hunger <= hungerLow then tags[#tags + 1] = 'hungry' end
+        if stats.thirst <= thirstLow then tags[#tags + 1] = 'thirsty' end
+    end
+
+    return tags
+end
+
+--- Sends the explicit CLEAR signal (`visible = false`, `tags = {}`) to
+--- `handlerCitizenid`, if — and only if — they currently resolve to a
+--- connected server id. Silent no-op otherwise (an offline handler has no
+--- client to tell, and a genuinely absent partnership/feature already
+--- means there is nothing to show them the next time they DO connect —
+--- see PushHandlerConditionUpdate's own "no active partnership" branch).
+--- @param handlerCitizenid string
+local function ClearHandlerConditionBadge(handlerCitizenid)
+    local src = ResolveOnlineSourceForCitizenid(handlerCitizenid)
+    if src then
+        TriggerClientEvent(HANDLER_CONDITION_EVENT, src, { visible = false, tags = {} })
+    end
+end
+
+--- Explicit cleanup for the one shape TickWellbeing's own per-K9 loop can
+--- never reach on its own: every wellbeing stat system switched off at
+--- once, which is also the one case TickWellbeing itself is never even
+--- called for (see the CreateThread loop below) — so nothing would
+--- otherwise ever push this feature's own CLEAR signal. Called from that
+--- SAME existing thread's own `else` branch — the one iteration that
+--- would otherwise do nothing observable at all — never a second thread.
+--- Cheap: bounded by however many K9s currently have a visible badge
+--- (typically zero), not by server population.
+local function ClearAllHandlerConditionBadges()
+    for k9Citizenid, cached in pairs(HandlerConditionCache) do
+        ClearHandlerConditionBadge(cached.handlerCitizenid)
+        HandlerConditionCache[k9Citizenid] = nil
+    end
+end
+
+--- Called once per tick, per currently-tracked K9 citizenid, from the SAME
+--- TickWellbeing per-K9 pass that already builds/sends item 11's
+--- wellbeingUpdate — see this file's "HANDLER CONDITION BADGE" header
+--- section for the full design.
+--- @param k9Citizenid string
+--- @param stats table
+local function PushHandlerConditionUpdate(k9Citizenid, stats)
+    -- FEATURE FLAG: no Partnership feature, nothing to resolve a handler
+    -- from — treated exactly like "no active partnership" below: clear
+    -- any badge this K9 might have left showing from before the flag was
+    -- switched off, then stop. See this file's "HANDLER CONDITION BADGE"
+    -- header, "gate the start, never the stop," reason 4's sibling case.
+    if not Config.Features.HandlerPartnership then
+        local cachedOff = HandlerConditionCache[k9Citizenid]
+        if cachedOff then
+            ClearHandlerConditionBadge(cachedOff.handlerCitizenid)
+            HandlerConditionCache[k9Citizenid] = nil
+        end
+        return
+    end
+
+    -- SOFT DEPENDENCY, this resource's established convention for a
+    -- cross-file resource-global consumed at RUNTIME (server/recall.lua's
+    -- Recall actor and server/defense.lua's HandlerDownDefense trigger
+    -- both guard this exact accessor identically) — never a load-order
+    -- assumption, even though server/partnership.lua does load before
+    -- this file in fxmanifest.lua's server_scripts.
+    if type(GetActivePartnerCitizenId) ~= 'function' then return end
+
+    local cached = HandlerConditionCache[k9Citizenid]
+
+    -- SERVER-AUTHORITATIVE PARTNER RESOLUTION — `k9Citizenid` is never
+    -- anything a client supplied; it is the citizenid TickWellbeing's own
+    -- loop already resolved for a currently-connected, currently
+    -- K9-modeled player (see ResolveCitizenid/ResolveK9Ped's own call
+    -- sites). `isK9` confirms `k9Citizenid` is genuinely the K9-role party
+    -- of its own active row — true by construction every time this is
+    -- reached from TickWellbeing below, checked anyway since this
+    -- function has no other way to fail closed against a future,
+    -- differently-shaped caller.
+    local handlerCitizenid, isK9 = GetActivePartnerCitizenId(k9Citizenid)
+
+    if not handlerCitizenid or not isK9 then
+        -- No active partnership for this K9 right now. If a PREVIOUS tick
+        -- DID push a visible condition to some handler for this exact K9,
+        -- that handler's badge must not be left stranded now that the
+        -- partnership backing it is gone — explicit clear, not silence.
+        if cached then
+            ClearHandlerConditionBadge(cached.handlerCitizenid)
+            HandlerConditionCache[k9Citizenid] = nil
+        end
+        return
+    end
+
+    if cached and cached.handlerCitizenid ~= handlerCitizenid then
+        -- Partner CHANGED since the last push this K9 ever sent (broke
+        -- and repartnered with someone else) without ever passing through
+        -- the "no partner" branch above. The OLD handler's badge is now
+        -- showing data about a partnership that no longer includes them —
+        -- clear it before considering the new handler at all.
+        ClearHandlerConditionBadge(cached.handlerCitizenid)
+        HandlerConditionCache[k9Citizenid] = nil
+        cached = nil
+    end
+
+    local handlerSrc = ResolveOnlineSourceForCitizenid(handlerCitizenid)
+    if not handlerSrc then
+        -- Partnership active, but the handler is not currently connected —
+        -- nobody to push to right now. `cached` (if any) is deliberately
+        -- left untouched: see this file's "HANDLER CONDITION BADGE"
+        -- header, "gate the start, never the stop," reason 3.
+        return
+    end
+
+    local tags = ComputeHandlerConditionTags(stats)
+    local tagsKey = table.concat(tags, ',')
+
+    local changed = not cached
+        or cached.lastHandlerSrc ~= handlerSrc
+        or cached.tagsKey ~= tagsKey
+
+    if changed then
+        TriggerClientEvent(HANDLER_CONDITION_EVENT, handlerSrc, { visible = true, tags = tags })
+        HandlerConditionCache[k9Citizenid] = { handlerCitizenid = handlerCitizenid, lastHandlerSrc = handlerSrc, tagsKey = tagsKey }
+    end
+end
+
+-- ======================================================================
 -- SHARED TICK LOOP — DEVELOPER_REFERENCE.md §13.0 Decision 1. ONE loop for all
 -- five stats, one pass over currently-connected players per tick. Started
 -- ONLY if at least one of the five flags is enabled — a fully-disabled
@@ -2374,6 +2701,11 @@ local function TickWellbeing()
                     end
 
                     TriggerClientEvent('qbx_k9unit:client:wellbeingUpdate', src, SnapshotOf(stats))
+
+                    -- HANDLER CONDITION BADGE (this pass) — same per-K9
+                    -- pass, same `stats` table, no second loop. See this
+                    -- file's own header section of the same name.
+                    PushHandlerConditionUpdate(citizenid, stats)
                 end
             elseif ped ~= 0 then
                 -- QA FIX (this pass): a currently-connected player who is
@@ -2486,6 +2818,22 @@ AddEventHandler('playerDropped', function(_reason)
         stats.lastCoords = nil
         stats.injuryDeathEpisodeStartedAt = 0
     end
+
+    -- HANDLER CONDITION BADGE CLEANUP (this pass) — if this disconnecting
+    -- player IS a K9 with a cached, currently-visible condition badge
+    -- showing on some handler's screen, that badge has no way to
+    -- self-heal via the next TickWellbeing pass: GetPlayers() will simply
+    -- never include this citizenid again this session, so
+    -- PushHandlerConditionUpdate's own "no partner online"/"no active
+    -- partnership" cleanup paths (used for every OTHER stop condition)
+    -- can never run for them again. Cleared explicitly, right here, the
+    -- one place this resource is ever told this K9 just went offline —
+    -- see this file's "HANDLER CONDITION BADGE" header, "gate the start,
+    -- never the stop," reason 2.
+    if citizenid and HandlerConditionCache[citizenid] then
+        ClearHandlerConditionBadge(HandlerConditionCache[citizenid].handlerCitizenid)
+        HandlerConditionCache[citizenid] = nil
+    end
 end)
 
 -- CONFIRMED LIVE-FLIP BUG, FIXED (this pass, coder-backend) -- this thread
@@ -2592,6 +2940,17 @@ CreateThread(function()
             local ok, err = pcall(TickWellbeing)
             if not ok then
                 print(('[qbx_k9unit] wellbeing tick error: %s'):format(tostring(err)))
+            end
+        else
+            -- HANDLER CONDITION BADGE (this pass) — the one shape
+            -- TickWellbeing itself is never even called for: every
+            -- wellbeing stat system off at once. See this file's "HANDLER
+            -- CONDITION BADGE" header, "gate the start, never the stop,"
+            -- reason 4. Cheap: a no-op scan whenever nothing is currently
+            -- showing (the common case), never a second thread.
+            local ok, err = pcall(ClearAllHandlerConditionBadges)
+            if not ok then
+                print(('[qbx_k9unit] wellbeing handler-condition clear error: %s'):format(tostring(err)))
             end
         end
     end

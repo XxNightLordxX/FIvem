@@ -441,13 +441,22 @@ end
 --- @param fn function -- a K9Store.* accessor
 --- @return any result -- rowsOrErr on success, or the caller's own documented
 --- fallback (nil/false/{}) on failure -- see each call site.
+--- @return boolean ok -- SECOND return, added this pass (see
+--- QueryActivePermissionSet's own "DISPLAY-GAP, FAIL-OPEN" doc comment
+--- below for why this exists): `true` only when `fn` actually ran to
+--- completion without throwing. Every PRE-EXISTING call site in this file
+--- still works unchanged -- Lua truncates extra return values in every
+--- context those call sites use (`SafeStoreCall(...) or {}`, a bare
+--- assignment to one local, a direct `~= nil` comparison) -- so this is
+--- additive, not a signature break. Only QueryActivePermissionSet reads
+--- this second value; every other call site is free to keep ignoring it.
 local function SafeStoreCall(fn, ...)
     local ok, resultOrErr = pcall(fn, ...)
     if not ok then
         print(('[qbx_k9unit] tablet.lua K9Store call failed: %s'):format(tostring(resultOrErr)))
-        return nil
+        return nil, false
     end
-    return resultOrErr
+    return resultOrErr, true
 end
 
 --- Single-key pcall-wrapped locale() resolution, mirroring client/tablet.lua's
@@ -496,14 +505,79 @@ end
 --- shape `{ permission = ... }`) -- now works correctly under
 --- Config.Database.enabled = false too.
 --- @param citizenid string
---- @return table<string, boolean>
+--- @return table<string, boolean> set
+--- @return boolean readOk -- SECOND return (DISPLAY-GAP, FAIL-OPEN fix,
+--- this pass) -- see BlockNamespaceUnreliable's own doc comment
+--- immediately below for the full "why" and how this is consumed. `true`
+--- only when SafeStoreCall's own underlying K9Store call actually
+--- succeeded (no pcall failure) -- NEVER inferred from `set` being empty,
+--- which is exactly the conflation this fix closes: an empty `set` is
+--- ambiguous on its own (genuinely holds nothing, OR the read failed and
+--- `or {}` below papered over it), so this second value is the one
+--- deliberate, explicit signal that disambiguates the two, and every
+--- caller that cares about the block namespace must consult it rather
+--- than re-deriving "did this actually work" from `set` a second way.
 local function QueryActivePermissionSet(citizenid)
-    local rows = SafeStoreCall(K9Store.Perm_GetActiveForCitizen, citizenid) or {}
+    local rows, readOk = SafeStoreCall(K9Store.Perm_GetActiveForCitizen, citizenid)
     local set = {}
-    for _, row in ipairs(rows) do
+    for _, row in ipairs(rows or {}) do
         set[row.permission] = true
     end
-    return set
+    return set, readOk
+end
+
+--- THE BUG THIS CLOSES: ResolveFeatureState below used to derive `blocked`
+--- purely from `activePermSet['block.' .. key] == true` -- true precision
+--- when the read behind `activePermSet` genuinely succeeded, but WRONG the
+--- moment it did not, because QueryActivePermissionSet's own `or {}`
+--- (before this pass) made "the query threw" and "this citizenid
+--- genuinely holds zero rows" produce the IDENTICAL empty table. An empty
+--- table can never look blocked, so a DB degradation (memory-mode,
+--- a per-table fallback, a schema collision, or a plain transient query
+--- error) made a real, active `block.<Name>` row silently stop applying
+--- ON THE TABLET ONLY -- the exact "MEMORY-MODE BLOCK ASYMMETRY" this
+--- resource's own server/permissions.lua HasPermission was hardened
+--- against (see that function's own doc comment, immediately above its
+--- `permissionKey:match('^block%.')` branch) -- never mirrored here until
+--- now. Real enforcement was never affected (every consuming file calls
+--- the hardened HasPermission directly, never this file's display-only
+--- aggregation) -- this was a display bug, but the forbidden DIRECTION of
+--- one: the tablet must never show `available` for something a real
+--- HasPermission call would refuse.
+---
+--- THE FIX, deliberately reusing HasPermission's own two cases rather than
+--- inventing a second notion of "did this read actually succeed":
+---   1. MEMORY-MODE / SCHEMA COLLISION / PART-INSTALLED FALLBACK, for the
+---      WHOLE session -- the exact same
+---      `K9Store.IsDatabaseEnabled('k9_permissions')` call HasPermission's
+---      own case 1 uses, unconditionally, regardless of whether THIS
+---      particular read happened to return successfully (PermRows, the
+---      memory-mode mirror, never throws -- it can report a clean, ok=true
+---      empty read while still being the wrong store to trust a block's
+---      absence from -- exactly HasPermission's own case-1 reasoning).
+---   2. THIS SPECIFIC READ FAILED -- `readOk == false` from
+---      QueryActivePermissionSet above. This file has no equivalent of
+---      HasPermission's own warmed, per-citizenid PermissionCache/
+---      PermissionCheckUnresolved (this is a live, uncached, DB-authoritative
+---      read on every call, by design -- see QueryActivePermissionSet's own
+---      header for why it must work for an offline target too) -- so there
+---      is no separate "was this citizenid ever left unresolved" table to
+---      consult here; the direct, honest analogue for an uncached read is
+---      simply whether THIS call actually succeeded, which is precisely
+---      the signal SafeStoreCall/QueryActivePermissionSet now surface.
+--- Either case denies the ENTIRE (finite, named) list of block-gated
+--- features to this citizenid for this one response, never just the keys
+--- that happen to already have a block row cached somewhere -- matching
+--- HasPermission's own "deny everything in the namespace rather than risk
+--- handing back even one" posture.
+--- @param readOk boolean -- QueryActivePermissionSet's own second return
+--- @return boolean
+local function BlockNamespaceUnreliable(readOk)
+    if type(K9Store) == 'table' and type(K9Store.IsDatabaseEnabled) == 'function'
+        and not K9Store.IsDatabaseEnabled('k9_permissions') then
+        return true -- case 1: memory-only (or schema-collided/part-installed) for k9_permissions this session
+    end
+    return readOk == false -- case 2: this citizenid's own read did not succeed
 end
 
 --- Real, current Unix time in whole seconds, or nil if unavailable --
@@ -1232,6 +1306,7 @@ end
 --- @param hasK9Access boolean -- already resolved for the relevant person (caller or target)
 --- @param activePermSet table<string, boolean> -- that SAME person's active k9_permissions rows
 --- @param isHighCommandBypass boolean? -- OPTIONAL, pre-resolved by the caller (mirrors ResolveEffectivePermissions's own `isHighCommandCaller` parameter shape) -- see this function's own header comment below for the full "displayed state, not the underlying record" reasoning
+--- @param blockNamespaceUnreliable boolean? -- OPTIONAL, pre-resolved ONCE per call site from BlockNamespaceUnreliable(readOk) (see that function's own doc comment for the full "DISPLAY-GAP, FAIL-OPEN" writeup this closes) -- when true, `activePermSet['block.' .. key]` cannot be trusted to reflect a real, currently-absent block, so this resolves 'blocked' unconditionally for every key, exactly mirroring server/permissions.lua's HasPermission failing closed for the identical reason.
 --- @return string -- 'global_off' | 'blocked' | 'not_certified' | 'requires_grant_missing' | 'available'
 --- DISPLAY-GAP FIX (this pass): high command already implicitly holds
 --- every permission/feature/K9 upgrade -- LegacyOrHighCommandStillQualifies
@@ -1283,9 +1358,19 @@ end
 --- requiresGrant detail to contextualize it against, and this is far
 --- less likely to confuse the high-command viewer about their OWN screen
 --- than about someone else's).
-local function ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass)
+---
+--- FAIL-CLOSED ON AN UNRELIABLE READ (this pass -- see
+--- BlockNamespaceUnreliable's own doc comment for the full "why"): checked
+--- immediately after 'global_off' and BEFORE the ordinary
+--- `activePermSet['block.' .. key]` read, for the same reason 'blocked'
+--- itself is checked before the high-command bypass below -- an unreliable
+--- read must win over EVERYTHING further down this function, bypass
+--- included, because the whole point is "an active block might be sitting
+--- in a place this read could not reach", and a rank-based bypass is not a
+--- reason to ignore that risk.
+local function ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass, blockNamespaceUnreliable)
     if not (Config.Features and Config.Features[key] == true) then return 'global_off', false end
-    if activePermSet['block.' .. key] == true then return 'blocked', false end
+    if blockNamespaceUnreliable or activePermSet['block.' .. key] == true then return 'blocked', false end
 
     local requireGrant = type(Config.FeatureControl) == 'table' and type(Config.FeatureControl.RequireGrant) == 'table'
         and Config.FeatureControl.RequireGrant[key] == true
@@ -1467,8 +1552,9 @@ end
 --- @param hasK9Access boolean
 --- @param activePermSet table<string, boolean>
 --- @param isHighCommandBypass boolean? -- see ResolveFeatureState's own doc comment. Callers of THIS function already have a live, correctly-scoped `IsHighCommand(source)` answer for the CALLER's own current job (tabletRequestMyRecord's own `isHighCommandCaller`) -- passed straight through, never re-derived via IsHighCommandBypassCitizenId here, since a fresh IsHighCommand(source) call is strictly more accurate than re-resolving the SAME online caller by citizenid a second time.
+--- @param blockNamespaceUnreliable boolean? -- see BlockNamespaceUnreliable's own doc comment -- pre-resolved ONCE by the caller from QueryActivePermissionSet's own second return, then forwarded to every ResolveFeatureState call this loop makes.
 --- @return table
-local function BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandBypass)
+local function BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandBypass, blockNamespaceUnreliable)
     local out = {}
     for i, key in ipairs(ListFeatureKeys()) do
         out[i] = {
@@ -1476,7 +1562,7 @@ local function BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandByp
             label = nil,     -- html/tablet.js's own DEFAULT_STRINGS humanizes an absent label client-side
             category = ResolveFeatureDomain(key),
             actionable = IsKnownActionableFeature(key),
-            state = ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass),
+            state = ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass, blockNamespaceUnreliable),
         }
     end
     return out
@@ -1497,14 +1583,15 @@ end
 --- @param hasK9Access boolean
 --- @param activePermSet table<string, boolean>
 --- @param isHighCommandBypass boolean? -- see ResolveFeatureState's own doc comment. Resolved by tabletRequestPersonFeatures for the TARGET specifically (server/permissions.lua's IsHighCommandBypassCitizenId, soft dependency) -- this is the TARGET's own rank, not the viewing high-command caller's; two high-command officers looking at a THIRD, non-high-command handler must see that handler's real, ungranted state, not their own.
+--- @param blockNamespaceUnreliable boolean? -- see BlockNamespaceUnreliable's own doc comment -- pre-resolved ONCE by the caller from QueryActivePermissionSet's own second return, then forwarded to every ResolveFeatureState call this loop makes. Deliberately NOT applied to the `blocked` field below (see this function's own header "granted/blocked/globallyEnabled/requiresGrant... UNCHANGED" -- ground truth stays ground truth; only `state` fails closed).
 --- @return table
-local function BuildPersonFeaturesArray(hasK9Access, activePermSet, isHighCommandBypass)
+local function BuildPersonFeaturesArray(hasK9Access, activePermSet, isHighCommandBypass, blockNamespaceUnreliable)
     local requireGrantTable = (type(Config.FeatureControl) == 'table' and type(Config.FeatureControl.RequireGrant) == 'table')
         and Config.FeatureControl.RequireGrant or {}
 
     local out = {}
     for i, key in ipairs(ListFeatureKeys()) do
-        local state, viaHighCommand = ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass)
+        local state, viaHighCommand = ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass, blockNamespaceUnreliable)
         out[i] = {
             key = key,
             label = nil,
@@ -1649,7 +1736,8 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         return { ok = false, error = 'rate_limited' }
     end
 
-    local activePermSet = QueryActivePermissionSet(citizenid)
+    local activePermSet, permReadOk = QueryActivePermissionSet(citizenid)
+    local blockNamespaceUnreliable = BlockNamespaceUnreliable(permReadOk)
     local effectivePermissions = ResolveEffectivePermissions(source, activePermSet, isHighCommandCaller)
     local xp, tierLabel = ResolveXpAndTierLabel(citizenid)
     local hasK9Access = type(HasK9Access) == 'function' and HasK9Access(source) == true
@@ -1706,7 +1794,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         -- IsHighCommandBypassCitizenId. See ResolveFeatureState's own doc
         -- comment for the full "why", and BuildPersonFeaturesArray's own
         -- call site below for the OFFLINE-capable sibling case.
-        myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandCaller),
+        myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandCaller, blockNamespaceUnreliable),
         -- `partnership` -- CLOSES A REAL GAP: tabletRequestPersonSummary (the
         -- high-command-only lookup path, CALLBACK 3) has called
         -- ResolvePartnershipInfo(targetCitizenId) since that callback
@@ -2258,7 +2346,8 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonFeatures', function(
         return { ok = false, error = 'rate_limited' }
     end
 
-    local activePermSet = QueryActivePermissionSet(targetCitizenId)
+    local activePermSet, permReadOk = QueryActivePermissionSet(targetCitizenId)
+    local blockNamespaceUnreliable = BlockNamespaceUnreliable(permReadOk)
     local hasK9Access = ResolveTargetHasK9Access(targetCitizenId, activePermSet)
     -- DISPLAY-GAP FIX (this pass) -- the TARGET's OWN rank, not the
     -- viewing high-command caller's: soft dependency on
@@ -2277,7 +2366,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonFeatures', function(
     return {
         ok = true,
         target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId) },
-        features = BuildPersonFeaturesArray(hasK9Access, activePermSet, targetIsHighCommandBypass),
+        features = BuildPersonFeaturesArray(hasK9Access, activePermSet, targetIsHighCommandBypass, blockNamespaceUnreliable),
     }
 end)
 

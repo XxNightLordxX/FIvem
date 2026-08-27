@@ -924,6 +924,12 @@ globals = {
     -- client/vision.lua
     "IsThermalVisionActive", "IsNightVisionActive", "ToggleThermalVision",
     "ToggleNightVision",
+    -- CycleVision: client/vision.lua's vision-merge entry point (this pass,
+    -- coder-architect) -- steps Off -> Night -> Thermal -> Off, skipping
+    -- whichever mode is flag-off/feature-blocked. Called by the new
+    -- 'k9vision' command/keybind (same file) and by client/radial.lua's new
+    -- "K9 Vision" item.
+    "CycleVision",
     -- client/kennel.lua (Phase 5 R&D, DeployableKennel)
     "RequestDeployKennel",
     -- RequestEnterOwnKennel / RequestKennelContextual: client/kennel.lua's

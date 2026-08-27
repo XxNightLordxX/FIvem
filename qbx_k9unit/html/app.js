@@ -228,6 +228,61 @@
     visual affordance, and nothing to click — there is no reason this
     would ever need focus, and none is requested anywhere in this file.
     ======================================================================
+
+    ======================================================================
+    HANDLER CONDITION BADGE CONTRACT (added this pass — must match
+    client/hud.lua exactly, byte-for-byte, same "a name that doesn't match
+    on both sides just hangs or drops silently" risk as the HUD contract
+    above). See server/wellbeing.lua's own "HANDLER CONDITION BADGE" header
+    section for the full server-side design. Short version: closes a
+    production-readiness audit's own "the single best remaining thing to
+    build" finding — a handler (the human officer, NEVER the player
+    controlling the dog) had no way to learn their own bonded K9 partner's
+    wellbeing short of the other player typing it out of character.
+
+    Lua -> JS (SendNUIMessage), one-directional only — same shape as the
+    audio bridge above, no JS -> Lua callback anywhere in this contract:
+
+        { action: 'hud:partnerCondition', data: { visible: boolean, tags: string[], strings?: Record<string,string> } }
+
+    COMPLETELY INDEPENDENT of `hud:updateVitals`'s own `visible` field and
+    of `#k9hud`'s own show/hide — see index.html's own comment on
+    `#k9partner-badge` for why: `hud:updateVitals`'s `visible` reflects
+    CanShowK9UI() for the LOCAL PLAYER'S OWN K9, which is false for the
+    overwhelming common case this badge exists for (a plain handler is not
+    their own K9). This message's own `visible` is a SEPARATE, independent
+    boolean for a SEPARATE DOM element (`#k9partner-badge`), toggled ONLY
+    by handleUpdatePartnerCondition() below — `handleUpdateVitals()` above
+    never touches it, and this handler never touches `#k9hud`.
+
+    `tags` is a small, fixed set of COARSE, NON-NUMERIC condition codes —
+    zero or more of 'tired'/'unhappy'/'stressed'/'injured'/'hungry'/
+    'thirsty' — resolved server-side from server/wellbeing.lua's own
+    existing per-stat thresholds (see that file's header for exactly
+    which). NEVER a raw stat value, NEVER a position, NEVER anything that
+    could narrow where the K9 is — this page renders exactly what it is
+    sent and invents nothing further. An empty `tags` array (while
+    `visible` is true) means every enabled stat is currently in its
+    healthy band, rendered as the `fine` string below. `visible: false`
+    (with `tags` always `[]` alongside it) is this feature's explicit HIDE
+    signal, sent whenever there is nothing left to report (no active
+    partnership, the partner disconnected, the partnership ended, or the
+    feature is switched off server-side) — this page hides `#k9partner-badge`
+    unconditionally whenever it sees this, never leaving a stale badge
+    on screen.
+
+    `strings` (optional, same "resilience net" pattern as `hud:updateVitals`'s
+    own `data.strings` for the Distraction row — see HUD_DEFAULT_STRINGS'
+    own comment above): client/hud.lua resolves every tag's player-visible
+    text via the shared `locale()` function (locales/en.json's `hud` group)
+    and forwards the resolved table here; PARTNER_CONDITION_DEFAULT_STRINGS
+    below is the non-authoritative English fallback used only if `strings`
+    is absent or a specific key inside it is missing/malformed.
+
+    NO SetNuiFocus HERE EITHER — same rule as the HUD contract above: this
+    badge has no DOM element that accepts input, no visual affordance
+    beyond static text, and nothing to click.
+    ======================================================================
 */
 
 (function () {
@@ -243,6 +298,13 @@
     var statusEls = {};
 
     var rootEl = null;
+
+    /** The HANDLER CONDITION BADGE's own DOM refs -- a SEPARATE element
+     * from `rootEl`/`statEls`/`statusEls` above (see index.html's own
+     * comment on `#k9partner-badge` for why this is deliberately not one
+     * more row inside `#k9hud`). Null until init() runs.
+     * @type {{ row: HTMLElement, label: HTMLElement, value: HTMLElement }|null} */
+    var partnerBadgeEls = null;
 
     /** English fallback for the Distraction status row's text values --
      * see applyDistractionStatus() below. This is the SAME "resilience
@@ -285,6 +347,45 @@
             return strings[key];
         }
         return HUD_DEFAULT_STRINGS[key];
+    }
+
+    /** English fallback for the Handler Condition Badge's own text values --
+     * see partnerConditionString()/applyPartnerCondition() below. Same
+     * "resilience net" pattern as HUD_DEFAULT_STRINGS above: client/hud.lua
+     * already sends a real `data.strings` object here (resolved via
+     * `locale()`, locales/en.json's `hud` group) every push, so in normal
+     * operation this fallback is a safety net, not the common path -- but
+     * a malformed/missing individual key inside a real `strings` payload
+     * still degrades to this table entry rather than rendering blank.
+     * Keys match exactly the six possible tag codes
+     * server/wellbeing.lua's ComputeHandlerConditionTags can ever emit,
+     * plus `fine` (shown when `tags` arrives empty) and `label` (this
+     * badge's own heading).
+     * @type {Record<string,string>} */
+    var PARTNER_CONDITION_DEFAULT_STRINGS = {
+        label: 'K9 Partner',
+        tired: 'Tired',
+        unhappy: 'Unhappy',
+        stressed: 'Stressed',
+        injured: 'Injured',
+        hungry: 'Hungry',
+        thirsty: 'Thirsty',
+        fine: 'Fine',
+    };
+
+    /**
+     * Resolves one Handler Condition Badge string key -- same shape as
+     * hudString() above, kept as its own function (not a shared helper)
+     * since the two default-string tables are independent and unrelated.
+     * @param {*} strings
+     * @param {string} key
+     * @returns {string}
+     */
+    function partnerConditionString(strings, key) {
+        if (strings && typeof strings[key] === 'string' && strings[key].length > 0) {
+            return strings[key];
+        }
+        return PARTNER_CONDITION_DEFAULT_STRINGS[key];
     }
 
     /** Bar-row stat keys whose owning Config.Features flag can be off,
@@ -473,6 +574,53 @@
 
         var xpTier = data.xpTier || {};
         applyXPTierStatus(xpTier.label, xpTier.badge);
+    }
+
+    /**
+     * Handles one `hud:partnerCondition` payload — see this file's header
+     * "HANDLER CONDITION BADGE CONTRACT" section, and
+     * server/wellbeing.lua's own "HANDLER CONDITION BADGE" header section,
+     * for the full contract this renders. COMPLETELY INDEPENDENT of
+     * `handleUpdateVitals()`/`rootEl` above — this toggles a SEPARATE DOM
+     * element (`#k9partner-badge`), never `#k9hud`.
+     * @param {{ visible: boolean, tags?: string[], strings?: Record<string,string> }} data
+     */
+    function applyPartnerCondition(data) {
+        if (!partnerBadgeEls) return;
+
+        var visible = !!(data && data.visible === true);
+        partnerBadgeEls.row.classList.toggle('hidden', !visible);
+        partnerBadgeEls.row.setAttribute('aria-hidden', visible ? 'false' : 'true');
+
+        if (!visible) return; // don't bother touching label/value DOM while hidden -- mirrors handleUpdateVitals' own posture above
+
+        var strings = data.strings;
+        // textContent only, both pieces -- never innerHTML, same standing
+        // rule as every other DOM write in this file (see
+        // applyDistractionStatus's own comment). Every string rendered here
+        // comes from partnerConditionString()'s own fixed, code/locale-owner
+        // authored table -- never a value echoed from the network payload
+        // verbatim (the payload's own `tags` entries are used only as
+        // LOOKUP KEYS into that fixed table, never written to the DOM
+        // directly).
+        partnerBadgeEls.label.textContent = partnerConditionString(strings, 'label');
+
+        var tags = Array.isArray(data.tags) ? data.tags : [];
+        var words = [];
+        for (var i = 0; i < tags.length; i++) {
+            if (typeof tags[i] === 'string') {
+                // An unrecognized tag code (present in neither `strings` nor
+                // PARTNER_CONDITION_DEFAULT_STRINGS) resolves to `undefined`
+                // here -- dropped rather than rendered, so a future/unknown
+                // tag this build doesn't know about degrades to "silently
+                // ignored," never a literal "undefined" appearing on screen.
+                var resolved = partnerConditionString(strings, tags[i]);
+                if (typeof resolved === 'string' && resolved.length > 0) {
+                    words.push(resolved);
+                }
+            }
+        }
+        partnerBadgeEls.value.textContent = words.length > 0 ? words.join(', ') : partnerConditionString(strings, 'fine');
     }
 
     // ------------------------------------------------------------------
@@ -934,6 +1082,11 @@
                 value: document.querySelector('[data-status="xpTier"]'),
             },
         };
+        partnerBadgeEls = {
+            row: document.getElementById('k9partner-badge'),
+            label: document.querySelector('[data-partner="label"]'),
+            value: document.querySelector('[data-partner="value"]'),
+        };
 
         // Attach the message listener FIRST, only THEN send the ready
         // ack — this ordering is the entire point of the handshake (see
@@ -946,6 +1099,9 @@
             switch (msg.action) {
                 case 'hud:updateVitals':
                     handleUpdateVitals(msg.data);
+                    break;
+                case 'hud:partnerCondition':
+                    applyPartnerCondition(msg.data);
                     break;
                 case 'audio:play':
                     handleAudioPlay(msg.data);

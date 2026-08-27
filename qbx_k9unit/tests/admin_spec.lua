@@ -705,6 +705,64 @@ t.test('IsAuthorizedAdmin: a block on a DIFFERENT feature key does not affect Ad
 end)
 
 -- ----------------------------------------------------------------------
+-- ADMIN-CAPABILITY BLOCK NAMESPACE (security-audit pass, this pass --
+-- "assess, then decide": k9.access/k9.certify/k9.audit/k9.givexp had NO
+-- block mechanism at all, distinct from the Config.Features
+-- 'block.AdminAuditCommands' proven above -- that one narrows only THIS
+-- FILE's own five slash commands; 'block.k9.audit' narrows whether
+-- `citizenid` holds the k9.audit CAPABILITY at all, the same fact
+-- server/tablet.lua's own effectivePermissions listing and every other
+-- 'k9.audit' consumer cares about. Both are independently meaningful and
+-- both are proven here.
+-- ----------------------------------------------------------------------
+
+t.test('IsAuthorizedAdmin: block.k9.audit denies even job.isboss, independently of block.AdminAuditCommands', function()
+    resetCaptures()
+    grantPermission('CITAUD-BOSS-1', 'block.k9.audit', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITAUD-BOSS-1',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: block.k9.audit denies an ordinary rank-qualified officer (grade >= auditGrade, not a boss)', function()
+    resetCaptures()
+    grantPermission('CITAUD-RANK-1', 'block.k9.audit', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITAUD-RANK-1',
+        job = { name = 'police', grade = { level = 4 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: block.k9.audit is scoped to that ONE citizenid -- a different, unblocked officer is unaffected', function()
+    resetCaptures()
+    grantPermission('SOMEONE-ELSE', 'block.k9.audit', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITAUD-UNAFFECTED-1',
+        job = { name = 'police', grade = { level = 4 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1, 'a block on a DIFFERENT citizenid must never leak onto this one')
+end)
+
+t.test('IsAuthorizedAdmin: a block on a DIFFERENT capability key (k9.certify) does not affect k9.audit -- capability keys are independent', function()
+    resetCaptures()
+    grantPermission('CITAUD-OTHERKEY-1', 'block.k9.certify', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITAUD-OTHERKEY-1',
+        job = { name = 'police', grade = { level = 4 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1, 'k9.audit must be unaffected by a block on a different capability key')
+end)
+
+-- ----------------------------------------------------------------------
 -- Rate limiting: AuditCooldown shared across all three commands, keyed by
 -- the caller's own source.
 -- ----------------------------------------------------------------------

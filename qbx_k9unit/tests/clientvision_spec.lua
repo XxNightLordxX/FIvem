@@ -709,35 +709,65 @@ end)
 -- Config-gated command + keybind REGISTRATION (not just behavior) -- each
 -- flag independently gates its OWN RegisterCommand/RegisterKeyMapping
 -- pair, per this file's own "the two flags are fully independent" comment.
+--
+-- COUNTS BELOW ADJUSTED, THIS PASS (vision merge, coder-architect): 'k9vision'
+-- (the new merged cycle) registers a COMMAND + KEYMAPPING UNCONDITIONALLY,
+-- regardless of either flag -- see this file's own "MERGED ENTRY POINT"
+-- section below for why. Every count in this section is therefore +1
+-- relative to before this pass; each test now explicitly excludes/asserts
+-- around the k9vision entry rather than assuming the two OLD toggles are
+-- the only thing this file ever registers.
 -- ----------------------------------------------------------------------
 
-t.test('both ThermalVision and NightVision false: zero commands and zero key mappings are registered', function()
+--- Filters k9vision's own always-present command/keybind out of a raw
+--- call-log array, so the tests below can keep asserting "how many OLD,
+--- flag-gated registrations exist" without also having to recount k9vision
+--- itself every time. `field` is 'name' for registerCommandCalls, or
+--- 'commandName' for registerKeyMappingCalls.
+--- @param calls table[]
+--- @param field string
+--- @return table[] filtered
+local function excludingK9Vision(calls, field)
+    local filtered = {}
+    for _, call in ipairs(calls) do
+        if call[field] ~= 'k9vision' then filtered[#filtered + 1] = call end
+    end
+    return filtered
+end
+
+t.test('both ThermalVision and NightVision false: zero OLD commands/key mappings are registered -- only the unconditional k9vision entry exists', function()
     local f = newVisionFixture({ features = { ThermalVision = false, NightVision = false } })
-    t.equals(#f.registerCommandCalls, 0)
-    t.equals(#f.registerKeyMappingCalls, 0)
+    t.equals(#excludingK9Vision(f.registerCommandCalls, 'name'), 0)
+    t.equals(#excludingK9Vision(f.registerKeyMappingCalls, 'commandName'), 0)
+    t.equals(#f.registerCommandCalls, 1, 'k9vision itself is still registered')
+    t.equals(#f.registerKeyMappingCalls, 1)
 end)
 
-t.test('ThermalVision true, NightVision false: only the thermal command/keybind is registered, with the real Config.Vision.Thermal.toggleKey', function()
+t.test('ThermalVision true, NightVision false: only the thermal command/keybind is registered (alongside the always-present k9vision), with the real Config.Vision.Thermal.toggleKey', function()
     local f = newVisionFixture({ features = { ThermalVision = true, NightVision = false } })
-    t.equals(#f.registerCommandCalls, 1)
-    t.equals(f.registerCommandCalls[1].name, 'qbx_k9unit:toggleThermalVision')
-    t.equals(#f.registerKeyMappingCalls, 1)
-    t.equals(f.registerKeyMappingCalls[1].commandName, 'qbx_k9unit:toggleThermalVision')
-    t.equals(f.registerKeyMappingCalls[1].description, locale('vision.thermal_keybind_label'))
-    t.equals(f.registerKeyMappingCalls[1].defaultKey, f.Config.Vision.Thermal.toggleKey)
+    local oldCommands = excludingK9Vision(f.registerCommandCalls, 'name')
+    t.equals(#oldCommands, 1)
+    t.equals(oldCommands[1].name, 'qbx_k9unit:toggleThermalVision')
+    local oldKeyMappings = excludingK9Vision(f.registerKeyMappingCalls, 'commandName')
+    t.equals(#oldKeyMappings, 1)
+    t.equals(oldKeyMappings[1].commandName, 'qbx_k9unit:toggleThermalVision')
+    t.equals(oldKeyMappings[1].description, locale('vision.thermal_keybind_label'))
+    t.equals(oldKeyMappings[1].defaultKey, f.Config.Vision.Thermal.toggleKey)
 end)
 
-t.test('NightVision true, ThermalVision false: only the night command/keybind is registered, with the real Config.Vision.Night.toggleKey', function()
+t.test('NightVision true, ThermalVision false: only the night command/keybind is registered (alongside k9vision), with the real Config.Vision.Night.toggleKey', function()
     local f = newVisionFixture({ features = { ThermalVision = false, NightVision = true } })
-    t.equals(#f.registerCommandCalls, 1)
-    t.equals(f.registerCommandCalls[1].name, 'qbx_k9unit:toggleNightVision')
-    t.equals(#f.registerKeyMappingCalls, 1)
-    t.equals(f.registerKeyMappingCalls[1].defaultKey, f.Config.Vision.Night.toggleKey)
+    local oldCommands = excludingK9Vision(f.registerCommandCalls, 'name')
+    t.equals(#oldCommands, 1)
+    t.equals(oldCommands[1].name, 'qbx_k9unit:toggleNightVision')
+    local oldKeyMappings = excludingK9Vision(f.registerKeyMappingCalls, 'commandName')
+    t.equals(#oldKeyMappings, 1)
+    t.equals(oldKeyMappings[1].defaultKey, f.Config.Vision.Night.toggleKey)
 end)
 
-t.test('both true: both commands are registered, and the captured command handler really calls through to the real Toggle*Vision function', function()
+t.test('both true: both OLD commands are registered (alongside k9vision), and the captured command handler really calls through to the real Toggle*Vision function', function()
     local f = newVisionFixture({ features = { ThermalVision = true, NightVision = true } })
-    t.equals(#f.registerCommandCalls, 2)
+    t.equals(#excludingK9Vision(f.registerCommandCalls, 'name'), 2)
 
     local thermalHandler, nightHandler
     for _, call in ipairs(f.registerCommandCalls) do
@@ -752,25 +782,176 @@ t.test('both true: both commands are registered, and the captured command handle
 end)
 
 -- ========================================================================
+-- MERGED ENTRY POINT -- 'k9vision' / CycleVision() (vision merge,
+-- coder-architect, this pass). See client/vision.lua's own "MERGED ENTRY
+-- POINT" header for the full design writeup this section tests against.
+-- ========================================================================
+
+t.test('k9vision: registered UNCONDITIONALLY -- present even when BOTH ThermalVision and NightVision are false', function()
+    local f = newVisionFixture({ features = { ThermalVision = false, NightVision = false } })
+    local found
+    for _, call in ipairs(f.registerCommandCalls) do
+        if call.name == 'k9vision' then found = call end
+    end
+    t.isNotNil(found, 'k9vision must exist even when neither underlying mode is available, matching k9track\'s own honest-degrade posture')
+
+    local keyMapping
+    for _, call in ipairs(f.registerKeyMappingCalls) do
+        if call.commandName == 'k9vision' then keyMapping = call end
+    end
+    t.isNotNil(keyMapping)
+    t.equals(keyMapping.defaultKey, 'I')
+end)
+
+t.test('CycleVision: both modes off -- notifies "no modes available", touches neither native', function()
+    local f = newVisionFixture({ features = { ThermalVision = false, NightVision = false } })
+    f.env.CycleVision()
+    t.equals(#f.setSeethroughCalls, 0)
+    t.equals(#f.setNightvisionCalls, 0)
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('vision.no_modes_available'))
+    t.equals(f.notifyCalls[1].type, 'error')
+end)
+
+-- THE PINNED REQUIREMENT: "the cycle skips a mode whose feature flag is
+-- off rather than landing on it." PROVEN BY BREAKING: deleting
+-- IsVisionModeAvailable()'s `if not Config.Features[featureKey] then
+-- return false end` line (client/vision.lua) turns this test red -- the
+-- first press would land on 'night' (SetNightvision(true)) instead of
+-- jumping straight to 'thermal', since the sequence would then wrongly
+-- include a disabled mode.
+t.test('CycleVision: NightVision off, ThermalVision on -- the cycle skips Night entirely, going straight Off -> Thermal -> Off', function()
+    local f = newVisionFixture({ features = { ThermalVision = true, NightVision = false } })
+
+    f.env.CycleVision() -- Off -> (skip Night) -> Thermal
+    t.isTrue(f.isSeethroughActive(), 'must land on Thermal, the only available mode')
+    t.isFalse(f.isNightvisionActive(), 'must never land on the disabled Night mode even transiently')
+    t.equals(#f.setNightvisionCalls, 0, 'a disabled mode must never even be asked to turn on')
+
+    f.env.CycleVision() -- Thermal -> Off (2-length sequence: off, thermal)
+    t.isFalse(f.isSeethroughActive())
+end)
+
+t.test('CycleVision: ThermalVision off, NightVision on -- the mirror image, cycling Off -> Night -> Off', function()
+    local f = newVisionFixture({ features = { ThermalVision = false, NightVision = true } })
+
+    f.env.CycleVision()
+    t.isTrue(f.isNightvisionActive())
+    t.equals(#f.setSeethroughCalls, 0, 'a disabled mode must never even be asked to turn on')
+
+    f.env.CycleVision()
+    t.isFalse(f.isNightvisionActive())
+end)
+
+t.test('CycleVision: both modes on -- steps Off -> Night -> Thermal -> Off, exactly 3 stops, never landing on both at once', function()
+    local f = newVisionFixture({ features = { ThermalVision = true, NightVision = true } })
+
+    f.env.CycleVision() -- Off -> Night
+    t.isTrue(f.isNightvisionActive())
+    t.isFalse(f.isSeethroughActive())
+
+    f.env.CycleVision() -- Night -> Thermal (mutual exclusion turns Night off)
+    t.isTrue(f.isSeethroughActive())
+    t.isFalse(f.isNightvisionActive())
+
+    f.env.CycleVision() -- Thermal -> Off
+    t.isFalse(f.isSeethroughActive())
+    t.isFalse(f.isNightvisionActive())
+
+    f.env.CycleVision() -- Off -> Night again -- proves the cycle actually wraps, not a one-shot
+    t.isTrue(f.isNightvisionActive())
+end)
+
+-- GATE-THE-STOP RULE, APPLIED TO THE CYCLE: "turning vision off works with
+-- the feature flag off." A mode that was active when the cycle started
+-- being pressed can go from available to disabled/blocked WHILE active
+-- (a live tablet flip, a featureblocks push) -- the very next press must
+-- still be able to turn it off, never strand the player in it.
+t.test('CycleVision: NightVision turned off entirely WHILE it is active -- the very next press turns it off, never strands the player in it', function()
+    local f = newVisionFixture({ features = { ThermalVision = false, NightVision = true } })
+    f.env.CycleVision() -- Off -> Night
+    t.isTrue(f.isNightvisionActive())
+
+    -- Live flag flip -- NightVision is no longer an available cycle
+    -- destination, but it is still the ACTIVE mode.
+    f.Config.Features.NightVision = false
+
+    f.env.CycleVision() -- must resolve straight to 'off', not error, not re-land on Night
+    t.isFalse(f.isNightvisionActive(), 'a mode that just went unavailable while active must still be reachable to turn off on the very next press')
+end)
+
+t.test('CycleVision: ThermalVision gets feature-blocked WHILE it is active -- the very next press turns it off', function()
+    local f = newVisionFixture({ features = { ThermalVision = true, NightVision = false } })
+    f.env.CycleVision() -- Off -> Thermal
+    t.isTrue(f.isSeethroughActive())
+
+    f.setBlocked('ThermalVision', true) -- live per-person block landed mid-use
+
+    f.env.CycleVision()
+    t.isFalse(f.isSeethroughActive(), 'a mode that just became blocked while active must still be reachable to turn off on the very next press')
+    t.equals(f.denyK9FeatureBlockedCallCount(), 0, 'the turning-OFF path must never consult the block at all')
+end)
+
+t.test('CycleVision: IsOwnModelK9 becomes false WHILE a mode is active -- the very next press still turns it off (same gate-the-stop rule, the player-level gate this time)', function()
+    local f = newVisionFixture({ features = { ThermalVision = true, NightVision = false } })
+    f.env.CycleVision() -- Off -> Thermal
+    t.isTrue(f.isSeethroughActive())
+
+    f.setIsOwnModelK9(false)
+
+    f.env.CycleVision()
+    t.isFalse(f.isSeethroughActive())
+end)
+
+t.test('CycleVision: a feature-blocked mode is skipped by the cycle just like a flag-off one, even though its Config.Features flag is still true', function()
+    local f = newVisionFixture({ features = { ThermalVision = true, NightVision = true } })
+    f.setBlocked('NightVision', true) -- flag is true, but blocked
+
+    f.env.CycleVision() -- Off -> (skip blocked Night) -> Thermal
+    t.isTrue(f.isSeethroughActive())
+    t.equals(#f.setNightvisionCalls, 0, 'a blocked mode must never even be asked to turn on, same as a flag-off one')
+end)
+
+t.test('EXPLICIT MODE SELECTION STILL WORKS, UNCHANGED: the old qbx_k9unit:toggleThermalVision/toggleNightVision commands remain real, independently callable, and untouched by the cycle\'s own state', function()
+    local f = newVisionFixture({ features = { ThermalVision = true, NightVision = true } })
+
+    local thermalHandler, nightHandler
+    for _, call in ipairs(f.registerCommandCalls) do
+        if call.name == 'qbx_k9unit:toggleThermalVision' then thermalHandler = call.handler end
+        if call.name == 'qbx_k9unit:toggleNightVision' then nightHandler = call.handler end
+    end
+    t.isNotNil(thermalHandler, 'the old explicit thermal command must still be a real, registered command')
+    t.isNotNil(nightHandler, 'the old explicit night command must still be a real, registered command')
+
+    -- A player who wants Thermal specifically can jump straight to it
+    -- without walking the cycle at all.
+    thermalHandler()
+    t.isTrue(f.isSeethroughActive())
+    t.isFalse(f.isNightvisionActive())
+end)
+
+-- ========================================================================
 -- CAMERA FEED (Config.Features.CameraFeedPiP) -- see client/vision.lua's
 -- own header "CAMERA FEED" section for the full contract this section
 -- tests against.
 -- ========================================================================
 
-t.test('CameraFeedPiP false: zero command/keybind registered, matching every other flag-gated registration in this file', function()
+t.test('CameraFeedPiP false: zero OLD command/keybind registered (only the always-present k9vision), matching every other flag-gated registration in this file', function()
     local f = newVisionFixture({ features = { CameraFeedPiP = false } })
-    t.equals(#f.registerCommandCalls, 0)
-    t.equals(#f.registerKeyMappingCalls, 0)
+    t.equals(#excludingK9Vision(f.registerCommandCalls, 'name'), 0)
+    t.equals(#excludingK9Vision(f.registerKeyMappingCalls, 'commandName'), 0)
 end)
 
-t.test('CameraFeedPiP true: exactly one command/keybind registered, using Config.CameraFeed.toggleKey', function()
+t.test('CameraFeedPiP true: exactly one OLD command/keybind registered (alongside k9vision), using Config.CameraFeed.toggleKey', function()
     local f = newVisionFixture({ features = { CameraFeedPiP = true } })
-    t.equals(#f.registerCommandCalls, 1)
-    t.equals(f.registerCommandCalls[1].name, 'qbx_k9unit:toggleCameraFeed')
-    t.equals(#f.registerKeyMappingCalls, 1)
-    t.equals(f.registerKeyMappingCalls[1].commandName, 'qbx_k9unit:toggleCameraFeed')
-    t.equals(f.registerKeyMappingCalls[1].description, locale('cameraFeed.toggle_keybind_label'))
-    t.equals(f.registerKeyMappingCalls[1].defaultKey, f.Config.CameraFeed.toggleKey)
+    local oldCommands = excludingK9Vision(f.registerCommandCalls, 'name')
+    t.equals(#oldCommands, 1)
+    t.equals(oldCommands[1].name, 'qbx_k9unit:toggleCameraFeed')
+    local oldKeyMappings = excludingK9Vision(f.registerKeyMappingCalls, 'commandName')
+    t.equals(#oldKeyMappings, 1)
+    t.equals(oldKeyMappings[1].commandName, 'qbx_k9unit:toggleCameraFeed')
+    t.equals(oldKeyMappings[1].description, locale('cameraFeed.toggle_keybind_label'))
+    t.equals(oldKeyMappings[1].defaultKey, f.Config.CameraFeed.toggleKey)
 end)
 
 t.test('CameraFeedPiP true but Config.CameraFeed is missing entirely: registration falls back to the hardcoded default key rather than erroring the whole file (defensive fallback -- this file does not own config.lua)', function()
@@ -803,9 +984,18 @@ t.test('CameraFeedPiP true but Config.CameraFeed is missing entirely: registrati
     env.Config.CameraFeed = nil
     local ok = pcall(Sandbox.loadInto, '../client/vision.lua', env)
     t.isTrue(ok, 'a missing Config.CameraFeed must never error client/vision.lua\'s top-level chunk (that would also silently disable ThermalVision/NightVision in the same file)')
-    t.equals(#capturedKeyMappingCalls, 1)
-    t.equals(capturedKeyMappingCalls[1].commandName, 'qbx_k9unit:toggleCameraFeed')
-    t.equals(capturedKeyMappingCalls[1].defaultKey, 'H', 'falls back to CAMERA_FEED_DEFAULTS.toggleKey')
+    -- 2 calls now, not 1: the unconditional k9vision keymapping (vision
+    -- merge, this pass) plus the CameraFeedPiP one this test is actually
+    -- about -- filter it out the same way excludingK9Vision() does above
+    -- (a local, ad hoc env here, not newVisionFixture(), so that helper
+    -- isn't in scope).
+    local oldKeyMappings = {}
+    for _, call in ipairs(capturedKeyMappingCalls) do
+        if call.commandName ~= 'k9vision' then oldKeyMappings[#oldKeyMappings + 1] = call end
+    end
+    t.equals(#oldKeyMappings, 1)
+    t.equals(oldKeyMappings[1].commandName, 'qbx_k9unit:toggleCameraFeed')
+    t.equals(oldKeyMappings[1].defaultKey, 'H', 'falls back to CAMERA_FEED_DEFAULTS.toggleKey')
 end)
 
 t.test('ToggleCameraFeed: not a role-holder (CanShowK9UI false) -- denied, no cam created', function()
@@ -1238,6 +1428,41 @@ t.test('ToggleThermalVision/ToggleNightVision: a block on ONE effect does not af
     f.setBlocked('ThermalVision', true)
     f.env.ToggleNightVision() -- unaffected -- NightVision is not blocked
     t.isTrue(f.isNightvisionActive())
+end)
+
+-- GATE-THE-START-NEVER-THE-STOP FIX (vision merge pass, coder-architect).
+-- Mirrors the block test immediately above, for IsOwnModelK9() instead of
+-- a per-person block -- the exact bug this pass found and fixed: the
+-- IsOwnModelK9() check used to run BEFORE `turningOn` was even computed,
+-- so a player already IN an effect who stopped being IsOwnModelK9() could
+-- not turn it back off through this function at all (only the separate
+-- 1000ms maintenance-thread poll would eventually notice). PROVEN BY
+-- BREAKING: reverting ToggleThermalVision()'s fix (moving the
+-- `if not IsOwnModelK9() then ... return end` block back above `local
+-- turningOn = ...`, unconditional again) turns this test red -- the
+-- turn-off branch would hit the notify-and-return path instead of ever
+-- reaching SetSeethrough(false).
+t.test('ToggleThermalVision: IsOwnModelK9 becomes false AFTER it is already on never refuses turning it back OFF -- termination is never gated', function()
+    local f = newVisionFixture()
+    f.env.ToggleThermalVision() -- on, while a K9 model
+    t.isTrue(f.isSeethroughActive())
+
+    f.setIsOwnModelK9(false) -- model swap away from K9, mid-session
+    f.env.ToggleThermalVision() -- the SAME toggle call, now used to turn it back OFF
+    t.isTrue(f.isSeethroughActive() == false, 'losing IsOwnModelK9() must never prevent turning an already-active effect back off')
+    t.equals(#f.notifyCalls, 2, 'the turn-off must still send its own "thermal off" notify, not the not_k9_model denial')
+    t.equals(f.notifyCalls[2].description, locale('vision.thermal_off'))
+end)
+
+t.test('ToggleNightVision: IsOwnModelK9 becomes false AFTER it is already on never refuses turning it back OFF', function()
+    local f = newVisionFixture()
+    f.env.ToggleNightVision() -- on
+    t.isTrue(f.isNightvisionActive())
+
+    f.setIsOwnModelK9(false)
+    f.env.ToggleNightVision() -- turn back off
+    t.isFalse(f.isNightvisionActive())
+    t.equals(f.notifyCalls[2].description, locale('vision.night_off'))
 end)
 
 t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- every toggle works exactly as before this pass', function()

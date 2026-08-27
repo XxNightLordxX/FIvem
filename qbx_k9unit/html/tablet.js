@@ -792,7 +792,7 @@
         self_grant_disabled_title: 'High command cannot grant XP to themselves on this server.',
         truncated_notice: 'Showing a limited number of results. Refine your search to find someone not listed.',
         action_working: 'Working...',
-        action_failed: 'Action failed.',
+        action_failed: 'Action failed — try again, and if it keeps happening, tell an admin.',
         action_succeeded: 'Done.',
         no_certifications: 'Not certified in any department.',
         my_certifications_heading: 'Certifications',
@@ -1709,6 +1709,9 @@
         cmdref_toggle_night_vision_usage: '/qbx_k9unit:toggleNightVision',
         cmdref_toggle_night_vision_does: 'Turns on night vision so you can see clearly in the dark. Press again to turn it off. Turning this on switches Thermal Vision off automatically.',
         cmdref_toggle_night_vision_needs: 'You must be controlling your K9, and Night Vision enabled on this server. No certification needed.',
+        cmdref_k9vision_usage: '/k9vision',
+        cmdref_k9vision_does: 'Cycles your K9 vision: off, then Night Vision, then Thermal Vision, then back off -- skipping whichever of those two your server has turned off. Old names /qbx_k9unit:toggleThermalVision and /qbx_k9unit:toggleNightVision still jump straight to one specific mode, if that\'s what you want instead.',
+        cmdref_k9vision_needs: 'You must be controlling your K9. No certification needed. Does nothing but notify you if both Night Vision and Thermal Vision are turned off on this server.',
 
         // ---- GUIDED FLOWS (this pass, owner's own words: "expand the
         // workflow paths for all the features to make them smoother,
@@ -2291,8 +2294,17 @@
         // retrofit.
         { command: 'qbx_k9unit:toggleCamera', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_usage', doesKey: 'cmdref_toggle_camera_does', needsKey: 'cmdref_toggle_camera_needs', gate: { kind: 'open' }, defaultKeybind: 'L' },
         { command: 'qbx_k9unit:toggleCameraFeed', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_feed_usage', doesKey: 'cmdref_toggle_camera_feed_does', needsKey: 'cmdref_toggle_camera_feed_needs', gate: { kind: 'access', featureKey: 'CameraFeedPiP' }, defaultKeybind: 'H', defaultKeybindConfigurable: true },
-        { command: 'qbx_k9unit:toggleThermalVision', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_thermal_vision_usage', doesKey: 'cmdref_toggle_thermal_vision_does', needsKey: 'cmdref_toggle_thermal_vision_needs', gate: { kind: 'open', featureKey: 'ThermalVision' }, defaultKeybind: 'K', defaultKeybindConfigurable: true },
-        { command: 'qbx_k9unit:toggleNightVision', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_night_vision_usage', doesKey: 'cmdref_toggle_night_vision_does', needsKey: 'cmdref_toggle_night_vision_needs', gate: { kind: 'open', featureKey: 'NightVision' }, defaultKeybind: 'J', defaultKeybindConfigurable: true },
+        // qbx_k9unit:toggleThermalVision / qbx_k9unit:toggleNightVision --
+        // VISION MERGE (coder-architect, this pass): folded into the single
+        // 'k9vision' cycle entry below. Both commands still work, unchanged
+        // (still real RegisterCommand + RegisterKeyMapping calls in
+        // client/vision.lua, still bound to K/J by default) -- they are a
+        // HIDDEN ALIAS pair now (COMMAND_CONSOLIDATION_SPEC.md §3 shape):
+        // real and functional, just no longer chat-suggested or listed here
+        // as their own separate Commands-tab rows. See
+        // tests/commandreferenceregistry_spec.lua's HIDDEN_ALIAS_COMMANDS
+        // ('vision' family) / COMMANDS_TAB_CLEANUP_COMPLETE.vision.
+        { command: 'k9vision', category: 'vision', adminOnly: false, usageKey: 'cmdref_k9vision_usage', doesKey: 'cmdref_k9vision_does', needsKey: 'cmdref_k9vision_needs', gate: { kind: 'open' }, defaultKeybind: 'I' },
 
         // ---- Field Gear & Equipment ----
         { command: 'k9deploykennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9deploykennel_usage', doesKey: 'cmdref_k9deploykennel_does', needsKey: 'cmdref_k9deploykennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },

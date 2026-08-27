@@ -340,10 +340,16 @@
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
-    - Calls CanShowK9UI()/DenyK9UIAccess() (client/main.lua) before any
-      self-initiated trigger acts — same "display gate only, server is the
-      real boundary" posture as every other gated client action in this
-      resource.
+    - Calls HasK9Access()/DenyK9UIAccess() (client/main.lua) before any
+      self-initiated START trigger acts (RequestBiteHold/RequestTakedown/
+      RequestDrag — UPDATED, permission audit follow-up this pass: was
+      CanShowK9UI(), widened to match server/combat.lua's shared
+      ValidateCombatRequest, which gates access on HasK9Access(src) alone)
+      — same "display gate only, server is the real boundary" posture as
+      every other gated client action in this resource. The matching
+      RELEASE halves (ReleaseBiteHold/ReleaseDrag) and the still-unwired
+      ReleaseTakedown stay completely ungated, on purpose — see each one's
+      own doc comment.
     - Reads Config.Combat.BiteAndHold/.NonLethalTakedown/.PropDragging
       (config.lua — the PropDragging sub-table has since LANDED (confirmed
       present in config.lua as of this review pass, with range/
@@ -697,6 +703,17 @@ end
 --- Self-initiated BiteAndHold trigger — DEVELOPER_REFERENCE.md §12.5.1. Called from
 --- client/radial.lua's "Bite & Hold / Release" item when not currently
 --- engaged (see IsBiteHoldEngaged() below for the toggle).
+---
+--- START-BRANCH-ONLY GATE, WIDENED TO HasK9Access() ALONE (permission audit
+--- follow-up, this pass — closes client/radial.lua's own disclosed
+--- "RESIDUAL GAP" note on its k9_bite_hold item): server/combat.lua's shared
+--- ValidateCombatRequest (backing requestBiteHold/requestTakedown/requestDrag
+--- alike) gates access on `HasK9Access(src)` alone, confirmed by reading it
+--- directly — no model/role check anywhere in that validator. This function
+--- is the START half only; ReleaseBiteHold() immediately below is a wholly
+--- separate function with no access gate of its own at all, so widening this
+--- one cannot touch that one — see ReleaseBiteHold()'s own doc comment for
+--- why it must stay that way.
 function RequestBiteHold()
     -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
     -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
@@ -710,8 +727,12 @@ function RequestBiteHold()
         return
     end
 
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    -- Widened to HasK9Access() alone -- see this function's own header
+    -- above. Known reason -> 'combat.no_access', the same house-standard
+    -- string server/combat.lua's own rejection path already uses for this
+    -- exact cause.
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 
@@ -784,6 +805,15 @@ end
 --- EXCLUSIVELY a server-computed speed gate from live position samples
 --- (server/combat.lua's own HandleTakedownRequest), never a client claim,
 --- so this function does not try to pre-filter on it.
+---
+--- GATE WIDENED TO HasK9Access() ALONE, SAME REASONING AS RequestBiteHold()
+--- ABOVE (permission audit follow-up, this pass — closes client/radial.lua's
+--- own disclosed "RESIDUAL GAP" note on its k9_takedown item): shared
+--- ValidateCombatRequest gates access on `HasK9Access(src)` alone. This is a
+--- one-shot action with no matching release/cancel branch in THIS function
+--- (see ReleaseTakedown() below, a wholly separate, still-unwired function
+--- with no access gate of its own) — nothing here to accidentally gate on
+--- the way out.
 function RequestTakedown()
     -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
     -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
@@ -797,8 +827,10 @@ function RequestTakedown()
         return
     end
 
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    -- Widened to HasK9Access() alone -- see this function's own header
+    -- above. Known reason -> 'combat.no_access'.
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 
@@ -898,6 +930,15 @@ local function FindNearestDraggableCandidate(rangeMeters)
 end
 
 --- Self-initiated PropDragging trigger — DEVELOPER_REFERENCE.md §12.5.4.
+---
+--- GATE WIDENED TO HasK9Access() ALONE, SAME REASONING AS RequestBiteHold()/
+--- RequestTakedown() ABOVE (permission audit follow-up, this pass — closes
+--- client/radial.lua's own disclosed "RESIDUAL GAP" note on its k9_drag
+--- item): shared ValidateCombatRequest gates access on `HasK9Access(src)`
+--- alone. This is the START half only; ReleaseDrag() below is a wholly
+--- separate function with no access gate of its own at all (only that the
+--- src is a legitimate party to the drag, holder or target) — widening this
+--- one cannot touch that one.
 function RequestDrag()
     -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
     -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
@@ -911,8 +952,10 @@ function RequestDrag()
         return
     end
 
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    -- Widened to HasK9Access() alone -- see this function's own header
+    -- above. Known reason -> 'combat.no_access'.
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 

@@ -260,7 +260,11 @@
     per-file state" convention (client/recall.lua's RequestRecall,
     client/combat.lua's RequestBiteHold/RequestDrag are the precedent this
     follows):
-        RequestStartSarCall()  -- self-initiated, gated (CanShowK9UI()).
+        RequestStartSarCall()  -- self-initiated, gated (HasK9Access() --
+            UPDATED, permission audit follow-up this pass: was
+            CanShowK9UI(), widened to match server/sarcalls.lua's own
+            requestSarCall callback, which gates access on
+            HasK9Access(source) alone).
         RequestAbandonSarCall() -- UNCONDITIONAL, never gated -- see its
             own doc comment for why, mirroring client/recall.lua's
             RequestRecall/client/scenttrail.lua's StopScentHunt exactly.
@@ -285,7 +289,7 @@
     client/kennel.lua's older single-purpose-command shape) -- picked here
     for consistency with the freshest, most directly comparable precedent
     in this codebase, not because the older shape was wrong.
-    Calls CanShowK9UI()/DenyK9UIAccess() (client/main.lua), K9Sit()
+    Calls HasK9Access()/DenyK9UIAccess() (client/main.lua), K9Sit()
     (client/movement.lua) and PlayK9Sound() (client/audio.lua), every one
     behind a `type(fn) == 'function'` runtime-existence guard -- no
     load-order assumption on any of them, so this file's own position in
@@ -649,13 +653,22 @@ RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, ca
     -- already told the player what happened; nothing further to do here.
 end)
 
---- Self-initiated entry point. CanShowK9UI() re-checked here purely as a
+--- Self-initiated entry point. HasK9Access() re-checked here purely as a
 --- client-side courtesy (server/sarcalls.lua's requestSarCall callback
 --- re-validates HasK9Access independently regardless, per this resource's
 --- "never trust the caller already checked" standard).
+---
+--- GATE WIDENED TO HasK9Access() ALONE (permission audit follow-up, this
+--- pass — closes client/radial.lua's own disclosed "RESIDUAL GAP" note on
+--- its k9_sar_call item's Start branch): server/sarcalls.lua's
+--- requestSarCall callback gates access on `HasK9Access(source)` alone,
+--- confirmed by reading it directly — no model/role check anywhere in that
+--- callback. This is the START half only; RequestAbandonSarCall() below is
+--- a wholly separate function with no access gate of its own at all —
+--- widening this one cannot touch that one.
 function RequestStartSarCall()
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 

@@ -986,6 +986,53 @@ function HasK9Access(source)
     local job = Player.PlayerData.job
     if not job or not Config.Departments[job.name] then return false end
 
+    -- EXPLICIT PER-PERSON BLOCK (security-audit pass, this pass -- "assess,
+    -- then decide" -- see server/permissions.lua's own
+    -- ADMIN_CAPABILITY_BLOCKABLE_KEYS doc comment for the full "why" this
+    -- exists). Checked FIRST, before every qualification path below --
+    -- including the explicit grant bypass immediately under this comment
+    -- and the High Command bypass further down -- mirroring the EXACT
+    -- "step 2, before the grant, beats everything" precedence every other
+    -- PER-PERSON FEATURE CONTROL check in this resource already uses for
+    -- the Config.Features 'block.<Name>' namespace (e.g.
+    -- server/admin.lua's IsAdminFeaturePermittedForCitizenId, this file's
+    -- own header). This is a NEW namespace ('block.k9.access'), not a
+    -- second mechanism: it is the SAME HasPermission call, the SAME
+    -- k9_permissions row shape, the SAME MEMORY-MODE BLOCK ASYMMETRY
+    -- fail-closed guarantee (HasPermission's own `permissionKey:match('^block%.')`
+    -- branch matches this literal string too, automatically, with no
+    -- additional code) -- only the key string is new.
+    --
+    -- COST (128-player audit question, disclosed): this is ONE more
+    -- PermissionCache table lookup on an ALREADY-warmed, in-memory table
+    -- HasPermission already reads for the grant-bypass check two lines
+    -- below -- no new query, no new cache, no new I/O class. HasK9Access
+    -- was already O(1) in-memory before this line; it still is.
+    --
+    -- GATES THE START, NEVER THE STOP (128-player audit question,
+    -- disclosed): HasK9Access is consulted at the START of every action
+    -- across this resource's ~25 other server/*.lua files -- confirmed by
+    -- direct grep, not assumed -- and this resource has an established,
+    -- explicitly-documented, resource-wide rule that every STOP/RELEASE/
+    -- EXIT/OFF path (server/combat.lua's releaseBiteHold/releaseTakedown/
+    -- releaseDrag, server/kennel.lua's requestExitKennel/requestPutDownKennel,
+    -- server/propattachment.lua's own remove branch, server/fetch.lua's
+    -- releaseFetchBall, server/main.lua's detachLeash,
+    -- server/training.lua's setTrainingMode(false), server/sarcalls.lua's
+    -- abandonSarCall, server/scentlineup.lua's k9lineupcancel,
+    -- server/scenttrail.lua's stopScentHunt) is UNCONDITIONAL and never
+    -- calls HasK9Access (or any block check) at all -- "gate the START of
+    -- a thing, never the STOP", stated in those exact words across at
+    -- least eight of those files' own comments. This block therefore
+    -- cannot strand anyone mid-action: it can only ever prevent a NEW
+    -- action from starting, exactly like every OTHER way HasK9Access can
+    -- already flip false mid-session (a job change, a decertification, a
+    -- revoked 'k9.access' grant) — none of which this resource treats as
+    -- a reason to also gate a release path, and this is no different.
+    if type(HasPermission) == 'function' and HasPermission(Player.PlayerData.citizenid, 'block.k9.access') then
+        return false
+    end
+
     -- PERMISSION GRANT BYPASS (server/permissions.lua, Config.Features.PermissionGrants,
     -- resolution-order STEP 1 -- see that file's own header for the full
     -- 4-step contract: "an active granted 'k9.access' permission -> ALLOW",
@@ -1359,6 +1406,23 @@ local function IsEligibleCertifier(source)
 
     local job = Player.PlayerData.job
     if not job or not Config.Departments[job.name] then return false end
+
+    -- EXPLICIT PER-PERSON BLOCK (security-audit pass, this pass) -- see
+    -- server/permissions.lua's own ADMIN_CAPABILITY_BLOCKABLE_KEYS doc
+    -- comment for the full "why", and HasK9Access's own identical addition
+    -- immediately above in this same file for the full "cost at scale" /
+    -- "gates the start, never the stop" writeup, both equally true here:
+    -- IsEligibleCertifier is a granter-side, request-time-only predicate
+    -- (GrantCertification/RevokeCertification/renew/tier-change all call
+    -- it once per request, never as part of an ongoing held state), so
+    -- there is no "mid-action" concern for this function at all. Checked
+    -- BEFORE job.isboss -- this is deliberately the ONE bypass in this
+    -- function that a block must beat too, matching the owner's own
+    -- stated model ("an explicit block beats everything, including High
+    -- Command") applied here to the certifier's own boss status.
+    if type(HasPermission) == 'function' and HasPermission(Player.PlayerData.citizenid, 'block.k9.certify') then
+        return false
+    end
 
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold.

@@ -56,6 +56,10 @@
       - client/training.lua's IsTrainingModeActive(),
         RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
         RequestTrainingBiteDrill().
+      - client/vision.lua's CycleVision() -- vision merge, this pass (see
+        that function's own "MERGED ENTRY POINT" header) -- the "K9 Vision"
+        item's only call, no CanShowK9UI()/HasK9Access() gate of its own,
+        see that item's own comment for why.
       - THIS PASS (top-level icon access gate, coder-security/coder-backend
         finding response): client/partnership.lua's IsPartnered(),
         client/kennel.lua's IsRestingInKennel()/IsCarryingKennel(),
@@ -938,15 +942,17 @@ local function RegisterK9RadialMenu()
     --- gates on `HasK9Access(src)` alone (confirmed by reading it directly —
     --- no model/role check on the REQUESTER anywhere in that handler; only
     --- the VEHICLE itself is re-verified as a real K9 vehicle model), the
-    --- identical shape as Bark/Search/Tracking above. RESIDUAL GAP, DISCLOSED:
-    --- client/vehicle.lua's own EnterNearestK9Vehicle() (out of this file's
-    --- scope) still internally re-gates on the narrower CanShowK9UI() —
-    --- widening ONLY this file's own pre-check therefore does not yet unlock
-    --- the ability end-to-end for a High Command/autoAccessGrade-bypass
-    --- holder; it removes one of the two redundant narrower gates and matches
-    --- this file's own onSelect to what the server actually allows, but
-    --- EnterNearestK9Vehicle()'s own gate needs the identical fix before a
-    --- bypass holder is truly unblocked. Flagged to the owner of that file.
+    --- identical shape as Bark/Search/Tracking above. RESIDUAL GAP CLOSED
+    --- (permission audit follow-up, this pass): client/vehicle.lua's own
+    --- EnterNearestK9Vehicle() was ALSO widened from CanShowK9UI() to
+    --- HasK9Access() alone (see that function's own doc comment) — a High
+    --- Command/autoAccessGrade-bypass holder now reaches the server
+    --- end-to-end through this item, with no narrower re-gate left in the
+    --- middle. (A separate, narrower, DISCLOSED gap remains in the ox_target
+    --- "Load Into Vehicle" hover option's own canInteract predicate, which
+    --- still hides on the narrower CanShowK9UI() — see that predicate's own
+    --- comment in client/vehicle.lua; a bypass holder simply reaches this
+    --- radial item instead.)
     if Config.Features.VehicleEntryExit then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_vehicle',
@@ -1052,6 +1058,55 @@ local function RegisterK9RadialMenu()
         }
     end
 
+    --- K9 Vision — vision merge (coder-architect, owner-directed
+    --- decluttering pass: "consolidate them just like how i asked the
+    --- scent stuff"). ONE item cycling Off -> Night -> Thermal -> Off,
+    --- calling the SAME CycleVision() (client/vision.lua) the new
+    --- 'k9vision' chat command and keybind both call — no logic of its own
+    --- beyond dispatching to it, same shape as k9_track_certified above.
+    ---
+    --- NOT THE SAME MERGE SHAPE AS TRACK ABOVE, ON PURPOSE (see
+    --- client/vision.lua's own "MERGED ENTRY POINT" header for the full
+    --- writeup this item only summarizes): Track's three types are
+    --- alternative answers to one one-shot question, resolved server-side
+    --- from certification. Thermal/Night are HELD STATES with no
+    --- certification to resolve from, so this is a plain cycle, not a
+    --- server-resolved pick — CycleVision() itself is what skips whichever
+    --- mode is flag-off or feature-blocked, so this item never has to.
+    ---
+    --- GATED HERE ON "at least one of the two modes is even switched on" —
+    --- a coarser, DISPLAY-ONLY check mirroring k9_track_certified's own
+    --- `ScentTracking or BloodTracking or GunpowderSniffing` gate
+    --- immediately above, not a claim that CycleVision() itself needs it
+    --- (it re-checks both flags on every press regardless, and degrades to
+    --- an honest "nothing available" notify if a live tablet flip turns
+    --- both off after this item was registered).
+    ---
+    --- NO CanShowK9UI()/HasK9Access() GATE ON THIS ITEM, DELIBERATELY —
+    --- client/vision.lua's own "RESOLVED ACCESS-GATING DECISION" (do not
+    --- re-litigate here): thermal/night vision is the K9's own innate
+    --- perception, gated on IsOwnModelK9() alone, the SAME free/local check
+    --- client/movement.lua's camera toggle uses, not the full departmental
+    --- CanShowK9UI() combinator every OTHER item in this menu uses. Adding
+    --- either check here would silently re-impose a certification/access
+    --- requirement this feature has never had, for a player who is simply
+    --- riding a K9 model right now. CycleVision() -> Toggle*Vision() already
+    --- performs the real IsOwnModelK9() gate (and notifies on failure) on
+    --- every step that turns a mode ON; stepping toward 'off' is never
+    --- gated at all, matching every other release/termination item here.
+    if Config.Features.NightVision or Config.Features.ThermalVision then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_vision_cycle',
+            label = locale('radial.vision_cycle_label'),
+            icon = 'eye',
+            onSelect = function()
+                if type(CycleVision) == 'function' then
+                    CycleVision()
+                end
+            end,
+        }
+    end
+
     --- Bite & Hold / Release — DEVELOPER_REFERENCE.md §12.5.1. A single
     --- context-sensitive item, following the SAME toggle shape as Attach/Detach
     --- Leash above: client/combat.lua's RequestBiteHold()/ReleaseBiteHold()/
@@ -1061,17 +1116,17 @@ local function RegisterK9RadialMenu()
     --- always-visible "Bite & Hold" and "Release" entries would mean one of
     --- them is always a no-op click depending on current state, which is
     --- exactly the shape client/radial.lua's own Leash/Track items already
-    --- rejected). Unlike Detach Leash (which skips the access gate entirely on
-    --- the way out, since client/movement.lua's DetachLeash() itself never
-    --- re-checks access), the Release branch here still re-checks CanShowK9UI()
-    --- first: client/combat.lua's own header frames ReleaseBiteHold() as
-    --- "always available while engaged" only with respect to the SERVER-side
-    --- re-check (never re-validating HasK9Access/feature-flag on the way out),
-    --- not as a client-side UI-gate exemption the way Detach Leash's own
-    --- comment explicitly documents — so this keeps the same "gate every call
-    --- into client/combat.lua" posture as every other item here rather than
-    --- assume a client-side exemption client/combat.lua's own comment never
-    --- actually claims for this specific function.
+    --- rejected). CORRECTED (this pass -- the paragraph here previously said
+    --- the opposite of what the code below it, and this item's own onSelect
+    --- comment, both actually do; a stale, self-contradicting note, fixed
+    --- rather than left to mislead a future reader into "fixing" the
+    --- toggle's release half back into a gated trap): the Release branch,
+    --- exactly LIKE Detach Leash above, skips the access gate entirely on
+    --- the way out. client/combat.lua's ReleaseBiteHold() never re-checks
+    --- HasK9Access/CanShowK9UI/the feature flag on the way out either (only
+    --- that this src is genuinely the holder) — see this item's own
+    --- onSelect below for the full "why gating this would strand a K9"
+    --- reasoning, which applies here exactly as it does to Detach Leash.
     ---
     --- STRUCTURE CHOICE — flat top-level item, NOT nested under a "Combat"
     --- submenu: unlike Bark's submenu (which nests because Config.
@@ -1090,24 +1145,16 @@ local function RegisterK9RadialMenu()
     --- (backing requestBiteHold/requestTakedown/requestDrag alike) gates on
     --- `HasK9Access(src)` alone — confirmed by reading it directly, no
     --- model/role check on the K9 anywhere in that validator — while this
-    --- Start branch used to gate on the broader CanShowK9UI(). RESIDUAL GAP,
-    --- DISCLOSED: client/combat.lua's own RequestBiteHold()/RequestTakedown()/
-    --- RequestDrag() (out of this file's scope) each still internally
-    --- re-gate on the narrower CanShowK9UI() as their own first line —
-    --- confirmed by reading them directly. Widening ONLY this file's own
-    --- pre-check therefore does not yet unlock bite/hold, takedown, or drag
-    --- end-to-end for a High Command/autoAccessGrade-bypass holder: the
-    --- request still reaches client/combat.lua's own gate immediately after
-    --- this one and is refused there instead, with the identical message.
-    --- Widened here anyway because (a) it is still the factually correct fix
-    --- for THIS file per the server's real contract, (b) it is a pure
-    --- no-op-or-improvement change on its own (nothing that worked before
-    --- stops working), and (c) client/combat.lua's own K9MoveRateModifiers
-    --- writes elsewhere in that SAME file already went through this identical
-    --- widening (its own "ANY-PED SWEEP FIX" — `IsOwnModelK9() or
-    --- HasK9Access()`) while these three Request*() entry points were missed
-    --- — flagged to that file's owner as the matching follow-up needed for
-    --- the fix to actually reach the player.
+    --- Start branch used to gate on the broader CanShowK9UI(). RESIDUAL GAP
+    --- CLOSED (permission audit follow-up, this pass): client/combat.lua's
+    --- own RequestBiteHold()/RequestTakedown()/RequestDrag() were ALSO
+    --- widened from CanShowK9UI() to HasK9Access() alone (see each
+    --- function's own doc comment) — a High Command/autoAccessGrade-bypass
+    --- holder now reaches the server end-to-end through this item, with no
+    --- narrower re-gate left in the middle. Their matching RELEASE halves
+    --- (ReleaseBiteHold/ReleaseDrag, and the still-unwired ReleaseTakedown)
+    --- were confirmed to already carry NO access gate of any kind, so this
+    --- widening could not, and does not, touch them.
     if Config.Features.BiteAndHold then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_bite_hold',
@@ -1172,11 +1219,11 @@ local function RegisterK9RadialMenu()
     --- reasoning as Bite & Hold above. Config.Features.NonLethalTakedown gate
     --- (stays `false` by default — see config.lua).
     ---
-    --- WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP AS BITE & HOLD --
-    --- see that item's own header comment above for the full writeup
-    --- (shared ValidateCombatRequest, and client/combat.lua's own
-    --- RequestTakedown() re-gating on CanShowK9UI() internally); applies
-    --- here verbatim, not repeated in full.
+    --- WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP CLOSED AS BITE &
+    --- HOLD -- see that item's own header comment above for the full
+    --- writeup (shared ValidateCombatRequest, and client/combat.lua's own
+    --- RequestTakedown() ALSO widened from CanShowK9UI() to HasK9Access()
+    --- alone); applies here verbatim, not repeated in full.
     if Config.Features.NonLethalTakedown then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_takedown',
@@ -1226,11 +1273,11 @@ local function RegisterK9RadialMenu()
     --- until the server's maxDragDurationMs timeout. This was the exact mistake
     --- corrected for Bite & Hold above; not repeating it here.
     ---
-    --- START BRANCH WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP AS
-    --- BITE & HOLD/TAKEDOWN -- see Bite & Hold's own header comment above
+    --- START BRANCH WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP CLOSED
+    --- AS BITE & HOLD/TAKEDOWN -- see Bite & Hold's own header comment above
     --- for the full writeup; applies here verbatim (shared
     --- ValidateCombatRequest, and client/combat.lua's own RequestDrag()
-    --- re-gating on CanShowK9UI() internally).
+    --- ALSO widened from CanShowK9UI() to HasK9Access() alone).
     if Config.Features.PropDragging then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_drag',
@@ -2062,13 +2109,14 @@ local function RegisterK9RadialMenu()
     --- finding, this pass): server/sarcalls.lua's requestSarCall callback
     --- gates on `HasK9Access(source)` alone -- confirmed by reading it
     --- directly, no model/role check anywhere in that callback. RESIDUAL
-    --- GAP, DISCLOSED: client/sarcalls.lua's own RequestStartSarCall() (out
-    --- of this file's scope) still internally re-gates on the narrower
-    --- CanShowK9UI() as its own first check -- confirmed by reading it
-    --- directly -- so widening ONLY this file's own pre-check does not yet
-    --- unlock SAR calls end-to-end for a High Command/autoAccessGrade-bypass
-    --- holder; same disclosed shape as Bite & Hold/Takedown/Drag above, see
-    --- that item's own header for the full reasoning for widening anyway.
+    --- GAP CLOSED (permission audit follow-up, this pass):
+    --- client/sarcalls.lua's own RequestStartSarCall() was ALSO widened from
+    --- CanShowK9UI() to HasK9Access() alone (see that function's own doc
+    --- comment) -- a High Command/autoAccessGrade-bypass holder now reaches
+    --- the server end-to-end through this item, with no narrower re-gate
+    --- left in the middle. RequestAbandonSarCall() above was confirmed to
+    --- already carry no access gate of any kind, so this widening could
+    --- not, and does not, touch it.
     if Config.Features.SARCalls then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_sar_call',

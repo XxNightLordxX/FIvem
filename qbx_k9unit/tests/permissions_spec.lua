@@ -1026,6 +1026,89 @@ do
         f.disconnectPlayer(targetSrc)
     end)
 
+    -- ------------------------------------------------------------------
+    -- IsValidPermissionKey: ADMIN-CAPABILITY BLOCK NAMESPACE
+    -- ('block.k9.access'/'block.k9.certify'/'block.k9.audit'/
+    -- 'block.k9.givexp' -- security-audit pass, this pass). See
+    -- ADMIN_CAPABILITY_BLOCKABLE_KEYS' own doc comment (this file) for the
+    -- full "why only these four" writeup this mirrors -- server/
+    -- certifications.lua's HasK9Access/IsEligibleCertifier and
+    -- server/admin.lua's IsAuthorizedAdmin now consult these three
+    -- directly; this section proves the VALIDATOR half via the REAL,
+    -- unmodified GrantPermission/RevokePermission/HasPermission, same
+    -- style as the feature./block. section immediately above.
+    -- ------------------------------------------------------------------
+
+    t.test('GrantPermission: block.k9.access / block.k9.certify / block.k9.audit are each accepted', function()
+        f.advanceTime(2000)
+        for _, key in ipairs({ 'block.k9.access', 'block.k9.certify', 'block.k9.audit' }) do
+            f.advanceTime(2000)
+            local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', key)
+            t.isTrue(ok, key .. ': ' .. tostring(outcome))
+            t.equals(outcome, 'ok')
+            f.advanceTime(2000)
+            f.env.RevokePermission(hcSrc, 'TARGET-A', key) -- clean up so the next iteration's grant is not a duplicate-active-row no-op
+        end
+    end)
+
+    t.test('GrantPermission: block.k9.givexp is accepted -- the one admin-capability key with no legacy rank tier at all, still blockable', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'block.k9.givexp')
+        t.isTrue(ok, tostring(outcome))
+        t.equals(outcome, 'ok')
+    end)
+
+    t.test('GrantPermission: feature.k9.access is REJECTED -- there is no positive-grant concept for this namespace, only block', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'feature.k9.access')
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('GrantPermission: block.k9.notarealcapability is REJECTED -- only the four named admin capabilities are blockable, not a free-form k9.<word>', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'block.k9.notarealcapability')
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('GrantPermission: block.k9.runtimecontrol is REJECTED -- a pure-grant custom capability key with no rank-based bypass has nothing for a block to add', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'block.k9.runtimecontrol')
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('END-TO-END: a granted block.k9.certify is genuinely readable back via HasPermission once the target is online', function()
+        f.advanceTime(2000)
+        local targetSrc = f.registerPlayer(105, 'TARGET-CAPBLOCK', { name = 'police', grade = { level = 1 } })
+        local ok = f.env.GrantPermission(hcSrc, 'TARGET-CAPBLOCK', 'block.k9.certify')
+        t.isTrue(ok)
+        t.isTrue(f.env.HasPermission('TARGET-CAPBLOCK', 'block.k9.certify'))
+        f.disconnectPlayer(targetSrc)
+    end)
+
+    -- ISOLATED FIXTURE, deliberately -- overriding K9Store.IsDatabaseEnabled
+    -- on the SHARED `f` above would leave 'k9_permissions' memory-mode (and
+    -- therefore every 'block.<Name>' check unconditionally blocked) for
+    -- every OTHER test still to come in this same do...end block. A fresh
+    -- newFixture() keeps this one test's memory-mode simulation from
+    -- leaking into anything else.
+    t.test('MEMORY-MODE BLOCK ASYMMETRY still applies to this NEW namespace for free -- no additional code needed in HasPermission itself', function()
+        local g = newFixture()
+        g.env.K9Store.IsDatabaseEnabled = function(tableName)
+            if tableName == 'k9_permissions' then return false end
+            return true
+        end
+        -- Nobody has ever granted this citizenid 'block.k9.access' this
+        -- session (PermRows starts empty in memory-mode, by construction)
+        -- -- HasPermission's own existing `permissionKey:match('^block%.')`
+        -- branch matches this literal string exactly as it already matches
+        -- 'block.<FeatureName>', with zero changes to that function.
+        t.isTrue(g.env.HasPermission('NEVER-SEEN-CITIZENID', 'block.k9.access'),
+            'memory-mode must fail closed for this namespace too, automatically')
+    end)
+
     t.test('GrantPermission: an empty-string target citizenid is rejected', function()
         f.advanceTime(2000)
         local ok, outcome = f.env.GrantPermission(hcSrc, '', 'k9.access')

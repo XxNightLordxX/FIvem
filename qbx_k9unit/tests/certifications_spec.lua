@@ -889,6 +889,64 @@ t.test('HasK9Access: with autoAccessGrade nil (shipped default), a high grade al
 end)
 
 -- ======================================================================
+-- HasK9Access -- EXPLICIT PER-PERSON BLOCK (security-audit pass, this
+-- pass -- "assess, then decide": k9.access/k9.certify/k9.audit/k9.givexp
+-- had NO block mechanism at all, so an owner could not selectively
+-- restrain one otherwise-qualifying officer without demoting them). Proves
+-- 'block.k9.access' beats EVERY qualifying route HasK9Access has -- the
+-- explicit grant, an active certification, and the autoAccessGrade rank
+-- bypass -- exactly matching the "an explicit block beats everything"
+-- precedence this resource already uses for the Config.Features
+-- 'block.<Name>' namespace.
+-- ======================================================================
+
+t.test('HasK9Access: block.k9.access beats an explicit, real k9.access grant', function()
+    local f = newFixture()
+    f.registerPlayer(20, 'CIT20', { name = 'police', grade = { level = 1 } })
+    f.env.HasPermission = function(citizenid, key)
+        return citizenid == 'CIT20' and (key == 'k9.access' or key == 'block.k9.access')
+    end
+    t.isFalse(f.env.HasK9Access(20), 'a real grant must not survive an explicit block on the same capability')
+end)
+
+t.test('HasK9Access: block.k9.access beats the autoAccessGrade rank bypass', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 10 },
+    } })
+    f.registerPlayer(21, 'CIT21', { name = 'police', grade = { level = 10 } }) -- meets autoAccessGrade exactly
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'CIT21' and key == 'block.k9.access' end
+    t.isFalse(f.env.HasK9Access(21), 'rank alone must not survive an explicit block -- this is the ONE lever to restrain a rank-qualified officer without demoting them')
+end)
+
+t.test('HasK9Access: block.k9.access beats an active, real certification', function()
+    local f = newFixture()
+    f.mysql.scalar.await = function() return 55 end -- an active cert row exists
+    f.env.RefreshCertificationCache('CIT22', 'police')
+    f.registerPlayer(22, 'CIT22', { name = 'police', grade = { level = 1 } })
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'CIT22' and key == 'block.k9.access' end
+    t.isFalse(f.env.HasK9Access(22), 'a genuine, active certification must not survive an explicit block')
+end)
+
+t.test('HasK9Access: block.k9.access is scoped to that ONE citizenid -- a different, unblocked handler with an identical certification is unaffected', function()
+    local f = newFixture()
+    f.mysql.scalar.await = function() return 56 end
+    f.env.RefreshCertificationCache('CIT23', 'police')
+    f.registerPlayer(23, 'CIT23', { name = 'police', grade = { level = 1 } })
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'SOMEONE-ELSE' and key == 'block.k9.access' end
+    t.isTrue(f.env.HasK9Access(23), 'a block on a DIFFERENT citizenid must never leak onto this one')
+end)
+
+t.test('HasK9Access: block.k9.access does not accidentally block on an UNRELATED capability key -- specificity of the match', function()
+    local f = newFixture()
+    f.mysql.scalar.await = function() return 57 end
+    f.env.RefreshCertificationCache('CIT24', 'police')
+    f.registerPlayer(24, 'CIT24', { name = 'police', grade = { level = 1 } })
+    -- Only 'block.k9.certify' is set for this citizenid -- 'block.k9.access' itself is never true.
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'CIT24' and key == 'block.k9.certify' end
+    t.isTrue(f.env.HasK9Access(24), 'a block on a DIFFERENT capability must never narrow this one')
+end)
+
+-- ======================================================================
 -- GrantCertification -- reached via the captured net event; env.source is
 -- the ambient global the real RegisterNetEvent closure reads, exactly as
 -- FXServer would set it per-invocation.
@@ -912,6 +970,38 @@ t.test('GrantCertification: a granter who is not certifier-eligible is rejected'
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2)
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
+end)
+
+-- ======================================================================
+-- IsEligibleCertifier -- EXPLICIT PER-PERSON BLOCK (security-audit pass,
+-- this pass). Reached indirectly through the real GrantCertification net
+-- event, exactly like the "not certifier-eligible" test immediately above
+-- -- proves 'block.k9.certify' beats even job.isboss, the ONE bypass in
+-- this function nothing else can override.
+-- ======================================================================
+
+t.test('GrantCertification: an explicit block.k9.certify denies even job.isboss', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'G1' and key == 'block.k9.certify' end
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](2)
+    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'),
+        'an explicit block must beat job.isboss -- this is the ONE lever to restrain a boss-ranked officer\'s certifying ability without demoting them')
+end)
+
+t.test('GrantCertification: block.k9.certify is scoped to that ONE citizenid -- a DIFFERENT boss-ranked granter is unaffected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G2', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T2', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    f.setPed(2, 200, vec3(0, 0, 0), K9_HASH_SHEPHERD)
+    f.env.HasPermission = function(citizenid, key) return citizenid == 'SOMEONE-ELSE' and key == 'block.k9.certify' end
+    f.setSource(1)
+    f.events['qbx_k9unit:server:certifyHandler'](2)
+    t.isFalse(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'),
+        'a block on a DIFFERENT citizenid must never leak onto this granter')
 end)
 
 t.test('GrantCertification: the certifier action cooldown silently no-ops the second rapid call from the SAME granter (no notification at all)', function()

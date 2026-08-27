@@ -238,6 +238,122 @@
     for a passive display-only overlay).
 ]]
 
+-- ============================================================================
+-- HANDLER CONDITION BADGE (this pass, coder-backend) -- see
+-- server/wellbeing.lua's own "HANDLER CONDITION BADGE" header section for
+-- the full server-side design this renders. Closes a production-readiness
+-- audit's own "the single best remaining thing to build" finding: a
+-- handler (the human officer, NEVER the player controlling the dog) had no
+-- way to learn their own bonded K9 partner's wellbeing short of the other
+-- player typing it out of character.
+--
+-- DELIBERATELY ABOVE Config.Features.HealthStaminaHUD's early-return
+-- (immediately below this block) — THIS IS NOT A BUG, READ BEFORE MOVING
+-- IT: HealthStaminaHUD gates the K9's OWN on-screen vitals (health/
+-- stamina/hunger/thirst/wellbeing bars) for whoever is CURRENTLY PLAYING
+-- THE DOG. This feature is for the opposite audience — a plain officer who
+-- is NOT their own K9, so CanShowK9UI() (IsOwnModelK9() AND HasK9Access())
+-- is false for them essentially always. Gating this badge behind the same
+-- flag as the K9's own vitals HUD would tie two logically independent
+-- audiences to one operator switch for no reason, and would make this
+-- feature permanently invisible on any server that ships with
+-- HealthStaminaHUD left at its own documented-provisional `false` default
+-- (config.lua) while still wanting handlers to see their partner's
+-- condition. The server already independently gates whether this feature
+-- has anything to send at all (Config.Features.HandlerPartnership plus,
+-- per tag, each stat's own owning flag — server/wellbeing.lua's
+-- PushHandlerConditionUpdate/ComputeHandlerConditionTags); this file adds
+-- no redundant client-side flag gate on top of that.
+--
+-- REGISTERED UNCONDITIONALLY, NOT GATED AT FILE-LOAD TIME LIKE THE REST OF
+-- THIS FILE'S "GATING" CONVENTION: this file's own established rule
+-- ("check the flag once at file-load time, register nothing while it's
+-- off") exists to avoid starting an expensive CreateThread poll loop for
+-- nothing — see this file's own "GATING" header note. There is no thread
+-- here to avoid starting: a bare RegisterNetEvent costs nothing beyond
+-- registering a dormant handler, and the SERVER is the sole authority on
+-- whether this event is EVER actually sent (see above) — registering
+-- unconditionally here, rather than mirroring the wellbeingCache
+-- listener's own `ANY_WELLBEING_ELEMENT_ENABLED`-gated pattern further
+-- down this file, avoids that OTHER listener's own disclosed limitation (a
+-- feature flag flipped ON live, after this client already connected with
+-- every relevant flag off, would never be picked up without a resource
+-- restart) at zero extra cost — there being no thread to (not) start is
+-- exactly what makes doing this differently from that other, pre-existing
+-- listener the more correct choice here, not a deviation invented for its
+-- own sake.
+--
+-- PURELY A FORWARDING RELAY — no locale text is embedded in the network
+-- payload (server/wellbeing.lua sends only fixed, non-numeric TAG CODES,
+-- never pre-rendered text, so the same payload works regardless of this
+-- client's own locale). This file resolves each tag's PLAYER-VISIBLE
+-- STRING via the shared ox_lib `locale()` function (locales/en.json's
+-- `hud` group, ADDITIVE new keys this pass) exactly ONCE, at file-load
+-- time (cheap, never re-resolved per message), and forwards the resolved
+-- table to html/app.js as `data.strings` — mirroring the SAME
+-- `data.strings` shape this file's own header already documents
+-- html/app.js as expecting for the pre-existing Distraction status row
+-- (`hud.distraction_active`/`hud.distraction_clear`), the established
+-- convention for locale text on this NUI surface. html/app.js keeps its
+-- own hardcoded English fallback table for defense-in-depth (a
+-- malformed/missing `strings` entry never renders blank), same as every
+-- other locale-carrying message on this surface.
+--
+-- SOURCE-ORIGIN GUARD, PAYLOAD VALIDATION: same `source ~= 65535` check,
+-- same reasoning, as every other server->client event handler in this
+-- file/this resource — a locally-triggered TriggerEvent (not
+-- TriggerClientEvent from the real server) would otherwise be
+-- indistinguishable from a genuine server push. `payload.tags` is walked
+-- defensively (only string entries survive) rather than forwarded
+-- verbatim — this page's own NO innerHTML / textContent-only rendering
+-- (html/app.js) already makes an unexpected tag harmless even without
+-- this, but never trusting a network payload's exact shape is this
+-- resource's own standing convention regardless of what the immediate
+-- consumer happens to do with it.
+-- ============================================================================
+local PARTNER_CONDITION_EVENT = 'qbx_k9unit:client:partnerConditionUpdate'
+
+--- Resolved ONCE, at file-load time — see this section's own "PURELY A
+--- FORWARDING RELAY" note above for why this is never re-resolved per
+--- message. Keys match exactly the six possible tag codes
+--- server/wellbeing.lua's ComputeHandlerConditionTags can ever emit, plus
+--- 'fine' (shown when `tags` arrives empty) and 'label' (this badge's own
+--- heading).
+local PARTNER_CONDITION_STRINGS = {
+    tired = locale('hud.partner_condition_tired'),
+    unhappy = locale('hud.partner_condition_unhappy'),
+    stressed = locale('hud.partner_condition_stressed'),
+    injured = locale('hud.partner_condition_injured'),
+    hungry = locale('hud.partner_condition_hungry'),
+    thirsty = locale('hud.partner_condition_thirsty'),
+    fine = locale('hud.partner_condition_fine'),
+    label = locale('hud.partner_condition_label'),
+}
+
+RegisterNetEvent(PARTNER_CONDITION_EVENT, function(payload)
+    if source ~= 65535 then return end
+    if type(payload) ~= 'table' then return end
+
+    local visible = payload.visible == true
+    local tags = {}
+    if visible and type(payload.tags) == 'table' then
+        for i = 1, #payload.tags do
+            if type(payload.tags[i]) == 'string' then
+                tags[#tags + 1] = payload.tags[i]
+            end
+        end
+    end
+
+    SendNUIMessage({
+        action = 'hud:partnerCondition',
+        data = {
+            visible = visible,
+            tags = tags,
+            strings = PARTNER_CONDITION_STRINGS,
+        },
+    })
+end)
+
 if not Config.Features.HealthStaminaHUD then return end
 
 -- ----------------------------------------------------------------------

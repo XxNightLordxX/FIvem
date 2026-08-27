@@ -43,7 +43,10 @@
     requestEnterKennel/requestPickupKennel:
       'qbx_k9unit:server:requestVehicleSeatClaim' (vehicleNetId: number, seatIndex: number, requestToken: number) [server/vehicle.lua]
         Sent immediately after this file's own local pre-flight checks pass
-        (feature flag, CanShowK9UI, per-person block, drag/bite-hold mutual
+        (feature flag, HasK9Access — UPDATED, permission audit follow-up:
+        was CanShowK9UI(), widened to match this same file's own
+        requestVehicleSeatClaim handler, which gates access on
+        HasK9Access(src) alone — per-person block, drag/bite-hold mutual
         guard, IsPedInAnyVehicle, nearest-vehicle, FindBestK9Seat) and BEFORE
         any door/seat native is ever touched — a denial therefore never has
         to undo a door it already opened. requestToken is an opaque,
@@ -136,11 +139,23 @@
       function: client/combat.lua's mutual guard, client/movement.lua's
       leash pull-back skip, and client/radial.lua's/client/tablet.lua's own
       toggle logic).
-    - THIS FILE calls client/main.lua's global CanShowK9UI() before acting
-      on any of the above, and client/main.lua's global
+    - THIS FILE calls client/main.lua's global HasK9Access() (UPDATED,
+      permission audit follow-up this pass — was CanShowK9UI(), widened in
+      EnterNearestK9Vehicle() to match server/vehicle.lua's own
+      requestVehicleSeatClaim gate) before acting on the ENTER path only;
+      ExitK9Vehicle() stays completely ungated, on purpose — see its own
+      doc comment. Also calls client/main.lua's global
       ResolveNetworkEntity(netId) inside ResolveVehicleFromState() below
       (DEVELOPER_REFERENCE.md near-term item 2 — was this file's own
       independent copy of the same defensive-resolve sequence).
+      NOTE: the ox_target "Load Into Vehicle" option's own canInteract
+      predicate (RegisterVehicleOxTargetOptions() below) still hides the
+      option on the narrower CanShowK9UI() — a purely cosmetic,
+      out-of-scope-this-pass gap deliberately left alone (see that
+      predicate's own comment): a High Command/autoAccessGrade-bypass
+      holder still reaches EnterNearestK9Vehicle() end-to-end via
+      client/radial.lua's own k9_vehicle item, just not via this hover
+      option, until that predicate gets the same widening.
 ]]
 
 -- ======================================================================
@@ -476,11 +491,28 @@ end
 --- (rear preferred — see FindBestK9Seat()), opens that seat's door, and
 --- seats the K9 into it for real, matching DEVELOPER_REFERENCE.md §6.1's
 --- vehicle bullet, which describes this real-seating behavior directly.
+---
+--- GATE WIDENED TO HasK9Access() ALONE (permission audit follow-up, this
+--- pass — closes client/radial.lua's own disclosed "RESIDUAL GAP" note on
+--- its k9_vehicle item's Enter branch): server/vehicle.lua's
+--- requestVehicleSeatClaim handler gates access on `HasK9Access(src)` alone,
+--- confirmed by reading it directly — no model/role check on the requester
+--- anywhere in that handler, only the vehicle itself is re-verified as a
+--- real K9 vehicle model. This is the ENTER half only; ExitK9Vehicle() below
+--- is a wholly separate function, deliberately never gated on
+--- CanShowK9UI()/HasK9Access() at all — widening this one cannot touch that
+--- one.
 function EnterNearestK9Vehicle()
     if not Config.Features.VehicleEntryExit then return end
 
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    -- Widened to HasK9Access() alone -- see this function's own header
+    -- above. Known reason -> 'combat.no_access', the same house-standard
+    -- string server/combat.lua's own rejection path uses for this exact
+    -- cause (server/vehicle.lua's own denial message,
+    -- locale('common.no_k9_access'), is unrelated and unchanged — see that
+    -- file's own comment on it).
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 
@@ -1024,6 +1056,19 @@ end)
 -- IsOwnModelK9()) — this is EXACTLY the "hot call site" client/main.lua's
 -- header names as the reason HasK9Access() has a short TTL cache, since
 -- canInteract can run several times a second while hovering.
+-- DISCLOSED, LEFT DELIBERATELY AS-IS THIS PASS (permission audit follow-up):
+-- EnterNearestK9Vehicle() itself was widened to HasK9Access() alone (see its
+-- own doc comment above) to match server/vehicle.lua's requestVehicleSeatClaim
+-- gate, but this canInteract predicate below was NOT — narrowing this file's
+-- change to only the function named in that audit rather than sweeping every
+-- CanShowK9UI() call site in the file. Net effect: a High Command/
+-- autoAccessGrade-bypass holder (HasK9Access() true, CanShowK9UI() false)
+-- will not see the "Load Into Vehicle" hover option, but reaches the same
+-- action end-to-end via client/radial.lua's k9_vehicle item regardless,
+-- which routes through HasK9Access() already. A real, narrower, same-shape
+-- gap as the one this pass closed — flagged here rather than silently
+-- widened without re-confirming this predicate's own hot-call-site
+-- performance characteristics stay correct under the change.
 -- Gate visibility with Config.Features.VehicleEntryExit AND the access
 -- check above — this is a DISPLAY optimization per DEVELOPER_REFERENCE.md
 -- §3/§4.5, not the security boundary. UPDATED (SEAT-RACE FIX pass): this

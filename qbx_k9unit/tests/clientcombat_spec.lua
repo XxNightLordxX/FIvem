@@ -564,7 +564,7 @@ end)
 -- server to be silently dropped.
 t.test('PER-MECHANIC GATING, SENDING SIDE: with its own flag off, RequestBiteHold refuses locally and never reaches the server', function()
     local f = newCombatFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = true })
-    f.setCanShowK9UI(true)
+    f.setHasK9Access(true) -- PERMISSION AUDIT FOLLOW-UP: the relevant access gate is now HasK9Access() alone (was CanShowK9UI()) -- set here purely to prove the FEATURE-flag check runs first, ahead of the access check, regardless of access
     f.addPoolPed(50, { x = 0.5 })
     -- Still DEFINED -- the file-level gate is "any of the three", and
     -- PropDragging is on here, so the file loads and declares all three.
@@ -580,7 +580,7 @@ end)
 t.test('PER-MECHANIC GATING, SENDING SIDE: the same holds for RequestTakedown and RequestDrag', function()
     -- Only BiteAndHold on, so the other two must each refuse locally.
     local f = newCombatFixture({ biteAndHold = true, nonLethalTakedown = false, propDragging = false })
-    f.setCanShowK9UI(true)
+    f.setHasK9Access(true) -- PERMISSION AUDIT FOLLOW-UP -- see the sibling test immediately above for why this is HasK9Access(), not CanShowK9UI(), now
     f.addPoolPed(50, { x = 0.5 })
     f.env.RequestTakedown()
     t.equals(#f.serverEvents, 0, 'RequestTakedown must not reach the server with NonLethalTakedown off')
@@ -592,7 +592,7 @@ t.test('PER-MECHANIC GATING: the gate does NOT block the mechanic that IS enable
     -- The regression that matters most: an over-broad gate would silently
     -- disable a feature the operator turned on.
     local f = newCombatFixture({ biteAndHold = true, nonLethalTakedown = false, propDragging = false })
-    f.setCanShowK9UI(true)
+    f.setHasK9Access(true) -- PERMISSION AUDIT FOLLOW-UP: RequestBiteHold's own access gate is HasK9Access() now (was CanShowK9UI()) -- without this, the fixture's own hasK9Access=false default denies before ever reaching the per-mechanic feature check this test targets
     f.addPoolPed(50, { x = 0.5 })
     f.env.RequestBiteHold()
     t.equals(#f.serverEvents, 1, 'BiteAndHold is enabled here and must still reach the server')
@@ -600,19 +600,30 @@ t.test('PER-MECHANIC GATING: the gate does NOT block the mechanic that IS enable
 end)
 
 -- ========================================================================
--- Self-initiated triggers: CanShowK9UI gate, the vehicle-tuck mutual guard,
--- no-target-in-range, and the happy path.
+-- Self-initiated triggers: HasK9Access gate (PERMISSION AUDIT FOLLOW-UP,
+-- this pass -- was CanShowK9UI(), widened to match server/combat.lua's
+-- shared ValidateCombatRequest, which gates access on HasK9Access(src)
+-- alone -- see client/combat.lua's own doc comment on RequestBiteHold()/
+-- RequestTakedown()/RequestDrag() for the full writeup), the vehicle-tuck
+-- mutual guard, no-target-in-range, and the happy path.
+--
+-- newCombatFixture()'s own `hasK9Access` default is `false` (chosen to
+-- preserve the UNRELATED move-rate-composer tests further down this file
+-- that rely on it staying false unless explicitly opted into) -- every test
+-- below that means to represent an ORDINARILY PERMITTED K9 now opts in
+-- explicitly via `hasK9Access = true` / `f.setHasK9Access(true)`, since
+-- CanShowK9UI() no longer gates any of these three functions at all.
 -- ========================================================================
 
-t.test('RequestBiteHold: CanShowK9UI false denies locally, no server contact', function()
-    local f = newCombatFixture({ canShowK9UI = false })
+t.test('RequestBiteHold: HasK9Access false denies locally, no server contact', function()
+    local f = newCombatFixture({ hasK9Access = false })
     f.env.RequestBiteHold()
     t.equals(f.denyCallCount(), 1)
     t.equals(#f.serverEvents, 0)
 end)
 
 t.test('RequestBiteHold: no candidate in range notifies and sends nothing', function()
-    local f = newCombatFixture()
+    local f = newCombatFixture({ hasK9Access = true })
     f.env.RequestBiteHold()
     t.equals(#f.serverEvents, 0)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('combat.no_target_in_range'))
@@ -620,14 +631,15 @@ t.test('RequestBiteHold: no candidate in range notifies and sends nothing', func
 end)
 
 t.test('RequestBiteHold: excludes a DEAD candidate ped (unlike RequestDrag\'s own candidate search)', function()
-    local f = newCombatFixture()
+    local f = newCombatFixture({ hasK9Access = true })
     f.addPoolPed(50, { x = 1, dead = true })
     f.env.RequestBiteHold()
     t.equals(#f.serverEvents, 0, 'a dead ped must never be selected by FindNearestCombatTarget')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('combat.no_target_in_range'), 'must reach the real candidate search (past the access gate) and find nobody live, not merely be denied access')
 end)
 
 t.test('RequestBiteHold: happy path sends the real netId of the nearest live candidate', function()
-    local f = newCombatFixture()
+    local f = newCombatFixture({ hasK9Access = true })
     f.addPoolPed(50, { x = 5 })
     f.addPoolPed(51, { x = 1 }) -- nearer
     f.setNetId(51, 900051)
@@ -637,8 +649,38 @@ t.test('RequestBiteHold: happy path sends the real netId of the nearest live can
     t.equals(f.lastServerEvent().args[1], 900051)
 end)
 
-t.test('ReleaseBiteHold: always sends, unconditionally, no CanShowK9UI gate', function()
-    local f = newCombatFixture({ canShowK9UI = false })
+-- PERMISSION AUDIT FOLLOW-UP -- the High Command/autoAccessGrade bypass
+-- shape this pass exists to unblock: HasK9Access() true (server/config
+-- grants access without certification) but IsOwnModelK9()/IsK9Role() false
+-- (the CanShowK9UI() combinator would have refused this caller before this
+-- pass's widening). RequestBiteHold() must reach the server regardless --
+-- it no longer calls CanShowK9UI()/IsOwnModelK9() at all.
+t.test('RequestBiteHold: HasK9Access() true with isOwnModelK9 false (High Command bypass shape) still reaches the server', function()
+    local f = newCombatFixture({ hasK9Access = true, isOwnModelK9 = false, canShowK9UI = false })
+    f.addPoolPed(50, { x = 1 })
+    f.setNetId(50, 900050)
+    f.env.RequestBiteHold()
+    t.equals(#f.serverEvents, 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestBiteHold')
+    t.equals(f.denyCallCount(), 0, 'must not have been locally denied')
+end)
+
+t.test('ReleaseBiteHold: always sends, unconditionally, no HasK9Access gate', function()
+    local f = newCombatFixture({ hasK9Access = false })
+    f.env.ReleaseBiteHold()
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseBiteHold')
+end)
+
+-- RELEASE-PATH GUARANTEE, PERMISSION AUDIT FOLLOW-UP (this pass's own
+-- explicit requirement): the release half of a toggle must be reachable
+-- with NO access at all, even after the START half's own gate was widened
+-- -- pinned directly against BOTH access predicates at once (not just
+-- HasK9Access, which the line above already covers alone) so a future edit
+-- that accidentally adds an `and CanShowK9UI()`-style check to the release
+-- path is caught here too.
+t.test('ReleaseBiteHold: fires with HasK9Access AND CanShowK9UI both false -- no access of any kind', function()
+    local f = newCombatFixture({ hasK9Access = false, canShowK9UI = false, isOwnModelK9 = false })
     f.env.ReleaseBiteHold()
     t.equals(#f.serverEvents, 1)
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseBiteHold')
@@ -646,20 +688,23 @@ end)
 
 -- TERMINATION-PATH GUARANTEE (this pass's own explicit test requirement):
 -- "verify the termination path still runs with the gating function
--- entirely undefined, not merely false." `canShowK9UI = false` above only
+-- entirely undefined, not merely false." `hasK9Access = false` above only
 -- proves the FALSE case; a real production install could have a stripped
--- or out-of-order client/main.lua where CanShowK9UI simply does not exist
+-- or out-of-order client/main.lua where HasK9Access simply does not exist
 -- as a global at all -- a stricter, meaningfully different condition
 -- (Lua raises "attempt to call a nil value" on a bare call, not a false
--- return) that a naive `if not CanShowK9UI() then ... end` guard would
+-- return) that a naive `if not HasK9Access() then ... end` guard would
 -- crash on, permanently bricking the release path. ReleaseBiteHold's own
--- body never references CanShowK9UI (or any other gate) at all -- this
--- pins that property directly rather than trusting it by inspection alone.
-t.test('ReleaseBiteHold: fires even when CanShowK9UI is entirely UNDEFINED (not merely false) -- a release path must never depend on any gating function existing at all', function()
+-- body never references HasK9UI/HasK9Access (or any other gate) at all --
+-- this pins that property directly rather than trusting it by inspection
+-- alone. CanShowK9UI is ALSO undefined here (not merely HasK9Access), same
+-- "no access predicate of any kind" posture as the pair of tests above.
+t.test('ReleaseBiteHold: fires even when HasK9Access/CanShowK9UI are entirely UNDEFINED (not merely false) -- a release path must never depend on any gating function existing at all', function()
     local f = newCombatFixture()
+    f.env.HasK9Access = nil
     f.env.CanShowK9UI = nil
     local ok, err = pcall(f.env.ReleaseBiteHold)
-    t.isTrue(ok, 'ReleaseBiteHold must not error when CanShowK9UI is undefined: ' .. tostring(err))
+    t.isTrue(ok, 'ReleaseBiteHold must not error when HasK9Access/CanShowK9UI are undefined: ' .. tostring(err))
     t.equals(#f.serverEvents, 1)
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseBiteHold')
 end)
@@ -669,25 +714,39 @@ end)
 -- for the first time. A K9 holder stuck unable to drop a dragged suspect
 -- is this resource's own named worst-case outcome (client/combat.lua's
 -- own ReleaseDrag doc comment: "no consent/access gate on the way out").
-t.test('ReleaseDrag: always sends, unconditionally, no CanShowK9UI gate -- including when CanShowK9UI is entirely UNDEFINED, not merely false', function()
-    local f = newCombatFixture({ canShowK9UI = false })
+t.test('ReleaseDrag: always sends, unconditionally, no HasK9Access/CanShowK9UI gate -- including when both are entirely UNDEFINED, not merely false', function()
+    local f = newCombatFixture({ hasK9Access = false, canShowK9UI = false })
     f.env.ReleaseDrag()
     t.equals(#f.serverEvents, 1)
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseDrag')
 
     local f2 = newCombatFixture()
+    f2.env.HasK9Access = nil
     f2.env.CanShowK9UI = nil
     local ok, err = pcall(f2.env.ReleaseDrag)
-    t.isTrue(ok, 'ReleaseDrag must not error when CanShowK9UI is undefined: ' .. tostring(err))
+    t.isTrue(ok, 'ReleaseDrag must not error when HasK9Access/CanShowK9UI are undefined: ' .. tostring(err))
     t.equals(#f2.serverEvents, 1)
     t.equals(f2.lastServerEvent().event, 'qbx_k9unit:server:releaseDrag')
 end)
 
-t.test('RequestTakedown: same CanShowK9UI/no-target shape as RequestBiteHold', function()
-    local f = newCombatFixture({ canShowK9UI = false })
+t.test('RequestTakedown: HasK9Access false denies locally (PERMISSION AUDIT FOLLOW-UP -- was CanShowK9UI(), see RequestBiteHold\'s own header comment for the full writeup)', function()
+    local f = newCombatFixture({ hasK9Access = false })
     f.env.RequestTakedown()
     t.equals(f.denyCallCount(), 1)
     t.equals(#f.serverEvents, 0)
+end)
+
+-- PERMISSION AUDIT FOLLOW-UP -- the High Command/autoAccessGrade bypass
+-- shape, RequestTakedown's own equivalent of RequestBiteHold's identical
+-- test above.
+t.test('RequestTakedown: HasK9Access() true with isOwnModelK9 false (High Command bypass shape) still reaches the server', function()
+    local f = newCombatFixture({ hasK9Access = true, isOwnModelK9 = false, canShowK9UI = false })
+    f.addPoolPed(50, { x = 1 })
+    f.setNetId(50, 900050)
+    f.env.RequestTakedown()
+    t.equals(#f.serverEvents, 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestTakedown')
+    t.equals(f.denyCallCount(), 0, 'must not have been locally denied')
 end)
 
 -- CANCEL-PATH FIX (this pass, coder-frontend -- audit-flagged gap):
@@ -696,27 +755,41 @@ end)
 -- above, pinned here for the first time for takedown: a K9 stuck unable to
 -- call off a wrongly-targeted takedown is exactly the "no way back" gap
 -- this pass exists to close.
-t.test('ReleaseTakedown: always sends, unconditionally, no CanShowK9UI gate -- including when CanShowK9UI is entirely UNDEFINED, not merely false', function()
-    local f = newCombatFixture({ canShowK9UI = false })
+t.test('ReleaseTakedown: always sends, unconditionally, no HasK9Access/CanShowK9UI gate -- including when both are entirely UNDEFINED, not merely false', function()
+    local f = newCombatFixture({ hasK9Access = false, canShowK9UI = false })
     f.env.ReleaseTakedown()
     t.equals(#f.serverEvents, 1)
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseTakedown')
 
     local f2 = newCombatFixture()
+    f2.env.HasK9Access = nil
     f2.env.CanShowK9UI = nil
     local ok, err = pcall(f2.env.ReleaseTakedown)
-    t.isTrue(ok, 'ReleaseTakedown must not error when CanShowK9UI is undefined: ' .. tostring(err))
+    t.isTrue(ok, 'ReleaseTakedown must not error when HasK9Access/CanShowK9UI are undefined: ' .. tostring(err))
     t.equals(#f2.serverEvents, 1)
     t.equals(f2.lastServerEvent().event, 'qbx_k9unit:server:releaseTakedown')
 end)
 
 t.test('RequestDrag: candidate search does NOT exclude a dead ped (PropDragging\'s whole premise is a downed target)', function()
-    local f = newCombatFixture()
+    local f = newCombatFixture({ hasK9Access = true }) -- PERMISSION AUDIT FOLLOW-UP: must clear RequestDrag's own access gate to reach the candidate search this test targets
     f.addPoolPed(60, { x = 1, dead = true })
     f.setNetId(60, 900060)
     f.env.RequestDrag()
     t.equals(#f.serverEvents, 1, 'a dead NPC ped must still be a valid drag candidate')
     t.equals(f.lastServerEvent().args[1], 900060)
+end)
+
+-- PERMISSION AUDIT FOLLOW-UP -- the High Command/autoAccessGrade bypass
+-- shape, RequestDrag's own equivalent of RequestBiteHold/RequestTakedown's
+-- identical tests above.
+t.test('RequestDrag: HasK9Access() true with isOwnModelK9 false (High Command bypass shape) still reaches the server', function()
+    local f = newCombatFixture({ hasK9Access = true, isOwnModelK9 = false, canShowK9UI = false })
+    f.addPoolPed(60, { x = 1 })
+    f.setNetId(60, 900060)
+    f.env.RequestDrag()
+    t.equals(#f.serverEvents, 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDrag')
+    t.equals(f.denyCallCount(), 0, 'must not have been locally denied')
 end)
 
 t.test('IsBiteHoldEngaged / IsDragEngaged / IsTakedownEngaged: all false before any grant', function()
@@ -862,7 +935,7 @@ end)
 -- ------------------------------------------------------------------
 
 t.test('vehicle-tuck guard: IsInK9Vehicle entirely absent (client/vehicle.lua not loaded) degrades cleanly -- never blocks', function()
-    local f = newCombatFixture() -- opts.isInK9Vehicle left nil -- global genuinely absent
+    local f = newCombatFixture({ hasK9Access = true }) -- PERMISSION AUDIT FOLLOW-UP: must clear RequestBiteHold's own access gate to reach the vehicle-tuck guard this test targets -- opts.isInK9Vehicle left nil -- global genuinely absent
     t.isNil(f.env.IsInK9Vehicle, 'sanity: this sandbox genuinely does not define IsInK9Vehicle')
     f.addPoolPed(50, { x = 1 })
     local ok, err = pcall(f.env.RequestBiteHold)
@@ -871,14 +944,14 @@ t.test('vehicle-tuck guard: IsInK9Vehicle entirely absent (client/vehicle.lua no
 end)
 
 t.test('vehicle-tuck guard: IsInK9Vehicle present but false -- proceeds normally for all three triggers', function()
-    local f = newCombatFixture({ isInK9Vehicle = false })
+    local f = newCombatFixture({ isInK9Vehicle = false, hasK9Access = true })
     f.addPoolPed(50, { x = 1 })
     f.env.RequestBiteHold()
     t.equals(#f.serverEvents, 1)
 end)
 
 t.test('vehicle-tuck guard: IsInK9Vehicle true blocks RequestBiteHold/RequestTakedown/RequestDrag with a notify and zero server contact (locale key "combat.blocked_by_vehicle" was missing from locales/en.json when this test was first written mid-session -- confirmed added since, real string re-checked via locale() below rather than typed in by hand, per this suite\'s own convention)', function()
-    local f = newCombatFixture({ isInK9Vehicle = true })
+    local f = newCombatFixture({ isInK9Vehicle = true, hasK9Access = true }) -- PERMISSION AUDIT FOLLOW-UP: must clear the access gate first to actually reach this test's own target, the vehicle-tuck guard immediately after it
     f.addPoolPed(50, { x = 1 }) -- deliberately resolvable -- a bypassed guard WOULD produce a visible server event
     f.env.RequestBiteHold()
     t.equals(#f.serverEvents, 0, 'a tucked K9 must never be able to start a bite hold')

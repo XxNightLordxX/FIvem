@@ -230,6 +230,13 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9settieroffline = 'cert_pairs',
     k9recertifyoffline = 'cert_pairs',
     k9unspecializeoffline = 'cert_pairs',
+    -- family #9 (Sensory/vision, 2 -> 1, 'k9vision') -- client/vision.lua.
+    -- Same "landed in the same change, not deferred" shape as permissions/
+    -- cert_pairs above -- see COMMANDS_TAB_CLEANUP_COMPLETE.vision below,
+    -- flipped true here: their COMMAND_REFERENCE rows were removed from
+    -- html/tablet.js in this same change (replaced by one 'k9vision' row).
+    ['qbx_k9unit:toggleThermalVision'] = 'vision',
+    ['qbx_k9unit:toggleNightVision'] = 'vision',
 }
 
 -- COMMANDS_TAB_CLEANUP_COMPLETE -- coordination table, project-lead-owned.
@@ -285,6 +292,14 @@ local COMMANDS_TAB_CLEANUP_COMPLETE = {
     -- entry, in this same change too).
     permissions = true,
     cert_pairs = true,
+
+    -- vision = true, SET HONESTLY (this pass, coder-architect): the
+    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision
+    -- COMMAND_REFERENCE rows were removed from html/tablet.js (replaced by
+    -- one 'k9vision' row) in THIS SAME CHANGE -- not blocked by a hot-file
+    -- conflict, since this pass owns COMMAND_REFERENCE/TABLET_STRING_KEYS
+    -- edits for this specific family.
+    vision = true,
 }
 
 -- PENDING_NEW_CANONICAL_COMMANDS -- a DIFFERENT exception from

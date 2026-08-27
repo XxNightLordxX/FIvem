@@ -1224,6 +1224,154 @@ t.test('DISPLAY-GAP FIX (PersonFeatures): OFFLINE resolves false unconditionally
 end)
 
 -- ============================================================================
+-- DISPLAY-GAP, FAIL-OPEN FIX (coder-security pass) -- the tablet must never
+-- show `available` for a feature a real HasPermission(citizenid,
+-- 'block.<Name>') call would refuse. QueryActivePermissionSet used to
+-- collapse "the k9_permissions read genuinely failed" and "this citizenid
+-- genuinely holds zero rows" into the SAME empty table (`or {}`), and
+-- ResolveFeatureState derived `blocked` purely from that table -- so a
+-- database degradation (memory-mode, a per-table fallback, a schema
+-- collision, or a plain transient query error) silently reported
+-- `available` for a feature a real block would have refused. This mirrors
+-- server/permissions.lua's own HasPermission "MEMORY-MODE BLOCK ASYMMETRY"
+-- fix for the identical namespace, on the display path this time.
+-- ============================================================================
+
+t.test('FAIL-OPEN FIX: a transient k9_permissions read failure reports blocked, never available, for an otherwise-unblocked feature (myFeatures)', function()
+    local f = newFixture({
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    -- No block row exists at all -- a healthy read would resolve 'available'
+    -- (see the control test immediately below). Simulate a real query
+    -- failure (a dropped connection, a busy pool) rather than a thrown
+    -- config/programmer error, exactly like RefreshPermissionCache's own
+    -- bounded-retry failure mode in server/permissions.lua.
+    f.env.K9Store.Perm_GetActiveForCitizen = function() error('simulated transient DB failure') end
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'blocked', 'a read that could not confirm the ABSENCE of a block must never display available -- fail closed, exactly like HasPermission')
+end)
+
+t.test('FAIL-OPEN FIX control: the SAME setup with a HEALTHY read and no block row resolves available -- the fix must not deny when nothing is actually wrong', function()
+    local f = newFixture({
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'available', 'a genuinely healthy read with no block row must still resolve available -- this fix must not be a blanket new denial')
+end)
+
+t.test('FAIL-OPEN FIX: k9_permissions memory-mode (Config.Database.enabled = false / schema fallback) reports blocked too, even though the memory-mode read itself throws no error', function()
+    local f = newFixture({
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    -- Memory-mode PermRows always starts empty (server/datastore.lua's own
+    -- "FAIL-CLOSED, BY CONSTRUCTION" header) -- this read succeeds cleanly,
+    -- ok=true, empty table -- the exact case HasPermission's own case 1
+    -- exists to catch (a real, un-erroring read of a store that structurally
+    -- cannot contain a row nobody has re-granted this session).
+    f.env.K9Store.IsDatabaseEnabled = function(tableName)
+        if tableName == 'k9_permissions' then return false end
+        return true
+    end
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'blocked', 'memory-mode for k9_permissions must fail closed for the block namespace, matching HasPermission\'s own case 1 exactly')
+end)
+
+t.test('FAIL-OPEN FIX: high command is NOT under-reported by this fix -- a healthy read still shows available via rank with no personal grant', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return false end,
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    -- Read is genuinely healthy (no failure simulated) -- high command's
+    -- real authority must still surface exactly as the pre-existing
+    -- DISPLAY-GAP FIX tests above already pin; this test exists specifically
+    -- alongside the FAIL-OPEN fix so a future change cannot satisfy "fail
+    -- closed on failure" by accidentally failing closed UNCONDITIONALLY.
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'available', 'high command must not be under-reported just because this pass hardened the failure path')
+end)
+
+t.test('FAIL-OPEN FIX: a block still wins over high command even when it is a FAILURE-INFERRED block, not a real row -- the owner\'s carve-out direction is preserved under failure too', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.env.K9Store.Perm_GetActiveForCitizen = function() error('simulated transient DB failure') end
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'blocked', 'an unreliable read must win over the high-command bypass -- exactly the same precedence a REAL block already has')
+end)
+
+t.test('FAIL-OPEN FIX (PersonFeatures): a transient read failure reports blocked for a TARGET too, never available', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local viewerSrc = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.env.K9Store.Perm_GetActiveForCitizen = function() error('simulated transient DB failure') end
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(viewerSrc, 'ANYTARGET')
+    local row
+    for _, entry in ipairs(result.features) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'blocked', 'the person-lookup screen must fail closed identically to myFeatures for the same reason')
+    t.isFalse(row.blocked, 'the GROUND-TRUTH `blocked` field stays honest (no block row was ever confirmed) -- only the displayed `state` fails closed, exactly like the existing viaHighCommand overlay never touches granted/blocked')
+end)
+
+-- ============================================================================
 -- tabletRequestRoster
 -- ============================================================================
 

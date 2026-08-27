@@ -57,6 +57,13 @@
       README.md's "Public API for developers (exports/events)" section's
       Phase 1 contract table), in case a later phase wants to call in
       from outside this file.
+    - VISION MERGE PASS (coder-architect, this pass) adds a FIFTH
+      resource-global: CycleVision(). See the "MERGED ENTRY POINT" section
+      further down this file, right above its definition, for the full
+      design writeup. client/radial.lua's new "K9 Vision" item is the other
+      Phase-2-plus caller alongside 'k9vision' below — same "one function,
+      every entry point calls it" shape StartCertifiedTrack() already
+      established for the scent merge.
     - THIS FILE calls client/main.lua's IsOwnModelK9() — see the RESOLVED
       ACCESS-GATING DECISION section immediately below for why this is
       IsOwnModelK9() and explicitly NOT CanShowK9UI().
@@ -390,29 +397,46 @@ end
 --- effect is active).
 --- See RESOLVED ACCESS-GATING DECISION above: gates on IsOwnModelK9()
 --- only, NOT CanShowK9UI().
+---
+--- GATE-THE-START-NEVER-THE-STOP FIX (vision merge pass, coder-architect):
+--- the IsOwnModelK9() check below used to run UNCONDITIONALLY, before
+--- `turningOn` was even computed -- so a player already IN thermal vision
+--- who stopped being IsOwnModelK9() (an appearance swap mid-session, or
+--- simply this getting called from CycleVision() below after some other
+--- exit condition already flipped) could not turn it back OFF through this
+--- function at all; only the separate 1000ms maintenance-thread poll would
+--- eventually notice and force it off. That is a latent version of exactly
+--- the "stuck in thermal with no way out" trap this resource's own standing
+--- doctrine exists to prevent -- the maintenance thread covers it within
+--- ~1s, but a direct, immediate stop request should never be refused for a
+--- reason that only matters for STARTING. Moved inside the `if turningOn`
+--- branch below, alongside the per-person block check (which already had
+--- this right) -- turning off is now unconditional, matching every other
+--- release/termination path in this resource (DetachLeash(),
+--- ReleaseBiteHold(), StopCameraFeed(), etc.).
 function ToggleThermalVision()
-    if not IsOwnModelK9() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
-        return
-    end
-
     local turningOn = not IsThermalVisionActive()
 
-    -- Per-person block (client/featureblocks.lua -- see that file's header
-    -- for the full contract). Checked ONLY on the turning-ON branch, never
-    -- on turning off -- this must never be able to trap someone with
-    -- thermal vision stuck active. `type(...) == 'function'` guard per
-    -- this resource's soft-dependency convention: if
-    -- client/featureblocks.lua is not yet loaded, this degrades to "never
-    -- blocked", the correct fail-open direction.
-    if turningOn and type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ThermalVision') then
-        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
-        return
-    end
-
-    -- Mutual exclusion happens BEFORE flipping this effect on, per
-    -- DEVELOPER_REFERENCE.md#vision §4's ordering.
     if turningOn then
+        if not IsOwnModelK9() then
+            lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
+            return
+        end
+
+        -- Per-person block (client/featureblocks.lua -- see that file's
+        -- header for the full contract). Checked ONLY on the turning-ON
+        -- branch, never on turning off -- this must never be able to trap
+        -- someone with thermal vision stuck active. `type(...) ==
+        -- 'function'` guard per this resource's soft-dependency convention:
+        -- if client/featureblocks.lua is not yet loaded, this degrades to
+        -- "never blocked", the correct fail-open direction.
+        if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ThermalVision') then
+            if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+            return
+        end
+
+        -- Mutual exclusion happens BEFORE flipping this effect on, per
+        -- DEVELOPER_REFERENCE.md#vision §4's ordering.
         EnsureOnlyOneVisionEffectActive('thermal')
     end
 
@@ -433,23 +457,27 @@ end
 --- thermal above. Identical shape to ToggleThermalVision() above,
 --- substituting SetNightvision/IsNightVisionActive and
 --- EnsureOnlyOneVisionEffectActive('night').
+---
+--- GATE-THE-START-NEVER-THE-STOP FIX -- see ToggleThermalVision()'s
+--- identical fix immediately above for the full writeup; same bug, same
+--- fix, mirrored here.
 function ToggleNightVision()
-    if not IsOwnModelK9() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
-        return
-    end
-
     local turningOn = not IsNightVisionActive()
 
-    -- Per-person block -- see ToggleThermalVision()'s identical block
-    -- immediately above for the full contract/reasoning; checked ONLY on
-    -- the turning-ON branch, never on turning off.
-    if turningOn and type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('NightVision') then
-        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
-        return
-    end
-
     if turningOn then
+        if not IsOwnModelK9() then
+            lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
+            return
+        end
+
+        -- Per-person block -- see ToggleThermalVision()'s identical block
+        -- above for the full contract/reasoning; checked ONLY on the
+        -- turning-ON branch, never on turning off.
+        if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('NightVision') then
+            if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+            return
+        end
+
         EnsureOnlyOneVisionEffectActive('night')
     end
 
@@ -464,6 +492,219 @@ function ToggleNightVision()
         EnsureVisionMaintenanceThreadRunning()
     end
 end
+
+-- ======================================================================
+-- MERGED ENTRY POINT — 'k9vision' cycle (owner-directed decluttering pass,
+-- coder-architect, this pass: "consolidate them just like how i asked the
+-- scent stuff... chat commands 3rd eye and radial menus"). ONE command +
+-- ONE radial item + ONE keybind that steps through whichever of Night/
+-- Thermal Vision the player actually has available, instead of asking a
+-- player to remember two separate keys (K/J) for what is functionally one
+-- question: "what am I looking through right now."
+--
+-- WHY THIS IS A CYCLE, NOT A COPY OF THE SCENT MERGE — read before touching
+-- this again. Scent's three track types merged into ONE action
+-- (StartCertifiedTrack(), client/tracking.lua) because they are three
+-- ALTERNATIVE ANSWERS to one one-shot question ("what should my K9 search
+-- for"), resolved server-side from certification and fired once. Vision is
+-- a different shape: Thermal/Night are HELD STATES a player stays in, not
+-- actions that fire and finish, and there is no server-side fact ("this
+-- player is certified for X") to resolve which one they want — a bare
+-- press-to-cycle genuinely can walk past the mode someone wanted, in a way
+-- re-running a search cannot. Two things keep that survivable rather than
+-- turning this into a worse control than the two toggles it replaces:
+--   1. The cycle is only 3 stops long (Off -> Night -> Thermal -> Off), so
+--      the absolute worst case is one extra press, not a long menu to walk
+--      past.
+--   2. THE OLD EXPLICIT TOGGLES STILL WORK, UNCHANGED, FOREVER — see the
+--      HIDDEN ALIAS note below. A player who wants Thermal specifically
+--      and doesn't want to think about cycle position can still press K
+--      (or /qbx_k9unit:toggleThermalVision) directly, exactly as before.
+--      This is the same "keep an explicit form for every merged family"
+--      rule the owner's own scent/kennel/fetch merges already established
+--      — the cycle is the discoverable default, not the only way in.
+--
+-- WHY CameraFeedPiP AND ScentVision ARE NOT STEPS IN THIS CYCLE.
+-- Config.FeatureGroups.Sensory's own comment (config.lua) already states
+-- this: "CameraFeedPiP... own entry point, requires an active partnership,
+-- deliberately not folded into the night/thermal cycle" — this pass
+-- implements exactly that pre-existing, config-documented decision, not a
+-- new one invented here. Two independent reasons, matching
+-- FEATURE_STRUCTURE_SPEC.md §2.1/§5's Sensory row:
+--   - CameraFeedPiP needs AN ACTIVE, IN-RANGE PARTNER to mean anything at
+--     all. Folding it into a flag-gated cycle would mean the cycle could
+--     land on a step that always refuses (no partner online / partner out
+--     of range) purely because it was that step's "turn" — precisely the
+--     "lands on it and refuses" failure mode this pass was explicitly
+--     warned against building. A partner-dependent action stays its own
+--     explicit entry point (`qbx_k9unit:toggleCameraFeed`, unchanged by
+--     this pass), the same way ScentLineup's pick/cancel stayed outside
+--     Detection's merged entry point for an analogous "different
+--     precondition, cannot silently inherit a shared gate" reason.
+--   - ScentVision (client/tracking.lua, out of this file's edit scope
+--     entirely) is a live, continuously-polling nearest-trails overlay
+--     with its own three-way mode (`always`/`keybind`/`off`,
+--     Config.Tracking.ScentVision.mode) and its own per-tick cost profile
+--     — a materially different resource/perf shape than a toggle-and-forget
+--     native post-effect. It keeps its own keybind (`k9scentvision`,
+--     client/keybinds.lua) exactly as FEATURE_STRUCTURE_SPEC.md §2.1 says
+--     it should.
+--
+-- GATE-THE-STOP RULE, APPLIED TO THE CYCLE ITSELF: stepping to a mode
+-- (`night`/`thermal`) reuses Toggle*Vision() above unchanged, so starting a
+-- mode is gated exactly as it always was (IsOwnModelK9() + the per-person
+-- block, both fixed above to run ONLY on their own turning-ON branch).
+-- Stepping TOWARD 'off' never consults either gate — see
+-- DispatchVisionTransition() below, which always turns off whatever is
+-- ACTUALLY active (read from the native-backed Is*VisionActive() getters,
+-- never from what the availability-filtered cycle THINKS should be active)
+-- regardless of whether that mode's flag is still on, still unblocked, or
+-- even still in the cycle at all. A mode that goes from available to
+-- blocked/disabled WHILE a player is actively using it (a live tablet
+-- flip, a featureblocks push) is not stranded: the very next `k9vision`
+-- press routes straight to 'off' for it, same as pressing that mode's own
+-- OLD toggle key would.
+-- ======================================================================
+
+--- Ordered set of the real modes CycleVision() steps through. 'off' is not
+--- listed — it is not a Config.Features-gated destination; it is always
+--- reachable, by construction (DispatchVisionTransition() below), matching
+--- this resource's "never gate a stop" doctrine.
+local VISION_CYCLE_MODES = { 'night', 'thermal' }
+
+--- @return 'off'|'night'|'thermal' — native-backed, authoritative, same
+--- reasoning as Is*VisionActive() above (never a locally tracked flag that
+--- could desync from the real native state).
+local function GetActiveVisionMode()
+    if IsThermalVisionActive() then return 'thermal' end
+    if IsNightVisionActive() then return 'night' end
+    return 'off'
+end
+
+--- Whether CycleVision() is allowed to STEP INTO this mode right now — the
+--- one place the cycle pre-filters, so pressing the key can never land on
+--- (and then have to refuse) a mode that is flagged off or currently
+--- feature-blocked. Deliberately does NOT check IsOwnModelK9() here — that
+--- gate is about the PLAYER, not the mode, and is left to Toggle*Vision()'s
+--- own turning-ON branch to enforce at the moment a step is actually taken
+--- (same division of labour client/tracking.lua's server-side per-candidate
+--- re-check already uses for the scent merge: this function narrows which
+--- modes are worth offering, the real gate still runs where the action
+--- actually happens).
+--- @param mode 'night'|'thermal'
+--- @return boolean
+local function IsVisionModeAvailable(mode)
+    local featureKey = mode == 'night' and 'NightVision' or 'ThermalVision'
+    if not Config.Features[featureKey] then return false end
+    if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked(featureKey) then return false end
+    return true
+end
+
+--- Turns the cycle's decision (`targetMode`) into the one native-backed
+--- call that gets there, given what is ACTUALLY active (`currentMode`) —
+--- never assumes the two must agree, because the whole point of routing
+--- 'off' through here is to handle the case where they don't (see this
+--- section's own "GATE-THE-STOP RULE" header comment).
+--- @param currentMode 'off'|'night'|'thermal'
+--- @param targetMode 'off'|'night'|'thermal'
+local function DispatchVisionTransition(currentMode, targetMode)
+    if targetMode == 'off' then
+        -- Turn off whichever mode is ACTUALLY running, not whichever the
+        -- availability-filtered sequence expected — see this function's own
+        -- doc comment. Toggle*Vision() called against the mode that is
+        -- ACTIVE always computes turningOn = false internally, which (after
+        -- this pass's gate-the-start-not-the-stop fix above) never consults
+        -- IsOwnModelK9()/the block check, so this is unconditional in
+        -- practice, not just in intent.
+        if currentMode == 'night' then
+            ToggleNightVision()
+        elseif currentMode == 'thermal' then
+            ToggleThermalVision()
+        end
+        return
+    end
+
+    if targetMode == 'night' then
+        ToggleNightVision()
+    elseif targetMode == 'thermal' then
+        ToggleThermalVision()
+    end
+end
+
+--- THE MERGED ACTION. Steps Off -> Night -> Thermal -> Off, skipping any
+--- mode IsVisionModeAvailable() says is not worth offering right now.
+--- Both `k9vision`'s command handler and client/radial.lua's "K9 Vision"
+--- item call this directly, same "one function, every entry point calls
+--- it" shape as client/tracking.lua's StartCertifiedTrack().
+function CycleVision()
+    local sequence = { 'off' }
+    for _, mode in ipairs(VISION_CYCLE_MODES) do
+        if IsVisionModeAvailable(mode) then
+            sequence[#sequence + 1] = mode
+        end
+    end
+
+    local currentMode = GetActiveVisionMode()
+
+    if #sequence == 1 then
+        -- Neither Night nor Thermal is available right now (both disabled,
+        -- or both currently feature-blocked).
+        if currentMode == 'off' then
+            -- Nothing to offer and nothing running -- an honest, explicit
+            -- "there is nothing here" notify beats a silent no-op a player
+            -- would read as a missed keypress.
+            lib.notify({ title = locale('common.notify_title'), description = locale('vision.no_modes_available'), type = 'error' })
+            return
+        end
+
+        -- Something is ACTIVE despite being unavailable right now (a block
+        -- or a live flag flip landed mid-use) -- route straight to the
+        -- universal, ungated stop rather than pretending there is a "next"
+        -- position to cycle to. See this section's own "GATE-THE-STOP RULE".
+        DispatchVisionTransition(currentMode, 'off')
+        return
+    end
+
+    local currentIndex
+    for i, mode in ipairs(sequence) do
+        if mode == currentMode then
+            currentIndex = i
+            break
+        end
+    end
+
+    -- currentIndex is ALWAYS found when currentMode == 'off' ('off' is
+    -- unconditionally sequence[1], set at this function's own top, so a
+    -- fresh Off -> Night press correctly wraps to sequence[2] below) and
+    -- whenever currentMode is a mode IsVisionModeAvailable() currently
+    -- allows. It is nil ONLY when a mode is ACTIVE despite no longer being
+    -- available (a live block/flag-flip landed mid-use) -- in that one
+    -- case, route straight to the universal stop rather than guess a "next"
+    -- position for a mode that is not even in the cycle right now. See this
+    -- section's own "GATE-THE-STOP RULE" header comment.
+    local targetMode = currentIndex and sequence[(currentIndex % #sequence) + 1] or 'off'
+
+    DispatchVisionTransition(currentMode, targetMode)
+end
+
+-- Registered UNCONDITIONALLY, matching client/tracking.lua's StartCertifiedTrack()
+-- / 'k9track' precedent exactly: this is a MERGED entry point with no
+-- dedicated Config.Features flag of its own (Config.FeatureGroups.Sensory
+-- has no single "Vision" base flag the way Detection has ScentTracking) --
+-- IsVisionModeAvailable() above already re-checks each real mode's own flag
+-- and block state on every single press, so a second, coarser gate on
+-- registration here would only make this command's existence diverge from
+-- what pressing it actually does. Unlike the OLD per-mode toggles below
+-- (still conditionally registered on their OWN flag, unchanged), this
+-- command's job is precisely to exist and say "nothing available" when
+-- both underlying modes are off, the same honest-degrade posture
+-- client/tracking.lua's 'k9track' already established for "certified for
+-- nothing right now."
+RegisterCommand('k9vision', function()
+    CycleVision()
+end, false)
+
+RegisterKeyMapping('k9vision', locale('vision.cycle_keybind_label'), 'keyboard', 'I')
 
 -- ----------------------------------------------------------------------
 -- CAMERA FEED (Config.Features.CameraFeedPiP) — see this file's header
@@ -828,9 +1069,16 @@ if Config.Features.NightVision then
     RegisterCommand('qbx_k9unit:toggleNightVision', function() ToggleNightVision() end, false)
     RegisterKeyMapping('qbx_k9unit:toggleNightVision', locale('vision.night_keybind_label'), 'keyboard', Config.Vision.Night.toggleKey)
 end
--- NOT added to client/radial.lua at all — per §11.3's file-plan row,
+-- These two OLD per-mode toggles are still deliberately NOT added to
+-- client/radial.lua individually — per §11.3's original file-plan row,
 -- "Vision toggles and door interaction are not added to the radial...
--- consistent with the camera toggle's existing precedent."
+-- consistent with the camera toggle's existing precedent." UPDATED, THIS
+-- PASS: that precedent still holds for these two BARE toggles, but
+-- client/radial.lua now DOES carry one merged "K9 Vision" item that calls
+-- CycleVision() above (see this file's own "MERGED ENTRY POINT" section) —
+-- a single cycle entry point is not the same thing §11.3 was refusing, and
+-- does not reopen it: it does not add either mode back as its OWN separate
+-- radial item.
 
 -- Resource-stop safety net — mirrors client/vehicle.lua's ALREADY-SHIPPED
 -- onResourceStop pattern for the identical underlying reason: per DEVELOPER_REFERENCE.md

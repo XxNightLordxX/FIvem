@@ -1340,6 +1340,16 @@ local TABLET_STRING_KEYS = {
     'cmdref_toggle_camera_feed_usage', 'cmdref_toggle_camera_feed_does', 'cmdref_toggle_camera_feed_needs',
     'cmdref_toggle_thermal_vision_usage', 'cmdref_toggle_thermal_vision_does', 'cmdref_toggle_thermal_vision_needs',
     'cmdref_toggle_night_vision_usage', 'cmdref_toggle_night_vision_does', 'cmdref_toggle_night_vision_needs',
+    -- VISION MERGE (coder-architect, this pass): 'k9vision' cycle's own
+    -- COMMAND_REFERENCE triple. The two ABOVE stay -- harmless, inert
+    -- leftovers (COMMAND_CONSOLIDATION_SPEC.md §4's own established
+    -- convention for a hidden-alias pair's locale keys) -- they no longer
+    -- have a COMMAND_REFERENCE row of their own (html/tablet.js), but
+    -- removing them here too would desync this list's key SET from
+    -- DEFAULT_STRINGS' own (tests/tabletlocalization_spec.lua enforces
+    -- exact set equality between the two) without also touching
+    -- locales/en.json, which is additive-only in this pass.
+    'cmdref_k9vision_usage', 'cmdref_k9vision_does', 'cmdref_k9vision_needs',
     'cmdref_default_keybind_configurable_template', 'cmdref_category_vision',
     -- GUIDED FLOWS (this pass, owner's own words: "expand the workflow
     -- paths for all the features to make them smoother, easier to

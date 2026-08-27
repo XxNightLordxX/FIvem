@@ -1581,26 +1581,19 @@ Config.CommandTablet = {
     -- this" checklist for the full list and what each one is for.
     itemName = 'k9_tablet',
 
-    -- NOT AN ENFORCED SWITCH -- READ BEFORE CHANGING (dead-config-field
-    -- audit finding: this field's own comment used to read like an
-    -- ordinary toggle and never disclosed that it does nothing on its own).
-    -- Nothing in this resource reads this value at all. ox_inventory
-    -- consumes (or does not consume) k9_tablet purely per that item's OWN
+    -- WHETHER THE TABLET ITEM IS CONSUMED WHEN USED IS SET IN YOUR OWN
+    -- OX_INVENTORY ITEMS.LUA, NOT HERE (second dead-config-field audit
+    -- pass: a `consumeItemOnUse = false` field used to sit on this line and
+    -- read exactly like a real on/off switch. It was not one -- nothing in
+    -- this resource ever read it, so editing it changed nothing in game.
+    -- Removed outright, rather than left as a field nobody could safely
+    -- trust, so there is nothing here left to mistake for a working
+    -- control). k9_tablet is consumed (or not) purely per that item's own
     -- `consume` field in YOUR ox_inventory items.lua, which this resource
-    -- does not own and cannot set. This field is a NOTE describing what you
-    -- should ALSO set your item's `consume` field to (0/false for a
-    -- reusable tablet, matching the "almost certainly false" default
-    -- below), not a control this resource enforces -- flipping it here
-    -- changes nothing in-game until you separately edit items.lua to
-    -- match. See client/tablet.lua's own useTabletItem handler for the
-    -- full mechanism this note describes.
-    -- THIS SETTING DOES NOTHING. Nothing in this resource reads it, and
-    -- changing it changes nothing in game. It is a REMINDER, not a switch:
-    -- whether the tablet item is consumed when used is decided in your own
-    -- ox_inventory items.lua, which this resource does not own and cannot
-    -- change. Left here, clearly labelled, rather than deleted, because
-    -- what it is reminding you of is real and easy to forget.
-    consumeItemOnUse = false,
+    -- does not own and cannot set -- set it to 0/false there for a reusable
+    -- tablet, which is almost certainly what you want. See
+    -- client/tablet.lua's own useTabletItem handler for the full mechanism
+    -- this note describes.
 
     -- Max roster rows returned in one query. Clamped server-side; a
     -- non-positive or non-number value falls back to the default rather
@@ -3225,6 +3218,15 @@ Config.Vision = {
     Thermal = { toggleKey = 'K' }, -- drives SetSeethrough(true/false) -- see §11.6
     Night   = { toggleKey = 'J' }, -- drives SetNightvision(true/false) -- see §11.6
 }
+-- The K and J keys above still jump straight to that one specific mode --
+-- nothing above changed. There is ALSO now a single "/k9vision" cycle
+-- (default key I, also in the K9 radial menu as "K9: Vision") that steps
+-- Off -> Night -> Thermal -> Off in one press, skipping whichever of
+-- ThermalVision/NightVision you turn off below in Config.Features. Turn
+-- both off and the cycle just tells the player nothing is available right
+-- now, rather than doing nothing with no explanation. This does not add a
+-- new setting to turn off on its own -- it simply respects the two flags
+-- above, the same way the K/J keys already do.
 
 -- ======================================================================
 -- COMBAT & ADVANCED AGILITY (DEVELOPER_REFERENCE.md §12.2).
@@ -4151,7 +4153,7 @@ Config.Wellbeing = {
         -- to any K9 standing near it. The primary model is unique to this
         -- feature; only it is listed.
         restSources             = { 'water_bowl', 'prop_dog_cage_01' },
-        speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty
+        speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty. Also the exact line where a bonded handler's HUD badge starts calling their dog "Tired" -- raise it and that word appears sooner (a lower tolerance for tiredness), lower it and it appears later
         -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
         -- client/movement.lua's own comment computes the worst case as
         -- Injury 0.7 * Fatigue 0.85 * Mood 0.9 ~= 0.535. That is the ordinary
@@ -4216,7 +4218,7 @@ Config.Wellbeing = {
         -- read the meter as broken. Now ~8.3 minutes, still leaving Pet/Feed
         -- (instant 10/20) clearly worth doing.
         passiveRegenPerTick          = 1.0,
-        performancePenaltyThreshold  = 25,
+        performancePenaltyThreshold  = 25, -- mood at or below this is also the exact line where a bonded handler's HUD badge starts calling their dog "Unhappy" -- raise it and that word shows up sooner, lower it and it shows up later
         performancePenaltyMultiplier = 0.95, -- RAISED 0.9 -> 0.95, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves DEVELOPER_REFERENCE.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
     },
     FearStress = {
@@ -4255,7 +4257,7 @@ Config.Wellbeing = {
         -- proximity to the victim, no relationship to the attacker required.
         -- Two correct reviews, one emergent hole in the seam between them.
         -- Tuning these numbers does NOT close it; the cap does.
-        hesitationThreshold      = 85,
+        hesitationThreshold      = 85, -- at or above this is also the exact line where a bonded handler's HUD badge starts calling their dog "Stressed" -- lower it and that word shows up sooner (a lower tolerance for stress), raise it and it shows up later
         hesitationDurationMs     = 8000,  -- how long a rejected Phase 3 combat-command attempt stays refused before the K9 may retry, absent a manual calm-down
         calmDownReduceAmount     = 40,    -- "Calm Down" command's effect (self-only, see server/wellbeing.lua)
         calmDownCooldownMs       = 15000,
@@ -4289,7 +4291,7 @@ Config.Wellbeing = {
     },
     Injury = {
         max                     = 100,
-        sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see DEVELOPER_REFERENCE.md §13.0 Decision 3's disclosed bounded limitation)
+        sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see DEVELOPER_REFERENCE.md §13.0 Decision 3's disclosed bounded limitation). Also the exact line where a bonded handler's HUD badge starts calling their dog "Injured" -- raise it and that word shows up sooner, lower it and it shows up later
         jumpBlockThreshold      = 20, -- below this, jump input is blocked
         speedPenaltyMultiplier  = 0.80, -- RAISED 0.7 -> 0.80, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
         damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source
@@ -4358,7 +4360,7 @@ Config.Wellbeing = {
     Hunger = {
         max                    = 100,
         decayPerTick           = 0.093, -- empties in ~90 minutes of one on-duty shift at the shipped tickIntervalMs (5000ms) if never fed
-        lowThreshold           = 30,    -- hunger below this triggers the speed penalty
+        lowThreshold           = 30,    -- hunger below this triggers the speed penalty. Also the exact line where a bonded handler's HUD badge starts calling their dog "Hungry" -- raise it and that word shows up sooner, lower it and it shows up later
         speedPenaltyMultiplier = 0.95,  -- fed into RecomputeK9MoveRate() (client/movement.lua), same "MULTIPLIES with every other penalty" caveat as Fatigue/Injury/Mood above
         feedRegenAmount        = 35,    -- restored per feedK9Hunger (/k9eat) use
         -- PLACEHOLDER item name -- see Config.Features.HungerThirstSystem's

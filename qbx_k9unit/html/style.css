@@ -201,6 +201,69 @@ body {
 
 /*
     ======================================================================
+    HANDLER CONDITION BADGE (this pass) -- see index.html's own comment on
+    #k9partner-badge, and app.js's "HANDLER CONDITION BADGE CONTRACT"
+    section, for the full design. Placed top-left, deliberately NOT
+    stacked with #k9hud (bottom-left) -- the two are independent surfaces
+    for two different audiences (a K9's own vitals vs. a handler's view of
+    their partner) that can, in a rare edge case, both be visible on the
+    same screen at once, so they must not overlap. Same pointer-events/
+    hidden-means-`display:none` posture as #k9hud throughout this file's
+    header rule -- this is exactly as passive/non-interactive as the rest
+    of this page.
+    ======================================================================
+*/
+#k9partner-badge,
+#k9partner-badge * {
+    pointer-events: none;
+}
+
+#k9partner-badge {
+    position: fixed;
+    left: 24px;
+    top: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #f2f2f2;
+    font-size: 13px;
+    line-height: 1.2;
+    /* TODO(coder-ui): placement/background/sizing are provisional
+       defaults, matching #k9hud's own identical TODO above -- revisit
+       together in coder-ui's layout/UX pass. */
+}
+
+/* Hidden until the first `hud:partnerCondition` push with `visible === true`
+   arrives (see app.js) -- avoids a flash of default-visible content before
+   Lua has sent anything, and is also how this badge hides itself again on
+   a true -> false transition (partnership ended, partner disconnected, or
+   the feature switched off -- see server/wellbeing.lua's own "gate the
+   start, never the stop" section for the full list of stop conditions). */
+#k9partner-badge.hidden {
+    display: none;
+}
+
+.k9partner-badge-label {
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 11px;
+    opacity: 0.8;
+    white-space: nowrap;
+}
+
+.k9partner-badge-value {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.95;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/*
+    ======================================================================
     K9 COMMAND TABLET WRAPPER (Config.Features.CommandTablet) -- added this
     pass. This governs ONLY the <iframe> shell added to index.html's own
     document (see that file's comment on it); the tablet's actual UI lives

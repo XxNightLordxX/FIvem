@@ -397,11 +397,116 @@ function K9SelfCheck.FindSpecializationGatedTrackTypes(configFeatures, specializ
     return out
 end
 
+--- ======================================================================
+--- PART 3 -- K9 EQUIPMENT SHOP PURCHASE-ENFORCEMENT BACKEND CHECK
+--- (coder-security, this pass -- red-team finding on server/equipmentshop.lua
+--- ~2286-2356, VERIFIED against the real code before acting).
+---
+--- server/equipmentshop.lua's K9 Supply shop enforces exactly two things
+--- ONLY through ox_inventory-vocabulary `registerHook('openShop', ...)` /
+--- `registerHook('buyItem', ...)` calls, routed via `K9Compat.Get('inventory')
+--- .RegisterHook` (see that file's own "PURCHASE-TIME ENFORCEMENT" section):
+--- the per-person `block.K9EquipmentShop` / `feature.K9EquipmentShop` grant
+--- gate, AND every item's own `requiredTierKey`/`requiredSpecialization`
+--- gate. shared/compat/inventory.lua's own "RegisterHook VOCABULARY" section
+--- confirms ox_inventory is currently the ONLY adapter whose RegisterHook
+--- translates an ARBITRARY event name; every other backend (qb-inventory
+--- CONFIRMED, ps-inventory skipped entirely, five others UNCONFIRMED) only
+--- ever translates `'swapItems'` -- a RegisterHook call for `'openShop'`/
+--- `'buyItem'` on any of them returns `false` immediately, registering
+--- nothing.
+---
+--- THIS WAS RE-VERIFIED, NOT ASSUMED, TO ALREADY FAIL CLOSED CORRECTLY:
+--- server/equipmentshop.lua's own ActivateEquipmentShopIfEnabled (its
+--- "HOOKS FIRST, ALWAYS" section) refuses to ever call RegisterShop unless
+--- BOTH hooks confirm registered -- so the practical effect on an
+--- unsupported backend is already "the K9 Supply shop is not offered at
+--- all, gated items or not", never "sold with no enforcement". That refusal
+--- already prints its own loud ERROR line the moment it happens -- but only
+--- there, deep in server console scrollback, and only if Config.Features.
+--- K9EquipmentShop was already true AT BOOT (a later runtime toggle-on hits
+--- the exact same refusal, on the same poll thread, equally deep in
+--- scrollback). THIS check exists purely to put the SAME fact on the one
+--- line an owner actually reads at the top of their console: the boot
+--- summary.
+---
+--- WHY "REFUSE THE WHOLE SHOP" AND NOT "SELL ONLY THE UNGATED ITEMS" --
+--- REJECTED ALTERNATIVE, RECORDED HERE: stripping only gated items from the
+--- RegisterShop call on an unsupported backend would still leave the
+--- OTHER, more fundamental thing these same two hooks enforce -- the
+--- per-person block.K9EquipmentShop/feature.K9EquipmentShop grant --
+--- completely unenforced. An officer High Command has explicitly blocked
+--- from this shop could still buy every ungated item freely on that
+--- backend, which is a worse, more surprising failure for an operator to
+--- discover than "the shop is not offered here at all". Refusing the whole
+--- shop is therefore the correct fail-closed choice for BOTH concerns at
+--- once, not an overreaction to the narrower tier/specialization finding
+--- alone.
+---
+--- CONFIG-ONLY, EXACTLY LIKE THE SPECIALIZATION-GATE CHECK ABOVE: this
+--- reads Config.Features.K9EquipmentShop and K9Compat.Which('inventory')
+--- only -- it does not, and structurally cannot from here, re-derive
+--- whether server/equipmentshop.lua's own EquipmentShopFullyActivated flag
+--- is currently true (that file exposes no accessor for it at all, matching
+--- the specialization check's own documented reason for not reaching into
+--- server/runtimecontrol.lua's FEATURE_TIERS directly). This reports what
+--- WOULD happen / already did happen for the DETECTED backend, which is
+--- exactly as far as this file can honestly see.
+---
+--- A `Config.Compat.Systems.inventory.custom` operator-authored adapter is
+--- DELIBERATELY NOT treated as "unsupported": K9Compat.Which('inventory')
+--- reports its resourceName as the literal string `'custom'`, and this file
+--- has no way to see whether that adapter's own RegisterHook actually
+--- translates 'openShop'/'buyItem' or not -- guessing either way would risk
+--- exactly the "crying wolf" false alarm this resource's own checks are
+--- built to avoid (see PART 2's header). Reported as its own distinct,
+--- non-alarming, informational case instead ('unknown') -- never silently
+--- folded into either 'ok' or 'unsupported_backend'.
+--- ======================================================================
+
+--- Adapters CONFIRMED (shared/compat/inventory.lua's own "RegisterHook
+--- VOCABULARY" section) to translate an ARBITRARY RegisterHook event name --
+--- specifically the 'openShop'/'buyItem' pair the K9 Supply shop needs.
+--- Hand-kept here, matching this file's own DEPENDENCIES table's own
+--- "hand-kept, changes exactly as often as the file it mirrors" precedent
+--- (see PART 1's header) -- update this list in the SAME change that
+--- shared/compat/inventory.lua ever gains a second adapter whose
+--- RegisterHook stops being restricted to translating 'swapItems' only.
+local EQUIPMENT_SHOP_ENFORCEMENT_CAPABLE_BACKENDS = { ['ox_inventory'] = true }
+
+--- @param featureEnabled boolean? -- Config.Features.K9EquipmentShop
+--- @param inventoryBackendName string? -- K9Compat.Which('inventory')'s first return value; nil = nothing usable detected at all
+--- @return string status -- 'not_applicable' (feature off) | 'ok' | 'unsupported_backend' | 'unknown' (a custom adapter -- cannot verify from here)
+function K9SelfCheck.EvaluateEquipmentShopEnforcement(featureEnabled, inventoryBackendName)
+    if featureEnabled ~= true then return 'not_applicable' end
+    if inventoryBackendName == 'custom' then return 'unknown' end
+    if type(inventoryBackendName) == 'string' and EQUIPMENT_SHOP_ENFORCEMENT_CAPABLE_BACKENDS[inventoryBackendName] then
+        return 'ok'
+    end
+    -- Covers every other named backend (e.g. 'qb-inventory') AND nil (no
+    -- usable backend detected at all, K9Compat.Get('inventory') already a
+    -- no-op stub) -- both are conclusively unable to register either hook.
+    return 'unsupported_backend'
+end
+
+--- @param status string -- a K9SelfCheck.EvaluateEquipmentShopEnforcement() result
+--- @param inventoryBackendName string?
+--- @return string? -- nil for 'not_applicable'/'ok' (the "say nothing" cases)
+function K9SelfCheck.FormatEquipmentShopEnforcementWarning(status, inventoryBackendName)
+    if status == 'unsupported_backend' then
+        local backendLabel = inventoryBackendName or 'no inventory backend detected'
+        return ("[qbx_k9unit] selfcheck: !! Config.Features.K9EquipmentShop is on, but the detected inventory backend (%s) cannot enforce the K9 Supply shop's purchase-time checks (the block.K9EquipmentShop/feature.K9EquipmentShop per-person gate, and any item's tier/specialization requirement) -- ox_inventory is currently the only backend confirmed to support the openShop/buyItem hooks this needs. server/equipmentshop.lua already refuses to activate this shop at all on this backend rather than sell it unenforced, so nothing is for sale here, gated or not, until you either switch to ox_inventory or turn Config.Features.K9EquipmentShop back off."):format(backendLabel)
+    elseif status == 'unknown' then
+        return "[qbx_k9unit] selfcheck: Config.Features.K9EquipmentShop is on, and Config.Compat.Systems.inventory.custom is in use -- this check cannot verify from here whether your custom inventory adapter's RegisterHook actually translates 'openShop'/'buyItem' (the two hooks the K9 Supply shop's purchase-time enforcement needs). If it does not, server/equipmentshop.lua will refuse to activate that shop at boot and say so loudly in its own console output -- watch for a line there naming 'REFUSING to activate'."
+    end
+    return nil
+end
 
 --- @param info table {
 ---   version = string?,                                    -- this resource's own fxmanifest.lua version, or nil if unknown
 ---   deps = { total, ok, unverified, problems }?,           -- from the dependency check, or nil if it could not run
 ---   features = { total, unrecognized }?,                   -- from the Config.Features check, or nil if it could not run
+---   equipmentShop = { status = string }?,                  -- from K9SelfCheck.EvaluateEquipmentShopEnforcement, or nil if it could not run
 ---   databaseState = string,                                -- short phrase; never fabricated, see header above
 --- }
 --- @return string -- exactly ONE line, never a banner
@@ -431,6 +536,20 @@ function K9SelfCheck.BuildBootSummaryLine(info)
         end
     else
         parts[#parts + 1] = 'Config.Features: not checked'
+    end
+
+    -- Omitted entirely for 'not_applicable' (the feature is off -- nothing
+    -- to say, matching this file's own "only warn about a switched-on
+    -- capability" convention) exactly as the specialization-gate check
+    -- above already omits itself for a trail type that is switched off.
+    if info.equipmentShop and info.equipmentShop.status ~= 'not_applicable' then
+        if info.equipmentShop.status == 'ok' then
+            parts[#parts + 1] = 'K9 Supply shop: enforced'
+        elseif info.equipmentShop.status == 'unsupported_backend' then
+            parts[#parts + 1] = 'K9 Supply shop: NOT offered (see warning above -- inventory backend cannot enforce it)'
+        elseif info.equipmentShop.status == 'unknown' then
+            parts[#parts + 1] = 'K9 Supply shop: enforcement unverified (custom inventory adapter)'
+        end
     end
 
     parts[#parts + 1] = 'database: ' .. (info.databaseState or 'unknown')
@@ -578,6 +697,28 @@ local function RunSpecializationGateCheck()
     return #gated
 end
 
+--- Prints the equipment-shop enforcement warning (see PART 3's own header
+--- above) and returns the tally BuildBootSummaryLine needs. Reads
+--- K9Compat.Which('inventory') defensively (pcall-guarded, and the whole
+--- K9Compat global may not even be loaded in some sandboxes) -- never
+--- throws, and never claims a backend it could not actually confirm.
+--- @return table? { status = string } -- nil only if Config.Features itself is missing/malformed (matches RunSpecializationGateCheck's own "nothing to check" case)
+local function RunEquipmentShopEnforcementCheck()
+    if type(Config) ~= 'table' or type(Config.Features) ~= 'table' then return nil end
+
+    local inventoryBackendName = nil
+    if type(K9Compat) == 'table' and type(K9Compat.Which) == 'function' then
+        local ok, name = pcall(K9Compat.Which, 'inventory')
+        if ok then inventoryBackendName = name end
+    end
+
+    local status = K9SelfCheck.EvaluateEquipmentShopEnforcement(Config.Features.K9EquipmentShop, inventoryBackendName)
+    local line = K9SelfCheck.FormatEquipmentShopEnforcementWarning(status, inventoryBackendName)
+    if line then print(line) end
+
+    return { status = status }
+end
+
 --- Short, honest phrase for the final summary line's database clause.
 --- Waits (bounded) for server/datastore.lua's own schema-collision probe
 --- to settle first -- the same K9Store.WaitForSchemaCheckToSettle() every
@@ -613,6 +754,7 @@ if type(AddEventHandler) == 'function' then
         local depResult = RunDependencyCheck()
         local featureResult = RunFeatureKeyCheck()
         RunSpecializationGateCheck()
+        local equipmentShopResult = RunEquipmentShopEnforcementCheck()
         local databaseState = BuildDatabaseStatePhrase()
 
         local ownVersion = nil
@@ -624,6 +766,7 @@ if type(AddEventHandler) == 'function' then
             version = ownVersion,
             deps = depResult,
             features = featureResult,
+            equipmentShop = equipmentShopResult,
             databaseState = databaseState,
         }))
     end)

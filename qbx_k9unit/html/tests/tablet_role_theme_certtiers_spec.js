@@ -32,6 +32,12 @@ const t = require('./testkit');
 const { createHarness, jsonResponse } = require('./tablet-sandbox');
 const { findByText, findByTag, findAll } = require('./tablet-dom-stub');
 
+// Mirrors html/tablet.js's own DEFAULT_STRINGS.action_failed (kept in sync
+// with locales/en.json's tablet.action_failed) -- see
+// tablet_mutation_error_spec.js's own identical constant for the full
+// writeup of why this is hardcoded here rather than a stale literal.
+const GENERIC_ACTION_FAILED_TEXT = 'Action failed — try again, and if it keeps happening, tell an admin.';
+
 function routeFetch(handlers) {
     return function (url, init) {
         const name = url.split('/').pop();
@@ -337,7 +343,7 @@ t.test('a rejected save (reason=invalid_field) highlights the offending field an
 
     const invalidFields = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-theme-field--invalid'));
     t.isTrue(invalidFields.length >= 1, 'the rejected field is visually marked, not just a generic failure banner');
-    t.isTrue(findByText(h.getRoot(), 'That value was rejected by the server.').length >= 1 || findByText(h.getRoot(), 'Action failed.').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'That value was rejected by the server.').length >= 1 || findByText(h.getRoot(), GENERIC_ACTION_FAILED_TEXT).length >= 1);
 });
 
 t.test('themingEnabled=false shows the disabled note and disables Save/Reset -- the current theme still applies regardless', async () => {

@@ -137,6 +137,13 @@ local function newVehicleFixture(opts)
     local denyCalls = 0
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
+    -- HasK9Access() -- PERMISSION AUDIT FOLLOW-UP (this pass): see
+    -- tests/clientvehicle_spec.lua's own newVehicleFixture for the identical
+    -- addition and its full writeup. Default `true`, same "happy path is
+    -- the default" convention canShowK9UI above already established.
+    local hasK9Access = true
+    local function HasK9Access() return hasK9Access end
+
     local isPedInAnyVehicle = opts.isPedInAnyVehicle or false
     local function IsPedInAnyVehicle(_ped, _bool) return isPedInAnyVehicle end
 
@@ -314,6 +321,7 @@ local function newVehicleFixture(opts)
     local overrides = {
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        HasK9Access = HasK9Access,
         IsPedInAnyVehicle = IsPedInAnyVehicle,
         PlayerPedId = PlayerPedId,
         GetHashKey = GetHashKey,
@@ -385,6 +393,7 @@ local function newVehicleFixture(opts)
         networkControlCalls = networkControlCalls,
         denyCalls = function() return denyCalls end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         --- Fires the captured onResourceStart handler(s) (this resource's
         --- own name) so RegisterVehicleOxTargetOptions() actually runs and
         --- exports.ox_target:addGlobalVehicle's options get captured.
@@ -454,6 +463,14 @@ local function newCombatTriggerFixture(opts)
     local denyCalls = 0
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
+    -- HasK9Access() -- PERMISSION AUDIT FOLLOW-UP (this pass): RequestBiteHold/
+    -- RequestTakedown/RequestDrag's own access gate was widened from
+    -- CanShowK9UI() to HasK9Access() alone -- see client/combat.lua's own doc
+    -- comment on each for the full writeup. Default `true`, same "happy path
+    -- is the default" convention canShowK9UI above already established.
+    local hasK9Access = true
+    local function HasK9Access() return hasK9Access end
+
     local function PlayerPedId() return 1 end
     local myCoords = vec3(0.0, 0.0, 0.0)
     local otherPed = 42
@@ -495,6 +512,7 @@ local function newCombatTriggerFixture(opts)
     local overrides = {
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        HasK9Access = HasK9Access,
         PlayerPedId = PlayerPedId,
         GetHashKey = GetHashKey,
         GetEntityCoords = GetEntityCoords,
@@ -531,6 +549,7 @@ local function newCombatTriggerFixture(opts)
         notifyCalls = notifyCalls,
         triggerServerEventCalls = triggerServerEventCalls,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
     }
 end
 

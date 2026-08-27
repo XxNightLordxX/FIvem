@@ -424,7 +424,7 @@
         "online_players_truncated_notice": "Showing the first %d online players — narrow your search to see the rest.",
         "online_player_stale": "This list is out of date. Refresh the Online Players list and try again.",
         "online_player_disconnected": "That player is no longer connected at that slot. Refresh the Online Players list and try again.",
-        "open_failed_generic": "The tablet can't open right now.",
+        "open_failed_generic": "The tablet can't open right now — try again, and if it keeps happening, tell an admin.",
         "revoke_still_has_access": "Revoked — but they still have this through their rank, so their access is unchanged.",
         "revoke_target_offline": "Revoked. They're offline, so whether they still have this by rank can't be confirmed right now.",
         "title": "K9 Command Tablet",
@@ -472,7 +472,7 @@
         "self_grant_disabled_title": "High command cannot grant XP to themselves on this server.",
         "truncated_notice": "Showing a limited number of results. Refine your search to find someone not listed.",
         "action_working": "Working...",
-        "action_failed": "Action failed.",
+        "action_failed": "Action failed — try again, and if it keeps happening, tell an admin.",
         "action_succeeded": "Done.",
         "no_certifications": "Not certified in any department.",
         "my_certifications_heading": "Certifications",
@@ -1130,6 +1130,9 @@
         "cmdref_toggle_night_vision_usage": "/qbx_k9unit:toggleNightVision",
         "cmdref_toggle_night_vision_does": "Turns on night vision so you can see clearly in the dark. Press again to turn it off. Turning this on switches Thermal Vision off automatically.",
         "cmdref_toggle_night_vision_needs": "You must be controlling your K9, and Night Vision enabled on this server. No certification needed.",
+        "cmdref_k9vision_usage": "/k9vision",
+        "cmdref_k9vision_does": "Cycles your K9 vision: off, then Night Vision, then Thermal Vision, then back off -- skipping whichever of those two your server has turned off. Old names /qbx_k9unit:toggleThermalVision and /qbx_k9unit:toggleNightVision still jump straight to one specific mode, if that's what you want instead.",
+        "cmdref_k9vision_needs": "You must be controlling your K9. No certification needed. Does nothing but notify you if both Night Vision and Thermal Vision are turned off on this server.",
         "tab_help": "Help",
         "help_heading": "How to Use This Tablet",
         "help_intro_line1": "This page walks you through using the tablet from scratch, in plain language. If you already know what you are doing and just need a quick lookup, use the Commands tab instead -- it lists every command with a live yes/no on whether you can use it right now.",
@@ -1664,7 +1667,8 @@
         "track_scent_label": "Track Scent",
         "vehicle_toggle_label": "Enter/Exit Vehicle",
         "kennel_label": "Kennel",
-        "utility_menu_label": "Utility"
+        "utility_menu_label": "Utility",
+        "vision_cycle_label": "K9: Vision"
     },
     "recall": {
         "keybind_label": "K9: Recall Partner",
@@ -1829,7 +1833,9 @@
         "night_on": "Night vision on.",
         "night_off": "Night vision off.",
         "thermal_keybind_label": "Toggle K9 Thermal Vision",
-        "night_keybind_label": "Toggle K9 Night Vision"
+        "night_keybind_label": "Toggle K9 Night Vision",
+        "cycle_keybind_label": "K9: Cycle Vision (Night/Thermal)",
+        "no_modes_available": "No K9 vision modes are available on this server right now."
     },
     "wellbeing": {
         "bowl_target_label": "Let K9 Drink",
@@ -1872,7 +1878,15 @@
     },
     "hud": {
         "distraction_active": "Distracted",
-        "distraction_clear": "Clear"
+        "distraction_clear": "Clear",
+        "partner_condition_label": "K9 Partner",
+        "partner_condition_tired": "Tired",
+        "partner_condition_unhappy": "Unhappy",
+        "partner_condition_stressed": "Stressed",
+        "partner_condition_injured": "Injured",
+        "partner_condition_hungry": "Hungry",
+        "partner_condition_thirsty": "Thirsty",
+        "partner_condition_fine": "Fine"
     },
     "announce": {
         "keybind_label": "K9: Warn Before Apprehending",

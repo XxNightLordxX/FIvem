@@ -287,8 +287,13 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9train', keySuffix = 'k9train' },
     -- client/vision.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCameraFeed', keySuffix = 'toggle_camera_feed' },
-    { command = 'qbx_k9unit:toggleThermalVision', keySuffix = 'toggle_thermal_vision' },
-    { command = 'qbx_k9unit:toggleNightVision', keySuffix = 'toggle_night_vision' },
+    -- client/vision.lua -- VISION MERGE (coder-architect, this pass):
+    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision are now
+    -- HIDDEN ALIASES of 'k9vision' (still real, working RegisterCommand +
+    -- RegisterKeyMapping calls -- see that file's own "MERGED ENTRY POINT"
+    -- comment), never chat-suggested under their own names anymore. See
+    -- HIDDEN_ALIAS_COMMANDS in tests/commandsuggestions_spec.lua.
+    { command = 'k9vision', keySuffix = 'k9vision' },
     -- client/recall.lua
     { command = 'k9recall', keySuffix = 'k9recall' },
     -- client/movement.lua (qbx_k9unit: namespace)

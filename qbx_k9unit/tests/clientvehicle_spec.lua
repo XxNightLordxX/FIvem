@@ -148,6 +148,24 @@ local function newVehicleFixture(opts)
     local denyCalls = 0
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
+    -- HasK9Access() -- PERMISSION AUDIT FOLLOW-UP (this pass): added because
+    -- EnterNearestK9Vehicle()'s own access gate was widened from
+    -- CanShowK9UI() to HasK9Access() alone, to match server/vehicle.lua's
+    -- requestVehicleSeatClaim handler (see client/vehicle.lua's own doc
+    -- comment on EnterNearestK9Vehicle() for the full writeup). Default
+    -- `true` -- same "happy path is the default" convention canShowK9UI
+    -- above already established for this fixture -- so every pre-existing
+    -- test below that never mentions access at all keeps exercising the
+    -- ordinary, permitted case unchanged. Decoupled from canShowK9UI on
+    -- purpose: this file's own ox_target canInteract predicate for "Load
+    -- Into Vehicle" still gates display on CanShowK9UI() (a disclosed,
+    -- deliberately out-of-scope-this-pass gap -- see that predicate's own
+    -- comment), so a test exercising the High Command/autoAccessGrade
+    -- bypass shape needs to set these two independently.
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = true end
+    local function HasK9Access() return hasK9Access end
+
     -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
     -- same "controllable stand-in" convention as CanShowK9UI/DenyK9UIAccess
     -- above. Soft dependency: only added to `env` when
@@ -405,6 +423,7 @@ local function newVehicleFixture(opts)
         GetHashKey = GetHashKey,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        HasK9Access = HasK9Access,
         lib = lib,
         PlayerPedId = PlayerPedId,
         GetEntityCoords = GetEntityCoords,
@@ -480,6 +499,7 @@ local function newVehicleFixture(opts)
         stepWatchdogOnce = stepWatchdogOnce,
         addGlobalVehicleCalls = addGlobalVehicleCalls,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         denyCallCount = function() return denyCalls end,
         setPedDead = function(v) pedDead = v end,
         setPedMissing = function() existingEntities[pedHandle] = nil end,
@@ -578,13 +598,37 @@ t.test('feature on: exposes the three documented globals, and IsInK9Vehicle star
     t.isFalse(f.env.IsInK9Vehicle())
 end)
 
-t.test('EnterNearestK9Vehicle: CanShowK9UI false denies locally, creates no thread', function()
+-- PERMISSION AUDIT FOLLOW-UP (this pass): EnterNearestK9Vehicle()'s own
+-- access gate was widened from CanShowK9UI() to HasK9Access() alone, to
+-- match server/vehicle.lua's requestVehicleSeatClaim handler -- see
+-- client/vehicle.lua's own doc comment on EnterNearestK9Vehicle() for the
+-- full writeup. CanShowK9UI() alone no longer denies this function at all
+-- (proven by the very next test, the High Command bypass shape).
+t.test('EnterNearestK9Vehicle: HasK9Access false denies locally, creates no thread', function()
     local f = newVehicleFixture()
-    f.setCanShowK9UI(false)
+    f.setHasK9Access(false)
     f.env.EnterNearestK9Vehicle()
     t.equals(f.denyCallCount(), 1)
     t.isFalse(f.env.IsInK9Vehicle())
     t.equals(f.threadCount(), 0)
+end)
+
+-- PERMISSION AUDIT FOLLOW-UP -- the High Command/autoAccessGrade bypass
+-- shape this pass exists to unblock: HasK9Access() true but CanShowK9UI()
+-- false (the pre-widening combinator, which this function no longer calls
+-- at all) must still reach the server -- proves the gate genuinely changed,
+-- not merely that HasK9Access() was added ALONGSIDE the old check.
+t.test('EnterNearestK9Vehicle: HasK9Access() true with CanShowK9UI() false (High Command bypass shape) still proceeds -- CanShowK9UI() no longer gates this function at all', function()
+    local f = newVehicleFixture()
+    f.setHasK9Access(true)
+    f.setCanShowK9UI(false)
+    f.env.EnterNearestK9Vehicle()
+    t.equals(f.denyCallCount(), 0, 'must not have been locally denied')
+    -- Proves this genuinely reached PAST the access gate (not merely that
+    -- nothing happened for an unrelated reason): with no K9 vehicle in range
+    -- in this fixture, the function's own NEXT check -- the vehicle search --
+    -- is what fires, producing this exact, different notify.
+    t.equals(f.lastNotify().description, locale('vehicle.no_vehicle_nearby'), 'must have reached the vehicle search past the access gate, not been denied')
 end)
 
 t.test('EnterNearestK9Vehicle: no K9 vehicle within range notifies and does nothing', function()
@@ -1513,16 +1557,22 @@ t.test('watchdog OWN-DEATH RELEASE: takes precedence even when the vehicle has A
 end)
 
 -- ========================================================================
--- ANY PED -- this file never calls IsOwnModelK9() anywhere: every gate is
--- CanShowK9UI() alone, and the vehicle-side model check (K9VehicleHashes)
--- is keyed on the VEHICLE's own model, never the ped's. The seated entity
--- is always, and only, PlayerPedId() -- the player's own ped -- confirmed
--- by grep having zero CreatePed/SetPlayerModel/other ped-spawning native
--- hits anywhere in client/vehicle.lua; nothing in this file, before or
--- after this pass, ever spawns a decorative or stand-in ped of any kind.
+-- ANY PED -- this file never calls IsOwnModelK9() anywhere: EnterNearestK9
+-- Vehicle()'s own gate is HasK9Access() alone (PERMISSION AUDIT FOLLOW-UP,
+-- this pass -- UPDATED, was CanShowK9UI() -- see that function's own doc
+-- comment for the full writeup; the ox_target "Load Into Vehicle" hover
+-- option's own canInteract predicate is a SEPARATE, disclosed exception
+-- that still gates display on CanShowK9UI() alone, covered by its own test
+-- immediately below this section), and the vehicle-side model check
+-- (K9VehicleHashes) is keyed on the VEHICLE's own model, never the ped's.
+-- The seated entity is always, and only, PlayerPedId() -- the player's own
+-- ped -- confirmed by grep having zero CreatePed/SetPlayerModel/other
+-- ped-spawning native hits anywhere in client/vehicle.lua; nothing in this
+-- file, before or after this pass, ever spawns a decorative or stand-in ped
+-- of any kind.
 -- ========================================================================
 
-t.test('ANY PED: EnterNearestK9Vehicle works via CanShowK9UI() alone, with IsOwnModelK9 entirely undefined', function()
+t.test('ANY PED: EnterNearestK9Vehicle works with IsOwnModelK9 entirely undefined, gated on HasK9Access() alone', function()
     local f = newVehicleFixture()
     t.isNil(f.env.IsOwnModelK9, 'sanity: this fixture genuinely never defines IsOwnModelK9')
     f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)

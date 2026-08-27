@@ -93,6 +93,18 @@ local function newSarCallsFixture(opts)
     local function CanShowK9UI() return canShowK9UI end
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
+    -- HasK9Access() -- PERMISSION AUDIT FOLLOW-UP (this pass):
+    -- RequestStartSarCall()'s own access gate was widened from CanShowK9UI()
+    -- to HasK9Access() alone, to match server/sarcalls.lua's requestSarCall
+    -- callback -- see client/sarcalls.lua's own doc comment on
+    -- RequestStartSarCall() for the full writeup. Decoupled from canShowK9UI
+    -- (its own opts key, default `true` matching canShowK9UI's own default)
+    -- so a test can exercise the High Command/autoAccessGrade bypass shape
+    -- (HasK9Access() true, CanShowK9UI() false) independently.
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = true end
+    local function HasK9Access() return hasK9Access end
+
     local k9SitCalls = 0
     local function K9Sit() k9SitCalls = k9SitCalls + 1 end
 
@@ -213,6 +225,7 @@ local function newSarCallsFixture(opts)
         print = printStub,
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
+        HasK9Access = HasK9Access,
         K9Sit = (opts.provideK9Sit ~= false) and K9Sit or nil,
         lib = lib,
         PlayerPedId = PlayerPedId,
@@ -270,6 +283,7 @@ local function newSarCallsFixture(opts)
         k9SitCallCount = function() return k9SitCalls end,
         denyCallCount = function() return denyCalls end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         queueCallbackResponse = function(v) callbackResponses[#callbackResponses + 1] = v end,
         setThrowNext = function() shouldThrowNext = true end,
         setReentrant = function(fn) reentrantFn = fn end,
@@ -410,11 +424,30 @@ end)
 -- SECTION C -- RequestStartSarCall() gating and reason mapping.
 -- ----------------------------------------------------------------------
 
-t.test('k9sarcall: CanShowK9UI() false denies access and never calls the server', function()
-    local f = newSarCallsFixture({ canShowK9UI = false })
+-- PERMISSION AUDIT FOLLOW-UP (this pass): RequestStartSarCall()'s own
+-- access gate was widened from CanShowK9UI() to HasK9Access() alone, to
+-- match server/sarcalls.lua's requestSarCall callback -- see
+-- client/sarcalls.lua's own doc comment on RequestStartSarCall() for the
+-- full writeup. CanShowK9UI() alone no longer denies this function at all
+-- (proven by the very next test, the High Command bypass shape).
+t.test('k9sarcall: HasK9Access() false denies access and never calls the server', function()
+    local f = newSarCallsFixture({ hasK9Access = false })
     f.startCommand({})
     t.equals(f.denyCallCount(), 1)
     t.equals(f.callbackCallCount(), 0)
+end)
+
+-- PERMISSION AUDIT FOLLOW-UP -- the High Command/autoAccessGrade bypass
+-- shape this pass exists to unblock: HasK9Access() true but CanShowK9UI()
+-- false (the pre-widening combinator, which this function no longer calls
+-- at all) must still reach the server.
+t.test('k9sarcall: HasK9Access() true with CanShowK9UI() false (High Command bypass shape) still reaches the server', function()
+    local f = newSarCallsFixture({ hasK9Access = true, canShowK9UI = false })
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand({})
+    t.equals(f.denyCallCount(), 0, 'must not have been locally denied')
+    t.equals(f.callbackCallCount(), 1, 'a HasK9Access()-true bypass holder must reach the server even though CanShowK9UI() would have refused them')
+    t.equals(f.lastCallbackCall().event, 'qbx_k9unit:server:requestSarCall')
 end)
 
 t.test('ANY PED: RequestStartSarCall() never touches a model native directly -- proven by omitting IsOwnModelK9/GetEntityModel from the sandbox entirely', function()

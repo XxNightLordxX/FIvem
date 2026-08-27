@@ -143,6 +143,17 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9settieroffline = true,
     k9recertifyoffline = true,
     k9unspecializeoffline = true,
+    -- family #9 (Sensory/vision, 2 -> 1, 'k9vision') -- client/vision.lua.
+    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision fold into
+    -- the new 'k9vision' cycle (off -> night -> thermal -> off). Both stay
+    -- real, working RegisterCommand + RegisterKeyMapping calls forever
+    -- (default keys K/J, still rebindable) -- this is "an explicit way to
+    -- select one specific mode", deliberately kept per this pass's own
+    -- brief ("vision modes are held states... an explicit way to select a
+    -- specific mode must remain"), just no longer chat-suggested under
+    -- their own names.
+    ['qbx_k9unit:toggleThermalVision'] = true,
+    ['qbx_k9unit:toggleNightVision'] = true,
 }
 
 --- Identical shape to tests/commandreferenceregistry_spec.lua's own
