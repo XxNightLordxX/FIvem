@@ -1846,12 +1846,25 @@ end
 -- ----------------------------------------------------------------------
 local FEATURE_TRIGGERS = {
     -- radial.lua 'k9_leash': Detach UNGATED, Attach gated + nearest candidate.
+    -- NOT WIDENED (permission audit finding, this pass, considered and
+    -- rejected -- matches radial.lua's own 'k9_leash' Attach branch
+    -- verbatim): server/main.lua's CheckLeashEligibility does NOT gate on
+    -- HasK9Access() alone -- it requires AT LEAST ONE of the two parties to
+    -- be a real K9 by model OR the decoupled K9 role
+    -- (IsConfiguredK9Model(...) or HasK9Role(...)), a check that itself
+    -- EXCLUDES the High Command/autoAccessGrade bypass, BEFORE
+    -- HasK9Access(k9Src) is ever consulted for whichever party ends up cast
+    -- as "the K9". A bypass-only holder with no model and no role can never
+    -- be treated as the K9 side of a pairing regardless of what this file
+    -- shows, so widening this gate would offer something the server would
+    -- then genuinely refuse ('no_k9_party'). Left on the broader combinator
+    -- on purpose.
     LeashMechanics = function()
         if type(IsLeashed) == 'function' and IsLeashed() then
             if type(DetachLeash) == 'function' then DetachLeash() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not CanShowK9UI() then DenyK9UIAccess('common.no_k9_role_or_access'); return false, 'not_available' end
         if type(FindNearestLeashCandidate) ~= 'function' then return false, 'not_available' end
         local candidateServerId = FindNearestLeashCandidate()
         if not candidateServerId then
@@ -1861,31 +1874,87 @@ local FEATURE_TRIGGERS = {
         if type(RequestLeashAttach) == 'function' then RequestLeashAttach(candidateServerId) end
         return true
     end,
-    -- radial.lua 'k9_vehicle': BOTH directions gated.
+    -- radial.lua 'k9_vehicle': Exit checked FIRST, UNGATED; Enter gated on
+    -- HasK9Access() ALONE.
+    --
+    -- ORDERING FIX (this pass -- the header comment here previously read
+    -- "BOTH directions gated," which was true of the code below it and was
+    -- exactly the "gate the START of a thing, never the STOP" trap this
+    -- file's own header warns about, already found and fixed once in THIS
+    -- file (see the PropAttachments entry below) and once in
+    -- client/radial.lua's own 'k9_vehicle' item ("ORDERING FIX, THIS PASS"
+    -- -- see that item's own comment). client/vehicle.lua's ExitK9Vehicle()
+    -- own doc comment states it is "Deliberately NOT gated behind
+    -- CanShowK9UI() -- a K9 whose certification lapses mid-ride must always
+    -- be able to get out"; this wrapper did not honor that, refusing the
+    -- WHOLE toggle (exit included) for anyone who failed CanShowK9UI()
+    -- before ever reaching the IsInK9Vehicle() check below. Fixed by
+    -- checking IsInK9Vehicle() FIRST, ungated, exactly mirroring
+    -- LeashMechanics/BiteAndHold/PropDragging above and below.
+    --
+    -- GATE WIDENED TO HasK9Access() ALONE ON THE ENTER BRANCH (permission
+    -- audit finding, this pass): server/vehicle.lua's
+    -- requestVehicleSeatClaim gates on `HasK9Access(src)` alone (confirmed
+    -- by reading it directly -- no model/role check on the REQUESTER
+    -- anywhere in that handler; only the VEHICLE itself is re-verified as a
+    -- real K9 vehicle model), matching client/radial.lua's own 'k9_vehicle'
+    -- Enter branch and client/vehicle.lua's own EnterNearestK9Vehicle()
+    -- (both already widened -- see each one's own doc comment). This wrapper
+    -- was the one remaining caller still gating stricter than both the
+    -- callee and the server it ultimately reaches.
     VehicleEntryExit = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
         if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then
             if type(ExitK9Vehicle) == 'function' then ExitK9Vehicle() end
-        elseif type(EnterNearestK9Vehicle) == 'function' then
-            EnterNearestK9Vehicle()
+            return true
         end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
+        if type(EnterNearestK9Vehicle) == 'function' then EnterNearestK9Vehicle() end
         return true
     end,
     -- radial.lua 'k9_bark' (non-AdvancedBarkRadial literal only -- no
     -- variant arg in this contract, see DISCLOSED SIMPLIFICATION above).
+    --
+    -- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission
+    -- audit finding, this pass): server/main.lua's relayBark handler gates
+    -- on `HasK9Access(src)` alone (confirmed by reading it directly, no
+    -- model/role check anywhere in that handler), matching
+    -- client/radial.lua's own 'k9_bark' item exactly (see that item's own
+    -- "GATE WIDENED TO HasK9Access() ALONE" comment) -- a High Command/
+    -- autoAccessGrade-bypass holder now reaches the server end-to-end
+    -- through this button too.
     BasicBarkSounds = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         TriggerServerEvent('qbx_k9unit:server:relayBark', 'bark')
         return true
     end,
-    -- radial.lua 'k9_track_scent'/'k9_track_blood'/'k9_track_gunpowder':
-    -- each stops itself if already the active type, else starts.
+    -- radial.lua 'k9_track_certified' (merged): each of these three keys
+    -- stops itself if already the active type, else starts its own single
+    -- type via the OLDER, still-live StartScentTrack()/StartBloodTrack()/
+    -- StartGunpowderTrack() globals (client/tracking.lua's own doc comment:
+    -- "kept as resource-globals... even though nothing in this resource's
+    -- own UI calls them anymore" except, per this file's own
+    -- DISCLOSED SIMPLIFICATION above, this contract, which cannot express
+    -- radial.lua's merged "search for whatever I'm certified for" action
+    -- without an `args` addition to the trigger payload).
+    --
+    -- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, this
+    -- pass): every real server-side track callback
+    -- (findTrackableSource/findNearestTrackableSource, server/tracking.lua)
+    -- gates on `HasK9Access(source)` alone (confirmed by reading them
+    -- directly), and the shared StartTrack() these three globals all funnel
+    -- through (client/tracking.lua) already gates on HasK9Access() alone
+    -- internally (see that function's own "ANY-PED SWEEP FIX" comment) --
+    -- this wrapper's outer CanShowK9UI() check ran BEFORE that already-
+    -- correct callee, refusing a High Command/autoAccessGrade-bypass holder
+    -- a search the callee itself would have granted. Matches
+    -- client/radial.lua's own merged 'k9_track_certified' item's identical
+    -- fix.
     ScentTracking = function()
         if type(GetActiveTrackType) == 'function' and GetActiveTrackType() == 'scent' then
             if type(StopTracking) == 'function' then StopTracking() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         if type(StartScentTrack) == 'function' then StartScentTrack() end
         return true
     end,
@@ -1894,7 +1963,7 @@ local FEATURE_TRIGGERS = {
             if type(StopTracking) == 'function' then StopTracking() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         if type(StartBloodTrack) == 'function' then StartBloodTrack() end
         return true
     end,
@@ -1903,7 +1972,7 @@ local FEATURE_TRIGGERS = {
             if type(StopTracking) == 'function' then StopTracking() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         if type(StartGunpowderTrack) == 'function' then StartGunpowderTrack() end
         return true
     end,
@@ -1919,26 +1988,61 @@ local FEATURE_TRIGGERS = {
         if type(ToggleNightVision) == 'function' then ToggleNightVision(); return true end
         return false, 'not_available'
     end,
-    -- radial.lua 'k9_bite_hold': Release UNGATED, Attempt gated.
+    -- radial.lua 'k9_bite_hold': Release UNGATED, Attempt gated on
+    -- HasK9Access() ALONE.
+    --
+    -- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, this
+    -- pass): server/combat.lua's shared ValidateCombatRequest (backing
+    -- requestBiteHold/requestTakedown/requestDrag alike) gates on
+    -- `HasK9Access(src)` alone (confirmed by reading it directly -- no
+    -- model/role check on the K9 anywhere in that validator), and
+    -- client/combat.lua's own RequestBiteHold() was already widened to
+    -- match (see that function's own doc comment) -- this wrapper's outer
+    -- CanShowK9UI() check ran BEFORE that already-correct callee, refusing
+    -- a High Command/autoAccessGrade-bypass holder a bite-and-hold the
+    -- callee itself would have granted. Matches client/radial.lua's own
+    -- 'k9_bite_hold' item's identical fix. The Release branch above is
+    -- UNCHANGED and stays UNGATED -- gate the START of a thing, never the
+    -- STOP (see the VehicleEntryExit entry above for the fuller version of
+    -- this rule, and ReleaseBiteHold()'s own doc comment for why gating the
+    -- release would strand an engaged K9 who loses access mid-hold).
     BiteAndHold = function()
         if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then
             if type(ReleaseBiteHold) == 'function' then ReleaseBiteHold() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         if type(RequestBiteHold) == 'function' then RequestBiteHold() end
         return true
     end,
-    -- radial.lua 'k9_takedown': one-shot, gated, no release counterpart.
+    -- radial.lua 'k9_takedown': one-shot, gated on HasK9Access() ALONE, no
+    -- release counterpart.
+    --
+    -- WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP CLOSED AS BITE &
+    -- HOLD ABOVE -- see that entry's own header comment for the full
+    -- writeup (shared ValidateCombatRequest, and client/combat.lua's own
+    -- RequestTakedown() ALSO widened from CanShowK9UI() to HasK9Access()
+    -- alone); applies here verbatim, not repeated in full. Matches
+    -- client/radial.lua's own 'k9_takedown' item.
     NonLethalTakedown = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         if type(RequestTakedown) == 'function' then RequestTakedown() end
         return true
     end,
-    -- radial.lua 'k9_drag': Release UNGATED, Attempt gated. TWO release
-    -- branches -- being dragged is asked first, being the dragger second --
-    -- see client/combat.lua's IsDragTargetEngaged() for why the target's own
-    -- release was previously unreachable from every one of its call sites.
+    -- radial.lua 'k9_drag': Release UNGATED, Attempt gated on HasK9Access()
+    -- ALONE. TWO release branches -- being dragged is asked first, being
+    -- the dragger second -- see client/combat.lua's IsDragTargetEngaged()
+    -- for why the target's own release was previously unreachable from
+    -- every one of its call sites.
+    --
+    -- START BRANCH WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP CLOSED
+    -- AS BITE & HOLD/TAKEDOWN ABOVE -- see Bite & Hold's own header comment
+    -- above for the full writeup; applies here verbatim (shared
+    -- ValidateCombatRequest, and client/combat.lua's own RequestDrag() ALSO
+    -- widened from CanShowK9UI() to HasK9Access() alone). Both release
+    -- branches below are UNCHANGED and stay UNGATED -- same "no unbounded
+    -- trap" reasoning as every other release/termination branch in this
+    -- table.
     PropDragging = function()
         if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
             if type(ReleaseDrag) == 'function' then ReleaseDrag() end
@@ -1948,7 +2052,7 @@ local FEATURE_TRIGGERS = {
             if type(ReleaseDrag) == 'function' then ReleaseDrag() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not HasK9Access() then DenyK9UIAccess('combat.no_access'); return false, 'not_available' end
         if type(RequestDrag) == 'function' then RequestDrag() end
         return true
     end,
@@ -1962,12 +2066,25 @@ local FEATURE_TRIGGERS = {
     -- server rejection instead of the Break option, same bounded failure
     -- mode client/partnership.lua's own ox_target predicate already
     -- tolerates for the identical reason.
+    --
+    -- NOT WIDENED (permission audit finding, this pass, checked and
+    -- rejected -- matches client/radial.lua's own 'k9_partner_up' item
+    -- verbatim): server/partnership.lua's CheckPartnershipEligibility
+    -- requires AT LEAST ONE party to be a real K9 by model OR the decoupled
+    -- K9 role (IsConfiguredK9Model(...) or HasK9Role(...)) BEFORE
+    -- HasK9Access is ever consulted for whichever party is cast as the K9 --
+    -- a bypass-only holder with no model and no role fails that check
+    -- regardless of what this button offers, same class as LeashMechanics
+    -- above. Left on the broader combinator on purpose. Break Partnership
+    -- (the branch immediately above) is a termination path and stays
+    -- UNGATED, matching the identical reasoning given for every other
+    -- release branch in this table.
     HandlerPartnership = function()
         if type(IsPartnered) == 'function' and IsPartnered() then
             if type(BreakPartnership) == 'function' then BreakPartnership() end
             return true
         end
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not CanShowK9UI() then DenyK9UIAccess('common.no_k9_role_or_access'); return false, 'not_available' end
         if type(FindNearestPartnerCandidate) ~= 'function' then return false, 'not_available' end
         local candidateServerId = FindNearestPartnerCandidate()
         if not candidateServerId then
@@ -1988,8 +2105,30 @@ local FEATURE_TRIGGERS = {
     -- the shared validation prefix"). The explicit bite-vs-takedown choice
     -- radial.lua's own two-item submenu offers is not reachable through
     -- this single-button contract.
+    --
+    -- CHECKED, NOT WIDENED (permission audit finding, this pass) --
+    -- matches client/radial.lua's own 'k9unit_defense' submenu items
+    -- verbatim ("this is an INITIATION action... mirrors
+    -- ConfirmHandlerDownDefense()'s own internal CanShowK9UI() gate"): the
+    -- callee, client/defense.lua's ConfirmHandlerDownDefense(), gates on
+    -- the full CanShowK9UI() combinator itself, so widening only THIS
+    -- wrapper's pre-check to HasK9Access() would be a no-op -- the callee
+    -- would still refuse a High Command/autoAccessGrade-bypass holder with
+    -- its own DenyK9UIAccess() call, one line further down, regardless of
+    -- what this wrapper decides. UNLIKE Bite & Hold/Takedown/Drag above,
+    -- ConfirmHandlerDownDefense() does NOT call RequestBiteHold()/
+    -- RequestTakedown() (which were widened) -- it fires
+    -- 'qbx_k9unit:server:requestBiteHold'/'requestTakedown' directly with a
+    -- pre-resolved target, reaching the SAME server/combat.lua
+    -- ValidateCombatRequest (HasK9Access(src) alone) those widened
+    -- functions do, but through a callee whose own internal gate was never
+    -- brought in line with that fact. That is a real instance of this same
+    -- audit's target bug, but it lives one layer down in
+    -- client/defense.lua (a file this pass does not own) -- reported to the
+    -- team rather than "fixed" here by widening a check that cannot change
+    -- the actual outcome.
     HandlerDownDefense = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not CanShowK9UI() then DenyK9UIAccess('common.no_k9_role_or_access'); return false, 'not_available' end
         if type(ConfirmHandlerDownDefense) == 'function' then ConfirmHandlerDownDefense('bite') end
         return true
     end,
@@ -2041,15 +2180,50 @@ local FEATURE_TRIGGERS = {
         if type(RequestDeployKennel) == 'function' then RequestDeployKennel() end
         return true
     end,
-    -- radial.lua 'k9_open_inventory': gated (redundant with the callee, kept for consistency).
+    -- radial.lua 'k9_open_inventory': gated (redundant with the callee, kept
+    -- for consistency).
+    --
+    -- NOT WIDENED (permission audit finding, this pass, checked and
+    -- rejected -- matches client/radial.lua's own 'k9_open_inventory' item
+    -- verbatim): server/inventory.lua's own openK9Inventory (self-targeted
+    -- here, targetServerId == source) requires HasK9Access(targetServerId)
+    -- AND (a real K9 model OR the decoupled K9 role) for the K9 whose gear
+    -- is being opened -- confirmed by reading it directly, and that file's
+    -- own comment explicitly rejects dropping the model/role half ("HasK9Access
+    -- is deliberately BROADER than the K9 role... neither of whom is
+    -- actually the K9"). Same class as LeashMechanics/HandlerPartnership
+    -- above; left on the broader combinator.
     K9Inventory = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
+        if not CanShowK9UI() then DenyK9UIAccess('common.no_k9_role_or_access'); return false, 'not_available' end
         if type(RequestOpenOwnK9Inventory) == 'function' then RequestOpenOwnK9Inventory() end
         return true
     end,
-    -- radial.lua 'k9_treat_nearest': gated (redundant with the callee, kept for consistency).
+    -- radial.lua 'k9_treat_nearest': UNGATED here too, this pass.
+    --
+    -- CanShowK9UI() PRE-CHECK REMOVED (permission audit finding, this
+    -- pass): "Treat K9" is a HUMAN HANDLER action, not a K9 ability --
+    -- server/medkit.lua's own header states this by name ("Does NOT call
+    -- HasK9Access -- eligibility to USE a medkit ON a K9 is job-only, never
+    -- HasK9Access -- not the K9 being treated") and its real gate,
+    -- IsMedkitUserAuthorized(source), checks Config.Departments/EmsJobSet
+    -- job membership ONLY, never HasK9Access, model, or role for the USING
+    -- player (confirmed by reading it directly). This wrapper used to gate
+    -- that human-officer action behind CanShowK9UI() -- "must yourself
+    -- currently be an on-duty, certified K9" -- which is not what the
+    -- server asks of the treater at all: a plain PD/EMS officer with ZERO
+    -- K9 certification of their own was refused a mechanic the server would
+    -- have granted, the same "checks whether a player is SHAPED like a dog
+    -- where it should check whether they HOLD the job" pattern this sweep
+    -- exists to close. Matches client/radial.lua's own 'k9_treat_nearest'
+    -- item, whose identical pre-check was removed in the same pass -- and
+    -- matches client/medkit.lua's own RequestTreatNearestK9(), which has
+    -- never had a CanShowK9UI() check of its own (confirmed by reading it
+    -- directly) -- removing only the gate on ONE of the two call sites
+    -- would have left the other blocking exactly what this fix exists to
+    -- unblock. The server (IsMedkitUserAuthorized, per-target proximity/
+    -- model/aliveness/cooldown checks) remains the real, independent
+    -- authority regardless.
     K9Medkit = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
         if type(RequestTreatNearestK9) == 'function' then RequestTreatNearestK9() end
         return true
     end,
