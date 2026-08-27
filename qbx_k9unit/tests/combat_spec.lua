@@ -3136,4 +3136,217 @@ t.test('non-compliance alerts: a missing IsHighCommand global degrades to the or
     t.isTrue(notified[45] == true, 'and the ordinary grade check must still work')
 end)
 
+-- ========================================================================
+-- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+-- RED-THEN-GREEN PROOF, in the real cross-file integration context.
+--   RED, closed: a PLAYER target (or, separately, the requesting HOLDER)
+--   already claimed by a DIFFERENT exclusive mechanic (kennel_rest/
+--   vehicle_seat) is refused a NEW bite-hold/takedown/drag grant -- the
+--   same class of race this pass's own audit traced concretely for
+--   kennel-vs-vehicle, extended to combat's own two sides.
+--   GREEN, the control: an ordinary grant with NO prior claim on either
+--   side (every OTHER test in this file) still succeeds -- this section
+--   only adds the NEW refusal paths and their own releases.
+--   GREEN, the other control: EndHold's own release (via
+--   releaseBiteHold/releaseTakedown/releaseDrag) still frees the TARGET's
+--   claim correctly WHILE it is actively held, and a HOLDER whose own
+--   citizenid somehow becomes claimed mid-hold can still always release
+--   what it holds -- GATE THE START, NEVER THE STOP.
+-- ========================================================================
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: requestBiteHold is refused when the target already holds a live kennel_rest claim', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC)
+    f.env.ClaimBody('TARGET-CID-' .. TARGET_SRC, 'kennel_rest')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyBiteHold'), 0, 'the race this pass closes: a player attached inside a kennel must never also be granted as a bite-hold target')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: requestBiteHold is refused when the target already holds a live vehicle_seat claim', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC)
+    f.env.ClaimBody('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat', 10000)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyBiteHold'), 0)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: an EXPIRED claim no longer blocks the target -- a 300ms race must never become a permanent lockout', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC)
+    f.env.ClaimBody('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat', 1000)
+    f.advance(1001)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyBiteHold'), 1, 'an expired claim must never permanently block a legitimate later grant')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: an NPC target has no citizenid and is entirely unaffected -- never errors, never wrongly refused', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    -- An unrelated claim on some other citizenid must have zero bearing on an NPC target.
+    f.env.ClaimBody('SOMEONE-ELSE', 'kennel_rest')
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    t.isTrue(ok)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: a granted bite-hold claims the target\'s own body -- a DIFFERENT mechanic sees it as claimed, with the correct detail', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+
+    local claimed, mechanic, detail = f.env.IsBodyClaimedByOther('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat')
+    t.isTrue(claimed)
+    t.equals(mechanic, 'combat_target')
+    t.equals(detail, 'bite')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: releaseBiteHold frees the target\'s claim -- release paths still work while a claim is actively held', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.isTrue(f.env.IsBodyClaimedByOther('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat'), 'sanity: the claim is genuinely held before release')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+
+    t.isFalse(f.env.IsBodyClaimedByOther('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat'), 'releasing the hold must free the target\'s claim')
+    t.isTrue(f.env.ClaimBody('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat', 10000), 'the control: a legitimate claim by a different mechanic succeeds once released')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: requestTakedown is refused when the target already holds a live kennel_rest claim', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wirePlayerTarget(f, 501, TARGET_SRC, { x = 1, y = 0, z = 0 })
+    f.env.ClaimBody('TARGET-CID-' .. TARGET_SRC, 'kennel_rest')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestTakedown', K9_SRC, 501)
+    f.setCoords(targetPed, 20, 0, 0) -- would otherwise satisfy the speed-sample fleeing check
+    f.runOneTick()
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:forceRagdoll'), 0)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, TARGET SIDE: requestDrag is refused when the target already holds a live vehicle_seat claim', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.env.ClaimBody('TARGET-CID-' .. TARGET_SRC, 'vehicle_seat', 10000)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 0)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, HOLDER SIDE: requestBiteHold is refused when the REQUESTING K9 already holds a live kennel_rest claim', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.env.ClaimBody('K9-CID-' .. K9_SRC, 'kennel_rest')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 0, 'a K9 attached inside a kennel must never also be granted as a bite-hold HOLDER')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, HOLDER SIDE: requestBiteHold is refused when the REQUESTING K9 already holds a live vehicle_seat claim', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.env.ClaimBody('K9-CID-' .. K9_SRC, 'vehicle_seat', 10000)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 0)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, HOLDER SIDE: an EXPIRED claim on the requesting K9 no longer blocks it from becoming a holder', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.env.ClaimBody('K9-CID-' .. K9_SRC, 'vehicle_seat', 1000)
+    f.advance(1001)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, HOLDER SIDE: a K9 who is ALREADY the combat_target of a different, unrelated hold cannot ALSO become a holder -- IsBodyClaimed (not IsBodyClaimedByOther) is what catches this', function()
+    -- requireWantedStatus = false: K9_SRC is wired via wireK9 (never sets a
+    -- "wanted" flag the way wirePlayerTarget does) since this test's whole
+    -- point is K9_SRC's own dual role as a genuine K9 AND, separately, a
+    -- combat target -- irrelevant to what this test actually proves.
+    local f = newCombatFixture({ requireWantedStatus = false })
+    -- K9_SRC_B holds K9_SRC's own ped as a target of an unrelated hold first.
+    wireK9(f, K9_SRC_B)
+    local k9Ped = wireK9(f, K9_SRC)
+    f.addOnline(K9_SRC) -- ResolveConnectedPlayerFromPed needs K9_SRC in GetPlayers() to resolve k9Ped back to a real player target
+    f.registerEntity(777, k9Ped, 1) -- GetEntityType 1 = ped -- names K9_SRC's OWN ped by netId for the SECOND request below
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC_B, 777)
+    t.isTrue(f.env.IsBodyClaimedByOther('K9-CID-' .. K9_SRC, 'vehicle_seat'), 'sanity: K9_SRC is now genuinely a combat_target')
+
+    -- K9_SRC now tries to become a holder against a third party.
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 0, 'a citizenid currently pinned as someone else\'s target must not simultaneously be grantable as a holder')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, HOLDER SIDE: requestTakedown is refused when the requesting K9 already holds a live kennel_rest claim', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wirePlayerTarget(f, 501, TARGET_SRC, { x = 1, y = 0, z = 0 })
+    f.env.ClaimBody('K9-CID-' .. K9_SRC, 'kennel_rest')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestTakedown', K9_SRC, 501)
+    f.setCoords(targetPed, 20, 0, 0)
+    f.runOneTick()
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:forceRagdoll'), 0)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, HOLDER SIDE: requestDrag is refused when the requesting K9 already holds a live vehicle_seat claim', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC, { isdead = true, wanted = true })
+    f.env.ClaimBody('K9-CID-' .. K9_SRC, 'vehicle_seat', 10000)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 501)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 0)
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: GATE THE STOP, NEVER THE START -- releaseBiteHold still works even if the HOLDER\'s own citizenid somehow becomes claimed by another mechanic mid-hold', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC)
+    wirePlayerTarget(f, 501, TARGET_SRC)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501) -- granted while genuinely unclaimed
+
+    -- Models a hypothetical future desync -- the holder's own citizenid
+    -- becomes claimed by a different mechanic WHILE this hold is already
+    -- open. The holder-side check lives only inside ValidateCombatRequest
+    -- (never called from EndHold/releaseBiteHold/the maintenance sweep), so
+    -- this must have zero effect on the ability to release an ALREADY-open
+    -- hold.
+    f.env.ClaimBody('K9-CID-' .. K9_SRC, 'kennel_rest')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 1, 'a termination path must never be gated on this, or the SAME class of trap this resource has already shipped and fixed elsewhere gets rebuilt here')
+end)
+
 os.exit(t.summary())
