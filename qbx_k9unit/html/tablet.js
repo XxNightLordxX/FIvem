@@ -9697,7 +9697,8 @@
         // one. This page never fabricates or hardcodes that wording --
         // the server owns it verbatim, and this field renders nothing at
         // all (see buildK9ProfileDetail() below) when the server omits it.
-        state.k9ProfileStaminaWarning = 'TEMP REVERT FOR RED PROOF -- always present';
+        state.k9ProfileStaminaWarning = (typeof profile.staminaPersistenceWarning === 'string' && profile.staminaPersistenceWarning.length > 0)
+            ? profile.staminaPersistenceWarning : null;
     }
 
     function clearK9ProfileSelection() {
@@ -10074,7 +10075,7 @@
         var staminaInput = mk('input', {
             class: 'k9tablet-cert-tier-label-input',
             attrs: {
-                type: 'number', step: 'any', min: '0', max: '20',
+                type: 'number', step: 'any', min: '0',
                 placeholder: S('k9_profile_blank_means_no_override_placeholder'),
             },
         });
