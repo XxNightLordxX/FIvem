@@ -19,6 +19,7 @@ pass itself.
 | 2026-08-26 | First pass recorded in a file rather than only a commit marker; clean, one item honestly unverified |
 | 2026-08-26 | Clean. 85 commits reviewed, 5 regression spot-checks pass, dependency status re-verified upstream, bark-audio gap confirmed closed. No findings. |
 | 2026-08-27 | Watchdog's own checks all clean. The real findings this pass came from a separate 12-agent production-readiness audit running alongside it -- including two live bugs the watchdog's fixed checklist would never have caught. |
+| 2026-08-27 (2nd) | Clean. 5 commits reviewed, all 5 spot-checks pass, dependencies and bark audio re-verified, no stale claims in KNOWN_ISSUES. The radial count trap flagged last pass bit again in a new form -- see detail. |
 
 ## 2026-08-26 — detail
 
@@ -147,3 +148,64 @@ corrected five genuinely stale claims, so this ground is freshly covered.
 **Findings from the watchdog's own checks: none.** Nothing was manufactured
 to fill this section — see the note at the top for why that sentence is
 worth less than it sounds.
+
+
+## 2026-08-27 (second pass) — detail
+
+Six hours after the previous pass, covering the five commits that closed
+out the production-readiness audit.
+
+**1. Commits since the last pass:** five — the K9/handler rosters plus
+reasoned refusal messages, the non-compliance alert rank gate, three
+config.lua comments that contradicted their own code, two leaking rate-limit
+tables plus a repo-wide tripwire for that whole bug class, and the
+pinned-dog table that a fresh install never created. All were reviewed as
+they landed, each with a red-then-green proof. Nothing unreviewed.
+
+**2. Externally-uncertain facts, re-verified:**
+
+- Dependencies — **all three alive, unchanged.** `ox_lib` 3.39.0,
+  `ox_target` 1.18.1, `oxmysql` reachable. Note for the next pass: the
+  GitHub API is blocked by this environment's proxy and returns nulls for
+  every field rather than an error, so `archived`/`pushed_at` come back
+  empty and could easily be misread as "repository gone". Use
+  `raw.githubusercontent.com` instead, which works.
+- Bark audio — **still resolved.** All five files verified as genuine Ogg
+  Vorbis with `file` rather than trusted by extension, and all still listed
+  in `fxmanifest.lua`'s `files{}` block.
+
+**3. Regression spot-checks — all five pass.** `AgilityBasicJump` still
+read, role-aware `LeashPairs` intact, `RevokeCertificationOffline` still
+refreshes the certification cache, vehicle `onResourceStop` present both
+sides, and `client/radial.lua`'s API split still correct.
+
+**THE RADIAL COUNT TRAP BIT AGAIN, in a new form.** Last pass recorded that
+counting lines rather than calls would report a phantom regression there.
+This pass it looked worse: five `lib.addRadialItem` matches but only three
+registering the root opener, which is exactly the shape of the hard-error
+bug the 2026-08-23 fix closed. It was not a regression. Two of the five
+matches are inside that file's own DOC COMMENTS, which describe the call
+shape in prose. The real count is three, all registering `k9unit_open`,
+which is correct.
+So the rule for that file is now: **match on the call followed by an actual
+opening construct, and check each site's own id — never a bare text count,
+and never a count that includes comment lines.** That file documents its own
+API discipline at length, which is exactly why naive greps over it keep
+lying.
+
+**4. Documented claims vs code:** `SPEC.md` still does not exist (long since
+consolidated into `README.md` and `DEVELOPER_REFERENCE.md`), so the
+trigger's "SPEC.md §7" reference remains stale and should be read as "the
+docs". Checked the inverse this time, which is the more useful direction
+now: does `KNOWN_ISSUES.md` still list as OPEN anything fixed in the last
+five commits? It does not. Its two remaining open items — the unverified
+`water_bowl` prop model and the placeholder `logo.png` — are both genuinely
+still open and both genuinely blocked on the owner.
+
+**5. Health baseline:** `luac5.4 -p` clean on all 207 `.lua` files;
+`luacheck` 0 warnings / 0 errors across 206; 108 Lua spec files and 39
+browser spec files green; working tree clean with nothing unpushed.
+
+**Findings: none.** Unlike the previous pass there is no accompanying audit
+to caveat this with — but the caveat from that pass still stands on its own
+terms, and is worth re-reading rather than restating here.
