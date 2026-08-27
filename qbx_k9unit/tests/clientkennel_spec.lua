@@ -254,9 +254,21 @@ local function newKennelFixture(opts)
     end
     local function GetEntityHeading(handle) return headingByHandle[handle] or 0.0 end
     local setCoordsCalls, setHeadingCalls = {}, {}
+    -- REST POSE (owner-reported "make sure the dog actually shows up in the
+    -- kennel" fix). Both of these are recorded rather than merely stubbed
+    -- because the ORDER of ClearPedTasksImmediately relative to
+    -- SetEntityCoords/AttachEntityToEntity is the whole point of the fix --
+    -- a stub that only proved "it was called" would pass just as happily
+    -- with the clear running AFTER the attach, which is the broken shape.
+    -- callSeq is a single shared monotonic counter every one of the four
+    -- relevant natives stamps itself with, so a test can assert real
+    -- sequencing instead of just presence.
+    local callSeq = 0
+    local function NextSeq() callSeq = callSeq + 1 return callSeq end
+
     local function SetEntityCoords(handle, x, y, z, ...)
         coordsByHandle[handle] = { x = x, y = y, z = z }
-        setCoordsCalls[#setCoordsCalls + 1] = { handle = handle, x = x, y = y, z = z }
+        setCoordsCalls[#setCoordsCalls + 1] = { handle = handle, x = x, y = y, z = z, seq = NextSeq() }
     end
     local function SetEntityHeading(handle, heading)
         headingByHandle[handle] = heading
@@ -270,7 +282,7 @@ local function newKennelFixture(opts)
 
     local detachCalls = {}
     local function DetachEntity(handle, dynamic, collision)
-        detachCalls[#detachCalls + 1] = { handle = handle, dynamic = dynamic, collision = collision }
+        detachCalls[#detachCalls + 1] = { handle = handle, dynamic = dynamic, collision = collision, seq = NextSeq() }
     end
 
     local attachCalls = {}
@@ -278,12 +290,25 @@ local function newKennelFixture(opts)
         attachCalls[#attachCalls + 1] = {
             entity1 = entity1, entity2 = entity2, boneIndex = boneIndex,
             xPos = xPos, yPos = yPos, zPos = zPos, xRot = xRot, yRot = yRot, zRot = zRot,
-            isPed = isPed,
+            isPed = isPed, seq = NextSeq(),
         }
     end
 
     local controlRequestCalls = {}
     local function NetworkRequestControlOfEntity(entity) controlRequestCalls[#controlRequestCalls + 1] = entity end
+
+    local clearTasksCalls = {}
+    local function ClearPedTasksImmediately(ped)
+        clearTasksCalls[#clearTasksCalls + 1] = { ped = ped, seq = NextSeq() }
+    end
+
+    local scenarioCalls = {}
+    local function TaskStartScenarioInPlace(ped, scenarioName, unkDelay, playEnterAnim)
+        scenarioCalls[#scenarioCalls + 1] = {
+            ped = ped, scenarioName = scenarioName,
+            unkDelay = unkDelay, playEnterAnim = playEnterAnim, seq = NextSeq(),
+        }
+    end
 
     local deadPeds = {}
     local function IsEntityDead(ped) return deadPeds[ped] == true end
@@ -378,6 +403,8 @@ local function newKennelFixture(opts)
         DetachEntity = DetachEntity,
         AttachEntityToEntity = AttachEntityToEntity,
         NetworkRequestControlOfEntity = NetworkRequestControlOfEntity,
+        ClearPedTasksImmediately = ClearPedTasksImmediately,
+        TaskStartScenarioInPlace = TaskStartScenarioInPlace,
         IsEntityDead = IsEntityDead,
         PlayerPedId = PlayerPedId,
         NetworkGetNetworkIdFromEntity = NetworkGetNetworkIdFromEntity,
@@ -441,6 +468,8 @@ local function newKennelFixture(opts)
         collisionCalls = collisionCalls,
         detachCalls = detachCalls,
         attachCalls = attachCalls,
+        clearTasksCalls = clearTasksCalls,
+        scenarioCalls = scenarioCalls,
         lastAttachCall = function() return attachCalls[#attachCalls] end,
         controlRequestCalls = controlRequestCalls,
         setPedDead = function(ped, dead) deadPeds[ped] = dead end,
@@ -913,6 +942,148 @@ t.test('enterKennelConfirmed: happy path -- positions this client\'s OWN ped at 
     t.equals(attach.entity2, 90, 'entity2 is the kennel object')
     t.equals(#f.createObjectCalls, 0, 'no ped or prop is ever created -- the occupant is a real, already-connected player\'s own ped')
     t.equals(f.lastNotify().description, locale('kennel.enter_success'))
+end)
+
+-- ======================================================================
+-- REST POSE -- owner-reported, THIS PASS: "make sure the dog actually
+-- shows up in the kennel."
+--
+-- Two separate defects lived in enterKennelConfirmed, and the tests below
+-- pin BOTH plus the exit side:
+--   1. Tasks were never cleared before the attach. You always WALK to a
+--      kennel, so the ped essentially always carries a live locomotion
+--      task when the confirmation lands, and AttachEntityToEntity does not
+--      cancel tasks -- it only re-parents the transform. The dog kept
+--      playing its walk/run cycle while pinned: visibly running on the
+--      spot inside the cage.
+--   2. It was never posed. Even with tasks cleared, the result is a dog
+--      standing bolt upright in a cage, which is not "resting in a kennel".
+--
+-- ORDER IS THE WHOLE POINT, so these assert real sequencing (the shared
+-- callSeq counter in the fixture), not mere presence. A test that only
+-- checked "ClearPedTasksImmediately was called" would pass just as happily
+-- against the broken shape where the clear runs AFTER the attach and wipes
+-- the pose, or after SetEntityCoords and teleports the ped mid-stride.
+-- ======================================================================
+t.test('REST POSE: enterKennelConfirmed clears tasks BEFORE repositioning and attaching, then poses AFTER the attach -- the exact order, not just the presence, of all four calls', function()
+    local f = newKennelFixture()
+    local netId = 860
+    f.registerForeignEntity(netId, 140, GetHashKey(PRIMARY_MODEL), { x = 50.0, y = 60.0, z = 10.0 })
+
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    t.equals(#f.clearTasksCalls, 1, 'tasks cleared exactly once on the way in')
+    t.equals(f.clearTasksCalls[1].ped, MY_PED, 'only ever this client\'s OWN ped -- never another player\'s')
+    t.equals(#f.scenarioCalls, 1, 'posed exactly once on the way in')
+    t.equals(f.scenarioCalls[1].ped, MY_PED, 'only ever this client\'s OWN ped')
+
+    local clearSeq = f.clearTasksCalls[1].seq
+    local coordsSeq = f.setCoordsCalls[#f.setCoordsCalls].seq
+    local attachSeq = f.lastAttachCall().seq
+    local poseSeq = f.scenarioCalls[1].seq
+
+    t.isTrue(clearSeq < coordsSeq, 'CLEAR BEFORE REPOSITION -- a ped teleported mid-stride keeps sliding; clearing first makes it genuinely idle for the whole sequence')
+    t.isTrue(clearSeq < attachSeq, 'CLEAR BEFORE ATTACH -- this is the actual bug: a live locomotion task surviving into the attach is what made the dog run on the spot inside the cage')
+    t.isTrue(attachSeq < poseSeq, 'POSE AFTER ATTACH -- the attach sets the parent transform and an in-place scenario animates without moving the root, so this order lets the attachment govern WHERE and the scenario govern WHAT IT LOOKS LIKE. Reversed, the scenario\'s own entry transition fights an attach applied a frame later')
+end)
+
+t.test('REST POSE: playEnterAnim is FALSE -- deliberately unlike every other TaskStartScenarioInPlace call in this resource, because this ped is already pinned inside a cage and an enter transition would render as sliding against an attachment that will not let it move', function()
+    local f = newKennelFixture()
+    local netId = 861
+    f.registerForeignEntity(netId, 141, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    t.equals(f.scenarioCalls[1].unkDelay, 0)
+    t.equals(f.scenarioCalls[1].playEnterAnim, false)
+end)
+
+t.test('REST POSE: the scenario name is resolved PER BREED from the occupant\'s own live ped model, and an unmapped/future model falls back to the shepherd sit rather than passing nil to the native', function()
+    -- Chop shares the Rottweiler sit (no Chop-specific scenario exists) --
+    -- the table is a verbatim copy of client/movement.lua's own
+    -- native-api-assistant-verified K9_SIT_SCENARIO_BY_MODEL_HASH, so this
+    -- pins the copy against silent divergence from its source.
+    local f = newKennelFixture()
+    f.registerForeignEntity(9999, MY_PED, GetHashKey('a_c_chop'))
+    local netId = 862
+    f.registerForeignEntity(netId, 142, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.equals(f.scenarioCalls[1].scenarioName, 'WORLD_DOG_SITTING_ROTTWEILER')
+
+    local g = newKennelFixture()
+    g.registerForeignEntity(9998, MY_PED, GetHashKey('a_c_husky'))
+    g.registerForeignEntity(863, 143, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    g.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 863)
+    t.equals(g.scenarioCalls[1].scenarioName, 'WORLD_DOG_SITTING_RETRIEVER')
+
+    -- Never registered a model at all -- GetEntityModel returns nil, the
+    -- shape a future Config.Peds entry nobody mapped would also produce.
+    local h = newKennelFixture()
+    h.registerForeignEntity(864, 144, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    h.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 864)
+    t.equals(h.scenarioCalls[1].scenarioName, 'WORLD_DOG_SITTING_SHEPHERD', 'the default, never nil -- a nil scenario name is a silent no-op that would leave the dog standing')
+end)
+
+t.test('REST POSE: NOT GATED -- the pose still plays for an occupant the server already authorized even when CanShowK9UI() would now deny (the one-layer-up trap: a cosmetic pose must never carry an authorization check K9Sit() would have imposed)', function()
+    local f = newKennelFixture()
+    local netId = 865
+    f.registerForeignEntity(netId, 145, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    f.setCanShowK9UI(false) -- decertified in the round-trip window, after the server already granted
+
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    t.isTrue(f.env.IsRestingInKennel(), 'the server already granted this occupancy claim before the event was sent -- the client must not second-guess it')
+    t.equals(#f.scenarioCalls, 1, 'posed anyway; a false refusal here would leave a silently un-posed dog plus a spurious access-denied toast right after the success notice')
+    t.equals(#f.clearTasksCalls, 1)
+end)
+
+t.test('CONTROL: a REFUSED entry never clears tasks and never poses -- proves the two new calls sit inside the granted path, not before its guards (a fixture that always posed would pass every positive assertion above while proving nothing)', function()
+    -- Forged local trigger: rejected by the SOURCE-ORIGIN GUARD, the very
+    -- first line of the handler.
+    local f = newKennelFixture()
+    f.registerForeignEntity(866, 146, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 1, 866)
+    t.equals(#f.clearTasksCalls, 0, 'a forged trigger must not touch this client\'s own ped at all')
+    t.equals(#f.scenarioCalls, 0)
+
+    -- Mid-round-trip vehicle guard: refuses AFTER the server already
+    -- granted, releases the claim, and must leave the ped completely alone.
+    local g = newKennelFixture()
+    g.registerForeignEntity(867, 147, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    g.setInK9Vehicle(true) -- true by the time the confirmation lands, exactly the MID-ROUND-TRIP shape
+    g.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 867)
+    t.equals(#g.attachCalls, 0)
+    t.equals(#g.clearTasksCalls, 0, 'a ped the vehicle already owns via a real seat must not have its tasks wiped by the kennel')
+    t.equals(#g.scenarioCalls, 0)
+
+    -- Unresolvable netId: fails closed before anything is touched.
+    local h = newKennelFixture()
+    h.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 999999)
+    t.equals(#h.clearTasksCalls, 0)
+    t.equals(#h.scenarioCalls, 0)
+end)
+
+t.test('REST POSE: EVERY exit path ends the pose -- the manual exit, and the automatic backstops where there is no player input coming to end a scenario on its own', function()
+    -- Manual exit.
+    local f = newKennelFixture()
+    f.registerForeignEntity(868, 148, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 868)
+    t.equals(#f.clearTasksCalls, 1)
+    f.env.ExitKennelRest()
+    t.equals(#f.clearTasksCalls, 2, 'the exit clears again -- without this the sit scenario keeps running and "Exit Kennel" looks like it did nothing')
+    t.isTrue(f.clearTasksCalls[2].seq > f.detachCalls[#f.detachCalls].seq, 'cleared after the detach, so nothing re-poses a ped that is already free')
+    t.isFalse(f.env.IsRestingInKennel())
+
+    -- Automatic backstop: the kennel is removed out from under the
+    -- occupant. THIS is the case that most needed it -- no player input is
+    -- coming to end the scenario by itself.
+    local g = newKennelFixture()
+    g.registerForeignEntity(869, 149, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    g.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 869)
+    t.equals(#g.clearTasksCalls, 1)
+    g.dispatchNetEvent('qbx_k9unit:client:removeKennel', 65535, 869)
+    t.isFalse(g.env.IsRestingInKennel())
+    t.equals(#g.clearTasksCalls, 2, 'the removal backstop ends the pose too')
 end)
 
 t.test('enterKennelConfirmed: source guard rejects a forged local trigger', function()

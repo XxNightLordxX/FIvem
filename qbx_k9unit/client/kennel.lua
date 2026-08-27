@@ -237,6 +237,88 @@ local KennelPropModelHashes = {
     [GetHashKey(Config.DeployableKennel.fallbackPropModel)] = true,
 }
 
+-- ======================================================================
+-- REST POSE (THIS PASS -- owner-reported: "make sure the dog actually
+-- shows up in the kennel").
+--
+-- THE BUG THIS CLOSES: 'qbx_k9unit:client:enterKennelConfirmed' below
+-- positioned and AttachEntityToEntity'd the occupant's own ped into the
+-- kennel WITHOUT ever clearing its running tasks first, and never posed it
+-- afterwards. Both halves were visible:
+--   1. NO TASK CLEAR. You always arrive at a kennel by WALKING to it, so
+--      the ped is essentially always carrying a live locomotion task at
+--      the moment the confirmation lands. Attaching does not cancel that
+--      task -- it only re-parents the transform -- so the dog kept playing
+--      its walk/run cycle while pinned in place: visibly running on the
+--      spot inside the cage. Every other "tuck the K9 into something"
+--      path in this resource already clears first (client/vehicle.lua's
+--      ForceLeaveVehicle, client/combat.lua's PlayBiteHoldStance,
+--      client/findalert.lua's PlayFindAlertSitPose, client/movement.lua's
+--      K9Sit and ScratchAtDoor) -- the kennel was the one that did not.
+--   2. NO POSE. Even with tasks cleared, the result is a dog standing
+--      bolt upright inside a cage, which does not read as "resting in a
+--      kennel" at all -- the exact thing the owner was looking for.
+--
+-- Scenario table COPIED VERBATIM (not re-derived, not re-guessed) from
+-- client/movement.lua's K9_SIT_SCENARIO_BY_MODEL_HASH -- see that file's
+-- own doc comment, immediately above its K9Sit() function, for the full
+-- native-api-assistant verification writeup (two independently maintained
+-- community scenario dumps, DioneB/GTAV-Scenarios and kibook/spooner's
+-- scenarios.lua, agreeing exactly that "WORLD_DOG_SIT" is not a real
+-- scenario and that the genuine per-breed names are
+-- WORLD_DOG_SITTING_SHEPHERD / _ROTTWEILER / _RETRIEVER / _SMALL).
+--
+-- WHY A DISCLOSED DUPLICATE RATHER THAN CALLING K9Sit(): identical
+-- reasoning to client/findalert.lua's own header "WHY THIS FILE DOES NOT
+-- CALL K9Sit()" section -- K9Sit() opens with `if not CanShowK9UI() then
+-- DenyK9UIAccess() return end`, and routing a purely COSMETIC pose through
+-- that gate is this codebase's own one-layer-up trap: the occupant has
+-- already been authorized by the server (server/kennel.lua granted the
+-- occupancy claim and wrote KennelOccupants[citizenid] before this event
+-- was ever sent), so a second client-side authorization check here could
+-- only ever produce a false refusal -- a silently un-posed dog plus a
+-- spurious "you cannot use K9 features right now" toast fired immediately
+-- after the player's own "you settle into the kennel" success notice.
+-- This is a pose, not a capability; it must not carry a gate.
+-- If this table is ever promoted to a shared resource-global (removing
+-- both this duplicate and findalert.lua's), it needs a .luacheckrc
+-- `globals` entry and small edits in all three files.
+local KENNEL_REST_SCENARIO_BY_MODEL_HASH = {}
+for model, scenario in pairs({
+    a_c_shepherd   = 'WORLD_DOG_SITTING_SHEPHERD',
+    a_c_rottweiler = 'WORLD_DOG_SITTING_ROTTWEILER',
+    a_c_chop       = 'WORLD_DOG_SITTING_ROTTWEILER', -- Chop is Rottweiler-framed; no Chop-specific scenario exists
+    a_c_husky      = 'WORLD_DOG_SITTING_RETRIEVER',  -- no husky-specific scenario; RETRIEVER is the closest general/medium-dog sit
+}) do
+    KENNEL_REST_SCENARIO_BY_MODEL_HASH[GetHashKey(model)] = scenario
+end
+local KENNEL_REST_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD' -- fallback if playing an unmapped/future Config.Peds model, same default K9Sit() uses
+
+--- Poses an already-attached occupant so it visibly RESTS in the kennel
+--- rather than standing in it. Called AFTER AttachEntityToEntity, never
+--- before: the attach sets the ped's parent transform, and an in-place
+--- scenario animates the ped without moving its root, so this order lets
+--- the attachment keep governing WHERE the dog is while the scenario
+--- governs WHAT IT LOOKS LIKE. Posing first and attaching second would
+--- risk the scenario's own entry transition (a real ped genuinely steps
+--- into a scenario) fighting an attach applied a frame later.
+---
+--- playEnterAnim = FALSE, deliberately different from every other
+--- TaskStartScenarioInPlace call in this resource (all of which pass
+--- `true`): those pose a free-standing ped, where the walk-into-position
+--- transition is exactly what you want. This ped is already pinned inside
+--- a cage, so an enter transition would render as the dog sliding around
+--- against an attachment that will not let it actually move. Snapping
+--- straight into the resting pose is the correct read here.
+---
+--- NOT GATED on anything -- see this section's header for why a cosmetic
+--- pose must not carry an authorization check.
+--- @param ped number
+local function PlayKennelRestPose(ped)
+    local scenarioName = KENNEL_REST_SCENARIO_BY_MODEL_HASH[GetEntityModel(ped)] or KENNEL_REST_DEFAULT_SCENARIO
+    TaskStartScenarioInPlace(ped, scenarioName, 0, false)
+end
+
 -- Currently-active kennel THIS client deployed, if any (nil otherwise).
 -- Local-only, never read from another file. This is a CLIENT-SIDE MIRROR
 -- of server/kennel.lua's authoritative Kennels[citizenid] entry, not an
@@ -349,6 +431,22 @@ local function ReleaseKennelRest(notifyLocaleKey)
     if DoesEntityExist(ped) then
         DetachEntity(ped, true, false)
         SetEntityCollision(ped, true, true)
+        -- ENDS THE REST POSE (THIS PASS, the same owner-reported "make sure
+        -- the dog actually shows up in the kennel" fix that ADDED the pose
+        -- -- see this file's REST POSE section above). Without this, a K9
+        -- that left the kennel kept the sitting scenario running until the
+        -- player happened to supply movement input, so "Exit Kennel" looked
+        -- like it had done nothing on every path that does not involve the
+        -- player immediately walking off -- most visibly the automatic
+        -- backstops (own-death, kennel lost, kennel removed, resource
+        -- stop), where there IS no player input coming.
+        --
+        -- ADDS NO CONDITION: this is inside the existing DoesEntityExist
+        -- guard and nothing else, so it cannot make an exit path
+        -- unreachable. GATE THE START OF A THING, NEVER THE STOP -- this
+        -- function is the always-available escape hatch every exit route in
+        -- this file funnels through, and it stays exactly that.
+        ClearPedTasksImmediately(ped)
     end
 
     if notifyLocaleKey then
@@ -944,6 +1042,20 @@ RegisterNetEvent('qbx_k9unit:client:enterKennelConfirmed', function(netId)
     local kennelCoords = GetEntityCoords(entity)
     local kennelHeading = GetEntityHeading(entity)
 
+    -- TASKS CLEARED FIRST -- see this file's own REST POSE section above
+    -- for the full writeup of the bug this closes. In short: you always
+    -- WALK to a kennel, so the ped is essentially always carrying a live
+    -- locomotion task at the moment this confirmation lands, and
+    -- AttachEntityToEntity does not cancel tasks -- it only re-parents the
+    -- transform. Without this, the dog kept playing its walk/run cycle
+    -- while pinned in place, visibly running on the spot inside the cage.
+    -- Runs BEFORE the reposition, not after, so the ped is genuinely idle
+    -- for the whole position -> attach -> pose sequence below rather than
+    -- being teleported mid-stride. Unconditional: this native is safe on a
+    -- dead or ragdolled ped (client/vehicle.lua's own ForceLeaveVehicle
+    -- calls it on exactly that case for the same reason).
+    ClearPedTasksImmediately(ped)
+
     -- Positioned directly at the kennel's own coords/heading before
     -- attaching, so the very first rendered frame already shows the
     -- occupant genuinely inside the prop rather than snapping there over
@@ -976,6 +1088,12 @@ RegisterNetEvent('qbx_k9unit:client:enterKennelConfirmed', function(netId)
         cfg.restOffsetX, cfg.restOffsetY, cfg.restOffsetZ,
         0.0, 0.0, 0.0,
         true, false, false, false, 2, true)
+
+    -- POSED LAST, after the attach -- see PlayKennelRestPose's own doc
+    -- comment for why this order and not the reverse. This is what makes
+    -- the dog actually READ as resting in the kennel rather than standing
+    -- inside it.
+    PlayKennelRestPose(ped)
 
     restState = { kennelNetId = netId }
     lib.notify({ title = locale('common.notify_title'), description = locale('kennel.enter_success'), type = 'success' })
