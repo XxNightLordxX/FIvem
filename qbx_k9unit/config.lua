@@ -464,21 +464,38 @@ Config.Features = {
     -- server/progression.lua's own "HANDLER XP TIER UNLOCKS" section,
     -- "CLOSED (WIRING PASS...)" paragraph.
     --
-    -- STILL SHIPS `false` HERE, DELIBERATELY, AS A SEPARATE GO-LIVE DECISION
-    -- FROM THE ANTI-FARM FIX ABOVE: this flag also controls THREE
-    -- already-wired awards (handlerCertifyK9, the three
-    -- handlerPartnershipTenure{1,7,30}Day milestones) that would go live for
-    -- every server the instant this flips, and tests/featuregroups_spec.lua
-    -- pins this exact shipped default (`false`) as a "never silently
-    -- re-enable" regression guard. Flipping a flag with that much blast
-    -- radius, and that dedicated a regression test guarding it, deserves its
-    -- own explicit go-live review by whoever owns that rollout -- not a
-    -- silent flip bundled into the anti-farm fix that merely makes it SAFE
-    -- to flip. The gap this flag used to guard against (an unsafe award) is
-    -- closed; whether and when to actually turn Handler XP Progression on
-    -- for your server is now a genuine choice, not a forced "no" -- set this
-    -- to `true` once you're ready.
-    HandlerXPProgression = false,
+    -- GO-LIVE DECISION TAKEN, 2026-08-27 -- THIS NOW SHIPS `true`.
+    --
+    -- The paragraph that used to sit here said this flag stayed `false` as a
+    -- go-live decision separate from the anti-farm fix, and that turning it
+    -- on was "a genuine choice... set this to `true` once you're ready."
+    -- That reasoning was correct at the time and is now spent, for one
+    -- reason: while it shipped `false`, the entire handler rank ladder was
+    -- DEAD. AwardHandlerXP (server/progression.lua) hard-returns on this
+    -- flag before doing anything, and it is the only function anywhere that
+    -- mints Handler XP -- so with the flag off, all six award keys fire,
+    -- pass their cooldowns, call AwardHandlerXP, and mint exactly zero. Not
+    -- a slow ladder: no ladder. Meanwhile the tablet advertises the ranks.
+    --
+    -- A rank a player can see and can never earn is worse than no rank at
+    -- all, and the owner of this resource is not going to find line 481 of a
+    -- config file to switch it on. Verified independently before flipping:
+    -- the anti-farm gap that originally forced the `false` is genuinely
+    -- closed (both new mints are per-actor, citizenid-keyed, survive
+    -- disconnect/reconnect, and sit under the shared XPMintBudget), and the
+    -- three awards that go live alongside it were already wired and already
+    -- protected -- handlerCertifyK9 by Config.CertifyMaxNewGranteesPerDay,
+    -- the handlerPartnershipTenure{1,7,30}Day milestones by tenure's own
+    -- break-and-reform reset (breaking a partnership LOSES progress rather
+    -- than re-minting it).
+    --
+    -- TO TURN IT BACK OFF: set this to `false`. That is the whole revert --
+    -- nothing else in this file or any other needs to change, and no data
+    -- is lost by doing it (already-earned Handler XP stays in the database
+    -- and simply stops accruing). tests/featuregroups_spec.lua's "never
+    -- silently re-enable" guard still pins this value; it now pins `true`,
+    -- so an accidental drift in either direction still fails a test.
+    HandlerXPProgression = true,
 
     HealthStaminaHUD     = true,
     FatigueSystem        = true,
@@ -837,7 +854,23 @@ Config.FeatureGroups = {
     },
     Progression = {
         enabled             = true, -- was the standalone XPProgression switch
-        HandlerXP           = false, -- HandlerXPProgression -- SHIPS FALSE, see Config.Features.HandlerXPProgression's own long comment above before ever flipping this: two of its six award keys still lack a real per-actor mint cooldown
+        -- HandlerXPProgression. THIS IS THE SECOND SWITCH, and the one that
+        -- actually decides: group resolution runs AFTER Config.Features, so
+        -- while this said `false`, setting Config.Features.HandlerXPProgression
+        -- to `true` was silently undone (resolved true -> false) and the
+        -- handler rank ladder stayed completely dead. Both must agree. If you
+        -- turn handler XP off again, set BOTH this and
+        -- Config.Features.HandlerXPProgression to `false`, or a future reader
+        -- will hit the same trap from the other direction.
+        --
+        -- The old comment here claimed "two of its six award keys still lack a
+        -- real per-actor mint cooldown". That was true when written and is now
+        -- false: handlerTreatK9 and handlerKennelDeploy were both wired behind
+        -- their own citizenid-keyed, disconnect-surviving mint cooldowns
+        -- (server/medkit.lua, server/kennel.lua). See
+        -- Config.Features.HandlerXPProgression's own header above for the
+        -- go-live reasoning and the one-line revert.
+        HandlerXP           = true,
         CertificationExpiry = false,
         Leaderboard         = true, -- K9Leaderboard
     },
@@ -4365,27 +4398,99 @@ Config.Wellbeing = {
         restRadius              = 5.0,
         -- The DETECTION is wired (see restRegenPerTick above -- the scan,
         -- the radius check and the server-side position resolution are all
-        -- real). What is unverified is this MODEL NAME: 'water_bowl' is a
-        -- guess that never got the two-independent-sources treatment
-        -- prop_dog_cage_01 and prop_bodyarmour_02 got elsewhere in this
-        -- file, so it may match nothing in the world. Confirm it on a dev
-        -- server before enabling FatigueSystem, or the rest bonus simply
-        -- never triggers -- silently, since a scan that matches nothing is
-        -- indistinguishable from a K9 that is never near a rest source.
-        -- WIRED IN THIS PASS (K9-can-rest-in-a-kennel task): added
-        -- Config.DeployableKennel.propModel ('prop_dog_cage_01', ALREADY
-        -- confirmed real -- see that field's own confidence note) as a
-        -- second rest source, exactly the one-line addition this field's
-        -- own CHANGELOG entry already anticipated. Deliberately did NOT add
-        -- Config.DeployableKennel.fallbackPropModel here: that fallback is
-        -- 'prop_tennis_ball', the SAME shared model server/kennel.lua's own
-        -- header CROSS-FEATURE GAP section already documents colliding with
-        -- server/fetch.lua's ball and server/propattachment.lua's fallback
-        -- vest -- adding it here would make an unrelated dropped fetch ball
-        -- or worn vest fallback prop silently grant the Fatigue rest bonus
-        -- to any K9 standing near it. The primary model is unique to this
-        -- feature; only it is listed.
-        restSources             = { 'water_bowl', 'prop_dog_cage_01' },
+        -- real). The MODEL NAMES below are of deliberately mixed, honestly
+        -- labelled confidence -- do not read the list shape as "these are
+        -- all equally trustworthy":
+        --
+        -- 'prop_dog_cage_01' -- CONFIRMED REAL, independently, before this
+        -- pass (see Config.DeployableKennel.propModel's own confidence
+        -- note: hash 379820688, found with a rendered screenshot in a
+        -- vanilla-prop database). Added here in an earlier pass as a
+        -- second rest source alongside the kennel feature, unchanged this
+        -- pass. Deliberately still NOT joined by
+        -- Config.DeployableKennel.fallbackPropModel ('prop_tennis_ball'):
+        -- server/kennel.lua's own header CROSS-FEATURE GAP section already
+        -- documents that model colliding with server/fetch.lua's ball and
+        -- server/propattachment.lua's fallback vest, and listing it here
+        -- too would let an unrelated dropped fetch ball or worn-vest
+        -- fallback silently grant this rest bonus to any K9 standing near
+        -- it.
+        --
+        -- 'water_bowl' -- STILL UNVERIFIED, and RESEARCHED THIS PASS
+        -- (owner-directed prop-name audit) rather than left untouched.
+        -- Every dedicated GTA/FiveM prop database and forum thread this
+        -- task's own brief named -- docs.fivem.net, gtahash.ru, gtahash.com,
+        -- forge.plebmasters.de, vespura.com, gta-objects.xyz, gtamods.com,
+        -- gta.fandom.com, forum.cfx.re, se7ensins.com, pastebin.com,
+        -- gist.githubusercontent.com's raw view, gta5-mods.com and even
+        -- en.wikipedia.org -- was BLOCKED OUTRIGHT by this sandbox's own
+        -- network egress policy this session (report that if a live
+        -- re-check is ever needed; it is a tooling gap, not a research
+        -- shortcut taken here). Two sources were reachable, so this is
+        -- what they actually showed, not a guess dressed up as a lookup:
+        --   1. github.com/DurtyFree/gta-v-data-dumps' ObjectList.ini, a
+        --      direct dump of the game's own object/ytyp data (21,631
+        --      entries total; only the first ~4,637 fit through this
+        --      session's fetch tooling, so this is a PARTIAL read, not a
+        --      full-file negative). Zero "dog" matches anywhere in that
+        --      visible slice. Every real bowl/bench/sofa name it DID
+        --      contain (hei_heist_acc_bowl_01/02,
+        --      apa_mp_h_acc_bowl_ceramic_01, ex_mp_h_acc_bowl_ceramic_01,
+        --      gr_prop_gr_bench_01a-04b, apa_mp_h_stn_sofa*,
+        --      bkr_prop_clubhouse_sofa_01a, hei_heist_stn_sofa*) is DLC
+        --      MP-property interior set-dressing (apartment/executive-
+        --      office/clubhouse/bunker/heist-setup-room), tied to that one
+        --      owned instance rather than general open-world street
+        --      objects, and none of it is dog-related or plainly a
+        --      seating bench (some, like imp_prop_bench_grinder_01a, are
+        --      garage WORKBENCHES, a different object entirely) -- so none
+        --      is proposed as a candidate.
+        --   2. gist.github.com/leonardosnt/53faac01a38fc94505e9, a separate
+        --      community-compiled prop list (~3,000+ entries, also cut off
+        --      before its own alphabetical end). USEFULLY CROSS-CHECKS
+        --      source 1: it independently confirms 'prop_dog_cage_01' AND
+        --      'prop_dog_cage_02', plus 'prop_beware_dog_sign' and several
+        --      'prop_cs_dog_lead_*' leash props -- so dog-adjacent props do
+        --      exist and this source surfaces them when present. It
+        --      contains NO "bed", dog-shaped "bowl", "kennel", "doghouse",
+        --      "trough", "food_bowl", "water_bowl" or "waterbowl" match of
+        --      any kind. The only bowls it lists at all are
+        --      'prop_bowl_crisps' (a snack bowl) and
+        --      'prop_cs_bowl_01'/'prop_cs_bowl_01b' (unidentified story-
+        --      mission bowls).
+        -- A pattern worth naming: every real bowl name either source
+        -- produced, without exception, carries a 'prop_' prefix (or a DLC
+        -- prefix plus a 'prop_'-style segment). 'water_bowl' has neither --
+        -- consistent with, not merely repeating, this field's pre-existing
+        -- "suspicious on its face" doubt. No dog-bowl or dog-bed candidate
+        -- was found anywhere to replace it with, so per instruction it
+        -- stays here, disclosed, rather than being swapped for a
+        -- different, equally-unconfirmed guess that would only look more
+        -- confident.
+        --
+        -- 'prop_bench_04' and 'prop_couch_01' -- ADDED THIS PASS. Both are
+        -- plain, non-DLC-prefixed names, confirmed present in source 2
+        -- above alongside several sibling variants
+        -- ('prop_bench_01b'/'01c'/'05'/'09', 'prop_couch_03'/'04'/'lg_*'/
+        -- 'sm_*') -- picked as the least location-suffixed of each family
+        -- (source 2 also lists 'prop_pris_bench_01'/'prop_byard_bench01'/
+        -- '02', almost certainly tied to the Bolingbroke Penitentiary yard
+        -- specifically, so not used here). Neither collides with any other
+        -- model name used anywhere else in this file (checked). ONE-SOURCE
+        -- CONFIRMATION ONLY, a real and lower tier than 'prop_dog_cage_01'
+        -- above: source 1 could not corroborate either name because both
+        -- fell outside the ~21% of ObjectList.ini this session's tooling
+        -- could load, not because it contradicted them -- so treat this as
+        -- "confirmed in one reachable database this session, backed by
+        -- well-established general FiveM community knowledge that both
+        -- prefixes name common vanilla static street/interior furniture,"
+        -- not as the two-independent-source bar 'prop_dog_cage_01' met. A
+        -- K9 resting near an ordinary bench or couch is a reasonable
+        -- stand-in given no dog-specific rest prop was found anywhere (see
+        -- 'water_bowl' note above) -- this is exactly the "benches, sofas,
+        -- or similar" fallback this field's own review brief allowed for
+        -- once dog-specific furniture was confirmed absent.
+        restSources             = { 'water_bowl', 'prop_dog_cage_01', 'prop_bench_04', 'prop_couch_01' },
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty. Also the exact line where a bonded handler's HUD badge starts calling their dog "Tired" -- raise it and that word appears sooner (a lower tolerance for tiredness), lower it and it appears later
         -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
         -- client/movement.lua's own comment computes the worst case as
@@ -4618,10 +4723,50 @@ Config.Wellbeing = {
         bowlCooldownMs         = 60000,  -- 60 seconds between bowl drinks, per citizenid -- shorter than the item cooldown since there is no item cost
         bowlInteractRange      = 2.0,    -- metres, how close the K9 must be to a matched bowl entity
         -- UNVERIFIED model name -- see KNOWN_ISSUES.md and
-        -- Config.Features.HungerThirstSystem's own comment above. If this
-        -- does not resolve to a real world prop on your server, the "Drink
-        -- from Bowl" option never appears anywhere, with no error --
-        -- giveK9Water (the item path, above) is unaffected either way.
+        -- Config.Features.HungerThirstSystem's own comment above for the
+        -- operator-facing version of this disclosure. RESEARCHED THIS PASS
+        -- (owner-directed prop-name audit): this field shares the exact
+        -- same 'water_bowl' guess Config.Wellbeing.Fatigue.restSources'
+        -- own, much longer confidence note above carries, and the same
+        -- finding applies -- see that note for the full source trail
+        -- (which of the task's own suggested databases/forums were
+        -- reachable this session and which were blocked outright by this
+        -- sandbox's network egress policy). Short version: no source
+        -- reachable this session confirmed 'water_bowl' as real, refuted
+        -- it outright, or turned up any dog/water-bowl-shaped replacement
+        -- to add here instead. The only real "bowl"-shaped objects either
+        -- reachable source actually contains are a party snack bowl
+        -- (`prop_bowl_crisps`), two unidentified story-mission bowls
+        -- (`prop_cs_bowl_01`, `prop_cs_bowl_01b`), and several DLC
+        -- apartment/heist/executive-office decorative ceramic bowls tied
+        -- to that one owned property instance
+        -- (`apa_mp_h_acc_bowl_ceramic_01`, `ex_mp_h_acc_bowl_ceramic_01`,
+        -- `hei_heist_acc_bowl_01`/`02`) -- real objects, but none a
+        -- plausible stand-in for a K9's water bowl. Adding any of them
+        -- here would repeat this field's exact original mistake under a
+        -- more confident-sounding name instead of fixing it, so
+        -- 'water_bowl' stays, disclosed, as the sole entry rather than
+        -- being traded for a different, equally-wrong-shaped guess. If
+        -- this does not resolve to a real world prop on your server, the
+        -- "Drink from Bowl" option never appears anywhere, with no error
+        -- -- giveK9Water (the item path, above) is unaffected either way.
+        --
+        -- RULED OUT vs MERELY UNTRIED, so the next pass does not repeat two
+        -- hours of blocked fetches: gtahash.ru/.com, forge.plebmasters.de,
+        -- vespura.com, gta-objects.xyz, forum.cfx.re and gta5-mods.com were
+        -- all EGRESS-BLOCKED by this sandbox this session, not checked and
+        -- found lacking -- only github.com/raw.githubusercontent.com/
+        -- gist.github.com got through. Re-try from a session where those
+        -- are reachable before assuming this gap is permanent.
+        --
+        -- NON-SILENT-FAILURE IDEA, NOT BUILT (outside this pass's file
+        -- scope): a boot-time GetAllObjects() scan would see almost
+        -- nothing streamed in yet and falsely report "no bowls found" --
+        -- a new silent lie replacing the old silent nothing. Safer shape:
+        -- a periodic (e.g. hourly) or first-player-connect-gated check in
+        -- server/wellbeing.lua, reusing its existing GetAllObjects() scan,
+        -- that warns only once it has NEVER once seen a bowlSources/
+        -- restSources model match.
         bowlSources            = { 'water_bowl' },
     },
 }

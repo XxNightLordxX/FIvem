@@ -273,7 +273,85 @@ read_globals = {
     -- exactly what the bonetool sweep exists to resolve.
     "GetWorldPositionOfEntityBone",
     "RegisterKeyMapping",
-    -- Player / entity queries
+    -- Player / entity queries -- THIS WHOLE LINE CARRIED NO CITATION AT ALL
+    -- before this pass (2026-08-27 native-verification audit), despite
+    -- GetPlayers being the single riskiest kind of miss possible: unlike an
+    -- unregistered NATIVE (which resolves to a silent nil forever, this
+    -- file's own standing warning), GetPlayers() is not a native at all --
+    -- it is a plain LUA GLOBAL FUNCTION, defined only inside `if
+    -- isDuplicityVersion then ... end` in citizenfx/fivem's own
+    -- data/shared/citizen/scripting/lua/scheduler.lua (fetched and read
+    -- directly this pass, same file this repo's own PerformHttpRequest
+    -- entry below already cites for the identical "Lua wrapper, not a raw
+    -- native" shape): `function GetPlayers() local num =
+    -- GetNumPlayerIndices() ... for i = 0, num - 1 do table_insert(t,
+    -- GetPlayerFromIndex(i)) end return t end`. Calling it from a CLIENT
+    -- script (where that whole `if isDuplicityVersion` block never even
+    -- executes, so the global is simply never assigned) is therefore NOT a
+    -- silent no-op -- it is a hard Lua runtime error, "attempt to call a
+    -- nil value (global 'GetPlayers')", on the very first line that tries.
+    -- SIDEDNESS CONFIRMED BY DIRECT SEARCH, this pass: every real call site
+    -- of `GetPlayers()` anywhere in this resource (server/announce.lua,
+    -- server/certifications.lua, server/combat.lua, server/defense.lua,
+    -- server/entities.lua, server/integrations.lua, server/main.lua,
+    -- server/partnership.lua, server/permissions.lua, server/progression.lua,
+    -- server/runtimecontrol.lua, server/sarcalls.lua, server/search.lua,
+    -- server/tablet.lua, server/tenure.lua, server/tracking.lua,
+    -- server/wellbeing.lua, server/xptiers.lua) is a server file -- the one
+    -- apparent client-side hit (client/progression.lua) is, on inspection,
+    -- a comment describing a design suggestion FOR server/progression.lua,
+    -- not a real call (exactly the "a comment containing a call shape
+    -- counts as a match" trap this pass's own instructions warned about --
+    -- opened and read, not trusted from the grep alone).
+    --
+    -- GetActivePlayers -- CONFIRMED CFX, apiset client, directly from its
+    -- own ext/native-decls page (HTTP 200, not a 404): "Returns all player
+    -- indices for 'active' physical players known to the client." THE
+    -- OPPOSITE REALM FROM GetPlayers ABOVE, and easy to reach for by name
+    -- alone -- this resource's only call site (client/radial.lua) is
+    -- correctly client-side.
+    --
+    -- GetPlayerFromServerId / GetPlayerServerId -- CONFIRMED CFX, apiset
+    -- client, both via runtime.fivem.net/doc/natives_cfx.json (fetched this
+    -- pass): GET_PLAYER_FROM_SERVER_ID hash 0x344EA166, GET_PLAYER_SERVER_ID
+    -- hash 0x4D97BCC7, neither in the base-game natives.json at all (these
+    -- are CFX-only additions, not Rockstar natives -- natives.json would
+    -- never carry them regardless of realm). Confirmed by direct search:
+    -- every real call site of either name in this resource is a client
+    -- file (client/leashvisual.lua, client/main.lua, client/medkit.lua,
+    -- client/movement.lua, client/partnership.lua, client/radial.lua,
+    -- client/sarcalls.lua, client/scentlineup.lua, client/vision.lua) --
+    -- the several server/*.lua occurrences of "GetPlayerServerId(...)" as
+    -- literal text are all inside comments explicitly explaining why that
+    -- combination is NOT used server-side (server/entities.lua,
+    -- server/inventory.lua, server/certifications.lua all document the same
+    -- "never verified server-side, the scan is strictly more conservative"
+    -- reasoning -- see server/entities.lua's own ResolveConnectedPlayerFromPed).
+    --
+    -- GetPlayerName / GetPlayerPed -- BOTH GENUINELY DUAL-REGISTERED under
+    -- the same Lua name, confirmed against BOTH databases this pass, which
+    -- is why this codebase safely calls each from EITHER realm:
+    --   natives.json (base-game, Rockstar): PLAYER GET_PLAYER_NAME (hash
+    --     0x6D0DE6A7B5DA71F8, no apiset -> client-only default, "index in,
+    --     name out"); PLAYER GET_PLAYER_PED (hash 0x43A66C31C68491C0, no
+    --     apiset -> client-only default, "index in, ped out").
+    --   natives_cfx.json (CFX-only extension, SEPARATE hash, SEPARATE
+    --     registration): CFX GET_PLAYER_NAME (hash 0x406B4B20, apiset
+    --     server, "server id in, name out"); CFX GET_PLAYER_PED (hash
+    --     0x6E31E993, apiset server, "server id in, ped out").
+    -- Confirmed by reading actual call sites: every server/*.lua call
+    -- passes `source` or another server id (the CFX server-side overload);
+    -- every client/*.lua call passes a player INDEX (PlayerId(),
+    -- GetPlayerFromServerId(...), a GetActivePlayers()/GetPlayers() loop
+    -- variable) (the base-game client-side overload). Two natives, one
+    -- shared Lua name, resolved by which VM is running -- not a
+    -- coincidence and not something to "simplify."
+    --
+    -- PlayerId -- CONFIRMED base-game (natives.json), PLAYER namespace,
+    -- hash 0x4F8644AF03D0E0D6, no apiset -> client-only default ("Gets the
+    -- local player's player index"), which is structurally the only realm
+    -- this could ever mean anything in (a server has no single "local
+    -- player"). Every call site in this resource is a client file.
     "GetPlayers", "GetActivePlayers", "GetPlayerFromServerId",
     "GetPlayerServerId", "GetPlayerName", "GetPlayerPed", "PlayerId",
     -- GetSelectedPedWeapon: a genuine SERVER native (CFX, apiset: server),
@@ -285,6 +363,23 @@ read_globals = {
     -- Used by server/wellbeing.lua to require that whoever reports nearby
     -- gunfire is actually holding a weapon.
     "GetSelectedPedWeapon",
+    -- PlayerPedId / NetworkGetPlayerIndexFromPed -- also previously
+    -- uncited. Both confirmed base-game (natives.json, fetched this pass):
+    -- PLAYER_PED_ID (PLAYER, hash 0xD80958FC74E988A6, no apiset ->
+    -- client-only default -- "Gets the local player's active ped");
+    -- NETWORK_GET_PLAYER_INDEX_FROM_PED (NETWORK, hash 0x6C0E2E0125610278,
+    -- no apiset -> client-only default, converts a ped entity to a player
+    -- index -- a concept ("player index") that only exists client-side in
+    -- the first place). Confirmed by direct search: every real call site of
+    -- either name in this resource is a client file (client/fetch.lua,
+    -- client/inventory.lua, client/leashvisual.lua, client/main.lua,
+    -- client/movement.lua, client/partnership.lua, client/pursuitsprint.lua
+    -- for NetworkGetPlayerIndexFromPed; PlayerPedId is used pervasively
+    -- across client/*.lua) -- server/entities.lua's own mention of
+    -- NetworkGetPlayerIndexFromPed is inside a comment explaining why that
+    -- combination is deliberately NOT used server-side (see the
+    -- GetPlayerServerId/GetPlayerName/GetPlayerPed entry above for the
+    -- fuller writeup of that same finding).
     "PlayerPedId", "NetworkGetPlayerIndexFromPed",
     "GetCurrentResourceName",
     -- Entity / world

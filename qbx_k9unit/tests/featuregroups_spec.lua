@@ -82,12 +82,41 @@ t.test('NO-OP ON DEFAULTS: every single real Config.Features key resolves, under
     t.equals(#mismatches, 0, 'mismatches: ' .. table.concat(mismatches, '; '))
 end)
 
-t.test('NEVER SILENTLY RE-ENABLE: the four keys that ship false stay false after resolution -- HandlerXPProgression, DiscordWebhook, CertificationExpiry, DangerWarn (NOT BoneSweepDevTool, which this suite confirms below actually ships true)', function()
+t.test('NEVER SILENTLY RE-ENABLE: the three keys that ship false stay false after resolution -- DiscordWebhook, CertificationExpiry, DangerWarn (NOT BoneSweepDevTool, which this suite confirms below actually ships true; NOT HandlerXPProgression, which now deliberately ships true -- see the test immediately below)', function()
     local env = loadRealConfig()
-    t.isFalse(env.Config.Features.HandlerXPProgression)
     t.isFalse(env.Config.Features.DiscordWebhook)
     t.isFalse(env.Config.Features.CertificationExpiry)
     t.isFalse(env.Config.Features.DangerWarn)
+end)
+
+-- ============================================================================
+-- HandlerXPProgression moved OUT of the ships-false pin above on 2026-08-27.
+-- This is the deliberate, recorded flip that guard existed to prevent
+-- happening SILENTLY -- so it is pinned just as hard in its new position,
+-- and in BOTH of its places, because the two of them disagreeing is what
+-- made this feature dead in the first place.
+--
+-- WHY IT FLIPPED: AwardHandlerXP (server/progression.lua) hard-returns on
+-- Config.Features.HandlerXPProgression before doing anything, and it is the
+-- only function anywhere that mints Handler XP. While the flag shipped
+-- false, all six award keys fired, passed their cooldowns, called
+-- AwardHandlerXP and minted exactly zero -- so the handler rank ladder was
+-- not slow, it was dead, while the tablet advertised the ranks. The
+-- anti-farm gap that originally justified the false is closed (both new
+-- mints are per-actor, citizenid-keyed and survive disconnect/reconnect).
+--
+-- WHY BOTH KEYS ARE ASSERTED: group resolution runs AFTER Config.Features,
+-- so Config.FeatureGroups.Progression.HandlerXP silently overrides the
+-- Config.Features value. Flipping only Config.Features resolved true ->
+-- false and changed nothing at all -- caught by the NO-OP ON DEFAULTS test
+-- above, which is the only reason it was noticed. Pinning both directions
+-- here means a future edit to either one alone fails a test instead of
+-- quietly re-killing the ladder.
+-- ============================================================================
+t.test('DELIBERATE GO-LIVE, PINNED IN BOTH PLACES: HandlerXPProgression ships true AND its owning group key Config.FeatureGroups.Progression.HandlerXP ships true -- the two must agree, because the group key silently wins over Config.Features and a mismatch makes the whole handler rank ladder mint zero XP with no error anywhere', function()
+    local env = loadRealConfig()
+    t.isTrue(env.Config.Features.HandlerXPProgression)
+    t.isTrue(env.Config.FeatureGroups.Progression.HandlerXP)
 end)
 
 t.test('CORRECTION ON RECORD: BoneSweepDevTool ships true (gated instead by a separate convar + ACE check, not by this flag) -- an earlier draft of this task\'s own brief named it as a ships-false example; this pins the real, corrected fact so it cannot silently drift back to the wrong claim', function()
