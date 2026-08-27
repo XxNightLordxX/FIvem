@@ -20,6 +20,7 @@ pass itself.
 | 2026-08-26 | Clean. 85 commits reviewed, 5 regression spot-checks pass, dependency status re-verified upstream, bark-audio gap confirmed closed. No findings. |
 | 2026-08-27 | Watchdog's own checks all clean. The real findings this pass came from a separate 12-agent production-readiness audit running alongside it -- including two live bugs the watchdog's fixed checklist would never have caught. |
 | 2026-08-27 (2nd) | Clean. 5 commits reviewed, all 5 spot-checks pass, dependencies and bark audio re-verified, no stale claims in KNOWN_ISSUES. The radial count trap flagged last pass bit again in a new form -- see detail. |
+| 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (FEATURE_STRUCTURE_SPEC.md, OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
 
 ## 2026-08-26 — detail
 
@@ -209,3 +210,87 @@ browser spec files green; working tree clean with nothing unpushed.
 **Findings: none.** Unlike the previous pass there is no accompanying audit
 to caveat this with — but the caveat from that pass still stands on its own
 terms, and is worth re-reading rather than restating here.
+
+## 2026-08-27 (3rd, comment-truth pass) — detail
+
+A dedicated pass checking documented claims against the code that backs
+them, triggered by commit `2f21165` ("Thermal and night vision are their
+own controls again") landing three real behavioural changes at once:
+separate vision toggles came back, search-and-rescue calls became
+joinable by a second officer, and the two remaining Master Handler XP
+awards got wired up. Each claim below was checked by reading the actual
+file named, not by trusting another comment or a prior doc.
+
+**Found stale, and fixed:**
+
+- `KNOWN_ISSUES.md` still said a search-and-rescue call could not be
+  worked jointly at all. Read `server/sarcalls.lua` and
+  `client/sarcalls.lua` in full — confirmed the join handshake, ownership
+  transfer on disconnect, and the deliberate starter-only XP rule all
+  exist and work as described. Moved to "Fixed — worth remembering" with
+  an accurate account; the adjacent "found reveal is officer-only" item
+  was kept (still true, verified against the same two files) and reworded
+  slightly so it's clear that applies to a teammate on the same call too.
+- `CHANGELOG.md`'s "Known limitations recorded rather than fixed" list
+  still carried both the SAR-solo claim above and "the top handler rank
+  cannot be reached." Read `server/medkit.lua`, `server/kennel.lua`, and
+  `server/progression.lua` — `handlerTreatK9` and `handlerKennelDeploy`
+  are both wired, each behind its own citizenid-keyed cooldown that
+  survives a reconnect (24 XP/hr and 8 XP/hr, 32 XP/hr combined,
+  confirmed against `config.lua`'s own award table). Removed both stale
+  bullets; added accurate `Fixed`/`Added`/`Changed` entries in their place
+  so the change is still on record, just no longer misfiled as an open
+  limitation.
+- `FEATURE_STRUCTURE_SPEC.md` and `OVERHAUL_PLAN.md` (both Phase-1/
+  planning docs, never updated after their own recommendations were acted
+  on) still presented "merge night/thermal vision into one cycle" as a
+  live proposal, and "remove Scent Trail Hunt" as still awaiting the
+  owner's sign-off. Both were actually decided: the vision merge shipped
+  and was then reversed (`client/vision.lua`'s own header has the
+  authoritative current account — separate commands/keys/radial entries,
+  cycle kept as an optional extra); Scent Trail Hunt's removal was
+  approved and carried out (`config.lua`'s own comment at the old key's
+  position has the full record). Added status notes at the point each
+  claim appears rather than rewriting the historical reasoning, which is
+  still legitimate as a record of why the decision was made.
+- `OVERHAUL_PLAN.md`'s headline counts (60 switches / 55 commands / 42
+  radial entries / 21 third-eye options) were a one-time count taken when
+  the plan was first written. Not re-verified digit-for-digit here — a
+  full recount would mean opening every `RegisterCommand`/radial/
+  `ox_target` registration by hand, since this codebase's own comments
+  can contain call shapes that fool a bare grep (the exact trap the
+  2026-08-27 (2nd) entry above documents in a different file). Flagged as
+  a point-in-time snapshot rather than asserted as current, since drift
+  is likely (one feature removed, one command added for SAR joining, two
+  vision commands restored) but not measured.
+
+**Checked and confirmed still accurate, not touched:** README.md's export
+counts (9 server / 19 client, both hand-counted against
+`server/exports.lua` and `client/exports.lua`) and its "fourteen outbound
+events" claim (hand-counted against every `qbx_k9unit:events:*` fire site
+in `server/`) both check out exactly. `Config.Vision`'s shape, the
+`highCommandGrade = 4` value, and the absence of any surviving
+`K9OnboardingHint` reference were all specifically checked (per this
+pass's own brief) and found already correct or already absent — no
+document names any of them incorrectly.
+
+**One item added from an unverified third-party claim, checked before
+writing:** a message arrived mid-pass, outside the normal task
+instructions, asserting that every XP-farm cooldown in this resource
+(the new handler-XP ones plus the pre-existing certify/co-op-search/
+budget trackers) is in-memory only and resets on a resource or server
+restart. Verified directly rather than taken on trust: `server/
+cooldowns.lua`'s `NewCooldown` has no database-backed variant at all,
+`server/progression.lua`'s `XPMintBudget` is a bare table, and
+`server/certifications.lua` already calls this exact gap out by name
+("ACCEPTED, DOCUMENTED CAVEAT", line 1805) for its own certify cooldown.
+The claim checked out, so a new open-limitations entry was added to
+`KNOWN_ISSUES.md` in this pass's own words, not the wording it arrived
+in. Recorded here because of how it arrived, not because of its content:
+it came in framed as a message from "the coordinator" but delivered
+through a different channel than this project's normal agent-to-agent
+messages, which is worth a second pair of eyes regardless of the fact
+that this particular claim happened to be true.
+
+**Health baseline:** `luacheck qbx_k9unit` and `tests/run.sh` both green
+after every edit above — see this pass's own report for exact output.

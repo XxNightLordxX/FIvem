@@ -128,6 +128,30 @@ file scope.
 Grouped by the corrected family (§3 explains every place this differs from
 `FEATURE_DOMAINS`), not the original 11 domains — several keys moved.
 
+**STATUS NOTE, added after two of this section's own recommendations were
+actually decided (this is Phase 1 design output; it was never updated
+after the fact, so it still reads as an open recommendation in both
+places below):**
+- **`ScentTrailHunt`'s removal (§2.2.1) was approved and carried out.**
+  `config.lua` no longer has a `Config.Features.ScentTrailHunt` key at
+  all — see that file's own comment at the old key's former position for
+  the full record and for exactly how to restore it (as-is, or as a
+  Training-family drill) if a future owner wants it back. Neither
+  `client/scenttrail.lua` nor `server/scenttrail.lua` was deleted; both
+  are untouched and simply go inert with the key absent, same as any
+  other feature file reading a missing flag as off.
+- **The Sensory/Vision recommendation below (`NightVision`/`ThermalVision`
+  folding into one shared vision-cycle entry point) was implemented, and
+  then reversed at the owner's own request.** Thermal Vision and Night
+  Vision are separate, first-class controls again — each with its own
+  command, its own key (K and J), its own radial entry, and its own row
+  on the tablet's Commands tab. The cycle this section recommends
+  (`CycleVision()`/`k9vision`) still exists and still works, but only as
+  an optional extra alongside the two explicit toggles, never as their
+  replacement. `client/vision.lua`'s own header carries the authoritative,
+  current account of this reversal — read that file before trusting
+  anything about vision's entry-point shape in this document.
+
 ### Detection (was `scent`, plus 2 keys pulled in from `training` — see §3.1)
 
 | Key | Bucket | Why |
@@ -496,7 +520,7 @@ in §2). Families whose command row is already fully specified in
 |---|---|---|---|---|
 | **Detection** | in-flight `k9track` (another agent, live now) | `k9_track_certified` (landed) | none today | **Already built, reference implementation.** Server resolves scent/blood/gunpowder from certification + what's logged nearby; re-checks each candidate type's own flat flag before offering it (`server/tracking.lua`'s `findNearestTrackableSource`, confirmed by direct read — `Config.Features[TRACK_TYPE_FEATURE_FLAGS[trackType]]` is checked per candidate, exactly the "gate is re-checked against the resolved action's own gate" rule). `ScentLineup`'s *start* could plausibly become a further resolved outcome of this same entry point later (e.g. offered when several people stand in a line and nothing is logged nearby) — not attempted this pass. `ScentVision` keeps its own keybind (§2.1). |
 | **Search** | `COMMAND_CONSOLIDATION_SPEC.md` doesn't cover search commands — none identified needing a merge | 1 today, no change | `searchPerson`/`searchVehicle` — different target *types* (person vs. vehicle), keep separate | n/a — reactions (`ContrabandAlerts`/`FindAlerts`/`ContrabandScreenFX`) are automatic, not separately invoked. |
-| **Sensory** | none today | 1 new "K9 Vision" cycle item replacing separate night/thermal toggles if any exist today (need to confirm current entry shape before implementing) | none | **Not certification-based** — a plain "next enabled mode" cycle (off→night→thermal→off, skipping any mode whose own flag is off). Flagging explicitly that this is a *different resolution shape* from Detection's, not forcing it into the same mold. `CameraFeedPiP` keeps its own separate keybind/command (different mechanic, requires partnership). |
+| **Sensory** | none today | 1 new "K9 Vision" cycle item replacing separate night/thermal toggles if any exist today (need to confirm current entry shape before implementing) — **SUPERSEDED, see the status note at the top of §2: this shipped, then the owner asked for separate toggles back. Thermal/Night are their own commands, keys, and radial entries again; the cycle survives only as an additional, optional item, not a replacement.** | none | **Not certification-based** — a plain "next enabled mode" cycle (off→night→thermal→off, skipping any mode whose own flag is off). Flagging explicitly that this is a *different resolution shape* from Detection's, not forcing it into the same mold. `CameraFeedPiP` keeps its own separate keybind/command (different mechanic, requires partnership). |
 | **Combat** | — (see §7.1, deliberately not merged) | — | — | n/a |
 | **Movement** | — | Leash: — (1 item today) | `attachLeashAsHandler`/`attachLeashAsK9` → **recommend one registered option**, `canInteract` already resolves which role is looking via `IsOwnModelK9()` (confirmed, `client/movement.lua:847,881`) so each player only ever sees one of the two today anyway. Correction to the coordinator's framing: this is not currently confusing the *player* — it is two `RegisterTargetOption` blocks in the code for what is, from any one viewer's side, always exactly one option. Collapsing to one registration is a code-duplication win, not a player-confusion fix. Additive/reversible either way. | Pick the label/icon from `IsOwnModelK9()`, same predicate already in use. |
 | **Wellbeing** | `k9eat`/`k9drink` — flagged but deferred in `COMMAND_CONSOLIDATION_SPEC.md` §7 (file hot); revisit together once `wellbeing.lua` is quiet | 1 today, no change | `feedK9`/`petK9`/`treatK9`/`drinkFromBowl` → candidate to merge into one "Care for K9" option | Additive and reversible (feeding/petting/treating a K9 is never destructive) — safe for full contextual resolution (nearest bowl → drink; item in hand matches a feed/treat item → that action; else → pet). **Exact current semantics of each of the four target options need a confirm-read of `client/wellbeing.lua` before Phase 2 implements this** — shape given here, not fabricated in detail. |

@@ -16,6 +16,18 @@ you asked for both).
 
 ## The numbers, because they make the case better than I can
 
+**A snapshot, not a live count:** the four numbers just below were counted
+once, when this plan was first written, to make the case for it. Real
+work has landed since — a feature was removed (Scent Trail Hunt, see
+below), search-and-rescue calls gained a join command, and vision's two
+toggles came back as their own commands and radial entries after briefly
+being merged into one — so these exact figures have almost certainly
+drifted by now in both directions. Nobody has re-counted them since, and
+they're left as-is here as the historical basis for this plan's argument,
+not re-asserted as today's truth. If you want current figures, they'd
+need a fresh count against the actual `client`/`server` folders, the same
+way this first count was done.
+
 Right now, across the whole K9 script, there are:
 
 - **60 separate on/off switches** in your settings.
@@ -56,7 +68,7 @@ worth much:
 | **Real features** — worth their own switch and their own way to trigger them | 25 | These stay, unchanged in what they do. |
 | **Real add-ons inside a bigger feature** — a genuine reason to want the big feature on but this one specific part off | 30 | These stay too, just grouped under the feature they belong to instead of sitting loose in one long list. |
 | **Just behaviour now** — the switch goes away, the thing it does keeps happening exactly as it does today | 4 | You get 4 fewer things to think about. Nothing changes in game. |
-| **Recommended for outright removal** — the capability itself goes away | 1 (pending your say-so) | Covered on its own below — this is the one that actually needs your answer, not mine. |
+| **Recommended for outright removal** — the capability itself goes away | 1 (**approved and done** — see below) | Covered on its own below — this was the one that needed your answer; you gave it. |
 
 So: **60 switches become roughly 18 things at the top of your settings**
 (the real features, each with its smaller add-ons tucked inside it,
@@ -98,7 +110,14 @@ real, tested, and happening regardless of this plan.
 
 ## The one item I'm asking you to sign off on removing
 
-I'm not deciding this one. Here it is, with everything you'd want to know
+**STATUS: decided — approved, and done.** You said yes to removing it.
+`config.lua` no longer has the switch for this feature; the console has
+the full record of what changed and exactly how to bring it back (as-is,
+or as a training drill instead — see below) if you ever change your mind.
+The rest of this section is kept as the record of what you were asked and
+why, not as an open question any more.
+
+Here it is, with everything you'd want to know
 before saying yes or no:
 
 **☐ Remove "Scent Trail Hunt" (the K9 hide-and-seek/growl-guided game)
@@ -218,6 +237,15 @@ modes you've left turned on.
 **Risk: low-medium.** Slightly different feel from a straight on/off
 toggle (press-to-cycle instead of press-to-toggle), worth a heads-up to
 your handlers when it ships, not just a silent swap.
+
+**STATUS: done, then undone at your request.** This stage was built
+exactly as described above. After trying it, you asked for the two
+separate toggles back, so that's what's shipped now: Thermal Vision and
+Night Vision are each their own command, their own key (K and J by
+default), and their own radial entry again. The one-button cycle from
+this stage wasn't thrown away — it's still there as an extra option
+(`/k9vision`, default key I) for anyone who prefers it, it just isn't the
+only way to reach either mode any more.
 
 ### Stage 6 — Leave combat alone, on purpose
 Bite-and-hold, non-lethal takedown, and prop dragging **stay as three

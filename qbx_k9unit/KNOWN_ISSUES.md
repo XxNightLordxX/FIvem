@@ -242,29 +242,34 @@ designed but have an edge worth knowing about before you rely on them.
   to support them. Confirming any of the five would need a live install to
   test against, not more reading.
 
-- **A search-and-rescue call cannot be worked jointly by two officers at
-  all.** The broader version of the point below, and the one more likely to
-  surprise an organised unit: the whole mechanic belongs to the one officer
-  who started it. There is no shared call, no way to assign or join one,
-  and nothing that shows another officer's hunt to anyone else — every hint
-  goes only to the officer who asked for it. A second officer starting a
-  call does not help with the first one; they get their own, independent
-  hidden target somewhere else. Two officers who think they are searching
-  together are in fact running two unrelated searches. Nothing is broken —
-  it was built one-officer-at-a-time — but nothing said so either, and a
-  server running organised K9 roleplay with several people on duty is
-  exactly where it will come up.
-
 - **Search-and-rescue "found" reveal is visible only to the officer who
-  found it**, not to other officers nearby. Deliberate — it avoids a class
-  of ghost-entity bug — but worth knowing if you expect a whole team to
-  see the same marker.
+  actually found the person or item**, not to anyone else — including a
+  fellow officer working the very same call with them. Deliberate — it
+  avoids a class of ghost-entity bug — but worth knowing if you expect a
+  whole team to see the same marker.
 
 - **The tenure check runs a small database query every five minutes for
   every fully-tenured partnership**, rather than skipping it entirely.
   This is deliberate and tested — the alternative (a cache that could go
   stale relative to a broken partnership) was judged the worse tradeoff.
   Not something to "optimize" without re-reading why first.
+
+- **Every XP anti-farm cooldown in this resource lives in memory only, so
+  restarting the resource (or the whole server) resets all of them at
+  once.** Confirmed by reading each one directly: the per-person cooldowns
+  behind treating your dog and deploying the kennel (the two Master
+  Handler awards described above), behind personally certifying someone,
+  behind the co-op search bonus, and the shared hourly XP budget every
+  mechanic in this resource draws from — all of them are plain in-memory
+  trackers with no database backing, and `server/certifications.lua`'s own
+  comment on its certification cooldown already calls this out by name as
+  an accepted, deliberate gap. **This is not something a player can
+  trigger** — it takes an admin actually restarting the resource or the
+  server. The practical effect is narrow: a handler who was, say, 20
+  minutes into a 30-minute cooldown gets it cleared early by a restart,
+  so an owner who restarts very often is quietly a little more generous
+  with XP than the stated hourly ceilings promise. Not a security hole,
+  just worth knowing if your ceilings need to be exact.
 
 - **`html/images/logo.png` is a placeholder, not a real logo.** It's a
   plain crimson circle on a near-black background — matched to the
@@ -307,6 +312,35 @@ designed but have an edge worth knowing about before you rely on them.
 Kept short on purpose. These aren't a changelog entry each — they're here
 because each one taught a rule worth not re-learning.
 
+- **A search-and-rescue call used to belong entirely to whoever started
+  it — a second officer had no way to help.** Starting your own call while
+  a colleague already had one running just gave you an unrelated hidden
+  target somewhere else; two officers who thought they were searching
+  together were in fact running two separate searches. Fixed: a second
+  officer can now ask to join an active call, and the officer running it
+  gets an accept-or-decline prompt (the same request-and-accept handshake
+  already used for the leash and for partnering up). Once accepted, the
+  joining officer genuinely searches — their own position counts, they get
+  their own warmer/colder hints, and they can be the one who actually finds
+  the person. If whoever started the call disconnects, the call does not
+  end — it passes to whichever remaining officer joined earliest, and only
+  ends for good once the last person on it leaves. One thing that stays
+  true on purpose: XP for finishing the call still only ever goes to
+  whoever started it, never to someone who joined later, even if the
+  joiner is the one who actually finds the person. That is not a leftover
+  limitation — it deliberately closes off two players trading "you start,
+  I'll join" to split extra reward for the same amount of real searching.
+- **The top handler rank (Master Handler) used to be effectively out of
+  reach for anyone who never personally certified a new handler.** Two of
+  the six actions that were supposed to pay handler XP — treating your own
+  dog and deploying the kennel — were configured but never actually paid
+  out, because paying them without a farming guard would have made XP
+  mintable at thousands per hour. Both now pay: treating your dog is
+  capped at 24 XP per hour per person, deploying the kennel at 8 XP per
+  hour per person, 32 XP per hour combined, each behind its own per-person
+  cooldown that survives a disconnect/reconnect rather than resetting. A
+  handler on ordinary duty now reaches Master Handler in roughly a week
+  instead of never.
 - **A file that isn't registered in `fxmanifest.lua` never loads, and
   nothing in the toolchain catches it.** This has happened five separate
   times — a file written, tested, and silently never running in-game.

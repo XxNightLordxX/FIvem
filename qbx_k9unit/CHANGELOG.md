@@ -62,6 +62,16 @@ tagged release will draw a line under this section.
 - **Firing somebody left their roster row behind**, so re-hiring them
   brought back their old role and their old callsign instead of putting
   them back in Unassigned.
+- **The top handler rank (Master Handler) could not be reached by anyone
+  who never personally certified a new handler.** Two of the six actions
+  configured to pay handler XP — treating your own dog, deploying the
+  kennel — were switched on in name only and never actually paid, because
+  paying them without a farming guard would have let XP be minted at
+  thousands per hour. Both now pay for real, each behind its own
+  per-person cooldown that survives a disconnect and reconnect: 24 XP an
+  hour for treating your dog, 8 XP an hour for deploying the kennel, 32
+  XP an hour combined. A handler on ordinary duty now reaches Master
+  Handler in roughly a week instead of never.
 
 - **A certified dog was invisible.** Changing to a dog model gives you a
   new body with none of its parts switched on. A human survives that; a
@@ -113,6 +123,12 @@ tagged release will draw a line under this section.
   Both were previously refused only on the player's own machine.
 - **Scent vision's off switch is a rule, not a request.** With it off, the
   server no longer answers the question at all.
+- **Thermal Vision and Night Vision are two separate controls again**, each
+  with its own key (K and J by default), its own radial menu entry, and
+  its own row on the tablet's Commands tab — reversing an earlier pass
+  that merged them into one cycling control. The one-key cycle
+  (`/k9vision`, default I) is kept as an optional extra alongside the two
+  explicit toggles, not a replacement for them.
 
 ### Added
 
@@ -155,6 +171,18 @@ tagged release will draw a line under this section.
   many were lost. The busiest event by far — a completed search — ships
   off. **A webhook URL is a password.** Anyone who has it can post to that
   channel forever.
+- **A second officer can now join an active search-and-rescue call.** They
+  ask to join, and the officer running the call accepts or declines — the
+  same request-and-accept handshake already used for the leash and for
+  partnering up. Once accepted, the joining officer genuinely searches on
+  their own: their own position counts, they get their own warmer/colder
+  hints, and they can be the one who actually finds the person. If
+  whoever started the call disconnects, the call passes to whichever
+  remaining officer joined earliest instead of ending, and it only ends
+  for good once the last person on it leaves. XP for finishing the call
+  still only ever goes to whoever started it — deliberate, so two people
+  can't trade turns starting and joining calls to split extra reward for
+  the same amount of real searching.
 - **Dogs can eat and drink from bowls.**
 - **A character can be pinned as a dog permanently**, so they load in as
   the same dog every time, independently of any certification.
@@ -175,12 +203,6 @@ tagged release will draw a line under this section.
 
 ### Known limitations recorded rather than fixed
 
-- The top handler rank cannot be reached without personally certifying
-  other people, because certifying is the only paying action above the
-  tenure ceiling. Fixing it needs the two unwired actions to start paying,
-  which needs anti-farm protection built for them first.
-- Two officers cannot work one search-and-rescue call together. The whole
-  mechanic belongs to the officer who started it.
 - `html/images/logo.png` is still a placeholder.
 - **Setting a dog faster than about double speed is accepted, saved and
   shown, and will not look any faster.** The movement code clamps the final

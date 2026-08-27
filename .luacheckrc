@@ -350,6 +350,69 @@ read_globals = {
     -- of this environment could not reach runtime.fivem.net to fall back to,
     -- so this entry was carried at reduced confidence until now.
     "GetWaterHeightNoWaves",
+    -- The eight entries below (NetworkGetEntityFromNetworkId through
+    -- GetEntityForwardVector) carried NO citation at all before this pass
+    -- (2026-08-27 native-verification audit) -- unlike almost every other
+    -- entry in this file, there was nothing here recording where any of
+    -- them were checked, only that they clearly work in practice (this
+    -- resource calls all eight from multiple already-shipping features).
+    -- Verified this pass against a freshly-fetched runtime.fivem.net/doc/
+    -- natives.json (all eight are real, base-game natives, none carrying an
+    -- `apiset` key, i.e. client-only under this file's own default reading):
+    --   NETWORK_GET_ENTITY_FROM_NETWORK_ID    0xCE4E5D9B0A4FF560
+    --   NETWORK_GET_NETWORK_ID_FROM_ENTITY    0xA11700682F3AD45C
+    --   NETWORK_DOES_ENTITY_EXIST_WITH_NETWORK_ID 0x18A47D074708FD68
+    --   GET_VEHICLE_NUMBER_PLATE_TEXT         0x7CE1CCB9B293020E
+    --   IS_PED_IN_ANY_VEHICLE                 0x997ABD671D25CA0B
+    --   GET_ENTITY_HEALTH                     0xEEF059FAD016D209
+    --   GET_ENTITY_MAX_HEALTH                 0x15D757606D170C3C
+    --   GET_ENTITY_FORWARD_VECTOR             0x0A794A5A57F8DF91
+    -- SIDEDNESS, checked against actual call sites, not assumed from the
+    -- natives.json default alone -- this matters because natives.json's
+    -- "no apiset key" reading is a DEFAULT, not a guarantee a later FXServer
+    -- build never added a real server registration on top (GetEntitySpeed/
+    -- IsPedRagdoll elsewhere in this file are exactly that exception):
+    --   NetworkGetEntityFromNetworkId / NetworkGetNetworkIdFromEntity /
+    --     GetEntityHealth / GetEntityMaxHealth / GetVehicleNumberPlateText /
+    --     IsPedInAnyVehicle -- INDEPENDENTLY RE-CONFIRMED server-callable
+    --     too, this pass, by direct read of citizenfx/fivem's
+    --     code/components/citizen-server-impl/src/state/
+    --     ServerGameState_Scripting.cpp (the same authoritative
+    --     "which GET_ENTITY_*/etc. FXServer actually registers" source
+    --     server/kennel.lua's own GetEntityForwardVector finding below
+    --     relies on): real handlers found for NETWORK_GET_ENTITY_FROM_NETWORK_ID,
+    --     NETWORK_GET_NETWORK_ID_FROM_ENTITY, GET_ENTITY_HEALTH,
+    --     GET_ENTITY_MAX_HEALTH, GET_VEHICLE_NUMBER_PLATE_TEXT and
+    --     IS_PED_IN_ANY_VEHICLE alike -- all six are genuinely dual-realm,
+    --     matching every one of this resource's own call sites for them,
+    --     client and server both.
+    --   NetworkDoesEntityExistWithNetworkId -- server-side registration
+    --     NOT FOUND in that same file, but that is NOT treated as proof of
+    --     absence here (this file is one component among several; a native
+    --     with no hit in one source file is UNVERIFIED, never CONFIRMED
+    --     ABSENT, on that alone -- the exact distinction this whole audit
+    --     exists to keep straight). Moot in practice either way: direct
+    --     search confirms its ONLY real call site anywhere in this resource
+    --     is client/main.lua:439 (inside PlaySoundOnNetworkEntity), a client
+    --     file -- every server/*.lua mention of this name is inside a
+    --     comment describing an OLD inline pattern already migrated away to
+    --     ResolveNetworkEntity's own NetworkGetEntityFromNetworkId +
+    --     DoesEntityExist pairing (server/entities.lua) -- so its server-side
+    --     status is UNVERIFIED but also uncalled-from-server-anywhere today.
+    --   GetEntityForwardVector -- the ONE entry of these eight CONFIRMED
+    --     ABSENT server-side, not merely unchecked -- see server/kennel.lua's
+    --     own "NOT GetEntityForwardVector(ped) -- CONFIRMED BROKEN
+    --     SERVER-SIDE" finding a few hundred lines below this file's own
+    --     server/wellbeing.lua-adjacent natives for the full writeup (traced
+    --     dispatch to FXServer's `s_invalidNativeHandler` no-op). Direct
+    --     search this pass confirms every server/*.lua occurrence of this
+    --     name is inside a comment explicitly saying NOT to call it
+    --     server-side (server/kennel.lua, server/fetch.lua) -- its only real
+    --     call sites anywhere in this resource are client/agility.lua,
+    --     client/combat.lua and client/movement.lua, all client files. Kept
+    --     allowlisted (client-side use is real and correct) -- this note
+    --     exists so nobody reads its presence here as license to call it
+    --     from a NEW server file.
     "NetworkGetEntityFromNetworkId", "NetworkGetNetworkIdFromEntity",
     "NetworkDoesEntityExistWithNetworkId",
     "GetVehicleNumberPlateText", "IsPedInAnyVehicle",
@@ -379,8 +442,24 @@ read_globals = {
     "RestorePlayerStamina",
     -- AgilityAdvanced capsule-sweep vault (client/agility.lua, extracted from
     -- client/movement.lua, Phase 3,
-    -- PHASE3_SPEC.md §12.5.5/§12.0 item 3) -- confirmed real natives per
-    -- qbx_k9unit/DEVELOPER_REFERENCE.md#phase-3-combat
+    -- PHASE3_SPEC.md §12.5.5/§12.0 item 3) -- the ORIGINAL citation for this
+    -- entry pointed only at this resource's own internal doc
+    -- (qbx_k9unit/DEVELOPER_REFERENCE.md#phase-3-combat), not a primary CFX
+    -- source -- an internal doc can be just as wrong as a misremembered
+    -- name, so this pass (2026-08-27) independently re-verified all three
+    -- against a freshly-fetched runtime.fivem.net/doc/natives.json rather
+    -- than trust that reference: SHAPETEST START_SHAPE_TEST_CAPSULE (hash
+    -- 0x28579D1B8F8AAC80, params x1,y1,z1,x2,y2,z2,radius,flags,entity,p9 ->
+    -- int), SHAPETEST GET_SHAPE_TEST_RESULT (hash 0x3D87450E15D98694, params
+    -- shapeTestHandle,hit*,endCoords*,surfaceNormal*,entityHit* -> int), and
+    -- ENTITY SET_ENTITY_VELOCITY (hash 0x1C99BB7B6E96D16F, params
+    -- entity,x,y,z -> void) -- none carry an `apiset` key, meaning
+    -- client-only default, matching client/agility.lua's own realm (its
+    -- only call site for all three, confirmed by direct search). Argument
+    -- COUNT also cross-checked against the actual call site
+    -- (client/agility.lua's DetectVaultableObstacleHeight): 10 positional
+    -- arguments passed to StartShapeTestCapsule, matching the 10-parameter
+    -- signature above exactly.
     "StartShapeTestCapsule", "GetShapeTestResult", "SetEntityVelocity",
     -- NUI bridge (client/hud.lua)
     "SendNUIMessage", "RegisterNUICallback",
@@ -402,14 +481,14 @@ read_globals = {
     --     toggle). No apiset key -> client-only default, matching their only
     --     call sites in client/vision.lua. Single-BOOL-arg call shape used
     --     there is correct.
-    --   IsNightvisionActive / IsSeethroughActive -- NOT CONFIRMED TO EXIST
-    --     AS NATIVES AT ALL. No ext/native-decls page (404) AND no matching
-    --     entry in natives.json under any underscore-split reconstruction of
-    --     that name. The natives.json hash database's actual GETTERS for
-    --     this pair are GRAPHICS GET_USINGNIGHTVISION (hash
-    --     0x2202A3F42C8E5F79) and GRAPHICS GET_USINGSEETHROUGH (hash
+    --   IsNightvisionActive / IsSeethroughActive -- CONFIRMED DOES NOT EXIST
+    --     AS A NATIVE, EITHER ONE. No ext/native-decls page (404) AND no
+    --     matching entry in natives.json under any underscore-split
+    --     reconstruction of that name. The natives.json hash database's
+    --     actual GETTERS for this pair are GRAPHICS GET_USINGNIGHTVISION
+    --     (hash 0x2202A3F42C8E5F79) and GRAPHICS GET_USINGSEETHROUGH (hash
     --     0x44B80ABAB9D80BD3) -- which the CFX Lua native-name generator
-    --     (PascalCase of the underscore-split name) would expose as
+    --     (PascalCase of the underscore-split name) exposes as
     --     GetUsingnightvision() / GetUsingseethrough(), NOT
     --     IsNightvisionActive()/IsSeethroughActive(). Independently
     --     corroborated: alt:V's own natives typings
@@ -417,32 +496,38 @@ read_globals = {
     --     native database by a different vendor) declare
     --     `getUsingnightvision()` / `getUsingseethrough()`, not an
     --     "isNightvisionActive"/"isSeethroughActive" of any casing.
-    --     PRACTICAL IMPACT, confirmed by reading the call sites: because
-    --     these two names do not resolve to any registered native hash,
-    --     FXServer's native dispatch returns nil forever with nothing
-    --     logged (this file's own standing rule) whenever
-    --     client/vision.lua calls them. `IsThermalVisionActive()` (`return
-    --     IsSeethroughActive() == true`) and `IsNightVisionActive()`
-    --     (`return IsNightvisionActive() == true`) therefore ALWAYS return
-    --     false, regardless of the real engine state -- which in turn makes
-    --     `ToggleThermalVision()`'s `local turningOn = not
-    --     IsThermalVisionActive()` ALWAYS true, so that keybind can only
-    --     ever call SetSeethrough(true) and never turn thermal vision back
-    --     off (ToggleNightVision() has the identical bug), and makes the
-    --     maintenance thread's `while IsThermalVisionActive() or
-    --     IsNightVisionActive() do` loop exit before its first iteration,
-    --     so the death/access-loss/feature-block cleanup branches inside it
-    --     never run. tests/clientvision_spec.lua's sandbox stubs its OWN
-    --     fake IsSeethroughActive/IsNightvisionActive functions rather than
-    --     the real FXServer runtime, so the test suite passes despite this.
-    --     Kept in this allowlist (removing them would only turn this into a
-    --     generic "undefined global" lint warning, not fix the underlying
-    --     bug, which is out of scope for a lint-config change) -- but do NOT
-    --     treat their presence here as evidence they are real. The actual
-    --     fix belongs in client/vision.lua: read GetUsingnightvision()/
-    --     GetUsingseethrough() instead (re-verify signature/behaviour before
-    --     shipping that change; not independently exercised against a live
-    --     FXServer in this pass).
+    --
+    --     THE BUG THIS DESCRIBED HAS SINCE BEEN FIXED IN client/vision.lua,
+    --     RE-CONFIRMED BY A LATER INDEPENDENT PASS (2026-08-27, this same
+    --     day): `IsThermalVisionActive()`/`IsNightVisionActive()` -- this
+    --     resource's OWN capital-V-named wrapper functions, declared further
+    --     down this file's `globals` block, NOT natives themselves -- now
+    --     call `NativeReportsActive(GetUsingseethrough())`/
+    --     `NativeReportsActive(GetUsingnightvision())` (client/vision.lua,
+    --     right where this comment used to warn the fix still needed to
+    --     land), and the two fake names `IsNightvisionActive`/
+    --     `IsSeethroughActive` have ZERO live call sites left anywhere in
+    --     client/, server/, shared/ or tests/ -- every remaining occurrence
+    --     of either name (client/vision.lua's own header, tests/clienthud_spec.lua,
+    --     tests/clientvision_spec.lua) is inside a comment describing this
+    --     historical bug/fix, confirmed by direct search this pass. GetUsingnightvision/
+    --     GetUsingseethrough themselves were independently re-confirmed
+    --     against a freshly-fetched runtime.fivem.net/doc/natives.json this
+    --     same pass (same two hashes as above, no `apiset` key -> client-only,
+    --     matching client/vision.lua's own realm).
+    --
+    --     NEITHER FAKE NAME IS PRESENT IN THIS ALLOWLIST, and per this
+    --     file's own "REMOVE THIS ENTRY if the function is ever abandoned"
+    --     rule (see ForceRevertK9Appearance/SetEntityVisible above) neither
+    --     should be re-added unless a real call site returns -- an
+    --     allowlisted name that resolves to no registered native is exactly
+    --     the failure mode this whole file exists to catch, not paper over.
+    --     This entry is kept purely as the historical record of a real,
+    --     shipped, silent-nil bug (thermal/night vision could only ever turn
+    --     ON, never off, for as long as this went unnoticed) and its fix, so
+    --     a future reader does not have to rediscover either from scratch --
+    --     it documents two names that are CONFIRMED ABSENT, never two names
+    --     to allowlist.
     "SetNightvision", "GetUsingnightvision", "SetSeethrough", "GetUsingseethrough",
     -- DeployableKennel (client/kennel.lua, server/kennel.lua, Phase 5 R&D,
     -- qbx_k9unit/DEVELOPER_REFERENCE.md#phase-5-research) -- object creation/
@@ -507,26 +592,39 @@ read_globals = {
     -- (see ForceRevertK9Appearance/ApplyK9AppearanceDirect above) targets --
     -- restore this entry only alongside a real, live call site.
     --
-    -- IsPedRagdoll KEPT, but its server-side callability is NOT independently
-    -- re-confirmed by this pass beyond what server/combat.lua's own comment
-    -- already claims ("traced citizenfx/fivem's own C++ native-registration
-    -- list"). What this pass could confirm: it is a real native
-    -- (natives.json, PED namespace, IS_PED_RAGDOLL, hash
-    -- 0x47E4E977581C5B55, params (ped) -> BOOL; no `apiset` key in that
-    -- database, meaning client-only under this file's own established
-    -- reading of that field);
-    -- it has no ext/native-decls page (404, not proof of absence); and it is
-    -- NOT part of ext/natives/rpc_spec_natives.lua's server-RPC setter list
-    -- (not conclusive either way for a GETTER -- that file only covers
-    -- state-mutating natives routed to the owning client). It has one live
-    -- server call site: server/combat.lua's IsTargetDowned NPC branch
+    -- IsPedRagdoll -- CONFIRMED server-callable, INDEPENDENTLY, THIS PASS
+    -- (2026-08-27), closing the gap the paragraph below used to leave open.
+    -- Client-side reality first, unchanged from before: it is a real native
+    -- (natives.json, PED namespace, IS_PED_RAGDOLL, hash 0x47E4E977581C5B55,
+    -- params (ped) -> BOOL; no `apiset` key in that database, meaning
+    -- client-only under this file's own established reading of that field
+    -- WHEN THAT IS ALL YOU HAVE); it has no ext/native-decls page (404, not
+    -- proof of absence). What THIS pass adds: raw-fetched
+    -- code/components/citizen-server-impl/src/state/ServerGameState_Scripting.cpp
+    -- (citizenfx/fivem, master) directly -- the same file server/kennel.lua's
+    -- own GetEntityForwardVector finding below already established as the
+    -- authoritative list of which GET_ENTITY_*/IS_PED_* natives FXServer
+    -- registers a real handler for -- and found, at the line registering it:
+    -- `RegisterNativeHandler("IS_PED_RAGDOLL", makeEntityFunction([...]
+    -- { auto movementGroup = entity->syncTree->GetPedMovementGroup(); return
+    -- movementGroup ? movementGroup->isRagdolling : false; }))`. This is a
+    -- REAL, working server-side implementation reading the synced entity's
+    -- own movement-group state -- not a stub, not the
+    -- `s_invalidNativeHandler` no-op the GetEntityForwardVector finding
+    -- below documents for an unregistered GET_ENTITY_* native. IsPedRagdoll
+    -- is therefore CONFIRMED EXISTS, server apiset, on top of its
+    -- already-established client-only-per-natives.json reading -- this is
+    -- one of the natives.json database's "no apiset key" entries where that
+    -- field's absence does NOT mean client-only, matching this file's own
+    -- GetEntitySpeed precedent above (also a base-game client native with a
+    -- SEPARATE, later-added FXServer registration natives.json's own
+    -- `apiset` field never learned to describe). Confirmed real call site:
+    -- server/combat.lua's IsTargetDowned NPC branch
     -- (`GetEntityHealth(targetPed) <= PED_DEAD_HEALTH_THRESHOLD or
-    -- IsPedRagdoll(targetPed)`). If IsPedRagdoll turns out to share
-    -- IsPedDeadOrDying's fate (no server registration), that OR silently
-    -- degrades to just the health check -- a real ragdolled-but-not-dead NPC
-    -- would stop being recognised as "downed" for PropDragging, with nothing
-    -- logged. Recommend confirming this against a live FXServer (print the
-    -- return value from a known-ragdolled NPC) before relying on it further.
+    -- IsPedRagdoll(targetPed)`) -- that OR's second branch is now known-live,
+    -- not merely hoped-live; no live-FXServer print-test is needed to trust
+    -- it further, since the C++ source itself is the primary source and
+    -- leaves nothing to a runtime guess.
     "NetworkRequestControlOfEntity", "IsPedRagdoll",
     -- Server-side implicit global inside event handlers
     "source",
@@ -604,42 +702,42 @@ read_globals = {
     --   GetResourceKvpString -- ext/native-decls page 404s. Confirmed
     --     instead against the primary C++ registration list itself
     --     (citizenfx/fivem, master,
-    --     code/components/citizen-resources-client/src/KVScriptFunctions.cpp,
-    --     fetched this session): `RegisterNativeHandler("GET_RESOURCE_KVP_STRING",
+    --     code/components/citizen-resources-client/src/KVScriptFunctions.cpp):
+    --     `RegisterNativeHandler("GET_RESOURCE_KVP_STRING",
     --     GetResourceKvp<const char*>)`, in the CLIENT resource component
     --     (the file path itself says so), matching this native's one call
-    --     site (client/hud.lua, a client file).
+    --     site (client/hud.lua, a client file). INDEPENDENTLY RE-FETCHED AND
+    --     RE-CONFIRMED 2026-08-27 (a later, separate verification pass, not
+    --     taken on the strength of the paragraph above): raw-fetched that
+    --     exact file from citizenfx/fivem master this session and grepped
+    --     its own `RegisterNativeHandler` calls directly -- line 575 reads
+    --     `RegisterNativeHandler("GET_RESOURCE_KVP_STRING",
+    --     GetResourceKvp<const char*>)`, verbatim. This is precisely the
+    --     "symmetry is not verification" check this repo's own history
+    --     shows is worth re-running even when a prior pass already did it:
+    --     the getter and setter are NOT a symmetric pair (see immediately
+    --     below), so confirming one is real says nothing about the other.
     --
-    --   SET_RESOURCE_KVP_STRING -- DOES NOT EXIST, CONFIRMED BY READING THE
-    --     SAME PRIMARY SOURCE LINE-BY-LINE, and deliberately NOT added here
-    --     even though client/hud.lua currently calls a `SetResourceKvpString`
-    --     of that exact spelling (this file's two write call sites,
-    --     MarkDurablyOpenedTablet/MarkDurablyDismissedHint). The real
-    --     registrations in that same KVScriptFunctions.cpp block are
-    --     `SET_RESOURCE_KVP` (the string-taking overload --
-    --     `SetResourceKvp<const char*>`), `SET_RESOURCE_KVP_INT` and
-    --     `SET_RESOURCE_KVP_FLOAT` -- there is no "_STRING"-suffixed setter
-    --     to mirror the getter's own GET_RESOURCE_KVP_STRING; the setter's
-    --     unsuffixed base name already means "string". This is the SAME
-    --     shape as this file's own already-documented
-    --     IsNightvisionActive/IsSeethroughActive finding above: an
-    --     unregistered name returns nil forever with nothing logged on
-    --     FXServer *and* the FiveM client runtime alike, so every call this
-    --     file makes to persist "already seen this hint"/"already opened the
-    --     tablet once" silently writes nothing -- the paired
-    --     GetResourceKvpString reads back nil every time (never `'1'`), so
-    --     HasDurablyOpenedTablet/HasDurablyDismissedHint can never return
-    --     true and the hint can never durably remember being dismissed or
-    --     the tablet being opened, across a reconnect or otherwise. Not
-    --     fixed here (out of scope for a lint-config change, and this file
-    --     is still being actively written elsewhere) -- flagged so it is not
-    --     rediscovered from scratch, and deliberately NOT allowlisted, per
-    --     this file's own standing rule: an allowlist entry for a name that
-    --     does not exist is how exactly this bug hides from luacheck.
-    -- REMOVE the two-native comment above (but re-verify before removing
-    -- IsControlJustPressed/GetResourceKvpString themselves) once
-    -- SetResourceKvpString is corrected to SetResourceKvp and this note is
-    -- superseded.
+    --   SET_RESOURCE_KVP_STRING -- CONFIRMED DOES NOT EXIST, by the same
+    --     direct read of that same file (both the original pass and the
+    --     2026-08-27 re-fetch above): the registrations in that
+    --     KVScriptFunctions.cpp block are `SET_RESOURCE_KVP` (the
+    --     string-taking overload -- `SetResourceKvp<const char*>`),
+    --     `SET_RESOURCE_KVP_INT` and `SET_RESOURCE_KVP_FLOAT` -- there is no
+    --     "_STRING"-suffixed setter to mirror the getter's own
+    --     GET_RESOURCE_KVP_STRING; the setter's unsuffixed base name already
+    --     means "string". THE BUG THIS ONCE DESCRIBED IS FIXED: client/hud.lua's
+    --     MarkDurablyOpenedTablet/MarkDurablyDismissedHint now call
+    --     `SetResourceKvp(...)` (confirmed by reading that file directly,
+    --     2026-08-27), not the invented `SetResourceKvpString` this comment
+    --     used to warn about -- SetResourceKvp is allowlisted above,
+    --     alongside GetResourceKvpString's own original verification entry.
+    --     SET_RESOURCE_KVP_STRING remains deliberately UN-allowlisted, same
+    --     "an allowlist entry for a name that does not exist is how exactly
+    --     this bug hides from luacheck" reasoning as the IsNightvisionActive/
+    --     IsSeethroughActive entry above -- kept here purely as the
+    --     historical record of a real, shipped, silent-write bug and its
+    --     fix, not as a name to ever re-add.
     "IsControlJustPressed", "GetResourceKvpString",
 }
 

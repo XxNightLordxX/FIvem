@@ -36,21 +36,28 @@
     aid" precedent, extended here to a ped for the first time in this
     resource.
 
-    A CONSEQUENCE WORTH STATING EXPLICITLY: because the reveal is never
-    networked, only the FINDING player's own client ever sees it -- no
-    other nearby player, however close, will see the rescued hiker/found
-    item appear. That is a real, disclosed trade-off (PROJECT_HISTORY.md's own
-    "a short visual effect on one specific player's own screen" precedent,
-    client/screenfx.lua) chosen deliberately over the alternative (a real,
-    networked, claimed-and-tracked entity everyone could see), because the
-    alternative reintroduces exactly the entity-lifecycle risk this whole
-    feature exists to avoid, for a purely cosmetic payoff. A future pass
-    that wants a shared multiplayer reveal moment would need to do that
-    properly (client creates, networks, reports the netId to
-    server/sarcalls.lua, server claims it via server/entities.lua's shared
-    registry, server owns its cleanup with the same rigor kennel/fetch/
-    propattachment already do) -- not attempted here, and not a small
-    addition on top of this file, a structurally different feature.
+    A CONSEQUENCE WORTH STATING EXPLICITLY, UPDATED BY "SHARED FOUND MARKER"
+    BELOW: because the reveal is never networked, only the FINDING player's
+    own client ever sees the actual ped/prop appear -- no other member,
+    however close, will see the rescued hiker/found item itself. That part
+    is UNCHANGED by this pass and remains a real, disclosed trade-off
+    (PROJECT_HISTORY.md's own "a short visual effect on one specific
+    player's own screen" precedent, client/screenfx.lua) chosen deliberately
+    over the alternative (a real, networked, claimed-and-tracked entity
+    everyone could see), because the alternative reintroduces exactly the
+    entity-lifecycle risk this whole feature exists to avoid, for a purely
+    cosmetic payoff. A future pass that wants every member to see the SAME
+    rescued hiker/found item, as an entity, would need to do that properly
+    (client creates, networks, reports the netId to server/sarcalls.lua,
+    server claims it via server/entities.lua's shared registry, server owns
+    its cleanup with the same rigor kennel/fetch/propattachment already do)
+    -- not attempted here, and not a small addition on top of this file, a
+    structurally different feature. What THIS pass adds instead is a
+    strictly smaller, categorically different thing: see "SHARED FOUND
+    MARKER" below -- every member of a resolved call (not "any nearby
+    player," only genuine call members) now gets a plain DrawMarker cue at
+    the real target coordinates, which is not an entity at all and carries
+    none of the above risk.
 
     ======================================================================
     HOW THE FEEDBACK WORKS, AND WHY IT DIFFERS FROM client/scenttrail.lua's
@@ -96,6 +103,58 @@
     the felt cue here is WHICH sound plays and WHEN, not its volume.
 
     ======================================================================
+    SHARED FOUND MARKER (this pass) -- see server/sarcalls.lua's own header
+    section of the same name for why sending `targetX`/`targetY` on the
+    sarCallEnded push, ONLY once a call has genuinely resolved, does not
+    reopen that file's own "WHY THE TARGET COORDINATE NEVER CROSSES THE
+    WIRE" guarantee. This file's own half is ShowFoundMarker below: a plain,
+    per-frame DrawMarker call, categorically different from ShowReveal
+    immediately above it in every way that matters for the "ghost-entity"
+    concern this feature's own header opens with --
+
+      * NO CreatePed/CreateObject call of any kind -- DrawMarker creates
+        NOTHING: no entity, no handle, no netId, nothing for THIS file's own
+        cleanup (ClearReveal/onResourceStop) or any OTHER feature's
+        cleanup/claim logic (server/entities.lua's ClaimNetworkEntity/
+        ResolveNetworkEntity registry) to ever reference, resolve, or
+        mistakenly delete. There is no lifecycle here to get wrong, because
+        there is no created thing.
+      * FIRES FOR EVERY MEMBER of a resolved call (reason == 'found' OR
+        'found_by_teammate'), unlike ShowReveal, which stays FINDER-ONLY and
+        is UNCHANGED by this pass -- see the sarCallEnded handler below:
+        ShowReveal is still called from the 'found' branch alone;
+        ShowFoundMarker is called from BOTH.
+      * DRAWN AT THE REAL TARGET COORDINATES (`call.targetX`/`call.targetY`,
+        now carried on the push -- see server/sarcalls.lua's own header),
+        never at "wherever this client happens to be standing" the way
+        ShowReveal's own offset-from-own-ped math necessarily is (that math
+        is a DELIBERATE approximation for the finder alone, since the
+        finder's own position IS, by construction, within
+        Config.SARCalls.arrivalRadius of the real target -- a teammate
+        standing elsewhere has no such guarantee, which is exactly why this
+        pass needed the real coordinate at all).
+      * Z IS APPROXIMATED, NOT SERVER-SUPPLIED -- server/sarcalls.lua never
+        tracks a Z coordinate for the hidden target at all (see that file's
+        own "WHY 2D" header section); ShowFoundMarker below reads THIS
+        client's own current Z, every frame, as a stand-in. A DISCLOSED
+        LIMITATION, same honesty as that file's own 2D-only math: a member
+        far from the find, on a genuinely different floor/elevation, sees
+        the marker rendered at THEIR OWN height rather than the real one --
+        acceptable for a short-lived cosmetic cue whose X/Y is exactly
+        correct, not claimed to be pixel-perfect in three dimensions.
+      * BOUNDED BY A LOCAL COUNTER, NOT BY REAL ELAPSED TIME -- mirrors
+        LoadModelWithTimeout's own already-established "increment a local
+        `elapsed` by a fixed step per Wait(), compare that counter, never
+        GetGameTimer()" idiom (see that function above), so the loop
+        terminates deterministically after a fixed number of iterations
+        regardless of whether the runtime the loop executes under actually
+        makes Wait() sleep for real. HONEST CONFIDENCE GRADING: the 50ms
+        draw cadence, marker type, scale and colour below are a first-pass
+        judgment call (this feature's own established "budget real
+        playtesting time" caution, PROJECT_HISTORY.md §2/§3, applies here
+        too), not verified against a live client for how it actually reads
+        on-screen this session.
+    ======================================================================
     NATIVE VERIFICATION -- CreatePed, the one native in this whole feature
     that is new to this resource (client or server): ext/native-decls/
     CreatePed.md 404s -- a legacy R* native with no CFX decl page, which
@@ -127,7 +186,13 @@
     NetworkGetNetworkIdFromEntity, GetGameTimer, CreateThread, Wait) is
     already allowlisted in the repo-root .luacheckrc read_globals list from
     this resource's existing usage elsewhere -- no fresh verification
-    needed for any of them.
+    needed for any of them. DrawMarker and GetEntityCoords (ShowFoundMarker
+    below, "SHARED FOUND MARKER" this pass) are likewise both ALREADY
+    allowlisted in that same list from this resource's existing usage
+    elsewhere (client/bonetool.lua's own sweep-preview marker for
+    DrawMarker; ubiquitous elsewhere in this resource for GetEntityCoords)
+    -- new to THIS file, not new to the resource, so no .luacheckrc change
+    was needed for this pass.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT (server side: server/sarcalls.lua, restated
@@ -151,10 +216,14 @@
        [RegisterNetEvent, server -> this caller's client only, never
        broadcast]
     6. 'qbx_k9unit:client:sarCallEnded' (reason: string, callType: string?,
-       callId: number) [RegisterNetEvent, server -> this caller's client
-       only] -- `reason` can now also be 'found_by_teammate' (see "TWO
-       OFFICERS, ONE CALL" below): treated exactly like 'timeout'/
-       'abandoned' below (state resets, no reveal), never like 'found'.
+       callId: number, targetX: number?, targetY: number? [present iff
+       reason == 'found'|'found_by_teammate' -- see "SHARED FOUND MARKER"
+       above]) [RegisterNetEvent, server -> this caller's client only] --
+       `reason` can now also be 'found_by_teammate' (see "TWO OFFICERS, ONE
+       CALL" below): state resets exactly like 'timeout'/'abandoned', and
+       (this pass) ShowFoundMarker still fires for it, but the FINDER-ONLY
+       entity reveal (ShowReveal/K9Sit/the found Bark_Alert) never does --
+       only the 'found' branch reaches those three.
     7. 'qbx_k9unit:client:sarCallJoined' (callId: number, initialTier: string)
        [RegisterNetEvent, server -> the newly-accepted joiner's client only]
        -- see "TWO OFFICERS, ONE CALL" below.
@@ -620,6 +689,79 @@ local function ShowReveal(callType)
     end)
 end
 
+-- ======================================================================
+-- SHARED FOUND MARKER -- see this file's header section of the same name
+-- for the full design writeup. Categorically unlike ShowReveal above: no
+-- entity, no handle, no netId, nothing created at all -- a plain per-frame
+-- DrawMarker call, which is why this is safe to fire for EVERY member of a
+-- resolved call, not only the finder.
+-- ======================================================================
+
+-- Marker constants -- plain locals, not Config, same "a cosmetic tuning
+-- knob nobody has asked to reconfigure yet" posture this resource already
+-- uses for client/bonetool.lua's own MARKER_TYPE/MARKER_SCALE/MARKER_COLOR
+-- (that file's dev-tool sweep marker, the only other DrawMarker call site in
+-- this resource). Type 1 ("cylinder-ish" marker) and the green tint are
+-- reused for the same "a simple, readable 'here' indicator" reason that
+-- file's own header gives, deliberately distinct from that file's red
+-- debug tint so the two are never confused if both happen to be visible at
+-- once.
+local FOUND_MARKER_TYPE = 1
+local FOUND_MARKER_SCALE = 2.0
+local FOUND_MARKER_COLOR = { r = 60, g = 220, b = 120, a = 160 }
+
+-- Fixed per-iteration step, not GetGameTimer()-measured elapsed time --
+-- same BOUNDED-LOOP idiom LoadModelWithTimeout above already establishes
+-- (increment a local counter by a fixed amount every Wait(), compare THAT
+-- counter, never real elapsed time) so this loop terminates deterministically
+-- after a fixed number of iterations regardless of whether the runtime
+-- executing it makes Wait() actually sleep -- see this file's header "SHARED
+-- FOUND MARKER" section for why that property matters.
+local FOUND_MARKER_DRAW_STEP_MS = 50
+
+--- @type number -- staleness token for the found-marker's own draw loop,
+--- same shape/reasoning as revealGeneration above -- a NEWER call resolving
+--- (this client finding, or being told about, a second call before the
+--- first marker's own duration has elapsed) must stop the OLD marker's own
+--- loop rather than let two markers draw over each other indefinitely.
+local foundMarkerGeneration = 0
+
+--- Draws a transient, non-entity marker at (x, y) for
+--- Config.SARCalls.revealDurationMs -- the SAME duration ShowReveal's own
+--- entity uses, so both halves of a resolved call's visual feedback expire
+--- together. Silently no-ops on a missing/non-number coordinate (a stale or
+--- back-compat push carrying neither) -- this resource's own established
+--- "a missing cosmetic input degrades to nothing, never to an error"
+--- posture, same as ShowReveal's own model-load-failure branches above.
+--- @param x number?
+--- @param y number?
+local function ShowFoundMarker(x, y)
+    if type(x) ~= 'number' or type(y) ~= 'number' then return end
+
+    foundMarkerGeneration = foundMarkerGeneration + 1
+    local myGeneration = foundMarkerGeneration
+
+    CreateThread(function()
+        local elapsed = 0
+        while myGeneration == foundMarkerGeneration and elapsed < tuning.revealDurationMs do
+            -- Z is APPROXIMATED from this client's own live position, read
+            -- fresh every iteration -- server/sarcalls.lua never tracks one
+            -- for the hidden target at all -- see this file's header "SHARED
+            -- FOUND MARKER" for the full disclosed-limitation writeup.
+            local myPos = GetEntityCoords(PlayerPedId())
+            DrawMarker(
+                FOUND_MARKER_TYPE, x, y, myPos.z,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                FOUND_MARKER_SCALE, FOUND_MARKER_SCALE, FOUND_MARKER_SCALE,
+                FOUND_MARKER_COLOR.r, FOUND_MARKER_COLOR.g, FOUND_MARKER_COLOR.b, FOUND_MARKER_COLOR.a,
+                false, false, 2, false, nil, nil, false
+            )
+            Wait(FOUND_MARKER_DRAW_STEP_MS)
+            elapsed = elapsed + FOUND_MARKER_DRAW_STEP_MS
+        end
+    end)
+end
+
 --- Plays one one-shot sound against THIS client's own ped's own netId --
 --- see this file's header "HOW THE FEEDBACK WORKS" for why gain is always
 --- 1.0 here and that is intentional. Silently no-ops (never errors) if
@@ -691,7 +833,7 @@ RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier, callId)
     HandleHintTierPush(tier)
 end)
 
-RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, callId)
+RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, callId, targetX, targetY)
     if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
     if not IsForCurrentSarCall(callId) then return end -- a late echo of a call this client already left behind (see header "STALE-SESSION RACE") -- must NOT clobber a newer session's own state
 
@@ -710,13 +852,22 @@ RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, ca
         PlayOwnPedSound('Bark_Alert')
         if type(K9Sit) == 'function' then K9Sit() end
         ShowReveal(callType)
+        ShowFoundMarker(targetX, targetY) -- SHARED FOUND MARKER (this pass) -- see this file's header; fires ALONGSIDE the finder-only entity reveal above, not instead of it
+    elseif reason == 'found_by_teammate' then
+        -- SHARED FOUND MARKER (this pass): a teammate who did not cross
+        -- arrivalRadius themselves still gets a real, shared, in-world cue
+        -- that the search is over and where it ended -- see this file's
+        -- header "SHARED FOUND MARKER" for exactly why this is safe to
+        -- widen (no entity, ever) while ShowReveal/K9Sit/the found
+        -- Bark_Alert above deliberately stay FINDER-ONLY, unchanged by this
+        -- pass -- see this file's header "TWO OFFICERS, ONE CALL".
+        ShowFoundMarker(targetX, targetY)
     end
-    -- 'timeout'/'abandoned'/'found_by_teammate': server/sarcalls.lua's own
-    -- NotifyPlayer call already told the player what happened; nothing
-    -- further to do here. 'found_by_teammate' deliberately falls through
-    -- to here rather than the 'found' branch above -- see this file's
-    -- header "TWO OFFICERS, ONE CALL": only the member whose OWN position
-    -- actually crossed arrivalRadius ever gets the local reveal.
+    -- 'timeout'/'abandoned': server/sarcalls.lua's own NotifyPlayer call
+    -- already told the player what happened; nothing further to do here --
+    -- neither reason ever carries a target coordinate at all (the call
+    -- never resolved as found), so there is nothing for ShowFoundMarker to
+    -- draw even if it were called.
 end)
 
 --- Step 1 of the join consent handshake, self-initiated side. Does NOT

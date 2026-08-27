@@ -212,13 +212,18 @@
        comment. callId added -- see "STALE-SESSION RACE" below.
     6. 'qbx_k9unit:client:sarCallEnded' (reason: ('found'|'found_by_teammate'|
        'timeout'|'abandoned'), callType: ('person'|'property')? [only
-       meaningful when reason == 'found'], callId: number)
+       meaningful when reason == 'found'], callId: number, targetX: number?,
+       targetY: number? [present iff reason == 'found'|'found_by_teammate'
+       -- see "SHARED FOUND MARKER" below])
        [TriggerClientEvent, THIS FILE only ever SENDS this, to one member's
        own client at a time] -- the one and only signal telling
        client/sarcalls.lua to run its own local cosmetic reveal (reason ==
        'found' only -- see "TWO OFFICERS, ONE CALL" below for why
-       'found_by_teammate' deliberately never triggers one). callId added
-       -- see "STALE-SESSION RACE" below.
+       'found_by_teammate' deliberately never triggers the FINDER-ONLY
+       entity reveal) and/or its own shared found-MARKER (reason == 'found'
+       OR 'found_by_teammate' -- see "SHARED FOUND MARKER" below, added this
+       pass, for exactly what widened and what deliberately did not).
+       callId added -- see "STALE-SESSION RACE" below.
     7. 'qbx_k9unit:client:sarCallJoined' (callId: number, initialTier: string)
        [TriggerClientEvent, THIS FILE only ever SENDS this, to the newly-
        accepted joiner's own client only] -- see "TWO OFFICERS, ONE CALL"
@@ -440,14 +445,84 @@
     arrivalRadius (`finderSrc`) and treats them differently from every
     other current member purely for FEEDBACK, never for reward -- only the
     finder gets reason == 'found' (which triggers client/sarcalls.lua's own
-    local cosmetic reveal AT THAT CLIENT'S OWN POSITION, since only the
-    finder is actually standing where the target was). Every OTHER member
-    gets reason == 'found_by_teammate' instead -- their own state resets
-    the same way, but no reveal ever spawns at THEIR position, since they
-    are not standing anywhere near the real target and a reveal there would
-    misrepresent what just happened. Both branches are IN EndSarCall below,
-    never a separate code path, so both inherit the exact same "one
-    resolution, notify everyone once" discipline.
+    FINDER-ONLY entity-level reveal AT THAT CLIENT'S OWN POSITION, since only
+    the finder is actually standing where the target was). Every OTHER
+    member gets reason == 'found_by_teammate' instead -- their own state
+    resets the same way, and (see "SHARED FOUND MARKER" immediately below,
+    this pass) now also sees a shared, non-entity marker at the real target
+    coordinates, but the entity-level reveal never spawns at THEIR position,
+    since they are not standing anywhere near the real target and a spawned
+    ped/prop there would misrepresent what just happened. Both branches are
+    IN EndSarCall below, never a separate code path, so both inherit the
+    exact same "one resolution, notify everyone once" discipline.
+
+    ======================================================================
+    SHARED FOUND MARKER (this pass -- closes the resource's own recorded
+    limitation, KNOWN_ISSUES.md's "Search-and-rescue 'found' reveal is
+    visible only to the officer who found it," which predates "TWO
+    OFFICERS, ONE CALL" and was written back when a call had exactly one
+    officer to begin with). Now that a call can have several genuinely
+    searching MEMBERS, a member who never sees any signal that the search is
+    over would otherwise keep hunting a target that no longer exists --
+    EXCEPT that was already NOT true even before this pass: every member,
+    finder or not, was already unconditionally sent 'qbx_k9unit:client:
+    sarCallEnded' (see the loop over `call.members` above, present since
+    "TWO OFFICERS, ONE CALL" first shipped), which already resets that
+    client's own `sarCallActive` and shows a real NotifyPlayer toast
+    ('sar.found_by_teammate') -- nobody was ever left silently hunting a
+    resolved call. What was genuinely still true one-officer-shaped: the
+    VISUAL payoff (see client/sarcalls.lua's own "WHY THE REVEAL IS NEVER
+    NETWORKED" header section) landed on the finder's own screen alone, with
+    nothing for anyone else to look at or walk toward.
+
+    THE ENTITY-LEVEL REVEAL STAYS FINDER-ONLY. UNCHANGED, ON PURPOSE. That
+    reveal's own "ghost-entity" concern (client/sarcalls.lua's header,
+    predating this pass) is about a client rendering an entity it does not
+    itself hold a live, correctly-scoped handle for -- and this file's own
+    entity history (kennel's arbitrary-entity-deletion bug, propattachment's
+    netId race, both named in this file's own opening header) is exactly
+    that failure mode: a piece of code holding a reference to, or an
+    identity for, an entity it does not fully own the lifecycle of. Widening
+    ShowReveal's own CreatePed/CreateObject call to fire on every member's
+    own client would mean EVERY member spawns their OWN separate, unrelated,
+    equally non-networked ped/prop, at THEIR OWN current position (never the
+    real target's, since that coordinate was never sent to them before this
+    pass either) -- which is not "the team sees one shared find," it is
+    "every member sees an unrelated stand-in appear at their own feet,"
+    strictly worse than doing nothing, not better. Networking the entity
+    instead (spawn once, report the netId, have this file claim and own it
+    via server/entities.lua the way kennel/fetch/propattachment already do)
+    would be a structurally different feature -- a real, tracked, claimed
+    entity with its own cleanup obligations -- exactly the risk class this
+    whole feature's own header states, up front, it exists to avoid for a
+    purely cosmetic payoff. NOT ATTEMPTED HERE. See client/sarcalls.lua's
+    own header for the confirmation that ShowReveal's call sites are
+    unchanged by this pass.
+
+    THE ANSWER: everything BELOW the entity is safe to share, because none
+    of it is an entity at all. This pass adds `call.targetX`/`call.targetY`
+    -- the SAME two numbers this file's own "WHY THE TARGET COORDINATE
+    NEVER CROSSES THE WIRE" header section above says must never cross the
+    wire -- to the sarCallEnded push, for EVERY member, on BOTH the 'found'
+    and 'found_by_teammate' branches below. This is NOT a reversal of that
+    section's own reasoning, because the reasoning was scoped to WHILE THE
+    CALL IS STILL ACTIVE: the whole point of never sending the coordinate
+    earlier is that a modified client could read it once and skip straight
+    to the target, bypassing the entire hot/cold mechanic this feature
+    exists to be. By the time EndSarCall runs for reason == 'found', the
+    mechanic is already over -- the finder already solved it by genuinely
+    closing the distance, and every OTHER member has already lost whatever
+    "advantage" reading this coordinate now could possibly grant, because
+    there is nothing left to search for. Sending it here costs the mechanic
+    nothing and buys client/sarcalls.lua's own ShowFoundMarker (its header,
+    same section name) the one thing it needs: a real, shared, in-world
+    coordinate for a DrawMarker-only, per-frame-rendered, never-created,
+    never-networked, nothing-for-anyone's-cleanup-logic-to-ever-reference
+    visual cue -- see that file's own header for exactly why a marker (a
+    pure render call, no entity, no handle, no netId) is categorically
+    unlike CreatePed/CreateObject and cannot reintroduce the ghost-entity
+    bug class no matter how many clients receive it.
+    ======================================================================
 
     ONE CITIZENID, ONE CALL, IN EITHER ROLE, AT A TIME: `MemberToCallId[src]
     = callId` is the reverse index every entry point below (requestSarCall,
@@ -467,6 +542,108 @@
     termination path in this resource. See "NO UNBOUNDED TRAP" above; this
     section extends that guarantee to every member of a call, not only its
     original owner.
+
+    ======================================================================
+
+    STALE JOIN-REQUEST FIX (RED-TEAM PASS -- found live, not present when
+    "TWO OFFICERS, ONE CALL" first shipped): PendingSarJoinRequests entries
+    used to be cleared in exactly two places -- consumed inside
+    respondJoinSarCall once answered, and playerDropped's own two-directional
+    scan on a genuine disconnect. Neither one ran when a member left a call
+    VOLUNTARILY (abandonSarCall, reaching RemoveMemberFromSarCall while
+    still fully connected), which is the ordinary, expected way an officer
+    stops a call -- not an edge case.
+
+    THE BUG, CONCRETELY: officer A owns call C1. Officer B sends
+    requestJoinSarCall naming A -- PendingSarJoinRequests[A] = { from = B,
+    ... } and A's client shows the accept/decline prompt. Before answering,
+    A calls abandonSarCall -- C1 ends via RemoveMemberFromSarCall, but the
+    pending entry survives (A never disconnected, so playerDropped's own
+    scan never ran). A starts a brand-new call, C2. A then taps Accept on
+    the dialog still sitting on their screen from BEFORE C1 ended.
+    respondJoinSarCall finds the entry still genuine and unexpired,
+    re-validates via CheckSarJoinEligibility (which, correctly, resolves
+    MemberToCallId[A] to whatever A is a member of RIGHT NOW -- there is no
+    way for that function to know the request was made "about" a call that
+    no longer exists), and seats B into C2 -- a call B never asked to help
+    with, off a prompt that named a call that had already ended by the time
+    B was added. `respondJoinSarCall` did exactly what it was asked; the bug
+    is that it was asked the wrong question, because nothing ever
+    invalidated a still-pending request when the party it named stopped
+    being reachable through the call it was actually about.
+
+    THE FIX: RemoveMemberFromSarCall now also clears any PendingSarJoinRequests
+    entry naming `src`, in EITHER direction (`src` as the pending TARGET, the
+    scenario above; `src` as the pending REQUESTER -- an officer who asked to
+    join, then abandoned some OTHER call they happened to also be a member of
+    in between asking and being answered, whose now-stale request should not
+    silently seat them somewhere later either) -- via
+    ClearPendingSarJoinRequestsFor, the same two-directional scan
+    playerDropped already performed, extracted into a shared helper so both
+    call sites stay byte-for-byte identical rather than two copies that can
+    drift. Called UNCONDITIONALLY at the top of RemoveMemberFromSarCall,
+    before either early-return -- see "NO UNBOUNDED TRAP"/this section's own
+    "NOT A TERMINATION-PATH CHANGE" framing below: this is cleanup work
+    riding along an already-unconditional path, never a new gate on it.
+    playerDropped's own call to the same helper is now technically redundant
+    with RemoveMemberFromSarCall's copy for a disconnecting member (RemoveMemberFromSarCall
+    already ran for them, above), but is INTENTIONALLY KEPT, unconditionally,
+    for the case RemoveMemberFromSarCall is never reached at all: a source
+    with a pending request who is not currently a member of ANY call (e.g. an
+    officer who sent requestJoinSarCall and disconnects before ever being
+    answered). Both copies are idempotent (repeated nil-assignment), so the
+    overlap for the "was a member, then disconnected" case costs nothing.
+
+    NOT A TERMINATION-PATH CHANGE: this fix only ever REMOVES stale state
+    that could otherwise be misread later -- it adds no new check that could
+    ever block or delay abandonSarCall, playerDropped, or any other
+    termination path from doing its own job. A source with no pending
+    request at all sees zero behavioral difference.
+
+    ======================================================================
+
+    JOIN-ELIGIBILITY CHECK ORDERING FIX (RED-TEAM PASS -- a narrow
+    information-leak, not a correctness bug): CheckSarJoinEligibility used
+    to resolve call ownership (`MemberToCallId[targetSrc]`/`targetCall.ownerSrc
+    ~= targetSrc` -> 'invalid_target') BEFORE the proximity check
+    (`too_far`). GetPlayerPed(targetSrc) succeeding only requires the named
+    target to be ONLINE somewhere on the server, not anywhere near the
+    requester -- so any citizenid with genuine, un-blocked K9 access could
+    aim requestJoinSarCall at an arbitrary online server id from across the
+    map and read the DIFFERENCE between 'invalid_target' ("that officer is
+    not running a call right now") and 'too_far' ("they are, but you are not
+    close enough") as a free, standing signal of whether a specific named
+    officer currently has an active search running -- no position, call
+    type, or hidden-target bearing leaks, but this file's own "WHY THE
+    TARGET COORDINATE NEVER CROSSES THE WIRE" section's whole premise is
+    that nothing about a call should be readable by a non-member at all, and
+    this was a real, if narrow, hole in that premise the check ORDER opened
+    by accident.
+
+    THE FIX: the proximity check now runs FIRST, ahead of ownership
+    resolution -- a requester who is not within joinProximityMeters of
+    targetSrc gets 'too_far' regardless of whether targetSrc turns out to
+    own a call, is a mere non-owner member of one, or has no call at all,
+    collapsing the three into one answer for anyone too far away to have
+    ever been a legitimate joiner in the first place. THE CARE THIS ORDER
+    CHANGE NEEDS: a genuinely NEARBY requester targeting someone with no
+    call (or a non-owner member) must still see the HONEST answer,
+    'invalid_target', not 'too_far' -- a proximity check that runs first but
+    is otherwise unchanged (still just Distance3D against targetSrc's own
+    live position) produces exactly that: nearby -> proximity check passes
+    -> falls through to ownership resolution -> 'invalid_target' for a real
+    non-owner/no-call target, same as before this pass. Only a requester who
+    is BOTH far away AND targeting a non-call-owner now gets 'too_far'
+    instead of 'invalid_target' -- a strictly LESS informative answer for
+    that one combination, never a wrong one: 'too_far' remains true in that
+    case (they are, in fact, too far, independent of whatever targetSrc is
+    or is not doing), it is just no longer the MOST specific true answer,
+    which is the entire point -- a distant caller can no longer distinguish
+    "no call" from "call, but I'm too far" for someone they are not actually
+    close enough to legitimately join either way. Proximity is now checked
+    against targetSrc's own live position in every case, ownership or not,
+    which is unchanged from before this pass -- only the ORDER of the two
+    checks moved.
 
     ======================================================================
 
@@ -851,6 +1028,26 @@ local MemberToCallId = {}
 -- identical anti-clobber rejection those two files already established.
 local PendingSarJoinRequests = {}
 
+--- Clears any pending join request naming `src` as either party -- `src` as
+--- the pending TARGET (a request aimed AT src, whether or not src has
+--- answered it yet) and `src` as the pending REQUESTER (a request src sent,
+--- naming someone else, not yet answered). Idempotent -- a harmless no-op
+--- in either or both directions if no such entry exists. Shared by
+--- RemoveMemberFromSarCall (below -- see that function's own "STALE
+--- JOIN-REQUEST FIX" reference) and playerDropped (below), so the two call
+--- sites can never drift into two different definitions of "clear a stale
+--- pending entry" -- see this file's header "STALE JOIN-REQUEST FIX" for
+--- the concrete bug this closes.
+--- @param src number
+local function ClearPendingSarJoinRequestsFor(src)
+    PendingSarJoinRequests[src] = nil -- target-side: a request aimed AT src
+    for targetSrc, pending in pairs(PendingSarJoinRequests) do
+        if pending.from == src then
+            PendingSarJoinRequests[targetSrc] = nil
+        end
+    end
+end
+
 --- Removes `src` from `callId`'s membership -- the ONE path covering both
 --- "a member chooses to leave, the call continues for everyone else" and
 --- "the member disconnects" alike (`isDisconnect` only controls whether
@@ -872,6 +1069,14 @@ local PendingSarJoinRequests = {}
 --- @param src number
 --- @param isDisconnect boolean
 local function RemoveMemberFromSarCall(callId, src, isDisconnect)
+    -- STALE JOIN-REQUEST FIX (RED-TEAM PASS) -- see this file's header
+    -- section of the same name for the full writeup. Unconditional, before
+    -- either early-return below: a pending request naming `src`, in either
+    -- direction, must never survive `src` leaving whatever call that
+    -- request was actually about -- otherwise a LATER accept/decline can
+    -- resolve against a call that has since changed entirely.
+    ClearPendingSarJoinRequestsFor(src)
+
     local call = ActiveSarCalls[callId]
     if not call or not call.members[src] then
         MemberToCallId[src] = nil -- defensive: clear a dangling reverse-index entry even if the forward record is already gone/mismatched
@@ -920,7 +1125,7 @@ AddEventHandler('playerDropped', function()
 
     local callId = MemberToCallId[src]
     if callId then
-        RemoveMemberFromSarCall(callId, src, true)
+        RemoveMemberFromSarCall(callId, src, true) -- this now ALSO clears any pending join-request entries naming src, in either direction -- see that function's own "STALE JOIN-REQUEST FIX" comment
     end
 
     -- Pending join-request cleanup, BOTH directions -- mirrors server/
@@ -929,12 +1134,14 @@ AddEventHandler('playerDropped', function()
     -- recycles numeric server ids, so an unscanned stale `.from` entry
     -- could otherwise resolve to a different, unrelated player who
     -- reconnects with the same id before this entry's own TTL expires).
-    PendingSarJoinRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
-    for targetSrc, pending in pairs(PendingSarJoinRequests) do
-        if pending.from == src then
-            PendingSarJoinRequests[targetSrc] = nil
-        end
-    end
+    -- Always run, UNCONDITIONALLY, even though RemoveMemberFromSarCall above
+    -- already did this same cleanup when `callId` was truthy (harmless,
+    -- idempotent overlap in that case) -- this is what still covers a
+    -- disconnecting source with NO current call membership at all, e.g. one
+    -- whose own requestJoinSarCall was sent but never answered before they
+    -- dropped -- RemoveMemberFromSarCall is never reached for that source at
+    -- all, since `callId` above is nil for them.
+    ClearPendingSarJoinRequestsFor(src)
 end)
 
 --- Flat 2D distance -- see this file's header "WHY 2D" section.
@@ -1045,19 +1252,29 @@ local function EndSarCall(callId, reason, finderSrc)
             AwardXP(call.citizenid, 'sarCallCompleted')
         end
         FireOutboundEvent('qbx_k9unit:events:sarCallCompleted', finderSrc, call.citizenid, call.jobName, call.callType, GetGameTimer() - call.startedAt)
+        -- SHARED FOUND MARKER (this pass) -- see this file's header section
+        -- of the same name for the full writeup. call.targetX/call.targetY
+        -- ride along on EVERY member's own push below, finder and teammate
+        -- alike -- safe only because the call has already resolved by this
+        -- point (see that header section for exactly why that timing is
+        -- what makes this different from "WHY THE TARGET COORDINATE NEVER
+        -- CROSSES THE WIRE" above, not a quiet reversal of it).
         for memberSrc in pairs(call.members) do
             if memberSrc == finderSrc then
                 NotifyPlayer(memberSrc, call.callType == 'person' and locale('sar.found_person') or locale('sar.found_property'), 'success')
-                TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'found', call.callType, call.callId)
+                TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'found', call.callType, call.callId, call.targetX, call.targetY)
             else
                 -- A teammate's own position never crossed arrivalRadius --
                 -- reason 'found_by_teammate' resets their state exactly the
-                -- same way, but deliberately never triggers
-                -- client/sarcalls.lua's local cosmetic reveal (they are not
-                -- standing anywhere near the real target -- see "THE FINDER
-                -- STILL MATTERS" above).
+                -- same way, and (this pass) still carries the target
+                -- coordinates so client/sarcalls.lua can draw its own
+                -- shared, non-entity found-marker there -- but this
+                -- deliberately never triggers that file's FINDER-ONLY
+                -- entity-level reveal (they are not standing anywhere near
+                -- the real target -- see "THE FINDER STILL MATTERS" and
+                -- "SHARED FOUND MARKER" above).
                 NotifyPlayer(memberSrc, locale('sar.found_by_teammate'), 'success')
-                TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'found_by_teammate', nil, call.callId)
+                TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'found_by_teammate', nil, call.callId, call.targetX, call.targetY)
             end
         end
     elseif reason == 'timeout' then
@@ -1346,19 +1563,35 @@ local function CheckSarJoinEligibility(requesterSrc, targetSrc)
         return false, nil, 'already_active'
     end
 
+    -- JOIN-ELIGIBILITY CHECK ORDERING FIX (RED-TEAM PASS) -- see this
+    -- file's header section of the same name for the full writeup. THIS
+    -- CHECK MUST RUN BEFORE OWNERSHIP RESOLUTION BELOW, not after: it used
+    -- to run second, which let anyone with genuine K9 access distinguish
+    -- "that officer has no call" (invalid_target) from "they do, but I'm
+    -- too far" (too_far) for an arbitrary online target from anywhere on
+    -- the map -- a real, if narrow, leak of "is this named officer
+    -- currently running a search" to a non-member. Distance3D only needs
+    -- targetSrc's own live position (already resolved above as targetPed),
+    -- never targetCall -- moving this ahead of ownership resolution costs
+    -- nothing and collapses that leak into one honest 'too_far' for anyone
+    -- not actually close enough to have ever been a legitimate joiner.
+    local dist = Distance3D(GetEntityCoords(requesterPed), GetEntityCoords(targetPed))
+    if dist > tuning.joinProximityMeters then
+        return false, nil, 'too_far'
+    end
+
     -- The target must be the CURRENT owner of a live call -- a request
     -- naming a mere participant (not the owner) is rejected the same way
     -- as naming someone with no call at all; only the owner is the accept
     -- authority for a NEW join (see "TWO OFFICERS, ONE CALL" DECISION 1).
+    -- Reached only once the requester is already confirmed near enough to
+    -- targetSrc (see the ordering fix immediately above) -- a genuinely
+    -- NEARBY requester targeting a non-owner/no-call target still gets this
+    -- honest 'invalid_target' answer, unchanged from before this pass.
     local targetCallId = MemberToCallId[targetSrc]
     local targetCall = targetCallId and ActiveSarCalls[targetCallId]
     if not targetCall or targetCall.ownerSrc ~= targetSrc then
         return false, nil, 'invalid_target'
-    end
-
-    local dist = Distance3D(GetEntityCoords(requesterPed), GetEntityCoords(targetPed))
-    if dist > tuning.joinProximityMeters then
-        return false, nil, 'too_far'
     end
 
     local memberCount = 0
