@@ -1080,4 +1080,107 @@ t.test('EXCLUSIVE BODY-CLAIM: the periodic sweep also releases this citizenid\'s
     t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'the sweep must release the shared body-claim in lockstep with its own VehicleSeatClaims entry')
 end)
 
+
+-- ========================================================================
+-- ONE SEAT PER CITIZENID, ACROSS EVERY VEHICLE (cross-change QA finding,
+-- this pass -- reproduced in a harness before being fixed).
+--
+-- This file's exclusivity has always been addressed by (vehicleNetId,
+-- seatIndex): correct for its original job, which was stopping two PEOPLE
+-- racing for one seat. server/bodyclaims.lua then arrived addressing
+-- exclusivity by CITIZENID, and the two schemes did not line up.
+--
+-- The sequence that broke it: hold seat 1 of vehicle A, then claim seat 1
+-- of vehicle B. The per-seat check passes (different seat, nobody else
+-- there), and ClaimBody reads the second call as a RENEWAL of the same
+-- mechanic rather than a collision, overwriting the first in that
+-- citizenid's single registry slot. Release vehicle A -- by hand, by TTL,
+-- or by the sweep -- and ReleaseBody has no seat identity to check
+-- against, so it clears the slot outright while vehicle B's seat is still
+-- genuinely held. The registry then reports that citizenid as unclaimed
+-- with a real seat claim live, and a concurrent kennel-rest or bite-hold
+-- request is granted: the exact "two mechanics claim one body" race the
+-- registry exists to close, reached by a different route.
+--
+-- Neither file's own tests could see it. bodyclaims_spec only renews the
+-- same logical claim; this file only ever collided two requests on the
+-- identical (vehicle, seat) pair. The bug lived in the seam.
+-- ========================================================================
+t.test('SECOND SEAT REFUSED: one citizenid holding a live claim on vehicle A cannot also claim a seat on vehicle B', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT-DUP')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.registerVehicle(501, 51, { coords = { x = 0, y = 0, z = 0 } })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    t.isNotNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'), 'precondition: the first claim really was granted')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 501, 1, 2)
+    local denied = f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimDenied')
+    t.isNotNil(denied, 'the second seat, on a different vehicle, must be refused')
+    t.equals(denied.args[1], 501)
+end)
+
+t.test('SECOND SEAT REFUSED: also across two seats of the SAME vehicle', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT-DUP')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 2, 2)
+
+    local denied = f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimDenied')
+    t.isNotNil(denied)
+    t.equals(denied.args[2], 2, 'the SECOND seat is the one refused, not the first')
+end)
+
+t.test('CONTROL: re-requesting the SAME seat is still a renewal, not a self-collision -- the fix must not lock a client out of the seat it already holds', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT-DUP')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 2)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimDenied'), 'a retry on the exact same seat is the documented renewal path and must still be granted')
+end)
+
+t.test('CONTROL: a DIFFERENT citizenid is unaffected -- this is a per-person limit, not a global one-seat-on-the-server limit', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setAccess(3, true)
+    f.setPlayer(2, 'CIT-A')
+    f.setPlayer(3, 'CIT-B')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.setPed(3, 11, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.registerVehicle(501, 51, { coords = { x = 0, y = 0, z = 0 } })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 3, 501, 1, 2)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimDenied'), 'two different people in two different vehicles is ordinary play and must never be refused')
+end)
+
+t.test('RELEASING THE FIRST SEAT FREES THE PERSON -- the refusal is a start gate, never a trap: let go and the next seat is available', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT-DUP')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.registerVehicle(501, 51, { coords = { x = 0, y = 0, z = 0 } })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseVehicleSeatClaim', 2, 500, 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 501, 1, 2)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimDenied'), 'after releasing, the same person must be able to take a different seat')
+end)
+
 os.exit(t.summary())

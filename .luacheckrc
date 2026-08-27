@@ -132,7 +132,7 @@ read_globals = {
     --   natives.json, fetched 2026-08-25): namespace PLAYER, hash
     --   0x00A1CADD00108836, name SET_PLAYER_MODEL, params (player, model),
     --   and NO `apiset` key -- which for that database means the default,
-    --   client-only. Its one call site, client/appearance.lua:202, is
+    --   client-only. Its one call site, client/appearance.lua:369, is
     --   client-side, so the realm is right. This is the native that makes
     --   "assign a K9 ped role to any player, any model" actually change
     --   what the player looks like; get the realm wrong and it is a silent
@@ -987,8 +987,8 @@ globals = {
     "IsHighCommandBypassCitizenId",
     -- Seams opened so other files can reach logic that was previously locked
     -- inside an ox_target closure or a `local`. Each verified defined before
-    -- being declared here: client/inventory.lua:195, client/medkit.lua:181,
-    -- server/search.lua:397.
+    -- being declared here: client/inventory.lua:326, client/medkit.lua:311,
+    -- server/search.lua:685.
     -- GetContrabandAlertTier exposes the PURE tier calculation only -- it is a
     -- testability seam, and must never become a path that reaches inventory
     -- contents while skipping the access, proximity and cooldown checks the

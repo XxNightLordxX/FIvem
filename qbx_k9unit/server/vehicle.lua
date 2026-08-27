@@ -223,6 +223,63 @@ local function GetLiveClaim(netId, seatIndex)
     return claim
 end
 
+--- Is `citizenid` already holding a live seat claim on some OTHER seat?
+--- Returns the offending claim's own coordinates so the caller can be
+--- specific, or nil if this citizenid holds nothing anywhere else.
+---
+--- WHY THIS EXISTS (cross-change QA finding, this pass). This file's own
+--- exclusivity has always been addressed by (vehicleNetId, seatIndex) --
+--- correct for its original purpose, which was stopping two PEOPLE racing
+--- for one seat. server/bodyclaims.lua then arrived addressing exclusivity
+--- by CITIZENID, and the two schemes do not line up: a citizenid holding
+--- seat 1 of vehicle A and then claiming seat 1 of vehicle B passes the
+--- per-seat check (different seat, nobody else there), and ClaimBody reads
+--- the second call as a RENEWAL of the same mechanic rather than a
+--- collision, silently overwriting the first claim in that citizenid's
+--- single registry slot. When vehicle A's claim is then released -- by the
+--- client, by TTL, or by the sweep -- ReleaseBody(citizenid,
+--- 'vehicle_seat') has no seat identity to check against and clears the
+--- slot outright, even though vehicle B's seat is still genuinely held.
+--- The registry then reports that citizenid as unclaimed while a real seat
+--- claim is live, and a concurrent kennel-rest or bite-hold request is
+--- granted -- reproducing the exact "two mechanics claim one body" race
+--- the registry was written to close, just by a different route.
+---
+--- Neither file's own tests could see this: bodyclaims_spec only renews
+--- the same logical claim, and vehicle_spec only ever collides two
+--- requests on the identical (vehicle, seat) pair. The bug lives in the
+--- seam between the two addressing schemes, which is exactly where a
+--- per-file review cannot look.
+---
+--- Fixed HERE rather than in server/bodyclaims.lua, deliberately: making
+--- the registry hold multiple claims per mechanic would weaken the
+--- one-body-one-claim invariant every other participant depends on, to
+--- accommodate a state this file should never have allowed in the first
+--- place. server/kennel.lua already refuses a second kennel for one
+--- citizenid the same way (its own single-slot KennelOccupants guard) --
+--- this brings the seat table in line with that.
+--- @param citizenid string
+--- @param exceptNetId number -- the seat being requested right now, which must not count against itself
+--- @param exceptSeatIndex number
+--- @return { netId: number, seatIndex: number }|nil
+local function FindOtherLiveSeatClaimFor(citizenid, exceptNetId, exceptSeatIndex)
+    for netId, perVehicle in pairs(VehicleSeatClaims) do
+        for seatIndex in pairs(perVehicle) do
+            if not (netId == exceptNetId and seatIndex == exceptSeatIndex) then
+                -- Routed through GetLiveClaim, never a raw table read, so an
+                -- already-expired entry is swept and released here rather
+                -- than counted as a live blocker -- a stale claim must never
+                -- lock someone out of every seat on the server.
+                local claim = GetLiveClaim(netId, seatIndex)
+                if claim and claim.citizenid == citizenid then
+                    return { netId = netId, seatIndex = seatIndex }
+                end
+            end
+        end
+    end
+    return nil
+end
+
 --- Clears (netId, seatIndex)'s claim, but ONLY if it is currently recorded
 --- against the EXACT `src` supplied — mirrors server/entities.lua's
 --- ReleaseNetworkEntity's own "never blindly clears whatever is there"
@@ -434,6 +491,20 @@ RegisterNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', function(vehicleNe
     -- race this file exists to close.
     local existing = GetLiveClaim(vehicleNetId, seatIndex)
     if existing and existing.src ~= src then
+        deny(locale('vehicle.no_seat_available'))
+        return
+    end
+
+    -- ONE SEAT PER CITIZENID, ACROSS EVERY VEHICLE -- see
+    -- FindOtherLiveSeatClaimFor's own doc comment above for the full
+    -- writeup of the cross-file race this closes. Checked AFTER the
+    -- per-seat check so the more specific refusal still wins when both
+    -- apply, and deliberately BEFORE the claim is written, so no partial
+    -- state exists to unwind. START GATE ONLY: nothing below is reachable
+    -- from releaseVehicleSeatClaim, the TTL path, the disconnect handler or
+    -- the sweep -- a player already holding a seat can always let go of it,
+    -- and in fact must, since that is how they get a different one.
+    if FindOtherLiveSeatClaimFor(citizenid, vehicleNetId, seatIndex) then
         deny(locale('vehicle.no_seat_available'))
         return
     end
