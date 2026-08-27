@@ -18,6 +18,7 @@ pass itself.
 | 2026-08-26 | Corrected a wrong security claim in the manifest, closed three dangling citations |
 | 2026-08-26 | First pass recorded in a file rather than only a commit marker; clean, one item honestly unverified |
 | 2026-08-26 | Clean. 85 commits reviewed, 5 regression spot-checks pass, dependency status re-verified upstream, bark-audio gap confirmed closed. No findings. |
+| 2026-08-27 | Watchdog's own checks all clean. The real findings this pass came from a separate 12-agent production-readiness audit running alongside it -- including two live bugs the watchdog's fixed checklist would never have caught. |
 
 ## 2026-08-26 — detail
 
@@ -80,3 +81,69 @@ sprint cooldown) and all four still hold in real code.
 0 warnings / 0 errors across 188; 99 Lua specs and 33 HTML specs green.
 
 **Findings: none.** Nothing was manufactured to fill this section.
+
+
+## 2026-08-27 — detail
+
+**A note on this pass, because it matters more than the result.** Every
+check the trigger asks for came back clean. Separately, and at the same
+time, a twelve-agent production-readiness audit found two genuinely serious
+live bugs. Neither was anywhere near this checklist:
+
+- Thermal and night vision could be switched on but never off, because both
+  getters named a native that does not exist. Silent since the day they were
+  written. The test suite passed throughout, because the test invented the
+  same two names in its own sandbox.
+- An unarmed player could switch off the abilities of the dog chasing them
+  by spamming a payload-less event until the dog hesitated.
+
+That is worth recording plainly: **a watchdog that only re-checks the things
+already known to have broken will keep coming back clean while real bugs
+accumulate beside it.** The five spot-checks below are still worth running —
+they are cheap and they pin real past regressions — but they are a
+regression net, not an audit, and this pass should not be read as "the
+resource is fine".
+
+**1. Commits since the last pass:** a large batch from one long session
+(scent-tracking merge, command consolidation, feature grouping, roster data
+layer, per-dog speed/stamina/scent overrides, closeable kennel, danger
+warnings, Discord logging, bowls). Each was reviewed as it landed, each
+behavioural change carries a test proved to fail without its fix. Nothing
+unreviewed.
+
+**2. Externally-uncertain facts, re-verified against source rather than
+memory:**
+
+- Dependencies — **all three alive.** `overextended/ox_lib` 3.39.0,
+  `overextended/ox_target` 1.18.1, `overextended/oxmysql` all reachable and
+  maintained. Unchanged from the last pass; the docs remain accurate.
+- Bark audio — **resolved and still resolved.** All five files in
+  `html/sounds/` verified as genuine Ogg Vorbis with `file` rather than
+  trusted by extension, all listed in `fxmanifest.lua`'s `files{}` block so
+  they actually reach clients, and attributed in `html/sounds/CREDITS.md`.
+
+**3. Regression spot-checks — all five pass:**
+
+- `AgilityBasicJump` still read in real code.
+- Role-aware `LeashPairs` structure intact in `server/main.lua`.
+- `RevokeCertificationOffline` still refreshes the certification cache.
+- Vehicle `onResourceStop` cleanup present on both sides.
+- `client/radial.lua`'s `lib.registerRadial` / `lib.addRadialItem` split
+  still correct. The raw counts have grown a lot since the last pass (11 and
+  9 including comments), which looks alarming and is not: all three real
+  `addRadialItem` calls still register the single `k9unit_open` root opener,
+  which is exactly the convention the 2026-08-23 hard-error fix
+  established. Counting lines rather than calls would have reported a
+  regression that is not there — worth knowing for the next pass.
+
+**4. Documented "fixed" claims:** `SPEC.md` still does not exist — it was
+consolidated into `README.md` and `DEVELOPER_REFERENCE.md`, so the
+trigger's "SPEC.md §7" reference is itself stale and should be read as "the
+docs" generally. A dedicated comment-truth pass ran this session and
+corrected five genuinely stale claims, so this ground is freshly covered.
+
+**5. Health baseline:** `luac5.4 -p` clean on all 207 `.lua` files.
+
+**Findings from the watchdog's own checks: none.** Nothing was manufactured
+to fill this section — see the note at the top for why that sentence is
+worth less than it sounds.
