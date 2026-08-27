@@ -333,10 +333,66 @@ read_globals = {
     "StartShapeTestCapsule", "GetShapeTestResult", "SetEntityVelocity",
     -- NUI bridge (client/hud.lua)
     "SendNUIMessage", "RegisterNUICallback",
-    -- Vision natives (see client/vision.lua -- these are the actual CFX
-    -- native names, distinct from this resource's own IsNightVisionActive/
-    -- IsThermalVisionActive wrapper functions declared below)
-    "SetNightvision", "IsNightvisionActive", "SetSeethrough", "IsSeethroughActive",
+    -- Vision natives (see client/vision.lua -- distinct from this resource's
+    -- own IsNightVisionActive/IsThermalVisionActive wrapper functions
+    -- declared below, which are this file's OWN functions, not natives).
+    --
+    -- CORRECTED 2026-08-27 (independent native-verification pass): the
+    -- previous version of this comment asserted "these are the actual CFX
+    -- native names" for all four entries below. That claim was WRONG for
+    -- two of them and, unlike every other entry in this file, carried no
+    -- hash/decl citation backing it up -- exactly the un-sourced-allowlist-
+    -- entry failure mode this file otherwise guards against.
+    --   SetNightvision / SetSeethrough -- REAL, CONFIRMED. Both 404 on
+    --     ext/native-decls (legacy R* natives, not proof of absence) but are
+    --     present in runtime.fivem.net/doc/natives.json: GRAPHICS
+    --     SET_NIGHTVISION (hash 0x18F621F7A5B1F85D, params: BOOL toggle) and
+    --     GRAPHICS SET_SEETHROUGH (hash 0x7E08924259E08CE0, params: BOOL
+    --     toggle). No apiset key -> client-only default, matching their only
+    --     call sites in client/vision.lua. Single-BOOL-arg call shape used
+    --     there is correct.
+    --   IsNightvisionActive / IsSeethroughActive -- NOT CONFIRMED TO EXIST
+    --     AS NATIVES AT ALL. No ext/native-decls page (404) AND no matching
+    --     entry in natives.json under any underscore-split reconstruction of
+    --     that name. The natives.json hash database's actual GETTERS for
+    --     this pair are GRAPHICS GET_USINGNIGHTVISION (hash
+    --     0x2202A3F42C8E5F79) and GRAPHICS GET_USINGSEETHROUGH (hash
+    --     0x44B80ABAB9D80BD3) -- which the CFX Lua native-name generator
+    --     (PascalCase of the underscore-split name) would expose as
+    --     GetUsingnightvision() / GetUsingseethrough(), NOT
+    --     IsNightvisionActive()/IsSeethroughActive(). Independently
+    --     corroborated: alt:V's own natives typings
+    --     (@altv/types-natives, generated from the same underlying GTA5
+    --     native database by a different vendor) declare
+    --     `getUsingnightvision()` / `getUsingseethrough()`, not an
+    --     "isNightvisionActive"/"isSeethroughActive" of any casing.
+    --     PRACTICAL IMPACT, confirmed by reading the call sites: because
+    --     these two names do not resolve to any registered native hash,
+    --     FXServer's native dispatch returns nil forever with nothing
+    --     logged (this file's own standing rule) whenever
+    --     client/vision.lua calls them. `IsThermalVisionActive()` (`return
+    --     IsSeethroughActive() == true`) and `IsNightVisionActive()`
+    --     (`return IsNightvisionActive() == true`) therefore ALWAYS return
+    --     false, regardless of the real engine state -- which in turn makes
+    --     `ToggleThermalVision()`'s `local turningOn = not
+    --     IsThermalVisionActive()` ALWAYS true, so that keybind can only
+    --     ever call SetSeethrough(true) and never turn thermal vision back
+    --     off (ToggleNightVision() has the identical bug), and makes the
+    --     maintenance thread's `while IsThermalVisionActive() or
+    --     IsNightVisionActive() do` loop exit before its first iteration,
+    --     so the death/access-loss/feature-block cleanup branches inside it
+    --     never run. tests/clientvision_spec.lua's sandbox stubs its OWN
+    --     fake IsSeethroughActive/IsNightvisionActive functions rather than
+    --     the real FXServer runtime, so the test suite passes despite this.
+    --     Kept in this allowlist (removing them would only turn this into a
+    --     generic "undefined global" lint warning, not fix the underlying
+    --     bug, which is out of scope for a lint-config change) -- but do NOT
+    --     treat their presence here as evidence they are real. The actual
+    --     fix belongs in client/vision.lua: read GetUsingnightvision()/
+    --     GetUsingseethrough() instead (re-verify signature/behaviour before
+    --     shipping that change; not independently exercised against a live
+    --     FXServer in this pass).
+    "SetNightvision", "GetUsingnightvision", "SetSeethrough", "GetUsingseethrough",
     -- DeployableKennel (client/kennel.lua, server/kennel.lua, Phase 5 R&D,
     -- qbx_k9unit/DEVELOPER_REFERENCE.md#phase-5-research) -- object creation/
     -- placement/model-loading natives, none previously used anywhere else
@@ -381,11 +437,46 @@ read_globals = {
     -- exactly those natives. It is best-effort: no success-check native is
     -- confirmed available here, so the call improves the odds of the
     -- effect landing rather than guaranteeing it -- see client/combat.lua's
-    -- own disclosure. IsPedDeadOrDying/IsPedRagdoll back the NPC branch of
-    -- server/combat.lua's IsTargetDowned (the player branch deliberately
-    -- avoids them, per PHASE3_SPEC.md §12.0 item 6's finding that they
-    -- measure raw physics state rather than a server's scripted laststand).
-    "NetworkRequestControlOfEntity", "IsPedDeadOrDying", "IsPedRagdoll",
+    -- own disclosure.
+    --
+    -- CORRECTED 2026-08-27 (independent native-verification pass):
+    -- IsPedDeadOrDying REMOVED from this list. This comment used to say it
+    -- backed the NPC branch of server/combat.lua's IsTargetDowned alongside
+    -- IsPedRagdoll -- true when originally written, but server/combat.lua's
+    -- own later header/inline comments (around IsTargetDowned and
+    -- PED_DEAD_HEALTH_THRESHOLD) already record that IsPedDeadOrDying "has
+    -- no FXServer server implementation at all" and was replaced there with
+    -- `GetEntityHealth(ped) <= PED_DEAD_HEALTH_THRESHOLD`. Verified this
+    -- pass by direct search: IsPedDeadOrDying( has ZERO live call sites left
+    -- anywhere in client/, server/, shared/ or tests/ -- every remaining
+    -- occurrence of the name is inside a comment describing that historical
+    -- fix (server/combat.lua, tests/combat_spec.lua). An allowlisted global
+    -- with no caller anywhere is exactly the stale-entry failure mode this
+    -- file's own "REMOVE THIS ENTRY if the function is ever abandoned" rule
+    -- (see ForceRevertK9Appearance/ApplyK9AppearanceDirect above) targets --
+    -- restore this entry only alongside a real, live call site.
+    --
+    -- IsPedRagdoll KEPT, but its server-side callability is NOT independently
+    -- re-confirmed by this pass beyond what server/combat.lua's own comment
+    -- already claims ("traced citizenfx/fivem's own C++ native-registration
+    -- list"). What this pass could confirm: it is a real native
+    -- (natives.json, PED namespace, IS_PED_RAGDOLL, hash
+    -- 0x47E4E977581C5B55, params (ped) -> BOOL; no `apiset` key in that
+    -- database, meaning client-only under this file's own established
+    -- reading of that field);
+    -- it has no ext/native-decls page (404, not proof of absence); and it is
+    -- NOT part of ext/natives/rpc_spec_natives.lua's server-RPC setter list
+    -- (not conclusive either way for a GETTER -- that file only covers
+    -- state-mutating natives routed to the owning client). It has one live
+    -- server call site: server/combat.lua's IsTargetDowned NPC branch
+    -- (`GetEntityHealth(targetPed) <= PED_DEAD_HEALTH_THRESHOLD or
+    -- IsPedRagdoll(targetPed)`). If IsPedRagdoll turns out to share
+    -- IsPedDeadOrDying's fate (no server registration), that OR silently
+    -- degrades to just the health check -- a real ragdolled-but-not-dead NPC
+    -- would stop being recognised as "downed" for PropDragging, with nothing
+    -- logged. Recommend confirming this against a live FXServer (print the
+    -- return value from a known-ragdolled NPC) before relying on it further.
+    "NetworkRequestControlOfEntity", "IsPedRagdoll",
     -- Server-side implicit global inside event handlers
     "source",
     -- ox_lib / oxmysql / export surface

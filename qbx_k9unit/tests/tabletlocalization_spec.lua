@@ -234,4 +234,119 @@ t.test('OpenTablet(): `strings` carries no MORE than DEFAULT_STRINGS does -- a r
     t.equals(sentCount, jsCount)
 end)
 
+-- ----------------------------------------------------------------------
+-- THE REMAINING BLIND SPOT, CLOSED. Every assertion above starts from a
+-- key that already exists on a CODE side (DEFAULT_STRINGS, or the strings
+-- payload OpenTablet builds from TABLET_STRING_KEYS) and checks it resolves
+-- against locales/en.json. Nothing iterated the other way. So a key that
+-- exists ONLY in locales/en.json -- left behind by a renamed or deleted
+-- screen -- was invisible to this whole file, which is precisely the
+-- "missing from the code sides, passes silently" case this spec exists to
+-- catch. An integration audit flagged a suspected gap here and could not
+-- enumerate it by hand; this test enumerates it mechanically instead.
+--
+-- Dead locale text is not merely untidy. Every one of these is a string
+-- somebody wrote, that a translator will faithfully translate, that no
+-- screen will ever show.
+--
+-- SERVER-RESOLVED PREFIXES ARE NOT DEAD and are excluded by prefix, not by
+-- name: server/runtimecontrol.lua builds these key names at runtime
+-- ('tablet.runtime_tunable_desc_' .. key:lower()) and sends the already-
+-- resolved TEXT to the page, so they legitimately have no DEFAULT_STRINGS
+-- or TABLET_STRING_KEYS entry and never will. Excluding by prefix rather
+-- than listing each one keeps this from needing an edit every time a
+-- tunable is added.
+local SERVER_RESOLVED_KEY_PREFIXES = {
+    'runtime_tunable_desc_',
+    'runtime_lockout_warning_',
+    'runtime_active_usage_warning_',
+}
+
+local function IsServerResolvedKey(key)
+    for _, prefix in ipairs(SERVER_RESOLVED_KEY_PREFIXES) do
+        if key:sub(1, #prefix) == prefix then return true end
+    end
+    return false
+end
+
+--- Every `tablet.<key>` name mentioned literally anywhere in server/*.lua
+--- or client/*.lua. This is the THIRD legitimate way a tablet string gets
+--- used, alongside DEFAULT_STRINGS and the OpenTablet payload: Lua resolves
+--- it itself and sends already-rendered text to the page. Eight real keys
+--- work this way today (console_not_authorized, the online_player_* family,
+--- open_failed_generic, the revoke_* pair, roster_truncated_notice), and
+--- treating them as dead would be wrong.
+---
+--- DERIVED BY SCANNING, never a hand-written list. A list would need
+--- editing every time somebody resolves a string in Lua, and the edit that
+--- gets forgotten is the one that turns this test into a nuisance somebody
+--- disables. Scanning costs one pass over the source and cannot rot.
+--- Deliberately a plain substring match rather than something stricter: the
+--- cost of a false NEGATIVE here is a dead string surviving, which is minor,
+--- while a false POSITIVE would be this test failing over a live key, which
+--- is how a good test gets deleted.
+local function CollectKeysReferencedInLua()
+    local referenced = {}
+    local handle = io.popen('cat ../server/*.lua ../client/*.lua 2>/dev/null')
+    if not handle then return referenced end
+    local text = handle:read('a') or ''
+    handle:close()
+    for key in text:gmatch("tablet%.([%a_][%w_]*)") do referenced[key] = true end
+    for key in text:gmatch("'([%a_][%w_]*)'") do referenced[key] = true end
+    return referenced
+end
+
+t.test('LOAD-BEARING: locales/en.json\'s `tablet` group carries no key that no code side can ever use -- dead text a translator would translate and no screen would show', function()
+    local f = newFixture()
+    f.env.OpenTablet()
+    local strings = f.sendNuiMessageCalls[1].data.strings
+    local defaultKeys = ExtractDefaultStringsKeys()
+
+    local reachable = {}
+    for _, key in ipairs(defaultKeys) do reachable[key] = true end
+    for key in pairs(strings) do reachable[key] = true end
+
+    -- Read the `tablet` group straight out of the real locale file. Doing
+    -- it here rather than through locale() deliberately: locale() answers
+    -- "does this key resolve", which is the direction every other test in
+    -- this file already covers. The question here is the opposite one --
+    -- what is IN the file that nothing asks for -- and only the file itself
+    -- can answer that.
+    local localeHandle = assert(io.open('../locales/en.json', 'r'))
+    local localeText = localeHandle:read('a')
+    localeHandle:close()
+    local tabletGroupStart = localeText:find('"tablet"%s*:%s*{')
+    assert(tabletGroupStart, 'the `tablet` group was not found in locales/en.json')
+    local depth, i, groupEnd = 0, localeText:find('{', tabletGroupStart, true), nil
+    while i and i <= #localeText do
+        local c = localeText:sub(i, i)
+        if c == '{' then depth = depth + 1
+        elseif c == '}' then
+            depth = depth - 1
+            if depth == 0 then groupEnd = i break end
+        end
+        i = i + 1
+    end
+    assert(groupEnd, 'the `tablet` group in locales/en.json is not brace-balanced')
+    local groupBody = localeText:sub(tabletGroupStart, groupEnd)
+
+    local localeKeys = {}
+    for line in groupBody:gmatch('[^\n]+') do
+        local key = line:match('^%s+"([%a_][%w_]*)"%s*:')
+        if key then localeKeys[key] = true end
+    end
+
+    local referencedInLua = CollectKeysReferencedInLua()
+
+    local orphans = {}
+    for key in pairs(localeKeys) do
+        if not reachable[key] and not IsServerResolvedKey(key) and not referencedInLua[key] then
+            orphans[#orphans + 1] = key
+        end
+    end
+    table.sort(orphans)
+
+    t.equals(#orphans, 0, ('locales/en.json has %d `tablet` key(s) that neither DEFAULT_STRINGS nor the OpenTablet strings payload can reach, and which are not server-resolved: %s'):format(#orphans, table.concat(orphans, ', ')))
+end)
+
 os.exit(t.summary())

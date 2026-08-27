@@ -61,7 +61,7 @@
 
     STUBBING EFFORT, reported honestly per this task's own instruction:
     every native this file touches is a simple boolean-flag toggle/getter
-    (IsSeethroughActive/SetSeethrough, IsNightvisionActive/SetNightvision,
+    (GetUsingseethrough/SetSeethrough, GetUsingnightvision/SetNightvision,
     IsEntityDead, PlayerPedId, GetCurrentResourceName) plus
     CreateThread/Wait/RegisterCommand/RegisterKeyMapping/AddEventHandler/
     lib.notify/locale -- all either already-established capturing-stub
@@ -248,9 +248,9 @@ local function newVisionFixture(opts)
     -- read straight from.
     local seethrough, nightvision = false, false
     local setSeethroughCalls, setNightvisionCalls = {}, {}
-    local function IsSeethroughActive() return seethrough end
+    local function GetUsingseethrough() return seethrough end
     local function SetSeethrough(v) seethrough = v; setSeethroughCalls[#setSeethroughCalls + 1] = v end
-    local function IsNightvisionActive() return nightvision end
+    local function GetUsingnightvision() return nightvision end
     local function SetNightvision(v) nightvision = v; setNightvisionCalls[#setNightvisionCalls + 1] = v end
 
     local notifyCalls = {}
@@ -294,9 +294,9 @@ local function newVisionFixture(opts)
         HasK9Access = HasK9Access,
         IsEntityDead = IsEntityDead,
         PlayerPedId = PlayerPedId,
-        IsSeethroughActive = IsSeethroughActive,
+        GetUsingseethrough = GetUsingseethrough,
         SetSeethrough = SetSeethrough,
-        IsNightvisionActive = IsNightvisionActive,
+        GetUsingnightvision = GetUsingnightvision,
         SetNightvision = SetNightvision,
         lib = { notify = lib_notify },
         CreateThread = CreateThread,
@@ -453,10 +453,33 @@ t.test('IsThermalVisionActive: reflects the underlying native exactly (false by 
     t.isFalse(f.env.IsThermalVisionActive())
 end)
 
-t.test('IsThermalVisionActive: coerces a non-boolean-true native return to false, not passed through as-is', function()
+-- DELIBERATE REVERSAL of what this test used to assert. It previously
+-- pinned `== true`, i.e. a native returning 1 had to be read as "off".
+-- That was the wrong way round, and this file's own history is the reason:
+-- the getter underneath it was calling a native that does not exist
+-- (IsSeethroughActive), so it returned nil forever and thermal vision could
+-- never be switched OFF. A getter wrongly reporting "off" is exactly the
+-- failure that produced.
+--
+-- Weigh the two readings against each other. If the native returns a real
+-- boolean, as natives.json declares (GET_USINGSEETHROUGH, GRAPHICS,
+-- 0x44B80ABAB9D80BD3), strict and lenient behave identically and the choice
+-- does not matter. They only differ if it ever hands back 1/0 — and there
+-- the strict reading silently recreates the bug just fixed, while the
+-- lenient one is correct. One reading is never worse; the other is
+-- sometimes catastrophic. So: anything non-nil and non-zero counts as on.
+t.test('IsThermalVisionActive: a native returning 1 rather than boolean true still reads as ON -- the strict reading here is what let "cannot turn it off" hide', function()
     local f = newVisionFixture()
-    f.env.IsSeethroughActive = function() return 1 end -- truthy in Lua, but not the exact boolean `true`
-    t.isFalse(f.env.IsThermalVisionActive(), 'must be `== true`, not a bare truthy check')
+    f.env.GetUsingseethrough = function() return 1 end
+    t.isTrue(f.env.IsThermalVisionActive(), '1 must mean on -- reading it as off is how a getter that never reports on goes unnoticed')
+end)
+
+t.test('IsThermalVisionActive: 0 and nil both read as OFF', function()
+    local f = newVisionFixture()
+    f.env.GetUsingseethrough = function() return 0 end
+    t.isFalse(f.env.IsThermalVisionActive(), '0 must mean off')
+    f.env.GetUsingseethrough = function() return nil end
+    t.isFalse(f.env.IsThermalVisionActive(), 'nil -- what an unregistered native returns -- must mean off')
 end)
 
 t.test('IsNightVisionActive: reflects the underlying native exactly (false by default)', function()

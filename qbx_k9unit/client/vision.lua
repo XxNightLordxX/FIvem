@@ -217,23 +217,56 @@
     ======================================================================
 ]]
 
---- Thin wrapper over the native's OWN getter — the native is the source
---- of truth for "is thermal vision currently on," not a separately
---- tracked local boolean that could desync from it (per DEVELOPER_REFERENCE.md §11.6 /
---- DEVELOPER_REFERENCE.md#vision §7: "the native's own getter is
---- the source of truth, not a separately-tracked local boolean"). Real
---- IsSeethroughActive() native, confirmed to exist alongside its setter
---- by native-api-assistant (DEVELOPER_REFERENCE.md §11.6) and independently by
---- DEVELOPER_REFERENCE.md#tracking §3.
+--- Thin wrapper over the native's OWN getter — the native is the source of
+--- truth for "is thermal vision currently on," not a separately tracked
+--- local boolean that could desync from it.
+---
+--- THE NAME WAS WRONG AND THE FEATURE WAS HALF-DEAD BECAUSE OF IT. This
+--- called IsSeethroughActive(), and its sibling below called
+--- IsNightvisionActive(). NEITHER NATIVE EXISTS. An unregistered native
+--- returns nil forever and logs nothing, so both getters answered false on
+--- every call, for every player, on every server, since the day they were
+--- written. What that actually broke:
+---   * ToggleThermalVision()'s `local turningOn = not IsThermalVisionActive()`
+---     was permanently true, so the keybind could only ever switch the
+---     effect ON. THERMAL AND NIGHT VISION COULD NOT BE TURNED OFF.
+---   * the mutual-exclusion helper never fired, so both could be on at once.
+---   * the maintenance thread's `while IsThermalVisionActive() or
+---     IsNightVisionActive() do` exited on its first check, making the
+---     death-exit, access-loss-exit and live feature-block paths inside it
+---     dead code.
+---   * client/exports.lua reported false to every other resource.
+--- tests/clientvision_spec.lua passed the whole time because it stubbed the
+--- made-up names into its own sandbox — the textbook version of a test
+--- proving only that the test agrees with itself.
+---
+--- The real natives, verified against runtime.fivem.net/doc/natives.json
+--- (both under GRAPHICS): GET_USINGSEETHROUGH 0x44B80ABAB9D80BD3 and
+--- GET_USINGNIGHTVISION 0x2202A3F42C8E5F79, which CitizenFX's Lua name
+--- generator exposes as GetUsingseethrough / GetUsingnightvision. Neither
+--- has a page under ext/native-decls (both 404), which is normal for a
+--- legacy Rockstar native and is NOT evidence of absence — natives.json is
+--- the authority here, and the alt:V binding generator, working from the
+--- same underlying table, independently produces the same two names.
+---
+--- Truthiness is handled rather than assumed: natives.json declares a BOOL
+--- return, but this codebase has been bitten before by a native handing
+--- back 1/0 where `== true` was expected, so anything non-nil and non-zero
+--- counts as on.
 --- @return boolean
-function IsThermalVisionActive()
-    return IsSeethroughActive() == true
+local function NativeReportsActive(value)
+    return value ~= nil and value ~= false and value ~= 0
 end
 
---- Thin wrapper over IsNightvisionActive(), same reasoning as above.
+--- @return boolean
+function IsThermalVisionActive()
+    return NativeReportsActive(GetUsingseethrough())
+end
+
+--- Thin wrapper over GetUsingnightvision(), same reasoning as above.
 --- @return boolean
 function IsNightVisionActive()
-    return IsNightvisionActive() == true
+    return NativeReportsActive(GetUsingnightvision())
 end
 
 --- Shared internal helper for the mutual-exclusivity judgment call
