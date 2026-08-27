@@ -1232,15 +1232,28 @@ t.test('k9_defense_bite / k9_defense_takedown: guarded -- absent ConfirmHandlerD
     t.equals(fGranted.calls.ConfirmHandlerDownDefense[2][1], 'takedown')
 end)
 
-t.test('k9_prop_attachment: guarded -- absent target does not throw; present target called only once access is granted', function()
+-- UPDATED: this test used to pin the exact bug it was meant to prevent.
+-- It asserted that the vest item REFUSES when CanShowK9UI() is false and
+-- never reaches RequestToggleK9PropAttachment. But that function is the one
+-- that decides whether the press is an ADD or a REMOVE, and it deliberately
+-- lets a REMOVE through unconditionally -- because taking off a vest you are
+-- already wearing is not a capability. Gating before it meant a handler who
+-- lost their certification while wearing one could not take it off from the
+-- radial menu, and decertification does not strip prop attachments
+-- server-side the way it strips leashes and holds. So the item is now
+-- ungated and the strictness lives in the callee, which knows the direction.
+--
+-- What this test pins now: the item ALWAYS reaches the callee, and the
+-- callee is trusted to apply the ADD gate (and to emit the same denial
+-- reason) itself. tests/clientpropattachment_spec.lua owns proving that.
+t.test('k9_prop_attachment: always reaches the toggle, which resolves add-vs-remove before gating -- so a lapsed handler can still take a vest OFF', function()
     local fAbsent = newRadialFixture({ features = { PropAttachments = true, DeployableKennel = true }, omit = { 'RequestToggleK9PropAttachment', 'RequestDeployKennel' } })
     assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_utility', 'k9_prop_attachment'))
 
     local fDenied = newRadialFixture({ features = { PropAttachments = true, DeployableKennel = true }, canShowK9UI = false })
     fDenied.findInMenu('k9unit_utility', 'k9_prop_attachment').onSelect()
-    t.equals(fDenied.denyCallCount(), 1, 'one denying item now -- the kennel item merged away and is deliberately ungated')
-    t.equals(fDenied.lastDenyReason(), 'common.no_k9_role_or_access', 'NOT WIDENED (server/propattachment.lua requires model/role AND access) -- see this item\'s own comment in client/radial.lua')
-    t.isNil(fDenied.calls.RequestToggleK9PropAttachment)
+    t.equals(fDenied.denyCallCount(), 0, 'the radial item itself must NOT deny -- it cannot tell an add from a remove, so it defers')
+    t.isNotNil(fDenied.calls.RequestToggleK9PropAttachment, 'the toggle is reached even with access refused, so the remove path stays open')
     t.isNil(fDenied.calls.RequestDeployKennel)
 
     local fGranted = newRadialFixture({ features = { PropAttachments = true, DeployableKennel = true } })

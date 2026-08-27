@@ -1517,6 +1517,39 @@ do
         t.equals(outcome, 'denied')
     end)
 
+    -- RED-TEAM FINDING, CRITICAL: a blocked high-command officer could lift
+    -- their own block. Being blocked writes a k9_permissions row and does
+    -- NOT touch job.grade/job.isboss, so IsHighCommand still answered true
+    -- for them -- and IsHighCommand was RevokePermission's only check. The
+    -- block is read-defended everywhere (it beats rank in HasK9Access,
+    -- IsEligibleCertifier, IsAuthorizedAdmin and IsAuthorizedForXpGrant) and
+    -- was write-undefended, which made it useless against precisely the
+    -- person it exists to restrain.
+    t.test('RevokePermission: a high-command officer CANNOT lift a block placed on themselves', function()
+        f.advanceTime(600000)
+        f.env.GrantPermission(hcSrc, 'HC-REVOKER', 'block.k9.certify')
+        f.advanceTime(600000)
+        local ok, outcome = f.env.RevokePermission(hcSrc, 'HC-REVOKER', 'block.k9.certify')
+        t.isFalse(ok, 'lifting your own block must be refused outright')
+        t.equals(outcome, 'denied_self_unblock')
+    end)
+
+    t.test('RevokePermission: CONTROL -- a DIFFERENT high-command officer can still lift that same block, so the refusal above is the self-check and not a broken fixture', function()
+        f.advanceTime(600000)
+        f.env.GrantPermission(hcSrc, 'OTHER-OFFICER', 'block.k9.certify')
+        f.advanceTime(600000)
+        local ok = f.env.RevokePermission(hcSrc, 'OTHER-OFFICER', 'block.k9.certify')
+        t.isTrue(ok, 'somebody else with the rank must still be able to lift it -- a block nobody can ever remove would be its own trap')
+    end)
+
+    t.test('RevokePermission: CONTROL -- self-revoking a NON-block key is still allowed, since giving up your own grant is not an escalation', function()
+        f.advanceTime(600000)
+        f.env.GrantPermission(hcSrc, 'HC-REVOKER', 'k9.access')
+        f.advanceTime(600000)
+        local ok = f.env.RevokePermission(hcSrc, 'HC-REVOKER', 'k9.access')
+        t.isTrue(ok, 'the new refusal must be scoped to block. keys only')
+    end)
+
     -- SECURITY FIX (this pass -- "revoking a retired permission key must
     -- always be possible"): RevokePermission used to reuse GrantPermission's
     -- own catalog-membership IsValidPermissionKey check, which rejected

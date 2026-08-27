@@ -42,7 +42,13 @@
         "revert_success_target": "Your K9 ped assignment has been removed — you are back to your original character.",
         "apply_success_granter": "K9 ped role applied to that player.",
         "revert_success_granter": "That player's K9 ped role has been removed — they are back to their original character.",
-        "apply_pending_offline": "That player is offline — the K9 ped role is saved and will apply the next time they log in."
+        "apply_pending_offline": "That player is offline — the K9 ped role is saved and will apply the next time they log in.",
+        "identity_target_label": "Identify K9",
+        "identity_notify_title": "K9 Identity",
+        "identity_line_name": "K9: %s",
+        "identity_line_callsign": "Callsign: %s",
+        "identity_line_handler": "Handler: %s",
+        "identity_name_fallback": "Unknown K9"
     },
     "bonetool": {
         "bone_index_label": "Bone Index: %d",
@@ -285,7 +291,8 @@
         "command_not_granted": "%s does not currently hold that permission.",
         "command_revoke_ok": "Revoked '%s' from %s.",
         "command_revoke_ok_rank": "Revoked '%s' from %s, but they still have it through their rank or High Command status.",
-        "command_revoke_ok_offline": "Revoked '%s' from %s. They are offline, so it could not be checked whether they still qualify for it through rank."
+        "command_revoke_ok_offline": "Revoked '%s' from %s. They are offline, so it could not be checked whether they still qualify for it through rank.",
+        "cannot_lift_own_block": "You cannot remove a restriction that was placed on you. Someone else with the rank has to lift it."
     },
     "tablet": {
         "shop_item_label_placeholder": "Leave blank to use the item's own name",
@@ -1429,7 +1436,6 @@
         "cmdref_danger_warn_alert_usage": "/qbx_k9unit:dangerWarnAlert",
         "cmdref_danger_warn_alert_does": "Tells your partnered handler you have spotted trouble, with a rough direction and distance.",
         "cmdref_danger_warn_alert_needs": "K9 access and an active partnership. The Danger Warning feature must be turned on for your server.",
-
         "tab_roster_k9": "K9 Roster",
         "tab_roster_handlers": "Handler Roster",
         "roster_unassigned_heading": "Unassigned",
@@ -1693,7 +1699,22 @@
         "hint_burning": "Your dog is pulling hard, right on top of something!",
         "feature_disabled": "Search-and-rescue calls are turned off on this server right now -- this is not about you personally, there is nothing to request.",
         "blocked": "High Command has individually blocked you from taking search-and-rescue calls. This is not a missing grant -- ask them why.",
-        "not_granted": "Search-and-rescue calls have not been granted to you individually. Ask a high command officer to grant you 'SAR Calls' access."
+        "not_granted": "Search-and-rescue calls have not been granted to you individually. Ask a high command officer to grant you 'SAR Calls' access.",
+        "found_by_teammate": "Your teammate already found what you were both searching for -- good work either way.",
+        "left_call": "You left the search-and-rescue call.",
+        "ownership_transferred": "The officer who started this search-and-rescue call disconnected -- you're now running it.",
+        "join_request_sent": "Request to join their search-and-rescue call sent.",
+        "join_pending_request_exists": "That officer already has a pending join request.",
+        "join_request_declined": "Your request to join the search-and-rescue call was declined.",
+        "join_request_no_longer_valid_initiator": "Your join request is no longer valid.",
+        "join_request_no_longer_valid_self": "That join request is no longer valid.",
+        "join_invalid_target": "Invalid officer to ask -- they need an active search-and-rescue call for you to join.",
+        "join_too_far": "You need to be closer to that officer to join their search-and-rescue call.",
+        "call_full": "That search-and-rescue call already has as many officers on it as it can take.",
+        "joined_call": "You joined the search-and-rescue call. Your dog will react as you get closer.",
+        "member_joined": "Another officer joined your search-and-rescue call.",
+        "join_request_header": "Join Search & Rescue Call",
+        "join_request_content": "%s wants to join your search-and-rescue call. Accept?"
     },
     "scenttrail": {
         "already_active": "You're already following a scent — stop the current hunt first.",
@@ -1886,7 +1907,10 @@
         "partner_condition_injured": "Injured",
         "partner_condition_hungry": "Hungry",
         "partner_condition_thirsty": "Thirsty",
-        "partner_condition_fine": "Fine"
+        "partner_condition_fine": "Fine",
+        "onboarding_title": "K9 Command Tablet",
+        "onboarding_body": "You have K9 gear waiting. Type /k9tablet to open your tablet and see what you can do.",
+        "onboarding_dismiss_hint": "Press %s to dismiss this reminder."
     },
     "announce": {
         "keybind_label": "K9: Warn Before Apprehending",

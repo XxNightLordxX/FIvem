@@ -1340,15 +1340,16 @@ local TABLET_STRING_KEYS = {
     'cmdref_toggle_camera_feed_usage', 'cmdref_toggle_camera_feed_does', 'cmdref_toggle_camera_feed_needs',
     'cmdref_toggle_thermal_vision_usage', 'cmdref_toggle_thermal_vision_does', 'cmdref_toggle_thermal_vision_needs',
     'cmdref_toggle_night_vision_usage', 'cmdref_toggle_night_vision_does', 'cmdref_toggle_night_vision_needs',
-    -- VISION MERGE (coder-architect, this pass): 'k9vision' cycle's own
-    -- COMMAND_REFERENCE triple. The two ABOVE stay -- harmless, inert
-    -- leftovers (COMMAND_CONSOLIDATION_SPEC.md §4's own established
-    -- convention for a hidden-alias pair's locale keys) -- they no longer
-    -- have a COMMAND_REFERENCE row of their own (html/tablet.js), but
-    -- removing them here too would desync this list's key SET from
-    -- DEFAULT_STRINGS' own (tests/tabletlocalization_spec.lua enforces
-    -- exact set equality between the two) without also touching
-    -- locales/en.json, which is additive-only in this pass.
+    -- OWNER REVERSAL (coder-architect, this pass): a prior "vision merge"
+    -- pass folded the two entries directly above into a single 'k9vision'
+    -- cycle and left their keys here only as "harmless inert leftovers"
+    -- (their COMMAND_REFERENCE row had been removed from html/tablet.js).
+    -- The owner has since asked for thermal and night vision to be
+    -- separate, first-class controls again -- both keys ABOVE are back to
+    -- backing a real COMMAND_REFERENCE row again (html/tablet.js), not
+    -- inert. 'k9vision' below is KEPT too, as an extra optional
+    -- convenience alongside the two explicit toggles (not a replacement for
+    -- them) -- its own COMMAND_REFERENCE triple.
     'cmdref_k9vision_usage', 'cmdref_k9vision_does', 'cmdref_k9vision_needs',
     'cmdref_default_keybind_configurable_template', 'cmdref_category_vision',
     -- GUIDED FLOWS (this pass, owner's own words: "expand the workflow
@@ -2006,15 +2007,37 @@ local FEATURE_TRIGGERS = {
         if type(RequestThrowFetchBall) == 'function' then RequestThrowFetchBall() end
         return true
     end,
-    -- radial.lua 'k9_prop_attachment': gated (redundant with the callee, kept for consistency).
+    -- NOT GATED HERE, DELIBERATELY. This wrapper used to check CanShowK9UI()
+    -- first, with a comment calling that "redundant with the callee". It was
+    -- the opposite of redundant, and it reintroduced a trap that had already
+    -- been found and fixed one layer down.
+    --
+    -- RequestToggleK9PropAttachment resolves INTENT before it gates: if a vest
+    -- is already on, the removal request goes through unconditionally, because
+    -- taking off a vest you are already wearing is not a capability. Checking
+    -- access up here ran before that resolution, so a handler who lost their
+    -- certification while wearing one was refused by this wrapper and the vest
+    -- stayed welded on. There is no server-side safety net either --
+    -- decertification tears down leashes, holds and partnerships, but not prop
+    -- attachments -- so this WAS the way out, and it was shut.
+    --
+    -- The callee still gates the ADD path and still calls DenyK9UIAccess()
+    -- itself, so nothing is widened and no message is lost by removing the
+    -- check here. Do not "restore" it for consistency: the consistent rule is
+    -- gate the START of a thing, never the STOP, and this call site cannot
+    -- tell which one it is.
     PropAttachments = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
         if type(RequestToggleK9PropAttachment) == 'function' then RequestToggleK9PropAttachment() end
         return true
     end,
-    -- radial.lua 'k9_deploy_kennel': gated (redundant with the callee, kept for consistency).
+    -- NOT GATED HERE, same reasoning as PropAttachments directly above.
+    -- RequestDeployKennel resolves "am I already carrying one" BEFORE any
+    -- flag or access check, so gating up here stopped a handler who lost
+    -- access from putting a carried kennel back down. Less severe than the
+    -- vest (a carried kennel restrains an object, not the player) and there
+    -- are other routes out, but it is the same mistake and it goes the same
+    -- way.
     DeployableKennel = function()
-        if not CanShowK9UI() then DenyK9UIAccess(); return false, 'not_available' end
         if type(RequestDeployKennel) == 'function' then RequestDeployKennel() end
         return true
     end,

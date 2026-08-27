@@ -86,6 +86,39 @@ read_globals = {
     -- Both are client-only, which is correct: NUI focus and control state
     -- have no server-side meaning.
     "SetNuiFocus", "IsDisabledControlJustPressed",
+    -- GetResourceKvpString -- client/hud.lua's onboarding hint, remembering
+    -- per-citizenid whether this player has opened the tablet or dismissed
+    -- the hint, across reconnects.
+    --
+    -- I ALLOWLISTED A NATIVE THAT DOES NOT EXIST HERE, AND THIS NOTE STAYS
+    -- SO NOBODY REPEATS IT. I originally added `SetResourceKvpString`
+    -- alongside this one, reasoning that its decl page 404ing was not proof
+    -- of absence and that both names were widely used in public resources.
+    -- A native-verification pass then checked the one source I had not:
+    -- the actual CitizenFX registration list in
+    -- code/components/citizen-resources-client/src/KVScriptFunctions.cpp.
+    -- I re-fetched it and confirmed directly. The registered setters are
+    -- SET_RESOURCE_KVP, SET_RESOURCE_KVP_INT, SET_RESOURCE_KVP_FLOAT (plus
+    -- _NO_SYNC variants). THERE IS NO SET_RESOURCE_KVP_STRING. The getter
+    -- has a _STRING-suffixed variant because it needs to say which type to
+    -- read back; the setter's bare name already means string.
+    --
+    -- So the correct pairing is asymmetric and reads wrong at a glance:
+    --   GetResourceKvpString(key)  -- real
+    --   SetResourceKvp(key, value) -- real
+    -- which is exactly why the mistake was easy and why lint must stay the
+    -- thing that catches it.
+    --
+    -- The lesson, since this file already carries the rule and I broke it
+    -- anyway: a 404 decl page is grounds for neither accepting nor
+    -- rejecting, and the natives.json fallback CANNOT settle a CFX native
+    -- (it is the Rockstar hash database and contains no CFX entries at all).
+    -- When both fail, the C++ registration list in the citizenfx/fivem repo
+    -- is the primary source. Use it. Do not fall back to "this name looks
+    -- familiar" -- that is precisely how this resource shipped two invented
+    -- vision getters that returned nil silently for months while its own
+    -- tests invented the same names and agreed with them.
+    "GetResourceKvpString", "SetResourceKvp",
     -- IsNuiFocused -- ext/native-decls/IsNuiFocused.md returns HTTP 200,
     -- ns CFX, apiset client, BOOL IS_NUI_FOCUSED(). Reports whether NUI
     -- focus is currently held by ANY resource, so opening the tablet can
@@ -264,7 +297,25 @@ read_globals = {
     -- client/agility.lua calls it from.
     "GetEntitySpeed",
     "GetEntityType", "GetEntityArchetypeName", "GetOffsetFromEntityInWorldCoords",
-    "SetEntityCollision", "SetEntityVisible", "FreezeEntityPosition",
+    -- SetEntityVisible REMOVED 2026-08-27 (independent native-verification
+    -- pass): zero call sites anywhere in this resource as of this audit
+    -- (client/, server/, shared/, tests/ all searched -- not even a comment
+    -- references it). git history confirms it once had exactly one real
+    -- caller, client/vehicle.lua's old boot-attach K9-vehicle approximation
+    -- (`SetEntityVisible(ped, false, false)` to hide the dog while it sat
+    -- invisibly in the trunk) -- removed outright by commit e23d1981
+    -- ("Seat the dog in the car..."), which replaced that approximation with
+    -- a real seated-in-vehicle implementation that deliberately keeps the K9
+    -- visible. The allowlist entry was never cleaned up alongside the
+    -- feature it existed for -- exactly the stale-entry failure mode this
+    -- file's own "REMOVE THIS ENTRY if the function is ever abandoned" rule
+    -- (see ForceRevertK9Appearance/ApplyK9AppearanceDirect above) targets.
+    -- SET_ENTITY_VISIBLE is a genuine native (natives.json, ENTITY
+    -- namespace, hash 0xEA1C610A04DB6BBB, no apiset key -- client-only under
+    -- this file's own established reading of that field) -- removed here for
+    -- being dead, not for being fake. Restore only alongside a real, live
+    -- call site.
+    "SetEntityCollision", "FreezeEntityPosition",
     "AttachEntityToEntity", "DetachEntity", "GetGamePool",
     "GetHashKey",
     -- CAM namespace + GetEntityRotation, for client/vision.lua's partner
@@ -535,6 +586,61 @@ read_globals = {
     -- search of the live overextended/ox_lib repository this session) --
     -- so this rides an already-load-bearing assumption, not a new one.
     "json",
+    -- client/hud.lua's K9 ONBOARDING HINT feature (Config.Features.
+    -- K9OnboardingHint, in progress as of this pass -- this file was still
+    -- being actively edited by another pass at the moment of this
+    -- verification, so re-check its call sites if this feature's shape
+    -- changes further). Two natives added here; a THIRD name that file
+    -- currently calls is deliberately NOT added -- see that finding below.
+    --
+    --   IsControlJustPressed -- ext/native-decls page 404s (legacy R*
+    --     native, not proof of absence). Confirmed instead against
+    --     runtime.fivem.net/doc/natives.json: PAD namespace, hash
+    --     0x580417101DDB492F, params (padIndex, control), no apiset key ->
+    --     client-only default. client/hud.lua's one call site passes
+    --     (0, <control>), matching that two-int signature, and is itself a
+    --     client file, so the realm is right.
+    --
+    --   GetResourceKvpString -- ext/native-decls page 404s. Confirmed
+    --     instead against the primary C++ registration list itself
+    --     (citizenfx/fivem, master,
+    --     code/components/citizen-resources-client/src/KVScriptFunctions.cpp,
+    --     fetched this session): `RegisterNativeHandler("GET_RESOURCE_KVP_STRING",
+    --     GetResourceKvp<const char*>)`, in the CLIENT resource component
+    --     (the file path itself says so), matching this native's one call
+    --     site (client/hud.lua, a client file).
+    --
+    --   SET_RESOURCE_KVP_STRING -- DOES NOT EXIST, CONFIRMED BY READING THE
+    --     SAME PRIMARY SOURCE LINE-BY-LINE, and deliberately NOT added here
+    --     even though client/hud.lua currently calls a `SetResourceKvpString`
+    --     of that exact spelling (this file's two write call sites,
+    --     MarkDurablyOpenedTablet/MarkDurablyDismissedHint). The real
+    --     registrations in that same KVScriptFunctions.cpp block are
+    --     `SET_RESOURCE_KVP` (the string-taking overload --
+    --     `SetResourceKvp<const char*>`), `SET_RESOURCE_KVP_INT` and
+    --     `SET_RESOURCE_KVP_FLOAT` -- there is no "_STRING"-suffixed setter
+    --     to mirror the getter's own GET_RESOURCE_KVP_STRING; the setter's
+    --     unsuffixed base name already means "string". This is the SAME
+    --     shape as this file's own already-documented
+    --     IsNightvisionActive/IsSeethroughActive finding above: an
+    --     unregistered name returns nil forever with nothing logged on
+    --     FXServer *and* the FiveM client runtime alike, so every call this
+    --     file makes to persist "already seen this hint"/"already opened the
+    --     tablet once" silently writes nothing -- the paired
+    --     GetResourceKvpString reads back nil every time (never `'1'`), so
+    --     HasDurablyOpenedTablet/HasDurablyDismissedHint can never return
+    --     true and the hint can never durably remember being dismissed or
+    --     the tablet being opened, across a reconnect or otherwise. Not
+    --     fixed here (out of scope for a lint-config change, and this file
+    --     is still being actively written elsewhere) -- flagged so it is not
+    --     rediscovered from scratch, and deliberately NOT allowlisted, per
+    --     this file's own standing rule: an allowlist entry for a name that
+    --     does not exist is how exactly this bug hides from luacheck.
+    -- REMOVE the two-native comment above (but re-verify before removing
+    -- IsControlJustPressed/GetResourceKvpString themselves) once
+    -- SetResourceKvpString is corrected to SetResourceKvp and this note is
+    -- superseded.
+    "IsControlJustPressed", "GetResourceKvpString",
 }
 
 -- Read+write: this resource's OWN cross-file globals. Every one of these is

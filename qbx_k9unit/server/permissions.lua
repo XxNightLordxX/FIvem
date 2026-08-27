@@ -1880,6 +1880,47 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
         return false, 'invalid_granter'
     end
 
+    -- YOU MAY NOT LIFT YOUR OWN BLOCK (red-team finding, CRITICAL).
+    --
+    -- Everywhere a block is READ, this resource defends it properly:
+    -- HasK9Access, IsEligibleCertifier, IsAuthorizedAdmin and
+    -- IsAuthorizedForXpGrant all consult 'block.k9.*' BEFORE any rank
+    -- bypass, and HasPermission structurally refuses to let the high-command
+    -- bypass reach a 'block.' key at all. The WRITE side never got the
+    -- matching restriction, and that made the whole feature useless against
+    -- exactly the person it exists to restrain.
+    --
+    -- The attack, in full: a chief blocks a misbehaving captain who is still
+    -- high command by rank. Being blocked only writes a k9_permissions row --
+    -- it does not touch job.grade or job.isboss -- so IsHighCommand still
+    -- answers true for that captain. The only check below was
+    -- IsHighCommand(granterSrc). So the captain runs revoke against their own
+    -- citizenid, the row is deleted, the permission cache refreshes
+    -- immediately, and they have handed themselves back the exact capability
+    -- they were just restrained from. Same for k9.access, k9.certify,
+    -- k9.audit and k9.givexp, and reachable from all three entry points
+    -- (the merged command, the legacy command, and the tablet callback),
+    -- since each is a deliberate thin pass-through with no check of its own.
+    --
+    -- There is no higher tier than high command in this resource to appeal
+    -- to, so the correct answer is simply that nobody removes their own
+    -- block -- someone else with the rank has to. That mirrors the rule
+    -- already enforced everywhere the block is read: a block beats everyone,
+    -- including you.
+    --
+    -- Deliberately NOT tied to Config.FeatureControl.allowHighCommandSelfGrant.
+    -- That setting governs self-GRANTING a capability and defaults to true so
+    -- a lone owner can bootstrap their own server; letting it also govern
+    -- self-unblocking would mean the shipped default silently reopens this
+    -- hole. Self-revoke of a NON-block key is untouched and still allowed --
+    -- giving up your own grant is not an escalation.
+    if type(permissionKey) == 'string' and permissionKey:match('^block%.')
+        and granterCitizenid == targetCitizenid then
+        LogAuditInvocation(granterSrc, 'revokePermission', ('permission=%s target=%s self=true'):format(permissionKey, targetCitizenid), 'denied_self_unblock')
+        NotifyPlayer(granterSrc, locale('permissions.cannot_lift_own_block'), 'error')
+        return false, 'denied_self_unblock'
+    end
+
     -- AUDIT (coder-security, this pass -- see GrantPermission's identical
     -- comment for the full "a self-grant must not need a human to notice
     -- two matching substrings" writeup): a high-command officer revoking a

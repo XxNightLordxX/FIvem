@@ -1806,15 +1806,28 @@ local function RegisterK9RadialMenu()
             label = locale('radial.toggle_vest_label'),
             icon = 'vest',
             onSelect = function()
-                -- NOT WIDENED -- server/propattachment.lua's ADD path
-                -- requires HasK9Access() AND (a real K9 model OR the
-                -- decoupled K9 role), stricter than HasK9Access() alone
-                -- (same class as Leash/Partnership/Open My Gear above).
-                if not CanShowK9UI() then
-                    DenyK9UIAccess('common.no_k9_role_or_access')
-                    return
-                end
-
+                -- NOT GATED HERE, DELIBERATELY -- and this is not the same
+                -- question as "should this be widened".
+                --
+                -- The old comment here was right that the ADD path is
+                -- stricter than HasK9Access() alone, so this item was
+                -- correctly NOT widened. But it then checked CanShowK9UI()
+                -- before calling the toggle, and the toggle is the function
+                -- that decides whether this is an add or a REMOVE. That
+                -- reintroduced, one layer up, a trap already found and fixed
+                -- one layer down: a handler who lost their certification
+                -- while wearing a vest was refused here, and the vest stayed
+                -- welded on. Decertification does not tear prop attachments
+                -- down server-side the way it does leashes, holds and
+                -- partnerships, so this was genuinely the way out.
+                --
+                -- RequestToggleK9PropAttachment resolves intent first: if a
+                -- vest is on, the removal goes through unconditionally;
+                -- otherwise it applies the full ADD gate itself and calls
+                -- DenyK9UIAccess() with the same reason this used to. So
+                -- nothing is widened and no message is lost -- the strictness
+                -- simply now lives at the point that knows which direction
+                -- the player is going.
                 if type(RequestToggleK9PropAttachment) == 'function' then
                     RequestToggleK9PropAttachment()
                 end

@@ -467,14 +467,41 @@ end
 --- @param source number
 --- @return boolean
 local function IsAuthorizedForXpGrant(source)
+    -- AN EXPLICIT BLOCK BEATS RANK, AND IS CHECKED FIRST (verification-pass
+    -- finding). This used to return true on IsHighCommand alone, before
+    -- consulting anything else, so 'block.k9.givexp' could never restrain a
+    -- high command officer -- and since nothing else in the resource read
+    -- that key either, it could not restrain anybody at all.
+    --
+    -- That was an asymmetry rather than a decision: server/admin.lua's
+    -- IsAuthorizedAdmin already checks 'block.k9.audit' BEFORE every one of
+    -- its own bypasses, job.isboss included, with a comment saying outright
+    -- that a block must beat even that. The same reasoning applies here with
+    -- MORE force, not less. Pulling an audit record reads history; granting
+    -- XP mints economy value out of nothing -- config.lua's own comment on
+    -- highCommandGrade calls it the one threshold that "grants WRITE power
+    -- over the economy". An owner could restrain one specific officer from
+    -- reading records but not from minting XP, which is exactly backwards.
+    --
+    -- Reached through the same `type(fn) == 'function'` guard as everything
+    -- else here, so a server running without the permissions system behaves
+    -- exactly as it did before. A caller whose citizenid cannot be resolved
+    -- is NOT treated as blocked: that case already falls through to the
+    -- `return false` at the end, so it fails closed without this branch
+    -- having to guess at it.
+    local callerPlayer = exports.qbx_core:GetPlayer(source)
+    local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
+    local hasResolvedCitizenid = type(callerCitizenid) == 'string' and callerCitizenid ~= ''
+
+    if hasResolvedCitizenid and type(HasPermission) == 'function'
+        and HasPermission(callerCitizenid, 'block.k9.givexp') == true then
+        return false
+    end
+
     if type(IsHighCommand) == 'function' and IsHighCommand(source) then return true end
 
-    if type(HasPermission) == 'function' then
-        local callerPlayer = exports.qbx_core:GetPlayer(source)
-        local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
-        if type(callerCitizenid) == 'string' and callerCitizenid ~= '' then
-            return HasPermission(callerCitizenid, 'k9.givexp') == true
-        end
+    if hasResolvedCitizenid and type(HasPermission) == 'function' then
+        return HasPermission(callerCitizenid, 'k9.givexp') == true
     end
 
     return false

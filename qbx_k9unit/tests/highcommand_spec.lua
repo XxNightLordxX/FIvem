@@ -111,6 +111,7 @@ local function newHarness(highCommandConfig, departments)
         capturedPrints[#capturedPrints + 1] = table.concat(parts, '\t')
     end
 
+    local permissionsByCitizenid = {}
     local runningTotals = {}
     local function AwardXPDirectStub(citizenid, amount, reason)
         capturedAwardCalls[#capturedAwardCalls + 1] = { citizenid = citizenid, amount = amount, reason = reason }
@@ -159,6 +160,25 @@ local function newHarness(highCommandConfig, departments)
     env.AwardXPDirect = AwardXPDirectStub
     env.GetActivePartnerCitizenId = GetActivePartnerCitizenIdStub
 
+    -- IsHighCommand / HasPermission are resource-globals server/highcommand.lua
+    -- reaches through `type(...) == 'function'` guards at COMMAND-HANDLER RUN
+    -- TIME, same as the two above, so they can be injected here.
+    --
+    -- Injected specifically so 'block.k9.givexp' can be tested. That block key
+    -- is ACCEPTED AND STORED by server/permissions.lua (it is listed in
+    -- ADMIN_CAPABILITY_BLOCKABLE_KEYS), so an owner can set it and believe it
+    -- restrains somebody -- and until this was fixed, IsAuthorizedForXpGrant
+    -- never read it, so it silently did nothing. A security control that
+    -- appears to exist and does not is worse than one that is simply absent,
+    -- which is why this is pinned here rather than left to the permissions
+    -- spec, which only ever proved the key could be STORED.
+    permissionsByCitizenid = permissionsByCitizenid or {}
+    env.HasPermission = function(citizenid, key)
+        local perms = permissionsByCitizenid[citizenid]
+        return perms ~= nil and perms[key] == true
+    end
+
+
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
         handler('qbx_k9unit')
     end
@@ -171,6 +191,7 @@ local function newHarness(highCommandConfig, departments)
         capturedAwardCalls = capturedAwardCalls,
         playersBySource = playersBySource,
         partnerships = partnerships,
+        permissionsByCitizenid = permissionsByCitizenid,
         -- Clears the SAME table objects IN PLACE, rather than rebinding the
         -- local variables to fresh tables: printStub/NotifyPlayerStub/
         -- AwardXPDirectStub above and the harness fields returned below both
@@ -867,6 +888,55 @@ t.test('audit: EVERY invocation is logged, including denied/rate_limited/invalid
     local hcSrc2 = registerPlayer(h, 'AUDITALL_HC2', granterJob)
     runCommand(h, hcSrc2, { tostring(target), 'not-a-number' })
     t.contains(h.capturedPrints[#h.capturedPrints], 'invalid_args')
+end)
+
+
+
+-- ============================================================================
+-- block.k9.givexp -- an explicit block must beat rank, like every sibling.
+--
+-- This was a real, shipped gap found by a verification pass. It is worse than
+-- a missing feature: server/permissions.lua LISTS 'k9.givexp' in
+-- ADMIN_CAPABILITY_BLOCKABLE_KEYS and happily accepts and stores
+-- 'block.k9.givexp', so an owner could set that block, be told it saved, and
+-- get no protection whatsoever -- while the three sibling capabilities
+-- (block.k9.access, block.k9.certify, block.k9.audit) all correctly beat rank.
+-- Granting XP is also the one capability that mints economy value from
+-- nothing, so it is the LAST one that should have been unenforceable.
+-- ============================================================================
+
+t.test('block.k9.givexp beats HIGH COMMAND RANK -- the bypass must not short-circuit past an explicit block', function()
+    local h = newHarness({ maxXpPerGrant = 5000, grantCooldownMs = 1500, allowSelfGrant = false })
+    -- isboss qualifies as high command without needing a grade threshold.
+    local src = registerPlayer(h, 'BLOCKED_HC', { name = 'police', isboss = true, grade = { level = 0 } })
+    local target = registerPlayer(h, 'TARGET_A', { name = 'police', grade = { level = 1 } })
+    h.permissionsByCitizenid['BLOCKED_HC'] = { ['block.k9.givexp'] = true }
+
+    runCommand(h, src, { tostring(target), '100' })
+
+    t.equals(#h.capturedAwardCalls, 0, 'a blocked high command officer must mint no XP at all')
+end)
+
+t.test('block.k9.givexp beats an explicit k9.givexp GRANT too -- a block is not merely the absence of a grant', function()
+    local h = newHarness({ maxXpPerGrant = 5000, grantCooldownMs = 1500, allowSelfGrant = false })
+    local src = registerPlayer(h, 'BLOCKED_GRANTEE', { name = 'police', grade = { level = 0 } })
+    local target = registerPlayer(h, 'TARGET_B', { name = 'police', grade = { level = 1 } })
+    h.permissionsByCitizenid['BLOCKED_GRANTEE'] = { ['k9.givexp'] = true, ['block.k9.givexp'] = true }
+
+    runCommand(h, src, { tostring(target), '100' })
+
+    t.equals(#h.capturedAwardCalls, 0, 'holding both a grant and a block resolves to blocked')
+end)
+
+t.test('CONTROL: the same high command officer WITHOUT the block still grants normally -- proving the refusals above are the block, not a broken fixture', function()
+    local h = newHarness({ maxXpPerGrant = 5000, grantCooldownMs = 1500, allowSelfGrant = false })
+    local src = registerPlayer(h, 'UNBLOCKED_HC', { name = 'police', isboss = true, grade = { level = 0 } })
+    local target = registerPlayer(h, 'TARGET_C', { name = 'police', grade = { level = 1 } })
+    -- deliberately no permissions row at all
+
+    runCommand(h, src, { tostring(target), '100' })
+
+    t.equals(#h.capturedAwardCalls, 1, 'an unblocked high command officer still mints XP -- the two tests above fail for the block, not because the fixture never reaches the grant')
 end)
 
 os.exit(t.summary())
