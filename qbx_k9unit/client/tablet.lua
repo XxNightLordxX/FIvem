@@ -1148,12 +1148,19 @@ local TABLET_STRING_KEYS = {
     -- STAMINA (owner-directed, this pass: "be able to make the stamina as
     -- high as i want and be able to make the stamina as high as i want or
     -- permanant") -- see html/tablet.js's buildK9ProfileStaminaField() for
-    -- the full "0 means permanent, session-only, drain-rate-not-a-stat"
-    -- contract these support.
+    -- the full "0 means permanent, drain-rate-not-a-stat" contract these
+    -- support. Persistence wording is NOT in this list: it comes from
+    -- the server's own conditional staminaPersistenceWarning field
+    -- (present only on a memory-only server, post migration 0021), never
+    -- a client-hardcoded string.
     'column_stamina_drain', 'k9_profile_effective_stamina_prefix', 'k9_profile_speed_clamp_note',
-    'k9_profile_stamina_label', 'k9_profile_stamina_hint', 'k9_profile_stamina_session_only_note',
+    'k9_profile_stamina_label', 'k9_profile_stamina_hint',
     'k9_profile_stamina_permanent_checkbox_label', 'k9_profile_stamina_permanent_label',
-    'k9_profile_stamina_drain_rate_template', 'k9_profile_session_only_badge', 'k9_profile_error_invalid_stamina',
+    'k9_profile_stamina_drain_rate_template', 'k9_profile_error_invalid_stamina',
+    -- PERSON SCREEN EMBED (coordinator-directed: "one place that acts on
+    -- a citizenid, extended, never forked") -- see html/tablet.js's own
+    -- buildPersonK9ProfileSection().
+    'k9_profile_person_section_heading', 'k9_profile_person_section_intro',
     -- K9 SUPPLY SHOP ITEM CATALOG (owner-directed "give high command real
     -- control over the equipment shop" pass, server/equipmentshop.lua's
     -- own "EQUIPMENT SHOP ITEM CATALOG" section) -- sits alongside the

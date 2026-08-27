@@ -350,18 +350,39 @@ local MAX_SPEED_SCENT_MULTIPLIER = ResolveMaxSpeedScentMultiplier()
 local MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0
 local MAX_NOTE_LENGTH = 120
 
--- STAMINA OVERRIDE ceiling. Owner's own words: "be able to make the
--- stamina as high as i want and be able to make the stamina...
--- permanant" -- reuses the SAME literal value (20.0) server/runtimecontrol.lua
--- already ships and tests for `Wellbeing.Fatigue.sprintDecayPerTick`
--- (that file's own TUNABLE_REGISTRY entry), duplicated here per this
--- file's own "no cross-file `local` import mechanism" convention, not
--- reinvented. `IsValidStaminaDrain` below deliberately accepts `>= 0`, NOT
--- `> 0` -- ZERO IS THE VALID "PERMANENT STAMINA" SENTINEL the owner asked
--- for (server/wellbeing.lua's TickWellbeing subtracts this value from
--- Fatigue every tick a K9 is sprinting; 0 means that subtraction never
--- happens, i.e. Fatigue's sprint-decay never fires for that citizenid).
-local MAX_STAMINA_DRAIN_PER_TICK = 20.0
+--- STAMINA OVERRIDE ceiling -- OWNER-EDITABLE, mirroring
+--- ResolveMaxSpeedScentMultiplier's own clamp-and-warn shape exactly (never
+--- assert on an operator-reachable config value -- see that function's own
+--- doc comment for the exact incident this avoids repeating). Reads
+--- Config.MaxStaminaDrainPerTick, NOT Config.MaxSpeedScentMultiplier -- see
+--- that config field's own header comment for why the two must never be
+--- conflated: THE DIRECTION IS INVERTED. speedMultiplier/
+--- scentRangeMultiplier are good when bigger, so their ceiling bounds how
+--- GOOD a dog can be made. sprintDecayPerTick is a drain rate -- bigger
+--- means it runs out of stamina FASTER, a WORSE dog -- so this ceiling
+--- bounds how BAD a dog can be made, not how good. Owner's own words: "be
+--- able to make the stamina as high as i want and be able to make the
+--- stamina as high as i want or permanant."
+---
+--- ZERO ALWAYS REMAINS VALID REGARDLESS OF THIS CEILING -- it is the
+--- "permanent stamina, never runs out" sentinel (server/wellbeing.lua's
+--- TickWellbeing subtracts this value from Fatigue every tick a K9 is
+--- sprinting; 0 means that subtraction never happens). `IsValidStaminaDrain`
+--- below deliberately accepts `>= 0`, NOT `> 0`, and this ceiling only ever
+--- bounds the UPPER end -- a configured ceiling can never make 0 invalid.
+--- @return number
+local function ResolveMaxStaminaDrainPerTick()
+    local fallback = 20.0
+    local raw = Config and Config.MaxStaminaDrainPerTick
+    local value = tonumber(raw)
+    if value == nil or value ~= value or value == math.huge or value == -math.huge or value <= 0 then
+        print(('[qbx_k9unit] k9profiles: Config.MaxStaminaDrainPerTick is missing or not a valid positive number (found: %s). Using the built-in fallback of %s instead -- find Config.MaxStaminaDrainPerTick in config.lua and set it to a positive number.'):format(tostring(raw), tostring(fallback)))
+        return fallback
+    end
+    return value
+end
+
+local MAX_STAMINA_DRAIN_PER_TICK = ResolveMaxStaminaDrainPerTick()
 
 -- Defensive cap on total live (non-tombstoned) override count -- mirrors
 -- server/certtiers.lua's own MAX_TIERS reasoning exactly: an

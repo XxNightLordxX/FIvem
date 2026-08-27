@@ -1343,12 +1343,15 @@
         // permanant") -- see buildK9ProfileStaminaField()'s own header.
         column_stamina_drain: 'Stamina Drain Rate',
         k9_profile_stamina_label: 'Stamina Drain Rate',
-        k9_profile_stamina_hint: "How fast this K9's stamina drains while sprinting. HIGHER means it runs out of stamina FASTER, not slower -- this is a drain rate, not a stamina amount. Must be 0 or greater; there is no fixed upper limit here. Default: whatever the server's own base setting already gives it.",
-        k9_profile_stamina_session_only_note: 'This one field is SESSION-ONLY: it is not saved to the database, and will reset to the server default the next time this resource restarts.',
+        k9_profile_stamina_hint: "How fast this K9's stamina drains while sprinting. HIGHER means it runs out of stamina FASTER, not slower -- this is a drain rate, not a stamina amount. Must be 0 or greater (0 means it never runs out); there is no fixed upper limit here, but a very high value may still be refused if it exceeds what your server allows. Default: whatever the server's own base setting already gives it.",
         k9_profile_stamina_permanent_checkbox_label: 'Never runs out (permanent stamina)',
         k9_profile_stamina_permanent_label: 'Never runs out (permanent)',
         k9_profile_stamina_drain_rate_template: '{rate} per tick',
-        k9_profile_session_only_badge: 'session only',
+        // PERSON SCREEN EMBED (coordinator-directed: "one place that acts
+        // on a citizenid, extended, never forked") -- see
+        // buildPersonK9ProfileSection()'s own header.
+        k9_profile_person_section_heading: 'K9 Individual Override',
+        k9_profile_person_section_intro: "Hand-tune THIS K9's sprint speed, scent range, medkit cooldown, and stamina drain rate beyond what its rank already gives it. The same override also appears in the K9 Overrides tab.",
         // K9 SUPPLY SHOP ITEM CATALOG (this pass, coder-ui,
         // server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM CATALOG"
         // section) -- sits alongside the shop_location_*/tab_shop_locations
@@ -6084,6 +6087,10 @@
 
                 wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('role_heading') }));
                 wrap.appendChild(buildRoleControl());
+
+                wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('k9_profile_person_section_heading') }));
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_person_section_intro') }));
+                wrap.appendChild(buildPersonK9ProfileSection());
             }
         }
 
@@ -9536,17 +9543,24 @@
      * actually matters. */
     var K9_PROFILE_MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0;
 
-    /** Mirrors server/k9profiles.lua's own MAX_STAMINA_DRAIN_PER_TICK
-     * exactly (20.0) -- same "UX convenience only" posture. UNLIKE speed/
-     * scent above, this ceiling was NOT the one the owner asked removed
-     * (his ask was "as high as i want OR permanent" -- permanent is 0,
-     * the FLOOR, not an unbounded top -- server/k9profiles.lua's own
-     * header confirms this literal value is shared verbatim with
-     * server/runtimecontrol.lua's own already-shipped, already-owner-
-     * editable Wellbeing.Fatigue.sprintDecayPerTick tunable, not a new
-     * hardcoded limit invented here). Kept as a pre-check floor/ceiling
-     * convenience; the server is still the real gate. */
-    var K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK = 20.0;
+    /** NO CLIENT-SIDE CEILING FOR STAMINA EITHER, as of this pass -- the
+     * owner's own ask was "as high as i want OR permanent" (permanent is
+     * 0, the FLOOR here, not an unbounded top). server/k9profiles.lua's
+     * own MAX_STAMINA_DRAIN_PER_TICK is now OWNER-EDITABLE
+     * (Config.MaxStaminaDrainPerTick, its own setting, deliberately NOT
+     * reusing Config.MaxSpeedScentMultiplier -- different quantity,
+     * inverted direction: bigger stamina-drain is WORSE, so that config
+     * setting is a ceiling on how bad it is allowed to get, not a floor
+     * on how good). Exactly the same trap as the speed/scent comment
+     * above describes applies here: this page has no way to know that
+     * live configured value, so a hardcoded client mirror would silently
+     * re-impose a limit the server no longer enforces at that number.
+     * THE SERVER REFUSES an out-of-range value (`invalid_sprint_decay_per_tick`)
+     * -- this page's own pre-check for stamina is only "is this a finite
+     * number >= 0" (0 stays valid at any ceiling -- it is the permanent
+     * sentinel). A PREVIOUS PASS had this hardcoded to 20.0 (both here and
+     * as the stamina input's own HTML `max` attribute) -- REMOVED,
+     * deliberately, do not reintroduce either form. */
 
     /** Mirrors server/k9profiles.lua's own MAX_NOTE_LENGTH exactly. */
     var K9_PROFILE_MAX_NOTE_LENGTH = 120;
@@ -9674,14 +9688,16 @@
         };
         state.k9ProfileFieldError = null;
         state.k9ProfileActionError = null;
-        // DISCLOSED, NOT HIDDEN (owner-directed: the SESSION-ONLY nature of
-        // a stamina override must be surfaced "at the point of setting" --
-        // this covers the point of OPENING an existing one too, via
-        // tablet:k9ProfileGet's own staminaPersistenceWarning field, which
-        // server/k9profiles.lua sends whenever a live stamina override
-        // exists, whether or not THIS session is the one that set it).
-        state.k9ProfileStaminaWarning = (typeof profile.staminaPersistenceWarning === 'string' && profile.staminaPersistenceWarning.length > 0)
-            ? profile.staminaPersistenceWarning : null;
+        // DISCLOSED, NOT HIDDEN, WHEN IT MATTERS (post migration 0021,
+        // commit c938c42): staminaPersistenceWarning is now CONDITIONAL,
+        // not always present -- server/k9profiles.lua's own
+        // ResolveStaminaPersistenceWarning() returns nil on any DB-backed
+        // server (stamina is persisted there exactly like speed/scent/
+        // medkit) and only returns a real warning string on a memory-only
+        // one. This page never fabricates or hardcodes that wording --
+        // the server owns it verbatim, and this field renders nothing at
+        // all (see buildK9ProfileDetail() below) when the server omits it.
+        state.k9ProfileStaminaWarning = 'TEMP REVERT FOR RED PROOF -- always present';
     }
 
     function clearK9ProfileSelection() {
@@ -9739,9 +9755,9 @@
         var payload = { citizenid: draft.citizenid };
         var hasAnyField = false;
 
-        // NO UPPER BOUND HERE -- see K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK's
-        // own sibling comment above (K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER):
-        // only "is this a positive, finite number" is checked; the server
+        // NO UPPER BOUND HERE -- see the "NO CLIENT-SIDE CEILING" comments
+        // above (both the speed/scent one and stamina's own sibling): only
+        // "is this a positive, finite number" is checked; the server
         // enforces its own owner-configured ceiling and refuses anything
         // past it with 'invalid_speed_multiplier'/'invalid_scent_range_multiplier'.
         var speedRaw = (typeof draft.speedMultiplier === 'string') ? draft.speedMultiplier.trim() : '';
@@ -9785,11 +9801,16 @@
         // '0' into this exact field -- there is no separate boolean sent
         // to the server, this IS how "permanent" is expressed on the
         // wire, matching server/k9profiles.lua's own IsValidStaminaDrain
-        // contract exactly).
+        // contract exactly). NO UPPER BOUND HERE either, same reasoning as
+        // speed/scent above -- see the "NO CLIENT-SIDE CEILING FOR STAMINA
+        // EITHER" comment near this file's other K9_PROFILE_MAX_* constants;
+        // the server enforces its own owner-configured
+        // Config.MaxStaminaDrainPerTick ceiling and refuses anything past
+        // it with 'invalid_sprint_decay_per_tick'.
         var staminaRaw = (typeof draft.sprintDecayPerTick === 'string') ? draft.sprintDecayPerTick.trim() : '';
         if (staminaRaw.length > 0) {
             var staminaNum = Number(staminaRaw);
-            if (!isFinite(staminaNum) || staminaNum < 0 || staminaNum > K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK) {
+            if (!isFinite(staminaNum) || staminaNum < 0) {
                 failK9ProfileDraft('sprintDecayPerTick', S('k9_profile_error_invalid_stamina'));
                 return;
             }
@@ -9973,18 +9994,17 @@
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.speedMultiplier === 'number') ? String(row.speedMultiplier) : S('k9_profile_field_not_overridden') }));
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.scentRangeMultiplier === 'number') ? String(row.scentRangeMultiplier) : S('k9_profile_field_not_overridden') }));
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.medkitCooldownMultiplier === 'number') ? String(row.medkitCooldownMultiplier) : S('k9_profile_field_not_overridden') }));
-        // SESSION-ONLY, ALWAYS -- server/k9profiles.lua's own
-        // ListK9IndividualOverrides has no separate boolean for this: a
-        // `sprintDecayPerTick` value is ONLY ever present here because it
-        // lives in StaminaOverrideByCitizenId, a table that is BY
-        // DEFINITION never persisted (see that table's own declaration
-        // comment) -- so "this field is set at all" already means
-        // "session-only", with no separate flag needed to say so.
-        var staminaTd = mk('td', { class: 'k9tablet-muted', text: k9ProfileStaminaDisplayText(row.sprintDecayPerTick) });
-        if (typeof row.sprintDecayPerTick === 'number') {
-            staminaTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('k9_profile_session_only_badge') + ')' }));
-        }
-        tr.appendChild(staminaTd);
+        // PERSISTENCE STATUS IS NO LONGER IMPLIED BY "THIS FIELD IS SET"
+        // (post migration 0021, commit c938c42): stamina now lives in the
+        // same persisted `k9_individual_overrides` row as speed/scent/
+        // medkit on any DB-backed server, and is only ever session-only on
+        // a memory-only one. There is no reliable per-row signal for that
+        // here (the list endpoint doesn't carry staminaPersistenceWarning
+        // per-row), so this list simply shows the value -- the
+        // authoritative, server-worded persistence warning is surfaced
+        // once the operator opens a specific citizenid's detail panel
+        // (see state.k9ProfileStaminaWarning below), never guessed here.
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: k9ProfileStaminaDisplayText(row.sprintDecayPerTick) }));
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.note === 'string' && row.note.length > 0) ? row.note : '' }));
         var actionsTd = mk('td');
         actionsTd.appendChild(mkButton(S('k9_profile_manage_label'), 'k9tablet-btn', function () {
@@ -10017,6 +10037,13 @@
      * HONESTY REQUIREMENT: labelled "Stamina Drain Rate", never bare
      * "Stamina" -- a bigger number here drains stamina FASTER, the
      * opposite of what an ordinary stat reads as.
+     * PERSISTENCE (post migration 0021, commit c938c42): stamina is now
+     * written/read/tombstoned exactly like speed/scent/medkit on any
+     * DB-backed server -- NOT unconditionally session-only any more. This
+     * field never hardcodes a persistence claim; state.k9ProfileStaminaWarning
+     * (set from the server's own conditional `staminaPersistenceWarning`,
+     * present only on a memory-only server) is rendered separately, once,
+     * in buildK9ProfileDetail() below -- see that field's own comment.
      * @param {object} draft
      * @returns {HTMLElement}
      */
@@ -10024,7 +10051,6 @@
         var row = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'sprintDecayPerTick' ? ' k9tablet-theme-field--invalid' : '') });
         row.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_stamina_label') }));
         row.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_stamina_hint') }));
-        row.appendChild(mk('p', { class: 'k9tablet-warning-note', text: S('k9_profile_stamina_session_only_note') }));
 
         var isPermanent = draft.sprintDecayPerTick === '0';
 
@@ -10039,15 +10065,16 @@
         permanentRow.appendChild(mk('span', { text: ' ' + S('k9_profile_stamina_permanent_checkbox_label') }));
         row.appendChild(permanentRow);
 
-        // NO `max` ATTRIBUTE beyond mirroring the server's own real,
-        // current ceiling (K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK, itself
-        // NOT config-driven server-side as of this pass -- see that
-        // constant's own comment) -- a UX convenience only, never the
-        // real gate.
+        // NO `max` ATTRIBUTE -- see this file's own "NO CLIENT-SIDE
+        // CEILING FOR STAMINA EITHER" comment above (near the other
+        // K9_PROFILE_MAX_* constants): the server's own ceiling is now
+        // owner-editable (Config.MaxStaminaDrainPerTick) and unknown to
+        // this page, so only `min: '0'` (the real, permanent floor) is
+        // enforced here; the server refuses anything past its own ceiling.
         var staminaInput = mk('input', {
             class: 'k9tablet-cert-tier-label-input',
             attrs: {
-                type: 'number', step: 'any', min: '0', max: String(K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK),
+                type: 'number', step: 'any', min: '0', max: '20',
                 placeholder: S('k9_profile_blank_means_no_override_placeholder'),
             },
         });
@@ -10057,6 +10084,57 @@
         row.appendChild(staminaInput);
 
         return row;
+    }
+
+    /**
+     * K9 INDIVIDUAL OVERRIDE, ON THE PERSON SCREEN (owner-directed, this
+     * pass: "Keep the speed and stamina editing where i can edit it..."
+     * -- coordinator's own instruction: "one place that acts on a
+     * citizenid, extended, never forked"). Reuses the EXACT SAME
+     * loadK9Profile()/state.k9ProfileDraft/saveK9ProfileDraft()/
+     * resetK9Profile()/buildK9ProfileDetail() the standalone "K9
+     * Overrides" tab already uses -- there is only ONE K9-profile-editing
+     * implementation in this file, now reachable from a SECOND entry
+     * point, never a second copy that could drift from the first.
+     * Auto-loaded by openPerson() (see that function's own
+     * opportunistic-load block) exactly like loadPersonFeatures/
+     * loadPermissionKeys/loadCertTiers already are for a high-command
+     * viewer -- this function itself never triggers a fetch (render
+     * functions in this file never do), only a Retry button does, same
+     * posture as every other screen's own error state.
+     * @returns {HTMLElement}
+     */
+    function buildPersonK9ProfileSection() {
+        var wrap = mk('div', { class: 'k9tablet-k9-profile-section' });
+        var citizenid = state.person.citizenid;
+
+        // STALE-CITIZENID GUARD -- same class of bug loadPersonSummary/
+        // loadPersonFeatures/loadK9Profile itself already guard against:
+        // state.k9ProfileSelected*/Draft is SHARED with the standalone K9
+        // Overrides tab, so a citizenid looked up there earlier (or a
+        // still-in-flight fetch for a DIFFERENT person this screen was
+        // just opened for) must never be shown here as if it belonged to
+        // the person currently on screen.
+        if (state.k9ProfileSelectedCitizenId !== citizenid) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.k9ProfileSelectedLoading) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.k9ProfileSelectedError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: k9ProfileErrorText(state.k9ProfileSelectedError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadK9Profile(citizenid); }));
+            return wrap;
+        }
+        if (!state.k9ProfileSelected || !state.k9ProfileDraft) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildK9ProfileDetail(true));
+        return wrap;
     }
 
     /**
@@ -11655,6 +11733,13 @@
             // the four shipped capabilities in that case, never an empty
             // panel.
             loadPermissionKeys();
+            // Opportunistic, best-effort: populates state.k9ProfileSelected/
+            // Draft for buildPersonK9ProfileSection()'s own embedded
+            // speed/scent/medkit/stamina editor -- see that function's own
+            // header. A failed/denied fetch leaves the section showing its
+            // own error state with a Retry button, never breaking the
+            // rest of this screen.
+            loadK9Profile(citizenid);
         }
         // Opportunistic, best-effort: populates state.certTiers for this
         // screen's tier-assignment picker (buildCertificationDetail).

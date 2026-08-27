@@ -155,6 +155,13 @@ local function boot(opts)
         -- back to its built-in 10.0 default", exactly matching a real
         -- server that has never touched Config.MaxSpeedScentMultiplier.
         MaxSpeedScentMultiplier = opts.maxSpeedScentMultiplier,
+        -- Owner-editable stamina-drain ceiling (Part B, added alongside
+        -- config.lua's own Config.MaxStaminaDrainPerTick -- see
+        -- server/k9profiles.lua's ResolveMaxStaminaDrainPerTick). Omitted
+        -- means "let that resolver fall back to its built-in 20.0
+        -- default", exactly matching a real server that has never touched
+        -- this setting -- same posture as maxSpeedScentMultiplier above.
+        MaxStaminaDrainPerTick = opts.maxStaminaDrainPerTick,
         Wellbeing = opts.wellbeingConfig,
     }
 
@@ -1172,6 +1179,101 @@ t.test('STAMINA: ListK9IndividualOverrides / k9ProfilesList includes a citizenid
     end
     t.isNotNil(found, 'a stamina-only override must still appear in the list')
     t.equals(found.sprintDecayPerTick, 1.5)
+end)
+
+-- ============================================================================
+-- SECTION 12 -- OWNER-EDITABLE STAMINA CEILING (Config.MaxStaminaDrainPerTick,
+-- coder-ui finding: MAX_STAMINA_DRAIN_PER_TICK was a plain hardcoded Lua
+-- local -- unlike MAX_SPEED_SCENT_MULTIPLIER above, which already read an
+-- owner-editable Config field -- meaning stamina was NOT actually "as high
+-- as i want" yet, despite the owner asking for exactly that in the same
+-- breath as speed/scent). ResolveMaxStaminaDrainPerTick mirrors
+-- ResolveMaxSpeedScentMultiplier's own clamp-and-warn shape exactly --
+-- SECTION 10's own tests above are the direct template for this section.
+-- THE DIRECTION IS INVERTED from Section 10, and 0 (permanent) must remain
+-- valid at every ceiling, however low -- both asserted explicitly below.
+-- ============================================================================
+
+t.test('STAMINA CEILING IS GENUINELY CONFIG-DRIVEN: Config.MaxStaminaDrainPerTick = 5.0 accepts 4.9 and rejects 5.1', function()
+    local f = boot({ isHighCommand = function() return true end, maxStaminaDrainPerTick = 5.0 })
+    local ok1 = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 4.9 })
+    t.isTrue(ok1.ok, 'a value below a 5.0 ceiling must be accepted')
+    t.equals(ok1.effective.sprintDecayPerTick, 4.9)
+
+    advance(f)
+    local rejected = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 5.1 })
+    t.isFalse(rejected.ok, 'a value above a 5.0 ceiling must be rejected')
+    t.equals(rejected.reason, 'invalid_sprint_decay_per_tick')
+end)
+
+t.test('STAMINA CEILING IS GENUINELY CONFIG-DRIVEN: a simulated reboot at Config.MaxStaminaDrainPerTick = 100.0 now accepts 90.0', function()
+    local f = boot({ isHighCommand = function() return true end, maxStaminaDrainPerTick = 100.0 })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 90.0 })
+    t.isTrue(result.ok, 'a value that would have been rejected under the old hardcoded 20.0 must be accepted once the operator raises the ceiling to 100.0')
+    t.equals(result.effective.sprintDecayPerTick, 90.0)
+end)
+
+t.test('STAMINA CEILING SANITY CHECK (prove the test above is real): a stale 20.0 ceiling would reject 90.0', function()
+    local wouldPassAtOldHardcodedCeiling = 90.0 >= 0 and 90.0 <= 20.0
+    t.isFalse(wouldPassAtOldHardcodedCeiling, '90.0 must be above the OLD hardcoded 20.0 ceiling for the test above to be a meaningful proof of config-drivenness')
+end)
+
+t.test('STAMINA CEILING: NEVER REJECTS 0 (permanent), even at a very low configured ceiling', function()
+    local f = boot({ isHighCommand = function() return true end, maxStaminaDrainPerTick = 1.0 })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 0 })
+    t.isTrue(result.ok, 'the permanent-stamina sentinel (0) must remain valid regardless of how low this ceiling is configured')
+    t.equals(result.effective.sprintDecayPerTick, 0)
+end)
+
+t.test('STAMINA CEILING: negative, NaN, infinity and a string are each rejected at a NON-DEFAULT ceiling too, and the call never errors (pcall)', function()
+    local f = boot({ isHighCommand = function() return true end, maxStaminaDrainPerTick = 5.0 })
+    local nan = 0 / 0
+    for _, bad in ipairs({ -1, nan, math.huge, -math.huge, 'not a number' }) do
+        advance(f)
+        local ok, result = pcall(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'], HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = bad })
+        t.isTrue(ok, ('must never throw for sprintDecayPerTick = %s at a 5.0 ceiling'):format(tostring(bad)))
+        t.isFalse(result.ok)
+        t.equals(result.reason, 'invalid_sprint_decay_per_tick')
+    end
+end)
+
+t.test('STAMINA CEILING: Config.MaxStaminaDrainPerTick missing entirely falls back to 20.0 with a named warning, never asserts/crashes the file', function()
+    local f = boot({ isHighCommand = function() return true end }) -- maxStaminaDrainPerTick omitted -> Config.MaxStaminaDrainPerTick is nil
+    t.isNotNil(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'], 'the file must still have loaded and registered every callback')
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.MaxStaminaDrainPerTick', 1, true) and line:find('20', 1, true) then
+            found = true
+        end
+    end
+    t.isTrue(found, 'a missing Config.MaxStaminaDrainPerTick must print a warning naming the exact setting and the 20.0 fallback')
+
+    local accepted = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 20.0 })
+    t.isTrue(accepted.ok)
+    advance(f)
+    local rejected = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT2', sprintDecayPerTick = 20.01 })
+    t.isFalse(rejected.ok)
+    t.equals(rejected.reason, 'invalid_sprint_decay_per_tick')
+end)
+
+t.test('STAMINA CEILING: Config.MaxStaminaDrainPerTick = 0 / negative / NaN / infinity / a string all fall back to 20.0 with a named warning', function()
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -5, nan, math.huge, -math.huge, 'not a number' }) do
+        local f = boot({ isHighCommand = function() return true end, maxStaminaDrainPerTick = bad })
+        local accepted = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 20.0 })
+        t.isTrue(accepted.ok, ('Config.MaxStaminaDrainPerTick = %s must fall back to the 20.0 default, not disable the file'):format(tostring(bad)))
+    end
+end)
+
+t.test('STAMINA CEILING: raising Config.MaxStaminaDrainPerTick never moves Config.MaxSpeedScentMultiplier\'s own ceiling -- the two settings are independent', function()
+    local f = boot({ isHighCommand = function() return true end, maxStaminaDrainPerTick = 100.0, maxSpeedScentMultiplier = 5.0 })
+    local staminaOk = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 50.0 })
+    t.isTrue(staminaOk.ok, 'the raised stamina ceiling applies to stamina')
+
+    advance(f)
+    local speedRejected = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 50.0 })
+    t.isFalse(speedRejected.ok, 'speedMultiplier must still be bound by its OWN 5.0 ceiling, unaffected by stamina\'s own 100.0')
+    t.equals(speedRejected.reason, 'invalid_speed_multiplier')
 end)
 
 os.exit(t.summary())
