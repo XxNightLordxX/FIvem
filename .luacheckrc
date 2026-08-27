@@ -239,6 +239,22 @@ read_globals = {
     -- `files`") does not apply here -- every call site in this resource is
     -- server-side only.
     "LoadResourceFile",
+    -- SAVE_RESOURCE_FILE. server/debugdump.lua's `/k9debug` command writes
+    -- one timestamped diagnostic file per run under this resource's own
+    -- `diagnostics/` folder -- the owner's own explicit request was a file
+    -- in a folder inside the resource, never console/chat output. VERIFIED
+    -- against ext/native-decls/SaveResourceFile.md (fetched fresh this
+    -- pass, not assumed from the similarly-named LoadResourceFile above):
+    -- HTTP 200, `ns: CFX`, `apiset: server`, `BOOL SAVE_RESOURCE_FILE(char*
+    -- resourceName, char* fileName, char* data, int dataLength)`. Every
+    -- call site in this resource is server-side only, matching that
+    -- `apiset`. NOT verified by this pass: whether it creates an
+    -- intermediate directory that does not already exist on disk (the decl
+    -- page does not say either way) -- server/debugdump.lua's own header
+    -- discloses this and ships `diagnostics/.gitkeep` specifically so that
+    -- folder exists on disk regardless of which way that turns out to
+    -- behave.
+    "SaveResourceFile",
     -- Server-side entity pool enumeration, used by server/wellbeing.lua's rest-
     -- source proximity check. VERIFIED against primary source: each has an
     -- ext/native-decls entry declaring `apiset: server`. Same test the native
@@ -880,6 +896,22 @@ globals = {
     -- for a caller who has lost access, or the fix becomes a permanent
     -- stranded-entity trap -- a worse bug than the hijack it closed.
     "ClaimNetworkEntity", "ReleaseNetworkEntity", "IsNetworkEntityClaimedByOther",
+    -- server/bodyclaims.lua -- the SAME cross-feature-registry pattern as
+    -- ClaimNetworkEntity/ReleaseNetworkEntity/IsNetworkEntityClaimedByOther
+    -- immediately above, applied to a citizenid instead of a netId: closes
+    -- a real, demonstrated race between server/kennel.lua's requestEnterKennel
+    -- and server/vehicle.lua's requestVehicleSeatClaim (each could
+    -- independently grant an exclusive claim on the SAME citizenid's own
+    -- body at once, since neither previously consulted the other's
+    -- registry), and extends the same guarantee to server/combat.lua's
+    -- BiteAndHold/NonLethalTakedown/PropDragging target AND holder sides.
+    -- IsBodyClaimed (distinct from IsBodyClaimedByOther) has no "own
+    -- mechanic" to exempt -- it exists for a caller (server/combat.lua's own
+    -- HOLDER-side check) that does not itself participate in this registry
+    -- at all. Consumed by server/kennel.lua, server/vehicle.lua, and
+    -- server/combat.lua. Same "a Release path must never be gated" note as
+    -- immediately above applies here too.
+    "ClaimBody", "ReleaseBody", "IsBodyClaimedByOther", "IsBodyClaimed",
     -- server/progression.lua -- validates a Config-supplied XP mint budget
     -- parameter. Exists because a boundary value must never silently mean
     -- "blocked forever": server/cooldowns.lua's IsOnCooldown already treats a
@@ -1514,6 +1546,12 @@ globals = {
     -- it ran on the player's own machine; the server had no way to ask the
     -- question at all until this.
     "IsK9CurrentlyHolding",
+    -- server/combat.lua -- READ-ONLY, same posture as IsK9CurrentlyHolding
+    -- immediately above: which effectType (if any) a holder currently
+    -- holds, so a denying caller (server/vehicle.lua's own
+    -- requestVehicleSeatClaim) can pick between two already-shipped,
+    -- effect-specific rejection messages instead of one generic one.
+    "GetActiveHoldEffectTypeForHolder",
     -- IsSearchInProgressForSource -- server/search.lua, exposed for a
     -- FUTURE server/combat.lua consumer, same "expose now, wire up later"
     -- precedent as FindNearestLeashCandidate/FindNearestPartnerCandidate

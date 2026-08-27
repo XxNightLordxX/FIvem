@@ -237,6 +237,15 @@ client_scripts {
     'client/equipmentshop.lua', -- K9 Supply shop walk-up (DEVELOPER_REFERENCE.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
     'client/commandsuggestions.lua', -- NEW FILE -- chat:addSuggestion for every RegisterCommand this resource registers (fresh-install finding: zero chat:addSuggestion calls existed anywhere in this resource before this file). No load-order dependency at all: reads only Config (already loaded via shared_scripts) and fires a purely local TriggerEvent at its own onResourceStart, calling no other client file's globals. Placed last purely because it has nothing to be ordered against, same reasoning as client/exports.lua immediately above it.
+    -- NEW FILE -- the client half of /k9debug (server/debugdump.lua owns
+    -- the command itself). Reads Config.DebugDump.enabled directly
+    -- (shared_scripts, already loaded) and, only while that is true, sends
+    -- a small, periodic self-report of client-only facts (ped health,
+    -- ragdoll/vehicle/NUI-focus state) the server cannot observe on its
+    -- own -- see that file's own header. No load-order dependency: calls
+    -- no other client file's globals, only real natives and
+    -- TriggerServerEvent.
+    'client/debugdump.lua',
 }
 
 server_scripts {
@@ -264,6 +273,22 @@ server_scripts {
     -- resolver (ResolveNetworkEntity), loaded alongside cooldowns.lua and
     -- before main.lua/search.lua, its two consumers.
     'server/entities.lua',
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (kennel-vs-vehicle-seat race fix pass,
+    -- coder-backend) -- ClaimBody/ReleaseBody/IsBodyClaimedByOther, the
+    -- single shared seam server/kennel.lua (kennel_rest),
+    -- server/vehicle.lua (vehicle_seat), and server/combat.lua
+    -- (combat_target) each now consult before committing an exclusive claim
+    -- on a citizenid's own body, closing a real, demonstrated race between
+    -- "Rest in Kennel" and "Enter Vehicle" -- see that file's own header for
+    -- the full writeup, including why the leash is deliberately NOT one of
+    -- this registry's participants. Placed alongside server/entities.lua,
+    -- the resource's other citizenid/netId cross-feature claim registry,
+    -- for the identical "shared primitive, grouped together" reasoning that
+    -- file's own placement comment gives -- no file-load-time call of its
+    -- own (every consumer reaches it only from inside a RegisterNetEvent
+    -- handler), so this ordering is thematic, not a hard requirement,
+    -- exactly like server/entities.lua immediately above it.
+    'server/bodyclaims.lua',
     -- Shared ox_lib notify wrapper (NotifyPlayer). Extracted after this
     -- pattern turned up hand-rolled 12 separate times across server files --
     -- with real drift already visible between copies -- while the roadmap
@@ -636,6 +661,17 @@ server_scripts {
     'server/webhook.lua',
     'server/exports.lua',
     'server/selfcheck.lua', -- Boot-time self-check (dependency version + Config.Features key check + one-line boot summary), extending the discipline server/datastore.lua's own schema-collision safety net already established. Loaded LAST: it only WARNS (never blocks) and its own database-state clause deliberately waits on K9Store.WaitForSchemaCheckToSettle() rather than racing it, so placement here is about reading things last, not a load-order requirement of its own -- see that file's own header.
+    -- NEW FILE -- the `/k9debug` command (Config.DebugDump, ships off).
+    -- HARD load-order requirement: loaded absolute LAST among this
+    -- resource's own server_scripts, on purpose -- it re-surfaces checks
+    -- from server/datastore.lua (K9Store), server/selfcheck.lua
+    -- (K9SelfCheck), and (at Config.DebugDump.level = 'verbose' only)
+    -- wraps the real global HasK9Access/IsHighCommand/HasPermission
+    -- functions defined in server/certifications.lua/server/highcommand.lua/
+    -- server/permissions.lua respectively -- every one of those must already
+    -- be the REAL function, not a stub, at the moment this file's own
+    -- top-level code runs. See that file's own header for the full design.
+    'server/debugdump.lua',
 }
 
 lua54 'yes'

@@ -1,0 +1,6 @@
+This folder holds the files /k9debug writes (server/debugdump.lua).
+It is git-tracked (via this placeholder) specifically so it already exists
+on disk wherever this resource is deployed, in case SaveResourceFile does
+not create an intermediate directory that is not already there -- see
+server/debugdump.lua's own header, "FILE OUTPUT -- VERIFIED, NOT ASSUMED".
+Safe to empty; nothing reads this file's own content.
