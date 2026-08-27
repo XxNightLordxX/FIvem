@@ -288,9 +288,18 @@
         (source: number, citizenid: string, jobName: string,
          callType: 'person'|'property')
         Fire from: server/sarcalls.lua's own /k9startsarcall callback, right
-        after a new ActiveSarCalls[source] session is recorded — `source` is
+        after a new ActiveSarCalls[callId] session is recorded — `source` is
         the live, currently-connected server id at the moment of firing, the
         same "hint, not a guarantee" caveat #7's `source` field documents.
+
+        CORRECTED 2026-08-27: this said `ActiveSarCalls[source]` until the
+        cooperative-SAR pass re-keyed that table from the owner's server id to
+        a callId, so a call could hold MULTIPLE members. The event itself is
+        unchanged — it still fires once, for the officer who STARTED the call,
+        carrying their source/citizenid/jobName — but the indexing scheme it
+        described no longer exists. Joining an existing call fires no event of
+        its own today; a consumer that needs to know about joiners would need
+        a new event, not a change to this one.
 
     13. 'qbx_k9unit:events:sarCallCompleted'
         (source: number, citizenid: string, jobName: string,
@@ -300,6 +309,24 @@
         event nor any other — see that file's own header EVENT/CALLBACK
         CONTRACT note). `durationMs` is `GetGameTimer() - call.startedAt`,
         measured at the moment this fires, not a stored value.
+
+        `source` AND `citizenid` CAN NOW BE TWO DIFFERENT PEOPLE. READ THIS
+        BEFORE CONSUMING EITHER. `source` is `finderSrc` — whoever physically
+        reached the target — while `citizenid` is `call.citizenid`, whoever
+        STARTED the call. Until cooperative SAR shipped, a call had exactly one
+        officer, so these always described the same person and a consumer could
+        safely treat them as interchangeable. They no longer are: a second
+        officer can join a call and be the one who finds it, in which case this
+        event names the joiner in `source` and the starter in `citizenid`.
+
+        WHICH ONE YOU WANT: `citizenid` is the durable, correct key for
+        anything that credits, logs or pays for the call — it matches who is
+        actually awarded XP (only the starter ever is, deliberately, so joining
+        cannot become a two-account loop). `source` is a live connection id and
+        carries the same "hint, not a guarantee" caveat #7 documents; use it
+        only to address the finder's own client right now. A logger that prints
+        `source`'s player name next to `citizenid`'s record will attribute the
+        find to the wrong officer whenever a joiner found it.
 
     14. 'qbx_k9unit:events:scentLineupResolved'
         (src: number, correct: boolean)
