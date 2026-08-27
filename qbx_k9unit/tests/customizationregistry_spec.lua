@@ -550,6 +550,36 @@ local DYNAMIC_BLOCK_COVERAGE = {
 -- does not invent a new design decision for any of these, it only encodes
 -- one that was already made and written down elsewhere.
 local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
+    -- ApprehensionAnnouncement (server/announce.lua, client/announce.lua) is
+    -- the "warn them before you release the dog" step: when on, a K9 must
+    -- announce near a suspect to open a short window in which a bite or
+    -- takedown against THAT suspect is permitted. It only ever makes
+    -- apprehension HARDER -- it grants no capability of its own.
+    --
+    -- A PER-PERSON BLOCK HERE WOULD INVERT THE MEANING OF THE BLOCK SYSTEM,
+    -- and that is the whole reason for this exemption. Everywhere else in
+    -- this resource, `block.<Feature>` takes a capability AWAY from one
+    -- person. Here the "feature" IS a restriction, so blocking somebody from
+    -- it would have to mean freeing them from having to warn -- a per-person
+    -- PRIVILEGE handed out through the discipline system, and the one admin
+    -- action most likely to be taken by mistake: an admin blocking a reckless
+    -- handler would accidentally grant them unrestricted biting, which is the
+    -- exact opposite of what they intended and what the word "block" says.
+    --
+    -- The direct, correct levers already exist and are already per-person
+    -- blockable: block.BiteAndHold and block.NonLethalTakedown. Those name
+    -- the capability actually being removed, they read the right way round in
+    -- an audit log, and they are the same two features this announcement gate
+    -- rides on top of at the same call site. Anyone reaching for "stop this
+    -- officer using their dog offensively" wants one of those, not this.
+    --
+    -- If per-person announcement policy is ever genuinely wanted (e.g. "this
+    -- handler specifically MUST warn, even though the server does not require
+    -- it"), that is a REQUIREMENT being added to one person, not a feature
+    -- being taken away -- a new key with its own name and its own argument,
+    -- never this one quietly gaining a block path that reads backwards.
+    ApprehensionAnnouncement = true,
+
     -- server/recall.lua's own header (its "PER-PERSON FEATURE CONTROL ...
     -- DELIBERATELY NOT IMPLEMENTED HERE" section, ~lines 51-70): Recall is
     -- this resource's one termination/escape-hatch path. IsValidPermissionKey

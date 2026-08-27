@@ -637,6 +637,20 @@ local FEATURE_TIERS = {
     -- does not have to go re-read server/dangerwarn.lua to confirm this
     -- classification themselves.
     DangerWarn             = { tier = 'rawtoplevel', note = 'server/dangerwarn.lua opens with "if not Config.Features.DangerWarn then return end" before its own config-safety resolution, cooldown construction, and RegisterNetEvent(\'qbx_k9unit:server:requestDangerWarn\', ...) -- the net event is never registered at all when the flag is off at load time.' },
+    -- ADDED 2026-08-27, alongside the Config.Features key itself, which had
+    -- never existed (see that key's own comment in config.lua for why a
+    -- fully-built, keybound, tested feature shipped with no switch anywhere).
+    -- CLASSIFIED 'live' BY READING BOTH FILES, not by trusting
+    -- server/announce.lua's own header claim: neither server/announce.lua nor
+    -- client/announce.lua has any file-level early return on the flag, and
+    -- RegisterCommand('k9announce'), RegisterKeyMapping('k9announce', ... 'M')
+    -- and both net events register UNCONDITIONALLY. Every read of the flag
+    -- sits inside a handler body -- IsApprehensionWarned() and the
+    -- announceApprehensionWarning handler's own opening line -- so a tablet
+    -- flip takes effect on the very next bite/takedown validation in either
+    -- direction, no restart, exactly like BiteAndHold/NonLethalTakedown whose
+    -- call site this gate rides on top of.
+    ApprehensionAnnouncement = { tier = 'live', note = 'server/announce.lua has NO file-level gate -- RegisterNetEvent(\'qbx_k9unit:server:announceApprehensionWarning\', ...) is registered unconditionally and checks "if not Config.Features.ApprehensionAnnouncement then return end" INSIDE its own callback body; IsApprehensionWarned() re-reads the flag on every single call. client/announce.lua likewise registers its command and M keybind unconditionally and checks the flag per-press.' },
     -- LOCKOUT-RISK (see "LOCKOUT-RISK FEATURES" below this table): turning
     -- this off, then actually following through with the config.lua edit +
     -- restart this tier already requires, removes the ONLY in-game surface

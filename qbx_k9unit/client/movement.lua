@@ -1576,7 +1576,7 @@ function RecomputeK9MoveRate()
     -- MULTIPLIER" above for the full reasoning. K9IndividualSpeedOverrideActive
     -- picks between the two ceilings; MOVE_RATE_MIN (the floor) is applied
     -- either way, unconditionally, never bypassed.
-    local ceiling = MOVE_RATE_MAX -- TEMP RED-PROOF BREAK
+    local ceiling = K9IndividualSpeedOverrideActive and MOVE_RATE_OVERRIDE_MAX or MOVE_RATE_MAX
     effective = math.max(MOVE_RATE_MIN, math.min(ceiling, effective))
 
     SetPedMoveRateOverride(ped, effective)

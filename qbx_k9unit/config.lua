@@ -737,6 +737,38 @@ Config.Features = {
     -- HandlerPartnership did before it shipped on. Turn it on once that
     -- review has happened.
     DangerWarn           = false,
+
+    -- APPREHENSION ANNOUNCEMENT -- the "warn them before you release the
+    -- dog" use-of-force step (server/announce.lua, client/announce.lua).
+    -- When on, a K9 must first announce (default key M, or /k9announce)
+    -- within about 8 metres of a suspect, opening roughly a 20-second
+    -- window during which a bite or takedown against THAT suspect is
+    -- permitted. Outside a window, the bite is refused. It never makes
+    -- apprehension easier, only harder, which is the point -- it mirrors
+    -- real police K9 doctrine and gives a suspect a chance to comply.
+    --
+    -- ADDED 2026-08-27, AND THE REASON IS WORTH READING. This key did not
+    -- exist -- not switched off, ABSENT, and absent for the entire history
+    -- of this file. The feature was fully built, keybound, given its own
+    -- command and its own tests, and then shipped with no switch anywhere
+    -- for anyone to find. A missing Config.Features key reads as nil, which
+    -- every gate in this resource treats as off, so it was permanently
+    -- dead on every install ever made, while the tablet's own help text
+    -- instructed the owner to "turn the feature on for your server" -- an
+    -- instruction with nothing behind it. The bug was never that it ships
+    -- off; it is that you were never given the choice.
+    --
+    -- IT SHIPS `false` DELIBERATELY, and that is not the leftover of the
+    -- bug. Requiring a warning before every bite is a roleplay policy
+    -- decision about how your server wants use-of-force to work, not a
+    -- safety default -- so it is genuinely yours to make. Set this to
+    -- `true` to turn it on. Config.FeatureGroups.Combat below carries the
+    -- same key and must agree with this one: group resolution runs AFTER
+    -- this table and silently overrides it, so setting only one of the two
+    -- changes nothing at all, with no error anywhere.
+    --
+    -- Tuning is optional -- see Config.Combat.ApprehensionAnnouncement.
+    ApprehensionAnnouncement = false,
 }
 
 -- ======================================================================
@@ -826,6 +858,12 @@ Config.FeatureGroups = {
         PursuitSprint      = true,
         HandlerDownDefense = true,
         DangerWarn         = false, -- ships off -- see Config.Features.DangerWarn's own comment above before ever flipping this to true
+        -- MUST AGREE WITH Config.Features.ApprehensionAnnouncement ABOVE.
+        -- This table is resolved AFTER Config.Features and silently wins,
+        -- so setting only one of the two changes nothing whatsoever and
+        -- reports no error. Turning the feature on means setting BOTH to
+        -- true; turning it off means setting BOTH to false.
+        ApprehensionAnnouncement = false,
     },
     Movement = {
         enabled            = true, -- was the standalone LeashMechanics switch
@@ -959,7 +997,7 @@ local FEATURE_GROUP_MEMBERS = {
     Detection    = { base = 'ScentTracking', Blood = 'BloodTracking', Gunpowder = 'GunpowderSniffing', Water = 'WaterTrackingDecay', Vision = 'ScentVision', Lineup = 'ScentLineup' },
     Search       = { base = 'SearchZones', ContrabandAlerts = 'ContrabandAlerts', FindAlerts = 'FindAlerts', ScreenFX = 'ContrabandScreenFX', SARCalls = 'SARCalls' },
     Sensory      = { NightVision = 'NightVision', ThermalVision = 'ThermalVision', CameraFeedPiP = 'CameraFeedPiP', ProximityAudio = 'ProximityAudioFX' },
-    Combat       = { BiteAndHold = 'BiteAndHold', NonLethalTakedown = 'NonLethalTakedown', PropDragging = 'PropDragging', PursuitSprint = 'PursuitSprint', HandlerDownDefense = 'HandlerDownDefense', DangerWarn = 'DangerWarn' },
+    Combat       = { BiteAndHold = 'BiteAndHold', NonLethalTakedown = 'NonLethalTakedown', PropDragging = 'PropDragging', PursuitSprint = 'PursuitSprint', HandlerDownDefense = 'HandlerDownDefense', DangerWarn = 'DangerWarn', ApprehensionAnnouncement = 'ApprehensionAnnouncement' },
     Movement     = { base = 'LeashMechanics', BasicBarkSounds = 'BasicBarkSounds', AdvancedBarkRadial = 'AdvancedBarkRadial', AgilityBasicJump = 'AgilityBasicJump', AgilityAdvanced = 'AgilityAdvanced', VehicleEntryExit = 'VehicleEntryExit', DoorInteraction = 'DoorInteraction' },
     Wellbeing    = { base = 'FatigueSystem', Mood = 'MoodSystem', FearStress = 'FearStressSystem', Distraction = 'DistractionSystem', InjuryLimping = 'InjuryLimping', HUD = 'HealthStaminaHUD', K9DownDispatch = 'K9DownDispatch', Medkit = 'K9Medkit', HungerThirst = 'HungerThirstSystem' },
     Progression  = { base = 'XPProgression', HandlerXP = 'HandlerXPProgression', CertificationExpiry = 'CertificationExpiry', Leaderboard = 'K9Leaderboard' },
