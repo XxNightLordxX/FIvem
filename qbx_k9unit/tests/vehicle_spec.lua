@@ -901,4 +901,183 @@ t.test('sweep: also drops a TTL-expired claim even if nobody ever requests that 
     t.isTrue(grantedThree)
 end)
 
+-- ========================================================================
+-- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+-- RED-THEN-GREEN PROOF, in the real cross-file integration context.
+--   RED, closed: a citizenid already claimed by a DIFFERENT exclusive
+--   mechanic (kennel_rest/combat_target), or already a busy combat holder,
+--   is refused a vehicle-seat grant -- the exact shape of the confirmed
+--   kennel-vs-vehicle-seat race, proven here from server/vehicle.lua's own
+--   side without needing server/kennel.lua/server/combat.lua loaded at all
+--   (ClaimBody is called directly, the same way a real grant would have).
+--   GREEN, the control: every ordinary single-claim test above this
+--   section still succeeds -- this section only adds the NEW refusal
+--   paths and their own releases.
+--   GREEN, the other control: releaseVehicleSeatClaim still works
+--   correctly WHILE a claim is actively held.
+-- ========================================================================
+
+t.test('EXCLUSIVE BODY-CLAIM: requestVehicleSeatClaim is refused when the SAME citizenid already holds a live kennel_rest claim', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.env.ClaimBody('CIT1', 'kennel_rest')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'), 'the race this pass exists to close: a seat must never be granted alongside another mechanic\'s live claim')
+    -- Reuses the SAME locale key client/vehicle.lua's own pre-existing
+    -- (racy) kennel-rest guard already reuses for this exact scenario.
+    t.equals(f.lastNotify().description, locale('kennel.enter_already_resting'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: requestVehicleSeatClaim is refused when the SAME citizenid already holds a live combat_target/drag claim, with the accurate "being dragged" message', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.env.ClaimBody('CIT1', 'combat_target', 5000, 'drag')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'))
+    t.equals(f.lastNotify().description, locale('vehicle.blocked_by_being_dragged'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: requestVehicleSeatClaim is refused when the SAME citizenid already holds a live combat_target/bite claim, with the generic fallback message (no dedicated locale key exists for this exact scenario)', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.env.ClaimBody('CIT1', 'combat_target', 5000, 'bite')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'))
+    t.equals(f.lastNotify().description, locale('combat.reject_fallback'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: a claim that has genuinely EXPIRED no longer blocks a vehicle-seat grant -- a 300ms race must never become a permanent lockout', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.env.ClaimBody('CIT1', 'kennel_rest', 1000)
+
+    f.advance(1001)
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isNotNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'), 'an expired claim must never permanently block a legitimate later request')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, COMBAT HOLDER BUSY-STATE: requestVehicleSeatClaim is refused with the DRAG-specific message when server/combat.lua reports this src as a busy drag holder', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    -- server/combat.lua is not loaded in this fixture -- stubbed directly,
+    -- mirroring the real `type(...) == 'function'` soft-dependency guard.
+    f.env.IsK9CurrentlyHolding = function(src) return src == 2 end
+    f.env.GetActiveHoldEffectTypeForHolder = function(src) return src == 2 and 'drag' or nil end
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'))
+    t.equals(f.lastNotify().description, locale('vehicle.blocked_by_drag'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, COMBAT HOLDER BUSY-STATE: requestVehicleSeatClaim is refused with the BITE-HOLD message for a bite/takedown holder (no dedicated takedown message exists, the bite-hold one is reused, mirroring client/vehicle.lua\'s own pre-existing convention)', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.env.IsK9CurrentlyHolding = function(src) return src == 2 end
+    f.env.GetActiveHoldEffectTypeForHolder = function(src) return src == 2 and 'takedown' or nil end
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'))
+    t.equals(f.lastNotify().description, locale('vehicle.blocked_by_bite_hold'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM, COMBAT HOLDER BUSY-STATE: an absent server/combat.lua (IsK9CurrentlyHolding never defined) is simply "not busy," never an error', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    -- IsK9CurrentlyHolding/GetActiveHoldEffectTypeForHolder deliberately
+    -- left undefined -- exactly like a server that never loaded
+    -- server/combat.lua at all.
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    t.isTrue(ok)
+    t.isNotNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: a granted vehicle-seat claims this citizenid\'s body -- a DIFFERENT mechanic sees it as claimed', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    local claimed, mechanic = f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest')
+    t.isTrue(claimed)
+    t.equals(mechanic, 'vehicle_seat')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: releaseVehicleSeatClaim also releases this citizenid\'s vehicle_seat body-claim -- release paths still work while a claim is actively held', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    t.isTrue(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'sanity: the claim is genuinely held before release')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseVehicleSeatClaim', 2, 500, 1)
+
+    t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'releasing the seat claim must free the body-claim too')
+    t.isTrue(f.env.ClaimBody('CIT1', 'kennel_rest'), 'the control: a legitimate claim by a different mechanic succeeds once released')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: playerDropped also releases this citizenid\'s vehicle_seat body-claim', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    f.firePlayerDropped(2, 'left')
+
+    t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'a disconnecting claimant must not leave a permanent body-claim behind')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: the periodic sweep also releases this citizenid\'s vehicle_seat body-claim for a TTL-expired claim nobody ever asks about again', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    f.advance(10001) -- past VEHICLE_SEAT_CLAIM_TTL_MS (10000)
+
+    f.stepSweep() -- primes
+    f.stepSweep() -- one full pass
+
+    t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'the sweep must release the shared body-claim in lockstep with its own VehicleSeatClaims entry')
+end)
+
 os.exit(t.summary())
