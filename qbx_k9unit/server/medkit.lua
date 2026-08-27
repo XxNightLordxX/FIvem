@@ -472,6 +472,59 @@ MedkitCooldown.StartSweep(MEDKIT_COOLDOWN_PRUNE_INTERVAL_MS, function(now, logge
     return (now - loggedAt) > staleAfterMs
 end)
 
+-- ==========================================================================
+-- HANDLER XP MINT COOLDOWN for handlerTreatK9 (WIRING PASS, coder-backend --
+-- closes the "top handler rank unreachable" audit finding). See this file's
+-- own "HANDLER XP TIER UNLOCK" comment on RunUseK9MedkitMutation below (and
+-- server/progression.lua's GetHandlerXPTierMedkitCooldownMs doc comment,
+-- "THE NUMBERS" section) for the full worst-case arithmetic this is sized
+-- against: MedkitCooldown itself, once BOTH the target K9's own Veteran-tier
+-- reduction (0.75) and a Master Handler's own reduction (0.70) stack, floors
+-- at 60000 * 0.75 * 0.70 = 31500ms -- and MedkitCooldown is keyed by the
+-- TARGET's citizenid, not the treating handler's, so it cannot see (let
+-- alone throttle) one actor round-robining several different K9s at that
+-- combined floor. This tracker is the dedicated, ACTOR-keyed mint cooldown
+-- config.lua's own Config.Features.HandlerXPProgression header names as the
+-- binding requirement for wiring this award at all -- entirely separate
+-- from MedkitCooldown (never derived from it: MedkitCooldown is itself now
+-- handler-rank-shortened, so treating it as a mint gate would let a higher
+-- rank both mint AND shorten its own throttle in the same action).
+--
+-- WINDOW: 30 real minutes, DELIBERATELY far longer than the 31500ms
+-- rank-reduced target-cooldown floor alone would suggest is "enough" -- see
+-- server/progression.lua's own "BINDING REQUIREMENT" note: sizing this near
+-- that floor would still let a single actor mint on the order of 1,371
+-- XP/hr solo (already over a third of the whole shared 3,600 XP/hr budget
+-- from ONE actor), with MedkitCooldown powerless to stop them round-robining
+-- targets to sustain it. At 12 XP (Config.HandlerXP.awards.handlerTreatK9) /
+-- 30 minutes = 24 XP/hr per actor, this action cannot plausibly dominate a
+-- citizenid's hourly total, and round-robining targets buys nothing (this
+-- tracker never looks at which K9 was treated).
+--
+-- FILE-LOCAL CONSTANT, NOT A CONFIG KEY -- same reasoning as every other
+-- *_XP_MINT_COOLDOWN_MS in this codebase (server/certifications.lua's
+-- CERTIFY_XP_MINT_COOLDOWN_MS, server/search.lua's
+-- COOP_SEARCH_XP_MINT_COOLDOWN_MS, and config.lua's own "THE REAL CEILING...
+-- AND WHY IT IS NOT A SETTING IN THIS FILE" header): this is a security
+-- floor, not an operator-tunable balance knob -- a merely-too-low
+-- operator-set value would pass every existing validity check while
+-- silently reopening the exact farm this exists to close. The only way to
+-- weaken it is to edit this file's own source under code review.
+--
+-- KEYED ON THE USING PLAYER'S DURABLE CITIZENID, SURVIVES DISCONNECT/
+-- RECONNECT -- deliberately NOT :RegisterPlayerDropped() (server ids are
+-- recycled; a cooldown keyed by a durable citizenid that reset on reconnect
+-- would not be a cooldown at all -- see server/certifications.lua's
+-- CertifyXpMintCooldown for the identical precedent this mirrors, including
+-- its own "NOT :RegisterPlayerDropped()" reasoning). Bounded instead by its
+-- own independent TTL sweep, same shape as MedkitCooldown's own sweep
+-- immediately above.
+local TREAT_XP_MINT_COOLDOWN_MS = 30 * 60 * 1000 -- 30 real minutes
+local HandlerTreatXpMintCooldown = NewCooldown()
+HandlerTreatXpMintCooldown.StartSweep(TREAT_XP_MINT_COOLDOWN_MS, function(now, loggedAt)
+    return (now - loggedAt) > (TREAT_XP_MINT_COOLDOWN_MS * 2)
+end)
+
 -- Per-target (K9 citizenid) mutex — prevents two concurrent
 -- 'qbx_k9unit:server:useK9Medkit' calls (e.g. two medics treating the same
 -- K9 at the same instant) from both passing the possession/cooldown checks
@@ -663,20 +716,22 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- of the K9-side reduction above (effectiveCooldownMs, not
     -- baseCooldownMs, is what gets passed in) rather than replacing it, so
     -- a high-tier handler treating a high-tier K9 gets BOTH reductions at
-    -- once. THIS MATTERS FOR ANY FUTURE handlerTreatK9 AWARD WIRING, NOT
-    -- JUST FOR THIS COOLDOWN: this cooldown is now RANK-REDUCED, down to a
-    -- combined worst-case floor of 31500ms (60000ms base * 0.75 Veteran-K9
-    -- * 0.70 Master-Handler, the shipped multipliers) -- see
-    -- GetHandlerXPTierMedkitCooldownMs's own doc comment (server/
-    -- progression.lua, "THE NUMBERS" section) for the full arithmetic. If
-    -- handlerTreatK9 is ever wired to fire from a successful heal below,
-    -- its own per-actor mint cooldown MUST be sized against that
-    -- rank-reduced floor, not the unreduced 60000ms config default, and
-    -- MUST be its own separate, actor-keyed tracker -- never derived from
-    -- MedkitCooldown itself (target-keyed, and now handler-rank-shortened).
-    -- tests/medkit_spec.lua carries a SOURCE AUDIT test that fails if
-    -- handlerTreatK9 is ever awarded from this file without a companion
-    -- *_XP_MINT_COOLDOWN tracker also present here.
+    -- once. THIS MATTERS FOR handlerTreatK9's OWN AWARD, NOT JUST THIS
+    -- COOLDOWN: this cooldown is RANK-REDUCED, down to a combined worst-case
+    -- floor of 31500ms (60000ms base * 0.75 Veteran-K9 * 0.70 Master-Handler,
+    -- the shipped multipliers) -- see GetHandlerXPTierMedkitCooldownMs's own
+    -- doc comment (server/progression.lua, "THE NUMBERS" section) for the
+    -- full arithmetic. handlerTreatK9 is now WIRED (this pass, coder-backend
+    -- -- see the "HANDLER XP" block near the end of RunUseK9MedkitMutation,
+    -- below), through a DEDICATED, separate, actor-keyed mint cooldown
+    -- (HandlerTreatXpMintCooldown, declared alongside MedkitCooldown above,
+    -- 30 real minutes) sized well below that 31500ms floor -- never derived
+    -- from MedkitCooldown itself (target-keyed, and rank-shortened, which is
+    -- exactly why it cannot be reused as a mint gate; see
+    -- HandlerTreatXpMintCooldown's own declaration comment for the full
+    -- arithmetic this closes). tests/medkit_spec.lua carries a SOURCE AUDIT
+    -- test confirming that companion tracker stays present alongside the
+    -- award.
     if type(GetHandlerXPTierMedkitCooldownMs) == 'function' then
         effectiveCooldownMs = GetHandlerXPTierMedkitCooldownMs(usingCitizenid, effectiveCooldownMs)
     end
@@ -764,6 +819,32 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
         if not ok then
             print(('[qbx_k9unit] RestoreInjury errored for citizenid %s during K9Medkit use — health restore already applied, Injury restore skipped'):format(targetCitizenid))
         end
+    end
+
+    -- HANDLER XP (WIRING PASS, coder-backend): handlerTreatK9, paid to the
+    -- USING player -- never the K9 -- and ONLY for a GENUINE heal
+    -- (`newHealth > currentHealth`, i.e. the target was actually below max
+    -- health and something was actually restored). A treat against an
+    -- already-full-health K9 still succeeds above (item consumed, cooldown
+    -- stamped, `ok = true` returned unchanged) -- this gate never turns that
+    -- into a failure (see this file's own "MEANINGFUL ACTION" note on
+    -- RunUseK9MedkitMutation's header) -- it only decides whether the action
+    -- was real K9 care worth a handler's own XP, never whether the item
+    -- works. Gated on usingCitizenid resolving at all (never a rejection
+    -- elsewhere in this function if it doesn't -- see the HANDLER XP TIER
+    -- UNLOCK comment above) AND on HandlerTreatXpMintCooldown, the dedicated
+    -- per-actor mint cooldown declared above -- never derived from
+    -- MedkitCooldown (target-keyed, and itself handler-rank-shortened; see
+    -- that tracker's own declaration comment for why reusing it here would
+    -- reopen the exact loop this dedicated tracker exists to close).
+    -- Soft dependency (`type(AwardHandlerXP) == 'function'`), same
+    -- convention as RestoreInjury/GetXPTierMedkitCooldownMs above -- this
+    -- file works identically whether or not server/progression.lua is
+    -- loaded or Config.Features.HandlerXPProgression is on (AwardHandlerXP
+    -- itself re-checks that flag and is a real no-op while it is off).
+    if usingCitizenid and newHealth > currentHealth and type(AwardHandlerXP) == 'function'
+        and HandlerTreatXpMintCooldown.Consume(usingCitizenid, TREAT_XP_MINT_COOLDOWN_MS, requestedAt) then
+        AwardHandlerXP(usingCitizenid, 'handlerTreatK9')
     end
 
     local notifyOk, notifyErr = pcall(function()

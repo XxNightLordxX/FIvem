@@ -139,21 +139,67 @@
        only ever SENDS this] -- UNCONDITIONAL, see RequestAbandonSarCall
        below: never gated on CanShowK9UI()/access of any kind, and NEVER
        takes or needs a callId -- see "STALE-SESSION RACE" below for why.
-    3. 'qbx_k9unit:client:sarHintTierChanged' (tier: string, callId: number)
+       Since "TWO OFFICERS, ONE CALL" below, this is ALSO how a joiner
+       leaves -- one function, one event, either role.
+    3. 'qbx_k9unit:server:requestJoinSarCall' (targetServerId: number)
+       [RegisterNetEvent, this file only ever SENDS this] -- see "TWO
+       OFFICERS, ONE CALL" below.
+    4. 'qbx_k9unit:server:respondJoinSarCall' (fromServerId: number,
+       accepted: boolean) [RegisterNetEvent, this file only ever SENDS
+       this] -- see "TWO OFFICERS, ONE CALL" below.
+    5. 'qbx_k9unit:client:sarHintTierChanged' (tier: string, callId: number)
        [RegisterNetEvent, server -> this caller's client only, never
        broadcast]
-    4. 'qbx_k9unit:client:sarCallEnded' (reason: string, callType: string?,
+    6. 'qbx_k9unit:client:sarCallEnded' (reason: string, callType: string?,
        callId: number) [RegisterNetEvent, server -> this caller's client
-       only]
-    Both server->client pushes carry the standard TRUST-BOUNDARY ORIGIN
-    GUARD (`source ~= 65535` -- FiveM's documented sentinel for "this event
-    genuinely came from the server," DEVELOPER_REFERENCE.md#trust-boundary,
+       only] -- `reason` can now also be 'found_by_teammate' (see "TWO
+       OFFICERS, ONE CALL" below): treated exactly like 'timeout'/
+       'abandoned' below (state resets, no reveal), never like 'found'.
+    7. 'qbx_k9unit:client:sarCallJoined' (callId: number, initialTier: string)
+       [RegisterNetEvent, server -> the newly-accepted joiner's client only]
+       -- see "TWO OFFICERS, ONE CALL" below.
+    8. 'qbx_k9unit:client:sarJoinRequest' (fromServerId: number)
+       [RegisterNetEvent, server -> the call OWNER's client only] -- shown
+       as an accept/decline prompt, mirroring client/partnership.lua's
+       partnerUpRequest handler.
+    Every server->client push above carries the standard TRUST-BOUNDARY
+    ORIGIN GUARD (`source ~= 65535` -- FiveM's documented sentinel for
+    "this event genuinely came from the server," DEVELOPER_REFERENCE.md#trust-boundary,
     the exact same convention client/screenfx.lua and client/scenttrail.lua
-    already apply to their own server->client pushes). Forging either
+    already apply to their own server->client pushes). Forging any of them
     grants no real advantage here (worst case: a spurious notification/
-    sound, or an early cosmetic reveal spawned at your own feet) -- kept
-    anyway for consistency with this resource's standing convention on
-    every server->client push.
+    sound, an early cosmetic reveal spawned at your own feet, or a fake
+    join prompt whose accept still routes through server/sarcalls.lua's own
+    re-validated CheckSarJoinEligibility) -- kept anyway for consistency
+    with this resource's standing convention on every server->client push.
+
+    ======================================================================
+    TWO OFFICERS, ONE CALL (this pass) -- read server/sarcalls.lua's own
+    header section of the same name first; that file is the authoritative
+    contract for WHO may join, WHEN, and the XP/anti-farm reasoning. This
+    file's own share of it is small and entirely about STATE, never
+    eligibility: RequestJoinSarCall() below sends the request (server-side
+    re-validates everything regardless, per this resource's "never trust
+    the caller already checked" standard); the sarJoinRequest handler shows
+    the owner's own accept/decline prompt, mirroring
+    client/partnership.lua's partnerUpRequest handler almost verbatim; and
+    the sarCallJoined handler is what actually flips THIS client's own
+    `sarCallActive`/`currentSarCallId` to true/set once the server accepts
+    -- the exact same two fields RequestStartSarCall() below sets on its
+    own successful grant, just reached from a second entry point. Both
+    entry points converge on the SAME local state from here on: once either
+    one sets `sarCallActive = true`, every hint push and every sarCallEnded
+    push behaves identically regardless of whether this client started the
+    call or joined it -- this file draws NO distinction between the two
+    roles anywhere past this point, which is deliberate: a joiner is meant
+    to "genuinely participate," not receive a second-class experience.
+    HandleHintTierPush(tier) below is the one place both entry points'
+    "show the player what tier they're in" logic lives, extracted out of
+    the sarHintTierChanged handler specifically so sarCallJoined's own
+    initial-tier push (bundled into ONE event rather than two, precisely to
+    avoid a fresh ordering race between "am I marked active yet" and "has
+    my first hint arrived yet") can reuse it verbatim rather than
+    duplicating the tier/sound branch a second time.
 
     ======================================================================
     STALE-SESSION RACE:
@@ -268,6 +314,11 @@
         RequestAbandonSarCall() -- UNCONDITIONAL, never gated -- see its
             own doc comment for why, mirroring client/recall.lua's
             RequestRecall/client/scenttrail.lua's StopScentHunt exactly.
+            Since "TWO OFFICERS, ONE CALL" above, this is now ALSO how a
+            joiner leaves -- unchanged signature, wider meaning.
+        RequestJoinSarCall(targetServerId: number) -- self-initiated, gated
+            (HasK9Access()) -- see "TWO OFFICERS, ONE CALL" above. Added
+            this pass alongside the other two.
         IsSarCallActive() -> boolean: a pure, no-network read of the local
             `sarCallActive` flag, same shape/precedent as
             client/combat.lua's IsBiteHoldEngaged()/client/movement.lua's
@@ -610,11 +661,14 @@ function RequestAbandonSarCall()
     TriggerServerEvent('qbx_k9unit:server:abandonSarCall')
 end
 
-RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier, callId)
-    if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
-    if not sarCallActive then return end -- a stale push after an already-ended call on this client
-    if not IsForCurrentSarCall(callId) then return end -- stale push from a session this client has already moved past -- see header "STALE-SESSION RACE"
-
+--- Shared by BOTH the sarHintTierChanged handler below AND the
+--- sarCallJoined handler (a joiner's own initial tier arrives bundled into
+--- that ONE event, not a separate sarHintTierChanged -- see this file's
+--- header "TWO OFFICERS, ONE CALL" for why) -- one place this feature's
+--- "turn a tier into something felt" logic lives, so there is only ever
+--- one branch to keep in sync with server/sarcalls.lua's own tier names.
+--- @param tier string -- 'cold' | 'warm' | 'hot' | 'burning'
+local function HandleHintTierPush(tier)
     if tier == 'burning' then
         lib.notify({ title = locale('common.notify_title'), description = locale('sar.hint_burning'), type = 'inform' })
         PlayOwnPedSound('Bark_Alert')
@@ -627,6 +681,14 @@ RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier, callId)
     else -- 'cold'
         lib.notify({ title = locale('common.notify_title'), description = locale('sar.hint_cold'), type = 'inform' })
     end
+end
+
+RegisterNetEvent('qbx_k9unit:client:sarHintTierChanged', function(tier, callId)
+    if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
+    if not sarCallActive then return end -- a stale push after an already-ended call on this client
+    if not IsForCurrentSarCall(callId) then return end -- stale push from a session this client has already moved past -- see header "STALE-SESSION RACE"
+
+    HandleHintTierPush(tier)
 end)
 
 RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, callId)
@@ -649,8 +711,99 @@ RegisterNetEvent('qbx_k9unit:client:sarCallEnded', function(reason, callType, ca
         if type(K9Sit) == 'function' then K9Sit() end
         ShowReveal(callType)
     end
-    -- 'timeout'/'abandoned': server/sarcalls.lua's own NotifyPlayer call
-    -- already told the player what happened; nothing further to do here.
+    -- 'timeout'/'abandoned'/'found_by_teammate': server/sarcalls.lua's own
+    -- NotifyPlayer call already told the player what happened; nothing
+    -- further to do here. 'found_by_teammate' deliberately falls through
+    -- to here rather than the 'found' branch above -- see this file's
+    -- header "TWO OFFICERS, ONE CALL": only the member whose OWN position
+    -- actually crossed arrivalRadius ever gets the local reveal.
+end)
+
+--- Step 1 of the join consent handshake, self-initiated side. Does NOT
+--- join anyone by itself -- see the sarCallJoined handler below for where
+--- this client's own state actually flips, after the owner accepts. See
+--- this file's header "TWO OFFICERS, ONE CALL" and server/sarcalls.lua's
+--- own header for the full design.
+---
+--- DELIBERATELY `local`, NOT a resource-global like RequestStartSarCall/
+--- RequestAbandonSarCall above -- this pass's own '/k9sarcall join
+--- <serverId>' command (below) is the only call site today (see that
+--- command's own "DISCLOSED, DELIBERATELY SMALL UI FOOTPRINT" comment); no
+--- ox_target option or radial item calls this cross-file yet. Widen this
+--- to a bare global (and add it to the repo-root .luacheckrc globals list
+--- alongside the other two) the same day such a call site actually lands
+--- -- not before, per this resource's own "don't expose a global before
+--- something needs it" discipline.
+--- @param targetServerId number
+local function RequestJoinSarCall(targetServerId)
+    -- Re-check, don't trust the caller (a future ox_target option or
+    -- radial item) already verified this -- cheap client-side sanity check
+    -- before bothering the server, which re-validates authoritatively
+    -- regardless (server/sarcalls.lua's CheckSarJoinEligibility).
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
+        return
+    end
+
+    if sarCallActive then
+        lib.notify({ title = locale('common.notify_title'), description = locale('sar.already_active'), type = 'error' })
+        return
+    end
+
+    TriggerServerEvent('qbx_k9unit:server:requestJoinSarCall', targetServerId)
+    -- The target's client is the one that shows the actual accept/decline
+    -- prompt (see the sarJoinRequest handler below), not this one.
+    lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_request_sent'), type = 'info' })
+end
+
+--- Step 1 of the join consent handshake, received on the CALL OWNER's
+--- client. Mirrors client/partnership.lua's partnerUpRequest handler
+--- almost verbatim.
+--- @param fromServerId number
+RegisterNetEvent('qbx_k9unit:client:sarJoinRequest', function(fromServerId)
+    if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
+
+    local fromPlayer = GetPlayerFromServerId(fromServerId)
+    -- locale('movement.officer_fallback_name', ...) is a deliberate
+    -- cross-group reuse, not a typo -- see client/partnership.lua's own
+    -- identical comment on its own partnerUpRequest handler for why this
+    -- resource reuses that key (and accept_label/decline_label below)
+    -- rather than minting near-duplicates under sar.*.
+    local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or locale('movement.officer_fallback_name', fromServerId)
+
+    -- If this client abandons/completes/disconnects mid-prompt, or either
+    -- side is no longer eligible by the time they answer, the server
+    -- re-validates everything at accept time regardless (see
+    -- server/sarcalls.lua's CheckSarJoinEligibility TOCTOU note) -- this
+    -- client just needs to send the response and handle a later rejection
+    -- gracefully, not assume acceptance always succeeds.
+    local response = lib.alertDialog({
+        header = locale('sar.join_request_header'),
+        content = locale('sar.join_request_content', fromName),
+        centered = true,
+        cancel = true,
+        labels = { confirm = locale('movement.accept_label'), cancel = locale('movement.decline_label') },
+    })
+
+    TriggerServerEvent('qbx_k9unit:server:respondJoinSarCall', fromServerId, response == 'confirm')
+end)
+
+--- Step 2 of the join consent handshake: the server has confirmed this
+--- client's own membership and is telling it which call, and starting
+--- tier, to track -- see this file's header "TWO OFFICERS, ONE CALL" for
+--- why this is ONE event bundling both, rather than reusing
+--- sarHintTierChanged for the initial tier the way RequestStartSarCall's
+--- own grant path effectively does.
+--- @param callId number
+--- @param initialTier string
+RegisterNetEvent('qbx_k9unit:client:sarCallJoined', function(callId, initialTier)
+    if source ~= 65535 then return end -- TRUST-BOUNDARY ORIGIN GUARD -- see this file's header
+
+    requestGeneration = requestGeneration + 1 -- invalidate any in-flight RequestStartSarCall()/RequestJoinSarCall() await that might resolve after this
+    sarCallActive = true
+    currentSarCallId = callId
+
+    HandleHintTierPush(initialTier)
 end)
 
 --- Self-initiated entry point. HasK9Access() re-checked here purely as a
@@ -718,15 +871,37 @@ function RequestStartSarCall()
     currentSarCallId = result.callId -- see this file's header "STALE-SESSION RACE"
 end
 
--- '/k9sarcall' starts a call; '/k9sarcall stop' abandons one -- same
--- command-with-a-stop-argument shape as client/scenttrail.lua's
+-- '/k9sarcall' starts a call; '/k9sarcall stop' abandons one (or leaves
+-- one you joined -- see RequestAbandonSarCall's own doc comment);
+-- '/k9sarcall join <serverId>' asks to join someone else's active call --
+-- same command-with-an-argument shape as client/scenttrail.lua's
 -- '/k9nosehunt [stop]', this resource's freshest precedent for this exact
--- class of feature. `false` (not ACE-restricted): access is enforced by
+-- class of feature, extended with one more sub-argument rather than a
+-- separate command. `false` (not ACE-restricted): access is enforced by
 -- CanShowK9UI()/HasK9Access() above and server-side, the same posture
 -- every other unrestricted K9 command in this resource uses.
+--
+-- A DISCLOSED, DELIBERATELY SMALL UI FOOTPRINT FOR THIS PASS: unlike
+-- client/partnership.lua's "Partner Up," joining a SAR call has no
+-- ox_target option of its own yet -- this command is the sole entry point.
+-- Adding one is a natural follow-up (coordinate the exact option shape
+-- with coder-ui/coder-frontend before building it), not attempted here to
+-- keep this pass's edits to this actively-shared file scoped and reviewable.
 RegisterCommand('k9sarcall', function(_, args)
-    if args[1] and tostring(args[1]):lower() == 'stop' then
+    local sub = args[1] and tostring(args[1]):lower() or nil
+
+    if sub == 'stop' then
         RequestAbandonSarCall() -- never gated -- see its own doc comment
+        return
+    end
+
+    if sub == 'join' then
+        local targetServerId = tonumber(args[2])
+        if not targetServerId then
+            lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_invalid_target'), type = 'error' })
+            return
+        end
+        RequestJoinSarCall(targetServerId)
         return
     end
 

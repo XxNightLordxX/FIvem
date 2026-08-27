@@ -382,6 +382,18 @@ function createHarness(options) {
         };
     }
 
+    /** The K9 ONBOARDING HINT's own (row, title, body, dismiss) quadruple --
+     * mirrors getPartnerBadge() above, for the THIRD, separate
+     * `#k9onboarding-hint` element. */
+    function getOnboardingHint() {
+        return {
+            row: doc.getElementById('k9onboarding-hint'),
+            title: doc.querySelector('[data-onboarding="title"]'),
+            body: doc.querySelector('[data-onboarding="body"]'),
+            dismiss: doc.querySelector('[data-onboarding="dismiss"]'),
+        };
+    }
+
     /** The lazily-constructed AudioContext instance app.js's own
      * ensureAudioContext() built internally (undefined until the first
      * message that needs one, e.g. 'audio:play', has been processed) --
@@ -401,6 +413,7 @@ function createHarness(options) {
         getBarRow,
         getStatusRow,
         getPartnerBadge,
+        getOnboardingHint,
         getAudioContextInstance,
         fetchCalls,
         AudioContextCtor,

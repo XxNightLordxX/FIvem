@@ -143,17 +143,17 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9settieroffline = true,
     k9recertifyoffline = true,
     k9unspecializeoffline = true,
-    -- family #9 (Sensory/vision, 2 -> 1, 'k9vision') -- client/vision.lua.
-    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision fold into
-    -- the new 'k9vision' cycle (off -> night -> thermal -> off). Both stay
-    -- real, working RegisterCommand + RegisterKeyMapping calls forever
-    -- (default keys K/J, still rebindable) -- this is "an explicit way to
-    -- select one specific mode", deliberately kept per this pass's own
-    -- brief ("vision modes are held states... an explicit way to select a
-    -- specific mode must remain"), just no longer chat-suggested under
-    -- their own names.
-    ['qbx_k9unit:toggleThermalVision'] = true,
-    ['qbx_k9unit:toggleNightVision'] = true,
+    -- family #9 (Sensory/vision) -- REVERTED (owner reversal, this pass,
+    -- coder-architect): a prior pass had folded
+    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision into a
+    -- 'k9vision' cycle and hidden them here. The owner has since asked for
+    -- thermal and night vision to be separate, first-class controls again
+    -- ("I want the thermal and night vision separate") -- both are chat-
+    -- suggested under their own names again (client/commandsuggestions.lua),
+    -- so neither belongs in this allowlist anymore. 'k9vision' itself is
+    -- KEPT, as an extra optional convenience alongside the two explicit
+    -- toggles, not as a replacement for them -- it was never hidden (it IS
+    -- the canonical name it names), so it never belonged in this table.
 }
 
 --- Identical shape to tests/commandreferenceregistry_spec.lua's own
@@ -162,9 +162,27 @@ local HIDDEN_ALIAS_COMMANDS = {
 --- character class.
 --- @param text string
 --- @return table<string, boolean> set
+--- Identical shape to tests/commandreferenceregistry_spec.lua's own
+--- StripFullLineComments -- see that file for the full WHY (a doc comment in
+--- client/hud.lua that wrote `RegisterCommand('...')` inside its own prose
+--- made BOTH drift guards report a real, live, undocumented command named
+--- `...`) and for why only WHOLE-LINE comments are stripped, never trailing
+--- ones.
+--- @param text string
+--- @return string
+local function StripFullLineComments(text)
+    local kept = {}
+    for line in (text .. '\n'):gmatch('([^\n]*)\n') do
+        if not line:match('^%s*%-%-') then
+            kept[#kept + 1] = line
+        end
+    end
+    return table.concat(kept, '\n')
+end
+
 local function ExtractRegisterCommandNames(text)
     local set = {}
-    for name in text:gmatch("RegisterCommand%('([^']+)'") do
+    for name in StripFullLineComments(text):gmatch("RegisterCommand%('([^']+)'") do
         set[name] = true
     end
     return set

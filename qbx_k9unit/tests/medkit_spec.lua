@@ -441,6 +441,21 @@ local function newMedkitFixture(opts)
         end
     end
 
+    -- WIRING PASS (coder-backend) -- server/progression.lua's real
+    -- AwardHandlerXP is NOT loaded into this sandbox (its own numeric/
+    -- budget contract belongs to tests/progression_spec.lua and
+    -- tests/handlerprogression_spec.lua, not this file) -- this is a small,
+    -- test-controlled stand-in, mirroring `withXPTierMedkitCooldown`'s own
+    -- shape immediately above, so RunUseK9MedkitMutation's own
+    -- soft-dependency call (`type(AwardHandlerXP) == 'function'` guard) can
+    -- be proven from THIS file's own invokeCallback path.
+    local awardHandlerXPCalls = {}
+    if opts.withAwardHandlerXP then
+        envOverrides.AwardHandlerXP = function(citizenid, actionKey)
+            awardHandlerXPCalls[#awardHandlerXPCalls + 1] = { citizenid = citizenid, actionKey = actionKey }
+        end
+    end
+
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -484,6 +499,7 @@ local function newMedkitFixture(opts)
         restoreInjuryCalls = restoreInjuryCalls,
         xpTierCooldownCalls = xpTierCooldownCalls,
         handlerXPTierCooldownCalls = handlerXPTierCooldownCalls,
+        awardHandlerXPCalls = awardHandlerXPCalls,
         createThreadCallCount = function() return createThreadCallCount end,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setNow = function(ms) fakeNow = ms end,
@@ -629,9 +645,9 @@ t.test('server/medkit.lua registers exactly its one documented lib.callback', fu
     t.isTrue(result.ok, 'sanity: the callback must be reachable and a well-formed request must succeed')
 end)
 
-t.test('server/medkit.lua starts exactly one CreateThread at file load (MedkitCooldown\'s own sweep)', function()
+t.test('server/medkit.lua starts exactly two CreateThreads at file load (MedkitCooldown\'s own sweep, and HandlerTreatXpMintCooldown\'s own sweep, WIRING PASS)', function()
     local f = newMedkitFixture()
-    t.equals(f.createThreadCallCount(), 1)
+    t.equals(f.createThreadCallCount(), 2)
 end)
 
 -- ========================================================================
@@ -1436,19 +1452,21 @@ t.test('HANDLER XP TIER UNLOCK: GetHandlerXPTierMedkitCooldownMs entirely absent
 end)
 
 -- ========================================================================
--- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass):
--- this cooldown is now handler-rank-reduced (combined worst case 31500ms
--- -- see GetHandlerXPTierMedkitCooldownMs's own doc comment,
--- server/progression.lua, "THE NUMBERS" section). handlerTreatK9 (12 XP,
--- Config.HandlerXP.awards) is DELIBERATELY still unwired -- AwardHandlerXP
--- is called from nowhere in this file. If that ever changes, whoever wires
--- it MUST add a dedicated per-ACTOR MINT cooldown (mirroring
--- server/certifications.lua's CertifyXpMintCooldown fix for
+-- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass;
+-- handlerTreatK9 WIRED this pass, coder-backend -- see below): this
+-- cooldown is handler-rank-reduced (combined worst case 31500ms -- see
+-- GetHandlerXPTierMedkitCooldownMs's own doc comment, server/progression.lua,
+-- "THE NUMBERS" section). handlerTreatK9 (12 XP, Config.HandlerXP.awards)
+-- is NOW wired -- server/medkit.lua's RunUseK9MedkitMutation calls
+-- AwardHandlerXP(usingCitizenid, 'handlerTreatK9') for a genuine heal, gated
+-- by HandlerTreatXpMintCooldown, a dedicated per-ACTOR MINT cooldown
+-- (mirroring server/certifications.lua's CertifyXpMintCooldown fix for
 -- handlerCertifyK9) -- never a per-target one (MedkitCooldown's own shape,
--- which a multi-target actor can bypass entirely) -- sized against the
--- rank-reduced 31500ms floor. This is a RED TEST, not a comment: it fails
--- the moment handlerTreatK9 is actually awarded from this file without a
--- same-file *_XP_MINT_COOLDOWN tracker alongside it. Mirrors
+-- which a multi-target actor could otherwise bypass entirely) -- sized well
+-- below the rank-reduced 31500ms floor (30 real minutes). This is a RED
+-- TEST, not a comment: it fails the moment handlerTreatK9 is awarded from
+-- this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker alongside it --
+-- now GREEN because that tracker genuinely exists. Mirrors
 -- tests/recall_spec.lua's own "SOURCE AUDIT" precedent.
 -- ========================================================================
 
@@ -1476,13 +1494,389 @@ t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 w
     -- cannot satisfy that. The test directly below proves this pattern
     -- rejects a comment and accepts a real declaration, so a future edit
     -- cannot quietly defeat it again.
-    t.isTrue(text:find('local%%s+[%%w_]*XpMintCooldown%%s*=%%s*NewCooldown') ~= nil,
+    t.isTrue(text:find('local%s+[%w_]*XpMintCooldown%s*=%s*NewCooldown') ~= nil,
         'handlerTreatK9 is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-ACTOR mint cooldown (a second, separate tracker, never MedkitCooldown itself, which is ' ..
         'target-keyed and now handler-rank-shortened to a 31500ms combined worst-case floor) named with the ' ..
         'XP_MINT_COOLDOWN convention (server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown ' ..
         'precedent) so this test can find it, then update this test\'s own expectations to match. See ' ..
         'server/progression.lua\'s GetHandlerXPTierMedkitCooldownMs header for the full writeup.')
+end)
+
+-- ========================================================================
+-- HANDLER XP WIRING (this pass, coder-backend -- closes the "top handler
+-- rank cannot be reached by playing" anti-farm audit finding). Proves the
+-- award/mint-cooldown behavior end to end from THIS file's own
+-- invokeCallback path, using opts.withAwardHandlerXP (this file's own
+-- test-controlled stand-in for server/progression.lua's real AwardHandlerXP
+-- -- see that option's own declaration comment above newMedkitFixture's own
+-- `local env = Sandbox.newEnv(envOverrides)` line). The REAL AwardHandlerXP's
+-- own numeric/budget contract is proven separately by
+-- tests/progression_spec.lua and tests/handlerprogression_spec.lua; this
+-- section proves THIS file's own call shape -- WHEN it calls AwardHandlerXP,
+-- with WHAT arguments, and under WHAT dedicated per-actor mint-cooldown gate
+-- -- plus one full real-chain integration test further down proving the
+-- REAL shared XP mint budget genuinely blocks this new award exactly like
+-- every other one.
+-- ========================================================================
+
+t.test('HANDLER XP WIRING: a genuine heal (target strictly below max health) awards handlerTreatK9 exactly once, to the USING player\'s own citizenid', function()
+    local f = newMedkitFixture({ withAwardHandlerXP = true })
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { health = 150, maxHealth = 200 })
+
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok)
+    t.equals(#f.awardHandlerXPCalls, 1)
+    t.equals(f.awardHandlerXPCalls[1].citizenid, 'HANDLER-CID')
+    t.equals(f.awardHandlerXPCalls[1].actionKey, 'handlerTreatK9')
+end)
+
+t.test('MEANINGFUL ACTION: topping off an already-full-health K9 still succeeds (ok=true, item consumed, cooldown stamped) but awards NO handlerTreatK9 XP -- not a genuine injury restore', function()
+    local f = newMedkitFixture({ withAwardHandlerXP = true })
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { health = 200, maxHealth = 200 }) -- already at max -- nothing to restore
+
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok, 'topping off an already-healthy K9 must still succeed -- this gate is on the AWARD, never the action (GATE THE START, NEVER THE STOP)')
+    t.equals(f.getItemCount(USER_SRC, f.config.K9Medkit.itemName), 4, 'the item is still consumed even though no XP is paid -- the medkit itself did not fail')
+    t.equals(#f.awardHandlerXPCalls, 0, 'no genuine injury was restored, so no handler XP should be minted for it')
+end)
+
+t.test('HANDLER XP WIRING: a second genuine treat by the SAME using citizenid against a DIFFERENT target, immediately after (well inside the 30-minute mint window), heals successfully but is NOT awarded a second time -- the per-actor mint cooldown (not MedkitCooldown\'s own per-target shape) is what stops a multi-target round-robin', function()
+    local f = newMedkitFixture({ withAwardHandlerXP = true })
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-A', health = 150, maxHealth = 200 })
+
+    local r1 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r1.ok)
+    t.equals(#f.awardHandlerXPCalls, 1)
+
+    -- A genuinely DIFFERENT target -- MedkitCooldown (per-target) has never
+    -- seen this citizenid before, so the heal itself succeeds regardless.
+    local TARGET_SRC_2 = TARGET_SRC + 1
+    wireTargetK9(f, TARGET_SRC_2, { citizenid = 'K9-B', health = 150, maxHealth = 200 })
+    f.advance(1) -- barely any time has passed -- nowhere near the 30-minute mint window
+    local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC_2)
+    t.isTrue(r2.ok, 'the heal itself must still succeed -- the mint cooldown gates the AWARD, never the action')
+    t.equals(#f.awardHandlerXPCalls, 1, 'the per-actor mint cooldown must block a second mint even against a totally different target')
+end)
+
+t.test('HANDLER XP WIRING: one millisecond before the 30-minute mint cooldown elapses, a genuinely different target still heals but is still refused a second mint', function()
+    local f = newMedkitFixture({ withAwardHandlerXP = true })
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-A', health = 150, maxHealth = 200 })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.equals(#f.awardHandlerXPCalls, 1)
+
+    local TARGET_SRC_2 = TARGET_SRC + 1
+    wireTargetK9(f, TARGET_SRC_2, { citizenid = 'K9-B', health = 150, maxHealth = 200 })
+    f.advance((30 * 60 * 1000) - 1)
+    local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC_2)
+    t.isTrue(r2.ok)
+    t.equals(#f.awardHandlerXPCalls, 1, 'still on cooldown at 1ms short of the full window')
+end)
+
+t.test('HANDLER XP WIRING: once the 30-minute mint cooldown fully elapses, the SAME actor is awarded again', function()
+    local f = newMedkitFixture({ withAwardHandlerXP = true })
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-A', health = 150, maxHealth = 200 })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.equals(#f.awardHandlerXPCalls, 1)
+
+    f.advance(30 * 60 * 1000) -- exactly 30 minutes -- MedkitCooldown's own much shorter window has long since cleared too
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-A', health = 150, maxHealth = 200 }) -- heal it again, freshly injured
+    local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r2.ok)
+    t.equals(#f.awardHandlerXPCalls, 2, 'once the actor\'s own mint cooldown has fully elapsed, the SAME actor must be paid again')
+end)
+
+t.test('FARM CLOSURE: the per-actor mint cooldown SURVIVES the actor\'s own disconnect and reconnect -- keyed on the durable citizenid, never the recyclable numeric source', function()
+    local f = newMedkitFixture({ withAwardHandlerXP = true })
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-A', health = 150, maxHealth = 200 })
+    f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.equals(#f.awardHandlerXPCalls, 1)
+
+    -- Simulate a disconnect + reconnect: the SAME citizenid returns on a
+    -- BRAND NEW numeric server id (FXServer recycles server ids -- nothing
+    -- about this citizenid's own identity changed by reconnecting).
+    local RECONNECTED_SRC = USER_SRC + 100
+    wireUsingPlayer(f, RECONNECTED_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    -- A genuinely different target, so MedkitCooldown (per-target) cannot be
+    -- the reason a second mint is refused here.
+    local TARGET_SRC_2 = TARGET_SRC + 1
+    wireTargetK9(f, TARGET_SRC_2, { citizenid = 'K9-B', health = 150, maxHealth = 200 })
+    f.advance(1)
+    local r2 = f.invokeCallback(CALLBACK_NAME, RECONNECTED_SRC, TARGET_SRC_2)
+    t.isTrue(r2.ok, 'the heal itself must still succeed on the new connection')
+    t.equals(#f.awardHandlerXPCalls, 1, 'a reconnect must NEVER reset this citizenid\'s own mint cooldown -- that is exactly the farm this tracker exists to close')
+end)
+
+t.test('HANDLER XP WIRING: AwardHandlerXP entirely absent (server/progression.lua not loaded, or the feature is off) never crashes, and the heal still succeeds exactly as before this pass', function()
+    local f = newMedkitFixture() -- withAwardHandlerXP deliberately omitted -- the global is simply undefined
+    wireUsingPlayer(f, USER_SRC, { citizenid = 'HANDLER-CID', itemCount = 5 })
+    wireTargetK9(f, TARGET_SRC, { health = 150, maxHealth = 200 })
+
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok, 'a missing AwardHandlerXP must never error, and must behave exactly like the pre-wiring heal path')
+end)
+
+-- ========================================================================
+-- HANDLER XP WIRING, REAL SHARED BUDGET (this pass, coder-backend): the
+-- three tests immediately above all stub AwardHandlerXP directly (this
+-- file's own opts.withAwardHandlerXP), which can only prove THIS file's own
+-- call shape -- it cannot prove the REAL server/progression.lua shared XP
+-- mint budget (XPMintBudget/XP_MINT_BUDGET_CAP_XP, per this task's own
+-- "the shared budget still caps total XP per hour with the new awards
+-- included" requirement) actually gets consulted for handlerTreatK9 too.
+-- This section loads the REAL, unmodified server/datastore.lua +
+-- server/cooldowns.lua + server/progression.lua alongside the REAL,
+-- unmodified server/medkit.lua (mirroring newMedkitOverrideChainFixture's
+-- own real-chain precedent above), and proves the shared budget genuinely
+-- refuses handlerTreatK9 once it is exhausted -- by another mechanic
+-- entirely -- and that the refusal is temporary (recovers once the budget
+-- refills), never a permanent lockout.
+-- ========================================================================
+
+--- @return table fixture
+local function newMedkitSharedBudgetFixture()
+    local fakeNow = 0
+    local function GetGameTimer() return fakeNow end
+
+    local eventHandlers = {}
+    local function AddEventHandler(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+    local function RegisterNetEvent(eventName, handler)
+        if handler then AddEventHandler(eventName, handler) end
+    end
+
+    local callbacks = {}
+    local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local function GetCurrentResourceName() return 'qbx_k9unit' end
+
+    -- Same one-shot "park at the first Wait()" CreateThread shape
+    -- newMedkitOverrideChainFixture already uses above -- neither
+    -- server/progression.lua's mint-budget sweep nor server/medkit.lua's two
+    -- own sweeps need stepping for this section's own tests.
+    local function CreateThread(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('newMedkitSharedBudgetFixture: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+    end
+    local function Wait(_ms) coroutine.yield() end
+
+    local playersBySource = {}
+    local function qbxGetPlayer(_self, src)
+        local p = playersBySource[src]
+        if not p then return nil end
+        return { PlayerData = p }
+    end
+    local function qbxGetPlayerByCitizenId(_self, citizenid)
+        for _, p in pairs(playersBySource) do
+            if p.citizenid == citizenid then return { PlayerData = p } end
+        end
+        return nil
+    end
+
+    local pedBySource = {}
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+
+    local coordsByPed = {}
+    local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
+
+    local healthByPed = {}
+    local function GetEntityHealth(ped) return healthByPed[ped] or 200 end
+    local maxHealthByPed = {}
+    local function GetEntityMaxHealth(ped) return maxHealthByPed[ped] or 200 end
+
+    local modelByPed = {}
+    local function GetEntityModel(ped) return modelByPed[ped] or 0 end
+    local k9Models = {}
+    local function IsConfiguredK9Model(model) return k9Models[model] == true end
+
+    local itemCounts = {}
+    local function oxGetItemCount(_self, src, itemName) return (itemCounts[src] and itemCounts[src][itemName]) or 0 end
+    local function oxRemoveItem(_self, src, itemName, count)
+        local have = (itemCounts[src] and itemCounts[src][itemName]) or 0
+        if have < count then return false end
+        itemCounts[src][itemName] = have - count
+        return true
+    end
+
+    -- THE POINT OF THIS FIXTURE'S OWN CONFIG: sum(Config.XP.awards) alone
+    -- (890) already exceeds server/progression.lua's own
+    -- XP_MINT_BUDGET_STARTER_TOKENS_CEILING_XP (900 is the ceiling, so 890 +
+    -- handlerTreatK9's 12 = 902 clears it) -- the starter allowance is
+    -- therefore CLAMPED to the fixed 900-token ceiling, independent of this
+    -- fixture's own sum, exactly as that constant's own doc comment
+    -- describes. A single `actionA` spend of 890 XP leaves exactly 10 tokens
+    -- -- strictly below handlerTreatK9's own 12 XP -- so the very next
+    -- handlerTreatK9 mint attempt must be refused by the shared budget
+    -- alone, with HandlerTreatXpMintCooldown itself never having fired for
+    -- this citizenid before (nothing else to blame the refusal on). A
+    -- 2-tier Config.HandlerXPTiers ladder ({0, 1}) turns "was handlerTreatK9
+    -- actually credited" into an observable tier flip via GetHandlerXPTier,
+    -- since Config.HandlerXP.awards.handlerTreatK9 (12) crosses the second
+    -- rank's 1-XP threshold the instant it is genuinely paid.
+    local config = {
+        Features = { K9Medkit = true, XPProgression = true, HandlerXPProgression = true },
+        Departments = baselineDepartments(),
+        K9Medkit = baselineK9MedkitConfig(),
+        FeatureControl = { RequireGrant = {} },
+        Database = { enabled = false },
+        XP = { scopePerCitizenidOrJob = 'citizenid', awards = { actionA = 890 } },
+        XPTiers = { { xp = 0, label = 'Recruit', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 } },
+        HandlerXP = { awards = { handlerTreatK9 = 12 } },
+        HandlerXPTiers = { { xp = 0, label = 'Rookie Handler' }, { xp = 1, label = 'Promoted Handler' } },
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
+    }
+
+    local env = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer,
+        CreateThread = CreateThread,
+        Wait = Wait,
+        AddEventHandler = AddEventHandler,
+        RegisterNetEvent = RegisterNetEvent,
+        lib = lib,
+        print = printStub,
+        GetCurrentResourceName = GetCurrentResourceName,
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+        exports = {
+            qbx_core = { GetPlayer = qbxGetPlayer, GetPlayerByCitizenId = qbxGetPlayerByCitizenId },
+            ox_inventory = {
+                GetItemCount = oxGetItemCount,
+                RemoveItem = oxRemoveItem,
+                GetInventoryItems = function() return {} end,
+                GetContainerFromSlot = function() return nil end,
+                RegisterStash = function() return true end,
+                RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
+        },
+        GetPlayers = function() return {} end,
+        GetPlayerPed = GetPlayerPed,
+        GetEntityCoords = GetEntityCoords,
+        GetEntityHealth = GetEntityHealth,
+        GetEntityMaxHealth = GetEntityMaxHealth,
+        GetEntityModel = GetEntityModel,
+        IsConfiguredK9Model = IsConfiguredK9Model,
+        NotifyPlayer = function(...) end,
+        TriggerClientEvent = function(...) end,
+        TriggerEvent = function(...) end,
+        Config = config,
+    })
+
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/entities.lua', env)
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
+    Sandbox.loadInto('../server/medkit.lua', env)
+    Sandbox.loadInto('../server/progression.lua', env)
+
+    for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    return {
+        env = env,
+        advance = function(ms) fakeNow = fakeNow + ms end,
+        setPlayer = function(src, citizenid, job) playersBySource[src] = { citizenid = citizenid, job = job, source = src } end,
+        setPed = function(src, ped) pedBySource[src] = ped end,
+        setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
+        setHealth = function(ped, hp) healthByPed[ped] = hp end,
+        setMaxHealth = function(ped, hp) maxHealthByPed[ped] = hp end,
+        setModel = function(ped, model) modelByPed[ped] = model end,
+        setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
+        setItemCount = function(src, itemName, n)
+            itemCounts[src] = itemCounts[src] or {}
+            itemCounts[src][itemName] = n
+        end,
+        useMedkit = function(usingSrc, targetSrc)
+            return callbacks['qbx_k9unit:server:useK9Medkit'](usingSrc, targetSrc)
+        end,
+        -- Spends `amount` (Config.XP.awards.actionA, 890) of the SAME shared
+        -- budget via the REAL, unmodified AwardXP -- a completely different
+        -- mechanic than medkit, proving the budget is genuinely SHARED
+        -- cross-mechanic, not a private medkit-only counter.
+        awardXP = function(citizenid, actionKey) return env.AwardXP(citizenid, actionKey) end,
+        handlerTier = function(citizenid) return env.GetHandlerXPTier(citizenid) end,
+    }
+end
+
+t.test('REAL SHARED BUDGET: handlerTreatK9 is refused once the shared XP mint budget is exhausted by a COMPLETELY DIFFERENT mechanic (AwardXP) for the SAME citizenid -- the heal still succeeds, but no handler XP is credited', function()
+    local f = newMedkitSharedBudgetFixture()
+    local USING_SRC, TARGET_SRC_ = 10, 20
+    local USING_PED, TARGET_PED = 9001, 9002
+    local CID = 'SHARED-BUDGET-CID'
+
+    f.setPlayer(USING_SRC, CID, { name = 'ambulance' })
+    f.setPlayer(TARGET_SRC_, 'K9-CID', { name = 'police' })
+    f.setPed(USING_SRC, USING_PED)
+    f.setPed(TARGET_SRC_, TARGET_PED)
+    f.setCoords(USING_PED, 0, 0, 0)
+    f.setCoords(TARGET_PED, 0, 0, 0)
+    f.setModel(TARGET_PED, K9_MODEL_HASH)
+    f.setIsK9Model(K9_MODEL_HASH, true)
+    f.setHealth(TARGET_PED, 150)
+    f.setMaxHealth(TARGET_PED, 200)
+    f.setItemCount(USING_SRC, 'k9_medkit', 5)
+
+    -- Sanity: the handler starts at the base rank.
+    t.equals(f.handlerTier(CID).label, 'Rookie Handler')
+
+    -- Drain the SAME citizenid's shared budget down to 10 tokens (900
+    -- starter - 890 actionA) via a totally unrelated mechanic (AwardXP,
+    -- never medkit) -- see this fixture's own declaration comment for the
+    -- exact arithmetic.
+    local spent = f.awardXP(CID, 'actionA')
+    t.equals(spent, 890)
+
+    -- The heal itself must succeed regardless -- the shared budget has
+    -- nothing to do with whether a medkit works.
+    local result = f.useMedkit(USING_SRC, TARGET_SRC_)
+    t.isTrue(result.ok)
+
+    -- But no handler XP was actually credited -- the tier must still read
+    -- as the base rank, because 12 XP could not be minted from only 10
+    -- remaining tokens.
+    t.equals(f.handlerTier(CID).label, 'Rookie Handler', 'the shared budget must refuse handlerTreatK9 exactly like every other award once exhausted')
+
+    -- NOT A PERMANENT LOCKOUT: advance past ALL THREE thresholds this second
+    -- attempt must clear -- MedkitCooldown (60000ms, per-target, so the
+    -- SAME K9 can be treated again), HandlerTreatXpMintCooldown (this
+    -- pass's own 30-minute per-actor mint cooldown -- consumed on the FIRST
+    -- attempt above regardless of the shared budget outcome, exactly like
+    -- server/certifications.lua's own CertifyXpMintCooldown precedent: the
+    -- mint cooldown gates the ATTEMPT, not a confirmed successful mint), and
+    -- the shared budget's own refill (3600 XP / 3,600,000ms -- comfortably
+    -- refills the remaining 10 tokens past 12 well before 30 minutes are
+    -- up). 1,800,001ms clears all three at once.
+    f.advance(30 * 60 * 1000 + 1)
+    f.setHealth(TARGET_PED, 150) -- freshly injured again
+    local result2 = f.useMedkit(USING_SRC, TARGET_SRC_)
+    t.isTrue(result2.ok)
+    t.equals(f.handlerTier(CID).label, 'Promoted Handler', 'once the shared budget has refilled past handlerTreatK9\'s own 12 XP, the SAME citizenid must be paid -- this was never a permanent block')
 end)
 
 -- ========================================================================

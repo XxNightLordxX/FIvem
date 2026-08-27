@@ -230,13 +230,17 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9settieroffline = 'cert_pairs',
     k9recertifyoffline = 'cert_pairs',
     k9unspecializeoffline = 'cert_pairs',
-    -- family #9 (Sensory/vision, 2 -> 1, 'k9vision') -- client/vision.lua.
-    -- Same "landed in the same change, not deferred" shape as permissions/
-    -- cert_pairs above -- see COMMANDS_TAB_CLEANUP_COMPLETE.vision below,
-    -- flipped true here: their COMMAND_REFERENCE rows were removed from
-    -- html/tablet.js in this same change (replaced by one 'k9vision' row).
-    ['qbx_k9unit:toggleThermalVision'] = 'vision',
-    ['qbx_k9unit:toggleNightVision'] = 'vision',
+    -- family #9 (Sensory/vision) -- REVERTED (owner reversal, this pass,
+    -- coder-architect): a prior pass folded
+    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision into a
+    -- 'k9vision' cycle and removed their own COMMAND_REFERENCE rows from
+    -- html/tablet.js. The owner has since asked for thermal and night
+    -- vision to be separate, first-class controls again -- both now have
+    -- their own COMMAND_REFERENCE row again (html/tablet.js), alongside
+    -- 'k9vision' kept as an extra optional convenience, so neither name
+    -- belongs in this allowlist anymore. See COMMANDS_TAB_CLEANUP_COMPLETE
+    -- below -- the 'vision' flag is reverted to not-complete for the same
+    -- reason.
 }
 
 -- COMMANDS_TAB_CLEANUP_COMPLETE -- coordination table, project-lead-owned.
@@ -293,13 +297,20 @@ local COMMANDS_TAB_CLEANUP_COMPLETE = {
     permissions = true,
     cert_pairs = true,
 
-    -- vision = true, SET HONESTLY (this pass, coder-architect): the
-    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision
+    -- vision -- REVERTED TO NOT-COMPLETE (owner reversal, this pass,
+    -- coder-architect). A prior pass had set this true once
+    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision's own
     -- COMMAND_REFERENCE rows were removed from html/tablet.js (replaced by
-    -- one 'k9vision' row) in THIS SAME CHANGE -- not blocked by a hot-file
-    -- conflict, since this pass owns COMMAND_REFERENCE/TABLET_STRING_KEYS
-    -- edits for this specific family.
-    vision = true,
+    -- one 'k9vision' row). The owner has since asked for thermal and night
+    -- vision to be separate, first-class controls again -- both rows are
+    -- back in html/tablet.js's COMMAND_REFERENCE (alongside 'k9vision',
+    -- kept as an extra optional convenience), so this family no longer has
+    -- any HIDDEN_ALIAS_COMMANDS members to enforce cleanup against (see
+    -- that table above -- the 'vision' family has zero entries now). Left
+    -- commented out, same convention as 'audit' above, rather than deleted,
+    -- so the history of this flag having been true and reverted is visible
+    -- in place.
+    -- vision = true,
 }
 
 -- PENDING_NEW_CANONICAL_COMMANDS -- a DIFFERENT exception from
@@ -333,9 +344,49 @@ local PENDING_NEW_CANONICAL_COMMANDS = {
 --- dependency on the real files ever being (or ever becoming) out of sync.
 --- @param text string
 --- @return table<string, boolean> set
+--- Removes every WHOLE-LINE Lua comment (a line whose first non-whitespace
+--- characters are `--`) before command extraction runs over the text.
+---
+--- WHY THIS EXISTS -- a real failure, not a hypothetical. This file used to
+--- carry a written-down disclosure that a `RegisterCommand('...')` mention
+--- inside a comment would be matched as if it were a real registration,
+--- excused as "not a concern in practice (every real call site in this
+--- codebase is live code, never commented out)". That assumption died: a
+--- doc comment in client/hud.lua explaining the drift-guard contract to
+--- future editors wrote the literal `RegisterCommand('...')` inside its own
+--- prose, and BOTH drift guards (this file and
+--- tests/commandsuggestions_spec.lua) went red claiming a real, live,
+--- undocumented command named `...` existed. It did not. The guard was
+--- accusing a sentence.
+---
+--- A disclosed limitation is still a limitation. The lesson recorded here:
+--- when a guard's correctness rests on "nobody would ever write that", the
+--- guard is wrong, because a comment ABOUT the guard is exactly the thing
+--- somebody eventually writes.
+---
+--- SCOPE, stated honestly rather than assumed away: this strips whole-line
+--- comments only. A trailing comment on a line that also holds live code
+--- (`DoThing() -- RegisterCommand('x')`) would still be matched. That is
+--- deliberate -- stripping trailing comments correctly means knowing
+--- whether the `--` sits inside a string literal, and a wrong answer there
+--- would make the guard MISS a real registration, which is the far worse
+--- failure. A whole-line comment, by contrast, can never contain a live
+--- call, so removing it is always safe in the direction that matters.
+--- @param text string
+--- @return string
+local function StripFullLineComments(text)
+    local kept = {}
+    for line in (text .. '\n'):gmatch('([^\n]*)\n') do
+        if not line:match('^%s*%-%-') then
+            kept[#kept + 1] = line
+        end
+    end
+    return table.concat(kept, '\n')
+end
+
 local function ExtractRegisterCommandNames(text)
     local set = {}
-    for name in text:gmatch("RegisterCommand%('([^']+)'") do
+    for name in StripFullLineComments(text):gmatch("RegisterCommand%('([^']+)'") do
         set[name] = true
     end
     return set
@@ -404,7 +455,7 @@ t.test('SYNTHETIC: ExtractRegisterCommandNames/ExtractDocumentedCommandNames cor
     local fakeServerText = [[
         RegisterCommand('k9realone', function() end, false)
         RegisterCommand('k9realtwo', function() end, false)
-        -- RegisterCommand('k9commentedout', function() end, false) -- a prose mention inside a comment is still matched by this narrow a pattern today; not a concern in practice (every real call site in this codebase is live code, never commented out), but disclosed rather than silently assumed away.
+        -- RegisterCommand('k9commentedout', function() end, false) -- a prose mention inside a whole-line comment is NOT a real registration and must never be reported as one; see StripFullLineComments above for the live incident that proved this.
     ]]
     local fakeDocumentedText = "var COMMAND_REFERENCE = [\n"
         .. "        { command: 'k9realone', category: 'field_gear' },\n"
@@ -418,7 +469,48 @@ t.test('SYNTHETIC: ExtractRegisterCommandNames/ExtractDocumentedCommandNames cor
     t.isTrue(documented['k9realone'] == true, 'sanity: extraction found the one fake documented command')
 
     t.isNil(documented['k9realtwo'], 'k9realtwo is real but undocumented in this fabricated fixture')
-    t.isTrue(real['k9commentedout'] == true, 'disclosed limitation, exercised directly: a commented-out RegisterCommand call still matches this pattern')
+    t.isNil(real['k9commentedout'], 'a RegisterCommand mention inside a whole-line comment is NOT a real registration -- the guard must not accuse a sentence')
+end)
+
+t.test('SYNTHETIC: StripFullLineComments removes a commented RegisterCommand mention WITHOUT ever hiding a live one -- including the exact client/hud.lua doc-comment shape that made both drift guards red', function()
+    -- The literal shape that broke this guard for real: prose explaining the
+    -- drift-guard contract, which had to name `RegisterCommand('...')` to
+    -- explain it. Reproduced verbatim in spirit so a future rewrite of the
+    -- extractor that re-breaks on it fails HERE first, not in the real suite.
+    local docCommentText = [==[
+        -- Raw GTA control ID for the dismiss action -- deliberately NOT a
+        -- RegisterCommand/RegisterKeyMapping pair. Adding any new
+        -- RegisterCommand('...') literal anywhere in this resource requires a
+        -- matching html/tablet.js COMMAND_REFERENCE entry.
+    ]==]
+    t.isNil(ExtractRegisterCommandNames(docCommentText)['...'],
+        'the real client/hud.lua doc comment that made both drift guards red no longer registers a phantom command named "..."')
+
+    -- CONTROL -- the whole risk of stripping anything is stripping too much.
+    -- Every one of these is LIVE code and must still be found: indented,
+    -- at column zero, sharing a line with other statements, and sitting
+    -- directly beneath a comment line that IS stripped.
+    local liveText = [==[
+        -- this whole line goes away, including its RegisterCommand('k9ghost') mention
+        RegisterCommand('k9indented', function() end, false)
+RegisterCommand('k9column0', function() end, false)
+        DoSomething() RegisterCommand('k9sameline', function() end, false)
+        RegisterCommand('k9trailing', function() end, false) -- a real call with a trailing comment after it
+    ]==]
+    local live = ExtractRegisterCommandNames(liveText)
+    t.isTrue(live['k9indented'] == true, 'CONTROL: an indented live registration directly under a stripped comment is still found')
+    t.isTrue(live['k9column0'] == true, 'CONTROL: a live registration at column zero is still found')
+    t.isTrue(live['k9sameline'] == true, 'CONTROL: a live registration sharing its line with another statement is still found')
+    -- This one is the reason the strip is deliberately WHOLE-LINE only. An
+    -- extractor that dropped every line merely CONTAINING `--` would lose
+    -- this real registration entirely -- the guard going quiet, which is the
+    -- failure direction that actually ships bugs.
+    t.isTrue(live['k9trailing'] == true, 'CONTROL: a live registration with a TRAILING comment on the same line is still found -- over-stripping must never blind the guard')
+    t.isNil(live['k9ghost'], 'the stripped comment line took its phantom name with it')
+
+    -- CONTROL -- a file with no trailing newline must not lose its last line.
+    t.isTrue(ExtractRegisterCommandNames("RegisterCommand('k9lastline', function() end, false)")['k9lastline'] == true,
+        'CONTROL: a registration on a final line with no trailing newline is still found')
 end)
 
 t.test('SYNTHETIC: a documented command with no matching real RegisterCommand call is caught in the other direction', function()

@@ -189,6 +189,38 @@ local function newFixture(opts)
         },
     }
 
+    -- BACKEND-ENFORCEMENT-CAPABILITY FIXTURE SUPPORT (coder-security, this
+    -- pass) -- a qb-inventory export table, present ONLY when a test asks
+    -- for the 'qb-inventory' backend via opts.inventoryOverride. Minimal but
+    -- REAL -- every export shared/compat/inventory.lua's own
+    -- BuildQbInventoryServer requires before it returns a non-nil table at
+    -- all (GetInventory/GetItemCount/RemoveItem/CreateInventory/CreateShop/
+    -- AddHook -- see that file's own qb-inventory section), so this fixture
+    -- exercises the REAL, unmodified compat layer's real "only 'swapItems'
+    -- is translated" restriction, never a hand-simulated shortcut. Same
+    -- shape as tests/compatinventory_spec.lua's own qbFullExports().
+    if opts.inventoryOverride == 'qb-inventory' then
+        exportsStub['qb-inventory'] = {
+            GetInventory = function(_self, _id) return nil end,
+            GetItemCount = function(_self, _inv, _item) return 0 end,
+            RemoveItem = function(_self, _id, _item, _amount, _slot) return true end,
+            CreateInventory = function(_self, _id, _data) return true end,
+            -- SHARES `registerShopCalls` WITH THE ox_inventory STUB ABOVE
+            -- (deliberately -- see this section's own header): a test
+            -- asserting "RegisterShop was never called" on this backend
+            -- must actually observe that, not vacuously pass because this
+            -- fixture only ever wired the counter to the OTHER backend's
+            -- export table. This IS the exact class of mistake this pass's
+            -- own red/green proof (this section's header) caught on the
+            -- first draft of this fixture, before this fix.
+            CreateShop = function(_self, shopData)
+                registerShopCalls[#registerShopCalls + 1] = { shopType = shopData and shopData.name, shopDetails = shopData }
+                return true
+            end,
+            AddHook = function(_self, _hookType, _callback) return 1 end,
+        }
+    end
+
     local Config = {
         Features = { K9EquipmentShop = opts.featureEnabled },
         K9EquipmentShop = opts.shopConfig,
@@ -199,7 +231,7 @@ local function newFixture(opts)
         Compat = {
             diagnosticCommand = false,
             Systems = {
-                inventory = { override = 'ox_inventory' },
+                inventory = { override = opts.inventoryOverride or 'ox_inventory' },
                 target = {}, framework = {}, dispatch = {}, ambulance = {},
             },
         },
@@ -287,7 +319,14 @@ local function newFixture(opts)
         locale = localeStub,
         NotifyPlayer = notifyPlayerStub,
         IsDuplicityVersion = function() return true end,
-        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+        -- Both 'ox_inventory' and 'qb-inventory' report 'started' -- harmless
+        -- for every EXISTING test here (Config.Compat.Systems.inventory's
+        -- TIER 1 override probes ONLY the one named resource it is pinned
+        -- to, never any other candidate -- shared/compat/core.lua's own
+        -- DetectSystem, "override skips the whole candidate walk"), and lets
+        -- opts.inventoryOverride = 'qb-inventory' tests reach the real,
+        -- unmodified qb-inventory adapter honestly.
+        GetResourceState = function(name) return (name == 'ox_inventory' or name == 'qb-inventory') and 'started' or 'missing' end,
         CreateThread = CreateThreadStub,
         Wait = WaitStub,
     })
@@ -831,6 +870,112 @@ t.test('Config.Features.K9EquipmentShop = false: openShop/buyItem hooks are neve
     f.fireResourceStart()
     t.isNil(f.hookCallbacks['openShop'])
     t.isNil(f.hookCallbacks['buyItem'])
+end)
+
+-- ============================================================================
+-- BACKEND ENFORCEMENT CAPABILITY (coder-security, this pass) -- red-team
+-- finding on server/equipmentshop.lua ~2286-2356, VERIFIED against the real
+-- code before acting.
+--
+-- THE CLAIM: on a qb-inventory server, RegisterHook('buyItem', ...) fails
+-- silently (only 'swapItems' is translated on that backend -- shared/
+-- compat/inventory.lua's own "RegisterHook VOCABULARY" section), so a
+-- modified client could buy a requiredTierKey/requiredSpecialization-gated
+-- item for free, with no server-side re-check at all.
+--
+-- WHAT THE REAL CODE ACTUALLY DOES, CONFIRMED BY THE TESTS BELOW:
+-- ActivateEquipmentShopIfEnabled (server/equipmentshop.lua's own "ACTIVATION"
+-- section) already refuses to EVER call RegisterShop unless BOTH the
+-- openShop and buyItem hooks confirm registered ("HOOKS FIRST, ALWAYS" --
+-- see that section's own header). On qb-inventory, both registrations fail
+-- (RegisterHook there only ever translates 'swapItems'), so the shop is
+-- NEVER registered with the inventory backend at all -- not "sold
+-- unenforced", but "never offered", satisfying this task's own stated
+-- fail-closed alternative ("the items simply do not appear rather than
+-- appearing and being free") in its strongest form: the WHOLE shop, not
+-- just the gated items, since the SAME two hooks also back the per-person
+-- block.K9EquipmentShop/feature.K9EquipmentShop gate -- see
+-- server/selfcheck.lua's own new "PART 3" header for why stripping only the
+-- gated items and leaving the rest for sale was considered and REJECTED
+-- (it would leave that per-person block completely unenforced on this
+-- backend).
+--
+-- The finding is therefore ALREADY FIXED in the production code; what these
+-- tests actually close is a real, separate gap this pass found alongside
+-- it: this exact fail-closed path had ZERO test coverage before now (every
+-- existing test in this suite pins Config.Compat.Systems.inventory.override
+-- to 'ox_inventory', where both hooks always succeed) -- precisely the
+-- "shipped guards with zero coverage" failure mode this codebase has hit
+-- before.
+--
+-- RED/GREEN PROOF PERFORMED FOR THIS PASS: server/equipmentshop.lua's own
+-- `if not (openOk and buyOk) then ... return end` guard (its "ACTIVATION"
+-- section) was temporarily changed to fall through unconditionally (as if
+-- a partial hook failure were acceptable). Both tests below immediately
+-- went red with clean, named assertion failures (never a suite crash) --
+-- 'unsupported backend still called RegisterShop' and a non-empty
+-- registerShopCalls list where the test expected none. The file was
+-- restored to its real, working form immediately afterward; the version in
+-- the working tree is the fixed one.
+-- ============================================================================
+
+--- @param printedLines string[]
+--- @param substring string
+--- @return boolean
+local function anyLineContains(printedLines, substring)
+    for _, line in ipairs(printedLines) do
+        if line:find(substring, 1, true) then return true end
+    end
+    return false
+end
+
+t.test('BACKEND ENFORCEMENT: an inventory backend whose RegisterHook only translates \'swapItems\' (qb-inventory, CONFIRMED) never registers openShop/buyItem, and the WHOLE shop refuses to activate -- fail CLOSED, never fail open', function()
+    local f = newFixture({
+        featureEnabled = true, shopConfig = BASE_SHOP_CONFIG,
+        inventoryOverride = 'qb-inventory',
+        registeredItems = { money = true, k9_medkit = true, k9_treat = true },
+    })
+    f.fireResourceStart()
+
+    t.isNil(f.hookCallbacks['openShop'], 'qb-inventory has no confirmed openShop hook translation -- registration must genuinely fail, never silently succeed with an inert callback')
+    t.isNil(f.hookCallbacks['buyItem'], 'qb-inventory has no confirmed buyItem hook translation')
+    t.equals(#f.registerShopCalls, 0, 'RegisterShop must NEVER be called when either purchase-enforcement hook failed to register -- an unenforced live shop is worse than no shop at all')
+    t.isTrue(anyLineContains(f.printedLines, 'REFUSING to activate'), 'the loud console refusal must fire so an operator can find out why the shop never appeared')
+end)
+
+t.test('BACKEND ENFORCEMENT: on that same unsupported backend, EVEN A FULLY QUALIFIED buyer cannot purchase the gated item -- because it was never offered at all, not because of a purchase-time check that happens to still catch them', function()
+    local world = newWorld()
+    world.items.k9_medkit = { label = nil, price = 150, currency = nil, sort_order = 1, required_tier_key = 'senior', required_specialization = nil, deleted = 0, updated_by = 'HC' }
+    local playersBySource = {}
+    registerPlayer(playersBySource, HC_SOURCE, 'QUALIFIED01', 'police')
+    local f = newFixture({
+        featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, world = world, playersBySource = playersBySource,
+        inventoryOverride = 'qb-inventory',
+        registeredItems = { money = true, k9_medkit = true, k9_treat = true },
+        meetsTierRequirement = function() return true end, -- WOULD allow if the buyItem hook could even run
+    })
+    f.fireResourceStart()
+
+    -- There is no buyItem hook to even invoke on this backend -- proving
+    -- the point directly: the callback this test would otherwise call
+    -- simply does not exist, so there is structurally nothing here for a
+    -- modified client to call and nothing here to buy from at all.
+    t.isNil(f.hookCallbacks['buyItem'])
+    t.equals(#f.registerShopCalls, 0)
+end)
+
+t.test('BACKEND ENFORCEMENT: ox_inventory (the confirmed-capable backend) is COMPLETELY UNAFFECTED by the qb-inventory case above -- both hooks register and the shop activates normally', function()
+    local f = newFixture({
+        featureEnabled = true, shopConfig = BASE_SHOP_CONFIG,
+        inventoryOverride = 'ox_inventory',
+        registeredItems = { money = true, k9_medkit = true, k9_treat = true },
+    })
+    f.fireResourceStart()
+
+    t.equals(type(f.hookCallbacks['openShop']), 'function')
+    t.equals(type(f.hookCallbacks['buyItem']), 'function')
+    t.isTrue(#f.registerShopCalls > 0, 'the shop must actually register on the confirmed-capable backend')
+    t.isFalse(anyLineContains(f.printedLines, 'REFUSING to activate'))
 end)
 
 -- ============================================================================

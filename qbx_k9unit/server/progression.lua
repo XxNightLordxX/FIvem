@@ -1202,6 +1202,60 @@ end
 --   server/certifications.lua already established) -- a red test, not a
 --   comment someone can wire past without reading.
 --
+--   CLOSED (WIRING PASS, coder-backend -- the "top handler rank cannot be
+--   reached by playing" anti-farm audit finding). The BINDING REQUIREMENT
+--   above is now satisfied by both files: server/medkit.lua declares
+--   HandlerTreatXpMintCooldown (a flat NewCooldown(), keyed on the USING
+--   player's own citizenid, 30 real minutes, swept -- never
+--   :RegisterPlayerDropped()'d, so it survives the actor's own
+--   disconnect/reconnect) and calls AwardHandlerXP(usingCitizenid,
+--   'handlerTreatK9') only when that tracker's own .Consume(...) allows it
+--   AND the heal was genuine (target strictly below max health beforehand --
+--   never a no-op top-off of an already-healthy K9). server/kennel.lua
+--   declares HandlerKennelDeployXpMintCooldown (same shape, keyed on the
+--   DEPLOYING player's own citizenid, 60 real minutes) and calls
+--   AwardHandlerXP(citizenid, 'handlerKennelDeploy') only at
+--   confirmKennelPlaced's own success line -- a REAL, confirmed, registered
+--   kennel object, never the earlier requestDeployKennel step, which can
+--   still fail after that step.
+--
+--   THE FEEDBACK LOOP THIS SECTION'S OWN HEADER FLAGS STILL DOES NOT EXIST,
+--   RE-VERIFIED (not re-argued from the old reasoning alone): both new mint
+--   cooldowns are FIXED FILE-LOCAL CONSTANTS (TREAT_XP_MINT_COOLDOWN_MS /
+--   KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS), never derived from
+--   GetHandlerXPTierMedkitCooldownMs/GetHandlerXPTierKennelDeployCooldownMs
+--   or from MedkitCooldown/DeployCooldown themselves -- a handler's own rank
+--   still shortens the ACTION cooldown (how often treating/deploying may be
+--   RETRIED), exactly as before this pass, but the MINT cadence (how often
+--   the ACTION actually PAYS) is completely unaffected by rank, at every
+--   tier. Climbing the ladder therefore still cannot make the ladder itself
+--   climb any faster.
+--
+--   RESULTING ARITHMETIC (see each tracker's own declaration comment in its
+--   own file for the full derivation, reproduced briefly here since this is
+--   the section the BINDING REQUIREMENT above points at): handlerTreatK9 is
+--   now capped at 12 XP / 30 min = 24 XP/hr per actor (independent of how
+--   many different K9s that actor round-robins, since the tracker is keyed
+--   on the actor alone); handlerKennelDeploy is now capped at 8 XP / 60 min
+--   = 8 XP/hr per actor (independent of how fast a disconnect/reconnect loop
+--   could otherwise force fresh deploys). Combined, 32 XP/hr worst-case
+--   theoretical ceiling from these two actions alone -- nowhere near the
+--   shared 3,600 XP/hr budget, and nowhere near fast enough to reach
+--   Config.HandlerXPTiers' 500-XP Master threshold "in an afternoon": even a
+--   handler with ZERO tenure/certification income needs 500 / 32 = 15.625
+--   continuous, uninterrupted, never-missed hours at this theoretical
+--   ceiling to reach Master from these two actions alone (a handler who also
+--   earns the full 155-XP tenure trickle needs only 345 / 32 = 10.78 such
+--   hours for the remainder) -- and a realistic, non-maxed pace (an
+--   occasional genuine injury to treat, one kennel redeploy per session)
+--   spreads that same total across roughly one to a few weeks of ordinary
+--   duty, the same order of magnitude config.lua's own Config.HandlerXPTiers
+--   header already describes for a certifying handler's path to Master.
+--   config.lua's own Config.Features.HandlerXPProgression and
+--   Config.HandlerXPTiers headers carry the full write-up and are the
+--   source of truth for this arithmetic going forward -- re-derive it there
+--   (not here) before ever retuning either mint-cooldown constant.
+--
 -- NO LIVE CLIENT PUSH: unlike Config.XPTiers' speedMultiplier/
 -- scentRangeMultiplier (which visibly change a K9's own ped behavior in
 -- real time and so need PushTierSnapshot to reach an already-connected

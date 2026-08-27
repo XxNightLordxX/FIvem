@@ -2295,15 +2295,25 @@
         { command: 'qbx_k9unit:toggleCamera', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_usage', doesKey: 'cmdref_toggle_camera_does', needsKey: 'cmdref_toggle_camera_needs', gate: { kind: 'open' }, defaultKeybind: 'L' },
         { command: 'qbx_k9unit:toggleCameraFeed', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_feed_usage', doesKey: 'cmdref_toggle_camera_feed_does', needsKey: 'cmdref_toggle_camera_feed_needs', gate: { kind: 'access', featureKey: 'CameraFeedPiP' }, defaultKeybind: 'H', defaultKeybindConfigurable: true },
         // qbx_k9unit:toggleThermalVision / qbx_k9unit:toggleNightVision --
-        // VISION MERGE (coder-architect, this pass): folded into the single
-        // 'k9vision' cycle entry below. Both commands still work, unchanged
-        // (still real RegisterCommand + RegisterKeyMapping calls in
-        // client/vision.lua, still bound to K/J by default) -- they are a
-        // HIDDEN ALIAS pair now (COMMAND_CONSOLIDATION_SPEC.md §3 shape):
-        // real and functional, just no longer chat-suggested or listed here
-        // as their own separate Commands-tab rows. See
+        // OWNER REVERSAL (coder-architect, this pass): an earlier pass had
+        // folded these two into a single 'k9vision' cycle entry and removed
+        // their own Commands-tab rows. The owner has since asked for
+        // thermal and night vision to be separate, first-class controls
+        // again ("I want the thermal and night vision separate") -- both
+        // get their own row back here, unchanged commands underneath (still
+        // real RegisterCommand + RegisterKeyMapping calls in
+        // client/vision.lua, still bound to K/J by default, never actually
+        // removed even while this pass's rows were gone). See
         // tests/commandreferenceregistry_spec.lua's HIDDEN_ALIAS_COMMANDS
-        // ('vision' family) / COMMANDS_TAB_CLEANUP_COMPLETE.vision.
+        // ('vision' family, now empty) / COMMANDS_TAB_CLEANUP_COMPLETE
+        // (vision reverted to not-complete).
+        { command: 'qbx_k9unit:toggleThermalVision', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_thermal_vision_usage', doesKey: 'cmdref_toggle_thermal_vision_does', needsKey: 'cmdref_toggle_thermal_vision_needs', gate: { kind: 'open', featureKey: 'ThermalVision' }, defaultKeybind: 'K', defaultKeybindConfigurable: true },
+        { command: 'qbx_k9unit:toggleNightVision', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_night_vision_usage', doesKey: 'cmdref_toggle_night_vision_does', needsKey: 'cmdref_toggle_night_vision_needs', gate: { kind: 'open', featureKey: 'NightVision' }, defaultKeybind: 'J', defaultKeybindConfigurable: true },
+        // 'k9vision' (Off -> Night -> Thermal -> Off) is KEPT as an extra,
+        // optional convenience alongside the two explicit toggles above --
+        // owner's own steer ("keep it as an extra... someone may prefer
+        // it"), same additive shape as 'k9kennel' alongside
+        // k9deploykennel/k9exitkennel (COMMAND_CONSOLIDATION_SPEC.md #5).
         { command: 'k9vision', category: 'vision', adminOnly: false, usageKey: 'cmdref_k9vision_usage', doesKey: 'cmdref_k9vision_does', needsKey: 'cmdref_k9vision_needs', gate: { kind: 'open' }, defaultKeybind: 'I' },
 
         // ---- Field Gear & Equipment ----

@@ -164,6 +164,23 @@ local function newKennelFixture(opts)
     local fakeNow = 0
     local function GetGameTimer() return fakeNow end
 
+    -- WIRING PASS (coder-backend): server/kennel.lua now declares
+    -- HandlerKennelDeployXpMintCooldown.StartSweep(...) at file-load time
+    -- (alongside DeployCooldown.RegisterPlayerDropped()), so this fixture
+    -- must provide a real CreateThread/Wait pair -- mirrors
+    -- tests/medkit_spec.lua's own newMedkitFixture threadRunner precedent
+    -- exactly (that file's own MedkitCooldown sweep needed the identical
+    -- stub for the identical reason). No test in this file needs to step
+    -- the sweep body itself, but the sandbox load would otherwise crash
+    -- immediately on "attempt to call a nil value (global 'CreateThread')"
+    -- the moment server/kennel.lua's own top-level chunk runs.
+    local threadRunner = Sandbox.newThreadRunner()
+    local createThreadCallCount = 0
+    local function CreateThread(fn)
+        createThreadCallCount = createThreadCallCount + 1
+        threadRunner.CreateThread(fn)
+    end
+
     local printedLines = {}
     local function printStub(...)
         local parts = {}
@@ -319,6 +336,8 @@ local function newKennelFixture(opts)
     local handlerXPTierKennelCalls = {}
     local envOverrides = {
         GetGameTimer = GetGameTimer,
+        CreateThread = CreateThread,
+        Wait = threadRunner.Wait,
         AddEventHandler = AddEventHandler,
         RegisterNetEvent = RegisterNetEvent,
         GetCurrentResourceName = GetCurrentResourceName,
@@ -350,6 +369,22 @@ local function newKennelFixture(opts)
         end
     end
 
+    -- WIRING PASS (coder-backend) -- server/progression.lua's real
+    -- AwardHandlerXP is NOT loaded into this sandbox (its own numeric/
+    -- budget contract belongs to tests/progression_spec.lua and
+    -- tests/handlerprogression_spec.lua, not this file) -- this is a small,
+    -- test-controlled stand-in, mirroring tests/medkit_spec.lua's own
+    -- `withXPTierMedkitCooldown`/`withHandlerXPTierMedkitCooldown` fixture
+    -- precedent exactly, so confirmKennelPlaced's own soft-dependency call
+    -- (`type(AwardHandlerXP) == 'function'` guard) can be proven from THIS
+    -- file's own dispatchNetEvent path.
+    local awardHandlerXPCalls = {}
+    if opts.withAwardHandlerXP then
+        envOverrides.AwardHandlerXP = function(citizenid, actionKey)
+            awardHandlerXPCalls[#awardHandlerXPCalls + 1] = { citizenid = citizenid, actionKey = actionKey }
+        end
+    end
+
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -364,6 +399,8 @@ local function newKennelFixture(opts)
         deletedEntities = deletedEntities,
         printedLines = printedLines,
         handlerXPTierKennelCalls = handlerXPTierKennelCalls,
+        awardHandlerXPCalls = awardHandlerXPCalls,
+        createThreadCallCount = function() return createThreadCallCount end,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
         callbacks = registeredCallbacks,
@@ -652,18 +689,21 @@ t.test('HANDLER XP TIER UNLOCK: GetHandlerXPTierKennelDeployCooldownMs entirely 
 end)
 
 -- ========================================================================
--- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass):
--- this cooldown is now handler-rank-reduced (worst case 3000ms, down from
--- the 5000ms default -- see GetHandlerXPTierKennelDeployCooldownMs's own
--- doc comment, server/progression.lua). handlerKennelDeploy (8 XP,
--- Config.HandlerXP.awards) is DELIBERATELY still unwired -- AwardHandlerXP
--- is called from nowhere in this file. If that ever changes, whoever wires
--- it MUST add a dedicated per-actor MINT cooldown (mirroring
--- server/certifications.lua's CertifyXpMintCooldown fix for
--- handlerCertifyK9), sized against the RANK-REDUCED 3000ms floor, never
--- derived from DeployCooldown itself. This is a RED TEST, not a comment:
--- it fails the moment handlerKennelDeploy is actually awarded from this
--- file without a same-file *_XP_MINT_COOLDOWN tracker alongside it. Mirrors
+-- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass;
+-- handlerKennelDeploy WIRED this pass, coder-backend -- see below): this
+-- cooldown is handler-rank-reduced (worst case 3000ms, down from the
+-- 5000ms default -- see GetHandlerXPTierKennelDeployCooldownMs's own doc
+-- comment, server/progression.lua). handlerKennelDeploy (8 XP,
+-- Config.HandlerXP.awards) is NOW wired -- server/kennel.lua's
+-- confirmKennelPlaced calls AwardHandlerXP(citizenid, 'handlerKennelDeploy')
+-- at a CONFIRMED new placement, gated by
+-- HandlerKennelDeployXpMintCooldown, a dedicated per-actor MINT cooldown
+-- (mirroring server/certifications.lua's CertifyXpMintCooldown fix for
+-- handlerCertifyK9), sized well below the RANK-REDUCED 3000ms floor
+-- (60 real minutes), never derived from DeployCooldown itself. This is a
+-- RED TEST, not a comment: it fails the moment handlerKennelDeploy is
+-- awarded from this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker
+-- alongside it -- now GREEN because that tracker genuinely exists. Mirrors
 -- tests/recall_spec.lua's own "SOURCE AUDIT" precedent.
 -- ========================================================================
 
@@ -691,7 +731,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDep
     -- cannot satisfy that. The test directly below proves this pattern
     -- rejects a comment and accepts a real declaration, so a future edit
     -- cannot quietly defeat it again.
-    t.isTrue(text:find('local%%s+[%%w_]*XpMintCooldown%%s*=%%s*NewCooldown') ~= nil,
+    t.isTrue(text:find('local%s+[%w_]*XpMintCooldown%s*=%s*NewCooldown') ~= nil,
         'handlerKennelDeploy is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-actor mint cooldown (a second, separate tracker, never DeployCooldown itself, now ' ..
         'handler-rank-shortened to a 3000ms worst-case floor) named with the XP_MINT_COOLDOWN convention ' ..
@@ -699,6 +739,98 @@ t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDep
         'can find it, sized against that rank-reduced floor rather than the unreduced 5000ms config default, then ' ..
         'update this test\'s own expectations to match. See server/progression.lua\'s ' ..
         'GetHandlerXPTierKennelDeployCooldownMs header for the full writeup.')
+end)
+
+-- ========================================================================
+-- HANDLER XP WIRING (this pass, coder-backend -- closes the "top handler
+-- rank cannot be reached by playing" anti-farm audit finding). Uses
+-- opts.withAwardHandlerXP (this fixture's own test-controlled stand-in for
+-- server/progression.lua's real AwardHandlerXP -- see its own declaration
+-- comment above) to prove THIS file's own call shape: WHEN it calls
+-- AwardHandlerXP, with WHAT arguments, and under WHAT dedicated per-actor
+-- mint-cooldown gate -- including the disconnect/reconnect farm this
+-- tracker exists to close (see HandlerKennelDeployXpMintCooldown's own
+-- declaration comment in server/kennel.lua for the full "why deploy is
+-- structurally rare, and why that alone is not enough" writeup this proves
+-- out). The REAL AwardHandlerXP's own numeric/budget contract is proven
+-- separately by tests/progression_spec.lua and
+-- tests/handlerprogression_spec.lua.
+-- ========================================================================
+
+t.test('HANDLER XP WIRING: a CONFIRMED new kennel deployment awards handlerKennelDeploy exactly once, to the deploying citizenid', function()
+    local f = newKennelFixture({ withAwardHandlerXP = true })
+    deploySuccessfully(f, 1, 'HANDLER-CID', 5001, { x = 0, y = 0, z = 0 })
+
+    t.equals(#f.awardHandlerXPCalls, 1)
+    t.equals(f.awardHandlerXPCalls[1].citizenid, 'HANDLER-CID')
+    t.equals(f.awardHandlerXPCalls[1].actionKey, 'handlerKennelDeploy')
+end)
+
+t.test('HANDLER XP WIRING: requestDeployKennel ALONE (before any confirm) never awards anything -- only a CONFIRMED placement pays', function()
+    local f = newKennelFixture({ withAwardHandlerXP = true })
+    f.setAccess(1, true)
+    f.setPlayer(1, 'HANDLER-CID')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+
+    t.equals(#f.awardHandlerXPCalls, 0, 'a request that never reaches a confirmed placement must never mint anything')
+end)
+
+t.test('HANDLER XP WIRING: a placement that is requested but then CANCELLED never awards anything', function()
+    local f = newKennelFixture({ withAwardHandlerXP = true })
+    f.setAccess(1, true)
+    f.setPlayer(1, 'HANDLER-CID')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    f.dispatchNetEvent('qbx_k9unit:server:cancelKennelPlacement', 1)
+
+    t.equals(#f.awardHandlerXPCalls, 0)
+end)
+
+t.test('FARM CLOSURE: a scripted disconnect/reconnect that forces a fresh deploy is STILL refused a second mint -- the per-actor mint cooldown is keyed on the durable citizenid, never the recyclable numeric source, and DeployCooldown\'s own :RegisterPlayerDropped() clearing on disconnect changes nothing here', function()
+    local f = newKennelFixture({ withAwardHandlerXP = true })
+
+    -- First genuine deploy -- paid.
+    deploySuccessfully(f, 1, 'HANDLER-CID', 5001, { x = 0, y = 0, z = 0 })
+    t.equals(#f.awardHandlerXPCalls, 1)
+
+    -- Disconnect while unoccupied/uncarried -- playerDropped's own
+    -- RemoveKennelForCitizenid call clears Kennels['HANDLER-CID'], which is
+    -- the ONE thing that ever allows a fresh deploy again during ordinary
+    -- play (see this file's own header architecture section). This is the
+    -- exact structural gap HandlerKennelDeployXpMintCooldown's own
+    -- declaration comment names as the real farm vector.
+    f.firePlayerDropped(1)
+
+    -- Reconnect on a BRAND NEW numeric server id -- same citizenid, nothing
+    -- about their identity changed. DeployCooldown itself was ALSO cleared
+    -- by the same disconnect (:RegisterPlayerDropped()), so nothing there
+    -- stands in the way of an immediate re-deploy either.
+    deploySuccessfully(f, 2, 'HANDLER-CID', 6001, { x = 0, y = 0, z = 0 })
+
+    t.equals(#f.awardHandlerXPCalls, 1, 'a disconnect/reconnect-forced fresh deploy must NOT mint a second time within the 60-minute window -- this is exactly the farm this tracker exists to close')
+end)
+
+t.test('once the 60-minute mint cooldown fully elapses, a SUBSEQUENT disconnect/reconnect-forced deploy is paid again -- not a permanent lockout', function()
+    local f = newKennelFixture({ withAwardHandlerXP = true })
+
+    deploySuccessfully(f, 1, 'HANDLER-CID', 5001, { x = 0, y = 0, z = 0 })
+    t.equals(#f.awardHandlerXPCalls, 1)
+    f.firePlayerDropped(1)
+    deploySuccessfully(f, 2, 'HANDLER-CID', 6001, { x = 0, y = 0, z = 0 })
+    t.equals(#f.awardHandlerXPCalls, 1, 'sanity: still refused immediately after reconnecting, same as the FARM CLOSURE test above')
+
+    f.advance(60 * 60 * 1000) -- exactly 60 real minutes
+    f.firePlayerDropped(2)
+    deploySuccessfully(f, 3, 'HANDLER-CID', 7001, { x = 0, y = 0, z = 0 })
+    t.equals(#f.awardHandlerXPCalls, 2, 'once the actor\'s own 60-minute mint cooldown has fully elapsed, the SAME citizenid must be paid again')
+end)
+
+t.test('HANDLER XP WIRING: AwardHandlerXP entirely absent (server/progression.lua not loaded, or the feature is off) never crashes, and a confirmed deploy still succeeds exactly as before this pass', function()
+    local f = newKennelFixture() -- withAwardHandlerXP deliberately omitted -- the global is simply undefined
+    local netId = deploySuccessfully(f, 1, 'HANDLER-CID', 5001, { x = 0, y = 0, z = 0 })
+    t.isTrue(netId ~= nil, 'a missing AwardHandlerXP must never error, and the deploy must succeed exactly like the pre-wiring path')
+    t.isTrue(lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt') ~= nil)
 end)
 
 -- ----------------------------------------------------------------------

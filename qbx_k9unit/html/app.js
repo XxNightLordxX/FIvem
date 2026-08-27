@@ -283,6 +283,59 @@
     badge has no DOM element that accepts input, no visual affordance
     beyond static text, and nothing to click.
     ======================================================================
+
+    ======================================================================
+    ONBOARDING HINT CONTRACT (added this pass — must match client/hud.lua
+    exactly, byte-for-byte, same risk as every other contract in this
+    file). See client/hud.lua's own "K9 ONBOARDING HINT" section for the
+    full design. Short version: closes an ease-of-use audit finding — a
+    brand-new K9/handler's entire onboarding was one fire-and-forget chat
+    line, sent once, at the exact moment their role is granted. Miss it
+    (tabbed out, mid-conversation, chat scrolled) and there was nothing
+    else anywhere that ever told them the tablet exists. This is the
+    second chance: a small, persistent, dismissible on-screen line.
+
+    Lua -> JS (SendNUIMessage), one-directional only, same shape as the
+    HANDLER CONDITION BADGE contract above:
+
+        { action: 'hud:onboardingHint', data: { visible: boolean, strings?: { title, body, dismissHint } } }
+
+    COMPLETELY INDEPENDENT of `hud:updateVitals`'s own `visible` and of
+    `#k9hud`'s own show/hide, for the identical reason
+    `hud:partnerCondition` is: this toggles its OWN separate DOM element
+    (`#k9onboarding-hint`), never `#k9hud` or `#k9partner-badge`.
+
+    JS -> Lua, the OTHER direction this contract adds (new for this
+    surface — every other message on this page is one-directional):
+    this page also WATCHES for the `tablet:open` SendNUIMessage push that
+    client/tablet.lua's OpenTablet() already sends on the SAME top-level
+    window (html/tablet-bridge.js's own header already establishes that a
+    second, independent `message` listener on that one window coexists
+    with zero interference — this is that same, already-established
+    pattern, not a new one). Seeing that message does two things,
+    independently: (1) hides `#k9onboarding-hint` LOCALLY and immediately
+    (no need to wait for Lua's own next poll tick), and (2) fires a
+    fire-and-forget `hud:tabletOpened` NUI callback so client/hud.lua can
+    persist "this citizenid opened the tablet" DURABLY — see
+    handleTabletOpened() below. This page never touches `#k9tablet-wrap`
+    or anything else html/tablet-bridge.js already owns.
+
+    `strings` (optional, same "resilience net" pattern as every other
+    locale-carrying message on this surface — see HUD_DEFAULT_STRINGS' own
+    comment): client/hud.lua resolves `title`/`body`/`dismissHint` via the
+    shared `locale()` function (locales/en.json's `hud` group) and
+    forwards the resolved table here; ONBOARDING_HINT_DEFAULT_STRINGS below
+    is the non-authoritative English fallback used only if `strings` is
+    absent or a specific key inside it is missing/malformed.
+
+    NO SetNuiFocus, NO CLICKABLE ELEMENT, ANYWHERE, EVER, FOR THIS SURFACE
+    EITHER: `#k9onboarding-hint` has no DOM element that accepts input —
+    dismissing it is a native key read on the Lua side (see that file's own
+    comment on IsDisabledControlJustPressed), never a click here. Without
+    NUI focus there is no visible cursor for a player to click anything
+    with regardless, so a clickable dismiss control could never have
+    worked on this surface even if one were added.
+    ======================================================================
 */
 
 (function () {
@@ -305,6 +358,13 @@
      * more row inside `#k9hud`). Null until init() runs.
      * @type {{ row: HTMLElement, label: HTMLElement, value: HTMLElement }|null} */
     var partnerBadgeEls = null;
+
+    /** The K9 ONBOARDING HINT's own DOM refs -- a THIRD, SEPARATE element
+     * from `rootEl`/`statEls`/`statusEls`/`partnerBadgeEls` above (see
+     * index.html's own comment on `#k9onboarding-hint` for why). Null
+     * until init() runs.
+     * @type {{ row: HTMLElement, title: HTMLElement, body: HTMLElement, dismiss: HTMLElement }|null} */
+    var onboardingHintEls = null;
 
     /** English fallback for the Distraction status row's text values --
      * see applyDistractionStatus() below. This is the SAME "resilience
@@ -621,6 +681,103 @@
             }
         }
         partnerBadgeEls.value.textContent = words.length > 0 ? words.join(', ') : partnerConditionString(strings, 'fine');
+    }
+
+    // ------------------------------------------------------------------
+    // K9 ONBOARDING HINT — see this file's header "ONBOARDING HINT
+    // CONTRACT" section for the full design this implements.
+    // ------------------------------------------------------------------
+
+    /** English fallback for the onboarding hint's own text values -- same
+     * "resilience net" pattern as HUD_DEFAULT_STRINGS/
+     * PARTNER_CONDITION_DEFAULT_STRINGS above: client/hud.lua already
+     * sends a real `data.strings` object here (resolved via `locale()`,
+     * locales/en.json's `hud` group) every push, so in normal operation
+     * this fallback is a safety net, not the common path.
+     * @type {Record<string,string>} */
+    var ONBOARDING_HINT_DEFAULT_STRINGS = {
+        title: 'K9 Command Tablet',
+        body: 'You have K9 gear waiting. Type /k9tablet to open your tablet and see what you can do.',
+        dismissHint: 'Press Backspace to dismiss this reminder.',
+    };
+
+    /**
+     * Resolves one onboarding-hint string key -- same shape as
+     * hudString()/partnerConditionString() above, kept as its own function
+     * since all three default-string tables are independent.
+     * @param {*} strings
+     * @param {string} key
+     * @returns {string}
+     */
+    function onboardingHintString(strings, key) {
+        if (strings && typeof strings[key] === 'string' && strings[key].length > 0) {
+            return strings[key];
+        }
+        return ONBOARDING_HINT_DEFAULT_STRINGS[key];
+    }
+
+    /**
+     * Handles one `hud:onboardingHint` payload — see this file's header
+     * "ONBOARDING HINT CONTRACT" section for the full contract this
+     * renders. COMPLETELY INDEPENDENT of `handleUpdateVitals()`/
+     * `applyPartnerCondition()` above -- this toggles a THIRD, separate DOM
+     * element (`#k9onboarding-hint`), never `#k9hud` or `#k9partner-badge`.
+     * @param {{ visible: boolean, strings?: Record<string,string> }} data
+     */
+    function applyOnboardingHint(data) {
+        if (!onboardingHintEls) return;
+
+        var visible = !!(data && data.visible === true);
+        onboardingHintEls.row.classList.toggle('hidden', !visible);
+        onboardingHintEls.row.setAttribute('aria-hidden', visible ? 'false' : 'true');
+
+        if (!visible) return; // don't bother touching title/body/dismiss DOM while hidden -- mirrors applyPartnerCondition's own posture above
+
+        var strings = data.strings;
+        // textContent only, all three pieces -- never innerHTML, same
+        // standing rule as every other DOM write in this file.
+        onboardingHintEls.title.textContent = onboardingHintString(strings, 'title');
+        onboardingHintEls.body.textContent = onboardingHintString(strings, 'body');
+        onboardingHintEls.dismiss.textContent = onboardingHintString(strings, 'dismissHint');
+    }
+
+    /**
+     * Fired the instant this page sees a `tablet:open` SendNUIMessage push
+     * — see this file's header "ONBOARDING HINT CONTRACT" section for the
+     * full design this closes the loop on. Two things happen,
+     * independently:
+     *   1. Hide the onboarding hint LOCALLY, immediately -- no need to
+     *      wait for Lua's own next poll tick to catch up and push
+     *      `visible: false` back down, since this page already knows for
+     *      certain the tablet was just opened.
+     *   2. Tell Lua about it via a fire-and-forget NUI callback
+     *      ('hud:tabletOpened') so client/hud.lua can persist "this
+     *      citizenid has opened the tablet" DURABLY (see that file for
+     *      exactly how/why) -- this page has no persistence of its own
+     *      and never could; it only ever forwards the fact that the open
+     *      happened.
+     * Deliberately does NOT touch `#k9tablet-wrap` or anything else
+     * html/tablet-bridge.js already owns.
+     */
+    function handleTabletOpened() {
+        applyOnboardingHint({ visible: false });
+
+        try {
+            fetch('https://' + GetParentResourceName() + '/hud:tabletOpened', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+                body: JSON.stringify({}),
+            }).catch(function () {
+                // Swallowed -- see sendReadyAck's own identical posture.
+                // Worst case if this never lands: the player simply sees
+                // the hint again next session (bounded, self-healing,
+                // never a stuck or broken state), never a crash here.
+            });
+        } catch (err) {
+            // Same dev-preview-outside-FiveM guard as sendReadyAck() above
+            // -- GetParentResourceName() is only defined inside FiveM's
+            // NUI runtime.
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1087,6 +1244,12 @@
             label: document.querySelector('[data-partner="label"]'),
             value: document.querySelector('[data-partner="value"]'),
         };
+        onboardingHintEls = {
+            row: document.getElementById('k9onboarding-hint'),
+            title: document.querySelector('[data-onboarding="title"]'),
+            body: document.querySelector('[data-onboarding="body"]'),
+            dismiss: document.querySelector('[data-onboarding="dismiss"]'),
+        };
 
         // Attach the message listener FIRST, only THEN send the ready
         // ack — this ordering is the entire point of the handshake (see
@@ -1102,6 +1265,18 @@
                     break;
                 case 'hud:partnerCondition':
                     applyPartnerCondition(msg.data);
+                    break;
+                case 'hud:onboardingHint':
+                    applyOnboardingHint(msg.data);
+                    break;
+                case 'tablet:open':
+                    // NOT this page's own action prefix -- see this file's
+                    // header "ONBOARDING HINT CONTRACT" section for why
+                    // this page ALSO watches for html/tablet-bridge.js's
+                    // own 'tablet:open' message (a second, independent
+                    // listener on the SAME message, not a conflict with
+                    // that file's own handling of it).
+                    handleTabletOpened();
                     break;
                 case 'audio:play':
                     handleAudioPlay(msg.data);

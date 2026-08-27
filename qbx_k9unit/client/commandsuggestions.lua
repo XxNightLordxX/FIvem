@@ -287,12 +287,21 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9train', keySuffix = 'k9train' },
     -- client/vision.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCameraFeed', keySuffix = 'toggle_camera_feed' },
-    -- client/vision.lua -- VISION MERGE (coder-architect, this pass):
-    -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision are now
-    -- HIDDEN ALIASES of 'k9vision' (still real, working RegisterCommand +
-    -- RegisterKeyMapping calls -- see that file's own "MERGED ENTRY POINT"
-    -- comment), never chat-suggested under their own names anymore. See
-    -- HIDDEN_ALIAS_COMMANDS in tests/commandsuggestions_spec.lua.
+    -- client/vision.lua -- OWNER REVERSAL (coder-architect, this pass):
+    -- the earlier vision-merge pass hid these two behind 'k9vision' as
+    -- HIDDEN_ALIAS_COMMANDS entries; the owner has since asked for thermal
+    -- and night vision to be separate, first-class controls again. Both are
+    -- real, unconditional RegisterCommand + RegisterKeyMapping calls in
+    -- client/vision.lua (unchanged throughout, including during the merge)
+    -- and are chat-suggested again here under their own names.
+    { command = 'qbx_k9unit:toggleThermalVision', keySuffix = 'toggle_thermal_vision' },
+    { command = 'qbx_k9unit:toggleNightVision', keySuffix = 'toggle_night_vision' },
+    -- 'k9vision' (Off -> Night -> Thermal -> Off cycle) is KEPT as an extra,
+    -- optional convenience alongside the two explicit toggles above -- see
+    -- client/vision.lua's own "MERGED ENTRY POINT" header for the reasoning
+    -- (same additive shape COMMAND_CONSOLIDATION_SPEC.md #5 already
+    -- established for k9kennel: an additional entry point calling the same
+    -- underlying functions, not a replacement for the explicit ones).
     { command = 'k9vision', keySuffix = 'k9vision' },
     -- client/recall.lua
     { command = 'k9recall', keySuffix = 'k9recall' },

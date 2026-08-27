@@ -297,6 +297,37 @@ local function newWellbeingFixture(opts)
         return { PlayerData = { citizenid = citizenid } }
     end
 
+    -- HANDLER CONDITION BADGE (this pass) -- exports.qbx_core:GetPlayerByCitizenId(citizenid),
+    -- the reverse-direction lookup server/wellbeing.lua's own
+    -- ResolveOnlineSourceForCitizenid needs. Derived from the SAME
+    -- `citizenidBySource` table setPlayer/clearPlayer already maintain
+    -- (mirrors tests/defense_spec.lua's/tests/recall_spec.lua's own
+    -- identical fixture pattern for this exact export) -- never a second,
+    -- independently-maintained table that could drift out of sync with it.
+    local function qbxGetPlayerByCitizenId(_self, citizenid)
+        for src, cid in pairs(citizenidBySource) do
+            if cid == citizenid then return { PlayerData = { citizenid = cid, source = src } } end
+        end
+        return nil
+    end
+
+    -- HANDLER CONDITION BADGE (this pass) -- server/partnership.lua's real
+    -- GetActivePartnerCitizenId accessor, stubbed. ABSENT from `env` by
+    -- default (mirrors tests/recall_spec.lua's/tests/defense_spec.lua's own
+    -- "server/partnership.lua module absent" soft-dependency convention) --
+    -- every PRE-EXISTING test in this file never wires this fixture up at
+    -- all, so `type(GetActivePartnerCitizenId) == 'function'` stays false
+    -- for every one of them, exactly reproducing today's real "no
+    -- partnership module loaded" behavior with zero risk of an accidental
+    -- behavior change. Only tests that explicitly call setPartner(...) (or
+    -- setActivePartnerResolver(...) directly) below ever populate this.
+    local partnerByCitizenid = {} -- citizenid -> { partner = citizenid, isK9 = bool }
+    local function getActivePartnerCitizenIdStub(citizenid)
+        local entry = partnerByCitizenid[citizenid]
+        if not entry then return nil, nil end
+        return entry.partner, entry.isK9
+    end
+
     local onlinePlayerIds = {}
     local function GetPlayers()
         local out = {}
@@ -456,7 +487,7 @@ local function newWellbeingFixture(opts)
         -- server/wellbeing.lua at all) are harmless no-ops purely so
         -- capability verification passes.
         exports = {
-            qbx_core = { GetPlayer = qbxGetPlayer },
+            qbx_core = { GetPlayer = qbxGetPlayer, GetPlayerByCitizenId = qbxGetPlayerByCitizenId },
             ox_inventory = {
                 GetItemCount = oxGetItemCount,
                 RemoveItem = oxRemoveItem,
@@ -501,6 +532,30 @@ local function newWellbeingFixture(opts)
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/inventory.lua', env)
     Sandbox.loadInto('../server/wellbeing.lua', env)
+
+    -- HANDLER CONDITION BADGE (this pass) -- env.GetActivePartnerCitizenId
+    -- is only ever assigned when a test opts in via setPartner/
+    -- setActivePartnerResolver below (never at fixture-construction time),
+    -- so every PRE-EXISTING test in this file -- none of which ever calls
+    -- either -- keeps observing `type(GetActivePartnerCitizenId) ==
+    -- 'function'` as false, exactly reproducing "server/partnership.lua
+    -- not loaded" with zero behavior change. Safe to assign AFTER
+    -- Sandbox.loadInto above: server/wellbeing.lua's own functions resolve
+    -- this name fresh, by upvalue into `env`, at CALL time (inside
+    -- TickWellbeing, always reached later via threadRunner.step()), never
+    -- at this file's own load time.
+    local function setPartner(k9Citizenid, handlerCitizenid)
+        partnerByCitizenid[k9Citizenid] = { partner = handlerCitizenid, isK9 = true }
+        partnerByCitizenid[handlerCitizenid] = { partner = k9Citizenid, isK9 = false }
+        env.GetActivePartnerCitizenId = getActivePartnerCitizenIdStub
+    end
+    local function clearPartner(citizenid)
+        local entry = partnerByCitizenid[citizenid]
+        if entry then
+            partnerByCitizenid[entry.partner] = nil
+        end
+        partnerByCitizenid[citizenid] = nil
+    end
 
     local primed = false
     local function primeIfNeeded()
@@ -597,6 +652,13 @@ local function newWellbeingFixture(opts)
         isDistracted = function(citizenid) return env.IsDistracted(citizenid) end,
         isFlashbangImmune = function(citizenid) return env.IsFlashbangImmune(citizenid) end,
         restoreInjury = function(citizenid, amount) return env.RestoreInjury(citizenid, amount) end,
+        -- HANDLER CONDITION BADGE (this pass) helpers --------------------
+        setPartner = setPartner,
+        clearPartner = clearPartner,
+        -- Simulates server/partnership.lua never having loaded at all,
+        -- even after a prior setPartner() call in the SAME test -- see
+        -- PushHandlerConditionUpdate's own soft-dependency guard.
+        setNoPartnershipModule = function() env.GetActivePartnerCitizenId = nil end,
     }
 end
 
@@ -2698,6 +2760,459 @@ t.test('CONFIG-DEFENSIVE: Config.Wellbeing.Hunger/.Thirst entirely ABSENT (an ol
 
     local okStart = pcall(f.fireResourceStart)
     t.isTrue(okStart, 'the onResourceStart item-warning sweep must also survive a missing Config.Wellbeing.Hunger/.Thirst')
+end)
+
+-- ========================================================================
+-- HANDLER CONDITION BADGE (this pass) -- see server/wellbeing.lua's own
+-- "HANDLER CONDITION BADGE" header section for the full design these
+-- tests pin. Every test below uses the REAL, unmodified
+-- PushHandlerConditionUpdate/ComputeHandlerConditionTags/
+-- ClearHandlerConditionBadge/ClearAllHandlerConditionBadges — none of
+-- them are `local` to this SPEC, only to server/wellbeing.lua itself —
+-- reached exclusively through the real TickWellbeing tick, the real
+-- playerDropped handler, and the real CreateThread loop's own `else`
+-- branch, exactly as production reaches them.
+-- ========================================================================
+
+local HANDLER_CONDITION_EVENT = 'qbx_k9unit:client:partnerConditionUpdate'
+
+--- @param f table
+--- @return table[] -- every captured partnerConditionUpdate client event, in order
+local function partnerConditionEvents(f)
+    local out = {}
+    for _, ev in ipairs(f.clientEvents) do
+        if ev.event == HANDLER_CONDITION_EVENT then
+            out[#out + 1] = ev
+        end
+    end
+    return out
+end
+
+--- Wires ONE online, K9-modeled player plus ONE registered (not
+--- necessarily "online" in the GetPlayers() sense -- see this section's
+--- own note below on why that distinction does not matter here) handler
+--- citizenid, partners them, and puts the K9 online. Does NOT run a tick
+--- -- callers do that themselves so they can inspect state at whichever
+--- point in the sequence they care about.
+--- @param f table
+--- @param opts table? -- { k9Src, k9Citizenid, handlerSrc, handlerCitizenid }
+--- @return number k9Src, number ped, number handlerSrc
+local function wirePartneredK9(f, opts)
+    opts = opts or {}
+    local k9Src = opts.k9Src or 1
+    local k9Citizenid = opts.k9Citizenid or 'K9-CID'
+    local handlerSrc = opts.handlerSrc or 10
+    local handlerCitizenid = opts.handlerCitizenid or 'HANDLER-CID'
+    local ped = k9Src * 100
+
+    f.setPlayer(k9Src, k9Citizenid)
+    f.setPed(k9Src, ped)
+    f.setModel(ped, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(ped, 0, 0, 0)
+    f.setPlayer(handlerSrc, handlerCitizenid)
+    f.setPartner(k9Citizenid, handlerCitizenid)
+    f.setOnline({ k9Src })
+
+    return k9Src, ped, handlerSrc
+end
+
+t.test('HANDLER CONDITION BADGE: a genuinely partnered, online handler receives exactly one condition push per changed tick', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    local _, _, handlerSrc = wirePartneredK9(f)
+
+    f.runOneTick()
+
+    local events = partnerConditionEvents(f)
+    t.equals(#events, 1)
+    t.equals(events[1].target, handlerSrc)
+    t.isTrue(events[1].args[1].visible)
+end)
+
+t.test('HANDLER CONDITION BADGE: an UNPARTNERED K9 sends no condition update to anyone, ever, even across many ticks -- with the partnership MODULE genuinely loaded (a real resolver wired in for an unrelated pair), just no ROW for this citizenid', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    f.setPlayer(1, 'K9-LONELY')
+    f.setPed(1, 100)
+    f.setModel(100, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(100, 0, 0, 0)
+    f.setOnline({ 1 })
+    -- setPartner for a COMPLETELY UNRELATED pair -- this wires the real
+    -- GetActivePartnerCitizenId resolver function into env (module
+    -- genuinely "loaded"), while 'K9-LONELY' itself is left with no row
+    -- at all -- distinct from the dedicated module-ABSENT test below,
+    -- which exercises the OTHER absence shape (GetActivePartnerCitizenId
+    -- not a function at all).
+    f.setPlayer(2, 'SOME-OTHER-K9')
+    f.setPlayer(20, 'SOME-OTHER-HANDLER')
+    f.setPartner('SOME-OTHER-K9', 'SOME-OTHER-HANDLER')
+
+    f.runOneTick()
+    f.runOneTick()
+    f.runOneTick()
+
+    t.equals(#partnerConditionEvents(f), 0)
+end)
+
+t.test('HANDLER CONDITION BADGE: server/partnership.lua module absent (GetActivePartnerCitizenId not a function at all) is a silent no-op, never a crash', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    f.setPlayer(1, 'K9-NOMOD')
+    f.setPed(1, 100)
+    f.setModel(100, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(100, 0, 0, 0)
+    f.setOnline({ 1 })
+    f.setNoPartnershipModule()
+
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'TickWellbeing must never crash just because server/partnership.lua never loaded')
+    t.equals(#partnerConditionEvents(f), 0)
+end)
+
+t.test('HANDLER CONDITION BADGE: Config.Features.HandlerPartnership = false is treated exactly like "no partnership" -- gated even when GetActivePartnerCitizenId WOULD have resolved a real partner', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = false } })
+    wirePartneredK9(f)
+
+    f.runOneTick()
+
+    t.equals(#partnerConditionEvents(f), 0, 'the feature flag must be checked even though this K9 genuinely has an active partnership')
+end)
+
+t.test('HANDLER CONDITION BADGE: a handler receives condition updates ONLY for their OWN bonded K9 partner, never for an unrelated K9 -- two independent pairs, cross-checked both ways', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    local _, _, handlerSrcA = wirePartneredK9(f, { k9Src = 1, k9Citizenid = 'K9-A', handlerSrc = 10, handlerCitizenid = 'HANDLER-A' })
+
+    -- A second, completely independent pair -- different K9, different
+    -- handler, no relationship to the first pair at all.
+    f.setPlayer(2, 'K9-B')
+    f.setPed(2, 200)
+    f.setModel(200, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(200, 5000, 5000, 0) -- far away -- irrelevant, this feature never uses position at all
+    f.setPlayer(20, 'HANDLER-B')
+    f.setPartner('K9-B', 'HANDLER-B')
+    f.setOnline({ 1, 2 })
+
+    f.runOneTick()
+
+    local events = partnerConditionEvents(f)
+    t.equals(#events, 2, 'exactly one push per genuinely partnered, online K9 this tick')
+
+    local sawA, sawB = false, false
+    for _, ev in ipairs(events) do
+        t.isTrue(ev.target == handlerSrcA or ev.target == 20, 'no target outside the two genuine handlers in this test ever receives this event')
+        if ev.target == handlerSrcA then sawA = true end
+        if ev.target == 20 then sawB = true end
+    end
+    t.isTrue(sawA, "K9-A's real partner (HANDLER-A) received their own push")
+    t.isTrue(sawB, "K9-B's real partner (HANDLER-B) received their own push, for THEIR OWN K9, never K9-A's")
+end)
+
+t.test('HANDLER CONDITION BADGE: send-only-on-change -- an unchanged tick for an already-seen, still-Fine K9 sends nothing new', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, MoodSystem = true, HandlerPartnership = true } })
+    wirePartneredK9(f)
+
+    f.runOneTick() -- first tick: always a push (cache starts empty)
+    t.equals(#partnerConditionEvents(f), 1)
+
+    f.runOneTick()
+    f.runOneTick()
+    f.runOneTick()
+
+    t.equals(#partnerConditionEvents(f), 1, 'three more ticks with nothing about this K9 having changed must add zero further pushes')
+end)
+
+-- ------------------------------------------------------------------
+-- THRESHOLD-TO-WORD PINS -- "coarse, not numeric," derived from the
+-- EXISTING per-stat threshold, never a new number. Each test sets its
+-- OWN stat's threshold to EXACTLY the stat's known starting value (see
+-- EnsureStats above -- Fatigue/Mood/Injury/Hunger/Thirst all start at
+-- their own `.max`; FearStress starts at 0) so the tag's own boundary
+-- comparison (`<=`/`>=`) is pinned on ONE deterministic real tick, with
+-- every OTHER stat's owning flag left off so only the one tag under test
+-- can ever appear. Hunger/Thirst additionally zero their own
+-- decayPerTick for this one fixture so passive decay cannot move the
+-- stat off its known starting value before the tag is evaluated --
+-- every other stat's own first-tick arithmetic already lands back on
+-- its exact starting value with no override needed (Fatigue: lastCoords
+-- is nil on tick 1, so no sprint/rest branch runs at all; Mood/Injury:
+-- passive REGEN clamps at max, a no-op starting already at max;
+-- FearStress: passive DECAY clamps at its own floor, 0, a no-op starting
+-- already at 0).
+-- ------------------------------------------------------------------
+
+--- @param f table
+--- @return string[]? tags -- nil if no partnerConditionUpdate was ever sent
+local function lastHandlerTags(f)
+    local events = partnerConditionEvents(f)
+    local last = events[#events]
+    return last and last.args[1].tags
+end
+
+--- @param tags string[]?
+--- @param tag string
+--- @return boolean
+local function tagsContain(tags, tag)
+    if not tags then return false end
+    for _, v in ipairs(tags) do
+        if v == tag then return true end
+    end
+    return false
+end
+
+t.test('THRESHOLD PIN: Fatigue <= speedPenaltyThreshold reports "tired" -- absent one unit above it, present exactly at it', function()
+    local cfgAbsent = baselineWellbeingConfig()
+    cfgAbsent.Fatigue.speedPenaltyThreshold = 99 -- starting fatigue (max=100) is one unit ABOVE this
+    local fAbsent = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
+    wirePartneredK9(fAbsent)
+    fAbsent.runOneTick()
+    t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'tired'))
+
+    local cfgPresent = baselineWellbeingConfig()
+    cfgPresent.Fatigue.speedPenaltyThreshold = 100 -- starting fatigue is EXACTLY this
+    local fPresent = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
+    wirePartneredK9(fPresent)
+    fPresent.runOneTick()
+    t.isTrue(tagsContain(lastHandlerTags(fPresent), 'tired'))
+end)
+
+t.test('THRESHOLD PIN: Mood <= performancePenaltyThreshold reports "unhappy" -- absent one unit above it, present exactly at it', function()
+    local cfgAbsent = baselineWellbeingConfig()
+    cfgAbsent.Mood.performancePenaltyThreshold = 99
+    local fAbsent = newWellbeingFixture({ featuresOverride = { MoodSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
+    wirePartneredK9(fAbsent)
+    fAbsent.runOneTick()
+    t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'unhappy'))
+
+    local cfgPresent = baselineWellbeingConfig()
+    cfgPresent.Mood.performancePenaltyThreshold = 100
+    local fPresent = newWellbeingFixture({ featuresOverride = { MoodSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
+    wirePartneredK9(fPresent)
+    fPresent.runOneTick()
+    t.isTrue(tagsContain(lastHandlerTags(fPresent), 'unhappy'))
+end)
+
+t.test('THRESHOLD PIN: FearStress >= hesitationThreshold reports "stressed" -- absent one unit above it, present exactly at it (starting fearStress is 0)', function()
+    local cfgAbsent = baselineWellbeingConfig()
+    cfgAbsent.FearStress.hesitationThreshold = 1 -- starting fearStress (0) is one unit BELOW this
+    local fAbsent = newWellbeingFixture({ featuresOverride = { FearStressSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
+    wirePartneredK9(fAbsent)
+    fAbsent.runOneTick()
+    t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'stressed'))
+
+    local cfgPresent = baselineWellbeingConfig()
+    cfgPresent.FearStress.hesitationThreshold = 0 -- starting fearStress is EXACTLY this
+    local fPresent = newWellbeingFixture({ featuresOverride = { FearStressSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
+    wirePartneredK9(fPresent)
+    fPresent.runOneTick()
+    t.isTrue(tagsContain(lastHandlerTags(fPresent), 'stressed'))
+end)
+
+t.test('THRESHOLD PIN: Injury <= sprintBlockThreshold reports "injured" -- absent one unit above it, present exactly at it', function()
+    local cfgAbsent = baselineWellbeingConfig()
+    cfgAbsent.Injury.sprintBlockThreshold = 99
+    local fAbsent = newWellbeingFixture({ featuresOverride = { InjuryLimping = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
+    wirePartneredK9(fAbsent)
+    fAbsent.runOneTick()
+    t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'injured'))
+
+    local cfgPresent = baselineWellbeingConfig()
+    cfgPresent.Injury.sprintBlockThreshold = 100
+    local fPresent = newWellbeingFixture({ featuresOverride = { InjuryLimping = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
+    wirePartneredK9(fPresent)
+    fPresent.runOneTick()
+    t.isTrue(tagsContain(lastHandlerTags(fPresent), 'injured'))
+end)
+
+t.test('THRESHOLD PIN: Hunger <= lowThreshold reports "hungry" -- absent one unit above it, present exactly at it', function()
+    local cfgAbsent = baselineWellbeingConfig()
+    cfgAbsent.Hunger.decayPerTick = 0 -- pin the starting value exactly at max across the one tick this test runs
+    cfgAbsent.Hunger.lowThreshold = 99
+    local fAbsent = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
+    wirePartneredK9(fAbsent)
+    fAbsent.runOneTick()
+    t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'hungry'))
+
+    local cfgPresent = baselineWellbeingConfig()
+    cfgPresent.Hunger.decayPerTick = 0
+    cfgPresent.Hunger.lowThreshold = 100
+    local fPresent = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
+    wirePartneredK9(fPresent)
+    fPresent.runOneTick()
+    t.isTrue(tagsContain(lastHandlerTags(fPresent), 'hungry'))
+end)
+
+t.test('THRESHOLD PIN: Thirst <= lowThreshold reports "thirsty" -- absent one unit above it, present exactly at it', function()
+    local cfgAbsent = baselineWellbeingConfig()
+    cfgAbsent.Thirst.decayPerTick = 0
+    cfgAbsent.Thirst.lowThreshold = 99
+    local fAbsent = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgAbsent })
+    wirePartneredK9(fAbsent)
+    fAbsent.runOneTick()
+    t.isFalse(tagsContain(lastHandlerTags(fAbsent), 'thirsty'))
+
+    local cfgPresent = baselineWellbeingConfig()
+    cfgPresent.Thirst.decayPerTick = 0
+    cfgPresent.Thirst.lowThreshold = 100
+    local fPresent = newWellbeingFixture({ featuresOverride = { HungerThirstSystem = true, HandlerPartnership = true }, wellbeingCfg = cfgPresent })
+    wirePartneredK9(fPresent)
+    fPresent.runOneTick()
+    t.isTrue(tagsContain(lastHandlerTags(fPresent), 'thirsty'))
+end)
+
+t.test('THRESHOLD PIN: a healthy K9 (every real shipped default, every one of the six flags on) reports an EMPTY tags array -- "Fine"', function()
+    local f = newWellbeingFixture({
+        featuresOverride = {
+            FatigueSystem = true, MoodSystem = true, FearStressSystem = true,
+            InjuryLimping = true, HungerThirstSystem = true, HandlerPartnership = true,
+        },
+    })
+    wirePartneredK9(f)
+    f.runOneTick()
+
+    local tags = lastHandlerTags(f)
+    t.isTrue(tags ~= nil)
+    t.equals(#tags, 0)
+end)
+
+t.test('THRESHOLD PIN: a tag is gated on its OWN owning Config.Features flag -- Fatigue at/below threshold reports NOTHING while FatigueSystem itself is off', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Fatigue.speedPenaltyThreshold = 100 -- would report 'tired' if FatigueSystem were on
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = false, MoodSystem = true, HandlerPartnership = true }, wellbeingCfg = cfg })
+    wirePartneredK9(f)
+    f.runOneTick()
+
+    t.isFalse(tagsContain(lastHandlerTags(f), 'tired'))
+end)
+
+-- ------------------------------------------------------------------
+-- NEVER A TRACKER -- assert on the REAL payload shape, not on intent.
+-- ------------------------------------------------------------------
+
+t.test('NEVER A TRACKER: the payload sent to a handler is EXACTLY { visible, tags } -- no position, no raw stat value, no third key, across a battery of scenarios including near-threshold and every flag on at once', function()
+    local scenarios = {
+        { features = { FatigueSystem = true, HandlerPartnership = true } },
+        { features = { FatigueSystem = true, MoodSystem = true, FearStressSystem = true, InjuryLimping = true, HungerThirstSystem = true, HandlerPartnership = true } },
+    }
+
+    local allowedTags = { tired = true, unhappy = true, stressed = true, injured = true, hungry = true, thirsty = true }
+
+    for _, scenario in ipairs(scenarios) do
+        local f = newWellbeingFixture({ featuresOverride = scenario.features })
+        wirePartneredK9(f)
+        f.setCoords(100, 12345.6, -9876.5, 42.0) -- a real, distinctive position this payload must NEVER leak
+        f.setHealth(100, 200) -- a real, distinctive raw health value this payload must NEVER leak
+
+        for _ = 1, 3 do f.runOneTick() end
+
+        for _, ev in ipairs(partnerConditionEvents(f)) do
+            local payload = ev.args[1]
+            local keyCount = 0
+            for _ in pairs(payload) do keyCount = keyCount + 1 end
+            t.equals(keyCount, 2, 'payload must have EXACTLY two keys: visible, tags')
+            t.isTrue(type(payload.visible) == 'boolean')
+            t.isTrue(type(payload.tags) == 'table')
+
+            for _, tag in ipairs(payload.tags) do
+                t.isTrue(type(tag) == 'string' and allowedTags[tag] == true, 'every tag must be one of the six fixed, coarse, non-numeric codes -- got ' .. tostring(tag))
+                -- Never a number rendered as a string, never a coordinate
+                -- component, never anything resembling a raw stat value.
+                t.isTrue(tonumber(tag) == nil, 'a tag must never be numeric')
+            end
+        end
+    end
+end)
+
+-- ------------------------------------------------------------------
+-- "GATE THE START, NEVER THE STOP" -- the display must stop cleanly.
+-- ------------------------------------------------------------------
+
+t.test('STOPS CLEANLY: partnership ending sends an explicit visible=false clear on the very next tick -- self-healing, not stranded', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    local _, _, handlerSrc = wirePartneredK9(f)
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 1, 'sanity: the handler really did get an initial visible push')
+
+    f.clearPartner('K9-CID') -- partnership ends -- GetActivePartnerCitizenId now resolves nil for both parties
+    f.runOneTick()
+
+    local events = partnerConditionEvents(f)
+    t.equals(#events, 2)
+    local clearEvent = events[2]
+    t.equals(clearEvent.target, handlerSrc)
+    t.isFalse(clearEvent.args[1].visible)
+    t.equals(#clearEvent.args[1].tags, 0)
+
+    -- And it stays cleared -- no further stray pushes once there is
+    -- nothing left to report.
+    f.runOneTick()
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 2)
+end)
+
+t.test('STOPS CLEANLY: the K9 (not the handler) disconnecting clears the badge IMMEDIATELY, via playerDropped -- never waits for a future tick that will never come for this citizenid again', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    local k9Src, _, handlerSrc = wirePartneredK9(f)
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 1)
+
+    f.firePlayerDropped(k9Src)
+
+    local events = partnerConditionEvents(f)
+    t.equals(#events, 2, 'the clear must be sent synchronously from playerDropped, with no further tick needed')
+    t.equals(events[2].target, handlerSrc)
+    t.isFalse(events[2].args[1].visible)
+
+    -- GetPlayers() no longer includes the disconnected K9 -- proves this
+    -- citizenid would otherwise never be revisited by TickWellbeing again,
+    -- which is exactly why the immediate clear above matters.
+    f.setOnline({})
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 2, 'no further pushes for a citizenid TickWellbeing will never iterate again')
+end)
+
+t.test('STOPS CLEANLY: the HANDLER (not the K9) disconnecting needs no explicit push (nobody to receive one), and a later RECONNECT under a new source id forces a fresh push rather than being suppressed as "unchanged"', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    wirePartneredK9(f, { handlerSrc = 10, handlerCitizenid = 'HANDLER-RECONNECT' })
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 1)
+
+    f.clearPlayer(10) -- handler goes offline -- GetPlayerByCitizenId('HANDLER-RECONNECT') now resolves nil
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'an offline handler must never crash the tick')
+    t.equals(#partnerConditionEvents(f), 1, 'nothing to push to -- no event, but no error either')
+
+    -- Handler reconnects under a DIFFERENT server id (a real, common case --
+    -- FiveM does not guarantee the same id back).
+    f.setPlayer(11, 'HANDLER-RECONNECT')
+    f.runOneTick()
+
+    local events = partnerConditionEvents(f)
+    t.equals(#events, 2, 'the reconnect must force a fresh push, not be suppressed by an unchanged tagsKey against the OLD source id')
+    t.equals(events[2].target, 11)
+    t.isTrue(events[2].args[1].visible)
+end)
+
+t.test('STOPS CLEANLY: every wellbeing stat system switched off at once clears every currently-visible badge from the CreateThread loop\'s own else-branch -- the one iteration TickWellbeing itself never runs', function()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true, HandlerPartnership = true } })
+    local _, _, handlerSrc = wirePartneredK9(f)
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 1)
+
+    f.config.Features.FatigueSystem = false -- the ONLY flag that was on -- now every one of the six is off
+
+    f.runOneTick()
+
+    local events = partnerConditionEvents(f)
+    t.equals(#events, 2, 'the else-branch must clear the stranded badge on this very next tick, even though TickWellbeing itself never runs')
+    t.equals(events[2].target, handlerSrc)
+    t.isFalse(events[2].args[1].visible)
+
+    -- Idempotent -- repeatedly idling with everything off must never
+    -- resend the clear over and over.
+    f.runOneTick()
+    f.runOneTick()
+    t.equals(#partnerConditionEvents(f), 2)
 end)
 
 os.exit(t.summary())

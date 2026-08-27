@@ -264,6 +264,75 @@ body {
 
 /*
     ======================================================================
+    K9 ONBOARDING HINT (Config.K9Onboarding.enabled) -- see index.html's
+    own comment on #k9onboarding-hint, and app.js's "ONBOARDING HINT
+    CONTRACT" section, for the full design. Placed top-right, deliberately
+    NOT stacked with #k9hud (bottom-left) or #k9partner-badge (top-left) --
+    all three are independent surfaces that could, in principle, all be
+    visible on the same screen at once, so none may ever overlap another.
+    Same pointer-events/hidden-means-`display:none` posture as #k9hud and
+    #k9partner-badge above -- there is NO clickable dismiss control
+    anywhere on this element; dismissing it is a native key read in
+    client/hud.lua (see that file's own "K9 ONBOARDING HINT" section),
+    never a click here -- this page never calls SetNuiFocus, and without
+    focus there is no cursor to click with anyway.
+    ======================================================================
+*/
+#k9onboarding-hint,
+#k9onboarding-hint * {
+    pointer-events: none;
+}
+
+#k9onboarding-hint {
+    position: fixed;
+    right: 24px;
+    top: 24px;
+    max-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #f2f2f2;
+    font-size: 13px;
+    line-height: 1.3;
+    /* TODO(coder-ui): placement/background/sizing are provisional
+       defaults, matching #k9hud's/#k9partner-badge's own identical TODO
+       above -- revisit together in coder-ui's layout/UX pass. */
+}
+
+/* Hidden until the first `hud:onboardingHint` push with `visible === true`
+   arrives (see app.js) -- avoids a flash of default-visible content before
+   Lua has sent anything, and is also how this hint hides itself again on
+   a true -> false transition (the tablet was opened, the dismiss key was
+   pressed, the per-session time window ran out, or the feature is switched
+   off -- see client/hud.lua's own section for the full list). */
+#k9onboarding-hint.hidden {
+    display: none;
+}
+
+.k9onboarding-hint-title {
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.k9onboarding-hint-body {
+    opacity: 0.95;
+}
+
+.k9onboarding-hint-dismiss {
+    margin-top: 2px;
+    font-size: 11px;
+    opacity: 0.7;
+    font-style: italic;
+}
+
+/*
+    ======================================================================
     K9 COMMAND TABLET WRAPPER (Config.Features.CommandTablet) -- added this
     pass. This governs ONLY the <iframe> shell added to index.html's own
     document (see that file's comment on it); the tablet's actual UI lives

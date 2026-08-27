@@ -133,14 +133,33 @@ local function newSarCallsFixture(opts)
     end
 
     local notifyCalls = {}
+    -- TWO OFFICERS, ONE CALL (this pass) -- lib.alertDialog stub, same
+    -- controllable-response shape tests/clientpartnership_spec.lua's own
+    -- fixture already establishes for the identical "accept/decline
+    -- prompt" pattern (client/sarcalls.lua's sarJoinRequest handler mirrors
+    -- client/partnership.lua's partnerUpRequest handler almost verbatim).
+    local alertDialogResponse = 'confirm'
+    local alertDialogCalls = {}
     local lib = {
         callback = { await = callbackAwait },
         notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end,
+        alertDialog = function(payload)
+            alertDialogCalls[#alertDialogCalls + 1] = payload
+            return alertDialogResponse
+        end,
     }
 
     local myPed = 1
     local function PlayerPedId() return myPed end
     local function NetworkGetNetworkIdFromEntity(entity) return entity * 1000 end
+
+    -- TWO OFFICERS, ONE CALL (this pass) -- GetPlayerFromServerId/
+    -- GetPlayerName stubs, same shape as
+    -- tests/clientpartnership_spec.lua's own fixture for the identical
+    -- "resolve a display name for the prompt" need.
+    local playerIndexByServerId = {}
+    local function GetPlayerFromServerId(serverId) return playerIndexByServerId[serverId] or -1 end
+    local function GetPlayerName(playerIndex) return 'Player#' .. tostring(playerIndex) end
 
     local serverEvents = {}
     local function TriggerServerEvent(eventName, ...)
@@ -250,6 +269,8 @@ local function newSarCallsFixture(opts)
         TaskStartScenarioInPlace = TaskStartScenarioInPlace,
         GetOffsetFromEntityInWorldCoords = GetOffsetFromEntityInWorldCoords,
         GetEntityHeading = GetEntityHeading,
+        GetPlayerFromServerId = GetPlayerFromServerId,
+        GetPlayerName = GetPlayerName,
         source = 65535,
     }
     if providePlayK9Sound then
@@ -314,6 +335,7 @@ local function newSarCallsFixture(opts)
         end,
         startCommand = function(args) commandHandlers['k9sarcall'](1, args or {}) end,
         stopCommand = function() commandHandlers['k9sarcall'](1, { 'stop' }) end,
+        joinCommand = function(targetServerId) commandHandlers['k9sarcall'](1, { 'join', tostring(targetServerId) }) end,
         fireHintTier = function(forged, tier, callId)
             env.source = forged and 999 or 65535
             netEventHandlers['qbx_k9unit:client:sarHintTierChanged'](tier, callId)
@@ -321,6 +343,18 @@ local function newSarCallsFixture(opts)
         fireCallEnded = function(forged, reason, callType, callId)
             env.source = forged and 999 or 65535
             netEventHandlers['qbx_k9unit:client:sarCallEnded'](reason, callType, callId)
+        end,
+        -- TWO OFFICERS, ONE CALL (this pass) below.
+        alertDialogCalls = alertDialogCalls,
+        setAlertDialogResponse = function(v) alertDialogResponse = v end,
+        registerPlayer = function(serverId, playerIndex) playerIndexByServerId[serverId] = playerIndex end,
+        fireJoinRequest = function(forged, fromServerId)
+            env.source = forged and 999 or 65535
+            netEventHandlers['qbx_k9unit:client:sarJoinRequest'](fromServerId)
+        end,
+        fireCallJoined = function(forged, callId, initialTier)
+            env.source = forged and 999 or 65535
+            netEventHandlers['qbx_k9unit:client:sarCallJoined'](callId, initialTier)
         end,
     }
 end
@@ -339,10 +373,12 @@ t.test('Config.Features.SARCalls = false: registers NO command, NO net events, a
     t.isNil(f.env.RequestAbandonSarCall)
 end)
 
-t.test('Config.Features.SARCalls = true: registers the k9sarcall command and both net events; all three resource-globals exist', function()
+t.test('Config.Features.SARCalls = true: registers the k9sarcall command and all four net events; all three resource-globals exist', function()
     local f = newSarCallsFixture()
     t.equals(f.commandCount(), 1)
-    t.equals(f.netEventCount(), 2)
+    -- FOUR now (was 2): sarHintTierChanged/sarCallEnded plus this pass's
+    -- own sarJoinRequest/sarCallJoined -- see "TWO OFFICERS, ONE CALL".
+    t.equals(f.netEventCount(), 4)
     t.isNotNil(f.env.RequestStartSarCall)
     t.isNotNil(f.env.RequestAbandonSarCall)
     t.isNotNil(f.env.IsSarCallActive)
@@ -838,5 +874,134 @@ end)
 --    tidiness issue -- section H above pins the fix, which makes the
 --    cleanup immediate instead of waiting on that timer.
 -- ----------------------------------------------------------------------
+
+-- ----------------------------------------------------------------------
+-- SECTION I -- TWO OFFICERS, ONE CALL (this pass). See server/sarcalls.lua's
+-- own header section of the same name for the full design; this section
+-- covers only what THIS file owns: local state transitions and the two
+-- new pushes, never eligibility (server/sarcalls.lua's
+-- CheckSarJoinEligibility is the sole authority for that, exercised in
+-- tests/sarcalls_spec.lua instead).
+-- ----------------------------------------------------------------------
+
+t.test('/k9sarcall join <id>: HasK9Access() false denies locally and never reaches the server', function()
+    local f = newSarCallsFixture({ hasK9Access = false })
+    f.joinCommand(55)
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('/k9sarcall join <id>: a non-numeric id is rejected locally with join_invalid_target, never reaches the server', function()
+    local f = newSarCallsFixture()
+    f.joinCommand('not-a-number')
+    t.equals(#f.serverEvents, 0)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_invalid_target'))
+end)
+
+t.test('/k9sarcall join <id>: a successful attempt reaches requestJoinSarCall with the target id, and notifies "request sent"', function()
+    local f = newSarCallsFixture()
+    f.joinCommand(55)
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:requestJoinSarCall')
+    t.equals(f.serverEvents[1].args[1], 55)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.join_request_sent'))
+end)
+
+t.test('/k9sarcall join <id>: already locally active (own call OR already joined one) rejects the attempt outright, no new round trip', function()
+    local f = newSarCallsFixture()
+    f.queueCallbackResponse({ started = true, callId = 1 })
+    f.startCommand()
+    t.equals(#f.serverEvents, 0, 'sanity: a start goes through the callback, not TriggerServerEvent')
+
+    f.joinCommand(55)
+    t.equals(#f.serverEvents, 0, 'already active locally -- must never even ask to join a second call')
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.already_active'))
+end)
+
+t.test('sarJoinRequest: shown ONLY to a genuine server push (source == 65535); a forged push is rejected outright, no dialog shown', function()
+    local f = newSarCallsFixture()
+    f.fireJoinRequest(true, 77) -- forged
+    t.equals(#f.alertDialogCalls, 0)
+    t.equals(#f.serverEvents, 0)
+end)
+
+t.test("sarJoinRequest: shows the accept/decline dialog with the requester's resolved name, and forwards ACCEPT back to the server", function()
+    local f = newSarCallsFixture()
+    f.registerPlayer(77, 3)
+    f.setAlertDialogResponse('confirm')
+
+    f.fireJoinRequest(false, 77)
+
+    t.equals(#f.alertDialogCalls, 1)
+    t.equals(f.alertDialogCalls[1].content, locale('sar.join_request_content', 'Player#3'))
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:respondJoinSarCall')
+    t.equals(f.serverEvents[1].args[1], 77)
+    t.isTrue(f.serverEvents[1].args[2])
+end)
+
+t.test('sarJoinRequest: an unresolvable requester falls back to the generic officer name, and DECLINE forwards accepted = false', function()
+    local f = newSarCallsFixture()
+    f.setAlertDialogResponse('cancel')
+
+    f.fireJoinRequest(false, 999) -- never registered -- GetPlayerFromServerId returns -1
+
+    t.equals(f.alertDialogCalls[1].content, locale('sar.join_request_content', locale('movement.officer_fallback_name', 999)))
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:respondJoinSarCall')
+    t.equals(f.serverEvents[1].args[1], 999)
+    t.isFalse(f.serverEvents[1].args[2])
+end)
+
+t.test('sarCallJoined: a forged push (source ~= 65535) is rejected outright -- no state change', function()
+    local f = newSarCallsFixture()
+    f.fireCallJoined(true, 42, 'warm')
+    t.isFalse(f.env.IsSarCallActive())
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('sarCallJoined: a genuine push flips local state to active, tracks the given callId, and immediately shows the bundled initial tier', function()
+    local f = newSarCallsFixture()
+    t.isFalse(f.env.IsSarCallActive())
+
+    f.fireCallJoined(false, 42, 'hot')
+
+    t.isTrue(f.env.IsSarCallActive(), 'joining must read as active exactly like starting does')
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.hint_hot'), 'the bundled initial tier must be shown immediately, via the SAME HandleHintTierPush logic sarHintTierChanged uses')
+    t.equals(#f.playK9SoundCalls, 1)
+    t.equals(f.playK9SoundCalls[1].soundName, 'Bark_Calm')
+
+    -- A subsequent, genuinely-later hint push for THIS SAME call must now
+    -- be accepted (proves currentSarCallId was actually set to 42, not left nil).
+    f.fireHintTier(false, 'burning', 42)
+    t.contains(f.notifyCalls[#f.notifyCalls].description, locale('sar.hint_burning'))
+end)
+
+t.test('sarCallJoined: RequestAbandonSarCall() works identically after joining as after starting -- leaving is never gated, and never distinguishes the two roles', function()
+    local f = newSarCallsFixture()
+    f.fireCallJoined(false, 42, 'warm')
+    t.isTrue(f.env.IsSarCallActive())
+
+    f.stopCommand()
+
+    t.isFalse(f.env.IsSarCallActive())
+    t.equals(f.serverEvents[#f.serverEvents].event, 'qbx_k9unit:server:abandonSarCall')
+end)
+
+t.test("sarCallEnded(found_by_teammate): resets local state exactly like timeout/abandoned -- never spawns a reveal, never sits, never plays the found sound -- only the ACTUAL finder's own client does that", function()
+    local f = newSarCallsFixture()
+    f.fireCallJoined(false, 42, 'warm')
+
+    f.fireCallEnded(false, 'found_by_teammate', nil, 42)
+
+    t.isFalse(f.env.IsSarCallActive(), "this member's own session must still end -- the call resolved either way")
+    t.equals(f.k9SitCallCount(), 0, "K9Sit is the finder's own trained-response cue -- a teammate who did not find it never gets it")
+    t.equals(#f.createdPeds, 0)
+    t.equals(#f.createdObjects, 0)
+    local barkAlertPlayed = false
+    for _, call in ipairs(f.playK9SoundCalls) do
+        if call.soundName == 'Bark_Alert' then barkAlertPlayed = true end
+    end
+    t.isFalse(barkAlertPlayed, 'the found-specific Bark_Alert must never play for found_by_teammate')
+end)
 
 os.exit(t.summary())

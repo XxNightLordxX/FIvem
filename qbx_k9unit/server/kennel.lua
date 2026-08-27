@@ -515,6 +515,71 @@ local DeployCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     Config.DeployableKennel.deployCooldownMs, 5000, 'Config.DeployableKennel.deployCooldownMs'))
 DeployCooldown.RegisterPlayerDropped()
 
+-- ==========================================================================
+-- HANDLER XP MINT COOLDOWN for handlerKennelDeploy (WIRING PASS,
+-- coder-backend -- closes the "top handler rank unreachable" audit
+-- finding). DeployCooldown above throttles the ACTION (how often a NEW
+-- placement may even be REQUESTED) -- it is keyed by the deploying player's
+-- raw connection `src`, is now handler-rank-shortened down to a 3000ms
+-- worst-case floor (Config.DeployableKennel.deployCooldownMs 5000ms *
+-- Master Handler's 0.60 kennelDeployCooldownMultiplier -- see
+-- requestDeployKennel's own "HANDLER XP TIER UNLOCK" comment below and
+-- server/progression.lua's GetHandlerXPTierKennelDeployCooldownMs doc
+-- comment, "THE NUMBERS" section), and is DELIBERATELY cleared on
+-- disconnect (`DeployCooldown.RegisterPlayerDropped()` above) -- none of
+-- which makes it a safe MINT throttle on its own. This tracker is the
+-- dedicated, CITIZENID-keyed mint cooldown config.lua's own
+-- Config.Features.HandlerXPProgression header names as the binding
+-- requirement for wiring this award at all -- entirely separate from
+-- DeployCooldown (never derived from it, for the identical
+-- "a handler's own rank cannot both mint AND shorten its own throttle"
+-- reasoning HandlerTreatXpMintCooldown's own precedent in
+-- server/medkit.lua documents).
+--
+-- WHY THIS FARM IS REAL EVEN THOUGH "DEPLOY" IS STRUCTURALLY RARE: a
+-- genuinely NEW deploy (the only place this award pays -- see
+-- confirmKennelPlaced below) only happens once per "kennel lifecycle" --
+-- Kennels[citizenid] blocks a second deploy outright while the first
+-- object still exists (requestDeployKennel's own "kennel.already_active_deployed"
+-- reject), and this file's own ride-along redesign means an ordinary
+-- pickup/carry/put-down cycle NEVER re-triggers a fresh deploy (the SAME
+-- object survives that whole cycle). The ONE thing that clears
+-- Kennels[citizenid] during ordinary play is the OWNER disconnecting while
+-- unoccupied/uncarried (playerDropped's own RemoveKennelForCitizenid call,
+-- below) -- which an ordinary logout satisfies essentially every time. That
+-- makes a scripted DISCONNECT/RECONNECT loop a real, repeatable way to force
+-- fresh deploys on demand, each one a fresh mint opportunity, with
+-- DeployCooldown itself providing NO protection at all (it resets to
+-- nothing on the very same disconnect via its own :RegisterPlayerDropped()
+-- call above). THIS is exactly the farm this dedicated, citizenid-keyed,
+-- disconnect-surviving tracker exists to close.
+--
+-- WINDOW: 60 real minutes, deliberately far longer than the 3000ms
+-- rank-reduced DeployCooldown floor alone would suggest -- config.lua's own
+-- header already measured the UNREDUCED 5000ms floor as 5,760 XP/hr gross
+-- if minted unthrottled, and the rank reduction alone would make that
+-- 9,600 XP/hr gross (67% worse). At 8 XP (Config.HandlerXP.awards.
+-- handlerKennelDeploy) / 60 minutes = 8 XP/hr per actor, even a scripted
+-- disconnect/reconnect loop run as fast as technically possible cannot move
+-- this citizenid's hourly XP total by more than a rounding error.
+--
+-- FILE-LOCAL CONSTANT, NOT A CONFIG KEY -- same reasoning as
+-- TREAT_XP_MINT_COOLDOWN_MS (server/medkit.lua) and every other
+-- *_XP_MINT_COOLDOWN_MS in this codebase: a security floor, not an
+-- operator-tunable balance knob -- the only way to weaken it is to edit
+-- this file's own source under code review.
+--
+-- KEYED ON THE DEPLOYING PLAYER'S DURABLE CITIZENID, SURVIVES DISCONNECT/
+-- RECONNECT -- deliberately NOT :RegisterPlayerDropped() (that would defeat
+-- the entire point given the farm shape described above). Bounded instead
+-- by its own independent TTL sweep, mirroring server/certifications.lua's
+-- CertifyXpMintCooldown precedent exactly.
+local KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS = 60 * 60 * 1000 -- 60 real minutes
+local HandlerKennelDeployXpMintCooldown = NewCooldown()
+HandlerKennelDeployXpMintCooldown.StartSweep(KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS, function(now, loggedAt)
+    return (now - loggedAt) > (KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS * 2)
+end)
+
 -- Meters of slack over the server-chosen spawn point allowed when
 -- confirming a placement — covers PlaceObjectOnGroundProperly's vertical
 -- ground-snap plus ordinary network/latency drift. Mirrors
@@ -732,23 +797,21 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     -- tick, matching ResolveMedkitBaseCooldownMs's identical precedent in
     -- server/medkit.lua.
     --
-    -- THIS MATTERS FOR ANY FUTURE handlerKennelDeploy AWARD WIRING, NOT
-    -- JUST FOR THIS COOLDOWN: this cooldown is now RANK-REDUCED, down to a
-    -- worst-case floor of 3000ms (5000ms base * 0.60 Master-Handler, the
-    -- shipped multiplier) -- see GetHandlerXPTierKennelDeployCooldownMs's
-    -- own doc comment (server/progression.lua, "THE NUMBERS" section) for
-    -- the full arithmetic (config.lua's own header already measured the
-    -- UNREDUCED 5000ms floor as 5,760 XP/hr gross and judged that unsafe
-    -- to award through unthrottled; this pass's reduction makes that
-    -- 9,600 XP/hr gross, 67% worse). If handlerKennelDeploy is ever wired
-    -- to fire from a successful deploy below, its own per-actor mint
-    -- cooldown MUST be sized against the rank-reduced 3000ms floor, not
-    -- the unreduced 5000ms config default, and MUST be its own separate
-    -- tracker -- never derived from DeployCooldown itself (now
-    -- handler-rank-shortened). tests/kennel_spec.lua carries a SOURCE
-    -- AUDIT test that fails if handlerKennelDeploy is ever awarded from
-    -- this file without a companion *_XP_MINT_COOLDOWN tracker also
-    -- present here.
+    -- THIS MATTERS FOR handlerKennelDeploy's OWN AWARD, NOT JUST THIS
+    -- COOLDOWN: this cooldown is RANK-REDUCED, down to a worst-case floor of
+    -- 3000ms (5000ms base * 0.60 Master-Handler, the shipped multiplier) --
+    -- see GetHandlerXPTierKennelDeployCooldownMs's own doc comment
+    -- (server/progression.lua, "THE NUMBERS" section) for the full
+    -- arithmetic. handlerKennelDeploy is now WIRED (this pass, coder-backend
+    -- -- see confirmKennelPlaced's own "HANDLER XP" block, further down this
+    -- file), through a DEDICATED, separate, citizenid-keyed mint cooldown
+    -- (HandlerKennelDeployXpMintCooldown, declared alongside DeployCooldown
+    -- above, 60 real minutes) sized well below that 3000ms floor -- never
+    -- derived from DeployCooldown itself (connection-keyed, cleared on
+    -- disconnect, and rank-shortened; see HandlerKennelDeployXpMintCooldown's
+    -- own declaration comment for the full disconnect/reconnect farm shape
+    -- this closes). tests/kennel_spec.lua carries a SOURCE AUDIT test
+    -- confirming that companion tracker stays present alongside the award.
     local baseDeployCooldownMs = ResolveConfiguredThresholdMs(
         Config.DeployableKennel.deployCooldownMs, 5000, 'Config.DeployableKennel.deployCooldownMs')
     local effectiveDeployCooldownMs = baseDeployCooldownMs
@@ -982,6 +1045,29 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     ClaimNetworkEntity(netId, 'kennel', citizenid)
 
     NotifyPlayer(src, locale('kennel.deployed_success'), 'success')
+
+    -- HANDLER XP (WIRING PASS, coder-backend): handlerKennelDeploy, paid
+    -- HERE -- at CONFIRMED placement -- never at requestDeployKennel (event
+    -- 1) further up this file, which only ever *asks* for a placement and
+    -- can still fail (wrong model, too far, timed out, cancelled, claimed by
+    -- someone else) at any point before this line is ever reached. Paying
+    -- here means only a REAL, confirmed, registered kennel object ever earns
+    -- anything. Gated by HandlerKennelDeployXpMintCooldown, the dedicated
+    -- per-actor (citizenid) mint cooldown declared above -- never by
+    -- DeployCooldown (connection-keyed, cleared on disconnect, and itself
+    -- handler-rank-shortened; see HandlerKennelDeployXpMintCooldown's own
+    -- declaration comment for exactly why that tracker cannot double as a
+    -- mint gate, and for the disconnect/reconnect farm shape this dedicated
+    -- tracker exists to close). Soft dependency
+    -- (`type(AwardHandlerXP) == 'function'`), same convention as every other
+    -- cross-file consultation in this file -- this file works identically
+    -- whether or not server/progression.lua is loaded or
+    -- Config.Features.HandlerXPProgression is on (AwardHandlerXP itself
+    -- re-checks that flag and is a real no-op while it is off).
+    if type(AwardHandlerXP) == 'function'
+        and HandlerKennelDeployXpMintCooldown.Consume(citizenid, KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS) then
+        AwardHandlerXP(citizenid, 'handlerKennelDeploy')
+    end
 end)
 
 --- Client reports its own placement attempt failed (model never loaded,

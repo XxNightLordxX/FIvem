@@ -225,6 +225,28 @@ function addPartnerBadge(doc) {
 }
 
 /**
+ * The K9 ONBOARDING HINT's own (row, title, body, dismiss) quadruple --
+ * mirrors html/index.html's real `#k9onboarding-hint` markup byte-for-byte
+ * (same `id`/`data-onboarding="title"`/`data-onboarding="body"`/
+ * `data-onboarding="dismiss"` hooks, same starting `hidden` class -- see
+ * that file's own comment on why this is a THIRD, separate element from
+ * `#k9hud`/`#k9partner-badge`, not one more row inside either).
+ */
+function addOnboardingHint(doc) {
+    const row = doc.createElement('div', { id: 'k9onboarding-hint', class: 'k9onboarding-hint hidden', 'aria-hidden': 'true' });
+    doc._register(row, 'k9onboarding-hint');
+    const title = doc.createElement('span', { 'data-onboarding': 'title' });
+    title.textContent = 'K9 Command Tablet';
+    doc._register(title);
+    const body = doc.createElement('span', { 'data-onboarding': 'body' });
+    body.textContent = '--';
+    doc._register(body);
+    const dismiss = doc.createElement('span', { 'data-onboarding': 'dismiss' });
+    dismiss.textContent = '--';
+    doc._register(dismiss);
+}
+
+/**
  * Builds a FakeDocument whose element graph mirrors html/index.html's real
  * #k9hud markup byte-for-byte on every attribute/class app.js's init()
  * actually reads -- see this file's header. Returns the FakeDocument
@@ -246,6 +268,7 @@ function buildK9HudDocument() {
     addStatusRow(doc, 'distraction');
     addStatusRow(doc, 'xpTier');
     addPartnerBadge(doc);
+    addOnboardingHint(doc);
 
     return doc;
 }

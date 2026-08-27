@@ -125,6 +125,27 @@ local function fireAbandonSarCall(abandonSource)
     registeredNetEvents['qbx_k9unit:server:abandonSarCall']()
 end
 
+--- TWO OFFICERS, ONE CALL (this pass) -- fires the captured
+--- requestJoinSarCall/respondJoinSarCall net-event handlers the same way
+--- fireAbandonSarCall above fires abandonSarCall: set the ambient `source`
+--- to whichever party is genuinely sending THIS message, then invoke the
+--- handler with only the OTHER arguments a real TriggerServerEvent call
+--- would carry.
+--- @param requesterSrc number
+--- @param targetServerId number
+local function fireRequestJoinSarCall(requesterSrc, targetServerId)
+    serverEnv.source = requesterSrc
+    registeredNetEvents['qbx_k9unit:server:requestJoinSarCall'](targetServerId)
+end
+
+--- @param ownerSrc number -- the call owner, responding
+--- @param fromServerId number
+--- @param accepted boolean
+local function fireRespondJoinSarCall(ownerSrc, fromServerId, accepted)
+    serverEnv.source = ownerSrc
+    registeredNetEvents['qbx_k9unit:server:respondJoinSarCall'](fromServerId, accepted)
+end
+
 local pedCoordsBySource = {}
 local function GetPlayerPed(source) return source end -- identity: this section's fake ped handle IS the source, same convention tests/scenttrail_spec.lua/tests/integrations_spec.lua both already use
 local function GetEntityCoords(ped) return pedCoordsBySource[ped] or { x = 0, y = 0, z = 0 } end
@@ -250,6 +271,19 @@ end
 local function lastEventFor(target)
     for i = #triggerClientEventCalls, 1, -1 do
         if triggerClientEventCalls[i].target == target then return triggerClientEventCalls[i] end
+    end
+    return nil
+end
+
+--- Same idea as lastEventFor above, for notifyCalls -- used by the TWO
+--- OFFICERS, ONE CALL tests below, where more than one member can be
+--- notified in the same tick and assertions need to key off WHICH member,
+--- not merely "the last notify overall".
+--- @param target number
+--- @return table? call
+local function lastNotifyFor(target)
+    for i = #notifyCalls, 1, -1 do
+        if notifyCalls[i].target == target then return notifyCalls[i] end
     end
     return nil
 end
@@ -1122,6 +1156,329 @@ t.test('REGRESSION: a VALID startCooldownMs is still used, not silently replaced
         t.isNil(line:find('startCooldownMs', 1, true),
             'a valid configured value must pass through silently -- warning on a good value trains operators to ignore the warning')
     end
+end)
+
+-- ========================================================================
+-- TWO OFFICERS, ONE CALL (this pass) -- server/sarcalls.lua's own join
+-- consent handshake. Same shared fixture as every SECTION 1 test above
+-- (ActiveSarCalls/MemberToCallId are file-lifetime `local`s, reused across
+-- every test in this file by design -- see lastEventFor's own comment).
+-- Sources 100+ used throughout, well clear of every earlier test's own
+-- range, so no leftover state from an earlier test can interfere.
+-- ========================================================================
+
+t.test('a second officer can join an active call and genuinely participate: their own tier pushes track their OWN position, and their OWN find ends the call for everyone', function()
+    playersBySource[100] = { citizenid = 'CIT_OWNER_100', job = 'police' }
+    playersBySource[101] = { citizenid = 'CIT_JOINER_101', job = 'police' }
+    pedCoordsBySource[100] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[101] = { x = 1.0, y = 0.0, z = 0.0 } -- within the default 10m join proximity of source 100
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0) -- target lands at (10.0, 0.0), per this fixture's minRadius=10
+    local started = requestSarCall(100)
+    t.isTrue(started.started)
+
+    -- Step 1: the joiner asks.
+    fireRequestJoinSarCall(101, 100)
+    local prompt = lastEventFor(100)
+    t.equals(prompt.event, 'qbx_k9unit:client:sarJoinRequest', "the OWNER's client is the one shown the accept/decline prompt")
+    t.equals(prompt.args[1], 101)
+
+    -- Step 2: the owner accepts.
+    fireRespondJoinSarCall(100, 101, true)
+    local joinedPush = lastEventFor(101)
+    t.equals(joinedPush.event, 'qbx_k9unit:client:sarCallJoined')
+    t.equals(joinedPush.args[1], started.callId, "the joiner must be told THIS call's own callId")
+    t.contains(lastNotifyFor(101).description, locale('sar.joined_call'))
+    t.contains(lastNotifyFor(100).description, locale('sar.member_joined'))
+
+    -- The joiner's OWN position is what matters for THEIR OWN hint tier --
+    -- at (1,0) they are 9m from the target (10,0), the same 'warm' tier
+    -- source 100 already saw on its own initial push, so move them to a
+    -- genuinely 'cold' distance (warmDistance=25 in this fixture) to prove
+    -- their tier is tracked independently, not just copied from the owner.
+    local ownerEventCountBeforeTick = 0
+    for _, ev in ipairs(triggerClientEventCalls) do
+        if ev.target == 100 then ownerEventCountBeforeTick = ownerEventCountBeforeTick + 1 end
+    end
+
+    pedCoordsBySource[101] = { x = -20.0, y = 0.0, z = 0.0 } -- distance to (10,0) = 30 -> 'cold'
+    tick()
+    local joinerTierPush = lastEventFor(101)
+    t.equals(joinerTierPush.event, 'qbx_k9unit:client:sarHintTierChanged')
+    t.equals(joinerTierPush.args[1], 'cold')
+
+    -- Owner never moved -- still 'warm' (10m away) -- confirms the two
+    -- members' own tiers are tracked completely independently: the
+    -- joiner's own tier crossing to 'cold' produced NO new push at all for
+    -- the owner (this tick loop only ever pushes on a CHANGE from the
+    -- previously observed tier, per member), who is still sitting inside
+    -- their own last-observed 'warm' tier from the initial grant.
+    local ownerEventCountAfterTick = 0
+    for _, ev in ipairs(triggerClientEventCalls) do
+        if ev.target == 100 then ownerEventCountAfterTick = ownerEventCountAfterTick + 1 end
+    end
+    t.equals(ownerEventCountAfterTick, ownerEventCountBeforeTick, "the joiner's own tier change must produce zero pushes for the owner")
+
+    -- The JOINER walks in and finds it -- ends the call for BOTH members.
+    pedCoordsBySource[101] = { x = 9.0, y = 0.0, z = 0.0 } -- 1m from target, inside arrivalRadius=2.0
+    fakeNow = fakeNow + 555
+    local awardCountBefore = #awardCalls
+    tick()
+
+    t.equals(#awardCalls, awardCountBefore + 1, 'exactly one award, regardless of who actually found it')
+    local award = awardCalls[#awardCalls]
+    t.equals(award.citizenid, 'CIT_OWNER_100', "the STARTER's own citizenid is paid, never the finder's, when they differ -- see TWO OFFICERS, ONE CALL DECISION 3")
+
+    local finderPush = lastEventFor(101)
+    t.equals(finderPush.event, 'qbx_k9unit:client:sarCallEnded')
+    t.equals(finderPush.args[1], 'found', 'the member who actually crossed arrivalRadius gets reason == found')
+    t.equals(finderPush.args[3], started.callId)
+
+    local teammatePush = lastEventFor(100)
+    t.equals(teammatePush.event, 'qbx_k9unit:client:sarCallEnded')
+    t.equals(teammatePush.args[1], 'found_by_teammate', 'every OTHER member gets found_by_teammate, never found -- they are not standing where the target was')
+    t.isNil(teammatePush.args[2], 'found_by_teammate carries no callType -- there is nothing for that client to reveal')
+
+    -- Confirmed fully cleared for BOTH sources -- a fresh request from
+    -- either succeeds (no lingering already_active for the joiner either).
+    fakeNow = fakeNow + 20000
+    t.isTrue(requestSarCall(101).started, 'the former joiner must be completely free to start their own call afterward')
+end)
+
+t.test('a non-consenting officer cannot be dragged into a call: DECLINING a join request leaves the requester exactly as before, and they remain free to start or join elsewhere', function()
+    playersBySource[102] = { citizenid = 'CIT_OWNER_102', job = 'police' }
+    playersBySource[103] = { citizenid = 'CIT_DECLINED_103', job = 'police' }
+    pedCoordsBySource[102] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[103] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(102)
+
+    fireRequestJoinSarCall(103, 102)
+    fireRespondJoinSarCall(102, 103, false) -- DECLINE
+
+    t.contains(lastNotifyFor(103).description, locale('sar.join_request_declined'))
+
+    -- Never actually added -- the tick loop must never touch source 103,
+    -- and a fresh requestSarCall for that same citizenid must succeed
+    -- (not rejected as already_active).
+    tick()
+    fakeNow = fakeNow + 20000
+    t.isTrue(requestSarCall(103).started, 'a declined requester was never a member of anything -- must be free to start their own call')
+
+    fireAbandonSarCall(103) -- cleanup
+    fireAbandonSarCall(102)
+end)
+
+t.test('proximity: a requester standing farther than Config.SARCalls.joinProximityMeters from the owner is rejected, and never occupies the single-slot pending table', function()
+    playersBySource[104] = { citizenid = 'CIT_OWNER_104', job = 'police' }
+    playersBySource[105] = { citizenid = 'CIT_FAR_105', job = 'police' }
+    pedCoordsBySource[104] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[105] = { x = 500.0, y = 0.0, z = 0.0 } -- far beyond joinProximityMeters (10.0 default)
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(104)
+
+    fireRequestJoinSarCall(105, 104)
+    t.contains(lastNotifyFor(105).description, locale('sar.join_too_far'))
+    t.isNil(lastEventFor(104) and lastEventFor(104).event == 'qbx_k9unit:client:sarJoinRequest' and true or nil,
+        'a rejected request must never reach the owner as a prompt')
+
+    -- Confirms no pending slot was consumed: moving in close and asking
+    -- again immediately must still work (if the first attempt HAD occupied
+    -- the slot, this second, genuinely-eligible attempt would be rejected
+    -- as "pending_request_exists" instead of actually prompting the owner).
+    pedCoordsBySource[105] = { x = 1.0, y = 0.0, z = 0.0 }
+    fireRequestJoinSarCall(105, 104)
+    t.equals(lastEventFor(104).event, 'qbx_k9unit:client:sarJoinRequest', 'once actually close enough, the SAME requester can ask again and reach the owner')
+
+    fireAbandonSarCall(105)
+    fireAbandonSarCall(104)
+end)
+
+t.test('only the call OWNER is the accept authority: a request naming a mere PARTICIPANT (not the owner) is rejected the same as an invalid target', function()
+    playersBySource[106] = { citizenid = 'CIT_OWNER_106', job = 'police' }
+    playersBySource[107] = { citizenid = 'CIT_MEMBER_107', job = 'police' }
+    playersBySource[108] = { citizenid = 'CIT_OUTSIDER_108', job = 'police' }
+    pedCoordsBySource[106] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[107] = { x = 1.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[108] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(106)
+    fireRequestJoinSarCall(107, 106)
+    fireRespondJoinSarCall(106, 107, true) -- 107 is now a MEMBER, not the owner
+
+    fireRequestJoinSarCall(108, 107) -- targets the PARTICIPANT, not the owner
+    t.contains(lastNotifyFor(108).description, locale('sar.join_invalid_target'))
+
+    fireAbandonSarCall(108)
+    fireAbandonSarCall(107)
+    fireAbandonSarCall(106)
+end)
+
+t.test('call_full: Config.SARCalls.maxMembers caps how many officers one call can hold', function()
+    ServerConfig.SARCalls.maxMembers = 2 -- override for this test only
+    playersBySource[109] = { citizenid = 'CIT_OWNER_109', job = 'police' }
+    playersBySource[110] = { citizenid = 'CIT_MEMBER_110', job = 'police' }
+    playersBySource[111] = { citizenid = 'CIT_OVERFLOW_111', job = 'police' }
+    pedCoordsBySource[109] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[110] = { x = 1.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[111] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(109)
+    fireRequestJoinSarCall(110, 109)
+    fireRespondJoinSarCall(109, 110, true) -- call now has 2 members == maxMembers
+
+    fireRequestJoinSarCall(111, 109)
+    t.contains(lastNotifyFor(111).description, locale('sar.call_full'))
+
+    ServerConfig.SARCalls.maxMembers = 4 -- restore for every later test
+    fireAbandonSarCall(111)
+    fireAbandonSarCall(110)
+    fireAbandonSarCall(109)
+end)
+
+t.test('the OWNER disconnecting transfers the call to a remaining participant instead of ending it -- the participant can still finish it, and the ORIGINAL starter still earns the XP even though they are gone', function()
+    playersBySource[112] = { citizenid = 'CIT_OWNER_112', job = 'police' }
+    playersBySource[113] = { citizenid = 'CIT_MEMBER_113', job = 'police' }
+    pedCoordsBySource[112] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[113] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(112)
+    fireRequestJoinSarCall(113, 112)
+    fireRespondJoinSarCall(112, 113, true)
+
+    -- The owner disconnects mid-call.
+    firePlayerDropped(112)
+    t.contains(lastNotifyFor(113).description, locale('sar.ownership_transferred'), 'the remaining member must be told the call is now theirs to manage')
+
+    -- The remaining participant is still fully serviced by the tick loop,
+    -- and can still finish the call.
+    pedCoordsBySource[113] = { x = 9.0, y = 0.0, z = 0.0 } -- 1m from target
+    local awardCountBefore = #awardCalls
+    tick()
+
+    t.equals(#awardCalls, awardCountBefore + 1)
+    t.equals(awardCalls[#awardCalls].citizenid, 'CIT_OWNER_112', 'the ORIGINAL starter still earns the find -- AwardXP works purely off citizenid, needing no live connection')
+    t.equals(lastEventFor(113).event, 'qbx_k9unit:client:sarCallEnded')
+    t.equals(lastEventFor(113).args[1], 'found')
+
+    -- Confirmed fully cleared: the surviving member is free again.
+    fakeNow = fakeNow + 20000
+    t.isTrue(requestSarCall(113).started)
+end)
+
+t.test('a participant can ALWAYS leave via abandonSarCall -- with the feature flag off and access revoked -- and leaving does not end the call for the OWNER who remains', function()
+    playersBySource[114] = { citizenid = 'CIT_OWNER_114', job = 'police' }
+    playersBySource[115] = { citizenid = 'CIT_LEAVER_115', job = 'police' }
+    pedCoordsBySource[114] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[115] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(114)
+    fireRequestJoinSarCall(115, 114)
+    fireRespondJoinSarCall(114, 115, true)
+
+    ServerConfig.Features.SARCalls = false -- feature disabled...
+    hasAccess = false -- ...and access revoked...
+    fireAbandonSarCall(115) -- ...leaving must still work, for a PARTICIPANT, not just an owner
+    ServerConfig.Features.SARCalls = true
+    hasAccess = true
+
+    t.equals(lastEventFor(115).event, 'qbx_k9unit:client:sarCallEnded')
+    t.equals(lastEventFor(115).args[1], 'abandoned')
+
+    -- The OWNER is completely unaffected -- still active, tick loop still
+    -- serving them, can still finish the call normally.
+    pedCoordsBySource[114] = { x = 9.0, y = 0.0, z = 0.0 }
+    local awardCountBefore = #awardCalls
+    tick()
+    t.equals(#awardCalls, awardCountBefore + 1, "the owner's own call must still resolve normally after a participant leaves")
+    t.equals(awardCalls[#awardCalls].citizenid, 'CIT_OWNER_114')
+end)
+
+t.test('when the OWNER leaves via abandonSarCall while a participant remains, ownership transfers -- the call does NOT end out from under the remaining, actively-searching participant', function()
+    playersBySource[116] = { citizenid = 'CIT_OWNER_116', job = 'police' }
+    playersBySource[117] = { citizenid = 'CIT_MEMBER_117', job = 'police' }
+    pedCoordsBySource[116] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[117] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(116)
+    fireRequestJoinSarCall(117, 116)
+    fireRespondJoinSarCall(116, 117, true)
+
+    fireAbandonSarCall(116) -- the OWNER voluntarily leaves -- NOT the last member
+
+    -- The remaining participant must NOT have been sent an 'abandoned'
+    -- end-of-call push -- their own call keeps running.
+    local memberPush = lastEventFor(117)
+    t.isTrue(memberPush == nil or memberPush.event ~= 'qbx_k9unit:client:sarCallEnded',
+        "the remaining participant's own call must not end just because the owner left")
+    t.contains(lastNotifyFor(117).description, locale('sar.ownership_transferred'))
+
+    pedCoordsBySource[117] = { x = 9.0, y = 0.0, z = 0.0 }
+    local awardCountBefore = #awardCalls
+    tick()
+    t.equals(#awardCalls, awardCountBefore + 1, 'the surviving participant must still be able to finish the call')
+
+    fakeNow = fakeNow + 20000
+    t.isTrue(requestSarCall(116).started, 'the officer who voluntarily left must themselves be completely free again too')
+end)
+
+t.test('ANTI-FARM: two citizenids alternately starting-and-inviting each other, with the JOINER finding every single call, still each only ever earn XP from calls THEY THEMSELVES started -- the join path never mints XP for anyone', function()
+    playersBySource[118] = { citizenid = 'CIT_ALT_A', job = 'police' }
+    playersBySource[119] = { citizenid = 'CIT_ALT_B', job = 'police' }
+
+    local ROUNDS = 6
+    local startsBy = { CIT_ALT_A = 0, CIT_ALT_B = 0 }
+    for round = 1, ROUNDS do
+        local starterSrc, joinerSrc, starterCitizenid, joinerCitizenid
+        if round % 2 == 1 then
+            starterSrc, joinerSrc, starterCitizenid, joinerCitizenid = 118, 119, 'CIT_ALT_A', 'CIT_ALT_B'
+        else
+            starterSrc, joinerSrc, starterCitizenid, joinerCitizenid = 119, 118, 'CIT_ALT_B', 'CIT_ALT_A'
+        end
+
+        pedCoordsBySource[starterSrc] = { x = 0.0, y = 0.0, z = 0.0 }
+        pedCoordsBySource[joinerSrc] = { x = 1.0, y = 0.0, z = 0.0 }
+        fakeNow = fakeNow + 20000 -- clears each citizenid's OWN 8000ms StartSarCallCooldown every time -- alternating means each citizenid's own successive starts are naturally 40000ms apart anyway
+        queueRandom(0.0, 0.0)
+
+        local grant = requestSarCall(starterSrc)
+        t.isTrue(grant.started, ('round %d: the starter must always be able to start -- their own cooldown was cleared'):format(round))
+        startsBy[starterCitizenid] = startsBy[starterCitizenid] + 1
+
+        fireRequestJoinSarCall(joinerSrc, starterSrc)
+        fireRespondJoinSarCall(starterSrc, joinerSrc, true)
+
+        -- The JOINER does all the work of actually finding it, every round.
+        pedCoordsBySource[joinerSrc] = { x = 9.0, y = 0.0, z = 0.0 }
+        local awardCountBefore = #awardCalls
+        tick()
+        t.equals(#awardCalls, awardCountBefore + 1, ('round %d: exactly one award'):format(round))
+
+        local award = awardCalls[#awardCalls]
+        t.equals(award.citizenid, starterCitizenid,
+            ('round %d: the payout must go to the STARTER (%s), never the joiner/finder (%s)'):format(round, starterCitizenid, joinerCitizenid))
+    end
+
+    -- Tally every award this whole test minted, by citizenid -- neither
+    -- citizenid may EVER appear as the recipient for a round it did not
+    -- itself start, and the total count must equal exactly ROUNDS (one
+    -- award per round, never more).
+    local totalForA, totalForB, totalOverall = 0, 0, 0
+    for _, entry in ipairs(awardCalls) do
+        if entry.citizenid == 'CIT_ALT_A' then totalForA = totalForA + 1 end
+        if entry.citizenid == 'CIT_ALT_B' then totalForB = totalForB + 1 end
+        if entry.citizenid == 'CIT_ALT_A' or entry.citizenid == 'CIT_ALT_B' then totalOverall = totalOverall + 1 end
+    end
+    t.equals(totalForA, startsBy.CIT_ALT_A, 'CIT_ALT_A must have earned XP from EXACTLY the calls it itself started -- never from a call it merely joined and found')
+    t.equals(totalForB, startsBy.CIT_ALT_B, 'CIT_ALT_B must have earned XP from EXACTLY the calls it itself started -- never from a call it merely joined and found')
+    t.equals(totalOverall, ROUNDS, "total payouts across the whole alternating run must equal exactly ROUNDS -- the join path contributed zero extra awards, so alternating roles cannot double this mechanic's own per-citizenid ceiling")
 end)
 
 -- ========================================================================

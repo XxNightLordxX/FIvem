@@ -57,13 +57,23 @@
       README.md's "Public API for developers (exports/events)" section's
       Phase 1 contract table), in case a later phase wants to call in
       from outside this file.
-    - VISION MERGE PASS (coder-architect, this pass) adds a FIFTH
-      resource-global: CycleVision(). See the "MERGED ENTRY POINT" section
-      further down this file, right above its definition, for the full
-      design writeup. client/radial.lua's new "K9 Vision" item is the other
-      Phase-2-plus caller alongside 'k9vision' below — same "one function,
-      every entry point calls it" shape StartCertifiedTrack() already
-      established for the scent merge.
+    - A later pass added a FIFTH resource-global: CycleVision(). See the
+      "CYCLE — EXTRA, OPTIONAL CONVENIENCE" section further down this file,
+      right above its definition, for the full design writeup and its
+      current status. OWNER REVERSAL (coder-architect, this pass): that
+      pass had temporarily made CycleVision()'s 'k9vision' the ONLY
+      discoverable vision control (chat-suggested/tablet-documented),
+      demoting ToggleThermalVision()/ToggleNightVision()'s own commands to
+      hidden aliases. The owner has since asked for thermal and night
+      vision to be separate, first-class controls again — both are back to
+      being independently chat-suggested and tablet-documented (see
+      client/commandsuggestions.lua, html/tablet.js). CycleVision()/
+      'k9vision' is KEPT, per the owner's own steer, as an extra, optional
+      convenience alongside the two explicit toggles, not a replacement for
+      them — client/radial.lua's "K9 Vision" item is the other caller,
+      alongside 'k9vision' below, same "one function, every entry point
+      calls it" shape StartCertifiedTrack() established for the scent
+      merge.
     - THIS FILE calls client/main.lua's IsOwnModelK9() — see the RESOLVED
       ACCESS-GATING DECISION section immediately below for why this is
       IsOwnModelK9() and explicitly NOT CanShowK9UI().
@@ -494,53 +504,63 @@ function ToggleNightVision()
 end
 
 -- ======================================================================
--- MERGED ENTRY POINT — 'k9vision' cycle (owner-directed decluttering pass,
--- coder-architect, this pass: "consolidate them just like how i asked the
--- scent stuff... chat commands 3rd eye and radial menus"). ONE command +
--- ONE radial item + ONE keybind that steps through whichever of Night/
--- Thermal Vision the player actually has available, instead of asking a
--- player to remember two separate keys (K/J) for what is functionally one
--- question: "what am I looking through right now."
+-- CYCLE — EXTRA, OPTIONAL CONVENIENCE — 'k9vision' (STATUS, owner
+-- reversal, coder-architect, this pass: "I want the thermal and night
+-- vision separate"). HISTORY, so this section is not silently re-read out
+-- of order: an earlier decluttering pass built this cycle AND demoted
+-- ToggleThermalVision()/ToggleNightVision()'s own commands to hidden
+-- aliases, making 'k9vision' the only chat-suggested/tablet-documented
+-- vision control. The owner has since reversed that specific part of the
+-- decision — thermal and night vision are separate, first-class controls
+-- again (their own command, own keybind, own radial entry, both visible in
+-- chat autocomplete and the tablet's Commands tab: see
+-- client/commandsuggestions.lua, html/tablet.js). THE CYCLE ITSELF IS KEPT,
+-- per the owner's own explicit steer ("keep it as an extra... it costs
+-- nothing, someone may prefer it") — this section documents it as exactly
+-- that: an extra, optional convenience alongside the two explicit toggles,
+-- never their replacement, discoverable through its own command + radial
+-- item + keybind ('k9vision', default I) but not the primary or only way
+-- to reach either mode.
 --
--- WHY THIS IS A CYCLE, NOT A COPY OF THE SCENT MERGE — read before touching
--- this again. Scent's three track types merged into ONE action
--- (StartCertifiedTrack(), client/tracking.lua) because they are three
--- ALTERNATIVE ANSWERS to one one-shot question ("what should my K9 search
--- for"), resolved server-side from certification and fired once. Vision is
--- a different shape: Thermal/Night are HELD STATES a player stays in, not
--- actions that fire and finish, and there is no server-side fact ("this
--- player is certified for X") to resolve which one they want — a bare
--- press-to-cycle genuinely can walk past the mode someone wanted, in a way
--- re-running a search cannot. Two things keep that survivable rather than
--- turning this into a worse control than the two toggles it replaces:
+-- WHY A CYCLE SHAPE STILL WORKS HERE EVEN AS AN EXTRA, NOT A COPY OF THE
+-- SCENT MERGE — read before touching this again. Scent's three track types
+-- merged into ONE action (StartCertifiedTrack(), client/tracking.lua)
+-- because they are three ALTERNATIVE ANSWERS to one one-shot question
+-- ("what should my K9 search for"), resolved server-side from
+-- certification and fired once. Vision is a different shape: Thermal/Night
+-- are HELD STATES a player stays in, not actions that fire and finish, and
+-- there is no server-side fact ("this player is certified for X") to
+-- resolve which one they want — a bare press-to-cycle genuinely can walk
+-- past the mode someone wanted, in a way re-running a search cannot. Two
+-- things keep that survivable rather than making the cycle a worse control
+-- than just using the two explicit toggles directly:
 --   1. The cycle is only 3 stops long (Off -> Night -> Thermal -> Off), so
 --      the absolute worst case is one extra press, not a long menu to walk
 --      past.
---   2. THE OLD EXPLICIT TOGGLES STILL WORK, UNCHANGED, FOREVER — see the
---      HIDDEN ALIAS note below. A player who wants Thermal specifically
---      and doesn't want to think about cycle position can still press K
---      (or /qbx_k9unit:toggleThermalVision) directly, exactly as before.
---      This is the same "keep an explicit form for every merged family"
---      rule the owner's own scent/kennel/fetch merges already established
---      — the cycle is the discoverable default, not the only way in.
+--   2. THE TWO EXPLICIT TOGGLES ARE THE PRIMARY, FIRST-CLASS CONTROLS,
+--      UNCHANGED, FOREVER. A player who wants Thermal specifically and
+--      doesn't want to think about cycle position presses K (or
+--      /qbx_k9unit:toggleThermalVision) directly — that is now the
+--      documented, discoverable default again, with the cycle as the
+--      bonus, not the other way around.
 --
 -- WHY CameraFeedPiP AND ScentVision ARE NOT STEPS IN THIS CYCLE.
 -- Config.FeatureGroups.Sensory's own comment (config.lua) already states
 -- this: "CameraFeedPiP... own entry point, requires an active partnership,
--- deliberately not folded into the night/thermal cycle" — this pass
--- implements exactly that pre-existing, config-documented decision, not a
--- new one invented here. Two independent reasons, matching
--- FEATURE_STRUCTURE_SPEC.md §2.1/§5's Sensory row:
+-- deliberately not folded into the night/thermal cycle" — this reflects
+-- that pre-existing, config-documented decision, not a new one invented
+-- here. Two independent reasons, matching FEATURE_STRUCTURE_SPEC.md
+-- §2.1/§5's Sensory row:
 --   - CameraFeedPiP needs AN ACTIVE, IN-RANGE PARTNER to mean anything at
 --     all. Folding it into a flag-gated cycle would mean the cycle could
 --     land on a step that always refuses (no partner online / partner out
 --     of range) purely because it was that step's "turn" — precisely the
---     "lands on it and refuses" failure mode this pass was explicitly
---     warned against building. A partner-dependent action stays its own
---     explicit entry point (`qbx_k9unit:toggleCameraFeed`, unchanged by
---     this pass), the same way ScentLineup's pick/cancel stayed outside
---     Detection's merged entry point for an analogous "different
---     precondition, cannot silently inherit a shared gate" reason.
+--     "lands on it and refuses" failure mode this shape was explicitly
+--     built to avoid. A partner-dependent action stays its own explicit
+--     entry point (`qbx_k9unit:toggleCameraFeed`, untouched), the same way
+--     ScentLineup's pick/cancel stayed outside Detection's merged entry
+--     point for an analogous "different precondition, cannot silently
+--     inherit a shared gate" reason.
 --   - ScentVision (client/tracking.lua, out of this file's edit scope
 --     entirely) is a live, continuously-polling nearest-trails overlay
 --     with its own three-way mode (`always`/`keybind`/`off`,
@@ -563,7 +583,7 @@ end
 -- blocked/disabled WHILE a player is actively using it (a live tablet
 -- flip, a featureblocks push) is not stranded: the very next `k9vision`
 -- press routes straight to 'off' for it, same as pressing that mode's own
--- OLD toggle key would.
+-- explicit toggle key would.
 -- ======================================================================
 
 --- Ordered set of the real modes CycleVision() steps through. 'off' is not
@@ -688,18 +708,19 @@ function CycleVision()
 end
 
 -- Registered UNCONDITIONALLY, matching client/tracking.lua's StartCertifiedTrack()
--- / 'k9track' precedent exactly: this is a MERGED entry point with no
+-- / 'k9track' precedent: this is an EXTRA, OPTIONAL entry point (see this
+-- file's own "CYCLE — EXTRA, OPTIONAL CONVENIENCE" section above) with no
 -- dedicated Config.Features flag of its own (Config.FeatureGroups.Sensory
 -- has no single "Vision" base flag the way Detection has ScentTracking) --
 -- IsVisionModeAvailable() above already re-checks each real mode's own flag
 -- and block state on every single press, so a second, coarser gate on
 -- registration here would only make this command's existence diverge from
--- what pressing it actually does. Unlike the OLD per-mode toggles below
--- (still conditionally registered on their OWN flag, unchanged), this
--- command's job is precisely to exist and say "nothing available" when
--- both underlying modes are off, the same honest-degrade posture
--- client/tracking.lua's 'k9track' already established for "certified for
--- nothing right now."
+-- what pressing it actually does. Unlike the two explicit per-mode toggles
+-- below (still conditionally registered on their OWN flag, unchanged, and
+-- the PRIMARY, first-class controls), this command's job is precisely to
+-- exist and say "nothing available" when both underlying modes are off,
+-- the same honest-degrade posture client/tracking.lua's 'k9track' already
+-- established for "certified for nothing right now."
 RegisterCommand('k9vision', function()
     CycleVision()
 end, false)

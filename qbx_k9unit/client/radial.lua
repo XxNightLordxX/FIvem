@@ -56,10 +56,17 @@
       - client/training.lua's IsTrainingModeActive(),
         RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
         RequestTrainingBiteDrill().
-      - client/vision.lua's CycleVision() -- vision merge, this pass (see
-        that function's own "MERGED ENTRY POINT" header) -- the "K9 Vision"
-        item's only call, no CanShowK9UI()/HasK9Access() gate of its own,
-        see that item's own comment for why.
+      - client/vision.lua's ToggleThermalVision()/ToggleNightVision() --
+        REVERTED, SEPARATE AGAIN, this pass (owner reversal: "I want the
+        thermal and night vision separate") -- their own
+        "Thermal Vision"/"Night Vision" items' only calls, each
+        independently flag-gated, no CanShowK9UI()/HasK9Access() gate of
+        their own, see each item's own comment for why.
+      - client/vision.lua's CycleVision() (see that function's own "CYCLE —
+        EXTRA, OPTIONAL CONVENIENCE" header) -- the "K9 Vision" item's only
+        call, kept as an extra alongside the two items immediately above,
+        no CanShowK9UI()/HasK9Access() gate of its own either, see that
+        item's own comment for why.
       - THIS PASS (top-level icon access gate, coder-security/coder-backend
         finding response): client/partnership.lua's IsPartnered(),
         client/kennel.lua's IsRestingInKennel()/IsCarryingKennel(),
@@ -1058,31 +1065,25 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- K9 Vision — vision merge (coder-architect, owner-directed
-    --- decluttering pass: "consolidate them just like how i asked the
-    --- scent stuff"). ONE item cycling Off -> Night -> Thermal -> Off,
-    --- calling the SAME CycleVision() (client/vision.lua) the new
-    --- 'k9vision' chat command and keybind both call — no logic of its own
-    --- beyond dispatching to it, same shape as k9_track_certified above.
+    --- Thermal Vision / Night Vision — REVERTED, SEPARATE AGAIN (owner
+    --- reversal, coder-architect, this pass: "I want the thermal and night
+    --- vision separate"). An earlier decluttering pass had removed each
+    --- mode's own radial entry in favour of the single k9_vision_cycle item
+    --- below; the owner has since asked for both to be first-class, visible
+    --- controls again, "their own radial entry" specifically named as part
+    --- of that. Each item here calls straight through to its own
+    --- Toggle*Vision() (client/vision.lua) — no shared/merged logic between
+    --- the two, matching the explicit, first-class command + keybind each
+    --- already has again (qbx_k9unit:toggleThermalVision/K,
+    --- qbx_k9unit:toggleNightVision/J).
     ---
-    --- NOT THE SAME MERGE SHAPE AS TRACK ABOVE, ON PURPOSE (see
-    --- client/vision.lua's own "MERGED ENTRY POINT" header for the full
-    --- writeup this item only summarizes): Track's three types are
-    --- alternative answers to one one-shot question, resolved server-side
-    --- from certification. Thermal/Night are HELD STATES with no
-    --- certification to resolve from, so this is a plain cycle, not a
-    --- server-resolved pick — CycleVision() itself is what skips whichever
-    --- mode is flag-off or feature-blocked, so this item never has to.
+    --- GATED HERE ON THE MODE'S OWN Config.Features FLAG ONLY — a coarser,
+    --- DISPLAY-ONLY check, same convention as every other flag-gated item in
+    --- this menu (e.g. k9_track_certified above): Toggle*Vision() itself
+    --- re-checks the real IsOwnModelK9() gate on every actual turning-ON
+    --- press regardless of what this item's own visibility decided.
     ---
-    --- GATED HERE ON "at least one of the two modes is even switched on" —
-    --- a coarser, DISPLAY-ONLY check mirroring k9_track_certified's own
-    --- `ScentTracking or BloodTracking or GunpowderSniffing` gate
-    --- immediately above, not a claim that CycleVision() itself needs it
-    --- (it re-checks both flags on every press regardless, and degrades to
-    --- an honest "nothing available" notify if a live tablet flip turns
-    --- both off after this item was registered).
-    ---
-    --- NO CanShowK9UI()/HasK9Access() GATE ON THIS ITEM, DELIBERATELY —
+    --- NO CanShowK9UI()/HasK9Access() GATE ON EITHER ITEM, DELIBERATELY —
     --- client/vision.lua's own "RESOLVED ACCESS-GATING DECISION" (do not
     --- re-litigate here): thermal/night vision is the K9's own innate
     --- perception, gated on IsOwnModelK9() alone, the SAME free/local check
@@ -1090,10 +1091,63 @@ local function RegisterK9RadialMenu()
     --- CanShowK9UI() combinator every OTHER item in this menu uses. Adding
     --- either check here would silently re-impose a certification/access
     --- requirement this feature has never had, for a player who is simply
-    --- riding a K9 model right now. CycleVision() -> Toggle*Vision() already
-    --- performs the real IsOwnModelK9() gate (and notifies on failure) on
-    --- every step that turns a mode ON; stepping toward 'off' is never
-    --- gated at all, matching every other release/termination item here.
+    --- riding a K9 model right now. Toggle*Vision() already performs the
+    --- real IsOwnModelK9() gate (and notifies on failure) on its own
+    --- turning-ON branch; turning off is never gated at all, matching every
+    --- other release/termination item here.
+    if Config.Features.ThermalVision then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_thermal_vision',
+            label = locale('radial.thermal_vision_label'),
+            icon = 'fire',
+            onSelect = function()
+                if type(ToggleThermalVision) == 'function' then
+                    ToggleThermalVision()
+                end
+            end,
+        }
+    end
+
+    if Config.Features.NightVision then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_night_vision',
+            label = locale('radial.night_vision_label'),
+            icon = 'moon',
+            onSelect = function()
+                if type(ToggleNightVision) == 'function' then
+                    ToggleNightVision()
+                end
+            end,
+        }
+    end
+
+    --- K9 Vision — EXTRA, OPTIONAL CONVENIENCE, kept alongside the two
+    --- explicit items immediately above (owner's own steer: "keep it as an
+    --- extra... it costs nothing, someone may prefer it"), not a
+    --- replacement for them. ONE item cycling Off -> Night -> Thermal ->
+    --- Off, calling the SAME CycleVision() (client/vision.lua) the
+    --- 'k9vision' chat command and keybind both call — no logic of its own
+    --- beyond dispatching to it, same shape as k9_track_certified above.
+    ---
+    --- NOT THE SAME MERGE SHAPE AS TRACK ABOVE — see client/vision.lua's own
+    --- "CYCLE — EXTRA, OPTIONAL CONVENIENCE" header for the full writeup
+    --- this item only summarizes: Track's three types are alternative
+    --- answers to one one-shot question, resolved server-side from
+    --- certification. Thermal/Night are HELD STATES with no certification
+    --- to resolve from, so this is a plain cycle, not a server-resolved pick
+    --- — CycleVision() itself is what skips whichever mode is flag-off or
+    --- feature-blocked, so this item never has to.
+    ---
+    --- GATED HERE ON "at least one of the two modes is even switched on" —
+    --- a coarser, DISPLAY-ONLY check mirroring k9_track_certified's own
+    --- `ScentTracking or BloodTracking or GunpowderSniffing` gate above, not
+    --- a claim that CycleVision() itself needs it (it re-checks both flags
+    --- on every press regardless, and degrades to an honest "nothing
+    --- available" notify if a live tablet flip turns both off after this
+    --- item was registered).
+    ---
+    --- NO CanShowK9UI()/HasK9Access() GATE ON THIS ITEM EITHER, for the
+    --- identical reason given for the two explicit items immediately above.
     if Config.Features.NightVision or Config.Features.ThermalVision then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_vision_cycle',

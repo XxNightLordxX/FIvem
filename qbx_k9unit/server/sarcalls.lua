@@ -187,24 +187,46 @@
        is rolled here too and kept server-side only until the call resolves
        as 'found' -- neither the client nor any caller of this callback
        ever learns it up front, preserving the same mystery for BOTH kinds
-       of call.
+       of call. 'already_active' now also covers "already a MEMBER of
+       someone else's call" -- see "TWO OFFICERS, ONE CALL" below: one
+       citizenid, one call, in either role, at a time.
     2. 'qbx_k9unit:server:abandonSarCall' (source) [RegisterNetEvent] --
-       UNCONDITIONAL. See "NO UNBOUNDED TRAP" above.
-    3. 'qbx_k9unit:client:sarHintTierChanged' (tier: string, callId: number)
-       [TriggerClientEvent, THIS FILE only ever SENDS this, to the caller's
-       own client only, never broadcast] -- fired once immediately on a
-       successful requestSarCall (the starting tier, whatever it genuinely
-       is) and again every time the tick loop below observes a DIFFERENT
-       tier than last observed for that call. Never fired twice in a row
-       with the same tier -- see TierForDistance/the tick loop's own
-       edge-trigger comment. callId added -- see "STALE-SESSION RACE" below.
-    4. 'qbx_k9unit:client:sarCallEnded' (reason: ('found'|'timeout'|
-       'abandoned'), callType: ('person'|'property')? [only meaningful when
-       reason == 'found'], callId: number) [TriggerClientEvent, THIS FILE
-       only ever SENDS this, to the caller's own client only] -- the one and
-       only signal telling client/sarcalls.lua to run its own local cosmetic
-       reveal (reason == 'found' only). callId added -- see "STALE-SESSION
-       RACE" below.
+       UNCONDITIONAL. See "NO UNBOUNDED TRAP" above. Since "TWO OFFICERS,
+       ONE CALL" below, this is the ONE unconditional path for leaving a
+       call in EITHER role -- see that section for exactly what leaving
+       means when other members remain.
+    3. 'qbx_k9unit:server:requestJoinSarCall' (source, targetServerId: number)
+       [RegisterNetEvent] -- step 1 of a second officer's join handshake.
+       See "TWO OFFICERS, ONE CALL" below for the full design.
+    4. 'qbx_k9unit:server:respondJoinSarCall' (source, fromServerId: number,
+       accepted: boolean) [RegisterNetEvent] -- step 2, the call OWNER's
+       response. See "TWO OFFICERS, ONE CALL" below.
+    5. 'qbx_k9unit:client:sarHintTierChanged' (tier: string, callId: number)
+       [TriggerClientEvent, THIS FILE only ever SENDS this, to ONE member's
+       own client at a time, never broadcast] -- fired once immediately for
+       a member the instant they join the call (whether by starting it or
+       by having a join request accepted), and again every time the tick
+       loop below observes a DIFFERENT tier than last observed FOR THAT
+       MEMBER. Never fired twice in a row with the same tier for the same
+       member -- see TierForDistance/the tick loop's own edge-trigger
+       comment. callId added -- see "STALE-SESSION RACE" below.
+    6. 'qbx_k9unit:client:sarCallEnded' (reason: ('found'|'found_by_teammate'|
+       'timeout'|'abandoned'), callType: ('person'|'property')? [only
+       meaningful when reason == 'found'], callId: number)
+       [TriggerClientEvent, THIS FILE only ever SENDS this, to one member's
+       own client at a time] -- the one and only signal telling
+       client/sarcalls.lua to run its own local cosmetic reveal (reason ==
+       'found' only -- see "TWO OFFICERS, ONE CALL" below for why
+       'found_by_teammate' deliberately never triggers one). callId added
+       -- see "STALE-SESSION RACE" below.
+    7. 'qbx_k9unit:client:sarCallJoined' (callId: number, initialTier: string)
+       [TriggerClientEvent, THIS FILE only ever SENDS this, to the newly-
+       accepted joiner's own client only] -- see "TWO OFFICERS, ONE CALL"
+       below.
+    8. 'qbx_k9unit:client:sarJoinRequest' (fromServerId: number)
+       [TriggerClientEvent, THIS FILE only ever SENDS this, to the call
+       OWNER's own client only] -- shown as an accept/decline prompt,
+       mirroring server/partnership.lua's partnerUpRequest push.
 
     Outbound integration events (server/exports.lua's `qbx_k9unit:events:*`
     namespace, server/integrations.lua's OUTBOUND-only convention -- this
@@ -302,6 +324,152 @@
 
     ======================================================================
 
+    TWO OFFICERS, ONE CALL (this pass -- closes the resource's own recorded
+    limitation that a search-and-rescue call could only ever be worked
+    solo). Read server/partnership.lua's own "requestPartnerUp"/
+    "respondPartnerUp" pair and server/main.lua's "requestLeashAttach"/
+    "respondLeashAttach" pair before touching anything below -- this reuses
+    their exact consent-handshake shape (single-slot-per-target pending
+    table, TTL, re-validate everything at accept time, clean up on
+    disconnect from BOTH sides), not a fourth, independently-invented one.
+
+    DECISION 1 -- WHO INITIATES: THE WOULD-BE JOINER, NOT THE OWNER. An
+    officer who wants to help sends 'qbx_k9unit:server:requestJoinSarCall'
+    naming the officer already running a call; THAT OWNER'S client shows
+    the accept/decline prompt via 'qbx_k9unit:client:sarJoinRequest'. This
+    is deliberately the OPPOSITE direction from "the owner invites" --
+    an owner mid-search should not have to stop and go hunt down a specific
+    colleague to bring them in; a nearby, eligible officer offering to help
+    costs the owner nothing more than a single accept/decline tap, and
+    nothing happens to the owner's call at all unless they explicitly say
+    yes. This is neither of the two extremes named in this feature's own
+    design brief ("open join" — anyone can seat themselves with zero
+    consent, a real griefing surface — or "owner invites" — real friction,
+    since the owner would need to already know who is nearby and willing)
+    -- it is the SAME two-step consent shape this codebase already ships
+    twice for an analogous "may I do a thing WITH you" question, aimed the
+    direction that fits this feature's own scenario (a second responder
+    arriving at an active scene) rather than partnership/leash's "either
+    party may ask" symmetry, since here only the OWNER has something to
+    consent to protect (their run, their workflow) -- the joiner is already
+    consenting to help by asking. CheckSarJoinEligibility below re-validates
+    HasK9Access/feature flag/per-person grant/proximity/call-not-full for
+    the REQUESTER at REQUEST time (an honest early rejection) and AGAIN at
+    ACCEPT time (TOCTOU -- either party could have moved, disconnected,
+    lost access, or the call could have ended entirely, in between). No
+    mutex is needed for the accept step, unlike server/partnership.lua's
+    DB-backed establish flow: adding a member here is a single, synchronous,
+    in-memory table write with no yielding DB round-trip in between the
+    re-check and the write, so there is no window for a second accept to
+    race into.
+
+    DECISION 2 -- THE OWNER DISCONNECTING TRANSFERS THE CALL, NEVER ENDS IT
+    OUT FROM UNDER A REMAINING SEARCHER. `ActiveSarCalls` is now keyed by
+    the call's own immutable `callId`, not by a source that can go stale --
+    `call.ownerSrc` is a MUTABLE FIELD naming whichever member currently
+    "runs" the call (the only thing that field controls: who
+    CheckSarJoinEligibility treats as the accept authority for a NEW join
+    request). `call.citizenid`/`call.jobName`, by contrast, are captured
+    ONCE at creation and NEVER change -- they identify who PAID
+    StartSarCallCooldown's own anti-farm floor to create this call, which
+    is a completely separate question from who is currently online to
+    manage it (see DECISION 3 for why this split matters). When the current
+    owner leaves (voluntarily via abandonSarCall, or involuntarily via
+    playerDropped), RemoveMemberFromSarCall below reassigns `call.ownerSrc`
+    to whichever remaining member joined earliest (deterministic; not a
+    popularity contest) and the call keeps running, exactly as if nothing
+    happened, for every member still in it -- the tick loop iterates
+    `call.members`, never a single hardcoded source, so it needs no special
+    case for this at all. The call only ever ends OUTRIGHT when its LAST
+    member leaves (see RemoveMemberFromSarCall's own doc comment) --
+    "ending it under someone still actively searching" (this feature's own
+    named trap shape) is therefore structurally impossible: nobody's own
+    membership is ever touched by anyone else's disconnect.
+
+    DECISION 3 -- JOINERS EARN ZERO XP. THIS IS DELIBERATE, NOT AN
+    OVERSIGHT. server/search.lua's TryAwardCoopSearchBonus (grep
+    'coopSearchBonus') is this resource's own precedent for paying a SECOND
+    person for someone else's success, and read in full before this
+    decision was made -- it only ever pays out to an established, DB-backed,
+    mutually-consented PARTNERSHIP (server/partnership.lua), gated on BOTH
+    parties holding Trained-tier XP or above, the receiving partner being
+    ONLINE and within COOP_SEARCH_PARTNER_PROXIMITY_METERS of the find, AND
+    its own dedicated per-receiving-citizenid mint cooldown, ALL routed
+    through the SAME shared AwardXP budget everything else already competes
+    for. That is a lot of machinery, and it exists precisely because
+    letting a second citizenid earn XP from a first citizenid's action is
+    an easy new farm surface the moment the two can coordinate. A SAR-call
+    joiner has NONE of that machinery's preconditions -- by DECISION 1's own
+    design, joining requires no pre-existing relationship at all, just
+    "nearby, eligible, and the owner said yes" -- which makes it a
+    STRICTLY EASIER two-account loop to run than coopSearchBonus's own:
+    citizenid A starts a call (spending A's own 10-minute
+    StartSarCallCooldown) and invites B to join; if joining minted XP, B
+    would earn a full sarCallCompleted award WITHOUT EVER TOUCHING B's OWN
+    StartSarCallCooldown budget, and the two could then swap roles on B's
+    own next call, each collecting a sarCallCompleted award on BOTH their
+    own start-path AND the other's join-path on the very same 10-minute
+    cycle -- silently doubling this mechanic's own documented 180 XP/hr
+    worst-case ceiling (see "XP ARITHMETIC" above) for two coordinating
+    accounts, with no new per-citizenid cooldown anywhere to catch it. Doing
+    this SAFELY would mean building coopSearchBonus's own full stack a
+    second time (a per-joiner-citizenid mint cooldown, a tier floor, routing
+    through the shared budget, and probably a proximity-to-the-find check
+    identical to "am I actually helping or just standing near the owner at
+    the start") for a bonus this feature's own design brief explicitly
+    permits skipping. THE DECISION: a joining officer's citizenid is
+    NEVER passed to AwardXP, for any reason, on any resolution of any
+    call -- only `call.citizenid` (the ORIGINAL starter, fixed at
+    creation, per DECISION 2) ever receives sarCallCompleted, on 'found',
+    exactly as before this pass, REGARDLESS of which member's own live
+    position is the one that actually crossed arrivalRadius. This makes
+    the two-colluding-accounts loop pay off NOTHING beyond what solo play
+    already allows: each citizenid can only ever mint SAR XP from a call
+    THEY THEMSELVES paid the cooldown to start, exactly as before this
+    pass -- joining someone else's call is worth doing for the roleplay
+    and for genuinely finishing the call faster (the same "help them find
+    it sooner" value coopSearchBonus's own header describes), never for a
+    payout. Proven by tests/sarcalls_spec.lua's own anti-farm test:
+    two citizenids alternately starting-and-inviting each other, finding
+    every single call, still each earn XP at exactly the rate their OWN
+    solo cooldown alone would allow -- the join path itself never calls
+    AwardXP at all.
+
+    THE FINDER STILL MATTERS, EVEN THOUGH XP DOES NOT DEPEND ON IT: the
+    tick loop below identifies WHICH member's own live position crossed
+    arrivalRadius (`finderSrc`) and treats them differently from every
+    other current member purely for FEEDBACK, never for reward -- only the
+    finder gets reason == 'found' (which triggers client/sarcalls.lua's own
+    local cosmetic reveal AT THAT CLIENT'S OWN POSITION, since only the
+    finder is actually standing where the target was). Every OTHER member
+    gets reason == 'found_by_teammate' instead -- their own state resets
+    the same way, but no reveal ever spawns at THEIR position, since they
+    are not standing anywhere near the real target and a reveal there would
+    misrepresent what just happened. Both branches are IN EndSarCall below,
+    never a separate code path, so both inherit the exact same "one
+    resolution, notify everyone once" discipline.
+
+    ONE CITIZENID, ONE CALL, IN EITHER ROLE, AT A TIME: `MemberToCallId[src]
+    = callId` is the reverse index every entry point below (requestSarCall,
+    requestJoinSarCall/respondJoinSarCall, abandonSarCall, playerDropped)
+    consults to answer "is this source currently part of ANY call" in O(1)
+    -- a citizenid already owning or having joined a call cannot start a
+    second one, join a second one, or be accepted into a second one, closing
+    off the one other farm shape decision 3's own arithmetic did not
+    already: nobody can multiply their own StartSarCallCooldown budget by
+    quietly running two calls at once.
+
+    NOT A TERMINATION-PATH CHANGE, AND NOT GATED ON ANYTHING:
+    RemoveMemberFromSarCall (reached from either abandonSarCall or
+    playerDropped) never checks Config.Features.SARCalls, HasK9Access, or
+    any per-person grant -- leaving, whether voluntary or by disconnecting,
+    must always work, for anyone, in any role, exactly like every other
+    termination path in this resource. See "NO UNBOUNDED TRAP" above; this
+    section extends that guarantee to every member of a call, not only its
+    original owner.
+
+    ======================================================================
+
     FILE-TO-FILE CONTRACT:
     - Calls HasK9Access(source) (server/certifications.lua), reused, never
       re-derived.
@@ -343,15 +511,15 @@
     resource's existing usage elsewhere (server/integrations.lua's
     PollK9Health is the closest structural precedent for this exact
     combination). math.random/math.sqrt/math.cos/math.sin/math.pi are the
-    standard Lua 5.4 math library, not FiveM natives, and vector3/vector2
-    arithmetic (the `#(a - b)` idiom used nowhere in THIS file, since
-    distance here is a flat 2D dx/dy/sqrt per "WHY 2D" above, not a vector
-    subtraction) is already used throughout this resource's server files
-    with no .luacheckrc entry required (confirmed: `luacheck config.lua`
-    reports zero warnings on its own literal `vector3(...)` call, and
-    luacheck 1.2.0 recognizes vector2/vector3/vector4/quat as built-in
-    globals even under `std = "lua54"` -- verified directly against the
-    installed luacheck binary this session, not assumed). The one native
+    standard Lua 5.4 math library, not FiveM natives. THIS FILE never uses
+    the `#(a - b)` vector-subtraction idiom server/partnership.lua's own
+    proximity check uses (that idiom needs a real vector metatable behind
+    both operands) -- both Distance2D (the hidden-target math, per "WHY 2D"
+    above) and Distance3D (the join-proximity check, "TWO OFFICERS, ONE
+    CALL" below) read coordinates by plain `.x`/`.y`/`.z` field access
+    only, which works identically whether GetEntityCoords hands back a
+    real vector3 or a bare table, and introduces no vector-arithmetic
+    native/metamethod dependency of any kind. The one native
     this WHOLE FEATURE needs that this resource has never used before
     (CreatePed) is called ONLY from client/sarcalls.lua, never from this
     file -- see that file's own header for the full verification writeup
@@ -504,6 +672,42 @@ tuning.pollIntervalMs = ResolveConfiguredThresholdMs(
 tuning.maxCallDurationMs = ResolveConfiguredThresholdMs(
     tuning.maxCallDurationMs, 480000, 'Config.SARCalls.maxCallDurationMs')
 
+-- ======================================================================
+-- TWO OFFICERS, ONE CALL (this pass) -- three new fields, same
+-- clamp-and-warn discipline as every field above, never a bare assert.
+-- joinProximityMeters has no ordering relationship to any other field
+-- here (unlike GROUP 1/GROUP 2 above), so it is validated standalone.
+-- joinRequestTTLMs/joinRequestCooldownMs are genuine durations with no
+-- legitimate non-positive meaning, same as pollIntervalMs/
+-- maxCallDurationMs immediately above -- resolved the same way, through
+-- the same helper.
+-- ======================================================================
+if not IsPositiveNumber(tuning.joinProximityMeters) then
+    print(
+        ('[qbx_k9unit] Config.SARCalls.joinProximityMeters must be a positive number (found: %s). Using the ' ..
+         'shipped default of 10.0 instead -- find Config.SARCalls.joinProximityMeters in config.lua and fix it.')
+            :format(tostring(tuning.joinProximityMeters))
+    )
+    tuning.joinProximityMeters = 10.0
+end
+
+local function IsPositiveInteger(v)
+    return type(v) == 'number' and v == v and v > 0 and v == math.floor(v)
+end
+if not IsPositiveInteger(tuning.maxMembers) then
+    print(
+        ('[qbx_k9unit] Config.SARCalls.maxMembers must be a positive whole number (found: %s). Using the shipped ' ..
+         'default of 4 instead -- find Config.SARCalls.maxMembers in config.lua and fix it.')
+            :format(tostring(tuning.maxMembers))
+    )
+    tuning.maxMembers = 4
+end
+
+tuning.joinRequestTTLMs = ResolveConfiguredThresholdMs(
+    tuning.joinRequestTTLMs, 30000, 'Config.SARCalls.joinRequestTTLMs')
+tuning.joinRequestCooldownMs = ResolveConfiguredThresholdMs(
+    tuning.joinRequestCooldownMs, 1000, 'Config.SARCalls.joinRequestCooldownMs')
+
 -- startCooldownMs is deliberately NOT re-validated here -- NewCooldown's
 -- own AssertValidDefaultThreshold below already errors loudly, naming that
 -- exact constructor call, the identical reasoning server/integrations.lua's
@@ -566,31 +770,171 @@ StartSarCallCooldown.StartSweep(START_SAR_CALL_COOLDOWN_SWEEP_INTERVAL_MS, funct
     return (now - loggedAt) > (START_SAR_CALL_COOLDOWN_MS * 2)
 end)
 
+-- Per-SOURCE join-request rate limit -- purely an anti-UI-harassment
+-- throttle on how often ONE source may send requestJoinSarCall, same role
+-- (and same source-keyed, RegisterPlayerDropped-cleaned shape) as server/
+-- main.lua's LeashRequestCooldown / server/partnership.lua's
+-- PartnerRequestCooldown. NOT an anti-farm mechanism -- see "TWO OFFICERS,
+-- ONE CALL" (DECISION 3) above for why this feature's real anti-farm floor
+-- is StartSarCallCooldown alone, which this tracker neither replaces nor
+-- weakens. Safe to clear on disconnect, unlike StartSarCallCooldown: rate-
+-- limiting a request is a UI-spam concern only, not a mint-XP concern.
+local SarJoinRequestCooldown = NewCooldown(tuning.joinRequestCooldownMs)
+SarJoinRequestCooldown.RegisterPlayerDropped()
+
 -- SERVER-ISSUED, monotonically increasing session id -- see this file's
 -- header "STALE-SESSION RACE" section for the full writeup. Minted once per
--- call, at the moment ActiveSarCalls[source] is created below, and never
--- reused -- a plain incrementing counter is sufficient (no need for
--- per-source scoping) since every push this file sends already targets a
--- single `src`, so this id only ever has to disambiguate THAT source's own
--- calls from each other over time, never one source's id from another's.
+-- call, at the moment ActiveSarCalls[callId] is created below, and never
+-- reused -- a plain incrementing counter is sufficient (no per-source
+-- scoping needed): every push this file sends already targets a single
+-- member `src`, so this id only ever has to disambiguate one member's own
+-- calls from each other over time, never one member's id from another's.
 local NextSarCallId = 0
 local function NewSarCallId()
     NextSarCallId = NextSarCallId + 1
     return NextSarCallId
 end
 
--- ActiveSarCalls[source] = { citizenid: string, jobName: string?,
+-- ======================================================================
+-- ActiveSarCalls[callId] = { citizenid: string, jobName: string?,
 --   callType: ('person'|'property'), targetX: number, targetY: number,
---   startedAt: number (GetGameTimer() ms), currentTier: string,
---   callId: number }. Ephemeral,
--- in-memory only, single-slot per source -- mirrors server/scenttrail.lua's
--- ActiveHunts shape exactly (a short-lived session record, not a rate
+--   startedAt: number (GetGameTimer() ms), callId: number,
+--   ownerSrc: number, members: { [src] = { citizenid: string,
+--   tier: string, joinedAt: number } } }.
+--
+-- KEYED BY callId, NOT BY SOURCE -- see "TWO OFFICERS, ONE CALL" above
+-- (DECISION 2). A source is only ever the right key for something that
+-- cannot outlive one connection; a call now can (ownership transfers when
+-- its current owner leaves), so the table's own key must be the one thing
+-- about a call that never changes for its whole lifetime.
+--
+-- `citizenid`/`jobName` are captured ONCE, at creation, from whichever
+-- citizenid actually paid StartSarCallCooldown to create this call, and
+-- NEVER reassigned -- they are who EndSarCall's 'found' branch pays,
+-- regardless of who is currently `ownerSrc` or which member's own position
+-- actually triggered the find (see DECISION 3).
+--
+-- `ownerSrc` is the one MUTABLE field: whichever member currently has the
+-- authority to accept a new join request. RemoveMemberFromSarCall below is
+-- the only place that ever reassigns it.
+--
+-- `members` always contains at least `ownerSrc` itself (a call with zero
+-- members has, by definition, already been removed from this table
+-- entirely -- see RemoveMemberFromSarCall). Ephemeral, in-memory only,
+-- same as before this pass -- a short-lived session record, not a rate
 -- limiter, so a plain table + manual playerDropped cleanup, not a
--- NewCooldown/NewMutex instance, per that file's own identical reasoning).
+-- NewCooldown/NewMutex instance, mirroring server/scenttrail.lua's
+-- ActiveHunts' own identical reasoning.
 local ActiveSarCalls = {}
 
+-- MemberToCallId[src] = callId, for EVERY current member of EVERY active
+-- call (owner or joiner alike). The reverse index every entry point below
+-- (requestSarCall, requestJoinSarCall/respondJoinSarCall, abandonSarCall,
+-- playerDropped) consults to answer "is this source currently part of ANY
+-- call" in O(1), without a linear scan of ActiveSarCalls -- and, as a
+-- direct consequence, the thing that actually enforces "one citizenid, one
+-- call, in either role, at a time" (see "TWO OFFICERS, ONE CALL" above).
+-- Plain table, not a NewCooldown/NewMutex instance -- an entry exists for
+-- exactly as long as its matching membership does, added and removed in
+-- lockstep with `ActiveSarCalls[callId].members[src]` at every single call
+-- site that touches either, so there is nothing here for a
+-- RegisterPlayerDropped/StartSweep hook to do that RemoveMemberFromSarCall
+-- (called from THIS file's own playerDropped handler below) does not
+-- already guarantee.
+local MemberToCallId = {}
+
+-- Ephemeral pending join requests: PendingSarJoinRequests[targetServerId]
+-- = { from = requesterSrc, expiresAt = <GetGameTimer() timestamp> }. Exact
+-- same shape, TTL, and single-slot-per-target discipline as server/
+-- main.lua's PendingLeashRequests / server/partnership.lua's
+-- PendingPartnershipRequests -- see requestJoinSarCall below for the
+-- identical anti-clobber rejection those two files already established.
+local PendingSarJoinRequests = {}
+
+--- Removes `src` from `callId`'s membership -- the ONE path covering both
+--- "a member chooses to leave, the call continues for everyone else" and
+--- "the member disconnects" alike (`isDisconnect` only controls whether
+--- `src` itself is notified/pushed to, since a disconnected source cannot
+--- receive either). Idempotent -- a harmless no-op if `src` is not
+--- currently a member of `callId` (or `callId` no longer exists at all),
+--- covering a genuine double-call the same way EndSarCall below always
+--- has. NEVER gated on access/certification/the feature flag -- see this
+--- file's header "NO UNBOUNDED TRAP" and "TWO OFFICERS, ONE CALL".
+---
+--- If `src` was the LAST remaining member, the call ends entirely (reason
+--- 'abandoned', unchanged client contract from before this pass). If
+--- other members remain and `src` was the current `ownerSrc`, ownership
+--- transfers to whichever remaining member joined earliest -- see "TWO
+--- OFFICERS, ONE CALL" (DECISION 2) above for why this can never leave a
+--- remaining, actively-searching member's call terminated out from under
+--- them.
+--- @param callId number
+--- @param src number
+--- @param isDisconnect boolean
+local function RemoveMemberFromSarCall(callId, src, isDisconnect)
+    local call = ActiveSarCalls[callId]
+    if not call or not call.members[src] then
+        MemberToCallId[src] = nil -- defensive: clear a dangling reverse-index entry even if the forward record is already gone/mismatched
+        return
+    end
+
+    call.members[src] = nil
+    MemberToCallId[src] = nil
+
+    if next(call.members) == nil then
+        -- Last member out -- the call ends entirely, exactly like the
+        -- original single-owner abandon path.
+        ActiveSarCalls[callId] = nil
+        if not isDisconnect then
+            NotifyPlayer(src, locale('sar.call_abandoned'), 'inform')
+            TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'abandoned', nil, call.callId)
+        end
+        return
+    end
+
+    if not isDisconnect then
+        NotifyPlayer(src, locale('sar.left_call'), 'inform')
+        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'abandoned', nil, call.callId)
+    end
+
+    if call.ownerSrc == src then
+        local newOwnerSrc, newOwnerJoinedAt
+        for memberSrc, state in pairs(call.members) do
+            if not newOwnerJoinedAt or state.joinedAt < newOwnerJoinedAt then
+                newOwnerSrc, newOwnerJoinedAt = memberSrc, state.joinedAt
+            end
+        end
+        call.ownerSrc = newOwnerSrc
+        -- Best-effort courtesy notice only -- the tick loop below needed no
+        -- code change at all to keep servicing this call correctly for
+        -- every member, transferred owner included; this is purely so a
+        -- human knows the call is now theirs to manage (e.g. a future
+        -- accept/decline for a NEW join request will show up on their
+        -- screen, not the disconnected original owner's).
+        NotifyPlayer(newOwnerSrc, locale('sar.ownership_transferred'), 'inform')
+    end
+end
+
 AddEventHandler('playerDropped', function()
-    ActiveSarCalls[source] = nil
+    local src = source
+
+    local callId = MemberToCallId[src]
+    if callId then
+        RemoveMemberFromSarCall(callId, src, true)
+    end
+
+    -- Pending join-request cleanup, BOTH directions -- mirrors server/
+    -- main.lua's PendingLeashRequests / server/partnership.lua's
+    -- PendingPartnershipRequests identical two-directional scan (FiveM
+    -- recycles numeric server ids, so an unscanned stale `.from` entry
+    -- could otherwise resolve to a different, unrelated player who
+    -- reconnects with the same id before this entry's own TTL expires).
+    PendingSarJoinRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
+    for targetSrc, pending in pairs(PendingSarJoinRequests) do
+        if pending.from == src then
+            PendingSarJoinRequests[targetSrc] = nil
+        end
+    end
 end)
 
 --- Flat 2D distance -- see this file's header "WHY 2D" section.
@@ -602,6 +946,27 @@ end)
 local function Distance2D(x1, y1, x2, y2)
     local dx, dy = x1 - x2, y1 - y2
     return math.sqrt(dx * dx + dy * dy)
+end
+
+--- Full 3D distance between two live coordinate tables, each read only by
+--- `.x`/`.y`/`.z` FIELD ACCESS -- deliberately NOT server/partnership.lua's
+--- `#(a - b)` vector-subtraction idiom (that shape needs a real vector
+--- metatable behind both operands; this file's own established convention,
+--- per Distance2D immediately above, is plain field access on whatever
+--- GetEntityCoords returns, which works identically whether that happens
+--- to be a real vector3 or a bare `{x=,y=,z=}` table). Used ONLY for the
+--- join-proximity check below -- "are these two officers standing near
+--- each other," a genuinely different question from RollSarTarget/
+--- TierForDistance's own 2D-only hidden-target math (see this file's
+--- header "WHY 2D" for why THAT one stays flat); two live officers'
+--- own Z really can differ (one on a step, one on a porch) in a way that
+--- would produce a wrong answer here if flattened the same way.
+--- @param a {x: number, y: number, z: number?}
+--- @param b {x: number, y: number, z: number?}
+--- @return number
+local function Distance3D(a, b)
+    local dx, dy, dz = a.x - b.x, a.y - b.y, (a.z or 0) - (b.z or 0)
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
 --- Rolls a random (x, y) between Config.SARCalls.minRadius and .maxRadius
@@ -640,43 +1005,71 @@ local function TierForDistance(distance)
     return 'cold'
 end
 
---- Ends `src`'s active call, if any, for `reason`
---- ('found'|'timeout'|'abandoned'). Idempotent -- a harmless no-op if
---- nothing is active for `src` (covers a genuine double-call, e.g. the
---- tick loop observing 'found' in the same instant abandonSarCall also
---- fires -- whichever runs first wins, the second is simply a no-op since
---- ActiveSarCalls[src] is already nil by then). NEVER gated on access or
---- certification -- see this file's header "NO UNBOUNDED TRAP".
---- @param src number
---- @param reason string -- 'found' | 'timeout' | 'abandoned'
-local function EndSarCall(src, reason)
-    local call = ActiveSarCalls[src]
+--- Ends `callId` entirely, for `reason` ('found'|'timeout'), notifying
+--- EVERY current member -- not merely one source -- and clearing every
+--- member's own MemberToCallId entry so nobody is left believing they are
+--- still in a call that no longer exists. Idempotent -- a harmless no-op
+--- if `callId` no longer resolves to a live call (covers a genuine
+--- double-call, e.g. the tick loop observing 'found' for one member in the
+--- same instant a DIFFERENT member's abandonSarCall also fires -- whichever
+--- runs first wins, the second is simply a no-op since ActiveSarCalls[callId]
+--- is already nil by then). NEVER gated on access or certification -- see
+--- this file's header "NO UNBOUNDED TRAP".
+---
+--- `reason == 'abandoned'` is deliberately NOT handled here any more --
+--- see RemoveMemberFromSarCall above, this pass's own single-member leave
+--- path (a full call end via a member leaving is just "the last member
+--- left", not a distinct case this function needs to know about).
+--- @param callId number
+--- @param reason string -- 'found' | 'timeout'
+--- @param finderSrc number? -- required iff reason == 'found': the ONE member whose own live position triggered this -- see "TWO OFFICERS, ONE CALL" (THE FINDER STILL MATTERS) above
+local function EndSarCall(callId, reason, finderSrc)
+    local call = ActiveSarCalls[callId]
     if not call then return end
-    ActiveSarCalls[src] = nil
+    ActiveSarCalls[callId] = nil
+    for memberSrc in pairs(call.members) do
+        MemberToCallId[memberSrc] = nil
+    end
 
     if reason == 'found' then
         -- Runtime-existence guard, not a load-order assumption -- see this
         -- file's header FILE-TO-FILE CONTRACT. AwardXP itself re-checks
         -- Config.Features.XPProgression and re-derives the amount from
         -- Config.XP.awards.sarCallCompleted -- this file never computes or
-        -- passes an amount.
+        -- passes an amount. `call.citizenid` -- the ORIGINAL starter, fixed
+        -- at creation -- is the ONLY citizenid ever paid here, regardless of
+        -- which member `finderSrc` actually is -- see "TWO OFFICERS, ONE
+        -- CALL" (DECISION 3) above: a joiner's own citizenid is never
+        -- passed to AwardXP for any reason, on any resolution.
         if type(AwardXP) == 'function' then
             AwardXP(call.citizenid, 'sarCallCompleted')
         end
-        FireOutboundEvent('qbx_k9unit:events:sarCallCompleted', src, call.citizenid, call.jobName, call.callType, GetGameTimer() - call.startedAt)
-        NotifyPlayer(src, call.callType == 'person' and locale('sar.found_person') or locale('sar.found_property'), 'success')
-        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'found', call.callType, call.callId)
+        FireOutboundEvent('qbx_k9unit:events:sarCallCompleted', finderSrc, call.citizenid, call.jobName, call.callType, GetGameTimer() - call.startedAt)
+        for memberSrc in pairs(call.members) do
+            if memberSrc == finderSrc then
+                NotifyPlayer(memberSrc, call.callType == 'person' and locale('sar.found_person') or locale('sar.found_property'), 'success')
+                TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'found', call.callType, call.callId)
+            else
+                -- A teammate's own position never crossed arrivalRadius --
+                -- reason 'found_by_teammate' resets their state exactly the
+                -- same way, but deliberately never triggers
+                -- client/sarcalls.lua's local cosmetic reveal (they are not
+                -- standing anywhere near the real target -- see "THE FINDER
+                -- STILL MATTERS" above).
+                NotifyPlayer(memberSrc, locale('sar.found_by_teammate'), 'success')
+                TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'found_by_teammate', nil, call.callId)
+            end
+        end
     elseif reason == 'timeout' then
         -- No outbound event here on purpose -- see this file's header
         -- EVENT/CALLBACK CONTRACT note on why 'timeout'/'abandoned' never
         -- fire one. `nil` passed explicitly for callType (unused for this
         -- reason) so callId still lands in its own fixed 3rd position --
         -- see this file's header "STALE-SESSION RACE".
-        NotifyPlayer(src, locale('sar.call_timeout'), 'inform')
-        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'timeout', nil, call.callId)
-    elseif reason == 'abandoned' then
-        NotifyPlayer(src, locale('sar.call_abandoned'), 'inform')
-        TriggerClientEvent('qbx_k9unit:client:sarCallEnded', src, 'abandoned', nil, call.callId)
+        for memberSrc in pairs(call.members) do
+            NotifyPlayer(memberSrc, locale('sar.call_timeout'), 'inform')
+            TriggerClientEvent('qbx_k9unit:client:sarCallEnded', memberSrc, 'timeout', nil, call.callId)
+        end
     end
 end
 
@@ -698,32 +1091,46 @@ CreateThread(function()
         -- Safe to clear the CURRENT key mid-`pairs` traversal in Lua (well-
         -- defined per the Lua reference manual -- server/cooldowns.lua's
         -- own StartSweep already relies on this exact property) -- EndSarCall
-        -- below does exactly that via ActiveSarCalls[src] = nil.
-        for src, call in pairs(ActiveSarCalls) do
+        -- below does exactly that via ActiveSarCalls[callId] = nil.
+        for callId, call in pairs(ActiveSarCalls) do
             if (now - call.startedAt) >= tuning.maxCallDurationMs then
-                EndSarCall(src, 'timeout')
+                EndSarCall(callId, 'timeout')
             else
-                local ped = GetPlayerPed(src)
-                if ped ~= 0 then
-                    local pos = GetEntityCoords(ped)
-                    local distance = Distance2D(pos.x, pos.y, call.targetX, call.targetY)
+                -- TWO OFFICERS, ONE CALL (this pass): each MEMBER is
+                -- measured against the target independently -- they are
+                -- standing in different places, so they can be in
+                -- different hint tiers, and any one of them finding it
+                -- ends the call for everyone. `call.members` is mutated
+                -- elsewhere ONLY by RemoveMemberFromSarCall/respondJoinSarCall,
+                -- never from inside this loop, so iterating it here while
+                -- EndSarCall (below) separately clears the OUTER
+                -- ActiveSarCalls[callId] entry is safe -- two different
+                -- tables, no pairs-mutation conflict.
+                for memberSrc, memberState in pairs(call.members) do
+                    local ped = GetPlayerPed(memberSrc)
+                    if ped ~= 0 then
+                        local pos = GetEntityCoords(ped)
+                        local distance = Distance2D(pos.x, pos.y, call.targetX, call.targetY)
 
-                    if distance <= tuning.arrivalRadius then
-                        EndSarCall(src, 'found')
-                    else
-                        local tier = TierForDistance(distance)
-                        if tier ~= call.currentTier then
-                            call.currentTier = tier
-                            TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', src, tier, call.callId)
+                        if distance <= tuning.arrivalRadius then
+                            EndSarCall(callId, 'found', memberSrc)
+                            break -- the call this member table belonged to no longer exists -- stop scanning its other (now-irrelevant) members this tick
+                        else
+                            local tier = TierForDistance(distance)
+                            if tier ~= memberState.tier then
+                                memberState.tier = tier
+                                TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', memberSrc, tier, call.callId)
+                            end
                         end
                     end
+                    -- ped == 0: not actually spawned in right now (still
+                    -- loading, or GetPlayers()-adjacent staleness) -- skip
+                    -- this member this tick and try again next tick, same
+                    -- as server/integrations.lua's PollK9Health does for the
+                    -- identical condition. A genuine disconnect is handled
+                    -- by the playerDropped handler above, not by anything
+                    -- in this loop.
                 end
-                -- ped == 0: not actually spawned in right now (still loading,
-                -- or GetPlayers()-adjacent staleness) -- skip this tick and
-                -- try again next tick, same as server/integrations.lua's
-                -- PollK9Health does for the identical condition. A genuine
-                -- disconnect is handled by the playerDropped handler above,
-                -- not by anything in this loop.
             end
         end
     end
@@ -814,7 +1221,12 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
         return { started = false, reason = 'denied' }
     end
 
-    if ActiveSarCalls[source] then
+    -- TWO OFFICERS, ONE CALL: one citizenid, one call, in EITHER role
+    -- (owner or joiner), at a time -- see this file's header for the full
+    -- reasoning. MemberToCallId covers both "already running a call" and
+    -- "already joined someone else's", which is why this single check now
+    -- replaces the old `ActiveSarCalls[source]` lookup.
+    if MemberToCallId[source] then
         return { started = false, reason = 'already_active' }
     end
 
@@ -859,21 +1271,23 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
     local coords = GetEntityCoords(ped)
     local targetX, targetY = RollSarTarget(coords.x, coords.y)
     local callType = math.random() < 0.5 and 'person' or 'property'
-    local initialDistance = Distance2D(coords.x, coords.y, targetX, targetY)
+    local initialTier = TierForDistance(Distance2D(coords.x, coords.y, targetX, targetY))
+    local callId = NewSarCallId()
 
-    ActiveSarCalls[source] = {
-        citizenid = citizenid,
+    ActiveSarCalls[callId] = {
+        citizenid = citizenid, -- FIXED for this call's whole lifetime -- see "TWO OFFICERS, ONE CALL" (DECISION 2/3)
         jobName = jobName,
         callType = callType,
         targetX = targetX,
         targetY = targetY,
         startedAt = GetGameTimer(),
-        currentTier = TierForDistance(initialDistance),
-        -- SERVER-ISSUED session id -- see this file's header "STALE-SESSION
-        -- RACE" and NewSarCallId's own declaration comment above. Minted
-        -- once, here, and never reassigned for the lifetime of this call.
-        callId = NewSarCallId(),
+        callId = callId,
+        ownerSrc = source, -- MUTABLE -- see "TWO OFFICERS, ONE CALL" (DECISION 2)
+        members = {
+            [source] = { citizenid = citizenid, tier = initialTier, joinedAt = GetGameTimer() },
+        },
     }
+    MemberToCallId[source] = callId
 
     FireOutboundEvent('qbx_k9unit:events:sarCallStarted', source, citizenid, jobName, callType)
     NotifyPlayer(source, locale('sar.call_started'), 'inform')
@@ -881,13 +1295,220 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
     -- from the previously observed tier, so without this the caller would
     -- otherwise hear/see nothing until the first tick that happens to cross
     -- a tier boundary, even if the roll already landed inside one.
-    TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', source, ActiveSarCalls[source].currentTier, ActiveSarCalls[source].callId)
+    TriggerClientEvent('qbx_k9unit:client:sarHintTierChanged', source, initialTier, callId)
 
-    return { started = true, callId = ActiveSarCalls[source].callId }
+    return { started = true, callId = callId }
+end)
+
+-- ======================================================================
+-- TWO OFFICERS, ONE CALL -- the join consent handshake. See this file's
+-- header for the full design (DECISION 1). Mirrors server/main.lua's
+-- requestLeashAttach/respondLeashAttach and server/partnership.lua's
+-- requestPartnerUp/respondPartnerUp almost line-for-line -- read either
+-- pair first; this is not a fourth, independently-invented shape.
+-- ======================================================================
+
+--- @param requesterSrc number -- the would-be joiner
+--- @param targetSrc number -- the alleged call owner
+--- @return boolean ok
+--- @return number? callId
+--- @return string? reason -- 'feature_disabled' | 'denied' (silent) | 'invalid_target' | 'already_active' | 'too_far' | 'call_full' | 'blocked' | 'not_granted'
+--- @return string? requesterCitizenid
+local function CheckSarJoinEligibility(requesterSrc, targetSrc)
+    if not Config.Features.SARCalls then
+        return false, nil, 'feature_disabled'
+    end
+
+    if type(requesterSrc) ~= 'number' or type(targetSrc) ~= 'number' or requesterSrc == targetSrc then
+        return false, nil, 'invalid_target'
+    end
+
+    -- Silent, on purpose -- same "already saw the client-side denial"
+    -- reasoning as requestSarCall's own HasK9Access branch above.
+    if not HasK9Access(requesterSrc) then
+        return false, nil, 'denied'
+    end
+
+    local requesterPed = GetPlayerPed(requesterSrc)
+    local targetPed = GetPlayerPed(targetSrc)
+    if requesterPed == 0 or targetPed == 0 then
+        return false, nil, 'denied' -- one side has no live ped to resolve a position from -- same silent posture as requestSarCall's own no-live-ped branch
+    end
+
+    local requesterPlayer = exports.qbx_core:GetPlayer(requesterSrc)
+    local requesterCitizenid = requesterPlayer and requesterPlayer.PlayerData and requesterPlayer.PlayerData.citizenid
+    if not requesterCitizenid then
+        return false, nil, 'denied'
+    end
+
+    -- ONE CITIZENID, ONE CALL, IN EITHER ROLE -- see this file's header.
+    if MemberToCallId[requesterSrc] then
+        return false, nil, 'already_active'
+    end
+
+    -- The target must be the CURRENT owner of a live call -- a request
+    -- naming a mere participant (not the owner) is rejected the same way
+    -- as naming someone with no call at all; only the owner is the accept
+    -- authority for a NEW join (see "TWO OFFICERS, ONE CALL" DECISION 1).
+    local targetCallId = MemberToCallId[targetSrc]
+    local targetCall = targetCallId and ActiveSarCalls[targetCallId]
+    if not targetCall or targetCall.ownerSrc ~= targetSrc then
+        return false, nil, 'invalid_target'
+    end
+
+    local dist = Distance3D(GetEntityCoords(requesterPed), GetEntityCoords(targetPed))
+    if dist > tuning.joinProximityMeters then
+        return false, nil, 'too_far'
+    end
+
+    local memberCount = 0
+    for _ in pairs(targetCall.members) do memberCount = memberCount + 1 end
+    if memberCount >= tuning.maxMembers then
+        return false, nil, 'call_full'
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- joining is using this feature exactly
+    -- as much as starting one is, so the same per-citizenid grant/block
+    -- applies to the REQUESTER. Checked last (cheapest/most-defensive
+    -- checks first, matching requestSarCall's own established discipline).
+    local permitted, denyReason = IsSarCallsPermittedForCitizenId(requesterCitizenid)
+    if not permitted then
+        return false, nil, denyReason
+    end
+
+    return true, targetCallId, nil, requesterCitizenid
+end
+
+local SAR_JOIN_REJECT_MESSAGES = {
+    feature_disabled = locale('sar.feature_disabled'),
+    already_active   = locale('sar.already_active'),
+    invalid_target   = locale('sar.join_invalid_target'),
+    too_far          = locale('sar.join_too_far'),
+    call_full        = locale('sar.call_full'),
+    blocked          = locale('sar.blocked'),
+    not_granted      = locale('sar.not_granted'),
+}
+--- @param reason string?
+--- @return string? -- nil for the silent 'denied' reason (and any unmapped reason), same posture as requestSarCall's own silent branches
+local function SarJoinRejectReasonMessage(reason)
+    return reason and SAR_JOIN_REJECT_MESSAGES[reason] or nil
+end
+
+--- Step 1 of the join consent handshake: the would-be joiner asks. Does
+--- NOT add anyone to the call -- only relays a prompt if the request
+--- itself is currently valid.
+--- @param targetServerId number
+RegisterNetEvent('qbx_k9unit:server:requestJoinSarCall', function(targetServerId)
+    local src = source
+
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(src, SAR_JOIN_REJECT_MESSAGES.invalid_target, 'error')
+        return
+    end
+
+    local ok, _, reason = CheckSarJoinEligibility(src, targetServerId)
+    if not ok then
+        local msg = SarJoinRejectReasonMessage(reason)
+        if msg then NotifyPlayer(src, msg, 'error') end
+        return
+    end
+
+    -- Single-slot-per-target anti-clobber, identical to server/main.lua's
+    -- requestLeashAttach / server/partnership.lua's requestPartnerUp: a
+    -- second requester targeting the SAME owner while one request is
+    -- already live is rejected outright, never silently overwritten.
+    local existingPending = PendingSarJoinRequests[targetServerId]
+    if existingPending and GetGameTimer() <= existingPending.expiresAt then
+        NotifyPlayer(src, locale('sar.join_pending_request_exists'), 'error')
+        return
+    end
+
+    if not SarJoinRequestCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, not an error worth notifying about (matches this resource's leash/partnership-request convention)
+    end
+
+    PendingSarJoinRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + tuning.joinRequestTTLMs }
+
+    TriggerClientEvent('qbx_k9unit:client:sarJoinRequest', targetServerId, src)
+    NotifyPlayer(src, locale('sar.join_request_sent'), 'inform')
+end)
+
+--- Step 2 of the join consent handshake: the call OWNER's response.
+--- Mirrors server/partnership.lua's respondPartnerUp's exact
+--- validate-before-notify discipline: the pending request is verified
+--- genuine (matching initiator + unexpired) BEFORE any
+--- TriggerClientEvent/NotifyPlayer referencing the client-supplied
+--- `fromServerId` fires.
+--- @param fromServerId number
+--- @param accepted boolean
+RegisterNetEvent('qbx_k9unit:server:respondJoinSarCall', function(fromServerId, accepted)
+    local src = source -- the call owner, responding
+
+    if type(fromServerId) ~= 'number' then return end
+
+    local pending = PendingSarJoinRequests[src]
+    local verifiedMatch = pending ~= nil and pending.from == fromServerId
+
+    if not verifiedMatch or GetGameTimer() > pending.expiresAt then
+        PendingSarJoinRequests[src] = nil -- drop a stale/expired entry, if any
+        NotifyPlayer(src, locale('sar.join_request_no_longer_valid_self'), 'error')
+        if verifiedMatch then
+            NotifyPlayer(fromServerId, locale('sar.join_request_no_longer_valid_initiator'), 'error')
+        end
+        return
+    end
+
+    PendingSarJoinRequests[src] = nil -- consumed either way, accept or decline, now that it's confirmed genuine
+
+    if not accepted then
+        NotifyPlayer(fromServerId, locale('sar.join_request_declined'), 'inform')
+        return
+    end
+
+    -- RE-VALIDATE -- do not trust that nothing changed since the request
+    -- was sent (classic TOCTOU: either party could have disconnected,
+    -- moved out of range, joined/started a different call, lost access,
+    -- or the call itself could have ended entirely, in the meantime). No
+    -- mutex needed here -- see this file's header (DECISION 1): adding a
+    -- member below is a single synchronous in-memory write, with no
+    -- yielding call between this check and that write for a second accept
+    -- to race into.
+    local ok, callId, reason, joinerCitizenid = CheckSarJoinEligibility(fromServerId, src)
+    if not ok then
+        local msg = SarJoinRejectReasonMessage(reason)
+        if msg then
+            NotifyPlayer(fromServerId, msg, 'error')
+            NotifyPlayer(src, msg, 'error')
+        end
+        return
+    end
+
+    local call = ActiveSarCalls[callId]
+    local joinerPed = GetPlayerPed(fromServerId)
+    local joinerPos = GetEntityCoords(joinerPed)
+    local initialTier = TierForDistance(Distance2D(joinerPos.x, joinerPos.y, call.targetX, call.targetY))
+
+    call.members[fromServerId] = { citizenid = joinerCitizenid, tier = initialTier, joinedAt = GetGameTimer() }
+    MemberToCallId[fromServerId] = callId
+
+    NotifyPlayer(fromServerId, locale('sar.joined_call'), 'success')
+    NotifyPlayer(src, locale('sar.member_joined'), 'inform')
+    -- Initial tier bundled into ONE push (sarCallJoined) rather than a
+    -- separate sarHintTierChanged -- see client/sarcalls.lua's own header
+    -- for why: it lets the joiner's client activate its local state AND
+    -- show the first hint atomically, with no dependency on which of two
+    -- separate network messages happens to arrive first.
+    TriggerClientEvent('qbx_k9unit:client:sarCallJoined', fromServerId, callId, initialTier)
 end)
 
 --- UNCONDITIONAL -- see this file's header "NO UNBOUNDED TRAP". Never
---- checks Config.Features.SARCalls or HasK9Access on purpose.
+--- checks Config.Features.SARCalls or HasK9Access on purpose. Covers
+--- EVERY member leaving, owner or joiner alike -- see
+--- RemoveMemberFromSarCall's own doc comment for exactly what leaving
+--- means when other members remain.
 RegisterNetEvent('qbx_k9unit:server:abandonSarCall', function()
-    EndSarCall(source, 'abandoned')
+    local src = source
+    local callId = MemberToCallId[src]
+    if not callId then return end -- no-op: this source is not currently part of any call
+    RemoveMemberFromSarCall(callId, src, false)
 end)
