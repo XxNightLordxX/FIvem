@@ -478,9 +478,20 @@ local function newClientFixture(opts)
     local netIdByPed = {}
     local function NetworkGetNetworkIdFromEntity(ped) return netIdByPed[ped] or (ped + 900000) end
 
+    -- TWO SEPARATE, INDEPENDENTLY-SETTABLE gate stubs, deliberately: the
+    -- whole point of the fix these back is that they are NOT the same
+    -- question. CanShowK9UI() is "are you currently the dog AND allowed";
+    -- HasK9Access() is "are you allowed" alone. The client used to ask the
+    -- first while the server asks the second, so a certified HANDLER --
+    -- allowed, but not currently a dog -- was refused locally before the
+    -- request was ever sent. A fixture that drove both from one flag could
+    -- not tell the fixed shape from the broken one.
     local canShowUi = opts.canShowK9UI ~= false
+    local hasAccess = opts.hasK9Access ~= false
     local denyCalls = 0
-    local function CanShowK9UI() return canShowUi end
+    local canShowK9UICalls = 0
+    local function CanShowK9UI() canShowK9UICalls = canShowK9UICalls + 1 return canShowUi end
+    local function HasK9Access() return hasAccess end
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
     local config = {
@@ -502,6 +513,7 @@ local function newClientFixture(opts)
         IsEntityDead = IsEntityDead,
         NetworkGetNetworkIdFromEntity = NetworkGetNetworkIdFromEntity,
         CanShowK9UI = CanShowK9UI,
+        HasK9Access = HasK9Access,
         DenyK9UIAccess = DenyK9UIAccess,
         Config = config,
         source = 65535,
@@ -514,6 +526,7 @@ local function newClientFixture(opts)
         serverEvents = serverEvents,
         keyMappings = keyMappings,
         denyCalls = function() return denyCalls end,
+        canShowK9UICallCount = function() return canShowK9UICalls end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         addPed = function(ped, x, y, z, isDead)
             pedPool[#pedPool + 1] = ped
@@ -541,12 +554,53 @@ t.test('client: RequestApprehensionWarning refuses locally, with feedback, when 
     t.equals(#f.notifications, 1)
 end)
 
-t.test('client: RequestApprehensionWarning defers to CanShowK9UI/DenyK9UIAccess', function()
-    local f = newClientFixture({ canShowK9UI = false })
+t.test('client: RequestApprehensionWarning refuses, with DenyK9UIAccess, when HasK9Access() is false -- the real access boundary, and the SAME one server/announce.lua itself checks', function()
+    local f = newClientFixture({ hasK9Access = false })
     f.requestApprehensionWarning()
 
     t.equals(#f.serverEvents, 0)
     t.equals(f.denyCalls(), 1)
+end)
+
+t.test('GATE WIDENED (QA finding): a certified HUMAN HANDLER -- HasK9Access() true, CanShowK9UI() false because they are not currently the dog -- CAN announce, and the request really reaches the server', function()
+    -- This is the case the feature exists for. server/announce.lua's own
+    -- header states it outright ("EITHER PARTY MAY ANNOUNCE") and gates on
+    -- HasK9Access(src) alone, with no model or role check anywhere in the
+    -- handler. The client used to ask CanShowK9UI() instead and refuse this
+    -- exact player locally, before the request was ever sent -- and
+    -- /k9announce plus its M keybind are this feature's ONLY entry points,
+    -- so there was no second route to fall back on. In the design's own
+    -- worst case (the handler is next to the suspect and the K9 is not) the
+    -- feature was unusable outright, and the bite it exists to authorize
+    -- was then refused server-side for want of a warning nobody was
+    -- allowed to give.
+    local f = newClientFixture({ hasK9Access = true, canShowK9UI = false })
+    f.addPed(4242, 1.0, 0.0, 0.0)
+    f.setNetId(4242, 777)
+
+    f.requestApprehensionWarning()
+
+    t.equals(f.denyCalls(), 0, 'a handler holding real access must never be told they cannot use K9 features')
+    t.equals(#f.serverEvents, 1, 'the request must actually reach the server')
+    t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:announceApprehensionWarning')
+    t.equals(f.serverEvents[1].args[1], 777)
+end)
+
+t.test('GATE WIDENED: CanShowK9UI() is not consulted at all on this path any more -- a narrower check left in place beside the wider one would re-close the gap silently', function()
+    local f = newClientFixture({ hasK9Access = true, canShowK9UI = false })
+    f.addPed(4243, 1.0, 0.0, 0.0)
+    f.requestApprehensionWarning()
+
+    t.equals(f.canShowK9UICallCount(), 0)
+end)
+
+t.test('CONTROL: widening the gate did NOT make the feature flag skippable -- the feature-off refusal still fires first, before access is ever consulted', function()
+    local f = newClientFixture({ featureOn = false, hasK9Access = true })
+    f.addPed(4244, 1.0, 0.0, 0.0)
+    f.requestApprehensionWarning()
+
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.denyCalls(), 0, 'refused for the feature being off, not for access')
 end)
 
 t.test('client: RequestApprehensionWarning notifies locally when no ped is in range', function()

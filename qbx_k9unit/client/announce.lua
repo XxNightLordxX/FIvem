@@ -92,7 +92,39 @@ function RequestApprehensionWarning()
         return
     end
 
-    if not CanShowK9UI() then
+    -- GATE WIDENED TO HasK9Access() ALONE (QA finding, this pass) -- the
+    -- same fix, for the same reason, already applied to
+    -- client/combat.lua's RequestBiteHold/RequestTakedown/RequestDrag and
+    -- client/defense.lua's ConfirmHandlerDownDefense. This one was missed.
+    --
+    -- THE BUG: this used to read `if not CanShowK9UI() then
+    -- DenyK9UIAccess() return end`, and CanShowK9UI() is
+    -- IsOwnModelK9()/IsK9Role() AND HasK9Access() -- it requires the
+    -- caller to currently BE the dog. server/announce.lua's own handler
+    -- gates on HasK9Access(src) ALONE, and its header says why in as many
+    -- words: "EITHER PARTY MAY ANNOUNCE... HasK9Access deliberately does
+    -- not [check the model]". A human handler standing next to the suspect
+    -- is supposed to be exactly as able to give the warning as the K9 is --
+    -- that is the whole cooperative half of the feature, and the reason the
+    -- warning window is keyed per-TARGET rather than per-announcer.
+    --
+    -- So the client refused, locally, before the request was ever sent, the
+    -- one party the server was specifically written to accept. A certified
+    -- handler pressing M next to a suspect got "you cannot use K9 features
+    -- right now" while genuinely holding full access, and there is no
+    -- second route to fall back on -- /k9announce and its M keybind are
+    -- this feature's ONLY entry points (no radial item, no tablet action).
+    -- In the design's own worst case (the handler is the one near the
+    -- suspect, the K9 is not) the feature was unusable outright, and the
+    -- bite or takedown it exists to authorize was then refused server-side
+    -- for want of a warning nobody was allowed to give.
+    --
+    -- This is the one-layer-up trap: a correct, deliberately-permissive
+    -- server gate re-narrowed by its own client caller. START HALF ONLY --
+    -- there is no stop half here to widen (an announcement is
+    -- fire-and-forget; the window it opens expires on its own timer and has
+    -- no release path that could be gated).
+    if type(HasK9Access) ~= 'function' or not HasK9Access() then
         DenyK9UIAccess()
         return
     end
