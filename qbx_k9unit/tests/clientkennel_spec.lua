@@ -1074,6 +1074,22 @@ t.test('REST POSE: EVERY exit path ends the pose -- the manual exit, and the aut
     t.isTrue(f.clearTasksCalls[2].seq > f.detachCalls[#f.detachCalls].seq, 'cleared after the detach, so nothing re-poses a ped that is already free')
     t.isFalse(f.env.IsRestingInKennel())
 
+    -- RESOURCE STOP. Regression test for a real miss: this handler used to
+    -- carry its OWN hand-duplicated copy of the detach/collision natives,
+    -- and the rest-pose fix landed in ReleaseKennelRest only -- so a K9
+    -- resting when an operator restarted the resource was left frozen in
+    -- the sitting scenario until they pressed a movement key, in exactly
+    -- the case that fix's own commit message claimed to have covered. Both
+    -- paths now go through the single ReleaseOccupantNatives().
+    local r = newKennelFixture()
+    r.registerForeignEntity(870, 150, GetHashKey(PRIMARY_MODEL), { x = 1.0, y = 2.0, z = 3.0 })
+    r.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, 870)
+    t.equals(#r.clearTasksCalls, 1)
+    r.fireResourceStop(RESOURCE_NAME)
+    t.isFalse(r.env.IsRestingInKennel())
+    t.equals(#r.clearTasksCalls, 2, 'resource stop ends the pose too -- the whole point of routing it through the one shared release')
+    t.isTrue(r.clearTasksCalls[2].seq > r.detachCalls[#r.detachCalls].seq, 'cleared after the detach, same order as every other exit path')
+
     -- Automatic backstop: the kennel is removed out from under the
     -- occupant. THIS is the case that most needed it -- no player input is
     -- coming to end the scenario by itself.

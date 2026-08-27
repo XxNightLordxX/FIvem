@@ -423,31 +423,51 @@ end
 --- ONE forked-entry-point risk surface (ExitKennelRest() itself), not
 --- three independent copies of "which locale key to notify with."
 --- @param notifyLocaleKey string?
+--- THE ONE COPY of the occupant's own native cleanup: detach, restore
+--- collision, end the rest pose. Every exit path in this file runs exactly
+--- this, and runs it by calling this function -- never by repeating the
+--- three calls inline.
+---
+--- EXTRACTED AFTER A REAL MISS (trap-hunt finding, immediately after the
+--- rest-pose fix landed): these three natives used to be hand-duplicated in
+--- TWO places -- ReleaseKennelRest below and the onResourceStop handler
+--- further down -- and when ClearPedTasksImmediately was added to end the
+--- pose, it landed in only ONE of them. The commit that added it claimed
+--- resource stop was covered; it was not. A K9 resting when an operator
+--- restarted the resource was left frozen in the sitting scenario, playing
+--- on the spot, until they happened to press a movement key. Not a hard
+--- trap (they were genuinely detached and collidable, so they could walk
+--- away), but visibly wrong, and wrong in exactly the case the fix said it
+--- had covered.
+---
+--- The duplication was the cause, so the duplication is what is fixed here
+--- rather than just the one missing line: a future change to what "release
+--- an occupant" means now has one place to land, and cannot half-apply.
+---
+--- GATE THE START OF A THING, NEVER THE STOP: this function takes no
+--- condition of its own beyond the entity existing. It never reads
+--- Config.Features.DeployableKennel, HasK9Access, certification, a
+--- cooldown, or the kennel's own door state, and it must never start --
+--- DetachEntity does not depend on the former parent still existing, so
+--- this is safe to call unconditionally from every exit path, including
+--- ones where the kennel is already gone.
+--- @param ped number
+local function ReleaseOccupantNatives(ped)
+    if not DoesEntityExist(ped) then return end
+    DetachEntity(ped, true, false)
+    SetEntityCollision(ped, true, true)
+    -- Ends the rest pose. Without it the sitting scenario keeps running
+    -- until the player supplies movement input -- and on the automatic
+    -- paths (own-death, kennel lost, kennel removed, resource stop) there
+    -- is no input coming, so the exit looks like it did nothing.
+    ClearPedTasksImmediately(ped)
+end
+
 local function ReleaseKennelRest(notifyLocaleKey)
     if not restState then return end
     restState = nil
 
-    local ped = PlayerPedId()
-    if DoesEntityExist(ped) then
-        DetachEntity(ped, true, false)
-        SetEntityCollision(ped, true, true)
-        -- ENDS THE REST POSE (THIS PASS, the same owner-reported "make sure
-        -- the dog actually shows up in the kennel" fix that ADDED the pose
-        -- -- see this file's REST POSE section above). Without this, a K9
-        -- that left the kennel kept the sitting scenario running until the
-        -- player happened to supply movement input, so "Exit Kennel" looked
-        -- like it had done nothing on every path that does not involve the
-        -- player immediately walking off -- most visibly the automatic
-        -- backstops (own-death, kennel lost, kennel removed, resource
-        -- stop), where there IS no player input coming.
-        --
-        -- ADDS NO CONDITION: this is inside the existing DoesEntityExist
-        -- guard and nothing else, so it cannot make an exit path
-        -- unreachable. GATE THE START OF A THING, NEVER THE STOP -- this
-        -- function is the always-available escape hatch every exit route in
-        -- this file funnels through, and it stays exactly that.
-        ClearPedTasksImmediately(ped)
-    end
+    ReleaseOccupantNatives(PlayerPedId())
 
     if notifyLocaleKey then
         lib.notify({ title = locale('common.notify_title'), description = locale(notifyLocaleKey), type = 'success' })
@@ -1165,11 +1185,15 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 
     if restState then
-        local ped = PlayerPedId()
-        if DoesEntityExist(ped) then
-            DetachEntity(ped, true, false)
-            SetEntityCollision(ped, true, true)
-        end
+        -- Routed through the SAME ReleaseOccupantNatives() every other exit
+        -- path uses, rather than repeating its natives inline -- that
+        -- inline copy is precisely what let the rest-pose fix half-land
+        -- here; see that function's own doc comment. Deliberately NOT
+        -- ReleaseKennelRest(): there is no meaningful notify or
+        -- tell-the-server step left to run when this resource's own script
+        -- instance is already stopping, and the server has its own
+        -- onResourceStop sweep for the bookkeeping.
+        ReleaseOccupantNatives(PlayerPedId())
         restState = nil
     end
 
