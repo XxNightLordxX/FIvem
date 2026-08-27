@@ -4272,17 +4272,34 @@ Config.DeployableKennel = {
     -- `fallbackPropModel` below if this model hash never loads within
     -- REQUEST_MODEL_TIMEOUT_MS, rather than silently placing nothing or
     -- erroring the whole feature out.
-    -- REFUTED AND REPLACED 2026-08-25. `prop_doghouse_01` was carried on a
-    -- single unverified source and does NOT appear in a 5,171-entry live
-    -- object database that has an in-engine rendered screenshot per entry --
-    -- its screenshot URL 404s. The two places the old name did appear both
-    -- trace to author assumptions, and the "second" source turned out to be
-    -- the same author reusing his own earlier config value, so it was never
-    -- independent corroboration at all.
-    -- `prop_dog_cage_01` (hash 379820688) IS in that database with a real
-    -- rendered screenshot. Not exhaustive proof the old name is fake, but it
-    -- is checkable evidence that affirmatively did not contain it while
-    -- containing a real themed substitute.
+    -- `prop_dog_cage_01` (hash 379820688) is CONFIRMED REAL, high
+    -- confidence: present in the full 21,631-entry DurtyFree
+    -- gta-v-data-dumps ObjectList.ini, and corroborated independently by
+    -- Forge/Pleb Masters' data-dump-derived object browser, which returns a
+    -- real base-game record for it. The kennel does NOT silently degrade to
+    -- the fallback in practice -- and if it ever did, `prop_tennis_ball` is
+    -- confirmed real too, so even the degraded case renders something.
+    --
+    -- CORRECTION, and read this before picking a different model. This
+    -- comment used to claim `prop_doghouse_01` had been "REFUTED" because it
+    -- "does NOT appear in a 5,171-entry live object database". THAT CLAIM
+    -- WAS WRONG. The pass that made it could only reach a partial slice of
+    -- the very same file; a later full fetch of ObjectList.ini (21,631
+    -- entries) finds `prop_doghouse_01` at line 9528, sitting immediately
+    -- beside prop_dog_cage_01/prop_dog_cage_02, and Forge returns a real
+    -- record for it: base game, Sep 2013, categorised under Beds and
+    -- Bedroom / Decorations. It is a genuine, base-game, doghouse-shaped
+    -- prop.
+    --
+    -- Nothing about the current behaviour depends on that correction --
+    -- propModel is prop_dog_cage_01 and nothing calls the other name. It is
+    -- corrected because a confident false negative is worse than no note at
+    -- all: the next person who wants the kennel to look like an actual
+    -- DOGHOUSE rather than a metal cage would have read the old paragraph
+    -- and ruled out the one asset that does exactly that. If you want that
+    -- look, `prop_doghouse_01` is a legitimate choice -- it is a different
+    -- shape and size from the cage, so re-check restOffsetX/Y/Z below once
+    -- you can see it in-engine.
     propModel = 'prop_dog_cage_01',
 
     -- Deliberately NOT a second guess at a "kennel-shaped" model name — a
@@ -4649,7 +4666,18 @@ Config.Wellbeing = {
         -- 'water_bowl' note above) -- this is exactly the "benches, sofas,
         -- or similar" fallback this field's own review brief allowed for
         -- once dog-specific furniture was confirmed absent.
-        restSources             = { 'water_bowl', 'prop_dog_cage_01', 'prop_bench_04', 'prop_couch_01' },
+        -- 'water_bowl' REMOVED (it is confirmed not to exist -- see
+        -- Config.Wellbeing.Thirst.bowlSources below for the evidence) and
+        -- replaced with the three real dog-bowl models that same check
+        -- turned up. The other three entries here were already confirmed
+        -- real. Nothing about resting changes for an existing server: the
+        -- entry that was removed had never once matched anything.
+        restSources             = {
+            'prop_dog_cage_01', 'prop_bench_04', 'prop_couch_01',
+            'm25_1_prop_m51_dog_bowl_full',
+            'm25_1_prop_m51_dog_bowl_empty',
+            'm25_2_int_01_dog_bowl',
+        },
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty. Also the exact line where a bonded handler's HUD badge starts calling their dog "Tired" -- raise it and that word appears sooner (a lower tolerance for tiredness), lower it and it appears later
         -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
         -- client/movement.lua's own comment computes the worst case as
@@ -4881,52 +4909,42 @@ Config.Wellbeing = {
         bowlRegenAmount        = 15,     -- restored per drinkFromBowl use -- smaller than the item path, the free/no-cost world-prop alternative
         bowlCooldownMs         = 60000,  -- 60 seconds between bowl drinks, per citizenid -- shorter than the item cooldown since there is no item cost
         bowlInteractRange      = 2.0,    -- metres, how close the K9 must be to a matched bowl entity
-        -- UNVERIFIED model name -- see KNOWN_ISSUES.md and
-        -- Config.Features.HungerThirstSystem's own comment above for the
-        -- operator-facing version of this disclosure. RESEARCHED THIS PASS
-        -- (owner-directed prop-name audit): this field shares the exact
-        -- same 'water_bowl' guess Config.Wellbeing.Fatigue.restSources'
-        -- own, much longer confidence note above carries, and the same
-        -- finding applies -- see that note for the full source trail
-        -- (which of the task's own suggested databases/forums were
-        -- reachable this session and which were blocked outright by this
-        -- sandbox's network egress policy). Short version: no source
-        -- reachable this session confirmed 'water_bowl' as real, refuted
-        -- it outright, or turned up any dog/water-bowl-shaped replacement
-        -- to add here instead. The only real "bowl"-shaped objects either
-        -- reachable source actually contains are a party snack bowl
-        -- (`prop_bowl_crisps`), two unidentified story-mission bowls
-        -- (`prop_cs_bowl_01`, `prop_cs_bowl_01b`), and several DLC
-        -- apartment/heist/executive-office decorative ceramic bowls tied
-        -- to that one owned property instance
-        -- (`apa_mp_h_acc_bowl_ceramic_01`, `ex_mp_h_acc_bowl_ceramic_01`,
-        -- `hei_heist_acc_bowl_01`/`02`) -- real objects, but none a
-        -- plausible stand-in for a K9's water bowl. Adding any of them
-        -- here would repeat this field's exact original mistake under a
-        -- more confident-sounding name instead of fixing it, so
-        -- 'water_bowl' stays, disclosed, as the sole entry rather than
-        -- being traded for a different, equally-wrong-shaped guess. If
-        -- this does not resolve to a real world prop on your server, the
-        -- "Drink from Bowl" option never appears anywhere, with no error
-        -- -- giveK9Water (the item path, above) is unaffected either way.
+        -- CONFIRMED FAKE, AND REPLACED WITH REAL PROPS. `'water_bowl'`
+        -- used to be the sole entry here, carried as a disclosed guess.
+        -- It is now settled, not guessed: a full fetch of the DurtyFree
+        -- gta-v-data-dumps ObjectList.ini (all 21,631 entries -- earlier
+        -- passes could only reach a partial slice of that same file)
+        -- contains ZERO matches for `water_bowl`, `waterbowl`, or any
+        -- water*bowl* combination, and Forge/Pleb Masters returns a clean
+        -- 404 for the literal name, control-tested against a known-fake
+        -- string to confirm the 404 means "not found" rather than "fetch
+        -- failed". There is no such model. While it sat here, "Drink from
+        -- Bowl" could never appear on anything, on any server, silently.
         --
-        -- RULED OUT vs MERELY UNTRIED, so the next pass does not repeat two
-        -- hours of blocked fetches: gtahash.ru/.com, forge.plebmasters.de,
-        -- vespura.com, gta-objects.xyz, forum.cfx.re and gta5-mods.com were
-        -- all EGRESS-BLOCKED by this sandbox this session, not checked and
-        -- found lacking -- only github.com/raw.githubusercontent.com/
-        -- gist.github.com got through. Re-try from a session where those
-        -- are reachable before assuming this gap is permanent.
+        -- WHAT IS REAL: the same full dump does contain genuine dog bowls.
+        -- These three are the ones in it, and they are what this list now
+        -- carries.
         --
-        -- NON-SILENT-FAILURE IDEA, NOT BUILT (outside this pass's file
-        -- scope): a boot-time GetAllObjects() scan would see almost
-        -- nothing streamed in yet and falsely report "no bowls found" --
-        -- a new silent lie replacing the old silent nothing. Safer shape:
-        -- a periodic (e.g. hourly) or first-player-connect-gated check in
-        -- server/wellbeing.lua, reusing its existing GetAllObjects() scan,
-        -- that warns only once it has NEVER once seen a bowlSources/
-        -- restSources model match.
-        bowlSources            = { 'water_bowl' },
+        -- READ THIS BEFORE EXPECTING IT TO JUST WORK: these are DLC
+        -- INTERIOR props, not open-world street furniture. They exist and
+        -- will load, but the base map does not scatter them around the
+        -- city the way it does benches. So the feature is no longer broken
+        -- -- it is now waiting on you. Place one of these props wherever
+        -- you want your K9s to be able to drink (your kennel, the station
+        -- yard, a training area) using whatever mapping resource you
+        -- already use, and "Drink from Bowl" starts appearing on it. Add
+        -- your own custom bowl model's name to this list too if you have
+        -- one; the list is matched by name, so any number of entries work.
+        --
+        -- If you place nothing, the item path (giveK9Water, above) is
+        -- completely unaffected and remains the way a K9 drinks -- exactly
+        -- as it has been all along, since this list never matched anything
+        -- until now.
+        bowlSources            = {
+            'm25_1_prop_m51_dog_bowl_full',
+            'm25_1_prop_m51_dog_bowl_empty',
+            'm25_2_int_01_dog_bowl',
+        },
     },
 
     -- ==================================================================
