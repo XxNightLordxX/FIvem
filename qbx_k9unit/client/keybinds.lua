@@ -226,6 +226,34 @@ end
 -- ======================================================================
 if Config.Features.NonLethalTakedown then
     RegisterCommand('k9takedown', function()
+        -- NOW A TOGGLE, not a one-shot (completeness QA finding, this pass).
+        -- ReleaseTakedown() has existed and been correct for some time --
+        -- ungated on the way out, matching ReleaseBiteHold/ReleaseDrag, with
+        -- a server handler that likewise never re-checks access -- and was
+        -- reachable from NOTHING. Its own doc comment said so ("NOT YET
+        -- WIRED into client/radial.lua's ... or client/keybinds.lua's ...
+        -- flagged to the owner of those two files"), and this is that file.
+        --
+        -- WHY IT MATTERS, not just tidiness: RequestTakedown() picks the
+        -- NEAREST eligible ped, which client/combat.lua's own comment admits
+        -- is "not necessarily the intended one". Pick the wrong person in a
+        -- crowd and they were force-ragdolled and damage-immune for the full
+        -- ragdollDurationMs with no way to undo it. The only other thing
+        -- that ends a takedown early is /k9recall -- a HANDLER-side action
+        -- needing HandlerPartnership on and an active partnership, so a solo
+        -- K9 (a documented, supported way to play) had no route at all.
+        --
+        -- RELEASE BRANCH FIRST, and ungated: this is the STOP half, so it
+        -- asks no access question of its own, exactly like the drag toggle
+        -- below and the bite-hold toggle above. Only the request branch
+        -- underneath carries a gate.
+        if type(IsTakedownEngaged) == 'function' and IsTakedownEngaged() then
+            if type(ReleaseTakedown) == 'function' then
+                ReleaseTakedown()
+            end
+            return
+        end
+
         if type(RequestTakedown) == 'function' then
             RequestTakedown()
         end

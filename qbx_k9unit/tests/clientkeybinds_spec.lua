@@ -98,6 +98,15 @@ local function newKeybindsFixture(opts)
 
     local requestTakedownCalls = 0
     local function RequestTakedown() requestTakedownCalls = requestTakedownCalls + 1 end
+    -- Takedown became a TOGGLE this pass -- see the k9takedown tests below.
+    -- Supplied under the SAME opts.provideTakedown flag as RequestTakedown,
+    -- so the "tolerates the whole takedown surface being undefined" test
+    -- covers these two as well rather than leaving new soft dependencies
+    -- untested, exactly as the drag surface already does for its own four.
+    local takedownEngaged = false
+    local releaseTakedownCalls = 0
+    local function IsTakedownEngaged() return takedownEngaged end
+    local function ReleaseTakedown() releaseTakedownCalls = releaseTakedownCalls + 1 end
 
     local k9SitCalls = 0
     local function K9Sit() k9SitCalls = k9SitCalls + 1 end
@@ -182,6 +191,8 @@ local function newKeybindsFixture(opts)
     end
     if opts.provideTakedown ~= false then
         overrides.RequestTakedown = RequestTakedown
+        overrides.IsTakedownEngaged = IsTakedownEngaged
+        overrides.ReleaseTakedown = ReleaseTakedown
     end
     if opts.provideK9Sit ~= false then
         overrides.K9Sit = K9Sit
@@ -208,6 +219,8 @@ local function newKeybindsFixture(opts)
         releaseDragCallCount = function() return releaseDragCalls end,
         requestDragCallCount = function() return requestDragCalls end,
         requestTakedownCallCount = function() return requestTakedownCalls end,
+        releaseTakedownCallCount = function() return releaseTakedownCalls end,
+        setTakedownEngaged = function(v) takedownEngaged = v end,
         k9SitCallCount = function() return k9SitCalls end,
         exitKennelRestCallCount = function() return exitKennelRestCalls end,
         toggleScentVisionCallCount = function() return toggleScentVisionCalls end,
@@ -606,6 +619,53 @@ t.test('k9exitkennel: does not touch CanShowK9UI()/DenyK9UIAccess() at all -- th
     f.runCommand('k9exitkennel')
     t.equals(f.exitKennelRestCallCount(), 1, 'must still call through even with CanShowK9UI() false')
     t.equals(f.denyCallCount(), 0, 'must never call DenyK9UIAccess() -- an exit path is never denied')
+end)
+
+
+-- ========================================================================
+-- TAKEDOWN IS NOW A TOGGLE (completeness QA finding, this pass).
+-- ReleaseTakedown() had existed and been correct for some time -- ungated
+-- on the way out, with a server handler that likewise never re-checks
+-- access -- and was reachable from NOTHING but a unit test. Its own doc
+-- comment said as much and named this file as one of the two that needed
+-- to wire it.
+--
+-- Why it is not merely tidiness: RequestTakedown() picks the NEAREST
+-- eligible ped, which client/combat.lua's own comment admits is "not
+-- necessarily the intended one". Take down the wrong person in a crowd and
+-- they stayed ragdolled and damage-immune for the full configured duration
+-- with no undo. The only other early end is /k9recall -- a handler-side
+-- action needing an active partnership -- so a solo K9 had no route at all.
+-- ========================================================================
+t.test('k9takedown: NOT engaged -> requests a takedown, exactly as before', function()
+    local f = newKeybindsFixture()
+    f.runCommand('k9takedown')
+    t.equals(f.requestTakedownCallCount(), 1)
+    t.equals(f.releaseTakedownCallCount(), 0)
+end)
+
+t.test('k9takedown: ENGAGED -> releases instead, and never falls through to the request path', function()
+    local f = newKeybindsFixture()
+    f.setTakedownEngaged(true)
+    f.runCommand('k9takedown')
+    t.equals(f.releaseTakedownCallCount(), 1, 'the wrongly-taken-down target must be releasable')
+    t.equals(f.requestTakedownCallCount(), 0, 'falling through would fire a SECOND takedown request while one is already live')
+end)
+
+t.test('k9takedown: the release branch is UNGATED -- pressing the key while engaged releases even with no K9 access at all, because that is the STOP half', function()
+    local f = newKeybindsFixture()
+    f.setCanShowK9UI(false)  -- decertified mid-takedown; the STOP half must not care
+    f.setTakedownEngaged(true)
+    f.runCommand('k9takedown')
+    t.equals(f.releaseTakedownCallCount(), 1, 'a K9 decertified mid-takedown must still be able to let go -- gate the start, never the stop')
+end)
+
+t.test('k9takedown: tolerates IsTakedownEngaged/ReleaseTakedown being entirely undefined (soft dependency) -- must not error', function()
+    local f = newKeybindsFixture({ provideTakedown = false })
+    t.isNil(f.env.IsTakedownEngaged)
+    t.isNil(f.env.ReleaseTakedown)
+    local ok = pcall(f.runCommand, 'k9takedown')
+    t.isTrue(ok)
 end)
 
 os.exit(t.summary())
