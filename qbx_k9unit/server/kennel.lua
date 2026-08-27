@@ -819,10 +819,23 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
         effectiveDeployCooldownMs = GetHandlerXPTierKennelDeployCooldownMs(citizenid, baseDeployCooldownMs)
     end
 
-    if not DeployCooldown.Consume(src, effectiveDeployCooldownMs) then
-        return -- silent no-op: rate-limited, matches bark/leash-request/certify-action convention
-    end
-
+    -- MOVED ABOVE DeployCooldown.Consume, 2026-08-27. These two are pure
+    -- table lookups with no side effect, and this file's own rule (stated
+    -- verbatim on the per-person check further up: "cheapest/no-side-effect
+    -- checks first... so a blocked handler never burns their own deploy
+    -- cooldown for a request that was always going to be refused") already
+    -- said they belonged here. They were below it, so a handler who already
+    -- had a kennel out spent their cooldown on a request that could never
+    -- have succeeded -- then picked the kennel up and had to wait before
+    -- they could put it down again, for a mistake that cost the server
+    -- nothing.
+    --
+    -- KNOWN, ACCEPTED TRADE: the consume used to double as a rate limit on
+    -- this refusal, so repeated presses now produce a message each time
+    -- instead of going quiet. That is self-inflicted and self-directed --
+    -- lib.notify to the presser's own screen, no broadcast, no server work
+    -- beyond a table read -- which is a far smaller cost than silently
+    -- charging a legitimate handler for a refused action.
     if Kennels[citizenid] then
         -- NAME WHERE (this pass -- refusal-clarity fix, not a gate change):
         -- this message used to only ever say "you already have one," never
@@ -862,6 +875,11 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
         NotifyPlayer(src, locale('kennel.placement_already_in_progress'), 'error')
         return
     end
+
+    if not DeployCooldown.Consume(src, effectiveDeployCooldownMs) then
+        return -- silent no-op: rate-limited, matches bark/leash-request/certify-action convention
+    end
+
 
     local ped = GetPlayerPed(src)
     if ped == 0 then return end -- defensive: src disconnected between the event firing and this line

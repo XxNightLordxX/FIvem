@@ -859,7 +859,19 @@ t.test('requestDeployKennel: an uncertified handler is rejected with a real noti
     t.equals(f.notifyCalls[1].notifyType, 'error')
 end)
 
-t.test('requestDeployKennel: cooldown silently blocks a second immediate request from the same source', function()
+-- THIS TEST'S EXPECTATION CHANGED ON 2026-08-27, and the reason is the point.
+-- It used to assert that pressing deploy twice in a row was met with SILENCE,
+-- because the deploy cooldown was consumed before anything else and swallowed
+-- the second press. The cooldown consume has since been moved BELOW the two
+-- pure state checks (see requestDeployKennel's own comment), because spending
+-- a handler's cooldown on a request that could never have succeeded is unfair
+-- and the file's own stated rule already forbade it.
+--
+-- So the second press is now answered honestly -- "you are already placing
+-- one" -- instead of silently swallowed. That is a better answer, not a
+-- regression: at that exact moment a placement genuinely IS in progress, and
+-- that is what the handler needs to know.
+t.test('requestDeployKennel: a second immediate request is answered with the real reason (a placement is already in progress), not silence', function()
     local f = newKennelFixture()
     f.setAccess(1, true)
     f.setPlayer(1, 'ABC123')
@@ -867,8 +879,29 @@ t.test('requestDeployKennel: cooldown silently blocks a second immediate request
     f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
     t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1)
     f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1) -- same instant, no advance
-    t.equals(#f.notifyCalls, 0, 'rate-limited rejection is silent, matching every other cooldown gate in this resource')
+    t.equals(#f.notifyCalls, 1, 'the handler is told why, rather than the press vanishing')
+    t.equals(f.notifyCalls[1].description, locale('kennel.placement_already_in_progress'))
     t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1, 'no second instruction sent')
+end)
+
+-- CONTROL for the reorder above. The cooldown must still exist and must still
+-- refuse SILENTLY when it is the only thing refusing -- otherwise the move
+-- could have quietly turned the cooldown into a no-op and the test above
+-- would still have passed, proving nothing about it. Reached by cancelling
+-- the pending placement first, which clears the state check that would
+-- otherwise answer ahead of the cooldown.
+t.test('CONTROL: the deploy cooldown itself still exists and still refuses SILENTLY when it is the only reason -- the reorder must not have turned it into a no-op', function()
+    local f = newKennelFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1)
+    f.dispatchNetEvent('qbx_k9unit:server:cancelKennelPlacement', 1) -- no pending placement, no deployed kennel
+    local notifiesBefore = #f.notifyCalls
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1) -- same instant: only the cooldown can refuse now
+    t.equals(#f.notifyCalls, notifiesBefore, 'a purely rate-limited refusal stays silent, matching every other cooldown gate here')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1, 'and no second instruction was sent')
 end)
 
 t.test('requestDeployKennel: an unresolvable citizenid is rejected with a real notification and no pending state', function()
