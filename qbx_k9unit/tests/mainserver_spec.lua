@@ -682,42 +682,196 @@ t.test('playerDropped handler count is 4 when cooldowns.lua is loaded alongside:
     t.equals(f.eventHandlerCount('playerDropped'), 4)
 end)
 
-t.test('EVERY tracker in server/main.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, key-keyed ones sweep, and none has neither', function()
-    -- THE REAL TRIPWIRE. The exact-count assertion above only catches a
-    -- cleanup hook being REMOVED. It cannot catch the thing that actually
-    -- happens: somebody adds a NewCooldown()/NewMutex() and forgets
-    -- .RegisterPlayerDropped(), which leaves the count unchanged and this
-    -- file green while a table grows for the whole uptime of the server.
-    --
-    -- tests/combat_spec.lua found and fixed this exact blind spot for its
-    -- own file. The fix lived there and never reached the other specs
-    -- asserting the same invariant the same broken way -- this is that
-    -- propagation.
-    --
-    -- Two legitimate cleanup strategies, and which is correct depends on
-    -- what the key IS:
-    --   keyed by a player `src`      -> .RegisterPlayerDropped()
-    --   keyed by anything else       -> .StartSweep(), because there is no
-    --                                   connection to hang cleanup off
-    -- A tracker with NEITHER leaks. Reads the file's own text because these
-    -- are file-locals with no accessor.
-    local handle = assert(io.open('../server/main.lua', 'r'))
-    local text = handle:read('*a')
-    handle:close()
+-- ============================================================================
+-- THE REAL TRIPWIRE -- GENERALISED ACROSS EVERY server/*.lua FILE (this
+-- pass). This used to be a single-file test, scanning ONLY server/main.lua's
+-- own text. That was exactly the blind spot that let THREE separate real
+-- leaks ship with the whole suite green at once: server/roster.lua's
+-- RosterReadCooldown/RosterMutateCooldown pair (source-keyed, neither
+-- .RegisterPlayerDropped() nor .StartSweep() -- and since FXServer RECYCLES
+-- server ids, a brand-new player could inherit a stale "still on cooldown"
+-- timestamp from a totally different prior occupant of that id) and
+-- server/sarcalls.lua's StartSarCallCooldown (citizenid-keyed, correctly
+-- NOT .RegisterPlayerDropped()'d -- clearing it on disconnect would let a
+-- citizenid dodge its own anti-farm floor by relogging -- but also missing
+-- the .StartSweep() it should have had instead, a pure omission since the
+-- flat NewCooldown API already supports it). tests/combat_spec.lua found
+-- and fixed this exact blind spot for its own file first; that fix never
+-- propagated to the other single-file copies of this same test (including
+-- this one) -- this generalised version is that propagation, done once,
+-- for every file, so the next instance of this bug class fails HERE
+-- instead of shipping a fourth time.
+--
+-- FILE LIST: derived from fxmanifest.lua's own server_scripts block, never
+-- hand-typed -- a hand-typed list rots the moment a new server/*.lua file
+-- is added and nobody remembers to add it here too.
+--
+-- THREE legitimate cleanup shapes now recognised (the third is new this
+-- pass -- see CLEARED-IN-OWN-PLAYERDROPPED-HANDLER below):
+--   1. keyed by a player `src` directly       -> .RegisterPlayerDropped()
+--   2. keyed by anything with no per-connection
+--      hook (a netId, a resolved identity string,
+--      a fixed constant)                      -> .StartSweep()
+--   3. keyed by something RESOLVED FROM a disconnecting source (e.g. a
+--      citizenid looked up from `source` at drop time) inside the file's
+--      OWN hand-written `AddEventHandler('playerDropped', ...)` handler,
+--      which calls `<Tracker>.Clear(<resolvedKey>)` directly -- this is
+--      functionally identical to strategy 1, just unable to use the
+--      .RegisterPlayerDropped() helper itself, because that helper always
+--      clears by the raw `source` value, never a value resolved from it
+--      (see server/cooldowns.lua's own NewCooldown/NewNestedCooldown
+--      :RegisterPlayerDropped doc comments). server/progression.lua's
+--      AwardXPCooldown (NewNestedCooldown, keyed by citizenid) is the one
+--      real example today, cleared via `AwardXPCooldown.Clear(citizenid)`
+--      inside that file's general playerDropped handler, right alongside
+--      the same handler's K9XP/HandlerXP cache eviction.
+--
+-- A tracker with NONE of the three leaks.
+--
+-- ALLOWLIST: a small, explicit, per-(file, name) table for trackers that
+-- GENUINELY need no cleanup at all -- never a way to silence a real gap.
+-- Every real entry today is a NewMutex() keyed by something other than a
+-- player source, backed by server/cooldowns.lua's own NewMutex doc comment
+-- (GROUP A/GROUP B release-discipline audit): a mutex only ever holds an
+-- entry for the duration of one in-flight, guaranteed-to-release critical
+-- section, so unlike a cooldown/TTL table it does not accumulate with
+-- uptime or connection count regardless of what its key domain is -- plus
+-- one NewCooldown() keyed by a single hardcoded constant (never more than
+-- one possible entry, ever). Guarded below (mirroring the guard shape
+-- tests/partnership_spec.lua already established for its own single-file
+-- ALLOWED_WITHOUT_CLEANUP) so this list can never quietly grow to swallow
+-- real leaks instead of catching them.
+-- ============================================================================
+t.test('EVERY tracker (NewCooldown/NewNestedCooldown/NewMutex) in EVERY server/*.lua file has a cleanup strategy -- source-keyed ones register a playerDropped hook, key-keyed ones sweep, citizenid-from-source ones clear inline, and none has NEITHER', function()
+    local fxHandle = assert(io.open('../fxmanifest.lua', 'r'))
+    local fxText = fxHandle:read('*a')
+    fxHandle:close()
 
-    local declared = {}
-    for name in text:gmatch('local%s+([%w_]+)%s*=%s*New[CM]') do
-        declared[#declared + 1] = name
-    end
-    t.isTrue(#declared >= 4,
-        ('sanity: only found %d tracker declaration(s) in server/main.lua -- the pattern has probably drifted; fix it rather than lowering this floor'):format(#declared))
+    local serverScriptsBlock = fxText:match('\nserver_scripts%s*{(.-)\n}')
+    t.isNotNil(serverScriptsBlock,
+        'sanity: could not find a top-level server_scripts { ... } block in fxmanifest.lua -- the parse pattern has probably drifted; fix it rather than lowering any floor below')
 
-    for _, name in ipairs(declared) do
-        local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
-        local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
-        t.isTrue(hasPlayerDropped or hasSweep,
-            name .. ' has neither .RegisterPlayerDropped() nor .StartSweep() -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it')
+    local files = {}
+    for path in serverScriptsBlock:gmatch("'(server/[%w_]+%.lua)'") do
+        files[#files + 1] = path
     end
+    t.isTrue(#files >= 40,
+        ('sanity: only found %d server/*.lua file(s) declared in fxmanifest.lua server_scripts -- the parse pattern has probably drifted; fix it rather than lowering this floor'):format(#files))
+
+    --- Every playerDropped handler this FILE wrote itself (never
+    --- server/cooldowns.lua's internal ones inside :RegisterPlayerDropped/
+    --- :StartSweep, since those live in cooldowns.lua's own text, not the
+    --- calling file's) as a list of substrings, so strategy 3 above can be
+    --- checked as "does this tracker's own .Clear( call appear inside one
+    --- of THESE handlers specifically", not "does .Clear( appear anywhere
+    --- in the file at all" (which would too easily pass for an unrelated,
+    --- non-cleanup .Clear() call elsewhere).
+    --- @param text string
+    --- @return string[]
+    local function extractOwnPlayerDroppedBlocks(text)
+        local blocks = {}
+        local searchFrom = 1
+        while true do
+            local s = text:find("AddEventHandler%('playerDropped'", searchFrom)
+            if not s then break end
+            local e = text:find('\nend%)', s)
+            if not e then break end
+            blocks[#blocks + 1] = text:sub(s, e)
+            searchFrom = e + 1
+        end
+        return blocks
+    end
+
+    local ALLOWED_WITHOUT_CLEANUP = {
+        ['server/partnership.lua'] = {
+            PartnershipEstablishMutex = 'NewMutex() keyed by ONE fixed resource-wide constant, never a player source -- holds at most one entry, released synchronously (GROUP A pcall discipline). Nothing to leak.',
+        },
+        ['server/certtiers.lua'] = {
+            TierEditMutex = 'NewMutex() keyed by tier_key, a small bounded admin-managed catalogue, never a player source -- GROUP B discipline (explicit release before every early return; critical section contains only SafeWrite-contract K9Store calls, which return false rather than throw). Never accumulates with uptime.',
+        },
+        ['server/equipmentshop.lua'] = {
+            ShopItemEditMutex = 'NewMutex() keyed by an item key, a small bounded admin-managed catalogue, never a player source -- same GROUP B discipline as TierEditMutex.',
+        },
+        ['server/permissionkeycatalog.lua'] = {
+            PermissionKeyEditMutex = 'NewMutex() keyed by a permission key, a small bounded admin-managed catalogue, never a player source -- same GROUP B discipline as TierEditMutex.',
+        },
+        ['server/xptiers.lua'] = {
+            XPTierEditMutex = 'NewMutex() keyed by ONE fixed ladder-wide lock constant, never a player source -- same reasoning as PartnershipEstablishMutex.',
+        },
+        ['server/medkit.lua'] = {
+            MedkitMutex = 'NewMutex() keyed by targetCitizenid, never a player source -- GROUP A discipline (whole critical section wrapped in pcall, unconditional Release immediately after). A mutex only holds an entry for an in-flight critical section, never accumulates over time regardless of key domain.',
+        },
+        ['server/k9profiles.lua'] = {
+            K9ProfileEditMutex = 'NewMutex() keyed by citizenid, never a player source -- GROUP B discipline (explicit release before every early return; critical section contains only SafeWrite-contract K9Store calls). Never accumulates with uptime.',
+        },
+        ['server/webhook.lua'] = {
+            RateLimitCooldown = "NewCooldown() keyed by RATE_LIMIT_KEY, a single hardcoded constant ('discord') -- this store can never hold more than one entry, ever, regardless of player connect/disconnect activity. Nothing to leak.",
+        },
+    }
+    local ALLOWLIST_MAX_ENTRIES = 12 -- hard cap: forces a re-justification pass (not a one-line addition) once this list stops being "small and explicit"
+
+    local allowlistEntryCount, allowlistMatchedCount = 0, 0
+    for _, byName in pairs(ALLOWED_WITHOUT_CLEANUP) do
+        for _ in pairs(byName) do allowlistEntryCount = allowlistEntryCount + 1 end
+    end
+    t.isTrue(allowlistEntryCount <= ALLOWLIST_MAX_ENTRIES,
+        ('the allowlist has grown to %d entries (cap %d) -- re-justify the whole list rather than adding one more line'):format(allowlistEntryCount, ALLOWLIST_MAX_ENTRIES))
+
+    local totalDeclared, totalChecked = 0, 0
+
+    for _, path in ipairs(files) do
+        local handle = assert(io.open('../' .. path, 'r'), 'could not open ' .. path)
+        local text = handle:read('*a')
+        handle:close()
+
+        local declared = {}
+        for line in (text .. '\n'):gmatch('(.-)\n') do
+            local name = line:match('^local%s+([%w_]+)%s*=%s*New[CMN]')
+                or line:match('^([%w_]+)%s*=%s*New[CMN]')
+            if name then declared[#declared + 1] = name end
+        end
+        totalDeclared = totalDeclared + #declared
+        if #declared == 0 then goto continueFile end
+
+        local ownPlayerDroppedBlocks = extractOwnPlayerDroppedBlocks(text)
+        local allowedForThisFile = ALLOWED_WITHOUT_CLEANUP[path] or {}
+
+        for _, name in ipairs(declared) do
+            if allowedForThisFile[name] then
+                allowlistMatchedCount = allowlistMatchedCount + 1
+            else
+                totalChecked = totalChecked + 1
+                local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
+                local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
+                local hasInlineClear = false
+                if not (hasPlayerDropped or hasSweep) then
+                    for _, block in ipairs(ownPlayerDroppedBlocks) do
+                        if block:find(name .. '.Clear(', 1, true) then
+                            hasInlineClear = true
+                            break
+                        end
+                    end
+                end
+                t.isTrue(hasPlayerDropped or hasSweep or hasInlineClear,
+                    ('%s: %s has none of .RegisterPlayerDropped(), .StartSweep(), or an inline .Clear(...) inside this file\'s own playerDropped handler -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it'):format(path, name))
+            end
+        end
+        ::continueFile::
+    end
+
+    t.isTrue(totalDeclared >= 75,
+        ('sanity: only found %d tracker declaration(s) across every server/*.lua file -- the discovery pattern has probably drifted; fix it rather than lowering this floor'):format(totalDeclared))
+    t.equals(allowlistMatchedCount, allowlistEntryCount,
+        'every ALLOWED_WITHOUT_CLEANUP entry must match a tracker actually declared in the file it names -- a non-matching entry is stale (renamed/removed tracker) and must be deleted, not left to silently do nothing')
+    -- Mirrors tests/partnership_spec.lua's own guard shape for its
+    -- single-file ALLOWED_WITHOUT_CLEANUP ("the allowlist must never grow
+    -- to cover every tracker -- that would make this test vacuous"),
+    -- scaled to the whole-resource count: the overwhelming majority of
+    -- every tracker in this resource must still be actively checked by the
+    -- real assertion above, not waved through.
+    t.isTrue(totalChecked >= totalDeclared - ALLOWLIST_MAX_ENTRIES,
+        'more trackers were skipped than the allowlist cap allows -- the allowlist is silently covering trackers that were never added to ALLOWED_WITHOUT_CLEANUP by name (or the discovery pattern double-counted); this test must never pass by skipping instead of checking')
+    t.isTrue(totalChecked >= 1, 'the allowlist must never grow to cover every tracker -- that would make this test vacuous')
 end)
 
 t.test('server/main.lua exposes ForceDetachLeashForSource and ForceDetachOfficerLeashForSource as resource-global functions', function()

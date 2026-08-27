@@ -826,35 +826,40 @@ end
 --- their sole release path is the pcall-guaranteed one, which does not
 --- depend on any player staying connected.
 ---
---- GROUP B — 4 more that landed after this comment was first written
---- (server/certtiers.lua TierEditMutex, server/equipmentshop.lua
---- ShopItemEditMutex, server/permissionkeycatalog.lua
---- PermissionKeyEditMutex, server/xptiers.lua XPTierEditMutex): NONE of
---- these wrap their critical section in `pcall` at all — instead, every one
---- releases explicitly, in-line, immediately before EVERY early `return`
---- inside the critical section (confirmed by direct read of all four, not
---- assumed from the pattern above), and every DB write inside that section
---- is a `K9Store.*` call under this resource's own SafeWrite contract (a
---- thrown DB error degrades to a returned `false`, never an uncaught
---- error — see server/datastore.lua) rather than an unguarded MySQL call
---- that could itself throw. That combination (nothing in the critical
---- section can throw + every explicit return path releases first) reaches
---- the same guarantee GROUP A's pcall gets structurally, by a different
---- route — not a weaker one, but genuinely a different one, so it is
---- recorded here rather than silently folded into GROUP A's description.
---- All four are keyed by something other than a player source (a tier_key,
---- an item key, a permission key, and XPTierEditMutex's own fixed
---- ladder-wide lock constant, respectively) and correctly do NOT call
---- RegisterPlayerDropped, same reasoning as MedkitMutex/
+--- GROUP B — landed after this comment was first written (server/
+--- certtiers.lua TierEditMutex, server/equipmentshop.lua ShopItemEditMutex,
+--- server/permissionkeycatalog.lua PermissionKeyEditMutex, server/
+--- xptiers.lua XPTierEditMutex, server/k9profiles.lua K9ProfileEditMutex):
+--- NONE of these wrap their critical section in `pcall` at all — instead,
+--- every one releases explicitly, in-line, immediately before EVERY early
+--- `return` inside the critical section (confirmed by direct read of all
+--- five, not assumed from the pattern above), and every DB write inside
+--- that section is a `K9Store.*` call under this resource's own SafeWrite
+--- contract (a thrown DB error degrades to a returned `false`, never an
+--- uncaught error — see server/datastore.lua) rather than an unguarded
+--- MySQL call that could itself throw. That combination (nothing in the
+--- critical section can throw + every explicit return path releases first)
+--- reaches the same guarantee GROUP A's pcall gets structurally, by a
+--- different route — not a weaker one, but genuinely a different one, so
+--- it is recorded here rather than silently folded into GROUP A's
+--- description. All five are keyed by something other than a player source
+--- (a tier_key, an item key, a permission key, XPTierEditMutex's own fixed
+--- ladder-wide lock constant, and a citizenid, respectively) and correctly
+--- do NOT call RegisterPlayerDropped, same reasoning as MedkitMutex/
 --- PartnershipEstablishMutex above.
 ---
 --- CORRECTION: this comment used to say "audited across all 5 current call
---- sites" as if that count were still current — it had quietly become
---- wrong the moment GROUP B's first member landed, and stayed wrong through
---- three more additions before anyone re-measured it here. The count is 9
---- today (`grep -c 'NewMutex()' server/*.lua`, excluding this constructor's
---- own definition and every prose mention in a comment) — re-derive it
---- yourself before trusting a number in this note again; do not let this
+--- sites", then later "the count is 9 today" — both went stale the moment
+--- the NEXT NewMutex() landed and nobody re-measured this comment at the
+--- same time. Rather than restate another number here for the next
+--- constructor to make stale, re-derive the real count yourself, right
+--- now, before trusting anything below: `grep -c 'NewMutex()' server/*.lua`
+--- (excluding this constructor's own definition and every prose mention in
+--- a comment, i.e. only real `local X = NewMutex()` construction sites)
+--- MUST equal the number of mutexes named across GROUP A + GROUP B above —
+--- if it doesn't, one of these two lists is missing an entry and needs a
+--- new GROUP B-shaped paragraph like this one, not a one-line addition to
+--- an existing list; do not let this
 --- correction itself calcify into the next stale claim.
 --- @return table mutex
 function NewMutex()

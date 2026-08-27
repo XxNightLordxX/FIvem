@@ -269,6 +269,17 @@ local ROSTER_READ_COOLDOWN_MS = 500
 local ROSTER_MUTATE_COOLDOWN_MS = 750
 local RosterReadCooldown = NewCooldown(ROSTER_READ_COOLDOWN_MS)
 local RosterMutateCooldown = NewCooldown(ROSTER_MUTATE_COOLDOWN_MS)
+-- Both keyed by player source ONLY (see the three .Consume(source, ...)
+-- call sites below) -- RegisterPlayerDropped, not StartSweep, is the
+-- correct hook per server/cooldowns.lua's own header. Without this, a
+-- disconnecting source's entry lived forever, and since FXServer RECYCLES
+-- server ids, a brand-new player could inherit a stale "still on cooldown"
+-- timestamp from a completely different prior player on their very first
+-- roster read/mutate -- matches server/tablet.lua's own
+-- TabletReadCooldown.RegisterPlayerDropped() precedent for the identical
+-- source-keyed shape.
+RosterReadCooldown.RegisterPlayerDropped()
+RosterMutateCooldown.RegisterPlayerDropped()
 
 -- Bounded, fixed fetch cap per department -- this callback is
 -- high-command-only (never a base-rank browse surface), so a generous,

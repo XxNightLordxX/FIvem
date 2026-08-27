@@ -531,13 +531,40 @@ tuning.maxCallDurationMs = ResolveConfiguredThresholdMs(
 -- guard above deliberately covers only the fields it validates by name, and
 -- startCooldownMs was not one of them -- so a `startCooldownMs = 0` reached
 -- NewCooldown(0) and errored at file-load time, taking the feature with it.
-local StartSarCallCooldown = NewCooldown(ResolveConfiguredThresholdMs(
-    tuning.startCooldownMs, 600000, 'Config.SARCalls.startCooldownMs'))
+local START_SAR_CALL_COOLDOWN_MS = ResolveConfiguredThresholdMs(
+    tuning.startCooldownMs, 600000, 'Config.SARCalls.startCooldownMs')
+local StartSarCallCooldown = NewCooldown(START_SAR_CALL_COOLDOWN_MS)
 -- Deliberately NOT .RegisterPlayerDropped() -- this cooldown is keyed by
 -- citizenid, which OUTLIVES a disconnect/reconnect within the same server
 -- uptime. Clearing it on disconnect would let a citizenid bypass the
 -- anti-farm floor simply by relogging, defeating the entire reason this
 -- cooldown is keyed by citizenid instead of by source in the first place.
+--
+-- That said, a citizenid who calls ONCE and never plays again (account
+-- abandoned, banned, or simply moved on) would otherwise leave a single
+-- `store[citizenid] = lastTouchedAtMs` entry in this tracker for the rest
+-- of this resource's uptime with nothing to reclaim it -- a real, if slow,
+-- unbounded leak QA found live in this file. FIXED via :StartSweep, not
+-- :RegisterPlayerDropped -- the anti-farm property above depends entirely
+-- on this table surviving a disconnect, so the ONLY safe way to bound its
+-- memory is to evict an entry ONLY once it is no longer doing any gating
+-- work at all, never on a connection-lifecycle event. The predicate below
+-- (`elapsed > threshold * 2`, mirroring server/combat.lua's
+-- TakedownTargetCooldown/BiteHoldTargetCooldown sweep predicates for the
+-- identical "citizenid/targetNetId-keyed, no connection hook" shape) only
+-- ever matches an entry for which IsOnCooldown/Consume would ALREADY
+-- unconditionally return "not on cooldown" -- eviction here can never
+-- change what any future call to this tracker answers, it only reclaims
+-- memory for bookkeeping nothing will ever consult again unless that same
+-- citizenid calls again, at which point Touch simply recreates the entry
+-- fresh. The x2 margin (not x1) is deliberate slack against this file's
+-- own documented GetGameTimer() caveat and normal sweep-vs-touch timing
+-- jitter, so a genuinely-still-cooling-down entry can never be swept out
+-- from under a citizenid who is one poll away from being allowed again.
+local START_SAR_CALL_COOLDOWN_SWEEP_INTERVAL_MS = 60000
+StartSarCallCooldown.StartSweep(START_SAR_CALL_COOLDOWN_SWEEP_INTERVAL_MS, function(now, loggedAt)
+    return (now - loggedAt) > (START_SAR_CALL_COOLDOWN_MS * 2)
+end)
 
 -- SERVER-ISSUED, monotonically increasing session id -- see this file's
 -- header "STALE-SESSION RACE" section for the full writeup. Minted once per

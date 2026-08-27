@@ -97,6 +97,41 @@ local function newFixture(opts)
         Database = opts.database or { enabled = false },
     }
 
+    -- CONTROLLABLE TIME (leak-fix pass): was a permanently-fixed `return 0`
+    -- with a comment claiming "no test in this file relies on real elapsed
+    -- time" -- true when written, but that is exactly what made this
+    -- fixture structurally unable to see RosterReadCooldown/
+    -- RosterMutateCooldown's own cleanup (or lack of it): a cooldown
+    -- tracker frozen at a single instant can never expire, so no test
+    -- built on it could ever distinguish "cleaned up on disconnect" from
+    -- "leaked forever" -- both look identical when `now` never moves.
+    -- `nowMs` is now a real, settable upvalue (default 0, unchanged
+    -- behavior for every pre-existing test that never touches it) --
+    -- `f.advanceTime(ms)` below moves it forward for the tests that need to
+    -- actually observe elapsed time.
+    local nowMs = opts.now or 0
+
+    -- AddEventHandler (leak-fix pass): server/roster.lua's
+    -- RosterReadCooldown/RosterMutateCooldown now call
+    -- .RegisterPlayerDropped() at this file's own load time (server/
+    -- cooldowns.lua's :RegisterPlayerDropped registers a real
+    -- `AddEventHandler('playerDropped', ...)` closure) -- this sandbox
+    -- must supply a real AddEventHandler or loading server/roster.lua
+    -- itself throws "attempt to call a nil value" before any test below
+    -- ever runs. Captures every handler by event name, exactly mirroring
+    -- tests/sarcalls_spec.lua's own `eventHandlers`/`firePlayerDropped`
+    -- shape, so `f.firePlayerDropped(source)` below can fire them the same
+    -- way FXServer would: by setting the ambient `source` global the
+    -- captured closure itself reads (server/cooldowns.lua's
+    -- :RegisterPlayerDropped closure takes no argument, same as every
+    -- other tracker's own cleanup closure), then invoking every captured
+    -- handler with no arguments.
+    local eventHandlers = {}
+    local function addEventHandlerStub(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
     local env = Sandbox.newEnv({
         Config = Config,
         exports = exportsStub,
@@ -104,19 +139,16 @@ local function newFixture(opts)
         print = printStub,
         IsHighCommand = opts.isHighCommand or function() return true end,
         GetPlayerName = function(_src) return 'NativeName' end,
+        AddEventHandler = addEventHandlerStub,
         -- server/cooldowns.lua's NewCooldown/.Consume fall back to
         -- GetGameTimer() whenever no explicit `now` override is passed --
         -- server/roster.lua's own RosterReadCooldown/RosterMutateCooldown
         -- calls never pass one, so this must exist or every single
         -- lib.callback invocation below throws "attempt to call a nil
-        -- value" before ever reaching this file's own logic. A fixed value
-        -- is fine here -- no test in this file relies on real elapsed time,
-        -- and every test that calls the SAME mutation callback twice on the
-        -- SAME source only ever does so after the FIRST call returned
-        -- early (a not_authorized refusal, before the cooldown tracker is
-        -- ever touched), so the cooldown itself is only ever really
-        -- consumed once per source per test regardless.
-        GetGameTimer = function() return 0 end,
+        -- value" before ever reaching this file's own logic. Reads the
+        -- controllable `nowMs` upvalue above (see its own comment for why
+        -- this is no longer a bare fixed `0`).
+        GetGameTimer = function() return nowMs end,
         QueryCertificationRecord = opts.queryCertificationRecord,
         GetXP = opts.getXP,
         IsPinnedDogCharacter = opts.isPinnedDogCharacter,
@@ -134,6 +166,18 @@ local function newFixture(opts)
         printedLines = printedLines,
         playersBySource = playersBySource,
         playersByCitizenId = playersByCitizenId,
+        advanceTime = function(deltaMs) nowMs = nowMs + deltaMs end,
+        --- Fires every captured `playerDropped` handler as if `source` had
+        --- genuinely disconnected -- see addEventHandlerStub's own comment
+        --- above for why this sets the ambient `source` global rather than
+        --- passing it as an argument.
+        --- @param source number
+        firePlayerDropped = function(source)
+            env.source = source
+            for _, handler in ipairs(eventHandlers['playerDropped'] or {}) do
+                handler()
+            end
+        end,
     }
 end
 
@@ -222,6 +266,76 @@ t.test('rosterSetCallsign: refused for a non-high-command caller, allowed once I
     local allowed = f.callbacks['qbx_k9unit:server:rosterSetCallsign'](1, payload)
     t.isTrue(allowed.ok)
     t.equals(f.K9Store.Personnel_GetActiveRow('TARGET2', 'police').callsign, '1-Adam-1')
+end)
+
+-- ----------------------------------------------------------------------
+-- LEAK FIX: RosterReadCooldown / RosterMutateCooldown (QA-found, this
+-- pass). Both are keyed by `source` ONLY. Before this fix, NEITHER had a
+-- .RegisterPlayerDropped() nor a .StartSweep() -- so a source's entry
+-- lived forever, and because FXServer RECYCLES server ids, a brand-new
+-- player could inherit a stale "still on cooldown" timestamp left behind
+-- by a totally different PRIOR occupant of that same id, on their very
+-- first roster read/mutate ever. These tests need the fixture's
+-- previously-fixed `GetGameTimer` and previously-absent `AddEventHandler`
+-- (both added above, this same pass) to even be expressible -- a cooldown
+-- frozen at a single instant can never expire, so no test built on the old
+-- fixture could ever have told "cleaned up on disconnect" apart from
+-- "leaked forever".
+-- ----------------------------------------------------------------------
+
+t.test('LEAK FIX: RosterReadCooldown is cleared on playerDropped -- a source id recycled onto a brand-new player never inherits a stale cooldown left by a different prior occupant', function()
+    local f = newFixture()
+    f.playersBySource[1] = makePlayer('CIT_OLD', 'police')
+
+    local first = f.callbacks['qbx_k9unit:server:rosterList'](1)
+    t.isTrue(first.ok, 'sanity: the first read must succeed')
+
+    -- Immediately afterward, with zero real time elapsed, the SAME source
+    -- is genuinely still inside ROSTER_READ_COOLDOWN_MS (500ms) -- proves
+    -- the tracker is actually gating something, not a vacuous test.
+    local second = f.callbacks['qbx_k9unit:server:rosterList'](1)
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited')
+
+    -- Source 1 disconnects, and FXServer reissues that exact same id to a
+    -- brand-new, unrelated player -- with NO real time having passed.
+    f.firePlayerDropped(1)
+    f.playersBySource[1] = makePlayer('CIT_NEW', 'police')
+
+    local afterRecycle = f.callbacks['qbx_k9unit:server:rosterList'](1)
+    t.isTrue(afterRecycle.ok,
+        'a brand-new player recycled onto a just-freed source id must never inherit a stale cooldown timestamp left behind by a totally different prior occupant of that id')
+end)
+
+t.test('LEAK FIX: RosterReadCooldown genuinely expires after real elapsed time too (not ONLY via playerDropped) -- sanity that the tracker still behaves like a cooldown', function()
+    local f = newFixture()
+    f.playersBySource[1] = makePlayer('CIT_A', 'police')
+    t.isTrue(f.callbacks['qbx_k9unit:server:rosterList'](1).ok)
+    t.isFalse(f.callbacks['qbx_k9unit:server:rosterList'](1).ok, 'sanity: still on cooldown before any time passes')
+
+    f.advanceTime(501) -- past ROSTER_READ_COOLDOWN_MS (500)
+    t.isTrue(f.callbacks['qbx_k9unit:server:rosterList'](1).ok, 'a genuinely elapsed cooldown must allow a fresh read for the SAME still-connected source')
+end)
+
+t.test('LEAK FIX: RosterMutateCooldown is cleared on playerDropped -- same recycled-id bug, the OTHER tracker', function()
+    local f = newFixture()
+    f.playersBySource[1] = makePlayer('CIT_OLD', 'police')
+
+    local first = f.callbacks['qbx_k9unit:server:rosterSetPersonnelRole'](1, {})
+    t.isFalse(first.ok)
+    t.equals(first.error, 'invalid_target', 'sanity: the mutate cooldown is consumed BEFORE payload validation, so an empty payload still proves the cooldown itself fired')
+
+    local second = f.callbacks['qbx_k9unit:server:rosterSetPersonnelRole'](1, {})
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited', 'sanity: the SAME source is genuinely still inside ROSTER_MUTATE_COOLDOWN_MS (750ms)')
+
+    f.firePlayerDropped(1)
+    f.playersBySource[1] = makePlayer('CIT_NEW', 'police')
+
+    local afterRecycle = f.callbacks['qbx_k9unit:server:rosterSetPersonnelRole'](1, {})
+    t.isFalse(afterRecycle.ok)
+    t.equals(afterRecycle.error, 'invalid_target',
+        'a brand-new player recycled onto a just-freed source id must reach payload validation, not a stale rate_limited refusal from a totally different prior occupant of that id')
 end)
 
 -- ----------------------------------------------------------------------

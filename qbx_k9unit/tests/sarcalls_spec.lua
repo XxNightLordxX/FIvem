@@ -254,10 +254,18 @@ local function lastEventFor(target)
     return nil
 end
 
-t.test('server load: registers requestSarCall via lib.callback and abandonSarCall via RegisterNetEvent, and starts exactly one tick thread', function()
+t.test('server load: registers requestSarCall via lib.callback and abandonSarCall via RegisterNetEvent, and starts exactly two threads (the SAR call tick loop + StartSarCallCooldown\'s own TTL sweep)', function()
     t.isNotNil(requestSarCall)
     t.isNotNil(registeredNetEvents['qbx_k9unit:server:abandonSarCall'])
-    t.equals(createThreadCallCount, 1)
+    -- Was 1 (the tick loop only) before this pass's leak fix:
+    -- StartSarCallCooldown (keyed by citizenid, deliberately NOT
+    -- .RegisterPlayerDropped()'d -- see its own declaration comment) now
+    -- also starts a :StartSweep() thread so a citizenid who calls once and
+    -- never plays again does not leave a permanent entry. `tick()` below
+    -- resumes BOTH threads once per call, same as production resumes both
+    -- CreateThread loops independently -- see the dedicated "SWEEP" tests
+    -- further down for proof the sweep never evicts a still-active entry.
+    t.equals(createThreadCallCount, 2)
 end)
 
 t.test('requestSarCall: Config.Features.SARCalls off is a real no-op (reason = denied), even with access, and now ALSO sends a plain "not about you" NotifyPlayer (DISCOVERABILITY FIX)', function()
@@ -357,6 +365,41 @@ t.test('requestSarCall: cooldown is keyed by CITIZENID, not by source -- a relog
     pedCoordsBySource[11] = { x = 0.0, y = 0.0, z = 0.0 }
     local second = requestSarCall(11) -- fakeNow has NOT advanced past startCooldownMs (8000)
     t.isFalse(second.started)
+    t.equals(second.reason, 'cooldown')
+end)
+
+t.test('ANTI-FARM (leak fix regression): StartSarCallCooldown survives BOTH a playerDropped disconnect AND several StartSweep maintenance passes -- only real elapsed time ever clears it, never a relog or a sweep tick', function()
+    playersBySource[13] = { citizenid = 'CIT_ANTIFARM', job = 'police' }
+    pedCoordsBySource[13] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000 -- clear any residual cooldown from earlier tests sharing this citizenid space
+    queueRandom(0.0, 0.0)
+    local first = requestSarCall(13)
+    t.isTrue(first.started)
+    fireAbandonSarCall(13)
+
+    -- Disconnect the source entirely. StartSarCallCooldown is keyed by
+    -- citizenid, not source, and is deliberately NOT
+    -- .RegisterPlayerDropped()'d -- see its own declaration comment. If
+    -- this assertion ever starts failing because someone "fixed" that,
+    -- they have just reopened the exact farm this cooldown exists to
+    -- close.
+    firePlayerDropped(13)
+
+    -- Several maintenance sweep passes run in between (StartSarCallCooldown's
+    -- own :StartSweep thread, this pass's leak fix -- resumed by tick()
+    -- alongside the tick loop, since both are separate CreateThread calls).
+    -- None of them may evict this entry early: real elapsed time (0ms) is
+    -- nowhere near either startCooldownMs (8000) or the sweep's own
+    -- eviction margin (startCooldownMs * 2 = 16000) -- proving the sweep
+    -- only ever reclaims memory for an ALREADY-expired entry, never one
+    -- still doing its anti-farm job.
+    for _ = 1, 5 do tick() end
+
+    -- Relog under a brand-new source id, with NO real time elapsed.
+    playersBySource[14] = { citizenid = 'CIT_ANTIFARM', job = 'police' }
+    pedCoordsBySource[14] = { x = 0.0, y = 0.0, z = 0.0 }
+    local second = requestSarCall(14)
+    t.isFalse(second.started, 'a disconnect + relog + several sweep passes must never bypass the citizenid cooldown')
     t.equals(second.reason, 'cooldown')
 end)
 
