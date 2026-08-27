@@ -222,6 +222,7 @@
     "defense": {
         "handler_under_attack": "Your handler is under attack! Press %s to respond, or use the radial menu.",
         "no_active_alert": "No active handler-down alert.",
+        "alert_expired": "That handler-down alert has already timed out -- too much time passed since your handler was attacked. If they still need help, go find them; a fresh alert will appear if they're attacked again.",
         "already_engaged": "You are already engaged with another target.",
         "no_hostile_detected": "No hostile detected -- select a target from the radial menu instead.",
         "confirm_keybind_label": "K9 Handler-Down Defense (confirm pre-selected target)"
@@ -1484,6 +1485,7 @@
     },
     "kennel": {
         "already_active_deployed": "You already have an active kennel deployed — pick it up before deploying another.",
+        "already_active_deployed_with_distance": "You already have an active kennel deployed, about %sm away — pick it up before deploying another.",
         "already_deployed": "You already have a kennel deployed.",
         "deployed_success": "Kennel deployed.",
         "enter_already_resting": "You are already resting in a kennel.",
@@ -1527,7 +1529,7 @@
         "contextual_deploying": "Deploying a kennel.",
         "contextual_closing": "Closing the kennel door.",
         "contextual_opening": "Opening the kennel door.",
-        "enter_closed": "That kennel is closed. Open it first.",
+        "enter_closed": "That kennel is closed -- ask its owner to open it, or open it yourself first if it's your own kennel.",
         "door_not_authorized": "Only the kennel's owner or whoever is resting inside it can open or close it.",
         "already_closed": "That kennel is already closed.",
         "closed_success": "Kennel closed.",
@@ -1712,6 +1714,8 @@
         "join_request_declined": "Your request to join the search-and-rescue call was declined.",
         "join_request_no_longer_valid_initiator": "Your join request is no longer valid.",
         "join_request_no_longer_valid_self": "That join request is no longer valid.",
+        "join_request_expired_initiator": "The officer you asked did not respond in time, so your request to join their search-and-rescue call has expired. Feel free to ask again if you still want to help.",
+        "join_request_expired_target": "You did not respond to a search-and-rescue join request in time, so it has expired. If you still want their help, they are welcome to ask again.",
         "join_invalid_target": "Invalid officer to ask -- they need an active search-and-rescue call for you to join.",
         "join_too_far": "You need to be closer to that officer to join their search-and-rescue call.",
         "call_full": "That search-and-rescue call already has as many officers on it as it can take.",

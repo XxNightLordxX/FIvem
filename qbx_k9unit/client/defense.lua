@@ -377,8 +377,20 @@ function ConfirmHandlerDownDefense(actionType)
         return
     end
 
+    -- EXPIRED-VS-NEVER-TRIGGERED (this pass -- a refusal-clarity fix, not a
+    -- gate change): read the RAW `PendingDefensePrompt` state BEFORE calling
+    -- HasFreshDefensePrompt() below, which -- via ClearExpiredPrompt -- would
+    -- otherwise nil out an actually-expired prompt in the very same call
+    -- that checks it, making "it timed out" indistinguishable from "there
+    -- was never one" by the time this function could tell the difference.
+    -- Precise, not a time-window heuristic: this reads the exact internal
+    -- state at the exact moment ConfirmHandlerDownDefense itself was
+    -- invoked, so there is no race between "recently expired" and "long
+    -- since expired" to get wrong.
+    local hadPromptButExpired = PendingDefensePrompt ~= nil and GetGameTimer() >= PendingDefensePrompt.expiresAt
     if not HasFreshDefensePrompt() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('defense.no_active_alert'), type = 'error' })
+        local description = hadPromptButExpired and locale('defense.alert_expired') or locale('defense.no_active_alert')
+        lib.notify({ title = locale('common.notify_title'), description = description, type = 'error' })
         return
     end
 

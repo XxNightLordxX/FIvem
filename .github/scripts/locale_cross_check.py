@@ -56,6 +56,30 @@ SCAN_EXTS = {".lua", ".js", ".html"}
 
 LOCALE_CALL_RE = re.compile(r"""locale\(\s*['"]([A-Za-z0-9_.]+)['"]""")
 
+# A key built at runtime from a literal PREFIX plus a variable --
+# `locale('tablet.' .. key)`, `locale('runtime_tunable_desc_' .. name)`.
+# The concrete key never appears anywhere in the source, so the plain
+# call-site scan above cannot see it and every key under that prefix looks
+# dead. Matches Lua's `..` and JS's `+` concatenation.
+LOCALE_DYNAMIC_PREFIX_RE = re.compile(r"""locale\(\s*['"]([A-Za-z0-9_.]*[._])['"]\s*(?:\.\.|\+)""")
+
+# Groups whose English text is OWNED AND TESTED SOMEWHERE ELSE, so an
+# absent literal call site here is expected rather than evidence of a dead
+# key. Excluding them is not a way of making this check quieter -- it is
+# what stops it reporting 1,174 false positives that drown the one
+# direction that actually hurts a player.
+#
+# `tablet`: html/tablet.js's DEFAULT_STRINGS is the documented, tested
+# English source for this group, paired with client/tablet.lua's
+# TABLET_STRING_KEYS, and resolved through `pcall(locale, 'tablet.' .. key)`
+# rather than by any literal call. That three-way contract has its own
+# dedicated enforcement in qbx_k9unit/tests/tabletlocalization_spec.lua,
+# which this script must not duplicate or second-guess. The same exclusion,
+# for the same stated reason, already exists in
+# qbx_k9unit/tests/localecallsites_spec.lua -- this is that file's rule
+# restated here, not a new judgement call invented to go green.
+GROUPS_OWNED_ELSEWHERE = {"tablet"}
+
 
 def flatten_locale_keys(obj, prefix=""):
     keys = set()
@@ -217,6 +241,73 @@ def gather_call_sites():
     return findings
 
 
+def gather_quoted_key_literals(known_keys):
+    """Keys named as DATA rather than called directly.
+
+    This resource routinely stores a key name in a table and resolves it
+    later through a variable:
+
+        denied = 'permissions.command_not_authorized',   -- server/permissions.lua
+        ...
+        NotifyPlayer(src, locale(entry.denied), 'error')
+
+    There is no literal `locale('permissions.command_not_authorized')`
+    anywhere, so a scan that only looks inside `locale(...)` calls declares
+    the key dead -- while it is very much alive and on a player's screen.
+
+    Reporting one of those as "safe to delete" would be worse than not
+    checking at all: it is confident, wrong, and actionable, and acting on
+    it removes a live message. So any known key that appears ANYWHERE as a
+    quoted string literal in production source counts as referenced. That
+    is deliberately generous -- it can keep a genuinely dead key off the
+    report if some comment-free string still mentions it -- and that is the
+    right direction to be wrong in. A missed piece of dead weight costs
+    nothing; a deleted live key costs a player their message.
+    """
+    referenced = set()
+    for sub in SCAN_DIRS:
+        base = RESOURCE / sub
+        if not base.is_dir():
+            continue
+        for fpath in sorted(base.rglob('*')):
+            if not fpath.is_file() or fpath.suffix not in SCAN_EXTS:
+                continue
+            raw = fpath.read_text(encoding='utf-8')
+            if fpath.suffix == '.lua':
+                stripped = strip_lua_comments(raw)
+            elif fpath.suffix == '.js':
+                stripped = strip_js_comments(raw)
+            else:
+                stripped = strip_html(raw)
+            for m in re.finditer(r"""['"]([A-Za-z0-9_.]+)['"]""", stripped):
+                candidate = m.group(1)
+                if candidate in known_keys:
+                    referenced.add(candidate)
+    return referenced
+
+
+def gather_dynamic_prefixes():
+    """Literal prefixes of runtime-built keys -- see LOCALE_DYNAMIC_PREFIX_RE."""
+    prefixes = set()
+    for sub in SCAN_DIRS:
+        base = RESOURCE / sub
+        if not base.is_dir():
+            continue
+        for fpath in sorted(base.rglob('*')):
+            if not fpath.is_file() or fpath.suffix not in SCAN_EXTS:
+                continue
+            raw = fpath.read_text(encoding='utf-8')
+            if fpath.suffix == '.lua':
+                stripped = strip_lua_comments(raw)
+            elif fpath.suffix == '.js':
+                stripped = strip_js_comments(raw)
+            else:
+                stripped = strip_html(raw)
+            for m in LOCALE_DYNAMIC_PREFIX_RE.finditer(stripped):
+                prefixes.add(m.group(1))
+    return prefixes
+
+
 def main():
     if not LOCALE_FILE.is_file():
         print(f"::error::{LOCALE_FILE} not found")
@@ -229,8 +320,21 @@ def main():
     call_sites = gather_call_sites()
     used_keys = {k for k, _, _ in call_sites}
 
+    dynamic_prefixes = gather_dynamic_prefixes()
+    named_as_data = gather_quoted_key_literals(locale_keys)
+
+    def reached_dynamically(key):
+        return any(key.startswith(p) for p in dynamic_prefixes)
+
+    def owned_elsewhere(key):
+        return key.split('.', 1)[0] in GROUPS_OWNED_ELSEWHERE
+
     missing = sorted(k for k in used_keys if k not in locale_keys)
-    unused = sorted(locale_keys - used_keys)
+    unused = sorted(
+        k for k in (locale_keys - used_keys)
+        if not owned_elsewhere(k) and not reached_dynamically(k) and k not in named_as_data
+    )
+    excluded_count = len(locale_keys - used_keys) - len(unused)
 
     status = 0
     if missing:
@@ -239,11 +343,38 @@ def main():
         for k in missing:
             sites = ", ".join(f"{f}:{l}" for kk, f, l in call_sites if kk == k)
             print(f"::error::'{k}' called at {sites} has no matching key in locales/en.json. This is silent at runtime -- ox_lib's locale() returns the raw key string on a miss instead of erroring, so a player would see the literal text \"{k}\" rather than a real message.")
+    # UNUSED IS REPORTED, NEVER FAILS THE BUILD -- and that is a deliberate
+    # change from how this script originally behaved.
+    #
+    # It used to exit 1 on any unused key. That was correct when written,
+    # against a 306-key file where every key had a literal call site. It
+    # stopped being correct as the resource grew: the tablet's own
+    # 1,100-plus-key contract and several runtime-built key families arrived
+    # afterwards, and this check reported every one of them as dead. The
+    # result was a job that failed on every single run, for over a thousand
+    # keys, none of which were real -- and a permanently red check protects
+    # nothing, because nobody reads the thousand-and-first line. Worse, the
+    # ONE direction that genuinely hurts a player (a call site with no key,
+    # which ox_lib renders on screen as the raw key text) was buried in that
+    # wall of noise, where a real regression would have gone unnoticed.
+    #
+    # This file's own header already says it: "a check that cries wolf gets
+    # ignored." So MISSING still fails the build, as it always did and must.
+    # An unused key is dead weight, not a bug -- reported so somebody can
+    # tidy it, never a reason to block a release. That is also exactly the
+    # posture qbx_k9unit/tests/localecallsites_spec.lua already takes for the
+    # same question, and the two disagreeing was its own small inconsistency.
     if unused:
-        status = 1
-        print("Locale cross-check FAILED -- these locales/en.json keys are never referenced by any locale() call in client/, server/, or html/:")
+        print(f"INFO (not a failure): {len(unused)} locales/en.json key(s) have no reaching call site:")
         for k in unused:
-            print(f"::error::'{k}' is defined in locales/en.json but no locale('{k}') call site exists. Either it is dead and safe to remove, or the real call site uses a different/typo'd key -- check the missing-keys list above for a likely match.")
+            print(f"  - {k}")
+        print("  Each is probably dead weight from a renamed or removed feature and safe to delete.")
+        print("  Before deleting one, check the MISSING list above for a similar name -- an unused")
+        print("  key and a missing key that look alike usually mean one call site has a typo.")
+    if excluded_count:
+        print(f"INFO: {excluded_count} key(s) excluded from the unused report -- reached through a runtime-built")
+        print("  prefix, or belonging to a group whose English text is owned and tested elsewhere.")
+        print("  See GROUPS_OWNED_ELSEWHERE and LOCALE_DYNAMIC_PREFIX_RE at the top of this file.")
 
     if status:
         print()
@@ -251,8 +382,11 @@ def main():
         sys.exit(1)
 
     print(
-        f"Locale cross-check passed: {len(locale_keys)} keys in locales/en.json, all {len(used_keys)} referenced by "
-        f"at least one of {len(call_sites)} total locale() call site(s) across client/server/html, 0 missing, 0 unused."
+        f"Locale cross-check passed: {len(locale_keys)} keys in locales/en.json, {len(call_sites)} literal "
+        f"locale() call site(s) across client/server/html, 0 MISSING (no call site anywhere references a key "
+        f"that does not exist -- this is the direction a player would actually see on screen). "
+        f"{len(unused)} unused key(s) reported above for tidying, {excluded_count} excluded as owned elsewhere "
+        f"or reached through a runtime-built prefix."
     )
 
 

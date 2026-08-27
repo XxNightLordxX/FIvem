@@ -3259,8 +3259,17 @@ end)
 --- @return table k9Store, table ctl
 local function newFakeK9Store()
     local rows = {}
-    local getCalls, upsertCalls = {}, {}
+    local getCalls, upsertCalls, waitCalls = {}, {}, {}
     local throwOnGet, throwOnUpsert, failUpsert = false, false, false
+    -- BOOT-ORDER SETTLEMENT (this pass) -- defaults to `true` (settled,
+    -- exactly what every real production boot looks like within a few
+    -- milliseconds of the schema probe's own real query returning) so
+    -- every ONE of the 112+ pre-existing tests above this section, none of
+    -- which calls `ctl.setSchemaSettled`, keeps observing precisely the
+    -- same load behaviour it already asserted on before this pass existed.
+    -- Only `setSchemaSettled(false)` (the dedicated tests below) exercises
+    -- the new branch.
+    local schemaSettled = true
 
     local function shallowCopy(tbl)
         local out = {}
@@ -3282,6 +3291,18 @@ local function newFakeK9Store()
             rows[citizenid] = shallowCopy(row)
             return true
         end,
+        -- BOOT-ORDER SETTLEMENT (this pass) -- mirrors the REAL
+        -- K9Store.WaitForSchemaCheckToSettle's own return contract exactly
+        -- (server/datastore.lua): `true` once the schema-collision
+        -- determination is final, `false` only while it genuinely has not
+        -- settled yet. This fake never actually waits/yields (there is
+        -- nothing timing-dependent to model here -- see this file's own
+        -- FAIL DIRECTION tests just below for why a plain boolean is
+        -- sufficient to pin EnsureStats' own two branches).
+        WaitForSchemaCheckToSettle = function()
+            waitCalls[#waitCalls + 1] = true
+            return schemaSettled
+        end,
     }
 
     return store, {
@@ -3290,8 +3311,10 @@ local function newFakeK9Store()
         setThrowOnGet = function(v) throwOnGet = v end,
         setThrowOnUpsert = function(v) throwOnUpsert = v end,
         setFailUpsert = function(v) failUpsert = v end,
+        setSchemaSettled = function(v) schemaSettled = v end,
         getCallCount = function() return #getCalls end,
         upsertCallCount = function() return #upsertCalls end,
+        waitCallCount = function() return #waitCalls end,
     }
 end
 
@@ -3518,6 +3541,81 @@ t.test('FAIL DIRECTION: K9Store.Wellbeing_Upsert throwing during a flush never c
 end)
 
 -- ============================================================================
+-- BOOT-ORDER SETTLEMENT (boot-order-race audit, this pass -- lifecycle QA
+-- finding: EnsureStats read K9Store.Wellbeing_Get with no call to
+-- K9Store.WaitForSchemaCheckToSettle at all, the one real gap left in
+-- server/datastore.lua's own authoritative caller list; see that file's own
+-- updated list entry for server/wellbeing.lua for the full trigger writeup).
+-- Mirrors the shape tests/datastore_spec.lua's own SETTLEMENT section uses to
+-- pin K9Store.WaitForSchemaCheckToSettle itself: a plain, controllable
+-- boolean answer is enough here (this file's own persistence layer never
+-- talks to K9Store.WaitForSchemaCheckToSettle's real bounded-poll timing --
+-- that mechanism is fully proven once, in tests/datastore_spec.lua, and is
+-- not re-derived per caller anywhere else in this resource's own test suite
+-- either -- see e.g. tests/permissionkeycatalog_spec.lua's/
+-- tests/xptiereditor_spec.lua's own equivalent pinning tests, which stub the
+-- SAME plain boolean rather than re-running a real coroutine race).
+-- ============================================================================
+
+t.test('BOOT-ORDER SETTLEMENT: a not-yet-settled schema check skips the database read entirely and degrades to the exact same fresh default as no database at all -- logged, never a fourth outcome', function()
+    local k9Store, ctl = newFakeK9Store()
+    ctl.setSchemaSettled(false)
+    -- Seeds a REAL, legitimate row first -- the strongest possible control:
+    -- if this test passed merely because there was nothing to load anyway,
+    -- it would prove nothing about the gate actually skipping the read.
+    ctl.seedRow('K9-CID', { fatigue = 50, mood = 20, fearStress = 10, injury = 60, hunger = 5, thirst = 3 })
+
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true, HungerThirstSystem = true }, k9Store = k9Store })
+    f.setPlayer(1, 'K9-CID')
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+
+    t.equals(ctl.waitCallCount(), 1, 'CONTROL: the gate was genuinely consulted, not skipped')
+    t.equals(ctl.getCallCount(), 0, 'CONTROL: Wellbeing_Get must NEVER be called while the schema-collision determination is still unsettled -- even though a real, seeded row exists and would otherwise load successfully')
+    t.equals(snap.fatigue, 100, 'degrades to the exact same fresh default as no database at all -- never the seeded row')
+    t.equals(snap.mood, 100)
+    t.equals(snap.fearStress, 0)
+    t.equals(snap.injury, 100)
+    t.equals(snap.hunger, 100)
+    t.equals(snap.thirst, 100)
+    t.contains(table.concat(f.printedLines, '\n'), 'schema-collision check had not finished', 'the fallback must be logged clearly, never silent')
+end)
+
+t.test('BOOT-ORDER SETTLEMENT control (the positive case, proving the gate does not just always skip): once the schema check has settled, EnsureStats performs its real read exactly as before and picks up the legitimate persisted row', function()
+    local k9Store, ctl = newFakeK9Store()
+    ctl.setSchemaSettled(true) -- explicit, even though this is the default -- this test is ABOUT this value
+    ctl.seedRow('K9-CID', { fatigue = 50, mood = 20, fearStress = 10, injury = 60, hunger = 5, thirst = 3 })
+
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true, HungerThirstSystem = true }, k9Store = k9Store })
+    f.setPlayer(1, 'K9-CID')
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+
+    t.equals(ctl.waitCallCount(), 1, 'CONTROL: the gate was genuinely consulted')
+    t.equals(ctl.getCallCount(), 1, 'CONTROL: settled -- the real read genuinely happened')
+    t.equals(snap.fatigue, 50, 'the legitimate persisted row is loaded verbatim once settled -- the gate must never suppress a real, confirmed-safe read')
+    t.equals(snap.mood, 20)
+    t.equals(snap.hunger, 5)
+    t.equals(snap.thirst, 3)
+end)
+
+t.test('BOOT-ORDER SETTLEMENT is paid at most once per citizenid per session: a second EnsureStats reference for the SAME already-cached citizenid never re-consults the gate or re-reads the database', function()
+    local k9Store, ctl = newFakeK9Store()
+    ctl.seedRow('K9-CID', { fatigue = 50, mood = 20, fearStress = 10, injury = 60, hunger = 5, thirst = 3 })
+
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true }, k9Store = k9Store })
+    f.setPlayer(1, 'K9-CID')
+
+    f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(ctl.waitCallCount(), 1, 'first reference: the gate is consulted once')
+    t.equals(ctl.getCallCount(), 1, 'first reference: the database is read once')
+
+    f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(ctl.waitCallCount(), 1, 'second reference, same session, same citizenid: the gate must NOT be consulted again -- EnsureStats already has this citizenid cached')
+    t.equals(ctl.getCallCount(), 1, 'second reference: the database must NOT be read again either')
+end)
+
+-- ============================================================================
 -- PROOF SCAFFOLDING CHECK (rule 6 of this task): this file must never ship a
 -- leftover "flip this to force red" switch. Grepped by hand, this pass:
 -- `grep -n "FORCE_RED\|DEBUG_BREAK\|TEMP_DISABLE" tests/wellbeing_spec.lua`
@@ -3525,7 +3623,24 @@ end)
 -- (PERSISTENCE ANTI-FARM above, and the LOAD FREEZE test) was verified by
 -- hand-editing server/wellbeing.lua's EnsureStats to ignore `loadedRow` and
 -- reverting immediately after confirming the specific test went red and then
--- green again -- never by leaving a switch in this file.
+-- green again -- never by leaving a switch in this file. The three BOOT-ORDER
+-- SETTLEMENT tests immediately above were verified the same way, this pass:
+-- temporarily replacing EnsureStats' own `local schemaSettled =
+-- type(K9Store.WaitForSchemaCheckToSettle) ~= 'function' or
+-- K9Store.WaitForSchemaCheckToSettle()` with a version that still CALLS
+-- K9Store.WaitForSchemaCheckToSettle() (so the "gate was consulted" CONTROL in
+-- every one of the three tests kept passing, isolating the break to the ONE
+-- thing actually broken -- ignoring the real return value) but then
+-- hard-codes `schemaSettled = true` regardless of the answer. That turned
+-- ONLY the first (negative) test red -- `getCallCount()` read 1 instead of
+-- the expected 0, and the snapshot came back holding the seeded row's real
+-- values instead of fresh defaults, since the query ran despite
+-- settled=false -- while the second (positive) and third (paid-once) tests
+-- stayed green throughout, since both already exercise settled=true and
+-- never depended on the false branch being honored. Confirming the first
+-- test was the one actually exercising the new gate, not a fixture that
+-- never reached it, and that the fix does not accidentally make every case
+-- fall through to the same branch. Reverting restored all three to green.
 -- ============================================================================
 
 os.exit(t.summary())

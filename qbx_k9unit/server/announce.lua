@@ -78,6 +78,21 @@
        therefore never strand an already-open hold or interfere with
        releasing/ending one -- this file adds no new termination path and
        touches none of the existing ones.
+
+       WIRING FIX, THIS PASS: the paragraph above described the intended
+       design from the moment this file was first written, but was not yet
+       true -- IsApprehensionWarned() was defined, individually tested
+       (tests/announce_spec.lua), and called by NOTHING anywhere else in
+       this resource. Config.Features.ApprehensionAnnouncement had zero
+       effect on whether a real bite/takedown succeeded: turning it on
+       opened windows and played the warning bark, and nothing ever asked
+       whether one was open before granting force. Found and fixed this
+       pass -- see server/combat.lua's own FILE-TO-FILE CONTRACT entry for
+       IsApprehensionWarned for the actual call site and
+       tests/combat_spec.lua's own "APPREHENSION ANNOUNCEMENT GATE" section
+       for the red-then-green proof, including the control that matters
+       most for THIS paragraph's own claim: an already-open hold surviving
+       its window expiring mid-hold, released normally.
     6. BALANCE: THIS ONLY MAKES APPREHENSION HARDER. Every branch below
        either does nothing (feature off, guard function absent) or adds a
        NEW way to be refused (no announcement on file for this target) --
@@ -85,11 +100,32 @@
        BiteAndHold/NonLethalTakedown easier to land, matching this
        resource's own stated K9-balance posture (Config.PursuitSprint's
        deliberate speed clamp is the precedent named in this feature's own
-       brief). Config.Features.ApprehensionAnnouncement therefore ships
-       `true` by default, mirroring Config.Combat.ExcludeVehicleSeatedTargets'
-       own precedent immediately below it in config.lua -- a purely
-       restrictive, fairness-motivated check layered onto this SAME shared
-       validator, also shipped `true`.
+       brief). THE ARGUMENT THIS MAKES FOR SHIPPING `true` BY DEFAULT is
+       therefore the same one Config.Combat.ExcludeVehicleSeatedTargets'
+       own precedent immediately below it in config.lua already acted on --
+       a purely restrictive, fairness-motivated check layered onto this
+       SAME shared validator, shipped `true` there.
+
+       STALE-CLAIM FIX (this pass -- caught when this feature's own gate was
+       finally wired into server/combat.lua's ValidateCombatRequest; see
+       that file's own FILE-TO-FILE CONTRACT entry for IsApprehensionWarned
+       for the wiring writeup): this paragraph used to assert
+       Config.Features.ApprehensionAnnouncement/Config.Combat.
+       ApprehensionAnnouncement "therefore" ship `true`, stated as settled
+       fact. They do not -- config.lua ships BOTH `false`. That was not a
+       drift between two files that once agreed; the two were never
+       reconciled in the first place, and this header asserted the
+       conclusion of the argument above as if it were also the decision
+       actually made. THE ACTUAL SHIPPED DEFAULT, AND WHY: `false`, an
+       explicit project-owner call, not an oversight -- requiring a verbal
+       warning before every single bite/takedown is a real roleplay-policy
+       decision a server owner should opt into deliberately, not one this
+       resource should silently impose the moment the file that implements
+       it ships. The BALANCE argument two paragraphs up remains genuinely
+       true and is kept, unedited, as the case FOR an owner who wants
+       stricter use-of-force realism to flip both flags to `true` -- it was
+       never wrong, only prematurely promoted from "the argument for" to
+       "therefore, what ships."
 
     ======================================================================
     SERVER AUTHORITY

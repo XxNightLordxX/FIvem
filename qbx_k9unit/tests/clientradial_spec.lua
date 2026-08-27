@@ -766,6 +766,111 @@ t.test('this spec\'s baseline flags: Bark, Leash, Vehicle, Utility (Phase 1 + re
 end)
 
 -- ----------------------------------------------------------------------
+-- DISPLAY ORDER (whole-menu ease-of-use audit, this pass) -- see
+-- client/radial.lua's own "DISPLAY ORDER PASS" header for the full
+-- front-to-back reasoning this locks in. A pure array-reshuffle right
+-- before registration -- these tests only ever read `f.findMenu('k9unit')`
+-- item ORDER, never presence/absence (already covered above) or onSelect
+-- behavior (covered by each item's own dedicated test elsewhere in this
+-- file).
+-- ----------------------------------------------------------------------
+
+--- @param items table[]
+--- @return table<string, number>
+local function idOrder(items)
+    local order = {}
+    for i, item in ipairs(items) do order[item.id] = i end
+    return order
+end
+
+t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order groups related items into families and fixes Partner Up / Break Partnership -- the one item this pass found genuinely BACKWARDS from every sibling start/stop pair', function()
+    local f = newRadialFixture({
+        features = {
+            CommandTablet = true,
+            ScentTracking = true,
+            ThermalVision = true,
+            NightVision = true,
+            BiteAndHold = true,
+            NonLethalTakedown = true,
+            PropDragging = true,
+            HandlerPartnership = true,
+            Recall = true,
+            HandlerDownDefense = true,
+            DangerWarn = true,
+            FetchMechanic = true,
+            SARCalls = true,
+            TrainingMode = true,
+        },
+    })
+    local items = f.findMenu('k9unit')
+    local order = idOrder(items)
+
+    -- Sanity: every id this test reasons about is actually present under
+    -- this fixture's all-flags-on features.
+    for _, id in ipairs({
+        'k9_open_tablet', 'k9_bark', 'k9_leash', 'k9_vehicle', 'k9_utility',
+        'k9_partner_up', 'k9_break_partnership',
+        'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_vision_cycle',
+        'k9_bite_hold', 'k9_takedown', 'k9_drag', 'k9_defense', 'k9_dangerwarn', 'k9_recall',
+        'k9_fetch', 'k9_kennel', 'k9_sar_call', 'k9_sar_call_join_nearest', 'k9_training',
+    }) do
+        t.isNotNil(order[id], ('%s must be present'):format(id))
+    end
+
+    -- THE ACTUAL FIX: Partner Up (an initiation) now precedes Break
+    -- Partnership (its own termination) -- every OTHER start/stop pair in
+    -- this menu already lists start before stop (Attach before Detach,
+    -- Enter before Exit, Bite & Hold before Release, Drag before Release);
+    -- this pair was the one exception, ordered backwards, before this pass.
+    t.isTrue(order.k9_partner_up < order.k9_break_partnership,
+        'Partner Up must precede Break Partnership, matching every other start/stop pair in this menu')
+
+    -- Command Tablet stays the single most prominent entry.
+    t.equals(order.k9_open_tablet, 1, 'Command Tablet -- "the one entry that reaches everything else" -- must stay first')
+
+    -- The Phase 1 foundational actions (plus their Utility extension point)
+    -- are grouped immediately after the Tablet, not scattered by whichever
+    -- pass happened to add each one.
+    t.isTrue(order.k9_bark < order.k9_partner_up, 'Bark (a Phase 1 foundational action) must precede the Partnership family')
+    t.isTrue(order.k9_leash < order.k9_partner_up, 'Attach/Detach Leash must precede the Partnership family')
+    t.isTrue(order.k9_vehicle < order.k9_partner_up, 'Enter/Exit Vehicle must precede the Partnership family')
+    t.isTrue(order.k9_utility < order.k9_partner_up, 'the Utility opener must precede the Partnership family')
+
+    -- Perception family (search/vision) is grouped together, and precedes
+    -- the Combat/Emergency family -- a K9 finds a scene before it acts on
+    -- one.
+    t.isTrue(order.k9_track_certified < order.k9_thermal_vision)
+    t.isTrue(order.k9_thermal_vision < order.k9_night_vision)
+    t.isTrue(order.k9_night_vision < order.k9_vision_cycle)
+    t.isTrue(order.k9_vision_cycle < order.k9_bite_hold, 'the whole Perception family must precede Combat')
+
+    -- Combat/Emergency family is grouped together, ending on Recall (the
+    -- universal "call it off" action for any of the three engagement types
+    -- immediately before it).
+    t.isTrue(order.k9_bite_hold < order.k9_takedown)
+    t.isTrue(order.k9_takedown < order.k9_drag)
+    t.isTrue(order.k9_drag < order.k9_defense)
+    t.isTrue(order.k9_defense < order.k9_dangerwarn)
+    t.isTrue(order.k9_dangerwarn < order.k9_recall)
+    t.isTrue(order.k9_recall < order.k9_fetch, 'Recall is the hinge back to the lighter, non-combat items after it')
+
+    -- Recreational/logistics pair, then the Search & Rescue Call pair
+    -- (unchanged relative order), then Training last.
+    t.isTrue(order.k9_fetch < order.k9_kennel)
+    t.isTrue(order.k9_kennel < order.k9_sar_call)
+    t.isTrue(order.k9_sar_call < order.k9_sar_call_join_nearest, 'starting a call must precede its own no-argument join convenience')
+    t.isTrue(order.k9_sar_call_join_nearest < order.k9_training, 'Training (practice, never live-duty) stays last')
+end)
+
+t.test('DISPLAY ORDER fail-safe: Training (the last id named in K9_SUBMENU_DISPLAY_ORDER) still lands as the actual last item when every id ordered after it is absent -- proves an explicitly-ordered id is never dropped, just placed', function()
+    local f = newRadialFixture({ features = { TrainingMode = true } })
+    local items = f.findMenu('k9unit')
+    local order = idOrder(items)
+    t.isNotNil(order.k9_training)
+    t.equals(order.k9_training, #items, 'Training must be the last item in the menu when nothing ordered after it is present')
+end)
+
+-- ----------------------------------------------------------------------
 -- 'k9unit_utility' sub-menu (Job 3 regrouping, ease-of-use audit) -- Sit/
 -- Toggle K9 Vest/Open My Gear/Treat K9, none of which carry a release/
 -- termination half worth protecting from an extra menu level (see
@@ -1325,16 +1430,44 @@ t.test('k9_partner_up: no candidate in range notifies radial.no_partner_candidat
     t.equals(f.notifyCalls[1].description, locale('radial.no_partner_candidate'))
 end)
 
-t.test('k9_defense_bite / k9_defense_takedown: guarded -- absent ConfirmHandlerDownDefense does not throw; present, each sends its OWN actionType, GATED on CanShowK9UI', function()
+-- UPDATED (three-surfaces-agree pass, this pass): this test used to pin
+-- the exact bug it was meant to prevent. It asserted the submenu REFUSES
+-- when CanShowK9UI() is false and never reaches ConfirmHandlerDownDefense.
+-- But ConfirmHandlerDownDefense() (client/defense.lua) was itself widened
+-- to HasK9Access() alone earlier today, matching server/combat.lua's
+-- shared ValidateCombatRequest (the same widening already proven above for
+-- Bite & Hold/Non-Lethal Takedown/Drag, and elsewhere in this file for
+-- Bark/Track/Vehicle Enter/SAR Call/Training Start) -- the pre-check here
+-- was never updated to match, so it sat ABOVE an already-correct callee and
+-- became the one thing still refusing a High Command/autoAccessGrade-bypass
+-- holder in the exact emergency this feature exists for (the tablet button
+-- and the keybind both already reached the widened callee). See
+-- client/radial.lua's own comment on this submenu for the full writeup.
+--
+-- What this test pins now: BOTH sub-items always reach the callee
+-- regardless of CanShowK9UI() -- the callee alone is trusted to apply its
+-- own, now-correct HasK9Access() gate. tests/clientdefense_spec.lua owns
+-- proving ConfirmHandlerDownDefense()'s own gate itself.
+t.test('k9_defense_bite / k9_defense_takedown: guarded -- absent ConfirmHandlerDownDefense does not throw; both ALWAYS reach the callee with their own actionType regardless of CanShowK9UI (removed pre-check) -- a bypass holder and an ordinary certified K9 alike', function()
     local fAbsent = newRadialFixture({ features = { HandlerDownDefense = true }, omit = { 'ConfirmHandlerDownDefense' } })
     assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_defense', 'k9_defense_bite'))
     assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_defense', 'k9_defense_takedown'))
 
-    local fDenied = newRadialFixture({ features = { HandlerDownDefense = true }, canShowK9UI = false })
-    fDenied.findInMenu('k9unit_defense', 'k9_defense_bite').onSelect()
-    t.equals(fDenied.denyCallCount(), 1)
-    t.isNil(fDenied.calls.ConfirmHandlerDownDefense)
+    -- THE FIX: a bypass holder (HasK9Access true, CanShowK9UI false --
+    -- exactly a High Command/autoAccessGrade grant with no model/role of its
+    -- own) now reaches the callee through BOTH items, never denied by this
+    -- file's own removed pre-check.
+    local fBypass = newRadialFixture({ features = { HandlerDownDefense = true }, hasK9Access = true, canShowK9UI = false })
+    fBypass.findInMenu('k9unit_defense', 'k9_defense_bite').onSelect()
+    fBypass.findInMenu('k9unit_defense', 'k9_defense_takedown').onSelect()
+    t.equals(fBypass.denyCallCount(), 0, 'the radial item itself must never deny -- that decision belongs to the (already-widened) callee alone now')
+    t.equals(#fBypass.calls.ConfirmHandlerDownDefense, 2)
+    t.equals(fBypass.calls.ConfirmHandlerDownDefense[1][1], 'bite')
+    t.equals(fBypass.calls.ConfirmHandlerDownDefense[2][1], 'takedown')
 
+    -- CONTROL: an ordinary certified K9 (both true, this fixture's own
+    -- default) still reaches the callee too -- proves this fix did not
+    -- accidentally turn the items into a no-op for the common case.
     local fGranted = newRadialFixture({ features = { HandlerDownDefense = true } })
     fGranted.findInMenu('k9unit_defense', 'k9_defense_bite').onSelect()
     fGranted.findInMenu('k9unit_defense', 'k9_defense_takedown').onSelect()

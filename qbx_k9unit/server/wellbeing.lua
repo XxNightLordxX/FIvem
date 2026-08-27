@@ -1549,13 +1549,73 @@ local function EnsureStats(citizenid)
     -- degrades to `loadedRow = nil` (the fresh-default branch below),
     -- never propagates out of EnsureStats -- a load failure must never
     -- break every OTHER wellbeing feature for this citizenid.
+    --
+    -- BOOT-ORDER SETTLEMENT (boot-order-race audit, this pass -- the same
+    -- fix already shipped for server/main.lua/server/certtiers.lua/
+    -- server/partnership.lua/server/progression.lua/server/xptiers.lua/
+    -- server/k9profiles.lua/server/permissions.lua/
+    -- server/permissionkeycatalog.lua/server/equipmentshop.lua; this file
+    -- was the one real gap left in server/datastore.lua's own authoritative
+    -- caller list -- see K9Store.WaitForSchemaCheckToSettle's own doc
+    -- comment there, now updated to name this file too). The SELECT inside
+    -- K9Store.Wellbeing_Get names only six columns -- narrower than the
+    -- full column set server/datastore.lua's own EXPECTED_TABLE_COLUMNS
+    -- checks k9_wellbeing against -- so without this, a citizenid's FIRST
+    -- reference this session could run that narrower SELECT against a
+    -- foreign `k9_wellbeing` table the full probe would correctly reject as
+    -- a collision, during the one window before that probe's own yielding
+    -- query has returned. THE CONCRETE TRIGGER, traced end to end: a K9
+    -- handler's own ped model is world state, not Lua state -- it survives
+    -- a `restart qbx_k9unit` untouched. client/wellbeing.lua's own
+    -- on-demand-snapshot thread checks `IsOwnModelK9()` on its very FIRST
+    -- iteration, with no leading Wait, and calls
+    -- 'qbx_k9unit:server:getWellbeingSnapshot' immediately the instant that
+    -- first check reads true -- which it does, immediately, for every
+    -- player who was already K9-modeled at the moment this resource
+    -- restarted. That callback reaches this exact line, well before
+    -- TickWellbeing's own shared thread has even taken its first
+    -- `Wait(TICK_INTERVAL_MS)`. Silently trusting a stranger's row here
+    -- would mean displaying (and, once dirtied, persisting over) another
+    -- resource's own data as this citizenid's real wellbeing stats --
+    -- wrong data, not a crash, and the harder of the two failure modes to
+    -- notice. PAID AT MOST ONCE PER CITIZENID PER SESSION (this whole
+    -- branch only runs on a genuine cache miss -- see this function's own
+    -- guard at its own top) and AT MOST ONCE, EVER, PER BOOT
+    -- (K9Store.WaitForSchemaCheckToSettle's own SCHEMA_CHECK_SETTLED latch
+    -- -- every reference after this boot's determination is final returns
+    -- instantly, true, paying no real wait at all). SOFT-GUARDED
+    -- (`type(K9Store.WaitForSchemaCheckToSettle) == 'function'`), matching
+    -- this exact function's own already-established "genuine cross-file
+    -- dependency, no consumer exists yet" idiom for
+    -- K9Store.Wellbeing_Get/Wellbeing_Upsert just above -- an older
+    -- server/datastore.lua that predates this accessor simply behaves
+    -- exactly as this file already did before this pass, never a new hang.
+    -- On a `false` return (the probe genuinely had not settled within the
+    -- wait budget), this skips the query entirely and falls straight
+    -- through to the SAME fresh-default branch below already used for "no
+    -- row"/"a thrown error"/"database off by config" -- per this function's
+    -- own header "FREEZE, NEVER A CATCH-UP DECAY" and this whole file's
+    -- fail-closed convention, an unsettled/unknown schema state must
+    -- collapse to that identical fresh-default outcome, never a new fourth
+    -- one. This can never be used to reset an ALREADY-LOADED citizenid's
+    -- stats: WellbeingStats[citizenid] is set once, immediately below, and
+    -- every later EnsureStats call for the same citizenid this session
+    -- short-circuits at this function's own top, long before this branch --
+    -- a relog/character-switch/reconnect that lands on a recycled server id
+    -- reaches this branch again only via a genuine eviction-and-reload (see
+    -- EvictStaleWellbeingEntries above), never merely by disconnecting.
     local loadedRow = nil
     if WellbeingPersistenceAvailable() then
-        local ok, rowOrErr = pcall(K9Store.Wellbeing_Get, citizenid)
-        if ok then
-            loadedRow = rowOrErr
+        local schemaSettled = type(K9Store.WaitForSchemaCheckToSettle) ~= 'function' or K9Store.WaitForSchemaCheckToSettle()
+        if schemaSettled then
+            local ok, rowOrErr = pcall(K9Store.Wellbeing_Get, citizenid)
+            if ok then
+                loadedRow = rowOrErr
+            else
+                print(('[qbx_k9unit] wellbeing.lua: K9Store.Wellbeing_Get threw for citizenid %s -- degrading to a fresh in-memory default for this session (%s)'):format(citizenid, tostring(rowOrErr)))
+            end
         else
-            print(('[qbx_k9unit] wellbeing.lua: K9Store.Wellbeing_Get threw for citizenid %s -- degrading to a fresh in-memory default for this session (%s)'):format(citizenid, tostring(rowOrErr)))
+            print(('[qbx_k9unit] wellbeing.lua: the schema-collision check had not finished within its wait budget -- creating a fresh in-memory default for citizenid %s (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. This citizenid\'s next reference after the check settles (or after this in-memory entry is evicted and reloaded) will pick up any real persisted row.'):format(citizenid))
         end
     end
 

@@ -41,21 +41,18 @@
         -- reused verbatim from client/combat.lua's own identical "no
         eligible target" case, rather than minting a near-duplicate string.
 
-    ONE NEW LOCALE KEY THIS FEATURE NEEDS, NOT YET LANDED (locales/en.json
-    is off-limits to this pass -- see this pass's own report for the exact
-    proposed wording to route): 'announce.warning_received', read by this
+    STALE-NOTE FIX (this pass): 'announce.warning_received', read by this
     file's own 'qbx_k9unit:client:apprehensionWarningReceived' handler
     below to tell the SUSPECT, specifically, that they have just been
-    warned. Calling locale() for a key that does not exist yet is SAFE in
-    real production -- ox_lib's real locale() returns the raw key string
-    rather than erroring on a miss (see tests/fixtures/sandbox.lua's own
-    comment contrasting its own stricter, hard-asserting test-only
-    behavior against this) -- so shipping this call now is a disclosed,
-    non-breaking degradation (a player would briefly see the literal key
-    on screen) until main lands the real key, mirroring the exact
-    "propose the key, degrade gracefully until it lands" precedent
-    server/combat.lua's own 'combat.tier_capability_denied' history already
-    used once.
+    warned, HAS LANDED in locales/en.json -- this section used to describe
+    it as "not yet landed" and explain why shipping the call anyway was
+    safe (ox_lib's real locale() degrades to the raw key on a miss, rather
+    than erroring). That degradation note is still accurate in general (see
+    server/combat.lua's own 'combat.tier_capability_denied' history for the
+    same pattern used once), it just no longer describes this key's own
+    current state -- kept here, corrected, rather than deleted, so a future
+    reader does not have to rediscover why this call was ever written
+    "riskily" in the first place.
 ]]
 
 --- Small, self-contained copy of client/combat.lua's `local`

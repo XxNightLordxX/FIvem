@@ -824,6 +824,36 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     end
 
     if Kennels[citizenid] then
+        -- NAME WHERE (this pass -- refusal-clarity fix, not a gate change):
+        -- this message used to only ever say "you already have one," never
+        -- where -- a handler who genuinely forgot where they left it had no
+        -- way to act on that beyond "go look everywhere." Best-effort only:
+        -- if the existing kennel's own entity happens not to be resolvable
+        -- right now (never observed in practice -- a deployed kennel is a
+        -- persistent world object, not something that streams out -- but
+        -- defensively handled rather than assumed away), this falls back to
+        -- the original, still-honest, distance-free message rather than
+        -- erroring or showing a garbage number.
+        --
+        -- Distance read by plain `.x`/`.y`/`.z` field access, deliberately
+        -- NOT the `#(a - b)` vector-subtraction idiom this file's own
+        -- requestEnterKennel/requestPickupKennel call sites use elsewhere --
+        -- see server/sarcalls.lua's own header "NATIVE/GLOBAL VERIFICATION"
+        -- section for why this is the more portable idiom (works whether
+        -- GetEntityCoords hands back a real vector3 or a bare table, no
+        -- metatable dependency either way).
+        local existingKennelEntity = ResolveNetworkEntity(Kennels[citizenid].netId, 3)
+        if existingKennelEntity then
+            local requesterPed = GetPlayerPed(src)
+            if requesterPed ~= 0 then
+                local requesterCoords = GetEntityCoords(requesterPed)
+                local kennelCoords = GetEntityCoords(existingKennelEntity)
+                local dx, dy, dz = requesterCoords.x - kennelCoords.x, requesterCoords.y - kennelCoords.y, requesterCoords.z - kennelCoords.z
+                local distanceMeters = math.sqrt(dx * dx + dy * dy + dz * dz)
+                NotifyPlayer(src, locale('kennel.already_active_deployed_with_distance', ('%d'):format(math.floor(distanceMeters + 0.5))), 'error')
+                return
+            end
+        end
         NotifyPlayer(src, locale('kennel.already_active_deployed'), 'error')
         return
     end

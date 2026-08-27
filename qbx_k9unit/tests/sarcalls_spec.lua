@@ -115,6 +115,45 @@ local function RegisterNetEvent(eventName, handler)
     registeredNetEvents[eventName] = handler
 end
 
+--- UNANSWERED-REQUEST EXPIRY NOTICE (this pass) -- server/sarcalls.lua's own
+--- requestJoinSarCall now schedules a one-shot SetTimeout per request (see
+--- that handler's own comment of the same name). DEADLINE-AWARE, unlike
+--- tests/clientcombat_spec.lua's own simpler SetTimeout stub (that file
+--- never needs two INDEPENDENTLY-scheduled timeouts with different real
+--- deadlines alive at once) -- each entry records the ABSOLUTE `fakeNow`
+--- instant it should fire at (captured at scheduling time, reading the
+--- SAME `fakeNow` upvalue GetGameTimer() above already exposes to
+--- production code), so firePendingTimeouts() below only ever runs a
+--- callback once `fakeNow` has genuinely reached its own deadline --
+--- critical for the IDENTITY GUARD test, which schedules a SECOND, later
+--- timeout while an EARLIER one is still outstanding and must not let
+--- firing the first one accidentally also fire the second one early.
+local pendingTimeouts = {} -- { { deadline = number, fn = function }, ... }
+local function SetTimeout(ms, fn)
+    pendingTimeouts[#pendingTimeouts + 1] = { deadline = fakeNow + ms, fn = fn }
+end
+
+--- Fires every currently-queued SetTimeout callback whose own deadline has
+--- already been reached by the current `fakeNow` (in scheduling order),
+--- leaving any not-yet-due entry queued for a later call -- mirrors how
+--- FXServer's own scheduler invokes each one exactly once, at its own
+--- delay, never early. A test that cares about "the TTL has now passed"
+--- should advance `fakeNow` itself first, then call this.
+local function firePendingTimeouts()
+    local due, notDue = {}, {}
+    for _, entry in ipairs(pendingTimeouts) do
+        if fakeNow >= entry.deadline then
+            due[#due + 1] = entry.fn
+        else
+            notDue[#notDue + 1] = entry
+        end
+    end
+    pendingTimeouts = notDue
+    for _, fn in ipairs(due) do
+        fn()
+    end
+end
+
 --- Fires the captured abandonSarCall net-event handler as if
 --- TriggerServerEvent('qbx_k9unit:server:abandonSarCall') had genuinely
 --- arrived from `abandonSource` -- see the forward-declaration comment
@@ -233,6 +272,7 @@ serverEnv = Sandbox.newEnv({
     Wait = threadRunner.Wait,
     AddEventHandler = AddEventHandler,
     RegisterNetEvent = RegisterNetEvent,
+    SetTimeout = SetTimeout,
     math = FakeMath,
     GetPlayerPed = GetPlayerPed,
     GetEntityCoords = GetEntityCoords,
@@ -1306,6 +1346,132 @@ t.test('a non-consenting officer cannot be dragged into a call: DECLINING a join
 
     fireAbandonSarCall(103) -- cleanup
     fireAbandonSarCall(102)
+end)
+
+-- ------------------------------------------------------------------------
+-- UNANSWERED-REQUEST EXPIRY NOTICE (this pass) -- before this pass, a join
+-- request the owner simply never answered (never accepted, never declined)
+-- just sat in PendingSarJoinRequests until some LATER, unrelated event
+-- happened to clear it -- the requester's own screen never learned anything
+-- past its own initial "request sent" toast. See requestJoinSarCall's own
+-- comment of the same name in server/sarcalls.lua.
+-- ------------------------------------------------------------------------
+
+t.test('UNANSWERED-REQUEST EXPIRY NOTICE: a join request the owner never answers notifies BOTH sides once the TTL passes, and genuinely frees the slot', function()
+    playersBySource[170] = { citizenid = 'CIT_OWNER_170', job = 'police' }
+    playersBySource[171] = { citizenid = 'CIT_ASKER_171', job = 'police' }
+    playersBySource[172] = { citizenid = 'CIT_ASKER_172', job = 'police' }
+    pedCoordsBySource[170] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[171] = { x = 1.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[172] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(170)
+
+    fireRequestJoinSarCall(171, 170)
+    t.contains(lastNotifyFor(171).description, locale('sar.join_request_sent'))
+
+    -- The owner never calls fireRespondJoinSarCall at all -- just leaves it.
+    -- Advance past Config.SARCalls.joinRequestTTLMs (this fixture never
+    -- overrides it -- production's own clamp-and-warn default is 30000ms)
+    -- and let the scheduled SetTimeout actually fire.
+    fakeNow = fakeNow + 30001
+    firePendingTimeouts()
+
+    t.contains(lastNotifyFor(171).description, locale('sar.join_request_expired_initiator'), "the REQUESTER must be told nobody answered in time")
+    t.contains(lastNotifyFor(170).description, locale('sar.join_request_expired_target'), "the OWNER must ALSO be told their unanswered prompt has expired")
+
+    -- Genuinely freed, not merely notified about: a DIFFERENT officer can
+    -- now ask the same owner with no "pending request exists" rejection.
+    fireRequestJoinSarCall(172, 170)
+    local prompt = lastEventFor(170)
+    t.equals(prompt.event, 'qbx_k9unit:client:sarJoinRequest', 'the slot must have been genuinely cleared, not just silently notified about')
+    t.equals(prompt.args[1], 172)
+
+    fireRespondJoinSarCall(170, 172, false) -- decline, cleanup
+    fireAbandonSarCall(170)
+end)
+
+t.test('UNANSWERED-REQUEST EXPIRY NOTICE, CONTROL: a request answered normally, well before its TTL, produces NO duplicate/incorrect notify when its now-stale timeout later fires', function()
+    playersBySource[173] = { citizenid = 'CIT_OWNER_173', job = 'police' }
+    playersBySource[174] = { citizenid = 'CIT_ASKER_174', job = 'police' }
+    pedCoordsBySource[173] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[174] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(173)
+
+    fireRequestJoinSarCall(174, 173)
+    fireRespondJoinSarCall(173, 174, true) -- accepted well within the TTL
+    t.contains(lastNotifyFor(174).description, locale('sar.joined_call'))
+
+    local notifyCountAfterAccept = #notifyCalls
+
+    -- The SAME SetTimeout requestJoinSarCall scheduled earlier still fires
+    -- eventually -- its own reference-identity guard must recognize the
+    -- pending slot was already consumed (by the real accept above, not by
+    -- this callback) and do nothing at all: no expiry notify to either
+    -- party, and certainly nothing that could contradict the accept they
+    -- already received.
+    fakeNow = fakeNow + 30001
+    firePendingTimeouts()
+
+    t.equals(#notifyCalls, notifyCountAfterAccept, 'a stale timeout for an already-answered request must be a complete no-op')
+
+    fireAbandonSarCall(174)
+    fireAbandonSarCall(173)
+end)
+
+t.test('UNANSWERED-REQUEST EXPIRY NOTICE, IDENTITY GUARD: a stale timeout for a slot since claimed by a DIFFERENT, newer request never touches that newer request', function()
+    playersBySource[175] = { citizenid = 'CIT_OWNER_175', job = 'police' }
+    playersBySource[176] = { citizenid = 'CIT_ASKER_176', job = 'police' }
+    playersBySource[177] = { citizenid = 'CIT_ASKER_177', job = 'police' }
+    pedCoordsBySource[175] = { x = 0.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[176] = { x = 1.0, y = 0.0, z = 0.0 }
+    pedCoordsBySource[177] = { x = 1.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    requestSarCall(175)
+
+    -- First request, from 176, never answered.
+    fireRequestJoinSarCall(176, 175)
+
+    -- The deadline passes, but nothing has actually fired the scheduled
+    -- SetTimeout callback yet (this fixture only ever fires one when a test
+    -- explicitly calls firePendingTimeouts -- exactly the ordering a real
+    -- server could also produce, since the request's own TTL and the
+    -- SetTimeout's own delay are the same number by construction, not
+    -- strictly ordered relative to a slot-clobbering event that also
+    -- becomes legal at that same instant).
+    fakeNow = fakeNow + 30001
+
+    -- A SECOND, entirely different requester now legitimately claims the
+    -- same slot -- allowed because the FIRST request's own expiresAt has
+    -- already passed (requestJoinSarCall's own anti-clobber check only
+    -- blocks against a still-UNEXPIRED pending entry).
+    fireRequestJoinSarCall(177, 175)
+    local secondPrompt = lastEventFor(175)
+    t.equals(secondPrompt.args[1], 177, "the second request must have genuinely claimed the slot")
+
+    local notifyCountBeforeStaleFire = #notifyCalls
+
+    -- NOW the first request's own stale SetTimeout finally fires. Its
+    -- reference-identity guard must see the slot no longer holds ITS OWN
+    -- table and do nothing -- neither notifying 176 (a correct, if
+    -- redundant, "expired" -- but this pass's own no-op posture skips it
+    -- rather than risk it) nor, far more importantly, ever touching the
+    -- SECOND request 177 legitimately still has pending.
+    firePendingTimeouts()
+
+    t.equals(#notifyCalls, notifyCountBeforeStaleFire, 'a stale timeout superseded by a newer request must be a complete no-op')
+
+    -- Proof the second request is genuinely intact, not silently cleared:
+    -- the owner can still accept it normally.
+    fireRespondJoinSarCall(175, 177, true)
+    t.contains(lastNotifyFor(177).description, locale('sar.joined_call'), "the SECOND request must have survived the FIRST request's own stale timeout completely untouched")
+
+    fireAbandonSarCall(177)
+    fireAbandonSarCall(175)
 end)
 
 t.test('proximity: a requester standing farther than Config.SARCalls.joinProximityMeters from the owner is rejected, and never occupies the single-slot pending table', function()

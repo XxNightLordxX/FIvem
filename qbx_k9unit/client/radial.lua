@@ -1614,14 +1614,32 @@ local function RegisterK9RadialMenu()
     --- alert'"), so there's no toggle shape to collapse them into the way
     --- Bite & Hold/Drag collapse their own start/stop pairs into one item.
     ---
-    --- NEITHER sub-item skips CanShowK9UI() -- this is an INITIATION action
-    --- (starts a bite/takedown request against a suggested hostile), never a
-    --- release/termination, so the "no unbounded trap" exemption Recall/Break
-    --- Partnership/the various Release branches rely on above does not apply
-    --- here. This mirrors ConfirmHandlerDownDefense()'s own internal
-    --- CanShowK9UI()/DenyK9UIAccess() gate -- this file's redundant pre-check
-    --- here follows the same "check here too, even though the callee already
-    --- checks" posture every other gated item in this file already uses.
+    --- UPDATED (three-surfaces-agree pass, this pass): this comment used to
+    --- claim NEITHER sub-item skips CanShowK9UI() because doing so "mirrors
+    --- ConfirmHandlerDownDefense()'s own internal CanShowK9UI()/
+    --- DenyK9UIAccess() gate" -- that claim went stale earlier today when
+    --- client/defense.lua's ConfirmHandlerDownDefense() was itself widened
+    --- to HasK9Access() alone (matching server/combat.lua's shared
+    --- ValidateCombatRequest, which has never checked model/role -- the
+    --- exact same widening already applied to Bite & Hold/Non-Lethal
+    --- Takedown/Drag above, and to Bark/Track/Vehicle Enter/SAR Call/
+    --- Training Start elsewhere in this file). The two pre-checks below were
+    --- never updated to match, so they sat ABOVE an already-correct callee
+    --- and became the one thing still refusing: a High Command/
+    --- autoAccessGrade-bypass holder got the "your handler is down" alert
+    --- (client/defense.lua's own handlerDownDefenseTrigger has no role/model
+    --- check of its own either), the keybind worked (it calls
+    --- ConfirmHandlerDownDefense() directly, no pre-check of its own), and
+    --- both the tablet button and this radial submenu refused -- three
+    --- surfaces disagreeing in the exact emergency this feature exists for.
+    --- REMOVED HERE for that reason -- not a widening of anything the server
+    --- would otherwise refuse, only the removal of a stricter client-only
+    --- refusal the (already-widened) callee never asked for. Both sub-items
+    --- now call straight through, same "the callee is trusted to gate
+    --- itself" posture k9_prop_attachment above already established for a
+    --- different reason (that one because the callee alone knows add-vs-
+    --- remove; this one because the callee alone now has the correct,
+    --- current gate).
     if Config.Features.HandlerDownDefense then
         lib.registerRadial({
             id = 'k9unit_defense',
@@ -1631,11 +1649,6 @@ local function RegisterK9RadialMenu()
                     label = locale('radial.defense_bite_label'),
                     icon = 'paw',
                     onSelect = function()
-                        if not CanShowK9UI() then
-                            DenyK9UIAccess('common.no_k9_role_or_access')
-                            return
-                        end
-
                         if type(ConfirmHandlerDownDefense) == 'function' then
                             ConfirmHandlerDownDefense('bite')
                         end
@@ -1646,11 +1659,6 @@ local function RegisterK9RadialMenu()
                     label = locale('radial.defense_takedown_label'),
                     icon = 'zzz',
                     onSelect = function()
-                        if not CanShowK9UI() then
-                            DenyK9UIAccess('common.no_k9_role_or_access')
-                            return
-                        end
-
                         if type(ConfirmHandlerDownDefense) == 'function' then
                             ConfirmHandlerDownDefense('takedown')
                         end

@@ -753,7 +753,24 @@
       owned amounts).
 
     ======================================================================
-    NATIVE/GLOBAL VERIFICATION: this file introduces ZERO new natives.
+    NATIVE/GLOBAL VERIFICATION (UPDATED, UNANSWERED-REQUEST EXPIRY NOTICE
+    pass): this file now uses ONE global new to ITSELF -- `SetTimeout`,
+    called once per requestJoinSarCall (see that handler's own "UNANSWERED-
+    REQUEST EXPIRY NOTICE" comment). Not a new native to this RESOURCE --
+    already allowlisted in the repo-root .luacheckrc's top-level `globals`
+    table (confirmed present before this pass touched it) from
+    client/combat.lua's own established use of it for its own cancellable-
+    wait scheduling; this is simply this file's own first call site. A
+    genuine FXServer global available in both realms (Citizen.SetTimeout),
+    fires its callback exactly once, does not need `Wait()`/a coroutine to
+    use, and needs no cleanup/cancellation handle here -- see that comment's
+    own "REFERENCE-IDENTITY GUARD" for why a stale/superseded firing is
+    already a safe no-op rather than something that would need cancelling.
+    Every other native/global claim below is otherwise UNCHANGED by this
+    pass.
+    ======================================================================
+    NATIVE/GLOBAL VERIFICATION (ORIGINAL): this file otherwise introduces
+    ZERO new natives.
     GetPlayers/GetPlayerPed/GetEntityCoords/GetGameTimer are all already
     allowlisted in the repo-root .luacheckrc read_globals list from this
     resource's existing usage elsewhere (server/integrations.lua's
@@ -1790,7 +1807,57 @@ RegisterNetEvent('qbx_k9unit:server:requestJoinSarCall', function(targetServerId
         return -- silent no-op: rate-limited, not an error worth notifying about (matches this resource's leash/partnership-request convention)
     end
 
-    PendingSarJoinRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + tuning.joinRequestTTLMs }
+    -- UNANSWERED-REQUEST EXPIRY NOTICE (this pass -- closes a real "did
+    -- either side ever learn" gap): before this pass, a request the owner
+    -- simply never answered (never accepted, never declined -- just left
+    -- the prompt sitting, alt-tabbed, or was busy) relied ENTIRELY on
+    -- respondJoinSarCall's own lazy `GetGameTimer() > pending.expiresAt`
+    -- check to ever notice the TTL had passed -- and that check only runs
+    -- if/when the owner eventually DOES respond. A request that is never
+    -- answered at all just sits in PendingSarJoinRequests, silently, until
+    -- some LATER, unrelated event happens to clear it (the owner
+    -- disconnecting, or the owner leaving whatever call the request was
+    -- about) -- the requester's own screen never shows anything past its
+    -- own initial "request sent" toast, for as long as the owner leaves the
+    -- prompt untouched. Mirrors server/main.lua's PendingLeashRequests /
+    -- server/partnership.lua's PendingPartnershipRequests, which share this
+    -- exact same lazy-only shape -- both out of this file's own ownership,
+    -- flagged in this pass's own report rather than changed here.
+    --
+    -- THE FIX: a single, one-shot SetTimeout, fired exactly once, exactly
+    -- tuning.joinRequestTTLMs after this request is created -- proactively
+    -- tells BOTH sides once the window has genuinely closed, rather than
+    -- waiting for either party to poke it. REFERENCE-IDENTITY GUARD, not a
+    -- second read of PendingSarJoinRequests[targetServerId]'s own fields:
+    -- `pendingEntry` below is captured as a local BEFORE the table write, so
+    -- the callback's `PendingSarJoinRequests[targetServerId] == pendingEntry`
+    -- check can only ever match THIS EXACT request's own table, never a
+    -- later, unrelated one that happens to reuse the same `targetServerId`
+    -- slot (server ids are recycled, and a slot can legitimately hold a
+    -- brand-new request from a DIFFERENT requester by the time this fires) --
+    -- a plain field comparison (e.g. re-checking `.from`/`.expiresAt`) could
+    -- theoretically collide; table identity cannot. A no-op, by design, in
+    -- every case where this specific request is no longer the one occupying
+    -- the slot: already consumed by a genuine accept/decline
+    -- (respondJoinSarCall sets `PendingSarJoinRequests[src] = nil`),
+    -- already cleared by either party leaving a call or disconnecting
+    -- (ClearPendingSarJoinRequestsFor, called from RemoveMemberFromSarCall/
+    -- playerDropped), or already superseded by a newer request occupying the
+    -- same slot -- every one of those paths already notifies whoever needs
+    -- notifying through its own existing message, so this callback firing
+    -- for any of them would be redundant, never wrong, which is exactly why
+    -- the identity guard suppresses it outright rather than merely risking a
+    -- double message.
+    local pendingEntry = { from = src, expiresAt = GetGameTimer() + tuning.joinRequestTTLMs }
+    PendingSarJoinRequests[targetServerId] = pendingEntry
+
+    SetTimeout(tuning.joinRequestTTLMs, function()
+        if PendingSarJoinRequests[targetServerId] == pendingEntry then
+            PendingSarJoinRequests[targetServerId] = nil
+            NotifyPlayer(src, locale('sar.join_request_expired_initiator'), 'error')
+            NotifyPlayer(targetServerId, locale('sar.join_request_expired_target'), 'inform')
+        end
+    end)
 
     TriggerClientEvent('qbx_k9unit:client:sarJoinRequest', targetServerId, src)
     NotifyPlayer(src, locale('sar.join_request_sent'), 'inform')

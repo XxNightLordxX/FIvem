@@ -1055,6 +1055,52 @@ function IsFeatureGroupParentEnabled(flatName)
     return familyTable.enabled ~= false
 end
 
+--- @param value boolean
+--- @return string -- 'ON' or 'OFF' -- this whole diagnostic is written for
+--- an owner reading server console output, not a developer, so it never
+--- says "true"/"false" or "boolean"
+local function OnOffWord(value)
+    return value and 'ON' or 'OFF'
+end
+
+--- Prints the warning this section exists to add. Config.Features and
+--- Config.FeatureGroups name the SAME flag two different ways, and they
+--- disagree, while the family (if any) is still enabled -- so nothing was
+--- ever forced off, the grouped value is just a quietly different answer
+--- than Config.Features gives, and Config.FeatureGroups always wins. This
+--- is the exact shape that silently kept HandlerXPProgression's handler
+--- rank ladder minting zero XP after Config.Features.HandlerXPProgression
+--- was flipped back to `true` -- see that key's own header comment above
+--- for the full incident -- and it is reported here for every flag this
+--- resolver handles, not only that one.
+---
+--- A family whose own `enabled` is `false` gets its OWN, separate warning
+--- instead (see `forcedOff` below) -- that case is not silent today and is
+--- not this function's job; this one exists specifically for the case that
+--- prints nothing today.
+--- @param flatName string -- the Config.Features key
+--- @param groupedLocation string -- e.g. 'Config.FeatureGroups.Progression.HandlerXP', 'Config.FeatureGroups.Detection.enabled', or 'Config.FeatureGroups.HighCommand'
+--- @param flatValue boolean -- Config.FeaturesBeforeGrouping[flatName], i.e. what Config.Features said before this function ever touched it
+--- @param groupedValue boolean -- the value Config.FeatureGroups is actually forcing flatName to right now
+local function ReportFlatGroupedDisagreement(flatName, groupedLocation, flatValue, groupedValue)
+    print((
+        "[qbx_k9unit] config.lua: '%s' is set in two places and they disagree. " ..
+        "Config.Features.%s says %s. %s says %s. Your server is actually using " ..
+        "%s right now, because Config.FeatureGroups is read after Config.Features " ..
+        "and always wins. To fix this, make both say the same thing: change %s " ..
+        "to %s if '%s' should be %s, or change Config.Features.%s to %s if %s is " ..
+        "what you actually want. Search this file for '%s' to find both settings."
+    ):format(
+        flatName,
+        flatName, OnOffWord(flatValue),
+        groupedLocation, OnOffWord(groupedValue),
+        OnOffWord(groupedValue),
+        groupedLocation, OnOffWord(flatValue), flatName, OnOffWord(flatValue),
+        flatName, OnOffWord(groupedValue), OnOffWord(groupedValue),
+        flatName
+    ))
+end
+
 --- Runs the resolution described in this section's own header comment.
 --- Safe to call more than once (tests do; production calls it exactly
 --- once, below). Genuinely idempotent against its own prior output --
@@ -1129,26 +1175,57 @@ function ResolveFeatureGroups()
                 -- the forced-off check is its original shipped default,
                 -- same as any other member -- there is no separate slot
                 -- for it to have been set to something else here.
+                --
+                -- `enabled` is ALSO this flag's "grouped counterpart", the
+                -- same relationship every other child below has with its
+                -- own Config.FeatureGroups.<Family>.<child> slot -- with
+                -- one real difference worth knowing: an ordinary child left
+                -- out of Config.FeatureGroups falls back to the flat
+                -- default below, so an omitted child can never disagree
+                -- with it. `enabled` does NOT do that -- omitted or left
+                -- out entirely, it defaults to `true` regardless of what
+                -- the flat default says (this function's own comment
+                -- above) -- so this flag can disagree with its flat
+                -- default even with nothing explicitly written here at
+                -- all.
+                local flatValue = Config.FeaturesBeforeGrouping[flatName]
                 Config.Features[flatName] = enabled
-                if not enabled and Config.FeaturesBeforeGrouping[flatName] == true then
+                if not enabled and flatValue == true then
                     forcedOff[#forcedOff + 1] = flatName
+                elseif enabled and flatValue == false then
+                    ReportFlatGroupedDisagreement(flatName, ('Config.FeatureGroups.%s.enabled'):format(familyName), flatValue, enabled)
                 end
             else
                 -- Default: the PRISTINE original shipped value (see this
                 -- function's own doc comment on why this must never read
                 -- Config.Features' own live value here) -- i.e. "not
                 -- overridden in Config.FeatureGroups".
-                local childValue = Config.FeaturesBeforeGrouping[flatName]
+                local flatValue = Config.FeaturesBeforeGrouping[flatName]
+                local childValue = flatValue
+                local explicitOverride = nil
                 if family ~= nil and family[childKey] ~= nil then
                     if type(family[childKey]) ~= 'boolean' then
                         print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.%s is not a boolean (got %s) -- using Config.Features.%s\'s original shipped value instead. Fix Config.FeatureGroups.%s.%s in config.lua.'):format(familyName, childKey, type(family[childKey]), flatName, familyName, childKey))
                     else
                         childValue = family[childKey]
+                        explicitOverride = family[childKey]
                     end
                 end
                 Config.Features[flatName] = enabled and childValue
                 if not enabled and childValue == true then
                     forcedOff[#forcedOff + 1] = flatName
+                elseif enabled and explicitOverride ~= nil and explicitOverride ~= flatValue then
+                    -- The family stays enabled AND someone explicitly wrote
+                    -- a value here that disagrees with the flat default --
+                    -- the exact case `forcedOff` above cannot see, because
+                    -- nothing was forced off: the family never said no, the
+                    -- grouped value is just quietly a different answer than
+                    -- Config.Features gives, and it always wins. Never
+                    -- fires for a child simply left OUT of
+                    -- Config.FeatureGroups -- `childValue` already equals
+                    -- `flatValue` in that case, so there is nothing to
+                    -- disagree about.
+                    ReportFlatGroupedDisagreement(flatName, ('Config.FeatureGroups.%s.%s'):format(familyName, childKey), flatValue, explicitOverride)
                 end
             end
         end
@@ -1165,7 +1242,15 @@ function ResolveFeatureGroups()
             if type(value) ~= 'boolean' then
                 print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s is not a boolean (got %s) -- Config.Features.%s keeps its existing value. Fix Config.FeatureGroups.%s in config.lua.'):format(flatName, type(value), flatName, flatName))
             else
+                local flatValue = Config.FeaturesBeforeGrouping[flatName]
                 Config.Features[flatName] = value
+                -- Standalone flags have no parent `enabled` to consult, so
+                -- unlike a family child above, this comparison is always
+                -- "currently decisive" -- there is no disabled-family case
+                -- that already explains a mismatch some other way.
+                if value ~= flatValue then
+                    ReportFlatGroupedDisagreement(flatName, ('Config.FeatureGroups.%s'):format(flatName), flatValue, value)
+                end
             end
         end
     end

@@ -380,12 +380,19 @@ t.test('ConfirmHandlerDownDefense: no fresh prompt (never triggered) notifies no
     t.equals(#f.serverEvents, 0)
 end)
 
-t.test('ConfirmHandlerDownDefense: an EXPIRED prompt is treated the same as no prompt at all', function()
+t.test('ConfirmHandlerDownDefense: an EXPIRED prompt is refused the SAME WAY as no prompt at all (no server event) but with DIFFERENT, more specific wording -- EXPIRED-VS-NEVER-TRIGGERED fix, this pass', function()
     local f = newDefenseFixture({ promptTtlMs = 100 })
     f.fireTrigger(false, 5000, 6000)
     f.setNow(100)
     f.runConfirmCommand()
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('defense.no_active_alert'))
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('defense.alert_expired'), 'an alert that genuinely existed and timed out must say so, not the generic "no active alert" copy')
+    t.equals(#f.serverEvents, 0)
+end)
+
+t.test('ConfirmHandlerDownDefense: EXPIRED-VS-NEVER-TRIGGERED CONTROL -- a prompt that never existed at all still gets the plain no_active_alert copy, never the expired one', function()
+    local f = newDefenseFixture()
+    f.runConfirmCommand()
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('defense.no_active_alert'), 'never having a prompt must not be misreported as one that expired')
     t.equals(#f.serverEvents, 0)
 end)
 

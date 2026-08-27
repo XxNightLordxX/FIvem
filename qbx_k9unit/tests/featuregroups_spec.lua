@@ -412,5 +412,100 @@ t.test('CLAMP AND WARN: a family simply omitted from Config.FeatureGroups entire
     t.isTrue(env.Config.Features.FatigueSystem, 'an omitted family must behave as fully enabled with no overrides -- i.e. unchanged from its shipped default')
 end)
 
+-- ========================================================================
+-- FLAT/GROUPED DISAGREEMENT -- the gap this task's own brief describes:
+-- a family's own `enabled` stays true (so `forcedOff` above has nothing to
+-- say) while its flat Config.Features value and its Config.FeatureGroups
+-- counterpart simply disagree -- today that resolves silently to the
+-- grouped value, with no console line at all. This is the exact shape that
+-- made a `true` in Config.Features.HandlerXPProgression silently resolve
+-- back to `false` for real, once (see that key's own header comment in
+-- config.lua). These tests cover all three places a flat/grouped pair can
+-- live: an ordinary family child, a family's `enabled` (the base flag's own
+-- grouped counterpart), and a standalone flag.
+--
+-- Every scenario below is built by mutating a FRESH sandboxed copy of the
+-- real config.lua (see loadRealConfig, and the existing OLD FLAT SHAPE
+-- tests above using this exact same technique) -- never the real, shipped
+-- config.lua on disk, and never a value this task was told not to change.
+-- ========================================================================
+
+t.test('FLAT/GROUPED DISAGREEMENT: an ordinary family child that explicitly disagrees with the flat pristine default is reported by name, even while the family itself stays enabled -- the exact silent-override bug shape (HandlerXPProgression, 2026-08-27) this diagnostic exists to catch', function()
+    local env, printLog = loadRealConfig()
+    for key in pairs(printLog) do printLog[key] = nil end
+    env.Config.FeatureGroups.Progression.HandlerXP = false -- disagrees with the real shipped Config.Features.HandlerXPProgression, which is true
+
+    env.ResolveFeatureGroups()
+
+    t.isFalse(env.Config.Features.HandlerXPProgression, 'sanity: unchanged existing behaviour -- the grouped value still silently wins')
+    local found = nil
+    for _, line in ipairs(printLog) do
+        if line:find('HandlerXPProgression', 1, true) and line:find('disagree', 1, true) then found = line end
+    end
+    t.isNotNil(found, 'expected a disagreement warning naming HandlerXPProgression: ' .. table.concat(printLog, ' | '))
+    t.contains(found, 'Config.Features.HandlerXPProgression')
+    t.contains(found, 'Config.FeatureGroups.Progression.HandlerXP')
+    t.contains(found, 'ON')
+    t.contains(found, 'OFF')
+end)
+
+t.test('FLAT/GROUPED DISAGREEMENT CONTROL: an explicit override that AGREES with the flat pristine default prints nothing new -- proves this diagnostic fires on a genuine mismatch only, not on every explicit override (which would make 60 lines of noise at every boot and train everyone to ignore this console)', function()
+    local env, printLog = loadRealConfig()
+    for key in pairs(printLog) do printLog[key] = nil end
+    env.Config.FeatureGroups.Progression.HandlerXP = true -- already the real shipped value -- explicit, but not a disagreement
+
+    env.ResolveFeatureGroups()
+
+    t.equals(#printLog, 0, 'an explicit override that matches the flat default must stay silent: ' .. table.concat(printLog, ' | '))
+end)
+
+t.test('FLAT/GROUPED DISAGREEMENT: a family\'s "enabled" (the grouped counterpart of its own base flag, e.g. Detection.enabled for ScentTracking) silently overriding a differing flat default is reported too, not just an ordinary child override -- simulates a fresh boot where the operator edited Config.Features.ScentTracking directly and never touched Config.FeatureGroups.Detection.enabled', function()
+    local env, printLog = loadRealConfig()
+    env.Config.Features.ScentTracking = false     -- what the operator wrote in the flat block
+    env.Config.FeaturesBeforeGrouping = nil        -- re-arm the "first call ever" snapshot so THIS becomes what gets captured as the pristine flat value -- simulating a genuinely fresh boot with this authored value, never touching the real shipped config.lua
+    for key in pairs(printLog) do printLog[key] = nil end
+
+    env.ResolveFeatureGroups()
+
+    t.isTrue(env.Config.Features.ScentTracking, 'sanity: Detection.enabled (left at its own shipped true) still silently wins -- unchanged existing behaviour, exactly the reported bug shape')
+    local found = nil
+    for _, line in ipairs(printLog) do
+        if line:find('ScentTracking', 1, true) and line:find('disagree', 1, true) then found = line end
+    end
+    t.isNotNil(found, 'expected a disagreement warning naming ScentTracking: ' .. table.concat(printLog, ' | '))
+    t.contains(found, 'Config.Features.ScentTracking')
+    t.contains(found, 'Config.FeatureGroups.Detection.enabled')
+end)
+
+t.test('FLAT/GROUPED DISAGREEMENT: a standalone flag disagreement is reported too, not just family members', function()
+    local env, printLog = loadRealConfig()
+    for key in pairs(printLog) do printLog[key] = nil end
+    env.Config.FeatureGroups.HighCommand = false -- disagrees with the real shipped Config.Features.HighCommand, which is true
+
+    env.ResolveFeatureGroups()
+
+    t.isFalse(env.Config.Features.HighCommand, 'sanity: unchanged existing behaviour -- the grouped value still silently wins')
+    local found = nil
+    for _, line in ipairs(printLog) do
+        if line:find('HighCommand', 1, true) and line:find('disagree', 1, true) then found = line end
+    end
+    t.isNotNil(found, 'expected a disagreement warning naming HighCommand: ' .. table.concat(printLog, ' | '))
+    t.contains(found, 'Config.Features.HighCommand')
+    t.contains(found, 'Config.FeatureGroups.HighCommand')
+end)
+
+t.test('FLAT/GROUPED DISAGREEMENT IS SUPPRESSED WHILE THE FAMILY ITSELF IS DISABLED: an explicit child override that disagrees with the flat default must print ONLY the existing forced-off warning while Config.FeatureGroups.Combat.enabled is false, never an additional disagreement line -- the parent-off case already has its own, clearer message, and printing both would be confusing, not helpful', function()
+    local env, printLog = loadRealConfig()
+    for key in pairs(printLog) do printLog[key] = nil end
+    env.Config.FeatureGroups.Combat.enabled = false
+    env.Config.FeatureGroups.Combat.BiteAndHold = false -- explicit, and disagrees with the real shipped flat default (true) -- must still not print a disagreement line, only forcedOff logic (which does not even apply here since it's already false)
+
+    env.ResolveFeatureGroups()
+
+    for _, line in ipairs(printLog) do
+        t.isTrue(not line:find('disagree', 1, true), 'no disagreement line expected while the family is disabled: ' .. line)
+    end
+end)
+
 print('')
 os.exit(t.summary())

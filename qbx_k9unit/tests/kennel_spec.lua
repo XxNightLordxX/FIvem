@@ -881,14 +881,28 @@ t.test('requestDeployKennel: an unresolvable citizenid is rejected with a real n
     t.equals(f.notifyCalls[1].notifyType, 'error')
 end)
 
-t.test('requestDeployKennel: a second request while a kennel is already active (confirmed) is rejected, not queued', function()
+t.test('requestDeployKennel: a second request while a kennel is already active (confirmed) is rejected, not queued, and NAMES HOW FAR AWAY the existing one is', function()
     local f = newKennelFixture()
+    -- deploySuccessfully places the confirmed kennel placementForwardOffsetMeters
+    -- (2.0 in this fixture's own Config.DeployableKennel) ahead of the ped's
+    -- own position on +Y at heading 0 -- the ped itself never moves between
+    -- deploy and this second request, so the real, live distance here is
+    -- exactly 2.0m -> rounds to "2".
     deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
     f.advance(DEPLOY_COOLDOWN_MS + 1) -- clear the per-source cooldown so THIS check, not the cooldown gate, is what's exercised
     local eventsBefore = countClientEvents(f, 'qbx_k9unit:client:deployKennelAt')
     f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.already_active_deployed'))
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.already_active_deployed_with_distance', '2'), 'NAME WHERE fix, this pass -- must say roughly how far away the existing kennel is, not just that one exists')
     t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), eventsBefore, 'no new placement started')
+end)
+
+t.test('requestDeployKennel: NAME WHERE fix CONTROL -- if the existing kennel entity cannot currently be resolved, this falls back to the plain, distance-free message rather than erroring or showing a garbage number', function()
+    local f = newKennelFixture()
+    local _, objectHandle = deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.removeExistence(objectHandle) -- ResolveNetworkEntity's own DoesEntityExist guard now fails, same as a genuinely despawned/unstreamed object
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.already_active_deployed'), 'an unresolvable existing kennel must still refuse honestly, just without a distance it cannot compute')
 end)
 
 t.test('requestDeployKennel: a second request while a placement is pending (unconfirmed) is rejected', function()

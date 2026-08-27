@@ -374,6 +374,27 @@ end
 ---   server/certtiers.lua
 ---   server/partnership.lua         -- the partnership-cache backfill loop
 ---     (RefreshPartnershipCache per already-connected officer).
+---   server/wellbeing.lua           -- ADDED (boot-order-race audit,
+---     lifecycle QA pass -- wellbeing persistence landed after this list
+---     was last written and was never revisited against it): 1 call site,
+---     but NOT an onResourceStart backfill loop like every other entry on
+---     this list -- this file has none. EnsureStats' own persistence-load
+---     branch (K9Store.Wellbeing_Get) is the one real read; the wait lives
+---     INSIDE that one shared function (same "wait lives inside the one
+---     shared function, not at each call site" shape as
+---     server/equipmentshop.lua's own ActivateEquipmentShopIfEnabled entry
+---     below), which covers every one of EnsureStats' own callers with one
+---     change: the shared TickWellbeing tick thread's own per-player pass,
+---     and every petK9/feedK9/calmDownK9/applyK9Distraction/
+---     relayDamageEvent/getWellbeingSnapshot handler. The earliest and most
+---     exposed of those is 'qbx_k9unit:server:getWellbeingSnapshot' --
+---     client/wellbeing.lua's own on-demand-snapshot thread checks
+---     IsOwnModelK9() on its very FIRST iteration, no leading Wait, and
+---     fires that callback immediately whenever a player's ped is ALREADY
+---     K9-modeled the instant this resource (re)starts (a ped model is
+---     world state a script restart does not reset) -- reaching this
+---     file's own K9Store.Wellbeing_Get well before TickWellbeing's shared
+---     thread has even taken its own first Wait(TICK_INTERVAL_MS).
 ---   server/progression.lua         -- the XP/handler-XP cache backfill
 ---     loop (LoadXPForCitizenid/LoadHandlerXPForCitizenid).
 ---   server/xptiers.lua
@@ -395,10 +416,21 @@ end
 --- HOW TO TELL IF A NEW FILE NEEDS ADDING: it registers its own
 --- `onResourceStart` handler (or a CreateThread loop with no meaningful
 --- delay before its first query) that reads a table in
---- EXPECTED_TABLE_COLUMNS above, directly or through a K9Store.* accessor.
---- If so, add it to fxmanifest.lua's own load-order comment for that file
---- AND to this list, in the SAME change -- this list drifting is exactly
---- the bug this paragraph exists to stop from recurring a third time.
+--- EXPECTED_TABLE_COLUMNS above, directly or through a K9Store.* accessor
+--- -- OR (added, wellbeing.lua entry above, this pass, so this exact gap
+--- cannot recur a THIRD time): it exposes an `lib.callback.register`/
+--- `RegisterNetEvent` handler a CLIENT can reach on its own very first
+--- frame after this resource restarts (no server-side delay of its own
+--- gates it), which reads such a table directly or through a K9Store.*
+--- accessor -- server/wellbeing.lua's own getWellbeingSnapshot is the
+--- worked example: nothing about it looks like a boot-time read at the
+--- call site itself, but a client that is ALREADY in the state the
+--- handler responds to (here, an already-K9-modeled ped, world state a
+--- script restart does not reset) can and does reach it within the very
+--- first network round trip after this resource loads. If so, add it to
+--- fxmanifest.lua's own load-order comment for that file AND to this
+--- list, in the SAME change -- this list drifting is exactly the bug this
+--- paragraph exists to stop from recurring a third time.
 --- DOES NOT BLOCK INDEFINITELY, BY CONSTRUCTION: this polls
 --- SCHEMA_CHECK_SETTLED at most `SCHEMA_CHECK_WAIT_TIMEOUT_MS /
 --- SCHEMA_CHECK_WAIT_POLL_MS` times (a fixed, small number), via `Wait(...)`

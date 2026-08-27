@@ -248,6 +248,28 @@ local function newCombatFixture(opts)
         return true -- real TierCapabilityPermits' own default-allow posture
     end
 
+    -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX) --
+    -- server/announce.lua's IsApprehensionWarned, wired into
+    -- ValidateCombatRequest's BiteAndHold/NonLethalTakedown branch this
+    -- pass. OMITTED FROM THE SANDBOX ENTIRELY BY DEFAULT, same convention as
+    -- HasPermission/TierCapabilityPermits above: proves the real
+    -- `type(IsApprehensionWarned) == 'function'` guard degrades cleanly (no
+    -- restriction) when server/announce.lua is absent, and means every one
+    -- of this file's ~150 OTHER tests (none of which opt in via
+    -- opts.withApprehensionAnnouncement) exercises that exact
+    -- absent-dependency path for free -- never a "warned" store that
+    -- happens to be empty. server/announce.lua's own window/expiry logic is
+    -- fully covered by tests/announce_spec.lua -- this stub only needs to
+    -- prove server/combat.lua calls it with the right netId, at the right
+    -- place (BiteAndHold/NonLethalTakedown only, never PropDragging, never a
+    -- termination path), and honors its answer.
+    local warnedByTargetNetId = {}
+    local apprehensionWarnedCalls = {}
+    local function defaultIsApprehensionWarned(targetNetId)
+        apprehensionWarnedCalls[#apprehensionWarnedCalls + 1] = targetNetId
+        return warnedByTargetNetId[targetNetId] == true
+    end
+
     local playersBySource = {} -- src -> { citizenid=, metadata={wanted=,iswanted=,isdead=,inlaststand=} }
     local function qbxGetPlayer(_self, src)
         local p = playersBySource[src]
@@ -416,6 +438,9 @@ local function newCombatFixture(opts)
     if opts.withTierCapabilityPermits then
         envOverrides.TierCapabilityPermits = defaultTierCapabilityPermits
     end
+    if opts.withApprehensionAnnouncement then
+        envOverrides.IsApprehensionWarned = defaultIsApprehensionWarned
+    end
     -- server/search.lua's own accessor, for the MUTUAL GUARD tests below.
     -- OMITTED from envOverrides entirely (not merely nil) unless a test
     -- supplies it, so the production file's own `type(fn) == 'function'`
@@ -476,6 +501,8 @@ local function newCombatFixture(opts)
         printedLines = printedLines,
         awardCalls = awardCalls,
         tierCapabilityCalls = tierCapabilityCalls,
+        apprehensionWarnedCalls = apprehensionWarnedCalls,
+        setWarned = function(targetNetId, val) warnedByTargetNetId[targetNetId] = val end,
         ambulanceIsDownedCalls = ambulanceIsDownedCalls,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
@@ -1484,6 +1511,120 @@ t.test('requestBiteHold: an NPC target succeeds, relayed ONLY to the requesting 
     t.equals(ev.target, K9_SRC)
     t.equals(ev.args[1], 500)
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyBiteHold'), 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). server/announce.lua's
+-- IsApprehensionWarned was defined, individually tested, and called by
+-- NOTHING -- Config.Features.ApprehensionAnnouncement had zero effect on
+-- whether a real bite/takedown succeeded. This section proves the fix:
+-- refused with no announcement on file (RED), succeeds once one is (GREEN,
+-- the control that proves this isn't just permanently denying everything),
+-- never applies to PropDragging, and -- the control that matters most, per
+-- this task's own "gate the start, never the stop" rule -- an
+-- already-open hold survives a window that expires mid-hold untouched, and
+-- can still be released normally.
+-- ----------------------------------------------------------------------
+
+t.test('requestBiteHold: refused with reason not_warned when ApprehensionAnnouncement is on and no announcement is on file for the target (RED)', function()
+    local f = newCombatFixture({ withApprehensionAnnouncement = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    -- f.setWarned(500, ...) never called -- no announcement on file at all.
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0, 'an unwarned target must never be granted a bite-hold once this feature is on')
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'error')
+    t.equals(#f.apprehensionWarnedCalls, 1, 'IsApprehensionWarned must be consulted exactly once, with the target netId')
+    t.equals(f.apprehensionWarnedCalls[1], 500)
+end)
+
+t.test('requestBiteHold: CONTROL -- succeeds once the target has a genuine announcement on file (GREEN, proves the gate is not simply denying everything)', function()
+    local f = newCombatFixture({ withApprehensionAnnouncement = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.setWarned(500, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'a genuinely warned target must still be biteable -- this feature only ADDS a precondition, never blocks unconditionally')
+end)
+
+t.test('requestBiteHold: CONTROL -- with the feature entirely absent from the sandbox (server/announce.lua not loaded), an unwarned target is UNAFFECTED -- proves the soft-dependency guard, not a hidden hard requirement', function()
+    local f = newCombatFixture() -- opts.withApprehensionAnnouncement omitted -- IsApprehensionWarned is genuinely absent
+    t.isNil(f.env.IsApprehensionWarned)
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'an absent IsApprehensionWarned must mean no restriction, never an error or a silent denial')
+end)
+
+t.test('requestTakedown: refused with reason not_warned when unwarned -- proves the SAME gate applies to the OTHER call site sharing ValidateCombatRequest, isolated from the speed gate (the target moves fast enough that it would otherwise pass)', function()
+    local f = newCombatFixture({ withApprehensionAnnouncement = true })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    -- f.setWarned(500, ...) never called -- no announcement on file at all.
+    -- The target still moves fast enough during the sample window to pass
+    -- the UNRELATED speed gate -- if this test passed regardless of whether
+    -- the not_warned gate exists, it would be proving nothing (a target that
+    -- never moves would ALSO be refused, for the wrong reason: not_fleeing).
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    t.equals(#f.clientEvents, 0, 'unwarned -- takedown must be refused exactly like bite-hold, even though the speed gate alone would have allowed it')
+end)
+
+t.test('requestTakedown: CONTROL -- the SAME moving-target scenario above succeeds once the target has a genuine announcement on file', function()
+    local f = newCombatFixture({ withApprehensionAnnouncement = true })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.setWarned(500, true)
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:applyNpcTakedown'), 'warned -- takedown must now proceed to its own speed-gate/ragdoll logic, not be blocked by this gate')
+end)
+
+t.test('requestDrag (PropDragging): NEVER gated by IsApprehensionWarned, even unwarned -- a drag target is already downed, not a fresh apprehension decision', function()
+    local f = newCombatFixture({ withApprehensionAnnouncement = true, propDragging = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { ragdoll = true })
+    -- Deliberately never calls f.setWarned(500, ...) -- if this gate ever
+    -- widened to cover PropDragging by accident, this is the test that
+    -- would catch it.
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1, 'PropDragging must never require an apprehension announcement -- the target is already subdued, not being freshly apprehended')
+end)
+
+t.test('CONTROL, THE ONE THAT MATTERS MOST: an already-open hold survives its warning window expiring MID-HOLD untouched, and can still be released normally -- proves this is a request-time-only gate, never a termination-path gate', function()
+    local f = newCombatFixture({ withApprehensionAnnouncement = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.setWarned(500, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'the hold must have opened while warned')
+
+    -- Simulate the real server/announce.lua window lapsing WHILE this hold
+    -- is still open -- exactly the "gate the start, never the stop" trap
+    -- this whole design exists to avoid (server/announce.lua's own header,
+    -- point 5).
+    f.setWarned(500, false)
+
+    local clientEventCountBeforeRelease = #f.clientEvents
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.isTrue(#f.clientEvents > clientEventCountBeforeRelease, 'releasing an already-open hold must succeed even though the warning window has since expired -- ValidateCombatRequest, and therefore IsApprehensionWarned, must never be consulted by a release path')
+
+    -- And the target is genuinely free again -- a SECOND K9 (now-unwarned
+    -- window notwithstanding, since 'already_held' would have masked a
+    -- lingering-hold bug here) can be granted a fresh hold once warned again,
+    -- proving the release genuinely completed rather than merely appearing to.
+    -- Advances past the target's own per-target cooldown (baselineBiteAndHoldConfig's
+    -- targetCooldownMs = 35000) first -- unrelated to this gate, but a real
+    -- precondition this fixture must also satisfy for a second hold to be
+    -- grantable at all, same as the pre-existing "after releaseBiteHold,
+    -- ActiveHolds is cleared" test above already does.
+    f.advance(35001)
+    f.setWarned(500, true)
+    wireK9(f, K9_SRC_B)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC_B, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 2, 'the target must be genuinely released, not left in a phantom already_held state')
 end)
 
 t.test('requestBiteHold: WantedStatusCheckOverride returning true is authoritative over metadata.wanted == false', function()
