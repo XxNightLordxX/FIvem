@@ -1819,8 +1819,8 @@ bug.
 
 | Feature | Zero-asset? | What an operator must supply |
 |---|---|---|
-| `ProximityAudioFX` | Audio mechanism: yes (same safe placeholder-soundset convention as `BasicBarkSounds`). Trigger condition: no — inert until `SuspectDistanceSource` is wired (fork 2). | Real growl/pant audio (already shipped as `.ogg`, see `README.md`), and a `SuspectDistanceSource` implementation. |
-| `PropAttachments` | No — unlike `DeployableKennel`, no research pass found any generically-real placeholder prop for a quadruped vest/harness. | A real prop model name — `propModel` ships `nil`, the feature safely no-ops (one log line) until an operator sets it. |
+| `ProximityAudioFX` | Audio mechanism: yes (same safe placeholder-soundset convention as `BasicBarkSounds`). Trigger condition, AS SPECCED HERE: no — inert until `SuspectDistanceSource` is wired (fork 2). **NOT WHAT ACTUALLY SHIPPED — see §14.4.1's own correction note.** | Real growl/pant audio (already shipped as `.ogg`, see `README.md`), and a `SuspectDistanceSource` implementation — moot; not what shipped, see §14.4.1. |
+| `PropAttachments` | No — unlike `DeployableKennel`, no research pass found any generically-real placeholder prop for a quadruped vest/harness. **UPDATED, verified by reading `config.lua` directly: `propModel` no longer ships `nil`.** It ships `'prop_bodyarmour_02'` (UNVERIFIED, "will very likely not load," per that field's own comment) with `fallbackPropModel = 'prop_tennis_ball'` (the same confirmed-safe model `DeployableKennel` falls back to) — so the feature does not no-op today; it visibly attaches the tennis-ball fallback, deliberately wrong-looking so an operator notices and supplies a real vest model. | A real prop model name to replace the `propModel`/`fallbackPropModel` placeholders — `config.lua`'s own `Config.PropAttachments` comment names the exact tradeoff. |
 | `FetchMechanic` | Yes, for the ball itself — `prop_tennis_ball` is the highest-confidence prop name found. Mouth-*carry* fidelity is conditional on fork 1. | Nothing required for a working feature. Optionally a custom "evidence bag" prop reskin (not required for v1). |
 
 ### Fork 4 (smaller, but load-bearing for §14.2/§14.3) — where does `ProximityAudioFX`'s automatic growl-relay cooldown live?
@@ -1840,7 +1840,7 @@ either action purely as an artifact of budget-sharing. Gets its own event
 | Sub-phase | Feature(s) | Why this order |
 |---|---|---|
 | 5a — independent | Fork 1's bone-index sweep (throwaway) | Blocks 5c and half of 5d; cheap, bounded, unlocks two features at once. |
-| 5b — independent, parallel with 5a | `ProximityAudioFX` | Unrelated to bone attachment; ships inert until `SuspectDistanceSource` is wired. |
+| 5b — independent, parallel with 5a | `ProximityAudioFX` | Unrelated to bone attachment; AS SPECCED HERE, ships inert until `SuspectDistanceSource` is wired — not what actually shipped, see §14.4.1's own correction note. |
 | 5c — depends on 5a | `PropAttachments` | The attach mechanism needs zero new research (already proven, `client/vehicle.lua`); blocked only on 5a's recorded index existing. |
 | 5d — spawn/throw/lifecycle independent of 5a; mouth-carry depends on 5a | `FetchMechanic` | The ball's lifecycle can start immediately with `mouthCarryModeByModel` defaulted to `'fake'`. |
 
@@ -1916,18 +1916,40 @@ Config.FetchMechanic = {
 
 ### 14.4.1 Proximity Audio FX (`Config.Features.ProximityAudioFX`)
 
-Requires `BasicBarkSounds` also `true`. A tick loop evaluates
-`SuspectDistanceSource()`; if `nil` or beyond the farthest tier, nothing
-happens. Otherwise it finds the nearest-matching tier and, once that tier's
-own `cadenceMs` has elapsed, sends `relayGrowl(growlType)`. The server
-re-validates flags/access, length-caps `growlType`, consumes the
+**CORRECTION -- THIS IS NOT WHAT SHIPPED, VERIFIED BY READING
+`client/proximityaudio.lua` DIRECTLY.** Everything below this line in this
+subsection is the original pre-implementation spec, kept for its design
+reasoning; the paragraph immediately below it documents what was actually
+built instead. There is no `Config.ProximityAudioFX.SuspectDistanceSource`
+field in `config.lua` at all (`Config.ProximityAudioFX` ships only
+`scanIntervalMs`/`triggerDistance`/`soundName`), no `relayGrowl`/`playGrowl`
+event pair, and no server file changes for this feature. What shipped
+instead, per `client/proximityaudio.lua`'s own header ("SCOPE -- WHAT THIS
+FILE IS, AND, EXPLICITLY, IS NOT"), is a deliberately narrower, already-
+working v1: a self-contained, purely client-local ambient effect that plays
+a looping growl (via `client/audio.lua`'s existing NUI/GainNode bridge, not
+`PlaySoundFromEntity`) for any live, recognized K9-modeled ped within
+`triggerDistance`, with the gain computed from the listening client's own
+distance -- no "hidden suspect" concept, no `SuspectDistanceSource` hook,
+no server relay, and nothing to wire before it works. It is not inert and
+was not blocked on fork 2's deferred detection primitive; it simply solved
+a narrower, real problem than this spec originally scoped, and explicitly
+does not block a future `SuspectDistanceSource`-driven layer being added on
+top of it later.
+
+**ORIGINAL SPEC, KEPT FOR THE DESIGN REASONING, NOT AS A DESCRIPTION OF
+CURRENT BEHAVIOUR:** Requires `BasicBarkSounds` also `true`. A tick loop
+evaluates `SuspectDistanceSource()`; if `nil` or beyond the farthest tier,
+nothing happens. Otherwise it finds the nearest-matching tier and, once
+that tier's own `cadenceMs` has elapsed, sends `relayGrowl(growlType)`. The
+server re-validates flags/access, length-caps `growlType`, consumes the
 independent `GrowlCooldown`, resolves the sender's own ped (never
 client-supplied), and broadcasts `playGrowl(netId, growlType)` to everyone
 — the same "broadcast wide, let native audio 3D-cull" posture as
 `relayBark`/`relayDoorScratch`.
 
 Open: the real "hidden suspect" detection primitive itself (explicitly
-deferred, fork 2).
+deferred, fork 2) — still open; not built by the v1 that shipped either.
 
 ### 14.4.2 Prop Attachments (`Config.Features.PropAttachments`)
 
@@ -2440,7 +2462,7 @@ continued concurrent editing:**
   that same SELECT returns), cannot actually be avoided. That header has
   since been corrected to describe what the cache actually short-circuits
   (the cheaper post-SELECT work, not the SELECT itself), and
-  `server/tenure.lua` (its own "ITEM 4 CLOSURE" section, ~lines 377-511)
+  `server/tenure.lua` (its own "ITEM 4 CLOSURE" section, ~lines 461-624)
   now carries a dated, fully worked decision: LEAVE IT, do not build a
   `k9Citizenid`-keyed pre-query cache, because the coupling a correct
   invalidation hook into `server/partnership.lua` would require is a

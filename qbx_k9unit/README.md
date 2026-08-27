@@ -353,10 +353,17 @@ Work through all of these first:
   `/k9eat` — which reads as "go buy some", not "the server owner never
   created this item." Either create both items, or turn
   `Config.Features.HungerThirstSystem` off until you have.
-- **A `water_bowl`-modeled world object**, if you want the K9 wellbeing
-  system's faster near-a-rest-source recovery. This model name is an
-  unverified guess — confirm it exists on your server or change it in
-  `config.lua`. Nothing breaks if you skip this; recovery is just slower.
+- **One of the confirmed-real rest/bowl props** (`Config.Wellbeing.Fatigue
+  .restSources` / `Config.Wellbeing.Thirst.bowlSources` in `config.lua`),
+  placed somewhere on your map, if you want the K9 wellbeing system's
+  faster near-a-rest-source recovery or the "Drink from Bowl" ox_target
+  option. These used to ship a single unverified guess (`'water_bowl'`,
+  which turned out not to exist); that's since been replaced with props
+  confirmed real against the game's own object list. The three dog-bowl
+  props are DLC interior props the base map doesn't scatter anywhere on
+  its own, so you still need to place one yourself with your own mapping
+  resource for that option to appear. Nothing breaks if you skip this;
+  recovery is just slower and "Drink from Bowl" simply never shows up.
 - **Decide `Config.K9Appearance.applyPedModelOnCertify`** (default
   `true`). On, certifying someone — or high command assigning them the
   role directly from the tablet — actually changes that player's

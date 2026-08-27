@@ -288,22 +288,28 @@ designed but have an edge worth knowing about before you rely on them.
   off. If you've never heard of that convar, this tool isn't running on
   your server.
 
-- **Hunger/Thirst's "Drink from Bowl" world-prop model (`'water_bowl'`) is
-  an unverified guess, and if it's wrong the option just never appears —
-  with no error, anywhere.** `Config.Wellbeing.Thirst.bowlSources` ships
-  `{ 'water_bowl' }`, the same disclosed-risk shape
-  `Config.Wellbeing.Fatigue.restSources` already carries for its own rest
-  props. If that model name doesn't match anything in your world, the
-  ox_target "Drink from Bowl" entry silently never shows up on anything —
-  a scan that matches nothing looks identical to a K9 that's never near a
-  bowl, so there's nothing to notice or debug. This does **not** affect
-  the rest of Thirst: `giveK9Water` (the carried-item path, `/k9drink`)
-  works fully regardless, with no model dependency at all. Confirm a real
-  bowl prop's model name on your own server (or add it alongside the
-  existing guess) before assuming this option is reachable. Also see
+- **Hunger/Thirst's "Drink from Bowl" world-prop models are real, but the
+  base map doesn't scatter them anywhere — you have to place one yourself
+  for the option to ever appear.** This used to say the shipped model name
+  (`'water_bowl'`) was an unverified guess that might not resolve to
+  anything in your world. That's since been settled: `'water_bowl'` was
+  confirmed fake against a full 21,631-entry game object-list extraction
+  and has been replaced in `Config.Wellbeing.Thirst.bowlSources` (and in
+  `Config.Wellbeing.Fatigue.restSources`, which carried the same guess)
+  with three confirmed-real dog-bowl props (`m25_1_prop_m51_dog_bowl_full`,
+  `m25_1_prop_m51_dog_bowl_empty`, `m25_2_int_01_dog_bowl`). The remaining
+  limitation is different from the original one: these are DLC interior
+  props, not open-world street furniture, so the base game does not
+  scatter them around the city the way it does benches. Place one of them
+  wherever you want a K9 to be able to drink (a kennel, the station yard,
+  a training area) using your own mapping resource, and the ox_target
+  "Drink from Bowl" entry appears there. This does **not** affect the rest
+  of Thirst: `giveK9Water` (the carried-item path, `/k9drink`) works fully
+  regardless, with no model dependency at all. Also see
   `Config.Features.HungerThirstSystem`'s own comment in `config.lua` for
-  the second placeholder this feature ships with (`k9_food`/`k9_water`
-  item names).
+  the other placeholder this feature ships with (`k9_food`/`k9_water`
+  item names, still genuinely unverified against any specific server's
+  own ox_inventory item list).
 
 ---
 

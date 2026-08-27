@@ -516,7 +516,7 @@ Config.Features = {
     -- nothing anywhere saying so. Flipped on here now that its config
     -- exists too (see Config.Wellbeing.Hunger/.Thirst below).
     --
-    -- TWO THINGS TO CHECK ON YOUR OWN SERVER BEFORE RELYING ON THIS,
+    -- ONE THING TO CHECK ON YOUR OWN SERVER BEFORE RELYING ON THIS,
     -- STATED PLAINLY, NOT BURIED:
     --   1. `k9_food` / `k9_water` (Config.Wellbeing.Hunger.feedItemName /
     --      Config.Wellbeing.Thirst.drinkItemName below) are PLACEHOLDER
@@ -525,14 +525,18 @@ Config.Features = {
     --      do not have that item" message -- server/wellbeing.lua already
     --      prints a one-time startup warning naming this exact gap if
     --      either item is missing, so check your server console on boot.
-    --   2. `'water_bowl'` (Config.Wellbeing.Thirst.bowlSources below) is an
-    --      UNVERIFIED model name -- the same disclosed guess
-    --      Config.Wellbeing.Fatigue.restSources already carries. If it does
-    --      not resolve to a real prop in your world, the "Drink from Bowl"
-    --      ox_target option simply never appears on ANYTHING, with no
-    --      error anywhere -- Thirst still works fully via the item path
-    --      (giveK9Water) regardless. See KNOWN_ISSUES.md for this exact
-    --      risk.
+    --
+    -- FORMERLY A SECOND ITEM HERE: `'water_bowl'` (Config.Wellbeing.Thirst
+    -- .bowlSources below) used to be listed as an UNVERIFIED model name,
+    -- the same disclosed-guess shape Config.Wellbeing.Fatigue.restSources
+    -- used to carry. Both are now settled, not guessed: `'water_bowl'` is
+    -- CONFIRMED FAKE and has been replaced in both lists with real DLC
+    -- interior dog-bowl props (see Config.Wellbeing.Thirst.bowlSources'
+    -- own comment below for the full verification writeup). "Drink from
+    -- Bowl" now appears wherever one of those real props is placed, not
+    -- nowhere -- see that same comment for the caveat that they are DLC
+    -- interior props, not open-world street furniture, so you still need
+    -- to place one yourself for it to be reachable.
     HungerThirstSystem   = true,
 
     -- server/admin.lua. A read-only, JOB-RANK-gated in-game audit surface
