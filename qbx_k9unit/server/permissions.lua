@@ -2234,62 +2234,135 @@ local REVOKE_COMMAND_OUTCOME_KEYS = {
 -- server/permissionkeycatalog.lua, server/tablet.lua) degrades to "these
 -- two commands are not registered in THAT harness" rather than a hard
 -- load-time crash the moment this section was added.
+-- ======================================================================
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §5 item 7, §1
+-- "permissions" family) -- k9grantpermission/k9revokepermission merge into
+-- ONE canonical `/k9permission <grant|revoke> <citizenid> <permission>`.
+-- Both handler BODIES below are UNCHANGED from before this pass -- only
+-- pulled out into named local functions so the merged dispatcher and both
+-- OLD command names (now hidden aliases, kept registered forever per the
+-- spec's own "operators have keybinds/cheat-sheets" rule) can share the
+-- exact same code, never two copies to drift apart. Confirmed identical
+-- gate both ways (Config.Features.PermissionGrants + IsHighCommand,
+-- checked INSIDE GrantPermission/RevokePermission themselves, never by
+-- this dispatcher) and the SAME PermissionActionCooldown instance either
+-- function reaches -- no widening, exactly per this file's own header
+-- "does this widen who can do what" test. The merged dispatcher itself
+-- adds NO authorization of its own: it only decides WHICH already-gated
+-- function to call, matching this task's own "parse the subcommand, then
+-- apply that subcommand's own gate" rule -- trivially true here since
+-- both subcommands' gates are byte-identical, but the shape is the same
+-- either way (never a single top-level gate ahead of knowing which verb
+-- was requested).
+-- ======================================================================
+
+--- @param source number
+--- @param args string[] -- { citizenid, permissionKey }
+local function HandleGrantPermissionCommand(source, args)
+    local targetCitizenid = args[1]
+    local permissionKey = args[2]
+    if type(targetCitizenid) ~= 'string' or targetCitizenid == '' or type(permissionKey) ~= 'string' or permissionKey == '' then
+        NotifyPlayer(source, locale('permissions.command_usage_grant'), 'error')
+        return
+    end
+
+    local ok, outcome = GrantPermission(source, targetCitizenid, permissionKey)
+    if ok then
+        NotifyPlayer(source, locale('permissions.command_grant_ok', PermissionLabelFor(permissionKey), targetCitizenid), 'success')
+        return
+    end
+
+    if outcome == 'already_granted' then
+        NotifyPlayer(source, locale(GRANT_COMMAND_OUTCOME_KEYS.already_granted, targetCitizenid), 'error')
+        return
+    end
+    local key = GRANT_COMMAND_OUTCOME_KEYS[outcome]
+    if key then
+        NotifyPlayer(source, locale(key), 'error')
+    end
+    -- outcome == 'invalid_granter': already notified by GrantPermission itself.
+end
+
+--- @param source number
+--- @param args string[] -- { citizenid, permissionKey }
+local function HandleRevokePermissionCommand(source, args)
+    local targetCitizenid = args[1]
+    local permissionKey = args[2]
+    if type(targetCitizenid) ~= 'string' or targetCitizenid == '' or type(permissionKey) ~= 'string' or permissionKey == '' then
+        NotifyPlayer(source, locale('permissions.command_usage_revoke'), 'error')
+        return
+    end
+
+    local ok, outcome, stillHasAccess = RevokePermission(source, targetCitizenid, permissionKey)
+    if ok then
+        local label = PermissionLabelFor(permissionKey)
+        if stillHasAccess == 'rank_or_high_command' then
+            NotifyPlayer(source, locale('permissions.command_revoke_ok_rank', label, targetCitizenid), 'success')
+        elseif stillHasAccess == 'unknown_target_offline' then
+            NotifyPlayer(source, locale('permissions.command_revoke_ok_offline', label, targetCitizenid), 'success')
+        else
+            NotifyPlayer(source, locale('permissions.command_revoke_ok', label, targetCitizenid), 'success')
+        end
+        return
+    end
+
+    if outcome == 'not_granted' then
+        NotifyPlayer(source, locale(REVOKE_COMMAND_OUTCOME_KEYS.not_granted, targetCitizenid), 'error')
+        return
+    end
+    local key = REVOKE_COMMAND_OUTCOME_KEYS[outcome]
+    if key then
+        NotifyPlayer(source, locale(key), 'error')
+    end
+    -- outcome == 'invalid_granter': already notified by RevokePermission itself.
+end
+
+-- `type(RegisterCommand) == 'function'` guard (this resource's established
+-- soft-dependency convention): RegisterCommand is a real, always-present
+-- FiveM native in production, so this is never false there -- both
+-- commands register exactly as unconditionally as described above. It
+-- exists purely so a minimal test harness/embedding that never provides
+-- one (this file is a widely-depended-upon soft dependency of several
+-- OTHER files' own test fixtures -- server/appearance.lua,
+-- server/permissionkeycatalog.lua, server/tablet.lua) degrades to "these
+-- two commands are not registered in THAT harness" rather than a hard
+-- load-time crash the moment this section was added.
 if type(RegisterCommand) == 'function' then
+    -- NEW CANONICAL COMMAND. Destructive-vs-additive note (this task's own
+    -- rule): revoke IS a destructive/access-removing action, but this is
+    -- NOT "contextual dispatch guessing intent" -- the verb is an explicit,
+    -- required word (`grant` or `revoke`), never inferred from argument
+    -- shape/type the way the online/offline certification pairs infer
+    -- online-vs-offline. An unrecognized/missing subcommand prints this
+    -- command's own usage string, reusing admin.lua's own
+    -- k9auditsearch/k9auditxp convention verbatim (`if source == 0 then
+    -- print(...) else NotifyPlayer(...) end`) rather than inventing a new
+    -- one.
+    RegisterCommand('k9permission', function(source, args)
+        local sub = args[1]
+        if sub == 'grant' then
+            HandleGrantPermissionCommand(source, { args[2], args[3] })
+        elseif sub == 'revoke' then
+            HandleRevokePermissionCommand(source, { args[2], args[3] })
+        else
+            local usage = locale('permissions.usage_permission')
+            if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
+        end
+    end, false)
+
+    -- HIDDEN ALIASES (COMMAND_CONSOLIDATION_SPEC.md §3) -- kept registered
+    -- forever, byte-identical bodies to before this merge, for existing
+    -- keybinds/macros/cheat-sheets. Not chat-suggested and not listed in
+    -- html/tablet.js's COMMAND_REFERENCE anymore (see
+    -- client/commandsuggestions.lua's/tests' own HIDDEN_ALIAS_COMMANDS
+    -- allowlist) -- `/k9permission grant|revoke` is what a user now
+    -- discovers instead.
     RegisterCommand('k9grantpermission', function(source, args)
-        local targetCitizenid = args[1]
-        local permissionKey = args[2]
-        if type(targetCitizenid) ~= 'string' or targetCitizenid == '' or type(permissionKey) ~= 'string' or permissionKey == '' then
-            NotifyPlayer(source, locale('permissions.command_usage_grant'), 'error')
-            return
-        end
-
-        local ok, outcome = GrantPermission(source, targetCitizenid, permissionKey)
-        if ok then
-            NotifyPlayer(source, locale('permissions.command_grant_ok', PermissionLabelFor(permissionKey), targetCitizenid), 'success')
-            return
-        end
-
-        if outcome == 'already_granted' then
-            NotifyPlayer(source, locale(GRANT_COMMAND_OUTCOME_KEYS.already_granted, targetCitizenid), 'error')
-            return
-        end
-        local key = GRANT_COMMAND_OUTCOME_KEYS[outcome]
-        if key then
-            NotifyPlayer(source, locale(key), 'error')
-        end
-        -- outcome == 'invalid_granter': already notified by GrantPermission itself.
+        HandleGrantPermissionCommand(source, args)
     end, false)
 
     RegisterCommand('k9revokepermission', function(source, args)
-        local targetCitizenid = args[1]
-        local permissionKey = args[2]
-        if type(targetCitizenid) ~= 'string' or targetCitizenid == '' or type(permissionKey) ~= 'string' or permissionKey == '' then
-            NotifyPlayer(source, locale('permissions.command_usage_revoke'), 'error')
-            return
-        end
-
-        local ok, outcome, stillHasAccess = RevokePermission(source, targetCitizenid, permissionKey)
-        if ok then
-            local label = PermissionLabelFor(permissionKey)
-            if stillHasAccess == 'rank_or_high_command' then
-                NotifyPlayer(source, locale('permissions.command_revoke_ok_rank', label, targetCitizenid), 'success')
-            elseif stillHasAccess == 'unknown_target_offline' then
-                NotifyPlayer(source, locale('permissions.command_revoke_ok_offline', label, targetCitizenid), 'success')
-            else
-                NotifyPlayer(source, locale('permissions.command_revoke_ok', label, targetCitizenid), 'success')
-            end
-            return
-        end
-
-        if outcome == 'not_granted' then
-            NotifyPlayer(source, locale(REVOKE_COMMAND_OUTCOME_KEYS.not_granted, targetCitizenid), 'error')
-            return
-        end
-        local key = REVOKE_COMMAND_OUTCOME_KEYS[outcome]
-        if key then
-            NotifyPlayer(source, locale(key), 'error')
-        end
-        -- outcome == 'invalid_granter': already notified by RevokePermission itself.
+        HandleRevokePermissionCommand(source, args)
     end, false)
 end
 

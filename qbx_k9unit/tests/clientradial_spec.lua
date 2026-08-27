@@ -205,8 +205,18 @@ local function newRadialFixture(opts)
     if hasK9Access == nil then hasK9Access = true end
 
     local canShowK9UICalls, denyCalls, hasK9AccessCalls = 0, 0, 0
+    local denyReasons = {}
     local function CanShowK9UI() canShowK9UICalls = canShowK9UICalls + 1; return canShowK9UI end
-    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
+    -- REASON PARAMETER (ease-of-use audit finding) -- captures whatever
+    -- reason (if any) each onSelect closure passes, so this spec can prove
+    -- the specific-reason routing (combat.no_access for HasK9Access()-alone
+    -- gates, common.no_k9_role_or_access for the broader CanShowK9UI() ones)
+    -- lands correctly, same "already-valid locale key" contract
+    -- tests/main_spec.lua's own DenyK9UIAccess tests pin directly.
+    local function DenyK9UIAccess(reason)
+        denyCalls = denyCalls + 1
+        denyReasons[#denyReasons + 1] = reason
+    end
     local function HasK9Access() hasK9AccessCalls = hasK9AccessCalls + 1; return hasK9Access end
 
     -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
@@ -433,6 +443,10 @@ local function newRadialFixture(opts)
         IsDragTargetEngaged = queryFn('IsDragTargetEngaged', 'isDragTargetEngaged'),
         IsRestingInKennel = queryFn('IsRestingInKennel', 'isRestingInKennel'),
         IsCarryingKennel = queryFn('IsCarryingKennel', 'isCarryingKennel'),
+        -- Command Tablet (Job 3 regrouping/bug-fix pass) -- see the
+        -- 'k9_open_tablet' tests near the bottom of this file for the full
+        -- writeup of the nesting bug this pass fixes.
+        OpenTablet = record('OpenTablet'),
     }
 
     local overrides = {
@@ -612,6 +626,7 @@ local function newRadialFixture(opts)
         setHasK9Access = function(v) hasK9Access = v end,
         canShowK9UICallCount = function() return canShowK9UICalls end,
         denyCallCount = function() return denyCalls end,
+        lastDenyReason = function() return denyReasons[#denyReasons] end,
         hasK9AccessCallCount = function() return hasK9AccessCalls end,
         setState = function(field, value) queryState[field] = value end,
         setMyPed = function(handle) myPed = handle end,
@@ -662,29 +677,66 @@ t.test('this spec\'s baseline flags: the k9unit submenu is registered and linked
     t.isNil(opener.onSelect, 'the opener is a pure navigation link, per this file\'s own header on menu-vs-navigation semantics -- it must carry no onSelect of its own')
 end)
 
-t.test('this spec\'s baseline flags: Sit, Bark, Leash, Vehicle (Phase 1) are present; every later-phase item stays absent', function()
+t.test('this spec\'s baseline flags: Bark, Leash, Vehicle, Utility (Phase 1 + regrouped items) are present at the top level; every later-phase item stays absent', function()
     local f = newRadialFixture()
     local items = f.findMenu('k9unit')
     local presentIds = {}
     for _, item in ipairs(items) do presentIds[item.id] = true end
 
-    t.isTrue(presentIds.k9_sit)
+    -- k9_sit MOVED into the 'k9unit_utility' sub-menu (Job 3 regrouping,
+    -- ease-of-use audit) -- it is no longer a direct 'k9unit' child at all;
+    -- see the dedicated 'k9unit_utility' section below for its own coverage.
+    t.isTrue(presentIds.k9_utility, 'the Utility sub-menu opener must be present -- k9_sit alone (no dedicated flag) guarantees the sub-menu is never empty')
     t.isTrue(presentIds.k9_bark)
     t.isTrue(presentIds.k9_leash)
     t.isTrue(presentIds.k9_vehicle)
     t.isTrue(presentIds.k9_kennel, 'k9_kennel has no dedicated Config.Features flag of its own -- it carries the kennel EXIT path since the merge, and an exit-adjacent item is registered unconditionally. See client/radial.lua own comment on that item.')
 
     local shouldBeAbsent = {
+        'k9_sit', -- moved into 'k9unit_utility', see above
         'k9_track_certified',
         'k9_bite_hold', 'k9_takedown', 'k9_drag',
         'k9_break_partnership', 'k9_partner_up', 'k9_recall', 'k9_defense',
-        'k9_fetch', 'k9_prop_attachment',
-        'k9_open_inventory', 'k9_treat_nearest',
+        'k9_fetch',
+        -- k9_prop_attachment/k9_open_inventory/k9_treat_nearest also MOVED
+        -- into 'k9unit_utility' (Job 3) -- structurally never a direct
+        -- 'k9unit' child anymore, regardless of their own feature flags;
+        -- see the dedicated 'k9unit_utility' presence tests below.
+        'k9_prop_attachment', 'k9_open_inventory', 'k9_treat_nearest',
         'k9_sar_call', 'k9_training',
     }
     for _, id in ipairs(shouldBeAbsent) do
-        t.isFalse(presentIds[id] == true, ('%s must be absent under default (still-false) feature flags'):format(id))
+        t.isFalse(presentIds[id] == true, ('%s must be absent from the top-level k9unit menu'):format(id))
     end
+end)
+
+-- ----------------------------------------------------------------------
+-- 'k9unit_utility' sub-menu (Job 3 regrouping, ease-of-use audit) -- Sit/
+-- Toggle K9 Vest/Open My Gear/Treat K9, none of which carry a release/
+-- termination half worth protecting from an extra menu level (see
+-- client/radial.lua's own "REGROUPING PASS" header for the full safety
+-- reasoning this follows). Command Tablet and every termination-capable
+-- toggle (Leash/Vehicle/Bite & Hold/Takedown/Drag/SAR Call/Recall/Break
+-- Partnership/Kennel) stay flat at the TOP level on purpose -- NOT folded
+-- in here, despite the task's own illustrative "Utility (kennel/inventory/
+-- vehicle/medkit/vest)" suggestion naming kennel and vehicle too; deviation
+-- documented at each of those items' own call sites in client/radial.lua.
+-- ----------------------------------------------------------------------
+
+t.test('k9unit_utility: registered and linked from the k9unit menu via a single k9_utility opener', function()
+    local f = newRadialFixture()
+    local link = f.findInMenu('k9unit', 'k9_utility')
+    t.isNotNil(link, 'k9unit must carry a k9_utility opener linking into the sub-menu')
+    t.equals(link.menu, 'k9unit_utility')
+    t.isNil(link.onSelect, 'the opener is a pure navigation link, carrying no onSelect of its own')
+
+    local utilityItems = f.findMenu('k9unit_utility')
+    t.isNotNil(utilityItems, 'lib.registerRadial must be called with id="k9unit_utility"')
+end)
+
+t.test('k9unit_utility: Sit is present regardless of every other feature flag, since it has no dedicated flag of its own', function()
+    local f = newRadialFixture()
+    t.isNotNil(f.findInMenu('k9unit_utility', 'k9_sit'))
 end)
 
 -- ----------------------------------------------------------------------
@@ -697,14 +749,16 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
     { flag = 'NonLethalTakedown', itemId = 'k9_takedown' },
     { flag = 'PropDragging', itemId = 'k9_drag' },
     { flag = 'Recall', itemId = 'k9_recall' },
-    { flag = 'PropAttachments', itemId = 'k9_prop_attachment' },
+    -- MOVED into 'k9unit_utility' (Job 3 regrouping) -- `menu` overrides the
+    -- default 'k9unit' target below for these three only.
+    { flag = 'PropAttachments', itemId = 'k9_prop_attachment', menu = 'k9unit_utility' },
     -- The two items this task explicitly called out as "wired only
     -- recently, both behind flags that ship false" -- proven here by the
     -- SAME generic mechanism as every other flag/item pair, not a special
     -- case, precisely because nothing about them IS special-cased in the
     -- source.
-    { flag = 'K9Inventory', itemId = 'k9_open_inventory' },
-    { flag = 'K9Medkit', itemId = 'k9_treat_nearest' },
+    { flag = 'K9Inventory', itemId = 'k9_open_inventory', menu = 'k9unit_utility' },
+    { flag = 'K9Medkit', itemId = 'k9_treat_nearest', menu = 'k9unit_utility' },
     -- RESOLVED this pass: closed the exact disclosed gap
     -- client/sarcalls.lua's own header used to name ("not wired into
     -- client/radial.lua by this pass") -- same generic mechanism, nothing
@@ -713,14 +767,16 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
 }
 
 for _, case in ipairs(FALSE_BY_DEFAULT_SINGLE_ITEM_CASES) do
+    local menu = case.menu or 'k9unit'
+
     t.test(('%s: absent when Config.Features.%s is explicitly false'):format(case.itemId, case.flag), function()
         local f = newRadialFixture()
-        t.isNil(f.findInMenu('k9unit', case.itemId))
+        t.isNil(f.findInMenu(menu, case.itemId))
     end)
 
     t.test(('%s: appears ONLY when Config.Features.%s is explicitly true'):format(case.itemId, case.flag), function()
         local f = newRadialFixture({ features = { [case.flag] = true } })
-        t.isNotNil(f.findInMenu('k9unit', case.itemId), ('%s must appear once %s is true'):format(case.itemId, case.flag))
+        t.isNotNil(f.findInMenu(menu, case.itemId), ('%s must appear once %s is true'):format(case.itemId, case.flag))
     end)
 end
 
@@ -776,7 +832,7 @@ t.test('k9_sit: present regardless of every other feature flag, since it has no 
     local f = newRadialFixture({ features = {
         LeashMechanics = false, VehicleEntryExit = false, BasicBarkSounds = false,
     } })
-    t.isNotNil(f.findInMenu('k9unit', 'k9_sit'))
+    t.isNotNil(f.findInMenu('k9unit_utility', 'k9_sit'))
 end)
 
 -- ----------------------------------------------------------------------
@@ -875,6 +931,24 @@ t.test('BasicBarkSounds true, AdvancedBarkRadial false: a single k9_bark item wi
     t.equals(f.triggerServerEventCalls[1].args[1], 'bark')
 end)
 
+-- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
+-- finding, this pass) -- server/main.lua's relayBark handler gates on
+-- HasK9Access(src) alone -- no existing test in this file exercised the
+-- basic (non-Advanced) Bark item's access gate at all before this pass.
+t.test('BasicBarkSounds true, AdvancedBarkRadial false: k9_bark is gated on HasK9Access() alone (widened) -- denied with combat.no_access; a bypass holder (HasK9Access true, CanShowK9UI false) is offered', function()
+    local fDenied = newRadialFixture({ hasK9Access = false, canShowK9UI = false })
+    fDenied.findInMenu('k9unit', 'k9_bark').onSelect()
+    t.equals(fDenied.denyCallCount(), 1)
+    t.equals(fDenied.lastDenyReason(), 'combat.no_access')
+    t.equals(#fDenied.triggerServerEventCalls, 0)
+
+    local fBypass = newRadialFixture({ hasK9Access = true, canShowK9UI = false })
+    fBypass.findInMenu('k9unit', 'k9_bark').onSelect()
+    t.equals(fBypass.denyCallCount(), 0)
+    t.equals(#fBypass.triggerServerEventCalls, 1)
+    t.equals(fBypass.triggerServerEventCalls[1].args[1], 'bark')
+end)
+
 t.test('BasicBarkSounds true + AdvancedBarkRadial true: k9_bark becomes a pure navigation link into k9unit_bark, carrying no onSelect of its own', function()
     local f = newRadialFixture({ features = { AdvancedBarkRadial = true } })
     local item = f.findInMenu('k9unit', 'k9_bark')
@@ -905,6 +979,60 @@ t.test('AdvancedBarkRadial true: k9unit_bark contains exactly one item per REAL 
         t.equals(f.triggerServerEventCalls[i].event, 'qbx_k9unit:server:relayBark')
         t.equals(f.triggerServerEventCalls[i].args[1], variant.barkType, 'each variant must send ITS OWN barkType, not a shared/last-iteration one (the exact Lua closure-capture bug this file\'s own header warns a naive loop could introduce)')
     end
+end)
+
+t.test('AdvancedBarkRadial true: each variant item is ALSO gated on HasK9Access() alone (widened), same as the basic Bark item', function()
+    local fDenied = newRadialFixture({ features = { AdvancedBarkRadial = true }, hasK9Access = false, canShowK9UI = false })
+    local variant = fDenied.Config.AdvancedBarkRadial[1]
+    fDenied.findInMenu('k9unit_bark', 'k9_bark_' .. variant.barkType).onSelect()
+    t.equals(fDenied.denyCallCount(), 1)
+    t.equals(fDenied.lastDenyReason(), 'combat.no_access')
+    t.equals(#fDenied.triggerServerEventCalls, 0)
+
+    local fBypass = newRadialFixture({ features = { AdvancedBarkRadial = true }, hasK9Access = true, canShowK9UI = false })
+    fBypass.findInMenu('k9unit_bark', 'k9_bark_' .. variant.barkType).onSelect()
+    t.equals(fBypass.denyCallCount(), 0)
+    t.equals(#fBypass.triggerServerEventCalls, 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- k9_open_tablet (Command Tablet) -- NESTING BUG FIX, this pass. Found
+-- while doing the Job 3 regrouping pass: this item used to be registered
+-- from a code position textually INSIDE the
+-- `if Config.Features.AdvancedBarkRadial and not
+-- IsRadialFeatureBlockedForMe('AdvancedBarkRadial') then` branch, so it only
+-- ever appeared when BOTH CommandTablet AND AdvancedBarkRadial were true --
+-- even though its own, only intended gate is Config.Features.CommandTablet
+-- alone. The tests below pin that this is now genuinely fixed: present
+-- whenever CommandTablet is true, REGARDLESS of AdvancedBarkRadial's value.
+-- ----------------------------------------------------------------------
+
+t.test('k9_open_tablet: absent when Config.Features.CommandTablet is false, regardless of AdvancedBarkRadial', function()
+    local fBasic = newRadialFixture({ features = { CommandTablet = false, AdvancedBarkRadial = false } })
+    t.isNil(fBasic.findInMenu('k9unit', 'k9_open_tablet'))
+
+    local fAdvanced = newRadialFixture({ features = { CommandTablet = false, AdvancedBarkRadial = true } })
+    t.isNil(fAdvanced.findInMenu('k9unit', 'k9_open_tablet'))
+end)
+
+t.test('THE BUG THIS PASS FIXES: k9_open_tablet is present when CommandTablet is true AND AdvancedBarkRadial is false -- it used to be silently absent in exactly this combination', function()
+    local f = newRadialFixture({ features = { CommandTablet = true, AdvancedBarkRadial = false } })
+    local item = f.findInMenu('k9unit', 'k9_open_tablet')
+    t.isNotNil(item, 'k9_open_tablet must appear whenever CommandTablet is true, independent of AdvancedBarkRadial -- this is the exact nesting bug this pass fixes')
+    t.equals(item.label, locale('radial.tablet_label'))
+
+    item.onSelect()
+    t.equals(#f.calls.OpenTablet, 1)
+end)
+
+t.test('k9_open_tablet: also present when BOTH CommandTablet and AdvancedBarkRadial are true (the one combination that already worked before this fix)', function()
+    local f = newRadialFixture({ features = { CommandTablet = true, AdvancedBarkRadial = true } })
+    t.isNotNil(f.findInMenu('k9unit', 'k9_open_tablet'))
+end)
+
+t.test('k9_open_tablet: guarded -- absent OpenTablet does not throw', function()
+    local f = newRadialFixture({ features = { CommandTablet = true }, omit = { 'OpenTablet' } })
+    assertGuardDoesNotThrow(f.findInMenu('k9unit', 'k9_open_tablet'))
 end)
 
 -- ----------------------------------------------------------------------
@@ -1058,53 +1186,71 @@ end)
 
 t.test('k9_prop_attachment: guarded -- absent target does not throw; present target called only once access is granted', function()
     local fAbsent = newRadialFixture({ features = { PropAttachments = true, DeployableKennel = true }, omit = { 'RequestToggleK9PropAttachment', 'RequestDeployKennel' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_prop_attachment'))
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_utility', 'k9_prop_attachment'))
 
     local fDenied = newRadialFixture({ features = { PropAttachments = true, DeployableKennel = true }, canShowK9UI = false })
-    fDenied.findInMenu('k9unit', 'k9_prop_attachment').onSelect()
+    fDenied.findInMenu('k9unit_utility', 'k9_prop_attachment').onSelect()
     t.equals(fDenied.denyCallCount(), 1, 'one denying item now -- the kennel item merged away and is deliberately ungated')
+    t.equals(fDenied.lastDenyReason(), 'common.no_k9_role_or_access', 'NOT WIDENED (server/propattachment.lua requires model/role AND access) -- see this item\'s own comment in client/radial.lua')
     t.isNil(fDenied.calls.RequestToggleK9PropAttachment)
     t.isNil(fDenied.calls.RequestDeployKennel)
 
     local fGranted = newRadialFixture({ features = { PropAttachments = true, DeployableKennel = true } })
-    fGranted.findInMenu('k9unit', 'k9_prop_attachment').onSelect()
+    fGranted.findInMenu('k9unit_utility', 'k9_prop_attachment').onSelect()
     t.equals(#fGranted.calls.RequestToggleK9PropAttachment, 1)
 end)
 
 -- THE TWO ITEMS THIS TASK EXPLICITLY PRIORITISED: "Open My Gear" and
 -- "Treat K9" -- both recently wired, both behind flags that ship false.
 -- Full treatment (presence already proven above): guard + access gate +
--- happy-path call.
+-- happy-path call. Both MOVED into 'k9unit_utility' (Job 3 regrouping).
 t.test('k9_open_inventory ("Open My Gear"): guarded -- absent RequestOpenOwnK9Inventory does not throw; denied access never calls it; granted access calls it', function()
     local fAbsent = newRadialFixture({ features = { K9Inventory = true }, omit = { 'RequestOpenOwnK9Inventory' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_open_inventory'))
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_utility', 'k9_open_inventory'))
 
     local fDenied = newRadialFixture({ features = { K9Inventory = true }, canShowK9UI = false })
-    fDenied.findInMenu('k9unit', 'k9_open_inventory').onSelect()
+    fDenied.findInMenu('k9unit_utility', 'k9_open_inventory').onSelect()
     t.equals(fDenied.denyCallCount(), 1)
+    t.equals(fDenied.lastDenyReason(), 'common.no_k9_role_or_access', 'NOT WIDENED (server/inventory.lua requires model/role AND access for the K9 whose gear is opened) -- see this item\'s own comment in client/radial.lua')
     t.isNil(fDenied.calls.RequestOpenOwnK9Inventory)
 
     local fGranted = newRadialFixture({ features = { K9Inventory = true } })
-    fGranted.findInMenu('k9unit', 'k9_open_inventory').onSelect()
+    fGranted.findInMenu('k9unit_utility', 'k9_open_inventory').onSelect()
     t.equals(#fGranted.calls.RequestOpenOwnK9Inventory, 1)
-    t.equals(fGranted.findInMenu('k9unit', 'k9_open_inventory').label, locale('radial.open_inventory_label'))
+    t.equals(fGranted.findInMenu('k9unit_utility', 'k9_open_inventory').label, locale('radial.open_inventory_label'))
 end)
 
-t.test('k9_treat_nearest ("Treat K9"): guarded -- absent RequestTreatNearestK9 does not throw; denied access never calls it; granted access calls it', function()
+-- CanShowK9UI() PRE-CHECK REMOVED (ease-of-use/permission audit finding,
+-- this pass) -- "Treat K9" is a HUMAN HANDLER action (job-only eligibility
+-- server-side, per server/medkit.lua's own header), not a K9 ability; this
+-- item's own onSelect no longer gates on CanShowK9UI() at all, matching
+-- client/medkit.lua's own RequestTreatNearestK9() (which had its own
+-- matching, redundant pre-check removed in the same pass) and this file's
+-- own "Treat K9" ox_target `canInteract` predicate (which never checked the
+-- treater's own role either). This is a REPLACEMENT for the old "guarded +
+-- access gate + happy path" test below, not an addition to it -- the old
+-- test's own "denied access never calls it" assertion described exactly
+-- the behavior this pass fixes.
+t.test('k9_treat_nearest ("Treat K9"): guarded -- absent RequestTreatNearestK9 does not throw; CanShowK9UI() is NEVER checked; it always calls through regardless of role/access (the server is the real gate)', function()
     local fAbsent = newRadialFixture({ features = { K9Medkit = true }, omit = { 'RequestTreatNearestK9' } })
-    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit', 'k9_treat_nearest'))
+    assertGuardDoesNotThrow(fAbsent.findInMenu('k9unit_utility', 'k9_treat_nearest'))
 
-    local fDenied = newRadialFixture({ features = { K9Medkit = true }, canShowK9UI = false })
-    fDenied.findInMenu('k9unit', 'k9_treat_nearest').onSelect()
-    t.equals(fDenied.denyCallCount(), 1)
-    t.isNil(fDenied.calls.RequestTreatNearestK9)
+    -- The exact case this pass fixes: CanShowK9UI() false (not a K9 role
+    -- holder at all -- e.g. a plain PD/EMS officer with no K9 certification)
+    -- must still reach RequestTreatNearestK9(), never DenyK9UIAccess() at
+    -- this layer.
+    local fNotAK9 = newRadialFixture({ features = { K9Medkit = true }, canShowK9UI = false })
+    fNotAK9.findInMenu('k9unit_utility', 'k9_treat_nearest').onSelect()
+    t.equals(fNotAK9.denyCallCount(), 0, 'this item must never call DenyK9UIAccess() itself -- CanShowK9UI() is not this action\'s gate')
+    t.equals(fNotAK9.canShowK9UICallCount(), 0, 'CanShowK9UI() must not even be READ by this onSelect -- it was fully removed, not merely ignored')
+    t.equals(#fNotAK9.calls.RequestTreatNearestK9, 1)
 
     local fGranted = newRadialFixture({ features = { K9Medkit = true } })
-    fGranted.findInMenu('k9unit', 'k9_treat_nearest').onSelect()
+    fGranted.findInMenu('k9unit_utility', 'k9_treat_nearest').onSelect()
     t.equals(#fGranted.calls.RequestTreatNearestK9, 1)
     -- Reuses medkit.treat_target_label rather than minting a duplicate key,
     -- per this item's own comment -- confirmed against the real label.
-    t.equals(fGranted.findInMenu('k9unit', 'k9_treat_nearest').label, locale('medkit.treat_target_label'))
+    t.equals(fGranted.findInMenu('k9unit_utility', 'k9_treat_nearest').label, locale('medkit.treat_target_label'))
 end)
 
 t.test('k9_fetch_recall: guarded -- absent RequestRecallFetchBall does not throw; present, UNGATED (a termination action)', function()
@@ -1164,11 +1310,29 @@ t.test('k9_sar_call: while a call is active, selecting it abandons -- UNGATED, n
     t.equals(f.canShowK9UICallCount(), 0, 'abandoning a call must never even ask CanShowK9UI -- see client/sarcalls.lua\'s own "UNCONDITIONAL, never gated" doc comment')
 end)
 
-t.test('k9_sar_call: while no call is active, denied access never calls RequestStartSarCall; granted access does', function()
-    local fDenied = newRadialFixture({ features = { SARCalls = true }, canShowK9UI = false })
+-- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
+-- finding, this pass) -- server/sarcalls.lua's requestSarCall callback
+-- gates on HasK9Access(source) alone. `hasK9Access = false` (not
+-- `canShowK9UI = false`) is therefore the real denial case now.
+t.test('k9_sar_call: while no call is active, HasK9Access() false denies (never calls RequestStartSarCall, with the specific combat.no_access reason); HasK9Access() true calls through', function()
+    local fDenied = newRadialFixture({ features = { SARCalls = true }, hasK9Access = false, canShowK9UI = false })
     fDenied.findInMenu('k9unit', 'k9_sar_call').onSelect()
     t.equals(fDenied.denyCallCount(), 1)
+    t.equals(fDenied.lastDenyReason(), 'combat.no_access')
     t.isNil(fDenied.calls.RequestStartSarCall)
+
+    -- THE WIDENING ITSELF: a High Command/autoAccessGrade-bypass holder --
+    -- HasK9Access() true, CanShowK9UI() false (HasK9Role() deliberately
+    -- excludes that exact bypass) -- must now be offered the call, not
+    -- silently denied by THIS file's own gate. RESIDUAL, DISCLOSED GAP:
+    -- client/sarcalls.lua's own RequestStartSarCall() (not loaded/exercised
+    -- by this isolated spec) still internally re-gates on CanShowK9UI() as
+    -- of this same pass -- see client/radial.lua's own comment on this item
+    -- for the full writeup; this test only proves THIS file's own half.
+    local fBypass = newRadialFixture({ features = { SARCalls = true }, hasK9Access = true, canShowK9UI = false })
+    fBypass.findInMenu('k9unit', 'k9_sar_call').onSelect()
+    t.equals(fBypass.denyCallCount(), 0)
+    t.equals(#fBypass.calls.RequestStartSarCall, 1)
 
     local fGranted = newRadialFixture({ features = { SARCalls = true } })
     fGranted.findInMenu('k9unit', 'k9_sar_call').onSelect()
@@ -1300,7 +1464,7 @@ end)
 
 t.test('FIXED: k9_sit is now guarded -- absent K9Sit does not throw', function()
     local f = newRadialFixture({ omit = { 'K9Sit' } })
-    assertGuardDoesNotThrow(f.findInMenu('k9unit', 'k9_sit'))
+    assertGuardDoesNotThrow(f.findInMenu('k9unit_utility', 'k9_sit'))
 end)
 
 t.test('FIXED: k9_vehicle is now guarded -- absent IsInK9Vehicle/EnterNearestK9Vehicle/ExitK9Vehicle does not throw in either direction', function()
@@ -1349,12 +1513,12 @@ end)
 
 t.test('k9_sit: denied access never calls K9Sit; granted access calls it', function()
     local fDenied = newRadialFixture({ canShowK9UI = false })
-    fDenied.findInMenu('k9unit', 'k9_sit').onSelect()
+    fDenied.findInMenu('k9unit_utility', 'k9_sit').onSelect()
     t.equals(fDenied.denyCallCount(), 1)
     t.isNil(fDenied.calls.K9Sit)
 
     local fGranted = newRadialFixture({ canShowK9UI = true })
-    fGranted.findInMenu('k9unit', 'k9_sit').onSelect()
+    fGranted.findInMenu('k9unit_utility', 'k9_sit').onSelect()
     t.equals(#fGranted.calls.K9Sit, 1)
 end)
 
@@ -1461,18 +1625,40 @@ t.test('k9_kennel: UNCONDITIONAL REGISTRATION GRANTS NOTHING OF ITS OWN -- this 
     t.equals(#f.triggerServerEventCalls, 0, 'this ITEM never talks to the network directly -- any server event is client/kennel.lua\'s own responsibility, proven elsewhere')
 end)
 
-t.test('k9_vehicle: BOTH directions (enter and exit) are gated on CanShowK9UI -- unlike Leash/Bite/Drag, there is no ungated "release" branch here', function()
-    local fEnterDenied = newRadialFixture({ features = { VehicleEntryExit = true }, canShowK9UI = false })
+-- ORDERING FIX + GATE WIDENED (permission audit finding, this pass) --
+-- Exit used to sit BEHIND this item's own access gate (the exact "gate the
+-- STOP" bug this codebase's own rule forbids); Exit is now checked FIRST,
+-- unconditionally, exactly like Detach Leash/Release Bite & Hold/Release
+-- Drag. The Enter (start) branch is separately WIDENED to HasK9Access()
+-- alone, not CanShowK9UI() (server/vehicle.lua's requestVehicleSeatClaim
+-- gates on HasK9Access(src) alone).
+t.test('k9_vehicle: Exit is now UNGATED (ordering fix -- checked before the access gate, never denied); Enter is gated on HasK9Access() alone (widened)', function()
+    local fEnterDenied = newRadialFixture({ features = { VehicleEntryExit = true }, hasK9Access = false, canShowK9UI = false })
     fEnterDenied.setState('isInK9Vehicle', false)
     fEnterDenied.findInMenu('k9unit', 'k9_vehicle').onSelect()
     t.equals(fEnterDenied.denyCallCount(), 1)
+    t.equals(fEnterDenied.lastDenyReason(), 'combat.no_access')
     t.isNil(fEnterDenied.calls.EnterNearestK9Vehicle)
 
-    local fExitDenied = newRadialFixture({ features = { VehicleEntryExit = true }, canShowK9UI = false })
-    fExitDenied.setState('isInK9Vehicle', true)
-    fExitDenied.findInMenu('k9unit', 'k9_vehicle').onSelect()
-    t.equals(fExitDenied.denyCallCount(), 1)
-    t.isNil(fExitDenied.calls.ExitK9Vehicle, 'unlike Detach Leash, exiting a vehicle is STILL gated -- must be denied too')
+    -- THE FIX: a K9 already inside a vehicle who has lost access (or never
+    -- had it) must still be able to exit via this item -- never denied.
+    local fExitNoAccess = newRadialFixture({ features = { VehicleEntryExit = true }, hasK9Access = false, canShowK9UI = false })
+    fExitNoAccess.setState('isInK9Vehicle', true)
+    fExitNoAccess.findInMenu('k9unit', 'k9_vehicle').onSelect()
+    t.equals(fExitNoAccess.denyCallCount(), 0, 'exiting a vehicle must never be denied -- this was the exact bug this pass fixes')
+    t.equals(#fExitNoAccess.calls.ExitK9Vehicle, 1)
+
+    -- THE WIDENING: a High Command/autoAccessGrade-bypass holder (HasK9Access
+    -- true, CanShowK9UI false) must now be offered Enter too. RESIDUAL,
+    -- DISCLOSED GAP: client/vehicle.lua's own EnterNearestK9Vehicle() (not
+    -- loaded/exercised by this isolated spec) still internally re-gates on
+    -- CanShowK9UI() as of this same pass -- see client/radial.lua's own
+    -- comment on this item for the full writeup.
+    local fEnterBypass = newRadialFixture({ features = { VehicleEntryExit = true }, hasK9Access = true, canShowK9UI = false })
+    fEnterBypass.setState('isInK9Vehicle', false)
+    fEnterBypass.findInMenu('k9unit', 'k9_vehicle').onSelect()
+    t.equals(fEnterBypass.denyCallCount(), 0)
+    t.equals(#fEnterBypass.calls.EnterNearestK9Vehicle, 1)
 end)
 
 t.test('k9_vehicle: granted access chooses Enter or Exit based on IsInK9Vehicle()', function()
@@ -1489,8 +1675,13 @@ t.test('k9_vehicle: granted access chooses Enter or Exit based on IsInK9Vehicle(
     t.isNil(fExit.calls.EnterNearestK9Vehicle)
 end)
 
-t.test('k9_bite_hold / k9_drag: the Release branch is UNGATED; the Start branch is GATED', function()
-    local fRelease = newRadialFixture({ features = { BiteAndHold = true, PropDragging = true }, canShowK9UI = false })
+-- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
+-- finding, this pass) -- server/combat.lua's shared ValidateCombatRequest
+-- (backing requestBiteHold/requestTakedown/requestDrag) gates on
+-- HasK9Access(src) alone. `hasK9Access = false` is therefore the real
+-- denial case now for the Start branch.
+t.test('k9_bite_hold / k9_drag: the Release branch is UNGATED; the Start branch is GATED on HasK9Access() alone (widened)', function()
+    local fRelease = newRadialFixture({ features = { BiteAndHold = true, PropDragging = true }, hasK9Access = false, canShowK9UI = false })
     fRelease.setState('isBiteHoldEngaged', true)
     fRelease.setState('isDragEngaged', true)
     fRelease.findInMenu('k9unit', 'k9_bite_hold').onSelect()
@@ -1499,14 +1690,30 @@ t.test('k9_bite_hold / k9_drag: the Release branch is UNGATED; the Start branch 
     t.equals(#fRelease.calls.ReleaseDrag, 1)
     t.equals(fRelease.denyCallCount(), 0, 'neither release branch may ever call DenyK9UIAccess')
 
-    local fStartDenied = newRadialFixture({ features = { BiteAndHold = true, PropDragging = true }, canShowK9UI = false })
+    local fStartDenied = newRadialFixture({ features = { BiteAndHold = true, PropDragging = true }, hasK9Access = false, canShowK9UI = false })
     fStartDenied.setState('isBiteHoldEngaged', false)
     fStartDenied.setState('isDragEngaged', false)
     fStartDenied.findInMenu('k9unit', 'k9_bite_hold').onSelect()
     fStartDenied.findInMenu('k9unit', 'k9_drag').onSelect()
     t.equals(fStartDenied.denyCallCount(), 2)
+    t.equals(fStartDenied.lastDenyReason(), 'combat.no_access')
     t.isNil(fStartDenied.calls.RequestBiteHold)
     t.isNil(fStartDenied.calls.RequestDrag)
+
+    -- THE WIDENING: a High Command/autoAccessGrade-bypass holder (HasK9Access
+    -- true, CanShowK9UI false) must now be offered both Start branches.
+    -- RESIDUAL, DISCLOSED GAP: client/combat.lua's own RequestBiteHold()/
+    -- RequestDrag() (not loaded/exercised by this isolated spec) still
+    -- internally re-gate on CanShowK9UI() as of this same pass -- see
+    -- client/radial.lua's own comment on these items for the full writeup.
+    local fBypass = newRadialFixture({ features = { BiteAndHold = true, PropDragging = true }, hasK9Access = true, canShowK9UI = false })
+    fBypass.setState('isBiteHoldEngaged', false)
+    fBypass.setState('isDragEngaged', false)
+    fBypass.findInMenu('k9unit', 'k9_bite_hold').onSelect()
+    fBypass.findInMenu('k9unit', 'k9_drag').onSelect()
+    t.equals(fBypass.denyCallCount(), 0)
+    t.equals(#fBypass.calls.RequestBiteHold, 1)
+    t.equals(#fBypass.calls.RequestDrag, 1)
 end)
 
 -- ----------------------------------------------------------------------
@@ -1531,12 +1738,31 @@ t.test('k9_track_certified: any active tracking session (regardless of type) mak
     t.isNil(f.calls.StartCertifiedTrack, 'must never also start a new search on the same click')
 end)
 
-t.test('k9_track_certified: nothing active -- starting the merged search is GATED on CanShowK9UI', function()
-    local f = newRadialFixture({ features = { ScentTracking = true }, canShowK9UI = false })
+-- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
+-- finding, this pass) -- server/tracking.lua's findTrackableSource/
+-- findNearestTrackableSource both gate on HasK9Access(source) alone;
+-- client/tracking.lua's own StartTrack() already made this exact fix on
+-- itself (see that file's "ANY-PED SWEEP FIX" comment).
+t.test('k9_track_certified: nothing active -- starting the merged search is GATED on HasK9Access() alone (widened)', function()
+    local f = newRadialFixture({ features = { ScentTracking = true }, hasK9Access = false, canShowK9UI = false })
     f.setState('isTracking', false)
     f.findInMenu('k9unit', 'k9_track_certified').onSelect()
     t.equals(f.denyCallCount(), 1)
+    t.equals(f.lastDenyReason(), 'combat.no_access')
     t.isNil(f.calls.StartCertifiedTrack)
+
+    -- THE WIDENING: a High Command/autoAccessGrade-bypass holder (HasK9Access
+    -- true, CanShowK9UI false) must now be offered the search. Unlike Bite &
+    -- Hold/Takedown/Drag/SAR Call/Vehicle above, there is NO residual gap
+    -- here -- client/tracking.lua's own StartTrack() (called via
+    -- StartCertifiedTrack()) already gates on HasK9Access() alone too (see
+    -- that file's own header, confirmed by reading it directly), so this
+    -- item genuinely unlocks the ability end-to-end for a bypass holder.
+    local fBypass = newRadialFixture({ features = { ScentTracking = true }, hasK9Access = true, canShowK9UI = false })
+    fBypass.setState('isTracking', false)
+    fBypass.findInMenu('k9unit', 'k9_track_certified').onSelect()
+    t.equals(fBypass.denyCallCount(), 0)
+    t.equals(#fBypass.calls.StartCertifiedTrack, 1)
 end)
 
 t.test('k9_track_certified: nothing active, access granted -- calls StartCertifiedTrack (the ONE merged action, never a specific Start*Track)', function()

@@ -287,8 +287,8 @@ function CanShowK9UI()
     return IsOwnModelK9() and HasK9Access()
 end
 
---- Shared denial notification for the "you cannot use K9 features right
---- now" case. This exact lib.notify() call was previously duplicated
+--- Shared denial notification for "you cannot use this K9 feature right
+--- now" refusals. This exact lib.notify() call was previously duplicated
 --- verbatim across client/radial.lua, client/search.lua,
 --- client/vehicle.lua, client/movement.lua, and client/tracking.lua. All
 --- five have since been migrated to call this shared function directly.
@@ -298,8 +298,54 @@ end
 --- stays true forever. Declared as a bare global here per this file's own
 --- established "declare once, reuse everywhere" convention (see
 --- CanShowK9UI/IsOwnModelK9 above).
-function DenyK9UIAccess()
-    lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+---
+--- REASON PARAMETER (ease-of-use audit finding, this pass): this is by far
+--- the most-hit refusal in the resource — ~105 call sites across 28 client
+--- files, 28 of them in client/radial.lua alone — and until now every one
+--- of them showed the SAME generic `common.no_k9_access` sentence
+--- ("You cannot use K9 features right now.") regardless of why: a civilian
+--- clicking a radial icon out of curiosity, a K9 whose certification lapsed
+--- mid-shift, and an officer in the wrong department all read the identical
+--- text, with no hint of why or what to do next. `combat.no_access`
+--- ("You are not certified for K9 duty -- ask a certifying officer to
+--- certify you.") is this resource's own existing example of the same
+--- refusal done right — this parameter lets a caller that ALREADY KNOWS
+--- why (it just tested a specific gate before calling this) route to that
+--- kind of specific, actionable string instead.
+---
+--- `reasonLocaleKey` is an OPTIONAL, ALREADY-RESOLVED locale key (not raw
+--- text) — this function does the `locale()` lookup itself, exactly like
+--- every other string this function has always shown. Two conventions this
+--- resource's own call sites now follow (see client/radial.lua's own
+--- per-item comments for which items know which):
+---   - a caller that checked `HasK9Access()` directly (not the broader
+---     `CanShowK9UI()` combinator) and got `false` KNOWS the specific cause
+---     is "not currently a certified/access-granted K9" — pass
+---     `'combat.no_access'`, the same house-standard string
+---     server/combat.lua's own rejection path already uses for this exact
+---     cause, rather than minting a duplicate.
+---   - a caller that checked the broader `CanShowK9UI()` combinator (role
+---     AND access — it cannot tell which half failed) should pass
+---     `'common.no_k9_role_or_access'` — still strictly more specific than
+---     the bare fallback below, and never factually wrong: EVERY
+---     `CanShowK9UI() == false` case really does mean "not currently an
+---     on-duty, access-granted K9 handler," regardless of which of the two
+---     ANDed conditions was the actual cause. A WRONG specific reason is
+---     worse than a vague one (this pass's own guiding rule) — so a caller
+---     that cannot narrow it down further than that must never guess past
+---     what it actually verified.
+--- Any other/omitted value falls back to `common.no_k9_access_unknown`, an
+--- upgraded generic default that — unlike the original bare
+--- `common.no_k9_access` (kept verbatim; server/vehicle.lua,
+--- server/scentlineup.lua, and this file's own tablet help text quote it
+--- unrelated to this function and must not drift) — still names a concrete
+--- next step for a genuinely unclassified refusal.
+--- @param reasonLocaleKey string? -- an already-valid locale() key for a caller that knows the specific reason; omit to use the improved generic fallback
+function DenyK9UIAccess(reasonLocaleKey)
+    local description = (type(reasonLocaleKey) == 'string' and reasonLocaleKey ~= '')
+        and locale(reasonLocaleKey)
+        or locale('common.no_k9_access_unknown')
+    lib.notify({ title = locale('common.notify_title'), description = description, type = 'error' })
 end
 
 -- Placeholder sound reference. DEVELOPER_REFERENCE.md §7 flags that "bark sounds" need

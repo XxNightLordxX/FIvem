@@ -580,13 +580,45 @@ end)
 -- RAISES on a missing key, and is never stubbed away).
 -- ----------------------------------------------------------------------
 
-t.test('DenyK9UIAccess: notifies with the real common.notify_title / common.no_k9_access locale keys, as an error', function()
+t.test('DenyK9UIAccess: called with no reason notifies with common.notify_title / the improved common.no_k9_access_unknown generic fallback, as an error', function()
     local f = newMainFixture()
     f.env.DenyK9UIAccess()
     t.equals(#f.notifyCalls, 1)
     t.equals(f.notifyCalls[1].title, locale('common.notify_title'))
-    t.equals(f.notifyCalls[1].description, locale('common.no_k9_access'))
+    t.equals(f.notifyCalls[1].description, locale('common.no_k9_access_unknown'))
     t.equals(f.notifyCalls[1].type, 'error')
+end)
+
+-- REASON PARAMETER (ease-of-use audit finding) -- a caller that already
+-- tested a specific gate before calling DenyK9UIAccess() can now pass the
+-- locale key naming that exact reason instead of getting the same generic
+-- sentence as everyone else.
+t.test('DenyK9UIAccess: called with a specific reason locale key uses that key, not the generic fallback', function()
+    local f = newMainFixture()
+    f.env.DenyK9UIAccess('combat.no_access')
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].title, locale('common.notify_title'))
+    t.equals(f.notifyCalls[1].description, locale('combat.no_access'))
+    t.isFalse(f.notifyCalls[1].description == locale('common.no_k9_access_unknown'))
+    t.equals(f.notifyCalls[1].type, 'error')
+end)
+
+t.test('DenyK9UIAccess: the broader CanShowK9UI()-style reason key is distinct from both the no-access and the unknown fallback strings', function()
+    local f = newMainFixture()
+    f.env.DenyK9UIAccess('common.no_k9_role_or_access')
+    t.equals(f.notifyCalls[1].description, locale('common.no_k9_role_or_access'))
+    t.isFalse(locale('common.no_k9_role_or_access') == locale('combat.no_access'))
+    t.isFalse(locale('common.no_k9_role_or_access') == locale('common.no_k9_access_unknown'))
+end)
+
+t.test('DenyK9UIAccess: a non-string/empty-string reason value still falls back to the generic message, never errors', function()
+    local f = newMainFixture()
+    f.env.DenyK9UIAccess('')
+    t.equals(f.notifyCalls[1].description, locale('common.no_k9_access_unknown'))
+
+    f = newMainFixture()
+    f.env.DenyK9UIAccess(123)
+    t.equals(f.notifyCalls[1].description, locale('common.no_k9_access_unknown'))
 end)
 
 -- ----------------------------------------------------------------------

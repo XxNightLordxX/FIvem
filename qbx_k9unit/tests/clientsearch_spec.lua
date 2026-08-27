@@ -103,7 +103,7 @@ end
 --- session this spec was written).
 local THROW = setmetatable({}, { __tostring = function() return 'THROW' end })
 
---- @param opts { canShowK9UI: boolean?, searchZones: boolean? }?
+--- @param opts { canShowK9UI: boolean?, hasK9Access: boolean?, searchZones: boolean? }?
 local function newSearchFixture(opts)
     opts = opts or {}
 
@@ -111,8 +111,24 @@ local function newSearchFixture(opts)
     if canShowK9UI == nil then canShowK9UI = true end
     local canShowK9UICallCount = 0
     local denyCalls = 0
+    local denyReasons = {}
     local function CanShowK9UI() canShowK9UICallCount = canShowK9UICallCount + 1; return canShowK9UI end
-    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
+    -- GATE WIDENED TO HasK9Access() ALONE (permission audit finding) --
+    -- client/search.lua's PerformSearch()/canInteract predicates now check
+    -- HasK9Access() instead of CanShowK9UI(). Independently settable from
+    -- canShowK9UI (defaults to the SAME value when opts.hasK9Access is
+    -- omitted, so every existing call site in this spec keeps working
+    -- unchanged) so the interesting divergent case -- HasK9Access()-true,
+    -- CanShowK9UI()-false, i.e. a High Command/autoAccessGrade-bypass
+    -- holder with no certification -- can be modeled directly.
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = canShowK9UI end
+    local hasK9AccessCallCount = 0
+    local function HasK9Access() hasK9AccessCallCount = hasK9AccessCallCount + 1; return hasK9Access end
+    local function DenyK9UIAccess(reason)
+        denyCalls = denyCalls + 1
+        denyReasons[#denyReasons + 1] = reason
+    end
 
     local existingEntities = {} -- entity -> boolean
     local function DoesEntityExist(entity) return existingEntities[entity] == true end
@@ -248,6 +264,7 @@ local function newSearchFixture(opts)
 
     local overrides = {
         CanShowK9UI = CanShowK9UI,
+        HasK9Access = HasK9Access,
         DenyK9UIAccess = DenyK9UIAccess,
         DoesEntityExist = DoesEntityExist,
         NetworkGetNetworkIdFromEntity = NetworkGetNetworkIdFromEntity,
@@ -301,8 +318,11 @@ local function newSearchFixture(opts)
         playSoundOnNetworkEntityCalls = playSoundOnNetworkEntityCalls,
 
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         canShowK9UICallCount = function() return canShowK9UICallCount end,
+        hasK9AccessCallCount = function() return hasK9AccessCallCount end,
         denyCallCount = function() return denyCalls end,
+        lastDenyReason = function() return denyReasons[#denyReasons] end,
 
         setEntityExists = function(entity, v) existingEntities[entity] = v end,
         setNetIdForEntity = function(entity, netId) netIdByEntity[entity] = netId end,
@@ -447,6 +467,54 @@ t.test('onSelect: CanShowK9UI() false denies access and never starts the sniff a
     t.equals(f.denyCallCount(), 1)
     t.equals(#f.progressBarCalls, 0)
     t.equals(f.callbackCallCount(), 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, Job 2).
+-- server/search.lua's searchTarget callback gates on HasK9Access(source)
+-- alone (confirmed by reading it directly) -- these tests prove client/
+-- search.lua's own gate now matches that, offering the ability to a High
+-- Command/autoAccessGrade-bypass holder (HasK9Access() true, CanShowK9UI()
+-- false -- HasK9Role() deliberately excludes that exact bypass, per
+-- server/appearance.lua's own header) instead of silently withholding it,
+-- and that DenyK9UIAccess() is now called with the specific, house-standard
+-- 'combat.no_access' reason rather than the old generic default.
+-- ----------------------------------------------------------------------
+
+t.test('onSelect: a High Command/autoAccessGrade-bypass holder (HasK9Access true, CanShowK9UI false) IS now offered the search -- proves the widened gate, not just its absence', function()
+    local f = newSearchFixture({ canShowK9UI = false, hasK9Access = true })
+    f.setEntityExists(500, true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.equals(f.denyCallCount(), 0, 'a bypass holder must not be denied at this gate at all')
+    t.equals(#f.progressBarCalls, 1, 'the sniff animation must actually start for a bypass holder')
+    t.equals(f.callbackCallCount(), 1, 'the real server callback must actually be reached')
+end)
+
+t.test('canInteract: a High Command/autoAccessGrade-bypass holder sees the option at all (canInteract widened identically to onSelect)', function()
+    local f = newSearchFixture({ canShowK9UI = false, hasK9Access = true })
+    t.isTrue(f.vehicleOption().canInteract(500, 1.0, {}, 'x'))
+    t.isTrue(f.personOption().canInteract(500, 1.0, {}, 'x'))
+end)
+
+t.test('onSelect: HasK9Access() false (whether or not CanShowK9UI() also is) denies access with the specific combat.no_access reason, not the old generic default', function()
+    local f = newSearchFixture({ canShowK9UI = false, hasK9Access = false })
+    f.setEntityExists(500, true)
+    f.vehicleOption().onSelect({ entity = 500 })
+    t.equals(f.denyCallCount(), 1)
+    t.equals(f.lastDenyReason(), 'combat.no_access')
+    t.isFalse(locale('combat.no_access') == locale('common.no_k9_access_unknown'), 'sanity: the two locale strings must actually differ, or this proof is meaningless')
+end)
+
+t.test('a certified K9 (CanShowK9UI true, HasK9Access true) is unaffected by the widened gate -- proves this is a pure widening, nothing that worked before stops working', function()
+    local f = newSearchFixture({ canShowK9UI = true, hasK9Access = true })
+    f.setEntityExists(500, true)
+    f.queueCallbackResponse({ ok = true, contrabandFound = false })
+    f.vehicleOption().onSelect({ entity = 500 })
+    t.equals(f.denyCallCount(), 0)
+    t.equals(#f.progressBarCalls, 1)
 end)
 
 t.test('onSelect: a target entity that no longer exists notifies search.nothing_to_search and never starts the animation', function()

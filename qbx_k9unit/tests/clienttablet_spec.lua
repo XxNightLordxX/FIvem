@@ -1087,6 +1087,91 @@ t.test('tablet:requestPersonFeatures: same shape guard as requestPersonSummary',
     t.equals(result.error, 'invalid_args')
 end)
 
+-- ----------------------------------------------------------------------
+-- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- three thin
+-- forwards straight onto server/roster.lua's own `qbx_k9unit:server:roster*`
+-- lib.callback registrations (Phase A). This file adds no authorization of
+-- its own -- IsHighCommand is re-verified server-side on every call (THE
+-- SECURITY RULE), which this suite cannot exercise directly (that lives in
+-- tests/roster_spec.lua); every test below only proves the BRIDGE forwards
+-- the right name/shape and never invents a second mutation path.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:rosterList: takes no payload and forwards straight to qbx_k9unit:server:rosterList', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:rosterList', { ok = true, k9 = {}, handlers = {}, unassigned = {} })
+    local result = f.callNui('tablet:rosterList', {})
+    t.isTrue(result.ok)
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:rosterList')
+end)
+
+t.test('tablet:rosterList: a thrown/unregistered server callback fails closed to timeout, never raises', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:rosterList', {})
+    t.equals(result.ok, false)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:rosterSetPersonnelRole: requires citizenid, job, and personnelRole, all rejected before any server round trip when missing', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:rosterSetPersonnelRole', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:rosterSetPersonnelRole', { citizenid = 'ABC' }).error, 'invalid_args')
+    t.equals(f.callNui('tablet:rosterSetPersonnelRole', { citizenid = 'ABC', job = 'police' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0, 'not one malformed call reached the server')
+end)
+
+t.test('tablet:rosterSetPersonnelRole: forwards citizenid/job/personnelRole as ONE payload table, verbatim', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:rosterSetPersonnelRole', { ok = true, outcome = 'assigned' })
+    local result = f.callNui('tablet:rosterSetPersonnelRole', { citizenid = 'ABC123', job = 'police', personnelRole = 'k9' })
+    t.isTrue(result.ok)
+    t.equals(result.outcome, 'assigned')
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:rosterSetPersonnelRole')
+    local payload = f.callbackCallLog[1].args[1]
+    t.equals(payload.citizenid, 'ABC123')
+    t.equals(payload.job, 'police')
+    t.equals(payload.personnelRole, 'k9')
+end)
+
+t.test('tablet:rosterSetPersonnelRole: a server refusal (e.g. department_mismatch) forwards verbatim, never silently swallowed', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:rosterSetPersonnelRole', { ok = false, error = 'department_mismatch' })
+    local result = f.callNui('tablet:rosterSetPersonnelRole', { citizenid = 'ABC123', job = 'police', personnelRole = 'k9' })
+    t.equals(result.ok, false)
+    t.equals(result.error, 'department_mismatch')
+end)
+
+t.test('tablet:rosterSetCallsign: requires citizenid and job; callsign may be omitted (clears it)', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:rosterSetCallsign', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:rosterSetCallsign', { citizenid = 'ABC' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+
+    f.setServerCallback('qbx_k9unit:server:rosterSetCallsign', { ok = true, outcome = 'callsign_cleared' })
+    local result = f.callNui('tablet:rosterSetCallsign', { citizenid = 'ABC123', job = 'police' })
+    t.isTrue(result.ok)
+    local payload = f.callbackCallLog[1].args[1]
+    t.equals(payload.citizenid, 'ABC123')
+    t.equals(payload.job, 'police')
+    t.isNil(payload.callsign)
+end)
+
+t.test('tablet:rosterSetCallsign: a non-string, non-nil callsign is rejected before any server round trip', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:rosterSetCallsign', { citizenid = 'ABC123', job = 'police', callsign = 12 })
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:rosterSetCallsign: forwards a real callsign string verbatim, and a callsign_taken refusal is never translated away', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:rosterSetCallsign', { ok = false, error = 'callsign_taken' })
+    local result = f.callNui('tablet:rosterSetCallsign', { citizenid = 'ABC123', job = 'police', callsign = '4-Adam-1' })
+    t.equals(result.ok, false)
+    t.equals(result.error, 'callsign_taken')
+    t.equals(f.callbackCallLog[1].args[1].callsign, '4-Adam-1')
+end)
+
 t.test('tablet:certify: requires both targetCitizenId and departmentKey, forwards both on success', function()
     local f = newTabletFixture()
     t.equals(f.callNui('tablet:certify', { targetCitizenId = 'ABC' }).error, 'invalid_args')
@@ -1108,31 +1193,54 @@ t.test('tablet:givexp: amount must be a number', function()
 end)
 
 -- ----------------------------------------------------------------------
--- tablet:decertify -- reuses the k9decertifyoffline command via SECTION 3,
--- NOT a new server callback.
+-- tablet:decertify -- BUGFIX (COMMAND_CONSOLIDATION_SPEC.md §6). Used to
+-- shell out to the OFFLINE-ONLY 'k9decertifyoffline' command via
+-- SubmitAllowlistedCommand/ExecuteCommand for EVERY target, online or
+-- offline -- and server/certifications.lua's RevokeCertificationOffline
+-- explicitly refuses when the target is actually online, so the button
+-- silently did nothing against anyone currently connected. Now calls a
+-- real server callback (qbx_k9unit:server:tabletDecertify, backed by
+-- RevokeCertificationForTablet), symmetric with tablet:certify above --
+-- see that function's own header for the full online/offline resolution
+-- writeup. `ExecuteCommand` is no longer used by this file at all.
 -- ----------------------------------------------------------------------
 
-t.test('tablet:decertify: valid payload submits "k9decertifyoffline <citizenid> <department>" via ExecuteCommand', function()
+t.test('REGRESSION PIN (the actual bug): tablet:decertify calls the real server callback, NOT ExecuteCommand -- this is what made an ONLINE target unreachable before this fix', function()
     local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletDecertify', { ok = true })
     local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
     t.isTrue(result.ok)
-    t.equals(#f.executeCommandCalls, 1)
-    t.equals(f.executeCommandCalls[1], 'k9decertifyoffline ABC123 police')
-    t.equals(#f.callbackCallLog, 0, 'must not also hit a server callback -- one mechanism only')
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletDecertify')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC123')
+    t.equals(f.callbackCallLog[1].args[2], 'police')
+    -- The OLD implementation would have made this assertion fail (0 calls,
+    -- because it went through ExecuteCommand instead) -- this is the exact
+    -- "make it fail first against the old command-bridge path" pin: if
+    -- this file ever regresses back to a command bridge for decertify,
+    -- executeCommandCalls stops being empty here and this line catches it.
+    t.equals(#f.executeCommandCalls, 0, 'decertify must never fall back to a fire-and-forget command bridge again')
 end)
 
-t.test('tablet:decertify: missing departmentKey is rejected before ExecuteCommand', function()
+t.test('tablet:decertify: server refusal (e.g. target too far, still online-checked server-side) is forwarded verbatim, never silently swallowed', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletDecertify', { ok = false, error = 'target_too_far' })
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
+    t.equals(result.ok, false)
+    t.equals(result.error, 'target_too_far')
+end)
+
+t.test('tablet:decertify: missing departmentKey is rejected before any server round trip', function()
     local f = newTabletFixture()
     local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123' })
     t.equals(result.error, 'invalid_args')
-    t.equals(#f.executeCommandCalls, 0)
+    t.equals(#f.callbackCallLog, 0)
 end)
 
-t.test('tablet:decertify: an unsafe token (whitespace) is rejected, never reaches ExecuteCommand', function()
+t.test('tablet:decertify: missing targetCitizenId is rejected before any server round trip', function()
     local f = newTabletFixture()
-    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC 123', departmentKey = 'police' })
-    t.equals(result.ok, false)
-    t.equals(#f.executeCommandCalls, 0)
+    local result = f.callNui('tablet:decertify', { departmentKey = 'police' })
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
 end)
 
 -- ----------------------------------------------------------------------
@@ -1364,60 +1472,41 @@ end)
 -- ----------------------------------------------------------------------
 -- SECTION 3 -- ALLOWLISTED_TABLET_COMMANDS / SubmitAllowlistedCommand.
 --
--- REMOVED THIS PASS: a broader 'tablet:runCommand' NUI callback used to
--- expose SubmitAllowlistedCommand generically over a nine-name allowlist
--- (k9certify, k9decertify, k9decertifyoffline, k9givexp, plus the five
--- k9audit* commands from server/admin.lua). A frontend sweep found zero
--- callers of 'tablet:runCommand' anywhere in html/, and it was never part
--- of client/tablet.lua's own documented NUI CONTRACT -- a registered
--- capability nothing could reach. The five k9audit* commands specifically
--- were evaluated for a real audit-log tab and rejected: every one of them
--- is chat/console-notify oriented at the server layer (RegisterCommand
--- handlers whose only outputs are NotifyPlayer/ox_lib toasts or print(),
--- never a server callback returning structured row data), so there was
--- nothing for a tablet screen to render even if the bridge were reachable.
--- See this pass's own report for the full reasoning. Only
--- tablet:decertify's direct, hardcoded reuse of 'k9decertifyoffline'
--- (tested separately above) remains -- covered here is the shared
--- SubmitAllowlistedCommand plumbing it runs through.
+-- REMOVED (an earlier pass): a broader 'tablet:runCommand' NUI callback
+-- used to expose SubmitAllowlistedCommand generically over a nine-name
+-- allowlist (k9certify, k9decertify, k9decertifyoffline, k9givexp, plus
+-- the five k9audit* commands from server/admin.lua). A frontend sweep
+-- found zero callers of 'tablet:runCommand' anywhere in html/, and it was
+-- never part of client/tablet.lua's own documented NUI CONTRACT -- a
+-- registered capability nothing could reach.
+--
+-- REMOVED ENTIRELY THIS PASS (COMMAND_CONSOLIDATION_SPEC.md §6 bugfix):
+-- tablet:decertify was the LAST remaining caller of
+-- SubmitAllowlistedCommand/ALLOWLISTED_TABLET_COMMANDS/
+-- IsSafeCommandArgToken -- now that it calls a real server callback
+-- instead (tested above), that entire SECTION 3 helper block is dead code
+-- and was deleted from client/tablet.lua rather than left as an unreachable
+-- stub (the exact "dead code that looks live" failure mode this file's own
+-- header already warns about). Nothing in client/tablet.lua calls
+-- ExecuteCommand anymore -- pinned below.
 -- ----------------------------------------------------------------------
 
-t.test('tablet:decertify: disabled entirely when allowActionsFromTablet is false, never reaches ExecuteCommand', function()
+t.test('tablet:decertify: disabled entirely when allowActionsFromTablet is false, never reaches the server callback', function()
     local f = newTabletFixture({ featureControl = { allowActionsFromTablet = false } })
     local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
     t.equals(result.error, 'actions_disabled')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('SECTION 3 REMOVED: client/tablet.lua never calls ExecuteCommand at all anymore -- SubmitAllowlistedCommand and its allowlist are gone, not merely unreachable', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletDecertify', { ok = true })
+    f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
     t.equals(#f.executeCommandCalls, 0)
 end)
 
-t.test('SubmitAllowlistedCommand (via tablet:decertify): too many args is rejected -- MAX_TABLET_COMMAND_ARGS is 2, matching k9decertifyoffline\'s own <citizenid> <job> shape', function()
+t.test('ALLOWLISTED_TABLET_COMMANDS/tablet:runCommand: neither the generic bridge nor the decertify-only allowlist survive as a registered NUI callback', function()
     local f = newTabletFixture()
-    -- departmentKey carrying embedded whitespace cannot itself smuggle a
-    -- third token (IsSafeCommandArgToken rejects whitespace outright,
-    -- exercised separately below) -- this proves the *count* ceiling
-    -- independently by calling the shared helper's own two-argument
-    -- shape at its exact limit and confirming a well-formed 2-arg payload
-    -- still succeeds, i.e. the ceiling is 2, not something smaller that
-    -- would also break this legitimate case.
-    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
-    t.isTrue(result.ok)
-    t.equals(#f.executeCommandCalls, 1)
-end)
-
-t.test('tablet:decertify: a token containing a semicolon is rejected -- no command injection via args', function()
-    local f = newTabletFixture()
-    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police; quit' })
-    t.isFalse(result.ok)
-    t.equals(#f.executeCommandCalls, 0)
-end)
-
-t.test('ALLOWLISTED_TABLET_COMMANDS: k9certify/k9decertify/k9givexp/every k9audit* command are no longer allowlisted -- only k9decertifyoffline remains reachable, and only via tablet:decertify', function()
-    local f = newTabletFixture()
-    -- tablet:decertify is the only NUI callback that ever calls
-    -- SubmitAllowlistedCommand, and it always submits the literal command
-    -- name 'k9decertifyoffline' -- there is no remaining NUI-reachable path
-    -- in this file that accepts an arbitrary command name at all (the prior
-    -- 'tablet:runCommand' generic bridge is gone), so this is asserted
-    -- indirectly: the callback name itself no longer exists.
     t.isNil(f.nuiCallbacks['tablet:runCommand'], 'tablet:runCommand must no longer be registered -- it had no caller in html/ and backed an unreachable command allowlist')
 end)
 

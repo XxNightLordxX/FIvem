@@ -78,6 +78,27 @@ function countRealCommandReferenceEntries() {
 }
 const REAL_COMMAND_REFERENCE_COUNT = countRealCommandReferenceEntries();
 
+// DERIVED, NOT HARDCODED (COMMAND_CONSOLIDATION_SPEC.md merges keep moving
+// this number -- a hardcoded count here has already gone stale once this
+// same session, which is exactly the trap REAL_COMMAND_REFERENCE_COUNT
+// above exists to avoid; this is the identical fix applied to the
+// admin-tier subset). Counts `adminOnly: true` entries within the SAME
+// COMMAND_REFERENCE array body countRealCommandReferenceEntries() already
+// isolates -- tied to the real source, so a future merge/split of an
+// admin-tier command changes this count automatically, with no comment to
+// remember to update.
+function countAdminOnlyCommandReferenceEntries() {
+    const startPos = tabletJsSourceForCommandCount.indexOf('var COMMAND_REFERENCE = [');
+    if (startPos === -1) throw new Error('tablet_command_reference_spec: var COMMAND_REFERENCE = [ not found in html/tablet.js');
+    const endPos = tabletJsSourceForCommandCount.indexOf('\n    ];', startPos);
+    if (endPos === -1) throw new Error('tablet_command_reference_spec: closing "];" for COMMAND_REFERENCE not found in html/tablet.js');
+    const body = tabletJsSourceForCommandCount.slice(startPos, endPos);
+    const matches = body.match(/adminOnly:\s*true/g);
+    if (!matches) throw new Error('tablet_command_reference_spec: matched zero adminOnly entries -- extraction pattern is stale');
+    return matches.length;
+}
+const ADMIN_TIER_COMMAND_REFERENCE_COUNT = countAdminOnlyCommandReferenceEntries();
+
 function routeFetch(handlers) {
     return function (url, init) {
         const name = url.split('/').pop();
@@ -211,17 +232,24 @@ t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge
     await openCommandsScreen(h);
 
     const adminBadges = findAll(h.getRoot(), (n) => n._textContent === ' (Admin)');
-    // 21 admin-tier commands in COMMAND_REFERENCE: 11 certification + 1
-    // givexp + 6 audit + 1 bonetool + 2 permission grant/revoke.
-    // The audit count is 6, not 5: the five original /k9audit<thing>
-    // commands PLUS the merged '/k9audit <cert|partner|search|xp|dept>'
-    // that now fronts them. The five stay registered as hidden aliases, so
-    // they are still real commands and still carry the badge.
-    t.equals(adminBadges.length, 21, 'every admin-tier command carries the (Admin) marker, for high command too');
+    // COUNT DERIVED FROM html/tablet.js ITSELF, not restated here (see
+    // ADMIN_TIER_COMMAND_REFERENCE_COUNT's own header comment) -- as of
+    // COMMAND_CONSOLIDATION_SPEC.md §5 items 7/8 (permissions 2->1,
+    // certification online/offline pairs 10->5), the five offline
+    // certification aliases and one of the two permission commands no
+    // longer have their own COMMAND_REFERENCE row at all (folded into
+    // their online/merged counterparts, which keep working under their old
+    // names as hidden, undocumented aliases -- see
+    // tests/commandreferenceregistry_spec.lua's own HIDDEN_ALIAS_COMMANDS).
+    // The audit family stays at 6, not 5: the five original
+    // /k9audit<thing> commands PLUS the merged
+    // '/k9audit <cert|partner|search|xp|dept>' that now fronts them both
+    // still have their own real, documented row.
+    t.equals(adminBadges.length, ADMIN_TIER_COMMAND_REFERENCE_COUNT, 'every admin-tier command carries the (Admin) marker, for high command too');
 
     const auditBadge = statusBadgeFor(h, '/k9auditcert <citizenid> [limit]');
     t.equals(auditBadge._textContent, 'Available');
-    const certifyBadge = statusBadgeFor(h, '/k9certify <server id>');
+    const certifyBadge = statusBadgeFor(h, '/k9certify <server id>  |  /k9certify <citizenid> <job>');
     t.equals(certifyBadge._textContent, 'Available');
 });
 

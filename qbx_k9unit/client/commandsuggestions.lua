@@ -315,18 +315,20 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9propattach', keySuffix = 'k9propattach' },
     -- server/highcommand.lua
     { command = 'k9givexp', keySuffix = 'k9givexp' },
-    -- server/certifications.lua
+    -- server/certifications.lua -- COMMAND_CONSOLIDATION_SPEC.md §2/§5 item
+    -- 8: k9certifyoffline/k9decertifyoffline/k9settieroffline/
+    -- k9recertifyoffline/k9unspecializeoffline are now HIDDEN ALIASES (still
+    -- real, working RegisterCommand calls -- see that file's own comment),
+    -- folded into their online counterparts below (which now resolve
+    -- online-vs-offline from args[1]'s own shape: numeric -> online,
+    -- non-numeric -> offline). Never chat-suggested under their own names
+    -- anymore. See HIDDEN_ALIAS_COMMANDS in tests/commandsuggestions_spec.lua.
     { command = 'k9certify', keySuffix = 'k9certify' },
-    { command = 'k9certifyoffline', keySuffix = 'k9certifyoffline' },
     { command = 'k9decertify', keySuffix = 'k9decertify' },
-    { command = 'k9decertifyoffline', keySuffix = 'k9decertifyoffline' },
     { command = 'k9settier', keySuffix = 'k9settier' },
-    { command = 'k9settieroffline', keySuffix = 'k9settieroffline' },
     { command = 'k9recertify', keySuffix = 'k9recertify' },
-    { command = 'k9recertifyoffline', keySuffix = 'k9recertifyoffline' },
     { command = 'k9specialize', keySuffix = 'k9specialize' },
     { command = 'k9unspecialize', keySuffix = 'k9unspecialize' },
-    { command = 'k9unspecializeoffline', keySuffix = 'k9unspecializeoffline' },
     -- server/admin.lua -- COMMAND_CONSOLIDATION_SPEC.md #1: k9auditcert/
     -- k9auditpartner/k9auditsearch/k9auditxp/k9auditdept are now HIDDEN
     -- ALIASES of 'k9audit' (still real, working RegisterCommand calls in
@@ -345,9 +347,11 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9stats', keySuffix = 'k9stats' },
     -- server/bonetool.lua
     { command = 'k9bonetool', keySuffix = 'k9bonetool' },
-    -- server/permissions.lua
-    { command = 'k9grantpermission', keySuffix = 'k9grantpermission' },
-    { command = 'k9revokepermission', keySuffix = 'k9revokepermission' },
+    -- server/permissions.lua -- COMMAND_CONSOLIDATION_SPEC.md §5 item 7:
+    -- k9grantpermission/k9revokepermission are now HIDDEN ALIASES of
+    -- 'k9permission' (still real, working RegisterCommand calls -- see that
+    -- file's own comment), never chat-suggested under their own names.
+    { command = 'k9permission', keySuffix = 'k9permission' },
     -- server/scentlineup.lua
     { command = 'k9lineup', keySuffix = 'k9lineup' },
     { command = 'k9lineuppick', keySuffix = 'k9lineuppick' },

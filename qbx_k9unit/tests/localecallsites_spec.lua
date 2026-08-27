@@ -1062,6 +1062,24 @@ local KNOWN_DYNAMIC_CALL_SITES = {
                'TUNABLE_REGISTRY at runtime and replicating its string transform, which is what ' ..
                "tests/runtimecontrol_spec.lua's own targeted coverage already does; not this file's job.",
     },
+    {
+        file = '../client/main.lua',
+        raw = 'reasonLocaleKey',
+        note = "DenyK9UIAccess(reasonLocaleKey) (ease-of-use audit pass) -- reasonLocaleKey is an " ..
+               'already-valid, ALREADY-RESOLVED locale() key a CALLER passes in (this function does ' ..
+               "the locale() lookup on the caller's behalf, exactly like every other string this " ..
+               'function has always shown), never a raw suffix/prefix this file itself assembles. Not ' ..
+               'enumerable by walking a fixed registry the way TunableDescriptionLocaleKey(key) above ' ..
+               'is: any client file that gates on CanShowK9UI()/HasK9Access() may pass its own reason ' ..
+               'key here, by design (that is the whole point of the parameter), so the real set grows ' ..
+               "with every future call site, not just this pass's own. Every value actually passed " ..
+               'today resolves to a REAL key confirmed present in locales/en.json (combat.no_access, ' ..
+               'common.no_k9_role_or_access, common.no_k9_access_unknown -- tests/main_spec.lua\'s own ' ..
+               'DenyK9UIAccess tests exercise all three plus the omitted-argument default), and the ' ..
+               "function's own `type(reasonLocaleKey) == \"string\"` guard means a non-string/absent " ..
+               'value never reaches locale() at all -- it falls back to the fixed, resolved ' ..
+               "common.no_k9_access_unknown default instead, which this scan already finds on its own.",
+    },
 }
 
 --- @param site table

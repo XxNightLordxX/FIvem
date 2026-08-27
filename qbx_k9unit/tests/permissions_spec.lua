@@ -2157,6 +2157,92 @@ t.test('CONSOLE/CHAT COMMANDS: k9grantpermission and k9revokepermission are regi
     t.isNotNil(on.commands.k9revokepermission)
 end)
 
+-- ============================================================================
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §5 item 7) --
+-- k9grantpermission/k9revokepermission merge into ONE canonical
+-- '/k9permission <grant|revoke> <citizenid> <permission>'. Both old names
+-- stay registered forever as HIDDEN ALIASES with byte-identical bodies
+-- (§3) -- this task's own rule ("destructive actions need an explicit
+-- word, never contextual guessing") is why the verb is REQUIRED here
+-- rather than inferred from argument shape/type the way the online/offline
+-- certification pairs infer online-vs-offline: revoke is destructive,
+-- grant is additive, and there is no argument-shape difference between
+-- them to dispatch on even if that were desirable.
+-- ============================================================================
+
+t.test('CONSOLE/CHAT COMMANDS: k9permission is registered regardless of Config.Features.CommandTablet, same as its two hidden aliases', function()
+    local off = newFixture({ commandTablet = false })
+    t.isNotNil(off.commands.k9permission)
+
+    local on = newFixture({ commandTablet = true })
+    t.isNotNil(on.commands.k9permission)
+end)
+
+do
+    local f = newFixture({
+        commandTablet = false,
+        locale = localeWithPendingCommandKeys,
+        isHighCommand = function(source) return source == 300 end,
+    })
+    local hcSrc = f.registerPlayer(300, 'HC-MERGED', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(301, 'LOWRANK-MERGED', { name = 'police', grade = { level = 1 } })
+    f.registerPlayer(302, 'MERGED-TARGET', { name = 'police', grade = { level = 1 } })
+
+    t.test('k9permission grant: dispatches to the EXACT SAME GrantPermission path as k9grantpermission -- HasPermission reflects it immediately', function()
+        f.commands.k9permission(hcSrc, { 'grant', 'MERGED-TARGET', 'feature.BiteAndHold' })
+        t.isTrue(f.env.HasPermission('MERGED-TARGET', 'feature.BiteAndHold'))
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, "Granted 'feature.BiteAndHold' to MERGED-TARGET.")
+        t.equals(last.kind, 'success')
+    end)
+
+    t.test('k9permission revoke: dispatches to the EXACT SAME RevokePermission path as k9revokepermission -- HasPermission reflects the removal immediately', function()
+        f.advanceTime(2000)
+        f.commands.k9permission(hcSrc, { 'revoke', 'MERGED-TARGET', 'feature.BiteAndHold' })
+        t.isFalse(f.env.HasPermission('MERGED-TARGET', 'feature.BiteAndHold'))
+    end)
+
+    t.test('k9permission: per-subcommand gating -- an UNAUTHORIZED (non-high-command) caller is refused for BOTH grant and revoke, identical to the two standalone commands, never a single shared top-level gate that could diverge from either', function()
+        f.advanceTime(2000)
+        f.commands.k9permission(301, { 'grant', 'MERGED-TARGET', 'feature.BiteAndHold' })
+        local lastGrant = lastNotifyFor(f, 301)
+        t.equals(lastGrant.message, 'You are not authorized to grant or revoke K9 permissions.')
+        t.isFalse(f.env.HasPermission('MERGED-TARGET', 'feature.BiteAndHold'))
+
+        f.advanceTime(2000)
+        f.commands.k9permission(301, { 'revoke', 'MERGED-TARGET', 'feature.BiteAndHold' })
+        local lastRevoke = lastNotifyFor(f, 301)
+        t.equals(lastRevoke.message, 'You are not authorized to grant or revoke K9 permissions.')
+    end)
+
+    t.test('k9permission: an unrecognized/missing subcommand prints this command\'s own usage string (admin.lua\'s k9auditsearch convention), reaching neither GrantPermission nor RevokePermission -- DESTRUCTIVE ACTIONS NEED AN EXPLICIT WORD, never contextual guessing', function()
+        f.advanceTime(2000)
+        f.commands.k9permission(hcSrc, {})
+        local last = lastNotifyFor(f, hcSrc)
+        t.equals(last.message, 'Usage: /k9permission <grant|revoke> [citizenid] [permissionKey]')
+        t.equals(last.kind, 'error')
+        t.isFalse(f.env.HasPermission('MERGED-TARGET', 'feature.BiteAndHold'))
+
+        f.advanceTime(2000)
+        f.commands.k9permission(hcSrc, { 'delete', 'MERGED-TARGET', 'feature.BiteAndHold' })
+        local last2 = lastNotifyFor(f, hcSrc)
+        t.equals(last2.message, 'Usage: /k9permission <grant|revoke> [citizenid] [permissionKey]')
+        t.isFalse(f.env.HasPermission('MERGED-TARGET', 'feature.BiteAndHold'), 'an unrecognized word must never be treated as an implicit grant')
+    end)
+
+    t.test('HIDDEN ALIAS: k9grantpermission still works standalone after the merge, byte-identical body/outcome to k9permission grant', function()
+        f.advanceTime(2000)
+        f.commands.k9grantpermission(hcSrc, { 'MERGED-TARGET', 'k9.access' })
+        t.isTrue(f.env.HasPermission('MERGED-TARGET', 'k9.access'))
+    end)
+
+    t.test('HIDDEN ALIAS: k9revokepermission still works standalone after the merge, byte-identical body/outcome to k9permission revoke', function()
+        f.advanceTime(2000)
+        f.commands.k9revokepermission(hcSrc, { 'MERGED-TARGET', 'k9.access' })
+        t.isFalse(f.env.HasPermission('MERGED-TARGET', 'k9.access'))
+    end)
+end
+
 do
     local f = newFixture({
         commandTablet = false, -- the whole point: this door works even when the tablet's own is closed

@@ -913,8 +913,13 @@ end
 --- with no registration-lifecycle change needed.
 function RequestK9CalmDown()
     if not LiveFeatureFlags.FearStressSystem then return end
+    -- REASON ROUTING (ease-of-use audit, this pass): CanShowK9UI() is the
+    -- broad role-AND-access combinator, so this call site cannot tell which
+    -- half failed -- 'common.no_k9_role_or_access' is the most specific
+    -- reason it can honestly claim (see DenyK9UIAccess's own doc comment in
+    -- client/main.lua for the full routing policy).
     if not CanShowK9UI() then
-        DenyK9UIAccess()
+        DenyK9UIAccess('common.no_k9_role_or_access')
         return
     end
 
@@ -1002,8 +1007,10 @@ end
 -- ======================================================================
 RegisterCommand('k9eat', function()
     if not LiveFeatureFlags.HungerThirstSystem then return end
+    -- REASON ROUTING (ease-of-use audit, this pass) -- see RequestK9CalmDown's
+    -- identical comment above for the full policy this follows.
     if not CanShowK9UI() then
-        DenyK9UIAccess()
+        DenyK9UIAccess('common.no_k9_role_or_access')
         return
     end
     TriggerServerEvent('qbx_k9unit:server:feedK9Hunger')
@@ -1011,8 +1018,10 @@ end, false)
 
 RegisterCommand('k9drink', function()
     if not LiveFeatureFlags.HungerThirstSystem then return end
+    -- REASON ROUTING (ease-of-use audit, this pass) -- see RequestK9CalmDown's
+    -- identical comment above for the full policy this follows.
     if not CanShowK9UI() then
-        DenyK9UIAccess()
+        DenyK9UIAccess('common.no_k9_role_or_access')
         return
     end
     TriggerServerEvent('qbx_k9unit:server:giveK9Water')

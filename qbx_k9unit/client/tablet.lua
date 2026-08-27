@@ -43,41 +43,47 @@
         Guarded with `type(fn) == 'function'` regardless (radial.lua
         returns early with neither defined when its own flag is off --
         this is not optional).
-      - SECTION 3 (tablet:decertify's own command bridge) calls
-        `ExecuteCommand`, the SAME mechanism the chat box itself uses to
-        submit a typed command -- a tablet-triggered
-        `/k9decertifyoffline <citizenid> <job>` is, from the server's
-        perspective, LITERALLY THE SAME EVENT as an officer typing it.
-        Allowlisted by exact command name (never a raw string), since a
-        generic passthrough is exactly what server/highcommand.lua's own
-        header already rejected for the identical reason. (A prior,
-        broader 'tablet:runCommand' generic bridge -- allowlisting
-        k9certify/k9decertify/k9givexp plus five k9audit* commands -- was
-        REMOVED this pass: it had no caller anywhere in html/, was never
-        part of this file's own documented NUI CONTRACT below, and at the
-        time the five k9audit* commands it existed to reach were
-        chat/console-notify oriented at the server layer with no callback
-        that returned structured data. STATUS UPDATE (later pass):
-        server/admin.lua has since grown the exact `lib.callback.register`
-        surface that gap named (tabletAuditCert/Partner/Search/Xp/Dept,
-        each returning `{ok, rows, label}` -- see its own header CALLBACK
-        SURFACE section), and this file's own NUI CONTRACT below now lists
-        the five tablet:audit* bridges built against it, plus the real
-        Audit Trail tab in html/tablet.js that consumes them -- the "real
-        audit tab" this note originally deferred. Left here, corrected
-        rather than deleted, so the reasoning for the ORIGINAL removal
-        (a generic passthrough is not how this file exposes new server
-        capability) still reads accurately for whoever finds this
-        comment. STATUS UPDATE (later pass, 2): server/admin.lua grew a
-        SIXTH callback, `qbx_k9unit:server:tabletAuditCatalog` (its own
-        header: "the GAP 2 read side"), the same pass that closed its own
-        eight `*Audit_Append` writers' matching read side -- it shipped
-        with full test coverage but, unlike the five above, no
-        `tablet:auditCatalog` bridge and no consuming screen, which is
-        exactly the seam this note exists to flag. That gap is now closed
-        too: `tablet:auditCatalog` is the sixth bridge in the NUI CONTRACT
-        below, and the Audit Trail tab's own Catalog Changes mode is what
-        consumes it -- see auditColumnsForCatalog() in html/tablet.js.)
+      - tablet:decertify used to call `ExecuteCommand` directly (a small
+        "SECTION 3" command-bridge helper, `SubmitAllowlistedCommand`), the
+        SAME mechanism the chat box itself uses to submit a typed command --
+        REMOVED THIS PASS (COMMAND_CONSOLIDATION_SPEC.md §6 bugfix): that
+        bridge always submitted the OFFLINE-ONLY '/k9decertifyoffline
+        <citizenid> <job>' command regardless of the target's real online
+        state, and that command's own server-side guard explicitly refuses
+        an actually-online target -- so the button silently did nothing
+        against anyone currently connected. tablet:decertify now calls a
+        real `qbx_k9unit:server:tabletDecertify` server callback, exactly
+        like tablet:certify already did (server/certifications.lua's new
+        RevokeCertificationForTablet resolves online-vs-offline itself and
+        delegates to the correct, UNCHANGED underlying function either way).
+        (A prior, broader 'tablet:runCommand' generic command-bridge --
+        allowlisting k9certify/k9decertify/k9givexp plus five k9audit*
+        commands -- was REMOVED in an earlier pass: it had no caller
+        anywhere in html/, was never part of this file's own documented NUI
+        CONTRACT below, and at the time the five k9audit* commands it
+        existed to reach were chat/console-notify oriented at the server
+        layer with no callback that returned structured data. STATUS UPDATE
+        (later pass): server/admin.lua has since grown the exact
+        `lib.callback.register` surface that gap named
+        (tabletAuditCert/Partner/Search/Xp/Dept, each returning
+        `{ok, rows, label}` -- see its own header CALLBACK SURFACE section),
+        and this file's own NUI CONTRACT below now lists the five
+        tablet:audit* bridges built against it, plus the real Audit Trail
+        tab in html/tablet.js that consumes them -- the "real audit tab"
+        this note originally deferred. Left here, corrected rather than
+        deleted, so the reasoning for the ORIGINAL removal (a generic
+        passthrough is not how this file exposes new server capability)
+        still reads accurately for whoever finds this comment. STATUS
+        UPDATE (later pass, 2): server/admin.lua grew a SIXTH callback,
+        `qbx_k9unit:server:tabletAuditCatalog` (its own header: "the GAP 2
+        read side"), the same pass that closed its own eight
+        `*Audit_Append` writers' matching read side -- it shipped with full
+        test coverage but, unlike the five above, no `tablet:auditCatalog`
+        bridge and no consuming screen, which is exactly the seam this note
+        exists to flag. That gap is now closed too: `tablet:auditCatalog`
+        is the sixth bridge in the NUI CONTRACT below, and the Audit Trail
+        tab's own Catalog Changes mode is what consumes it -- see
+        auditColumnsForCatalog() in html/tablet.js.)
     ======================================================================
 
     ======================================================================
@@ -89,8 +95,9 @@
     client can fire any NUI callback with any payload, so nothing in this
     file may ever be the thing that actually authorizes an action.
     `Config.FeatureControl.allowActionsFromTablet` (checked before
-    SECTION 2/3 dispatch) is a pure UX toggle, not an authorization
-    boundary -- turning it off only removes the tablet's trigger buttons,
+    SECTION 2 dispatch and inside tablet:decertify's own handler) is a
+    pure UX toggle, not an authorization boundary -- turning it off only
+    removes the tablet's trigger buttons,
     it cannot and does not change what a keybind/command/radial item can
     still do.
     ======================================================================
@@ -180,12 +187,22 @@
       tablet:openOnlinePlayer {source,nonce}                      -> cb({ok,citizenid?,name?,error?,message?}) [console audience -- resolves ONE online-players row to a citizenid, freshly, at click time; see server/tablet.lua's tabletResolveOnlinePlayer for the recycled-source-id guard]
       tablet:requestPersonSummary {targetCitizenId}               -> cb(PersonSummaryResult)    [console audience]
       tablet:requestPersonFeatures {targetCitizenId}               -> cb(PersonFeaturesResult)   [high command only]
+      tablet:rosterList {}                                        -> cb({ok,k9?,handlers?,unassigned?,error?})  [high command only -- server/roster.lua's qbx_k9unit:server:rosterList, ROSTER_SPEC.md Phase B; forwarded VERBATIM, no ReasonToJsResult]
+      tablet:rosterSetPersonnelRole {citizenid,job,personnelRole}  -> cb({ok,outcome?,error?})    [high command only -- server/roster.lua's qbx_k9unit:server:rosterSetPersonnelRole]
+      tablet:rosterSetCallsign {citizenid,job,callsign?}           -> cb({ok,outcome?,error?})    [high command only -- server/roster.lua's qbx_k9unit:server:rosterSetCallsign; callsign omitted or '' clears it]
+        These three are a THIRD entry point into the SAME buildPersonScreen()
+        Console/Online-Players already open (ROSTER_SPEC.md §0) -- not a
+        second roster/person mechanism. rosterList's rows are the shared
+        payload BOTH the two new roster tabs AND the Person screen's own
+        embedded Roster Role/Callsign section read; sorting by tier/grade/XP
+        is a PURE client-side re-sort of that one payload in html/tablet.js,
+        never a second call to this callback.
       tablet:requestMyPartnerships {}                             -> cb(PartnershipsResult)      [Partnerships tab, everyone -- server/tablet.lua's tabletRequestMyPartnerships, enriched here with the caller's own active row's getPartnershipTenureProgress]
       tablet:requestPartnershipsForTarget {targetCitizenId}       -> cb(PartnershipsResult)      [Partnerships tab admin lookup, high command only]
       tablet:forceEndPartnership {targetCitizenId}                -> cb({ok,error?})             [Partnerships tab admin control, high command only -- server/partnership.lua's existing ForceBreakPartnershipForCitizenId]
       tablet:triggerFeature {feature}                             -> cb({ok,error?})            [SECTION 2]
       tablet:certify {targetCitizenId, departmentKey}             -> cb({ok,error?,message?})   [server/certifications.lua's tabletCertify -- online OR offline, see GrantCertificationForTablet's own header]
-      tablet:decertify {targetCitizenId, departmentKey}           -> cb({ok,error?,message?})   [SECTION 3, k9decertifyoffline]
+      tablet:decertify {targetCitizenId, departmentKey}           -> cb({ok,error?,message?})   [server/certifications.lua's tabletDecertify -- online OR offline, see RevokeCertificationForTablet's own header]
       tablet:setCertificationTier {targetCitizenId, departmentKey, tier}     -> cb({ok,error?})  [server/certifications.lua's tabletSetCertificationTier -- online OR offline]
       tablet:renewCertification {targetCitizenId, departmentKey}            -> cb({ok,error?})  [tabletRenewCertification -- online OR offline]
       tablet:grantSpecialization {targetCitizenId, departmentKey, specialization}  -> cb({ok,error?})  [tabletGrantSpecialization -- ONLINE ONLY, see that function's own header for why]
@@ -1302,6 +1319,7 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9auditxp_usage', 'cmdref_k9auditxp_does', 'cmdref_k9auditxp_needs',
     'cmdref_k9auditdept_usage', 'cmdref_k9auditdept_does', 'cmdref_k9auditdept_needs',
     'cmdref_k9bonetool_usage', 'cmdref_k9bonetool_does', 'cmdref_k9bonetool_needs',
+    'cmdref_k9permission_usage', 'cmdref_k9permission_does', 'cmdref_k9permission_needs',
     'cmdref_k9grantpermission_usage', 'cmdref_k9grantpermission_does', 'cmdref_k9grantpermission_needs',
     'cmdref_k9revokepermission_usage', 'cmdref_k9revokepermission_does', 'cmdref_k9revokepermission_needs',
     -- Integration-sweep fix (this pass): seven REAL, working keybind
@@ -1427,6 +1445,26 @@ local TABLET_STRING_KEYS = {
     'partnerships_established_label', 'partnerships_ended_label', 'partnerships_ended_by_label', 'partnerships_ended_system_template',
     'partnerships_tier_label', 'partnerships_tier_none', 'partnerships_tier_value_template', 'partnerships_next_tier_countdown_template',
     'partnerships_admin_heading', 'partnerships_admin_hint', 'partnerships_admin_none', 'partnerships_force_end_label',
+
+    -- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- owner's own
+    -- words, this file's own NUI CONTRACT note on tablet:rosterList/
+    -- rosterSetPersonnelRole/rosterSetCallsign above. The 24 keys
+    -- ROSTER_SPEC.md §10 names, plus a small number html/tablet.js's own
+    -- DEFAULT_STRINGS comment at this exact same point names individually
+    -- (outcome codes server/roster.lua can return that no existing generic
+    -- mutation-error key already covered) -- added here, to locales/en.json's
+    -- `tablet` group, and to html/tablet.js's DEFAULT_STRINGS in the SAME
+    -- change, per this file's own BuildTabletStrings/
+    -- tabletlocalization_spec.lua three-way contract.
+    'tab_roster_k9', 'tab_roster_handlers', 'roster_unassigned_heading', 'roster_unassigned_explainer',
+    'roster_callsign_column', 'roster_callsign_none', 'roster_callsign_label', 'roster_callsign_save',
+    'roster_callsign_taken_error', 'roster_callsign_invalid_chars_error', 'roster_hire_label', 'roster_hire_role_prompt',
+    'roster_hire_role_k9', 'roster_hire_role_handler', 'roster_fire_label', 'roster_fire_confirm_prompt',
+    'roster_fire_self_warning', 'roster_role_change_label', 'roster_role_change_confirm_prompt', 'roster_sort_label',
+    'roster_sort_by_tier', 'roster_sort_by_grade', 'roster_sort_by_xp', 'roster_dogcharacter_pin_note',
+    'roster_error_invalid_personnel_role', 'roster_error_not_certified', 'roster_error_already_assigned', 'roster_error_no_active_personnel',
+    'roster_bucket_empty', 'roster_unassigned_none', 'roster_certified_since_column',
+    'help_tab_roster_k9_desc', 'help_tab_roster_handlers_desc',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -2013,92 +2051,6 @@ RegisterNUICallback('tablet:triggerFeature', function(data, cb)
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION 3 -- tablet:decertify's own command bridge. Submits the EXACT
--- SAME command string the chat box would, via `ExecuteCommand` (verified
--- this pass: ext/native-decls/ExecuteCommand.md returns HTTP 200,
--- `apiset: shared`). The command's own RegisterCommand handler is the one
--- and only place that authorizes anything here (IsEligibleCertifier) --
--- this bridge adds no authority, exactly the "one code path"
--- RIGHT-VS-WRONG note above demands.
---
--- ALLOWLISTED BY NAME, never "run anything" -- server/highcommand.lua's
--- own header already rejected a generic passthrough for the identical
--- reason. Every arg token is checked for whitespace/control characters
--- before being concatenated into a command string, so a malformed NUI
--- payload can't inject a second command or shift argument positions.
---
--- REMOVED THIS PASS: a broader 'tablet:runCommand' NUI callback used to
--- expose this same SubmitAllowlistedCommand plumbing generically, keyed
--- by an allowlist of NINE command names (k9certify, k9decertify,
--- k9decertifyoffline, k9givexp, plus five k9audit* commands from
--- server/admin.lua). A frontend sweep (html/, exhaustive) found zero
--- references to 'tablet:runCommand' anywhere, and it was never even part
--- of this file's own documented NUI CONTRACT above -- unlike every other
--- callback in this file, no html/tablet.js UI element ever fired it.
--- Eight of those nine allowlisted names had NO OTHER caller either (only
--- k9decertifyoffline is reachable at all, via tablet:decertify's direct,
--- hardcoded call to SubmitAllowlistedCommand just below) -- a registered
--- capability nothing could reach, exactly the "dead code that looks live"
--- failure mode this resource has already shipped once before (five files
--- once written, tested, and never registered in the manifest).
---
--- The five k9audit* names specifically were evaluated for a real audit-log
--- tab and rejected -- see this pass's own report for the full reasoning.
--- Short version: every one of them (server/admin.lua) is chat/console-
--- notify oriented at the server layer (RegisterCommand handlers that only
--- ever call NotifyPlayer/ox_lib toast or print() -- see that file's own
--- PresentRows/PrintRowsToConsole, its only two output paths) with no
--- server callback that returns structured row data to a caller. Building
--- an actual audit tab would need a NEW, PROPOSED server callback that runs
--- the SAME query functions already in that file (QueryCertificationHistory
--- etc.) and returns raw rows instead of formatted notify strings -- real
--- server-side work outside this file's ownership, reported to main/
--- coder-backend/coder-security rather than half-built here as another
--- unreachable stub.
--- ----------------------------------------------------------------------
-local ALLOWLISTED_TABLET_COMMANDS = {
-    k9decertifyoffline = true, -- tablet:decertify's own implementation below -- the only allowlisted name with a real caller
-}
-local MAX_TABLET_COMMAND_ARGS = 2 -- k9decertifyoffline's exact shape: <citizenid> <job>, its only allowlisted command today
-
---- @param token any
---- @return boolean
-local function IsSafeCommandArgToken(token)
-    token = tostring(token)
-    return token ~= '' and #token <= 64 and not token:find('[%s;]')
-end
-
---- Shared submit path -- currently only reached from tablet:decertify's
---- internal reuse below, but kept as a small, named-allowlist helper
---- (rather than inlining a single string check into that one call site)
---- so a FUTURE tablet mutation that wants to reuse an existing chat
---- command has one already-vetted place to add its name to, instead of
---- reinventing this validation shape from scratch.
---- @param command string
---- @param args table?
---- @return boolean ok
---- @return string? errorCode
-local function SubmitAllowlistedCommand(command, args)
-    if not ALLOWLISTED_TABLET_COMMANDS[command] then return false, 'invalid_args' end
-    args = type(args) == 'table' and args or {}
-    if #args > MAX_TABLET_COMMAND_ARGS then return false, 'invalid_args' end
-
-    local parts = { command }
-    for i = 1, #args do
-        if not IsSafeCommandArgToken(args[i]) then return false, 'invalid_args' end
-        parts[#parts + 1] = tostring(args[i])
-    end
-
-    -- Fire-and-forget, same as a player typing this command themselves --
-    -- the command's OWN handler notifies success/failure/authorization
-    -- outcome, exactly as it already does for chat-typed usage. `true`
-    -- here means only "submitted," never "succeeded" -- a RegisterCommand
-    -- handler has no synchronous return value to relay.
-    ExecuteCommand(table.concat(parts, ' '))
-    return true
-end
-
--- ----------------------------------------------------------------------
 -- PART 1 -- VIEW + mutation callbacks matching html/tablet.js's own
 -- contract exactly. See this file's header NUI CONTRACT for the full
 -- name/payload table.
@@ -2206,6 +2158,66 @@ RegisterNUICallback('tablet:requestPersonFeatures', function(data, cb)
     cb(AwaitServerCallback('qbx_k9unit:server:tabletRequestPersonFeatures', data.targetCitizenId))
 end)
 
+-- ----------------------------------------------------------------------
+-- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- owner, three
+-- messages, verbatim: "make it in the tablet where there is a roster where
+-- we can assign callsigns see list of hired k9s and full menu to fire
+-- promote etc" / "Also a separate roster for handlers same thing" / "Also
+-- in the roster be able to reorder them by rank." Three thin forwards
+-- straight onto server/roster.lua's OWN `qbx_k9unit:server:roster*`
+-- lib.callback registrations (Phase A, already committed) -- that file's
+-- own header is explicit that it registers its OWN endpoints rather than
+-- adding anything to server/tablet.lua, so these three bridges call it
+-- DIRECTLY, matching that instruction exactly; no new server code, no
+-- second roster-mutation path.
+--
+-- Every one of these three server callbacks independently re-verifies
+-- IsHighCommand(source) on every call (server/roster.lua's own header,
+-- THE SECURITY RULE) -- this file adds no authorization of its own, same
+-- posture as every other bridge in this section.
+--
+-- RESULT SHAPE, forwarded VERBATIM (no ReasonToJsResult translation
+-- needed -- server/roster.lua already returns THIS file's own
+-- `{ok, error?}`/`{ok, outcome?}` convention directly, unlike the
+-- `reason`-keyed callbacks elsewhere in this file):
+--   rosterList: success   { ok = true, k9 = RosterRow[], handlers = RosterRow[], unassigned = RosterRow[] }
+--               failure   { ok = false, error = 'not_authorized' | 'rate_limited' }
+--   rosterSetPersonnelRole/rosterSetCallsign:
+--               success   { ok = true, outcome = string }  -- see server/roster.lua's own doc comment for the exact outcome codes per callback
+--               failure   { ok = false, error = string }
+-- ----------------------------------------------------------------------
+RegisterNUICallback('tablet:rosterList', function(_, cb)
+    cb(AwaitServerCallback('qbx_k9unit:server:rosterList'))
+end)
+
+RegisterNUICallback('tablet:rosterSetPersonnelRole', function(data, cb)
+    if type(data) ~= 'table' or type(data.citizenid) ~= 'string' or data.citizenid == ''
+        or type(data.job) ~= 'string' or data.job == ''
+        or type(data.personnelRole) ~= 'string' or data.personnelRole == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:rosterSetPersonnelRole',
+        { citizenid = data.citizenid, job = data.job, personnelRole = data.personnelRole }))
+end)
+
+--- `data.callsign` may be a non-empty string (set), an empty string, or
+--- omitted entirely (both of the latter two CLEAR the callsign --
+--- server/roster.lua's own RosterSetCallsign already normalizes '' to nil
+--- itself; this bridge does not duplicate that normalization, it only
+--- checks the TYPE is safe to forward -- a non-string, non-nil value is
+--- the one shape rejected here).
+RegisterNUICallback('tablet:rosterSetCallsign', function(data, cb)
+    if type(data) ~= 'table' or type(data.citizenid) ~= 'string' or data.citizenid == ''
+        or type(data.job) ~= 'string' or data.job == ''
+        or (data.callsign ~= nil and type(data.callsign) ~= 'string') then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:rosterSetCallsign',
+        { citizenid = data.citizenid, job = data.job, callsign = data.callsign }))
+end)
+
 --- THE PARTNERSHIPS TAB (this pass, coder-ui) -- see server/tablet.lua's
 --- own "CALLBACKS 7-9" doc comment for the full contract/reasoning; three
 --- thin forwards below, matching this file's own established shape for
@@ -2281,21 +2293,23 @@ RegisterNUICallback('tablet:certify', function(data, cb)
 end)
 
 RegisterNUICallback('tablet:decertify', function(data, cb)
-    -- Maps directly onto the EXISTING '/k9decertifyoffline <citizenid> <job>'
-    -- command (server/certifications.lua) -- citizenid-keyed and already
-    -- offline-capable, so this needs no new server code at all. Routed
-    -- through SECTION 3's SAME allowlisted-command path, not a duplicate.
-    --
-    -- BUGFIX (this pass): this callback did not check
-    -- Config.FeatureControl.allowActionsFromTablet before submitting the
-    -- command, even though this file's own header documents that flag as
-    -- "checked before SECTION 2/3 dispatch" -- tablet:triggerFeature
-    -- (SECTION 2) already did; this SECTION 3 consumer never did, the only
-    -- gap of its kind now that the unreachable generic 'tablet:runCommand'
-    -- bridge (which DID check it) has been removed. Pure UX toggle, not an
-    -- authorization boundary -- see SECURITY NOTE -- but an operator who
-    -- turns it off expects EVERY tablet action button inert, not just the
-    -- ability-trigger ones.
+    -- BUGFIX (this pass, COMMAND_CONSOLIDATION_SPEC.md §6): this callback
+    -- used to shell out to the OFFLINE-ONLY '/k9decertifyoffline <citizenid>
+    -- <job>' command via a SubmitAllowlistedCommand/ExecuteCommand bridge,
+    -- for EVERY target regardless of online state. That command's own
+    -- RevokeCertificationOffline (server/certifications.lua) explicitly
+    -- REFUSES when the citizenid resolves to a currently connected player
+    -- (its own proximity-check-integrity guard) -- so clicking Decertify
+    -- against an ONLINE person always hit that refusal and did nothing,
+    -- contradicting this button's own documented "works for an ONLINE or
+    -- OFFLINE target" contract (see tablet:certify immediately above, which
+    -- always worked this way). Now calls the SAME kind of real server
+    -- callback tablet:certify already uses -- server/certifications.lua's
+    -- new RevokeCertificationForTablet (via qbx_k9unit:server:tabletDecertify)
+    -- resolves online-vs-offline itself and runs the online path's REAL,
+    -- UNCHANGED proximity/self-cert/eligibility rules when the target is
+    -- online, exactly like a live '/k9decertify [server id]' would -- never
+    -- weakened to make this button easier than the command it now mirrors.
     if not (Config.FeatureControl and Config.FeatureControl.allowActionsFromTablet == true) then
         cb({ ok = false, error = 'actions_disabled' })
         return
@@ -2305,24 +2319,7 @@ RegisterNUICallback('tablet:decertify', function(data, cb)
         cb({ ok = false, error = 'invalid_args' })
         return
     end
-    -- HONEST SUCCESS, NOT A CONFIRMED ONE (state-handling/error-reporting
-    -- consistency sweep, this pass): SubmitAllowlistedCommand's own `ok`
-    -- means only "the command string was handed to ExecuteCommand," the
-    -- SAME fire-and-forget contract a player typing this in chat gets --
-    -- it is NOT a signal that '/k9decertifyoffline' itself went on to
-    -- succeed (RevokeCertificationOffline runs asynchronously afterward and
-    -- reports its own outcome only via NotifyPlayer chat/toast, never back
-    -- through this `cb`). `submitted = true` on the ok branch lets
-    -- html/tablet.js's runMutation() show an honest "submitted, refreshing
-    -- to confirm" notice instead of claiming a stronger guarantee than this
-    -- callback actually has -- the same "reports success without doing it"
-    -- bug this project keeps finding, avoided here without inventing a
-    -- second confirmation mechanism: onSettled still re-pulls this
-    -- citizenid's authoritative certification state either way, so the
-    -- truth is visible within the same round trip regardless of which
-    -- notice text this line chose.
-    local ok, errorCode = SubmitAllowlistedCommand('k9decertifyoffline', { data.targetCitizenId, data.departmentKey })
-    cb({ ok = ok, submitted = ok or nil, error = (not ok) and errorCode or nil })
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletDecertify', data.targetCitizenId, data.departmentKey))
 end)
 
 -- ----------------------------------------------------------------------

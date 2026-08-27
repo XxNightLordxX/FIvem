@@ -129,6 +129,20 @@ local HIDDEN_ALIAS_COMMANDS = {
     -- "additive still means the player sees one thing" instruction.
     k9deploykennel = true,
     k9exitkennel = true,
+    -- family #7: permissions (2 -> 1, 'k9permission') -- server/permissions.lua
+    k9grantpermission = true,
+    k9revokepermission = true,
+    -- family #8: online/offline certification pairs (10 -> 5) --
+    -- server/certifications.lua. k9certify/k9decertify/k9settier/
+    -- k9recertify/k9unspecialize stay their own canonical names (unchanged)
+    -- and are NOT in this table -- only their *offline counterparts fold
+    -- away. k9specialize has no offline counterpart at all and is
+    -- untouched.
+    k9certifyoffline = true,
+    k9decertifyoffline = true,
+    k9settieroffline = true,
+    k9recertifyoffline = true,
+    k9unspecializeoffline = true,
 }
 
 --- Identical shape to tests/commandreferenceregistry_spec.lua's own
@@ -383,22 +397,51 @@ t.test('onResourceStart(qbx_k9unit): registers a chat:addSuggestion for every CO
     t.equals(sit.description, Sandbox.locale('tablet.cmdref_k9sit_does'), 'k9sit description must match the tablet\'s own Commands tab text verbatim')
     t.equals(#sit.params, 0, 'k9sit takes no arguments -- params must be empty')
 
-    -- Single required param.
+    -- Single required param -- COMMAND_CONSOLIDATION_SPEC.md §2/§4: /k9certify's
+    -- usage string now shows BOTH shapes ("/k9certify <server id>  |
+    -- /k9certify <citizenid> <job>"), so ParseUsageParams' own disclosed
+    -- "flattens every bracket token across both shapes, in order" behavior
+    -- (this file's own header "PARAMETER HINTS" section) now extracts three
+    -- tokens from the one combined usage string, not one.
     local certify = f.findSuggestion('k9certify')
     t.isNotNil(certify, '/k9certify must have a registered suggestion')
     t.equals(certify.description, Sandbox.locale('tablet.cmdref_k9certify_does'))
-    t.equals(#certify.params, 1)
+    t.equals(#certify.params, 3)
     t.equals(certify.params[1].name, 'server id')
     t.equals(certify.params[1].help, '', 'a required param carries no "Optional." marker')
+    t.equals(certify.params[2].name, 'citizenid')
+    t.equals(certify.params[3].name, 'job')
 
-    -- Required + optional pair.
+    -- Required + optional pair -- /k9decertify's own combined usage string
+    -- similarly now flattens to five tokens (online shape's <server id>
+    -- [reason], then the offline shape's <citizenid> <job> [reason]).
     local decertify = f.findSuggestion('k9decertify')
     t.isNotNil(decertify, '/k9decertify must have a registered suggestion')
-    t.equals(#decertify.params, 2)
+    t.equals(#decertify.params, 5)
     t.equals(decertify.params[1].name, 'server id')
     t.equals(decertify.params[1].help, '')
     t.equals(decertify.params[2].name, 'reason')
     t.equals(decertify.params[2].help, 'Optional.', 'an optional param must carry the "Optional." marker')
+    t.equals(decertify.params[3].name, 'citizenid')
+    t.equals(decertify.params[4].name, 'job')
+    t.equals(decertify.params[5].name, 'reason')
+    t.equals(decertify.params[5].help, 'Optional.')
+
+    -- COMMAND_CONSOLIDATION_SPEC.md §3 -- HIDDEN ALIASES never appear in
+    -- autocomplete at all, even though every one of them is still a real,
+    -- working RegisterCommand call (confirmed elsewhere in this file).
+    t.isNil(f.findSuggestion('k9certifyoffline'), 'k9certifyoffline is a hidden alias -- it must never get its own chat:addSuggestion')
+    t.isNil(f.findSuggestion('k9decertifyoffline'), 'k9decertifyoffline is a hidden alias')
+    t.isNil(f.findSuggestion('k9settieroffline'), 'k9settieroffline is a hidden alias')
+    t.isNil(f.findSuggestion('k9recertifyoffline'), 'k9recertifyoffline is a hidden alias')
+    t.isNil(f.findSuggestion('k9unspecializeoffline'), 'k9unspecializeoffline is a hidden alias')
+    t.isNil(f.findSuggestion('k9grantpermission'), 'k9grantpermission is a hidden alias')
+    t.isNil(f.findSuggestion('k9revokepermission'), 'k9revokepermission is a hidden alias')
+
+    -- ...and the new canonical merged permission command IS suggested.
+    local permission = f.findSuggestion('k9permission')
+    t.isNotNil(permission, '/k9permission must have a registered suggestion')
+    t.equals(permission.description, Sandbox.locale('tablet.cmdref_k9permission_does'))
 
     -- A colon-namespaced keybind-paired command, whose keySuffix is
     -- de-namespaced -- proves the keySuffix indirection actually resolves

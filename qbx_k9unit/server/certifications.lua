@@ -2536,33 +2536,44 @@ end
 --- exactly as before, recording a NULL `revoke_reason`. See this file's
 --- header "REVOKE REASON" for the fixed vocabulary and why a mismatch is
 --- rejected outright rather than silently stored as free text.
+--- RETURN VALUE, ADDED THIS PASS (purely additive -- every pre-existing
+--- caller (RegisterNetEvent/RegisterCommand handlers near the bottom of
+--- this file) discards both return values today, exactly as it discarded
+--- the previous bare `return`, so this changes NO observable behavior for
+--- either of them). Added so the K9 Command Tablet's own
+--- RevokeCertificationForTablet (below) can report a real, specific
+--- outcome back to the caller instead of only a fire-and-forget toast --
+--- the SAME retrofit GrantCertification/SetCertificationTier/
+--- RenewCertification already received.
 --- @param granterSrc number
 --- @param targetServerId number
 --- @param reason string? -- 'retired'|'reassigned'|'disciplinary'|'performance'|'other', or nil
+--- @return boolean ok
+--- @return string outcome -- 'invalid_target' | 'not_eligible' | 'on_cooldown' | 'invalid_revoke_reason' | 'self_certification_disabled' | 'target_offline' | 'target_too_far' | 'target_no_department_cert' | 'invalid_granter' | 'db_error' | 'target_not_actively_certified' | 'ok'
 local function RevokeCertification(granterSrc, targetServerId, reason)
     if type(targetServerId) ~= 'number' then
         NotifyPlayer(granterSrc, locale('certifications.invalid_target_id'), 'error')
-        return
+        return false, 'invalid_target'
     end
 
     if not IsEligibleCertifier(granterSrc) then
         NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke_hint'), 'error')
-        return
+        return false, 'not_eligible'
     end
 
     if IsCertifyActionOnCooldown(granterSrc) then
-        return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
+        return false, 'on_cooldown' -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
     end
 
     if reason ~= nil and not VALID_REVOKE_REASONS[reason] then
         NotifyPlayer(granterSrc, locale('certifications.invalid_revoke_reason'), 'error')
-        return
+        return false, 'invalid_revoke_reason'
     end
 
     local isSelfCert = granterSrc == targetServerId
     if isSelfCert and not Config.AllowSelfCertification then
         NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled_hint'), 'error')
-        return
+        return false, 'self_certification_disabled'
     end
 
     local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
@@ -2581,7 +2592,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
             local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
             if dist > Config.CertifyProximityMeters then
                 NotifyPlayer(granterSrc, locale('certifications.target_too_far_to_revoke_distance', tostring(Config.CertifyProximityMeters)), 'error')
-                return
+                return false, 'target_too_far'
             end
         end
     else
@@ -2605,16 +2616,16 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         -- reports the mismatch back to the granter so they know to use
         -- that command instead of assuming this one silently worked.
         NotifyPlayer(granterSrc, locale('certifications.target_offline_use_decertify_offline'), 'error')
-        return
+        return false, 'target_offline'
     end
 
     if not targetJobName or not Config.Departments[targetJobName] then
         NotifyPlayer(granterSrc, locale('certifications.target_no_department_cert'), 'error')
-        return
+        return false, 'target_no_department_cert'
     end
 
     local granterCitizenid = ResolveGranterCitizenId(granterSrc)
-    if not granterCitizenid then return end
+    if not granterCitizenid then return false, 'invalid_granter' end
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
     -- row matches (DEVELOPER_REFERENCE.md §4.3).
@@ -2654,7 +2665,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
             -- side effects below (leash/partnership teardown, HUD
             -- metadata, the target-facing notice) against a guess.
             NotifyPlayer(granterSrc, locale('certifications.revoke_error'), 'error')
-            return
+            return false, 'db_error'
         end
 
         -- Confirmed inactive despite the client-side error (e.g. a
@@ -2664,7 +2675,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         -- state.
     elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
         NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified'), 'inform')
-        return
+        return false, 'target_not_actively_certified'
     end
 
     -- Outbound integration event (server/exports.lua's EVENT CONTRACT §2) —
@@ -2744,6 +2755,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
     end
 
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
+    return true, 'ok'
 end
 
 --- DEVELOPER_REFERENCE.md §4.3 offline-capable revoke flow (manual). Called only by the
@@ -2764,39 +2776,46 @@ end
 --- grant-only).
 --- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a NEW, OPTIONAL
 --- fourth argument — see RevokeCertification's own identical doc comment.
+--- RETURN VALUE, ADDED THIS PASS (purely additive -- see RevokeCertification's
+--- own identical retrofit note above; this function's only pre-existing
+--- caller, the '/k9decertifyoffline' command below, discards both values).
+--- Added so the K9 Command Tablet's own RevokeCertificationForTablet
+--- (below) can report a real, specific outcome back to the caller.
 --- @param granterSrc number
 --- @param citizenid string
 --- @param job string
 --- @param reason string? -- 'retired'|'reassigned'|'disciplinary'|'performance'|'other', or nil
+--- @return boolean ok
+--- @return string outcome -- 'not_eligible' | 'on_cooldown' | 'invalid_target' | 'invalid_revoke_reason' | 'invalid_department' | 'invalid_granter' | 'target_online_use_online_action' | 'db_error' | 'target_not_actively_certified' | 'ok'
 local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     if not IsEligibleCertifier(granterSrc) then
         NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke_hint'), 'error')
-        return
+        return false, 'not_eligible'
     end
 
     if IsCertifyActionOnCooldown(granterSrc) then
-        return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
+        return false, 'on_cooldown' -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
         NotifyPlayer(granterSrc, locale('certifications.usage_decertify_offline'), 'error')
-        return
+        return false, 'invalid_target'
     end
 
     if reason ~= nil and not VALID_REVOKE_REASONS[reason] then
         NotifyPlayer(granterSrc, locale('certifications.invalid_revoke_reason'), 'error')
-        return
+        return false, 'invalid_revoke_reason'
     end
 
     -- Reject a typo'd/unconfigured job outright rather than silently
     -- no-opping against a job name that could never have an active row.
     if not Config.Departments[job] then
         NotifyPlayer(granterSrc, locale('certifications.invalid_department_hint', job, ConfiguredDepartmentsList()), 'error')
-        return
+        return false, 'invalid_department'
     end
 
     local granterCitizenid = ResolveGranterCitizenId(granterSrc)
-    if not granterCitizenid then return end
+    if not granterCitizenid then return false, 'invalid_granter' end
 
     -- SECURITY FIX (coder-security review): this command exists ONLY to
     -- reach a genuinely disconnected target (see this function's header
@@ -2820,7 +2839,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     local onlineCheckTarget = exports.qbx_core:GetPlayerByCitizenId(citizenid)
     if onlineCheckTarget and onlineCheckTarget.PlayerData and onlineCheckTarget.PlayerData.source then
         NotifyPlayer(granterSrc, locale('certifications.target_online_use_decertify_command', onlineCheckTarget.PlayerData.source), 'error')
-        return
+        return false, 'target_online_use_online_action'
     end
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
@@ -2846,7 +2865,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
             -- cannot confirm; see RevokeCertification's identical branch
             -- above for the full reasoning.
             NotifyPlayer(granterSrc, locale('certifications.revoke_error'), 'error')
-            return
+            return false, 'db_error'
         end
 
         -- Confirmed inactive despite the client-side error — fall through
@@ -2856,7 +2875,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
         -- Distinguish "no matching active cert" from success — a granter
         -- typo'ing a citizenid should not look identical to a real revoke.
         NotifyPlayer(granterSrc, locale('certifications.offline_target_not_certified'), 'inform')
-        return
+        return false, 'target_not_actively_certified'
     end
 
     -- Outbound integration event (server/exports.lua's EVENT CONTRACT §2) —
@@ -2939,6 +2958,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     end
 
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
+    return true, 'ok'
 end
 
 -- ======================================================================
@@ -2994,6 +3014,116 @@ local function LogTabletCertAuditInvocation(granterSrc, action, detail, outcome)
     local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
     local whoLabel = granterCitizenid and ('citizenid=' .. granterCitizenid) or ('unresolved-source=' .. tostring(granterSrc))
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, action, detail, outcome))
+end
+
+--- ======================================================================
+--- TABLET DECERTIFY -- THE FIX (this pass, coordinator-directed follow-up
+--- confirming COMMAND_CONSOLIDATION_SPEC.md §6). RevokeCertification and
+--- RevokeCertificationOffline above ALREADY BOTH EXIST and each already
+--- enforces its own correct rules -- the bug is not in either of them. The
+--- bug was in client/tablet.lua's tablet:decertify NUI callback: it shelled
+--- out to `/k9decertifyoffline` via SubmitAllowlistedCommand for EVERY
+--- target, online or offline -- and RevokeCertificationOffline's own
+--- "refuse if actually online right now" TOCTOU guard above (mirrors
+--- GrantCertificationOffline/SetCertificationTierOffline/
+--- RenewCertificationOffline) means an online target ALWAYS hit that
+--- refusal. The tablet's own documented contract ("works for an ONLINE or
+--- OFFLINE target, same as tablet:certify") was never actually true for
+--- decertify.
+---
+--- THE FIX: `RevokeCertificationForTablet` below, mirroring
+--- `GrantCertificationForTablet`'s exact shape -- resolve `citizenid` to a
+--- currently-connected server id FIRST and, if that succeeds, delegate to
+--- RevokeCertification UNCHANGED (the exact same eligibility, cooldown,
+--- self-cert, and proximity rules a live '/k9decertify [server id]' would
+--- run -- ONLINE PATH ENTIRELY UNTOUCHED BY THIS CHANGE, its proximity/
+--- consent requirements are never weakened to make the offline one easier).
+--- Only when the target is NOT currently connected does it fall through to
+--- RevokeCertificationOffline. One code path, no duplicated authority.
+---
+--- AUDIT LOGGING: unlike GrantCertificationForTablet (written before the
+--- LogTabletCertAuditInvocation convention above existed), this wrapper
+--- DOES log via LogTabletCertAuditInvocation, mirroring
+--- SetCertificationTierForTablet/RenewCertificationForTablet/
+--- GrantSpecializationForTablet/RevokeSpecializationForTablet below in this
+--- file -- decertify is a destructive action (this task's own "destructive
+--- actions need an explicit word, gate the start never the stop" rule),
+--- and every OTHER destructive/mutating *ForTablet wrapper in this file
+--- already gets this audit line; there is no reason for the one newly
+--- added here to be the sole exception.
+---
+--- `reason` is deliberately NOT accepted here: html/tablet.js's own
+--- tablet:decertify payload is `{ targetCitizenId, departmentKey }` (no
+--- reason field, see client/tablet.lua's own NUI CONTRACT comment) --
+--- RevokeCertification(Offline) both treat a nil `reason` exactly like
+--- every pre-existing chat-command-only caller that never passed one, so
+--- this is not a capability regression versus what the tablet already
+--- lacked.
+--- @param granterSrc number
+--- @param citizenid string
+--- @param departmentKey string -- input-sanity/UX check only, same role as
+--- GrantCertificationForTablet's own identical parameter -- NEVER used to
+--- override the target's actual live job; a live job that does not match
+--- `departmentKey` is reported as 'department_mismatch' rather than
+--- silently revoking the mismatched real department.
+--- @return boolean ok
+--- @return string outcome -- every RevokeCertification/RevokeCertificationOffline outcome, plus 'invalid_target' (shape) | 'invalid_department' | 'department_mismatch'
+--- ======================================================================
+local function RevokeCertificationForTablet(granterSrc, citizenid, departmentKey)
+    local ok, outcome = (function()
+        if type(citizenid) ~= 'string' or citizenid == '' or type(departmentKey) ~= 'string' or departmentKey == '' then
+            return false, 'invalid_target'
+        end
+        if not Config.Departments[departmentKey] then
+            return false, 'invalid_department'
+        end
+
+        local onlineTarget = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local onlineTargetSrc = onlineTarget and onlineTarget.PlayerData and onlineTarget.PlayerData.source
+        if onlineTargetSrc then
+            local liveJob = onlineTarget.PlayerData.job
+            if not liveJob or liveJob.name ~= departmentKey then
+                return false, 'department_mismatch'
+            end
+            return RevokeCertification(granterSrc, onlineTargetSrc)
+        end
+
+        return RevokeCertificationOffline(granterSrc, citizenid, departmentKey)
+    end)()
+
+    -- ROSTER FIX (coordinator-flagged gap, this pass) -- server/roster.lua's
+    -- own ClearPersonnelRowForCitizenJob doc comment already named THIS
+    -- function as its intended caller, written before this function itself
+    -- existed. Best-effort `k9_personnel` cleanup, run ONLY after a
+    -- confirmed successful revoke (never before -- "never gate a
+    -- termination path"), and never allowed to turn an already-succeeded
+    -- revoke back into a reported failure: a failure here is logged by
+    -- ClearPersonnelRowForCitizenJob itself and simply left for a future
+    -- cleanup pass, exactly like this file's own
+    -- RevokeAllSpecializationsForCitizenJob/MaybeRevertK9Appearance calls
+    -- immediately above treat their own best-effort side effects. Without
+    -- this call, a fired handler's roster role AND callsign silently
+    -- survive the revoke -- invisible today (both roster reads already
+    -- filter on an active certification, per that function's own doc
+    -- comment) but resurrecting on re-certification, landing them back on
+    -- a roster with their old callsign instead of Unassigned
+    -- (ROSTER_SPEC.md §4). `clearedBy` is resolved fresh here (never
+    -- reusing RevokeCertification(Offline)'s own already-notified
+    -- ResolveGranterCitizenId call, which would risk a second, spurious
+    -- notify to `granterSrc` after the revoke already succeeded) --
+    -- falls back to a 'system:...' sentinel per that function's own
+    -- documented contract if the granter's citizenid cannot be resolved for
+    -- any reason, rather than skipping the cleanup entirely.
+    if ok and type(ClearPersonnelRowForCitizenJob) == 'function' then
+        local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
+        local clearedBy = (granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid)
+            or 'system:tabletDecertify'
+        ClearPersonnelRowForCitizenJob(citizenid, departmentKey, clearedBy)
+    end
+
+    LogTabletCertAuditInvocation(granterSrc, 'tabletDecertify',
+        ('target=%s department=%s'):format(tostring(citizenid), tostring(departmentKey)), outcome)
+    return ok, outcome
 end
 
 --- Changes `targetServerId`'s certification tier for their OWN currently
@@ -4825,6 +4955,21 @@ if Config.Features and Config.Features.CommandTablet == true then
         return { ok = false, error = outcome }
     end)
 
+    -- BUGFIX (this pass, COMMAND_CONSOLIDATION_SPEC.md §6) -- symmetric with
+    -- tabletCertify immediately above. Was previously reached via
+    -- client/tablet.lua's SubmitAllowlistedCommand -> '/k9decertifyoffline'
+    -- bridge, which structurally could not succeed against a currently
+    -- online target (RevokeCertificationOffline's own online-target
+    -- refusal). RevokeCertificationForTablet's own doc comment above has
+    -- the full writeup; `source` is ox_lib's own server-verified callback
+    -- dispatch value, passed straight through as `granterSrc`, same as
+    -- every other tablet callback in this file.
+    lib.callback.register('qbx_k9unit:server:tabletDecertify', function(source, targetCitizenid, departmentKey)
+        local ok, outcome = RevokeCertificationForTablet(source, targetCitizenid, departmentKey)
+        if ok then return { ok = true } end
+        return { ok = false, error = outcome }
+    end)
+
     -- ==================================================================
     -- CERTIFICATION DEPTH (this pass) — the four tablet callbacks closing
     -- this file's biggest remaining "reachable only via net event/command,
@@ -4878,26 +5023,65 @@ RegisterNetEvent('qbx_k9unit:server:revokeHandler', function(targetServerId, rea
     RevokeCertification(source, targetServerId, reason)
 end)
 
+-- ======================================================================
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8) --
+-- k9certify/k9certifyoffline, k9decertify/k9decertifyoffline,
+-- k9settier/k9settieroffline, k9recertify/k9recertifyoffline,
+-- k9unspecialize/k9unspecializeoffline: 10 commands -> 5. RESOLUTION RULE,
+-- reused verbatim from server/dogcharacter.lua's own ResolveTargetCitizenId
+-- (not re-derived): `tonumber(args[1])` succeeds -> the argument is a
+-- server id, call the ONLINE function, UNCHANGED; fails -> it is a
+-- citizenid string, call the OFFLINE function, UNCHANGED. No new
+-- resolution/validation logic lives in these dispatchers themselves -- each
+-- of the 10 underlying functions already does its own shape validation
+-- (and its own usage notify) internally, so the dispatcher only ever
+-- decides WHICH already-gated, already-validating function to call, then
+-- forwards the rest of `args` unchanged. Confirmed (COMMAND_CONSOLIDATION_SPEC.md
+-- §1): all 11 grant/revoke/tier/renew/specialization functions in this
+-- file share the exact same IsEligibleCertifier gate and
+-- IsCertifyActionOnCooldown budget -- merging on the online/offline axis
+-- widens nothing.
+--
+-- RECYCLED SERVER IDS: not a new risk this merge introduces. The numeral
+-- is forwarded unchanged straight into the existing online function, which
+-- already resolves it to a live Player/citizenid SYNCHRONOUSLY, in the
+-- same tick, via exports.qbx_core:GetPlayer(targetServerId) -- nothing is
+-- ever cached or persisted keyed on the raw numeral, before or after this
+-- change. A numeral that no longer resolves to a connected player hits
+-- that function's own existing "target must be online"/"target offline"
+-- refusal, exactly as /k9certify [server id] already did against a
+-- disconnected id before this pass.
+--
+-- HIDDEN ALIASES (§3): k9certifyoffline/k9decertifyoffline/
+-- k9settieroffline/k9recertifyoffline/k9unspecializeoffline stay
+-- registered forever, UNCHANGED bodies, as the explicit escape hatch for a
+-- genuinely all-digit citizenid (§2's own disclosed ambiguity note) and for
+-- existing macros/cheat-sheets. No longer chat-suggested
+-- (client/commandsuggestions.lua) or listed in html/tablet.js's own
+-- COMMAND_REFERENCE -- see both files' HIDDEN_ALIAS_COMMANDS allowlists.
+-- ======================================================================
+
 RegisterCommand('k9certify', function(source, args)
-    -- Validate args[1] is actually numeric before calling into the grant
-    -- flow — a modified/careless caller could hand this a non-numeric
-    -- string, and GrantCertification's own `type(targetServerId) ~=
-    -- 'number'` guard exists for the net-event path, but the command path
-    -- should reject with a clear usage message instead of silently
-    -- forwarding nil.
-    local targetServerId = tonumber(args[1])
-    if not targetServerId then
-        NotifyPlayer(source, locale('certifications.usage_certify'), 'error')
+    -- DISCOVERABILITY (§4): a totally bare `/k9certify` has no target of
+    -- EITHER shape to resolve -- show the combined usage string (both
+    -- shapes) rather than silently falling into the offline branch below
+    -- and showing only ITS narrower usage message, which would mislead a
+    -- caller who never intended the offline form at all.
+    if args[1] == nil or args[1] == '' then
+        local usage = locale('certifications.usage_certify')
+        if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    GrantCertification(source, targetServerId)
+    local targetServerId = tonumber(args[1])
+    if targetServerId then
+        GrantCertification(source, targetServerId)
+    else
+        GrantCertificationOffline(source, args[1], args[2])
+    end
 end, false)
 
--- Offline-capable counterpart to /k9certify (this pass, coordinator-
--- directed follow-up -- see GrantCertificationOffline's own doc comment
--- and GrantCertificationForTablet's own header above for the full "why
--- this is now safe on the shipped default, and when it deliberately still
--- refuses" writeup). Mirrors /k9decertifyoffline's exact shape.
+-- HIDDEN ALIAS (see block header above) -- body UNCHANGED from before this
+-- merge.
 RegisterCommand('k9certifyoffline', function(source, args)
     local citizenid = args[1]
     local job = args[2]
@@ -4909,21 +5093,27 @@ RegisterCommand('k9certifyoffline', function(source, args)
 end, false)
 
 RegisterCommand('k9decertify', function(source, args)
-    -- Same arg validation as k9certify above.
-    local targetServerId = tonumber(args[1])
-    if not targetServerId then
-        NotifyPlayer(source, locale('certifications.usage_decertify'), 'error')
+    -- DISCOVERABILITY (§4): same "show the combined usage, not the narrower
+    -- offline one" reasoning as k9certify above.
+    if args[1] == nil or args[1] == '' then
+        local usage = locale('certifications.usage_decertify')
+        if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    -- CERTIFICATION DEPTH (this pass, Part A §2): args[2], an optional
-    -- reason code — nil if omitted, exactly like before this pass.
-    RevokeCertification(source, targetServerId, args[2])
+    local targetServerId = tonumber(args[1])
+    if targetServerId then
+        -- CERTIFICATION DEPTH (this pass, Part A §2): args[2], an optional
+        -- reason code — nil if omitted, exactly like before this pass.
+        RevokeCertification(source, targetServerId, args[2])
+    else
+        -- Offline shape shifts by one position (§2's own "argument-shape
+        -- note"): citizenid, job, [reason] -- args[3], not args[2].
+        RevokeCertificationOffline(source, args[1], args[2], args[3])
+    end
 end, false)
 
--- Offline-capable counterpart to /k9decertify — see RevokeCertificationOffline
--- above and this file's header (command 7b) for why this exists as a
--- separate, citizenid-keyed command rather than extending the numeric
--- targetServerId contract used everywhere else.
+-- HIDDEN ALIAS (see block header above) -- body UNCHANGED from before this
+-- merge.
 RegisterCommand('k9decertifyoffline', function(source, args)
     local citizenid = args[1]
     local job = args[2]
@@ -4963,21 +5153,29 @@ end, false)
 -- rather than left as a comment describing them as unreachable-by-design.
 -- ======================================================================
 
+-- COMMAND CONSOLIDATION (§2/§5 item 8) -- same dispatcher shape as
+-- k9certify/k9decertify above; see that block's own header comment for the
+-- full resolution-rule/recycled-id/hidden-alias writeup, not repeated here.
 RegisterCommand('k9settier', function(source, args)
-    local targetServerId = tonumber(args[1])
-    if not targetServerId then
-        NotifyPlayer(source, locale('certifications.usage_settier'), 'error')
+    if args[1] == nil or args[1] == '' then
+        local usage = locale('certifications.usage_settier')
+        if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    SetCertificationTier(source, targetServerId, args[2])
+    local targetServerId = tonumber(args[1])
+    if targetServerId then
+        SetCertificationTier(source, targetServerId, args[2])
+    else
+        -- Offline shape shifts by one position: citizenid, job, tier --
+        -- args[3], not args[2].
+        SetCertificationTierOffline(source, args[1], args[2], args[3])
+    end
 end, false)
 
--- Offline-capable counterpart to /k9settier — see SetCertificationTierOffline
--- above and RevokeCertificationOffline's own header note (item 7b) for why
--- this exists as a separate, citizenid-keyed command rather than extending
--- the numeric targetServerId contract. Added THIS PASS alongside the tablet
--- path (SetCertificationTierForTablet) so the same offline-capable
--- re-tiering ability is reachable without the tablet too.
+-- HIDDEN ALIAS (see k9certify's own block header above) -- body UNCHANGED
+-- from before this merge. Added alongside the tablet path
+-- (SetCertificationTierForTablet) so the same offline-capable re-tiering
+-- ability is reachable without the tablet too.
 RegisterCommand('k9settieroffline', function(source, args)
     local citizenid = args[1]
     local job = args[2]
@@ -4989,19 +5187,24 @@ RegisterCommand('k9settieroffline', function(source, args)
     SetCertificationTierOffline(source, citizenid, job, newTier)
 end, false)
 
+-- COMMAND CONSOLIDATION (§2/§5 item 8) -- same dispatcher shape as
+-- k9certify above.
 RegisterCommand('k9recertify', function(source, args)
-    local targetServerId = tonumber(args[1])
-    if not targetServerId then
-        NotifyPlayer(source, locale('certifications.usage_recertify'), 'error')
+    if args[1] == nil or args[1] == '' then
+        local usage = locale('certifications.usage_recertify')
+        if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    RenewCertification(source, targetServerId)
+    local targetServerId = tonumber(args[1])
+    if targetServerId then
+        RenewCertification(source, targetServerId)
+    else
+        RenewCertificationOffline(source, args[1], args[2])
+    end
 end, false)
 
--- Offline-capable counterpart to /k9recertify — see RenewCertificationOffline
--- above, added THIS PASS for the identical reason /k9settieroffline was
--- just above: the same offline-capable renewal ability the tablet now has
--- (RenewCertificationForTablet) reachable without the tablet too.
+-- HIDDEN ALIAS (see k9certify's own block header above) -- body UNCHANGED
+-- from before this merge.
 RegisterCommand('k9recertifyoffline', function(source, args)
     local citizenid = args[1]
     local job = args[2]
@@ -5021,19 +5224,29 @@ RegisterCommand('k9specialize', function(source, args)
     GrantSpecialization(source, targetServerId, args[2])
 end, false)
 
+-- COMMAND CONSOLIDATION (§2/§5 item 8) -- same dispatcher shape as
+-- k9certify above. k9specialize (immediately above) is DELIBERATELY
+-- unmerged -- it has no offline counterpart at all (GrantSpecializationForTablet's
+-- own doc comment: granting a specialization always requires the target to
+-- be online), so there is nothing to fold into it.
 RegisterCommand('k9unspecialize', function(source, args)
-    local targetServerId = tonumber(args[1])
-    if not targetServerId then
-        NotifyPlayer(source, locale('certifications.usage_unspecialize'), 'error')
+    if args[1] == nil or args[1] == '' then
+        local usage = locale('certifications.usage_unspecialize')
+        if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    RevokeSpecialization(source, targetServerId, args[2])
+    local targetServerId = tonumber(args[1])
+    if targetServerId then
+        RevokeSpecialization(source, targetServerId, args[2])
+    else
+        -- Offline shape shifts by one position: citizenid, job,
+        -- specialization -- args[3], not args[2].
+        RevokeSpecializationOffline(source, args[1], args[2], args[3])
+    end
 end, false)
 
--- Offline-capable counterpart to /k9unspecialize — see
--- RevokeSpecializationOffline above and RevokeCertificationOffline's own
--- header note (item 7b) for why this exists as a separate, citizenid-keyed
--- command rather than extending the numeric targetServerId contract.
+-- HIDDEN ALIAS (see k9certify's own block header above) -- body UNCHANGED
+-- from before this merge.
 RegisterCommand('k9unspecializeoffline', function(source, args)
     local citizenid = args[1]
     local job = args[2]

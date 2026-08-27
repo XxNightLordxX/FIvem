@@ -209,6 +209,27 @@ local HIDDEN_ALIAS_COMMANDS = {
     -- targeted for removal here, once batched with the rest.
     k9deploykennel = 'kennel',
     k9exitkennel = 'kennel',
+    -- family #7: permissions (2 -> 1, 'k9permission') -- server/permissions.lua.
+    -- Unlike audit/fetch/training's "interim" state, this family's
+    -- COMMAND_REFERENCE removal landed in the SAME change as the merge
+    -- itself (no hot-file blocker for this family) -- see
+    -- COMMANDS_TAB_CLEANUP_COMPLETE.permissions below, flipped true here,
+    -- not left as a follow-up.
+    k9grantpermission = 'permissions',
+    k9revokepermission = 'permissions',
+    -- family #8: online/offline certification pairs (10 -> 5) --
+    -- server/certifications.lua. k9certify/k9decertify/k9settier/
+    -- k9recertify/k9unspecialize keep their own existing canonical names
+    -- (no new name introduced -- they now simply also accept the offline
+    -- citizenid+job shape) and are NOT in this table; only their five
+    -- *offline counterparts fold away. Same "landed in the same change,
+    -- not deferred" shape as permissions above -- see
+    -- COMMANDS_TAB_CLEANUP_COMPLETE.cert_pairs below.
+    k9certifyoffline = 'cert_pairs',
+    k9decertifyoffline = 'cert_pairs',
+    k9settieroffline = 'cert_pairs',
+    k9recertifyoffline = 'cert_pairs',
+    k9unspecializeoffline = 'cert_pairs',
 }
 
 -- COMMANDS_TAB_CLEANUP_COMPLETE -- coordination table, project-lead-owned.
@@ -252,6 +273,18 @@ local COMMANDS_TAB_CLEANUP_COMPLETE = {
     -- enforcing "neither old name may creep into COMMAND_REFERENCE later"
     -- from this pass onward.
     dog_record = true,
+
+    -- permissions/cert_pairs = true, SET HONESTLY (this pass, coder-backend):
+    -- both families' html/tablet.js COMMAND_REFERENCE removals landed in
+    -- THIS SAME CHANGE as their server-side merges (server/permissions.lua,
+    -- server/certifications.lua) -- neither was blocked by a hot-file
+    -- conflict the way k9dog/k9fetch/k9train/k9kennel were (see
+    -- PENDING_NEW_CANONICAL_COMMANDS below -- N/A here anyway, since
+    -- neither family introduces a genuinely NEW command name; k9permission
+    -- is new but was added directly, with its own real COMMAND_REFERENCE
+    -- entry, in this same change too).
+    permissions = true,
+    cert_pairs = true,
 }
 
 -- PENDING_NEW_CANONICAL_COMMANDS -- a DIFFERENT exception from

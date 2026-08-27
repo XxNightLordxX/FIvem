@@ -205,7 +205,18 @@ local function newFixture(opts)
     -- this file's own EXPIRY design deliberately keeps as the ONLY
     -- Lua-side wall-clock read (see certifications.lua's own NowUnix doc
     -- comment). Overridable per test via advanceUnixTime below.
-    local osStub = { time = function() return state.nowUnix end }
+    local osStub = {
+        time = function() return state.nowUnix end,
+        -- ROSTER FIX (coordinator-flagged gap, this pass): server/datastore.lua's
+        -- own memory-mode FormatDateTime helper calls os.date(...) directly
+        -- (real oxmysql DATETIME-string formatting has no equivalent to fake in
+        -- real-DB mode, which every OTHER test in this file uses -- this only
+        -- matters for the one opts.database={enabled=false} integration test).
+        -- The REAL os.date is safe to pass through verbatim: called only with an
+        -- explicit unixTime argument, it is pure/deterministic, never reads the
+        -- actual wall clock.
+        date = os.date,
+    }
 
     -- CERTIFICATION DEPTH (this pass): GetPlayers() backs
     -- TickCertificationExpiryWarnings' sweep loop -- reflects whichever
@@ -259,6 +270,16 @@ local function newFixture(opts)
     -- opts.includeHandlerXpHook = false to confirm the guard tolerates the
     -- global being entirely absent.
     local handlerXpAwardCalls = {} -- { citizenid, actionKey }
+
+    -- ROSTER FIX (coordinator-flagged gap, this pass) --
+    -- ClearPersonnelRowForCitizenJob (server/roster.lua) is a NEW soft
+    -- dependency this pass added a real call site for
+    -- (RevokeCertificationForTablet), same runtime-existence-guard shape as
+    -- every other cross-file hook above -- opt out via
+    -- opts.includeRosterHook = false to confirm that guard tolerates the
+    -- global being entirely absent (server/roster.lua not loaded /
+    -- Config.Features.CommandTablet off).
+    local personnelClearCalls = {} -- { citizenid, job, clearedBy }
 
     local playersBySource = {}
     local playersByCitizenId = {}
@@ -394,6 +415,16 @@ local function newFixture(opts)
         -- table as zero, exactly like the real config.lua default
         -- ("an empty table changes nothing").
         FeatureControl = opts.featureControl,
+        -- ROSTER FIX (coordinator-flagged gap, this pass) -- absent by
+        -- default (every pre-existing test's shipped-default posture,
+        -- matching Features/expiry above -- K9Store's own DatabaseEnabled()
+        -- fails safe to real-DB mode when this is nil, unchanged for every
+        -- existing test). A dedicated integration test opts into
+        -- `{ enabled = false }` (memory mode) so it can load the REAL
+        -- server/roster.lua alongside this file and prove a genuine
+        -- certify -> assign role/callsign -> revoke -> re-certify round
+        -- trip without hand-mocking every roster K9Store query too.
+        Database = opts.database,
     }
     if Config.AllowSelfCertification == nil then Config.AllowSelfCertification = true end
 
@@ -470,6 +501,12 @@ local function newFixture(opts)
             handlerXpAwardCalls[#handlerXpAwardCalls + 1] = { citizenid, actionKey }
         end
     end
+    if opts.includeRosterHook ~= false then
+        overrides.ClearPersonnelRowForCitizenJob = function(citizenid, job, clearedBy)
+            personnelClearCalls[#personnelClearCalls + 1] = { citizenid, job, clearedBy }
+            return true
+        end
+    end
 
     -- WORKFLOW-CLARITY PASS -- see this file's own header for the full
     -- "byte-identical to Sandbox.locale except for the explicitly pending
@@ -494,6 +531,19 @@ local function newFixture(opts)
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/certifications.lua', env)
 
+    -- ROSTER FIX (coordinator-flagged gap, this pass) -- opt-in, REAL,
+    -- unmodified server/roster.lua loaded into the SAME env/K9Store so an
+    -- integration test can exercise RevokeCertificationForTablet's new
+    -- ClearPersonnelRowForCitizenJob call site against roster.lua's own
+    -- genuine re-hire semantics (ROSTER_SPEC.md §4), not a stub. Requires
+    -- `Config.Database = { enabled = false }` (memory mode, opts.database
+    -- above) -- roster.lua's own file-level gate
+    -- (`Config.Features.CommandTablet == true`) also requires
+    -- opts.features.CommandTablet = true, same as tabletFixture() below.
+    if opts.includeRoster == true then
+        Sandbox.loadInto('../server/roster.lua', env)
+    end
+
     return {
         env = env,
         state = state,
@@ -506,6 +556,7 @@ local function newFixture(opts)
         appearanceApplyCalls = appearanceApplyCalls,
         appearanceRevertCalls = appearanceRevertCalls,
         handlerXpAwardCalls = handlerXpAwardCalls,
+        personnelClearCalls = personnelClearCalls,
         registerPlayer = registerPlayer,
         disconnectPlayer = disconnectPlayer,
         setPed = setPed,
@@ -2471,18 +2522,129 @@ end)
 -- event path's `type(targetServerId) ~= 'number'` guard already covered.
 -- ======================================================================
 
-t.test('/k9certify command: a non-numeric args[1] is rejected with the usage message before GrantCertification is ever reached', function()
+-- ======================================================================
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8) --
+-- /k9certify and /k9decertify are now DISPATCHERS: `tonumber(args[1])`
+-- succeeds -> online branch (unchanged); fails -> offline branch
+-- (GrantCertificationOffline/RevokeCertificationOffline, unchanged). A
+-- non-numeric args[1] is therefore no longer rejected outright -- it is a
+-- CITIZENID, treated exactly like a direct /k9certifyoffline call would.
+-- ======================================================================
+
+t.test('/k9certify command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to GrantCertificationOffline unchanged', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.commands['k9certify'].fn(1, { 'not-a-number' })
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certify'), 'error'))
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
+
+    f.commands['k9certify'].fn(1, { 'OFFLINE_CIT', 'police' })
+
+    t.equals(insertParams[1], 'OFFLINE_CIT')
+    t.equals(insertParams[2], 'police')
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_granter'), 'success'))
 end)
 
-t.test('/k9decertify command: a non-numeric args[1] is rejected with the usage message', function()
+t.test('/k9certify command: a numeric args[1] still routes to the ONLINE GrantCertification, completely unchanged by the merge', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.commands['k9certify'].fn(1, { '20' })
+
+    t.isTrue(insertCalled)
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.grant_success_target'), 'success'))
+end)
+
+t.test('/k9certify command: a totally bare command (no args at all) shows the COMBINED usage string (both shapes), never just the narrower offline-only message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9certify'].fn(1, {})
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certify'), 'error'))
+    t.isFalse(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certifyoffline'), 'error'), 'must not show the narrower offline-only usage for a bare command')
+end)
+
+t.test('HIDDEN ALIAS: /k9certifyoffline still works standalone, byte-identical body, for the digits-only-citizenid escape hatch (§2\'s own disclosed ambiguity)', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
+
+    -- A genuinely all-digit citizenid: tonumber() would succeed on this,
+    -- so /k9certify alone could never route it to the offline path --
+    -- /k9certifyoffline staying real and reachable is exactly what makes
+    -- this case reachable at all.
+    f.commands['k9certifyoffline'].fn(1, { '123456', 'police' })
+
+    t.equals(insertParams[1], '123456')
+    t.equals(insertParams[2], 'police')
+end)
+
+t.test('/k9decertify command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to RevokeCertificationOffline unchanged, args shifted by one for the optional reason', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.commands['k9decertify'].fn(1, { 'OFFLINE_CIT', 'police', 'disciplinary' })
+
+    t.equals(updateParams[2], 'disciplinary', 'the third arg must forward as the reason -- the offline shape shifts by one position vs. the online one')
+    t.equals(updateParams[3], 'OFFLINE_CIT')
+    t.equals(updateParams[4], 'police')
+end)
+
+t.test('/k9decertify command: a totally bare command (no args at all) shows the COMBINED usage string, never the offline-only one', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.commands['k9decertify'].fn(1, {})
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_decertify'), 'error'))
+end)
+
+t.test('HIDDEN ALIAS: /k9decertifyoffline still works standalone, byte-identical body', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.commands['k9decertifyoffline'].fn(1, { 'REVOKEE', 'police' })
+
+    t.equals(updateParams[3], 'REVOKEE')
+    t.equals(updateParams[4], 'police')
+end)
+
+t.test('RECYCLED SERVER ID SAFETY (COMMAND_CONSOLIDATION_SPEC.md §2): the merged /k9decertify command resolves a numeric arg via a fresh GetPlayer() lookup on EVERY invocation, never a cached mapping -- a server id that is reassigned between two calls resolves to whoever holds it NOW, exactly like the pre-merge /k9decertify already did', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'FIRST_OCCUPANT', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('FIRST_OCCUPANT', 'police')
+
+    f.disconnectPlayer(20)
+    f.registerPlayer(20, 'SECOND_OCCUPANT', { name = 'police', grade = { level = 1 } })
+    f.setPed(20, 1030, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('SECOND_OCCUPANT', 'police')
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    -- '20' now means SECOND_OCCUPANT -- the numeral is forwarded straight
+    -- into GetPlayer(20), resolved fresh, in this same tick.
+    f.commands['k9decertify'].fn(1, { '20' })
+
+    t.equals(updateParams[3], 'SECOND_OCCUPANT', 'the numeral must resolve to whoever currently holds server id 20, never a stale mapping to whoever held it earlier')
 end)
 
 t.test('/k9certify command: a valid numeric string arg reaches the real grant flow end-to-end', function()
@@ -3118,11 +3280,41 @@ t.test('SetCertificationTier: REGRESSION -- a throwing UPDATE that ACTUALLY comm
     t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.tier_change_success_target', 'senior'), 'success'))
 end)
 
-t.test('/k9settier command: a non-numeric args[1] is rejected with the usage message', function()
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8):
+-- /k9settier is now a dispatcher, same shape as /k9certify/k9decertify above.
+t.test('/k9settier command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to SetCertificationTierOffline unchanged, args shifted by one for the tier', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.commands['k9settier'].fn(1, { 'not-a-number', 'senior' })
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+
+    f.commands['k9settier'].fn(1, { 'OFFLINE_CIT', 'police', 'senior' })
+
+    t.equals(updateParams[1], 'senior')
+    t.equals(updateParams[2], 'OFFLINE_CIT')
+    t.equals(updateParams[3], 'police')
+end)
+
+t.test('/k9settier command: a totally bare command shows the COMBINED usage string', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9settier'].fn(1, {})
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_settier'), 'error'))
+end)
+
+t.test('HIDDEN ALIAS: /k9settieroffline still works standalone, byte-identical body', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+
+    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+
+    t.equals(updateParams[2], 'T1')
+    t.equals(updateParams[3], 'police')
 end)
 
 -- ----------------------------------------------------------------------
@@ -3272,11 +3464,37 @@ t.test('RenewCertification: REGRESSION -- a throwing UPDATE that ACTUALLY commit
     t.isTrue(notifiedExactly(f, 20, localeWithPendingCertKeys('certifications.renew_success_target_detail', '90'), 'success'))
 end)
 
-t.test('/k9recertify command: a non-numeric args[1] is rejected with the usage message', function()
+t.test('/k9recertify command: a totally bare command (no args at all) shows the COMBINED usage string (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8)', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.commands['k9recertify'].fn(1, {})
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_recertify'), 'error'))
+end)
+
+t.test('/k9recertify command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to RenewCertificationOffline unchanged', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 } end
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    f.commands['k9recertify'].fn(1, { 'OFFLINE_CIT', 'police' })
+
+    t.isTrue(updateCalled)
+end)
+
+t.test('HIDDEN ALIAS: /k9recertifyoffline still works standalone, byte-identical body', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 } end
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+
+    t.isTrue(updateCalled)
 end)
 
 -- ----------------------------------------------------------------------
@@ -3656,11 +3874,45 @@ t.test('RevokeSpecializationOffline: a typo\'d/unconfigured department is reject
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not-a-real-department', 'police, sheriff'), 'error'))
 end)
 
-t.test('/k9unspecialize command: a non-numeric args[1] is rejected with the usage message', function()
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8):
+-- /k9unspecialize is now a dispatcher, same shape as the others above.
+-- /k9specialize (grant) has NO offline counterpart at all and is
+-- deliberately left untouched -- see this file's own new comment above its
+-- RegisterCommand call.
+t.test('/k9unspecialize command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to RevokeSpecializationOffline unchanged, args shifted by one for the specialization key', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.commands['k9unspecialize'].fn(1, { 'not-a-number', 'narcotics' })
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.query.await = function() return {} end
+
+    f.commands['k9unspecialize'].fn(1, { 'OFFLINE_CIT', 'police', 'narcotics' })
+
+    t.equals(updateParams[2], 'OFFLINE_CIT')
+    t.equals(updateParams[3], 'police')
+    t.equals(updateParams[4], 'narcotics')
+end)
+
+t.test('/k9unspecialize command: a totally bare command shows the COMBINED usage string', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9unspecialize'].fn(1, {})
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_unspecialize'), 'error'))
+end)
+
+t.test('HIDDEN ALIAS: /k9unspecializeoffline still works standalone, byte-identical body', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.query.await = function() return {} end
+
+    f.commands['k9unspecializeoffline'].fn(1, { 'T1', 'police', 'narcotics' })
+
+    t.equals(updateParams[2], 'T1')
+    t.equals(updateParams[3], 'police')
+    t.equals(updateParams[4], 'narcotics')
 end)
 
 t.test('/k9unspecializeoffline command: a missing specialization argument is rejected with the usage message', function()
@@ -4334,6 +4586,242 @@ t.test('tabletSetCertificationTier: an unconfigured department key is invalid_de
 
     t.isFalse(result.ok)
     t.equals(result.error, 'invalid_department')
+end)
+
+-- ======================================================================
+-- THE BUGFIX (COMMAND_CONSOLIDATION_SPEC.md §6) -- tabletDecertify /
+-- RevokeCertificationForTablet. Before this pass, client/tablet.lua's
+-- tablet:decertify NUI callback shelled out to the OFFLINE-ONLY
+-- '/k9decertifyoffline' command for EVERY target, online or offline --
+-- and RevokeCertificationOffline's own "refuse if actually online right
+-- now" guard (tested above at "RevokeCertificationOffline: SECURITY")
+-- means clicking Decertify against a currently-connected person ALWAYS
+-- hit that refusal and did nothing. RevokeCertificationForTablet (mirrors
+-- GrantCertificationForTablet exactly) is the fix: resolve online-vs-
+-- offline from the citizenid itself and delegate to the correct,
+-- UNCHANGED underlying function either way.
+-- ======================================================================
+
+t.test('tabletDecertify: THE BUG, PINNED -- an ONLINE target is actually revoked through the tablet callback (this is what silently failed before RevokeCertificationForTablet existed)', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- seed an active cert first
+    f.env.RefreshCertificationCache('T1', 'police')
+    t.isTrue(f.env.HasK9Access(20), 'sanity: the target really is certified before the revoke')
+
+    local updateCalled = false
+    f.mysql.update.await = function(_sql, params) updateCalled = true; return 1 end
+    f.mysql.scalar.await = function() return nil end -- post-revoke re-cache: no active row
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'T1', 'police')
+
+    t.isTrue(result.ok, 'an ONLINE target must actually be revocable through the tablet -- this assertion is exactly what the old command-bridge implementation could never satisfy')
+    t.isTrue(updateCalled)
+    t.isFalse(f.env.HasK9Access(20), 'access must genuinely be gone, not just reported gone')
+    t.isTrue(auditedWith(f, 'tabletDecertify', 'ok'))
+end)
+
+t.test('tabletDecertify: SECURITY -- a caller with no rank/grant/high-command is refused, no DB write attempted, and the refusal is audited', function()
+    local f = tabletFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 0 } })
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](1, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_eligible')
+    t.isFalse(updateCalled)
+    t.isTrue(auditedWith(f, 'tabletDecertify', 'not_eligible'), 'a DENIED tablet invocation must be audited too, not only a successful one')
+end)
+
+t.test('tabletDecertify: ONLINE proximity is still enforced, exactly like a live /k9decertify -- a distant target is refused, the online path is never weakened for the tablet', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(999, 999, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_too_far')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletDecertify: OFFLINE success -- a disconnected target still gets revoked, no proximity possible or required, and is audited', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    -- T1 is NOT registered as an online player at all.
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'T1', 'police')
+
+    t.isTrue(result.ok)
+    t.equals(updateParams[3], 'T1')
+    t.equals(updateParams[4], 'police')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_success'), 'success'), 'granter is notified even though the target is offline')
+    t.isTrue(auditedWith(f, 'tabletDecertify', 'ok'))
+end)
+
+t.test('tabletDecertify: OFFLINE -- no active certification row for that department is a distinguishable no-op, never a false success', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.mysql.update.await = function() return 0 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'NOBODY', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'target_not_actively_certified')
+end)
+
+t.test('tabletDecertify: a stale department view (target changed job since) is refused as department_mismatch, never silently revoking their real, current department', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'sheriff', grade = { level = 1 } }) -- really "sheriff" now, tablet still thinks "police"
+
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'T1', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'department_mismatch')
+    t.isFalse(updateCalled)
+end)
+
+t.test('tabletDecertify: shape validation -- an empty citizenid is invalid_target before any lookup, no notify sent at all', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, '', 'police')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_target')
+end)
+
+t.test('tabletDecertify: an unconfigured department key is invalid_department before any lookup', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'T1', 'not_a_real_department')
+
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_department')
+end)
+
+t.test('tabletDecertify: RECYCLED SERVER ID SAFETY -- resolution is by citizenid only, never a client-supplied numeral, so a server id previously belonging to the revoke target cannot leak onto whoever holds that number now', function()
+    local f = tabletFixture()
+    f.registerPlayer(10, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T1', 'police')
+
+    -- T1 disconnects; FiveM recycles their old numeric source id (20) onto
+    -- an entirely unrelated new connection, T2, who happens to hold an
+    -- active cert of their own for the SAME department.
+    f.disconnectPlayer(20)
+    f.registerPlayer(20, 'T2', { name = 'police', grade = { level = 1 } })
+    f.setPed(20, 1030, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('T2', 'police')
+    t.isTrue(f.env.HasK9Access(20), 'sanity: T2 (the NEW occupant of source id 20) is genuinely certified')
+
+    -- Decertifying T1 (now genuinely offline) must resolve via
+    -- GetPlayerByCitizenId('T1') -- which now correctly returns nothing,
+    -- since T1 is not who is connected as source 20 anymore -- and fall
+    -- through to the offline path for T1's own row, never touching T2's
+    -- live, currently-certified access just because '20' used to mean T1.
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.scalar.await = function() return nil end -- T1's own post-revoke recache: no active row
+
+    local result = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'T1', 'police')
+
+    t.isTrue(result.ok)
+    t.equals(updateParams[3], 'T1', 'the UPDATE must target T1 (the citizenid actually requested), never T2 merely because T2 now holds T1\'s old numeral')
+    t.equals(updateParams[4], 'police')
+    t.isTrue(f.env.HasK9Access(20), 'T2 (whoever actually holds source id 20 right now) must be completely unaffected by decertifying a DIFFERENT citizenid')
+end)
+
+-- ======================================================================
+-- ROSTER FIX (coordinator-flagged gap, this pass) -- RevokeCertificationForTablet
+-- did not call server/roster.lua's own ClearPersonnelRowForCitizenJob, so a
+-- fired handler's `k9_personnel` row (their roster role AND callsign)
+-- survived the revoke -- invisible today (both roster reads already filter
+-- on an active certification) but resurrecting on re-certification,
+-- landing them back on a roster with their OLD callsign instead of
+-- Unassigned (ROSTER_SPEC.md §4). This is a genuine, end-to-end
+-- INTEGRATION test -- REAL server/roster.lua loaded alongside this file,
+-- REAL K9Store (memory mode), no stubbing of ClearPersonnelRowForCitizenJob
+-- at all -- proving the actual production call site, not a mocked stand-in.
+-- ======================================================================
+
+t.test('INTEGRATION: certify -> assign roster role + callsign -> revoke via tabletDecertify -> re-certify -- the re-certified handler lands back in Unassigned with no callsign, never resurrecting the old row', function()
+    local f = newFixture({
+        features = { CommandTablet = true },
+        database = { enabled = false }, -- memory mode -- real K9Store, no MySQL mocking needed
+        includeRoster = true,           -- loads the REAL server/roster.lua into this same env
+    })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    -- CERTIFY (online, real GrantCertification via the command path).
+    f.commands['k9certify'].fn(10, { '20' })
+    t.isTrue(f.env.HasK9Access(20), 'sanity: TARGET is really certified before any roster assignment')
+
+    -- ASSIGN a roster role and a callsign -- real RosterAssignPersonnelRole/
+    -- RosterSetCallsign, exactly as the tablet's own roster screen would.
+    local assignOk, assignOutcome = f.env.RosterAssignPersonnelRole('TARGET', 'police', 'k9', 'GRANTER')
+    t.isTrue(assignOk, assignOutcome)
+    local callsignOk = f.env.RosterSetCallsign('TARGET', 'police', '6-Frank-2')
+    t.isTrue(callsignOk)
+
+    local beforeRow = f.env.K9Store.Personnel_GetActiveRow('TARGET', 'police')
+    t.isNotNil(beforeRow, 'sanity: a real personnel row exists before the revoke')
+    t.equals(beforeRow.role, 'k9')
+    t.equals(beforeRow.callsign, '6-Frank-2')
+
+    -- REVOKE via the REAL tabletDecertify callback -- RevokeCertificationForTablet,
+    -- the actual production call site this pass fixed.
+    f.advanceTime(COOLDOWN_MS + 100)
+    local revokeResult = f.callbacks['qbx_k9unit:server:tabletDecertify'](10, 'TARGET', 'police')
+    t.isTrue(revokeResult.ok, 'sanity: the revoke itself must succeed')
+    t.isFalse(f.env.HasK9Access(20), 'sanity: certification is really gone')
+
+    -- THE ACTUAL FIX: the personnel row must be gone too, immediately,
+    -- without needing a resource restart or a manual roster edit.
+    t.isNil(f.env.K9Store.Personnel_GetActiveRow('TARGET', 'police'),
+        'ClearPersonnelRowForCitizenJob must have run -- a fired handler\'s roster row must not survive their own revoke')
+
+    -- RE-CERTIFY (still online, same server id) -- the exact re-hire
+    -- scenario ROSTER_SPEC.md §4 requires to land in Unassigned.
+    f.advanceTime(COOLDOWN_MS + 100)
+    f.commands['k9certify'].fn(10, { '20' })
+    t.isTrue(f.env.HasK9Access(20), 'sanity: TARGET is certified again')
+
+    -- THE REGRESSION THIS TEST PINS: without the fix, the OLD personnel row
+    -- (role=k9, callsign=6-Frank-2) would still be sitting there, active,
+    -- the moment this second certification landed -- resurrecting them
+    -- straight back onto the roster under their old callsign instead of
+    -- Unassigned.
+    t.isNil(f.env.K9Store.Personnel_GetActiveRow('TARGET', 'police'),
+        'a re-certified handler must start Unassigned, with no callsign -- the old row must never resurrect')
 end)
 
 t.test('tabletRenewCertification: OFFLINE success extends expiry with no proximity possible or required', function()

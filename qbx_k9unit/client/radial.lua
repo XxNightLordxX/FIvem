@@ -596,23 +596,55 @@ end
 
 local function RegisterK9RadialMenu()
     -- Contents of the "K9 Unit" SUBMENU (registered via lib.registerRadial
-    -- below) — none of these carry their own `menu` field. On an item, `menu`
-    -- means "selecting this navigates to another already-registered menu,"
-    -- not "this item belongs to submenu X" — see this file's header for the
-    -- verified ox_lib source behind that distinction. These are terminal
-    -- actions with their own onSelect, so `menu` must stay unset on all of
-    -- them.
-    local k9SubmenuItems = {
+    -- below) — none of these carry their own `menu` field, UNLESS noted
+    -- otherwise (an opener that navigates into a nested sub-menu, same
+    -- `menu`-field mechanic this file's header already documents for
+    -- 'k9unit_bark'/'k9unit_defense'/'k9unit_dangerwarn'/'k9unit_fetch'/
+    -- 'k9unit_training'). Every other item here is a terminal action with
+    -- its own onSelect, so `menu` must stay unset on all of those.
+    local k9SubmenuItems = {}
+
+    -- ======================================================================
+    -- REGROUPING PASS (ease-of-use audit finding, Job 3): the "K9 Unit"
+    -- submenu used to hold ~17-18 items at ONE flat level, with only five
+    -- (Bark/Defense/DangerWarn/Fetch/Training) pushed into their own
+    -- sub-menus — ox_lib pages the rest automatically, so finding an item
+    -- near the end of that flat list meant paging through the wheel.
+    --
+    -- k9UtilitySubmenuItems below is the ONE new sub-menu this pass adds
+    -- ('k9unit_utility') — see its own registration further down for the
+    -- full "why these four, and not the ones the task's own suggested
+    -- grouping named instead" writeup. Built as a SEPARATE local table, same
+    -- shape as k9SubmenuItems itself, so its own registration can follow the
+    -- identical `lib.registerRadial({id=..., items=...})` + one opener
+    -- appended to k9SubmenuItems pattern already established for the other
+    -- five nested sub-menus in this file — never a second, different
+    -- mechanism.
+    -- ======================================================================
+    local k9UtilitySubmenuItems = {
         --- Sit — DEVELOPER_REFERENCE.md §6.1. No dedicated Config.Features flag (bundled
         --- under the general RadialMenu flag + access check, same as every
-        --- other Phase 1 item here).
+        --- other Phase 1 item here). MOVED into the new Utility sub-menu,
+        --- this pass -- a pure, one-shot cosmetic action with no release/
+        --- termination half of its own, so nesting it costs nothing (see
+        --- the "REGROUPING PASS" header above this table for the full
+        --- safety reasoning this decision follows).
         {
             id = 'k9_sit',
             label = locale('radial.sit_label'),
             icon = 'couch',
             onSelect = function()
+                -- REASON ROUTING (ease-of-use audit, this pass): this item
+                -- only ever checks the broad CanShowK9UI() combinator (role
+                -- AND access), never HasK9Access() alone, so it cannot tell
+                -- which half failed -- 'common.no_k9_role_or_access' is the
+                -- most specific reason this call site can honestly claim
+                -- (see DenyK9UIAccess's own doc comment in client/main.lua
+                -- for the full routing policy). Every other CanShowK9UI()
+                -- gate in this file below follows the identical convention;
+                -- not re-explained at each one.
                 if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                    DenyK9UIAccess('common.no_k9_role_or_access')
                     return
                 end
                 -- type(...) == 'function' guard per this file's own header
@@ -634,6 +666,57 @@ local function RegisterK9RadialMenu()
         },
     }
 
+    -- K9 Command Tablet. MOVED, this pass, out of a real found bug: this
+    -- item used to be registered from a code position textually INSIDE the
+    -- `if Config.Features.AdvancedBarkRadial and not
+    -- IsRadialFeatureBlockedForMe('AdvancedBarkRadial') then` branch further
+    -- below (a leftover of however the Advanced Bark Radial insertion was
+    -- made) -- meaning "Command Tablet" only ever appeared when
+    -- AdvancedBarkRadial was ALSO true, even though its own gate is (and was
+    -- always meant to be) Config.Features.CommandTablet alone, entirely
+    -- unrelated to bark variants. A server running CommandTablet=true with
+    -- AdvancedBarkRadial at its false default (or blocked) never saw this
+    -- item at all. Fixed by lifting it out to its own unconditional
+    -- top-level block, added FIRST -- matching this item's own
+    -- "Deliberately FIRST in the submenu" comment below, which was true in
+    -- INTENT even while the actual code placement silently contradicted it.
+    -- NOT folded into the new Utility sub-menu above: "burying it under
+    -- [every other ability] would be backwards" (this item's own comment)
+    -- applies just as much to a NEW sub-menu as to the old items it already
+    -- named -- the one entry that reaches everything else stays the most
+    -- prominent, not the most nested.
+    if Config.Features.CommandTablet then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_open_tablet',
+            label = locale('radial.tablet_label'),
+            icon = 'tablet',
+            onSelect = function()
+                if type(OpenTablet) == 'function' then OpenTablet() end
+            end,
+        }
+    end
+
+    -- Utility sub-menu OPENER, appended here (right after Command Tablet)
+    -- for prominence, even though 'k9unit_utility' itself is not actually
+    -- REGISTERED via lib.registerRadial until later in this same function
+    -- call (after every conditional utility item -- Toggle K9 Vest/Open My
+    -- Gear/Treat K9 -- has had its chance to append into
+    -- k9UtilitySubmenuItems). Safe per this function's own "ORDERING
+    -- PRESERVED" header: click-time `menu` resolution only requires every
+    -- submenu to exist in ox_lib's `menus` table by the time THIS function
+    -- returns and control is handed back to the player -- statement order
+    -- between an opener's append and its target submenu's own registration,
+    -- within the same synchronous call, never matters. UNCONDITIONAL: Sit
+    -- (k9UtilitySubmenuItems' first entry, above) carries no Config.Features
+    -- flag of its own, so this sub-menu is never empty and this opener is
+    -- always worth showing whenever the whole "K9 Unit" wheel is.
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_utility',
+        label = locale('radial.utility_menu_label'),
+        icon = 'toolbox',
+        menu = 'k9unit_utility',
+    }
+
     --- Bark — DEVELOPER_REFERENCE.md §6.1, §8 step 9. Config.Features.BasicBarkSounds gate.
     ---
     --- Phase 5's AdvancedBarkRadial (Config.Features.AdvancedBarkRadial, layered
@@ -650,6 +733,19 @@ local function RegisterK9RadialMenu()
     --- AdvancedBarkRadial is off, behavior is byte-for-byte the same as before
     --- this feature existed: a single 'k9_bark' action sending the literal
     --- 'bark' string.
+    ---
+    --- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission
+    --- audit finding, this pass): server/main.lua's relayBark handler gates
+    --- on `HasK9Access(src)` alone -- confirmed by reading it directly, no
+    --- model/role check anywhere in that handler -- while both onSelect
+    --- branches below used to gate on the broader CanShowK9UI() combinator
+    --- (IsK9Role() AND HasK9Access(), which HasK9Role deliberately EXCLUDES
+    --- the High Command/autoAccessGrade bypasses from -- server/appearance.lua's
+    --- own header). A handler whose ONLY access comes from that bypass
+    --- therefore had a bark the server would gladly relay, silently withheld
+    --- by this file alone. Matches the identical, already-shipped precedent
+    --- this file's Fetch "Throw" item and Training's Start branch both use
+    --- (see each item's own comment below) -- not a new idiom.
     if Config.Features.BasicBarkSounds then
         -- Per-person block on the ADVANCED VARIANT SUBMENU specifically --
         -- see this function's own "K9 UNIT RADIAL -- PER-PERSON BLOCK"
@@ -668,8 +764,13 @@ local function RegisterK9RadialMenu()
                     label = variant.label,
                     icon = variant.icon,
                     onSelect = function()
-                        if not CanShowK9UI() then
-                            DenyK9UIAccess()
+                        -- HasK9Access() alone, NOT CanShowK9UI() -- see this
+                        -- block's own header above. Known reason ->
+                        -- 'combat.no_access', the house-standard "not
+                        -- certified" string, matching what this exact
+                        -- boolean failing actually means server-side.
+                        if not HasK9Access() then
+                            DenyK9UIAccess('combat.no_access')
                             return
                         end
                         -- server re-validates Config.Features.BasicBarkSounds and
@@ -683,25 +784,6 @@ local function RegisterK9RadialMenu()
                 id = 'k9unit_bark',
                 items = barkSubmenuItems,
             })
-
-    -- K9 Command Tablet. Deliberately FIRST in the submenu: for a handler
-    -- who does not want to learn keybinds, this one entry reaches every
-    -- other ability, so burying it under them would be backwards.
-    -- Guarded with type() because client/tablet.lua returns early when
-    -- Config.Features.CommandTablet is off, in which case OpenTablet is
-    -- never defined. The tablet itself re-checks authorization; opening it
-    -- is not a privileged act, and a handler who is not certified still
-    -- opens it and is shown WHY rather than finding a dead menu entry.
-    if Config.Features.CommandTablet then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_open_tablet',
-            label = locale('radial.tablet_label'),
-            icon = 'tablet',
-            onSelect = function()
-                if type(OpenTablet) == 'function' then OpenTablet() end
-            end,
-        }
-    end
 
             -- Opener item inside the "K9 Unit" submenu: selecting THIS navigates
             -- into 'k9unit_bark' (registered just above), same `menu`-field
@@ -720,8 +802,10 @@ local function RegisterK9RadialMenu()
                 label = locale('radial.bark_label'),
                 icon = 'volume-high',
                 onSelect = function()
-                    if not CanShowK9UI() then
-                        DenyK9UIAccess()
+                    -- HasK9Access() alone, NOT CanShowK9UI() -- see this
+                    -- block's own header above.
+                    if not HasK9Access() then
+                        DenyK9UIAccess('combat.no_access')
                         return
                     end
                     -- server re-validates Config.Features.BasicBarkSounds and
@@ -794,8 +878,23 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
+                -- NOT WIDENED TO HasK9Access() (permission audit finding,
+                -- this pass, considered and rejected here specifically):
+                -- server/main.lua's CheckLeashEligibility does NOT gate on
+                -- HasK9Access() alone -- it requires AT LEAST ONE of the two
+                -- parties to be a real K9 by model OR the decoupled K9 role
+                -- (IsConfiguredK9Model(...) or HasK9Role(...)), a check that
+                -- itself EXCLUDES the High Command/autoAccessGrade bypass,
+                -- BEFORE HasK9Access(k9Src) is ever consulted for whichever
+                -- party ends up cast as "the K9". A bypass-only holder with
+                -- no model and no role can never be treated as the K9 side
+                -- of a pairing regardless of what this client shows, so
+                -- widening this gate would offer something the server would
+                -- then genuinely refuse ('no_k9_party') -- exactly the "offer
+                -- something that will just be refused" outcome this pass was
+                -- told to avoid. Left on the broader combinator on purpose.
                 if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                    DenyK9UIAccess('common.no_k9_role_or_access')
                     return
                 end
 
@@ -819,29 +918,63 @@ local function RegisterK9RadialMenu()
     --- context-sensitive item mirroring the ox_target vehicle option
     --- client/vehicle.lua registers directly. Config.Features.VehicleEntryExit
     --- gate.
+    ---
+    --- ORDERING FIX, THIS PASS: the Exit branch used to sit BEHIND this
+    --- item's own access gate — a K9 who lost access mid-ride (decertified,
+    --- feature flag flip) would hit DenyK9UIAccess() before ever reaching
+    --- the IsInK9Vehicle() check, with no way to exit via this item at all,
+    --- exactly the "gate the START of a thing, never the STOP" rule this
+    --- codebase holds every other toggle item in this file to (Attach/Detach
+    --- Leash, Bite & Hold, Drag all check their own "already engaged" branch
+    --- FIRST, ungated, before ever consulting CanShowK9UI()/HasK9Access()).
+    --- client/vehicle.lua's own ExitK9Vehicle() doc comment already states
+    --- it is "Deliberately NOT gated behind CanShowK9UI() — a K9 whose
+    --- certification lapses mid-ride must always be able to get out"; this
+    --- item simply did not honor that. Fixed by checking IsInK9Vehicle()
+    --- FIRST, exactly mirroring the Leash/Bite & Hold/Drag items' own shape.
+    ---
+    --- ENTER BRANCH -- FOUND BEYOND THE NAMED LIST, WIDENED HERE (permission
+    --- audit finding, this pass): server/vehicle.lua's requestVehicleSeatClaim
+    --- gates on `HasK9Access(src)` alone (confirmed by reading it directly —
+    --- no model/role check on the REQUESTER anywhere in that handler; only
+    --- the VEHICLE itself is re-verified as a real K9 vehicle model), the
+    --- identical shape as Bark/Search/Tracking above. RESIDUAL GAP, DISCLOSED:
+    --- client/vehicle.lua's own EnterNearestK9Vehicle() (out of this file's
+    --- scope) still internally re-gates on the narrower CanShowK9UI() —
+    --- widening ONLY this file's own pre-check therefore does not yet unlock
+    --- the ability end-to-end for a High Command/autoAccessGrade-bypass
+    --- holder; it removes one of the two redundant narrower gates and matches
+    --- this file's own onSelect to what the server actually allows, but
+    --- EnterNearestK9Vehicle()'s own gate needs the identical fix before a
+    --- bypass holder is truly unblocked. Flagged to the owner of that file.
     if Config.Features.VehicleEntryExit then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_vehicle',
             label = locale('radial.vehicle_toggle_label'),
             icon = 'car',
             onSelect = function()
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
-                    return
-                end
-
-                -- type(...) == 'function' guards -- see k9_sit's identical
-                -- note above for the full HEADER/CODE DRIFT FIX writeup. An
-                -- absent IsInK9Vehicle() is treated as "not currently in a
-                -- K9 vehicle" (falls through to the Enter branch).
+                -- Exit checked FIRST, unconditionally -- see this item's own
+                -- "ORDERING FIX" header above. type(...) == 'function' guard
+                -- -- see k9_sit's identical note above for the full
+                -- HEADER/CODE DRIFT FIX writeup. An absent IsInK9Vehicle()
+                -- is treated as "not currently in a K9 vehicle" (falls
+                -- through to the Enter branch).
                 if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then
                     if type(ExitK9Vehicle) == 'function' then
                         ExitK9Vehicle()
                     end
-                else
-                    if type(EnterNearestK9Vehicle) == 'function' then
-                        EnterNearestK9Vehicle()
-                    end
+                    return
+                end
+
+                -- Widened to HasK9Access() alone -- see this item's own
+                -- header comment above. Known reason -> 'combat.no_access'.
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
+                    return
+                end
+
+                if type(EnterNearestK9Vehicle) == 'function' then
+                    EnterNearestK9Vehicle()
                 end
             end,
         }
@@ -878,6 +1011,17 @@ local function RegisterK9RadialMenu()
     --- client/tracking.lua's own 'k9track' chat command is the OTHER entry
     --- point to the exact same StartCertifiedTrack() -- this radial item
     --- adds no logic of its own beyond dispatching to it.
+    -- GATE WIDENED TO HasK9Access() ALONE (permission audit finding, this
+    -- pass): every real server-side track callback (findTrackableSource/
+    -- findNearestTrackableSource, server/tracking.lua) gates on
+    -- `HasK9Access(source)` alone -- confirmed by reading them directly. This
+    -- item's own Start branch used to gate on the broader CanShowK9UI(),
+    -- silently withholding tracking from a High Command/autoAccessGrade
+    -- bypass holder the server would happily serve. client/tracking.lua's
+    -- OWN StartTrack() already made this exact fix on itself (see that
+    -- file's "ANY-PED SWEEP FIX"/"gating on HasK9Access() alone" comment,
+    -- confirmed by reading it directly) -- this item was the one remaining
+    -- caller still gating stricter than the function it calls into.
     if Config.Features.ScentTracking or Config.Features.BloodTracking or Config.Features.GunpowderSniffing then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_track_certified',
@@ -895,8 +1039,9 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                -- HasK9Access() alone -- see this block's own header above.
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
                     return
                 end
 
@@ -939,6 +1084,30 @@ local function RegisterK9RadialMenu()
     --- submenu. BiteAndHold/NonLethalTakedown below follow that same flat
     --- precedent, not Bark's nesting one. Config.Features.BiteAndHold gate
     --- (stays `false` by default — see config.lua).
+    ---
+    --- START BRANCH WIDENED TO HasK9Access() ALONE (permission audit
+    --- finding, this pass): server/combat.lua's shared ValidateCombatRequest
+    --- (backing requestBiteHold/requestTakedown/requestDrag alike) gates on
+    --- `HasK9Access(src)` alone — confirmed by reading it directly, no
+    --- model/role check on the K9 anywhere in that validator — while this
+    --- Start branch used to gate on the broader CanShowK9UI(). RESIDUAL GAP,
+    --- DISCLOSED: client/combat.lua's own RequestBiteHold()/RequestTakedown()/
+    --- RequestDrag() (out of this file's scope) each still internally
+    --- re-gate on the narrower CanShowK9UI() as their own first line —
+    --- confirmed by reading them directly. Widening ONLY this file's own
+    --- pre-check therefore does not yet unlock bite/hold, takedown, or drag
+    --- end-to-end for a High Command/autoAccessGrade-bypass holder: the
+    --- request still reaches client/combat.lua's own gate immediately after
+    --- this one and is refused there instead, with the identical message.
+    --- Widened here anyway because (a) it is still the factually correct fix
+    --- for THIS file per the server's real contract, (b) it is a pure
+    --- no-op-or-improvement change on its own (nothing that worked before
+    --- stops working), and (c) client/combat.lua's own K9MoveRateModifiers
+    --- writes elsewhere in that SAME file already went through this identical
+    --- widening (its own "ANY-PED SWEEP FIX" — `IsOwnModelK9() or
+    --- HasK9Access()`) while these three Request*() entry points were missed
+    --- — flagged to that file's owner as the matching follow-up needed for
+    --- the fix to actually reach the player.
     if Config.Features.BiteAndHold then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_bite_hold',
@@ -972,8 +1141,9 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                -- HasK9Access() alone -- see this block's own header above.
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
                     return
                 end
 
@@ -1001,14 +1171,20 @@ local function RegisterK9RadialMenu()
     --- Kept flat (not nested), same "Track precedent over Bark precedent"
     --- reasoning as Bite & Hold above. Config.Features.NonLethalTakedown gate
     --- (stays `false` by default — see config.lua).
+    ---
+    --- WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP AS BITE & HOLD --
+    --- see that item's own header comment above for the full writeup
+    --- (shared ValidateCombatRequest, and client/combat.lua's own
+    --- RequestTakedown() re-gating on CanShowK9UI() internally); applies
+    --- here verbatim, not repeated in full.
     if Config.Features.NonLethalTakedown then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_takedown',
             label = locale('radial.takedown_label'),
             icon = 'zzz',
             onSelect = function()
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
                     return
                 end
 
@@ -1049,6 +1225,12 @@ local function RegisterK9RadialMenu()
     --- feature-flag flip, model swap) with no way to let go, stranding the drag
     --- until the server's maxDragDurationMs timeout. This was the exact mistake
     --- corrected for Bite & Hold above; not repeating it here.
+    ---
+    --- START BRANCH WIDENED TO HasK9Access() ALONE, SAME RESIDUAL GAP AS
+    --- BITE & HOLD/TAKEDOWN -- see Bite & Hold's own header comment above
+    --- for the full writeup; applies here verbatim (shared
+    --- ValidateCombatRequest, and client/combat.lua's own RequestDrag()
+    --- re-gating on CanShowK9UI() internally).
     if Config.Features.PropDragging then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_drag',
@@ -1080,8 +1262,8 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
                     return
                 end
 
@@ -1240,8 +1422,17 @@ local function RegisterK9RadialMenu()
             label = locale('partnership.partner_up_target_label'),
             icon = 'handshake',
             onSelect = function()
+                -- NOT WIDENED TO HasK9Access() -- checked, matches Leash's
+                -- own "considered and rejected" case above verbatim:
+                -- server/partnership.lua's CheckPartnershipEligibility
+                -- requires at least one party to be a real K9 by model OR
+                -- the decoupled K9 role (IsConfiguredK9Model(...) or
+                -- HasK9Role(...)) BEFORE HasK9Access is ever consulted for
+                -- whichever party is cast as the K9 -- a bypass-only holder
+                -- with no model and no role fails that check regardless of
+                -- what this client offers. Left on the broader combinator.
                 if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                    DenyK9UIAccess('common.no_k9_role_or_access')
                     return
                 end
 
@@ -1340,7 +1531,7 @@ local function RegisterK9RadialMenu()
                     icon = 'paw',
                     onSelect = function()
                         if not CanShowK9UI() then
-                            DenyK9UIAccess()
+                            DenyK9UIAccess('common.no_k9_role_or_access')
                             return
                         end
 
@@ -1355,7 +1546,7 @@ local function RegisterK9RadialMenu()
                     icon = 'zzz',
                     onSelect = function()
                         if not CanShowK9UI() then
-                            DenyK9UIAccess()
+                            DenyK9UIAccess('common.no_k9_role_or_access')
                             return
                         end
 
@@ -1416,7 +1607,7 @@ local function RegisterK9RadialMenu()
                     icon = 'circle-exclamation',
                     onSelect = function()
                         if not CanShowK9UI() then
-                            DenyK9UIAccess()
+                            DenyK9UIAccess('common.no_k9_role_or_access')
                             return
                         end
 
@@ -1431,7 +1622,7 @@ local function RegisterK9RadialMenu()
                     icon = 'skull-crossbones',
                     onSelect = function()
                         if not CanShowK9UI() then
-                            DenyK9UIAccess()
+                            DenyK9UIAccess('common.no_k9_role_or_access')
                             return
                         end
 
@@ -1506,7 +1697,7 @@ local function RegisterK9RadialMenu()
                         end
 
                         if not HasK9Access() then
-                            DenyK9UIAccess()
+                            DenyK9UIAccess('combat.no_access')
                             return
                         end
 
@@ -1558,14 +1749,22 @@ local function RegisterK9RadialMenu()
     --- Config.Features.PropAttachments itself) internally -- same redundant
     --- "check here too, even though the callee already checks" posture every
     --- other gated item in this file already uses.
+    -- MOVED into the Utility sub-menu, this pass (Job 3 regrouping) -- a
+    -- pure toggle with no release/termination half worth protecting (see
+    -- this function's own "REGROUPING PASS" header near k9UtilitySubmenuItems'
+    -- declaration for the full safety reasoning).
     if Config.Features.PropAttachments then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
+        k9UtilitySubmenuItems[#k9UtilitySubmenuItems + 1] = {
             id = 'k9_prop_attachment',
             label = locale('radial.toggle_vest_label'),
             icon = 'vest',
             onSelect = function()
+                -- NOT WIDENED -- server/propattachment.lua's ADD path
+                -- requires HasK9Access() AND (a real K9 model OR the
+                -- decoupled K9 role), stricter than HasK9Access() alone
+                -- (same class as Leash/Partnership/Open My Gear above).
                 if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                    DenyK9UIAccess('common.no_k9_role_or_access')
                     return
                 end
 
@@ -1729,14 +1928,27 @@ local function RegisterK9RadialMenu()
     --- (opens a stash against the local player's own ped), not a
     --- release/termination one, so the "no unbounded trap" exemption given to
     --- Detach Leash/Recall/etc. above does not apply here.
+    -- MOVED into the Utility sub-menu, this pass (Job 3 regrouping) -- a
+    -- pure initiation action with no release/termination half (see this
+    -- function's own "REGROUPING PASS" header near k9UtilitySubmenuItems'
+    -- declaration for the full safety reasoning).
     if Config.Features.K9Inventory then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
+        k9UtilitySubmenuItems[#k9UtilitySubmenuItems + 1] = {
             id = 'k9_open_inventory',
             label = locale('radial.open_inventory_label'),
             icon = 'briefcase',
             onSelect = function()
+                -- NOT WIDENED -- server/inventory.lua's own openK9Inventory
+                -- (self-targeted here, targetServerId == source) requires
+                -- HasK9Access(targetServerId) AND (a real K9 model OR the
+                -- decoupled K9 role) for the K9 whose gear is being opened
+                -- -- confirmed by reading it directly, and that file's own
+                -- comment explicitly rejects dropping the model/role half
+                -- ("HasK9Access is deliberately BROADER than the K9 role...
+                -- neither of whom is actually the K9"). Same class as
+                -- Leash/Partnership above; left on the broader combinator.
                 if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                    DenyK9UIAccess('common.no_k9_role_or_access')
                     return
                 end
 
@@ -1764,31 +1976,67 @@ local function RegisterK9RadialMenu()
     --- `${common.notify_title}` cross-reference (see this file's own header /
     --- DEVELOPER_REFERENCE.md).
     ---
-    --- `RequestTreatNearestK9()` takes no arguments and re-checks both
-    --- CanShowK9UI() and Config.Features.K9Medkit internally (confirmed by
-    --- reading client/medkit.lua directly, not assumed) -- this item's own
-    --- CanShowK9UI() gate below is therefore redundant with the callee, same
-    --- posture as Open My Gear immediately above. This is an INITIATION action
-    --- (starts a treat request against a found target), not a
-    --- release/termination one, so the "no unbounded trap" exemption given to
-    --- Detach Leash/Recall/etc. above does not apply here.
+    --- `RequestTreatNearestK9()` takes no arguments and re-checks
+    --- Config.Features.K9Medkit internally.
+    ---
+    --- CanShowK9UI() PRE-CHECK REMOVED HERE, THIS PASS (permission audit
+    --- finding): "Treat K9" is a HUMAN HANDLER action, not a K9 ability --
+    --- server/medkit.lua's own header states this by name ("Does NOT call
+    --- HasK9Access -- eligibility to USE a medkit ON a K9 is job-only, never
+    --- HasK9Access -- not the K9 being treated") and its real gate,
+    --- IsMedkitUserAuthorized(source), checks Config.Departments/EmsJobSet
+    --- job membership ONLY, never HasK9Access, model, or role for the USING
+    --- player. This item's own onSelect used to gate that human-officer
+    --- action behind CanShowK9UI() -- IsK9Role() AND HasK9Access(), i.e.
+    --- "must yourself currently be an on-duty, certified K9" -- which is not
+    --- what the server asks of the treater at all, and is a STRICTER,
+    --- FACTUALLY WRONG requirement for this specific action (not merely a
+    --- High-Command-bypass edge case: a plain PD/EMS officer with ZERO K9
+    --- certification of their own was refused a mechanic the server would
+    --- have granted). This matches how client/medkit.lua's own "Treat K9"
+    --- ox_target predicate has ALWAYS worked (it never checks the treater's
+    --- own CanShowK9UI() either -- only that the TARGET looks like a K9) --
+    --- this radial item's self-service entry point simply had not been
+    --- brought in line with it. client/medkit.lua's RequestTreatNearestK9()
+    --- has had its own matching, redundant CanShowK9UI() pre-check removed
+    --- in that same pass (see its own doc comment) — removing only ONE of
+    --- the two would have left the other blocking exactly what this fix
+    --- exists to unblock. The server (IsMedkitUserAuthorized, per-target
+    --- proximity/model/aliveness/cooldown checks) remains the real,
+    --- independent authority regardless; a non-eligible clicker now gets
+    --- RequestTreatK9()'s own specific 'no_access'/'not_granted' rejection
+    --- instead of this file's generic denial -- a strictly more honest
+    --- failure, not a weaker one.
+    -- MOVED into the Utility sub-menu, this pass (Job 3 regrouping) -- a
+    -- pure initiation action with no release/termination half (see this
+    -- function's own "REGROUPING PASS" header near k9UtilitySubmenuItems'
+    -- declaration for the full safety reasoning).
     if Config.Features.K9Medkit then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
+        k9UtilitySubmenuItems[#k9UtilitySubmenuItems + 1] = {
             id = 'k9_treat_nearest',
             label = locale('medkit.treat_target_label'),
             icon = 'kit-medical',
             onSelect = function()
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
-                    return
-                end
-
                 if type(RequestTreatNearestK9) == 'function' then
                     RequestTreatNearestK9()
                 end
             end,
         }
     end
+
+    -- Every conditional Utility item (Toggle K9 Vest/Open My Gear/Treat K9)
+    -- above has now had its chance to append into k9UtilitySubmenuItems,
+    -- on top of Sit (unconditional, appended at this table's own
+    -- declaration) -- register the sub-menu itself NOW, same
+    -- `lib.registerRadial({id=..., items=...})` shape as every other nested
+    -- sub-menu in this file. The 'k9_utility' OPENER linking into this id
+    -- was already appended to k9SubmenuItems earlier (right after Command
+    -- Tablet) -- see that append's own comment for why registering here,
+    -- after the opener already exists earlier in the array, is still safe.
+    lib.registerRadial({
+        id = 'k9unit_utility',
+        items = k9UtilitySubmenuItems,
+    })
 
     --- Search & Rescue Call -- closes a real gap: client/sarcalls.lua's
     --- RequestStartSarCall()/RequestAbandonSarCall() previously had no
@@ -1808,11 +2056,19 @@ local function RegisterK9RadialMenu()
     --- trap" requirement as every other release/termination branch above.
     --- RequestAbandonSarCall()'s own doc comment states this explicitly:
     --- "UNCONDITIONAL, never gated... a player who loses access, or simply
-    --- wants to give up, must always be able to abandon a call." The Start
-    --- branch keeps the same redundant "check here too, even though the
-    --- callee already checks" CanShowK9UI() posture every other initiation
-    --- item in this file uses (RequestStartSarCall() re-checks it again
-    --- internally regardless).
+    --- wants to give up, must always be able to abandon a call."
+    ---
+    --- START BRANCH WIDENED TO HasK9Access() ALONE (permission audit
+    --- finding, this pass): server/sarcalls.lua's requestSarCall callback
+    --- gates on `HasK9Access(source)` alone -- confirmed by reading it
+    --- directly, no model/role check anywhere in that callback. RESIDUAL
+    --- GAP, DISCLOSED: client/sarcalls.lua's own RequestStartSarCall() (out
+    --- of this file's scope) still internally re-gates on the narrower
+    --- CanShowK9UI() as its own first check -- confirmed by reading it
+    --- directly -- so widening ONLY this file's own pre-check does not yet
+    --- unlock SAR calls end-to-end for a High Command/autoAccessGrade-bypass
+    --- holder; same disclosed shape as Bite & Hold/Takedown/Drag above, see
+    --- that item's own header for the full reasoning for widening anyway.
     if Config.Features.SARCalls then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_sar_call',
@@ -1830,8 +2086,8 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
+                if not HasK9Access() then
+                    DenyK9UIAccess('combat.no_access')
                     return
                 end
 
@@ -1901,7 +2157,7 @@ local function RegisterK9RadialMenu()
                         end
 
                         if not HasK9Access() then
-                            DenyK9UIAccess()
+                            DenyK9UIAccess('combat.no_access')
                             return
                         end
 
@@ -2022,18 +2278,19 @@ local function RegisterK9RadialMenu()
         elseif not iconReachable then
             -- No department, no K9 access, and no ongoing engagement this
             -- client could need to end -- see this function's own header
-            -- for the full gate this implements. Reuses DenyK9UIAccess()
-            -- verbatim: the exact same "you cannot use K9 features right
-            -- now" message every other gated action in this file already
-            -- shows, rather than minting a new, parallel denial string for
-            -- what is functionally the identical situation.
+            -- for the full gate this implements. Reuses DenyK9UIAccess()'s
+            -- own 'common.no_k9_role_or_access' reason (ease-of-use audit,
+            -- this pass): this is precisely the aggregate condition that
+            -- string describes (not currently an on-duty, access-granted K9
+            -- handler, and not mid-engagement) -- more specific than the
+            -- bare fallback, and never factually wrong for this case.
             lib.addRadialItem({
                 {
                     id = 'k9unit_open',
                     label = locale('radial.menu_open_label'),
                     icon = 'dog',
                     onSelect = function()
-                        if type(DenyK9UIAccess) == 'function' then DenyK9UIAccess() end
+                        if type(DenyK9UIAccess) == 'function' then DenyK9UIAccess('common.no_k9_role_or_access') end
                     end,
                 },
             })

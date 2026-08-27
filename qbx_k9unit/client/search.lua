@@ -288,12 +288,24 @@ end
 --- @param targetType 'vehicle'|'person'
 --- @param targetEntity number  -- resolved live entity handle from the ox_target callback's own `data.entity`
 local function PerformSearch(targetType, targetEntity)
+    -- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission
+    -- audit finding, this pass): server/search.lua's searchTarget callback
+    -- gates on `HasK9Access(source)` alone -- confirmed by reading it
+    -- directly (both the initial check and the mid-flight re-check after
+    -- the awaited ox_inventory call), no model/role check on the searching
+    -- K9 anywhere in that callback. This used to gate on the broader
+    -- CanShowK9UI(), silently withholding search from a High Command/
+    -- autoAccessGrade-bypass holder the server would happily serve. Known
+    -- reason -> 'combat.no_access', the house-standard "not certified"
+    -- string, matching what this exact boolean failing actually means
+    -- server-side.
+    --
     -- Defensive re-check, same posture as every other gated action in this
     -- resource; canInteract below is a DISPLAY optimization only, the
     -- server independently re-validates HasK9Access(source) regardless
     -- (§11.4 item 2 step 3 per the contract note).
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
+    if not HasK9Access() then
+        DenyK9UIAccess('combat.no_access')
         return
     end
 
@@ -531,7 +543,9 @@ local function RegisterSearchOxTargetOptions()
                 -- reasoning, for the MUTUAL GUARD above. Display-only:
                 -- PerformSearch re-checks it defensively regardless.
                 if (IsBusyWithSomethingElse()) then return false end
-                return CanShowK9UI()
+                -- Widened to HasK9Access() alone -- see PerformSearch's own
+                -- header comment above for the full writeup.
+                return HasK9Access()
             end,
             onSelect = function(data)
                 PerformSearch('vehicle', data.entity)
@@ -577,7 +591,9 @@ local function RegisterSearchOxTargetOptions()
                 -- reasoning, for the MUTUAL GUARD above. Display-only:
                 -- PerformSearch re-checks it defensively regardless.
                 if (IsBusyWithSomethingElse()) then return false end
-                return CanShowK9UI()
+                -- Widened to HasK9Access() alone -- see PerformSearch's own
+                -- header comment above for the full writeup.
+                return HasK9Access()
             end,
             onSelect = function(data)
                 PerformSearch('person', data.entity)

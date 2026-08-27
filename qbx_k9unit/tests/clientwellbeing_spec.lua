@@ -145,8 +145,16 @@ local function newWellbeingFixture(opts)
     if canShowK9UI == nil then canShowK9UI = true end
     local canShowK9UICallCount = 0
     local denyCalls = 0
+    local denyReasons = {}
     local function CanShowK9UI() canShowK9UICallCount = canShowK9UICallCount + 1; return canShowK9UI end
-    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
+    -- REASON PARAMETER (ease-of-use audit finding) -- captures whatever
+    -- reason (if any) each call site passes, so this spec can prove the
+    -- specific-reason routing (common.no_k9_role_or_access for these
+    -- CanShowK9UI()-gated self-only actions) lands correctly.
+    local function DenyK9UIAccess(reason)
+        denyCalls = denyCalls + 1
+        denyReasons[#denyReasons + 1] = reason
+    end
 
     local isOwnModelK9 = false
     local function IsOwnModelK9() return isOwnModelK9 end
@@ -421,6 +429,7 @@ local function newWellbeingFixture(opts)
         setCanShowK9UI = function(v) canShowK9UI = v end,
         canShowK9UICallCount = function() return canShowK9UICallCount end,
         denyCallCount = function() return denyCalls end,
+        lastDenyReason = function() return denyReasons[#denyReasons] end,
         -- Sets BOTH halves of the same underlying fact, deliberately.
         -- In production IsOwnModelK9() is `IsEntityModelK9(PlayerPedId())
         -- or role`, so "my own model is a K9" and "the player ped is a K9
@@ -922,10 +931,11 @@ t.test('RequestK9CalmDown: FearStressSystem off is a silent no-op -- never even 
     t.equals(#f.triggerServerEventCalls, 0)
 end)
 
-t.test('RequestK9CalmDown: FearStressSystem on, access denied -> DenyK9UIAccess fires, no server event', function()
+t.test('RequestK9CalmDown: FearStressSystem on, access denied -> DenyK9UIAccess fires with the common.no_k9_role_or_access reason, no server event', function()
     local f = newWellbeingFixture({ features = { FearStressSystem = true }, canShowK9UI = false })
     f.env.RequestK9CalmDown()
     t.equals(f.denyCallCount(), 1)
+    t.equals(f.lastDenyReason(), 'common.no_k9_role_or_access', 'ease-of-use audit pass: a CanShowK9UI()-gated call site cannot narrow further than this reason')
     t.equals(#f.triggerServerEventCalls, 0)
 end)
 
@@ -1214,10 +1224,11 @@ t.test('/k9eat: HungerThirstSystem off is a silent no-op -- never even consults 
     t.equals(#f.triggerServerEventCalls, 0)
 end)
 
-t.test('/k9eat: HungerThirstSystem on, access denied -> DenyK9UIAccess fires, no server event', function()
+t.test('/k9eat: HungerThirstSystem on, access denied -> DenyK9UIAccess fires with the common.no_k9_role_or_access reason, no server event', function()
     local f = newWellbeingFixture({ features = { HungerThirstSystem = true }, canShowK9UI = false })
     f.command('k9eat')()
     t.equals(f.denyCallCount(), 1)
+    t.equals(f.lastDenyReason(), 'common.no_k9_role_or_access')
     t.equals(#f.triggerServerEventCalls, 0)
 end)
 

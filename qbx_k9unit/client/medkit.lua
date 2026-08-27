@@ -275,26 +275,40 @@ local function FindNearestTreatableK9()
 end
 
 --- Resource-global — radial self-service entry point (see FILE-TO-FILE
---- CONTRACT above). Mirrors client/movement.lua's RequestLeashAttach()
---- shape: re-checks CanShowK9UI() itself rather than trusting that a
---- caller (a future client/radial.lua item) already did, per this
---- codebase's "must not be triggerable by a modified client" spirit — the
---- server re-validates independently regardless (server/medkit.lua's
---- HandleUseK9Medkit). This is an INITIATION action (starts a treat
---- request against a found target), not a release/termination one, so —
---- unlike a termination path — it is gated, not exempted, per this
---- resource's established initiation-vs-termination gating split (see
---- client/movement.lua's DetachLeash()/client/recall.lua's RequestRecall()
---- for the termination side of that split).
+--- CONTRACT above).
+---
+--- CanShowK9UI() PRE-CHECK REMOVED, THIS PASS (permission audit finding):
+--- this function used to re-check CanShowK9UI() itself, mirroring
+--- client/movement.lua's RequestLeashAttach() shape -- WRONG for this
+--- specific action. "Treat K9" is a HUMAN HANDLER action, not a K9 ability:
+--- server/medkit.lua's own header states this by name ("Does NOT call
+--- HasK9Access -- eligibility to USE a medkit ON a K9 is job-only, never
+--- HasK9Access -- not the K9 being treated"), and its real authorization
+--- gate, IsMedkitUserAuthorized(source), checks Config.Departments/EmsJobSet
+--- job membership ONLY for the USING player -- never HasK9Access, model, or
+--- role. CanShowK9UI() (IsK9Role() AND HasK9Access()) demanded the OPPOSITE
+--- of that: that the TREATER themselves currently be an on-duty, certified
+--- K9. A plain PD/EMS officer with zero K9 certification of their own --
+--- not merely a High Command/autoAccessGrade-bypass edge case -- was
+--- refused a mechanic the server would have granted. This also brings this
+--- function in line with this file's OWN "Treat K9" ox_target `canInteract`
+--- predicate just above, which has NEVER checked the treater's own
+--- CanShowK9UI() (only that the TARGET looks like a K9) -- this self-service
+--- entry point simply had not been kept consistent with it.
+--- client/radial.lua's own 'k9_treat_nearest' item has had its matching,
+--- redundant CanShowK9UI() pre-check removed in the same pass (see that
+--- item's own comment) -- removing only one of the two would have left the
+--- other still blocking exactly what this fix exists to unblock. The server
+--- (IsMedkitUserAuthorized, plus every per-target proximity/model/aliveness/
+--- cooldown check inside RequestTreatK9()'s own callback) remains the real,
+--- independent authority regardless -- a non-eligible clicker now reaches
+--- RequestTreatK9()'s own specific 'no_access'/'not_granted' rejection
+--- (already mapped below) instead of this file's own generic denial, a
+--- strictly more honest failure, not a weaker one.
 --- Feature-flag/no-candidate cases are each notified distinctly so a
 --- player understands why nothing happened, then funnels into the SAME
 --- RequestTreatK9() implementation the ox_target option above uses.
 function RequestTreatNearestK9()
-    if not CanShowK9UI() then
-        DenyK9UIAccess()
-        return
-    end
-
     if not Config.Features.K9Medkit then
         -- Byte-for-byte identical to the reasonLabel table's own
         -- feature_disabled entry above (confirmed by grep before minting) --
