@@ -2403,6 +2403,103 @@ local function RegisterK9RadialMenu()
         }
     end
 
+    -- ======================================================================
+    -- DISPLAY ORDER PASS (whole-menu ease-of-use audit, this pass). Every
+    -- item above is appended to k9SubmenuItems in ACCRETION order -- wherever
+    -- its own feature's code block happened to land as this menu grew across
+    -- many separate passes -- never in the order a player should actually
+    -- meet them. Reordered HERE, ONCE, right before registration: this
+    -- touches no gate, no onSelect closure, no id, no Config.Features check,
+    -- and changes which items exist for nobody -- only the sequence ox_lib's
+    -- own wheel paginates them in. Every nested submenu (`k9unit_bark`/
+    -- `k9unit_defense`/`k9unit_dangerwarn`/`k9unit_fetch`/`k9unit_training`/
+    -- `k9unit_utility`) was already registered, in full, by the code above --
+    -- this pass only ever reshuffles the flat list of OPENER/terminal items
+    -- that live directly inside 'k9unit' itself; it never reaches inside a
+    -- nested submenu's own item list.
+    --
+    -- THE ORDER CHOSEN, AND WHY (front-to-back):
+    --   1. Command Tablet   -- unchanged from before this pass: "the one
+    --      entry that reaches everything else stays the most prominent, not
+    --      the most nested" (this item's own comment, still true).
+    --   2-5. Bark, Attach/Detach Leash, Enter/Exit Vehicle, Utility -- the
+    --      Phase 1 foundational actions (DEVELOPER_REFERENCE.md §6.1 names
+    --      exactly this set, plus Sit, which the Utility opener now carries)
+    --      plus their direct extension point, grouped together right after
+    --      the Tablet. These are the single most-used, most one-shot actions
+    --      in the whole wheel and used to be scattered by whichever pass
+    --      added them (Utility sat 2nd, ahead of Bark, purely because that
+    --      was where its own opener happened to be appended in the source).
+    --   6-7. Partner Up, THEN Break Partnership -- swapped from before this
+    --      pass (Break Partnership used to precede Partner Up). Every OTHER
+    --      start/stop pair in this menu lists the start action before its
+    --      own stop (Attach before Detach, Enter before Exit, Bite & Hold
+    --      before Release, Drag before Release, Throw before Recall) --
+    --      Partnership was the one place a termination action was ordered
+    --      AHEAD of the initiation it terminates, backwards from every
+    --      sibling convention and from the plain fact that you cannot break
+    --      a partnership you have not formed yet. Nothing about either
+    --      item's own gating changed -- Break Partnership still carries no
+    --      CanShowK9UI() gate of any kind (see its own comment above,
+    --      unaffected by display order).
+    --   8-11. K9: Search (tracking), Thermal Vision, Night Vision, Cycle
+    --      Vision -- the perception family, grouped together and placed
+    --      before Combat: a K9 finds/reads a scene before it acts on one.
+    --   12-17. Bite & Hold, Non-Lethal Takedown, Drag, Handler-Down
+    --      Response, Danger Warn, Recall -- the combat/emergency family,
+    --      immediately following Perception (search, then engage), ending on
+    --      Recall -- the universal "call it off" action that can end any of
+    --      the three engagement types immediately before it, and the natural
+    --      hinge point back to lighter, non-combat items after it.
+    --   18-19. Fetch, then Kennel -- recreational/logistics items, kept
+    --      together and placed after the serious combat/emergency cluster.
+    --   20-21. Search & Rescue Call, then Join Nearest Search & Rescue Call
+    --      -- unchanged relative order (already adjacent and already
+    --      correctly sequenced: start the toggle before its own
+    --      no-argument join convenience).
+    --   22. Training -- last: a practice/administrative feature, never a
+    --      live-duty action, matching how every other "not actually urgent"
+    --      item in this list already trends toward the back.
+    --
+    -- FAIL-SAFE FOR A FUTURE ITEM: K9_SUBMENU_DISPLAY_ORDER is consulted by
+    -- ID. Any id NOT listed here (a future item added above without a
+    -- matching entry in this list) is APPENDED AFTER every explicitly
+    -- ordered id, in the SAME relative order it already had among other
+    -- unlisted ids (a stable partition, not a silent drop) -- so forgetting
+    -- to place a brand-new item here never hides it, it only leaves that one
+    -- item exactly as visible as this whole audit found the menu before this
+    -- pass: at the back, in accretion order, the same "needs a design
+    -- decision, not a bug" state every item in this list started in.
+    -- ======================================================================
+    local K9_SUBMENU_DISPLAY_ORDER = {
+        'k9_open_tablet',
+        'k9_bark', 'k9_leash', 'k9_vehicle', 'k9_utility',
+        'k9_partner_up', 'k9_break_partnership',
+        'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_vision_cycle',
+        'k9_bite_hold', 'k9_takedown', 'k9_drag', 'k9_defense', 'k9_dangerwarn', 'k9_recall',
+        'k9_fetch', 'k9_kennel',
+        'k9_sar_call', 'k9_sar_call_join_nearest',
+        'k9_training',
+    }
+    do
+        local orderIndex = {}
+        for i, id in ipairs(K9_SUBMENU_DISPLAY_ORDER) do orderIndex[id] = i end
+
+        local ordered, unordered = {}, {}
+        for _, item in ipairs(k9SubmenuItems) do
+            if orderIndex[item.id] then
+                ordered[#ordered + 1] = item
+            else
+                unordered[#unordered + 1] = item
+            end
+        end
+        table.sort(ordered, function(a, b) return orderIndex[a.id] < orderIndex[b.id] end)
+        for _, item in ipairs(unordered) do
+            ordered[#ordered + 1] = item
+        end
+        k9SubmenuItems = ordered
+    end
+
     -- Per-person block on the WHOLE radial surface -- see this function's
     -- own "K9 UNIT RADIAL -- PER-PERSON BLOCK" header above.
     if Config.Features.RadialMenu then

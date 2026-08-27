@@ -386,6 +386,30 @@
       .takedownSuccess (config.lua) are the two award keys this file owns;
       searchContrabandFound/trackSourceResolved belong to
       server/search.lua/server/tracking.lua respectively, not here.
+    - Calls IsApprehensionWarned(targetNetId), resource-global from
+      server/announce.lua, ONLY IF IT EXISTS (same runtime-existence-guard
+      convention as IsHesitating/IsDistracted immediately above — an absent
+      server/announce.lua, or one that failed to load, must mean "no
+      restriction," never an error; this matches IsApprehensionWarned's own
+      documented behavior of being fully permissive whenever
+      Config.Features.ApprehensionAnnouncement is false, so a genuinely
+      absent function and a present-but-disabled one both degrade the same
+      way). WIRED THIS PASS — see ValidateCombatRequest's own inline comment,
+      immediately before its final `return true`, for the actual call site.
+      server/announce.lua's own header (points 4-6) is the authority for
+      this feature's design; this file's ONLY job is to consult it at
+      REQUEST time, for BiteAndHold/NonLethalTakedown alone (see that call
+      site's own comment for why PropDragging is excluded) — never from
+      EndHold, EndActiveEffectForHolder, the maintenance expiry sweep, or
+      releaseBiteHold/releaseTakedown/releaseDrag, so a warning window
+      lapsing mid-hold can never strand an already-open hold or block a
+      release. BEFORE THIS PASS: IsApprehensionWarned existed, was fully
+      tested in isolation (tests/announce_spec.lua), and was called by
+      NOTHING — turning Config.Features.ApprehensionAnnouncement on had zero
+      effect on whether a bite/takedown actually succeeded. Found and fixed
+      this pass, reported upstream as a real user-facing gap (an owner who
+      enabled the feature believing it was enforced was not being told the
+      truth).
     - Loaded in fxmanifest.lua's server_scripts after cooldowns.lua,
       entities.lua, and certifications.lua (all three are load-time
       dependencies of this file). No ordering dependency on
@@ -1280,6 +1304,15 @@ local COMBAT_REJECT_MESSAGES = {
     -- for longer than intended.
     implausible_movement = locale('combat.implausible_movement'),
     target_in_vehicle    = locale('combat.target_in_vehicle'),
+    -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). See
+    -- ValidateCombatRequest's own call site (immediately before its final
+    -- `return true`) and this file's header FILE-TO-FILE CONTRACT entry for
+    -- IsApprehensionWarned for the full writeup. Landed in locales/en.json
+    -- FIRST (this file's own established "land the key, then swap the
+    -- mapping in" discipline -- tier_capability_denied's own history above
+    -- names why), so this table never risks referencing a key that does not
+    -- exist yet.
+    not_warned = locale('combat.not_warned'),
 }
 
 --- COMBAT_FEATURE_DISPLAY_LABEL (this pass, coder-backend handoff): the
@@ -1818,6 +1851,47 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
 
     if isPlayerTarget and not IsPlayerWantedEligible(targetSrc) then
         return false, nil, nil, nil, nil, 'not_eligible_target'
+    end
+
+    -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). See this
+    -- file's own header FILE-TO-FILE CONTRACT entry for IsApprehensionWarned
+    -- for the full "was defined, tested, and called by nothing" writeup this
+    -- closes. server/announce.lua's own header, points 4-6, is the design
+    -- authority this implements:
+    --   - BiteAndHold/NonLethalTakedown ONLY, via the SAME featureKey guard
+    --     TierCapabilityPermits above already uses for an identical
+    --     distinction. PropDragging is deliberately EXCLUDED: a drag target
+    --     must already be downed (opts.requireAlive == false, PropDragging's
+    --     own precondition) -- pulling an already-subdued person is not a
+    --     fresh use-of-force decision a verbal warning is meant to precede,
+    --     and folding it in here would silently widen what server/announce.lua's
+    --     own header calls a purely restrictive, apprehension-specific check
+    --     into a mechanic its design was never scoped to cover.
+    --   - PLACED LAST, deliberately, not alongside the early TierCapabilityPermits
+    --     floor above: every other reason to refuse THIS target (invalid,
+    --     dead, vehicle-seated, too far, already held, not wanted-eligible)
+    --     is checked first, so "you forgot to warn them" is only ever the
+    --     reported reason once every other fact about the target would
+    --     otherwise have allowed the request -- telling someone to go warn a
+    --     target that was never going to be a legal one anyway would teach
+    --     the wrong lesson.
+    --   - Soft dependency (`type(IsApprehensionWarned) == 'function'`), same
+    --     convention as IsHesitating/IsDistracted above -- an absent
+    --     server/announce.lua is "no restriction," never an error.
+    --   - REQUEST-TIME ONLY, exactly like every other check in this
+    --     function (see this function's own doc comment) -- ValidateCombatRequest
+    --     is only ever called to OPEN a hold, never from EndHold,
+    --     EndActiveEffectForHolder, the maintenance expiry sweep, or
+    --     releaseBiteHold/releaseTakedown. A warning window that lapses
+    --     WHILE a hold is already open can therefore never strand that hold
+    --     or block releasing it -- this is the gate-the-start-never-the-stop
+    --     rule this resource has shipped violations of before, and the
+    --     control this pass's own tests/combat_spec.lua tests are built
+    --     specifically to pin.
+    if (featureKey == 'BiteAndHold' or featureKey == 'NonLethalTakedown')
+        and type(IsApprehensionWarned) == 'function'
+        and not IsApprehensionWarned(targetNetId) then
+        return false, nil, nil, nil, nil, 'not_warned'
     end
 
     return true, k9Ped, targetPed, isPlayerTarget, targetSrc
