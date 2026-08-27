@@ -337,10 +337,22 @@ Work through all of these first:
   is the exception: it prints a console warning naming any item it was
   asked to sell that your inventory doesn't have, so check the server
   console after a restart.) The items: `k9_medkit`, `k9_treat`,
-  `k9_meat_bait`, `k9_ultrasonic_whistle`, and `k9_tablet` **only if**
+  `k9_meat_bait`, `k9_ultrasonic_whistle`, **`k9_food`**, **`k9_water`**,
+  and `k9_tablet` **only if**
   you set
   `Config.CommandTablet.openMode` to `'item'` or `'both'` (default is
   `'both'`, so you need it either way unless you change that).
+
+  **`k9_food` and `k9_water` are the two most important ones on that
+  list**, and they were missing from it until now. The hunger and thirst
+  system (`Config.Features.HungerThirstSystem`) ships **on**, and those
+  two are the only way to feed or water a K9 — the supply shop does not
+  sell them and nothing else grants them. Skip them and your K9 gets
+  hungry and thirsty forever, takes the movement-speed penalty that comes
+  with it, and sees "You do not have any dog food." every time they try
+  `/k9eat` — which reads as "go buy some", not "the server owner never
+  created this item." Either create both items, or turn
+  `Config.Features.HungerThirstSystem` off until you have.
 - **A `water_bowl`-modeled world object**, if you want the K9 wellbeing
   system's faster near-a-rest-source recovery. This model name is an
   unverified guess — confirm it exists on your server or change it in

@@ -200,13 +200,21 @@ BEGIN
         SELECT 1 FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_SCHEMA = DATABASE()
           AND TABLE_NAME IN (
-            'k9_certifications','k9_certification_specializations','k9_search_log',
-            'k9_partnerships','k9_progression','k9_permissions',
-            'k9_runtime_feature_overrides','k9_runtime_override_audit',
-            'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
-            'k9_certification_tiers','k9_certification_tier_capabilities',
-            'k9_certification_tier_audit','k9_equipment_shop_locations',
-            'k9_equipment_shop_locations_audit'
+            'k9_certification_specializations',
+            'k9_certification_tier_audit',
+            'k9_certification_tier_capabilities','k9_certification_tiers',
+            'k9_certifications','k9_dog_characters',
+            'k9_equipment_shop_item_audit','k9_equipment_shop_items',
+            'k9_equipment_shop_locations',
+            'k9_equipment_shop_locations_audit',
+            'k9_individual_override_audit','k9_individual_overrides',
+            'k9_partnership_pair_progress','k9_partnerships',
+            'k9_ped_assignments','k9_permission_key_audit',
+            'k9_permission_keys','k9_permissions','k9_personnel',
+            'k9_progression','k9_runtime_feature_overrides',
+            'k9_runtime_override_audit','k9_search_log','k9_tablet_theme',
+            'k9_tablet_theme_audit','k9_wellbeing','k9_xp_tier_audit',
+            'k9_xp_tiers'
           )
     ) THEN
         SELECT 'STOPPED - NOTHING INSTALLED' AS status,
@@ -246,21 +254,34 @@ BEGIN
         SELECT ist.TABLE_NAME
         FROM INFORMATION_SCHEMA.TABLES ist
         JOIN (
-            SELECT 'k9_certifications' AS table_name
-            UNION ALL SELECT 'k9_certification_specializations'
-            UNION ALL SELECT 'k9_partnerships'
-            UNION ALL SELECT 'k9_progression'
-            UNION ALL SELECT 'k9_permissions'
-            UNION ALL SELECT 'k9_runtime_feature_overrides'
-            UNION ALL SELECT 'k9_runtime_override_audit'
-            UNION ALL SELECT 'k9_tablet_theme'
-            UNION ALL SELECT 'k9_tablet_theme_audit'
-            UNION ALL SELECT 'k9_ped_assignments'
-            UNION ALL SELECT 'k9_certification_tiers'
-            UNION ALL SELECT 'k9_certification_tier_capabilities'
+            SELECT 'k9_certification_specializations' AS table_name
             UNION ALL SELECT 'k9_certification_tier_audit'
+            UNION ALL SELECT 'k9_certification_tier_capabilities'
+            UNION ALL SELECT 'k9_certification_tiers'
+            UNION ALL SELECT 'k9_certifications'
+            UNION ALL SELECT 'k9_dog_characters'
+            UNION ALL SELECT 'k9_equipment_shop_item_audit'
+            UNION ALL SELECT 'k9_equipment_shop_items'
             UNION ALL SELECT 'k9_equipment_shop_locations'
             UNION ALL SELECT 'k9_equipment_shop_locations_audit'
+            UNION ALL SELECT 'k9_individual_override_audit'
+            UNION ALL SELECT 'k9_individual_overrides'
+            UNION ALL SELECT 'k9_partnership_pair_progress'
+            UNION ALL SELECT 'k9_partnerships'
+            UNION ALL SELECT 'k9_ped_assignments'
+            UNION ALL SELECT 'k9_permission_key_audit'
+            UNION ALL SELECT 'k9_permission_keys'
+            UNION ALL SELECT 'k9_permissions'
+            UNION ALL SELECT 'k9_personnel'
+            UNION ALL SELECT 'k9_progression'
+            UNION ALL SELECT 'k9_runtime_feature_overrides'
+            UNION ALL SELECT 'k9_runtime_override_audit'
+            UNION ALL SELECT 'k9_search_log'
+            UNION ALL SELECT 'k9_tablet_theme'
+            UNION ALL SELECT 'k9_tablet_theme_audit'
+            UNION ALL SELECT 'k9_wellbeing'
+            UNION ALL SELECT 'k9_xp_tier_audit'
+            UNION ALL SELECT 'k9_xp_tiers'
         ) wanted ON wanted.table_name = ist.TABLE_NAME
         WHERE ist.TABLE_SCHEMA = DATABASE()
           AND ist.TABLE_COLLATION <> 'utf8mb4_unicode_ci';
@@ -318,13 +339,18 @@ SELECT TABLE_NAME AS `table`, TABLE_COLLATION AS collation_after_this_migration
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME IN (
-    'k9_certifications','k9_certification_specializations','k9_search_log',
-    'k9_partnerships','k9_progression','k9_permissions',
-    'k9_runtime_feature_overrides','k9_runtime_override_audit',
-    'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
-    'k9_certification_tiers','k9_certification_tier_capabilities',
-    'k9_certification_tier_audit','k9_equipment_shop_locations',
-    'k9_equipment_shop_locations_audit'
+    'k9_certification_specializations','k9_certification_tier_audit',
+    'k9_certification_tier_capabilities','k9_certification_tiers',
+    'k9_certifications','k9_dog_characters',
+    'k9_equipment_shop_item_audit','k9_equipment_shop_items',
+    'k9_equipment_shop_locations','k9_equipment_shop_locations_audit',
+    'k9_individual_override_audit','k9_individual_overrides',
+    'k9_partnership_pair_progress','k9_partnerships','k9_ped_assignments',
+    'k9_permission_key_audit','k9_permission_keys','k9_permissions',
+    'k9_personnel','k9_progression','k9_runtime_feature_overrides',
+    'k9_runtime_override_audit','k9_search_log','k9_tablet_theme',
+    'k9_tablet_theme_audit','k9_wellbeing','k9_xp_tier_audit',
+    'k9_xp_tiers'
   )
 ORDER BY TABLE_NAME;
 
