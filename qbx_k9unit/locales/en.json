@@ -1624,7 +1624,8 @@
         "track_certified_label": "K9: Search",
         "track_gunpowder_label": "Track Gunpowder",
         "track_scent_label": "Track Scent",
-        "vehicle_toggle_label": "Enter/Exit Vehicle"
+        "vehicle_toggle_label": "Enter/Exit Vehicle",
+        "kennel_label": "Kennel"
     },
     "recall": {
         "keybind_label": "K9: Recall Partner",

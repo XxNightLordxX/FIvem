@@ -1595,23 +1595,40 @@ local function RegisterK9RadialMenu()
     --- "already have one deployed" local short-circuit) internally -- same
     --- redundant "check here too, even though the callee already checks"
     --- posture every other gated item in this file already uses.
-    if Config.Features.DeployableKennel then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_deploy_kennel',
-            label = locale('radial.deploy_kennel_label'),
-            icon = 'house-chimney',
-            onSelect = function()
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
-                    return
-                end
-
-                if type(RequestDeployKennel) == 'function' then
-                    RequestDeployKennel()
-                end
-            end,
-        }
-    end
+    --- MERGED, owner-directed decluttering pass. This used to be a gated
+    --- "Deploy Kennel" item, with a separate ungated "Exit Kennel" item
+    --- below it -- two flat entries in this menu for what is one job. It is
+    --- now ONE entry covering deploy, enter, exit, close and open.
+    --- RequestKennelContextual() (client/kennel.lua) works out which of the
+    --- five is meant from what is actually around you, asking the server for
+    --- the facts a client is never told -- whether the kennel is occupied,
+    --- and whether its door is shut -- rather than guessing at them.
+    ---
+    --- NOW REGISTERED UNCONDITIONALLY, where Deploy Kennel was gated on
+    --- Config.Features.DeployableKennel. This is the load-bearing part of
+    --- the merge and must not be "tidied" back behind the flag: the old Exit
+    --- Kennel item was deliberately ungated because LEAVING a kennel is a
+    --- termination path, and a player who is inside one when an admin
+    --- switches the feature off would otherwise be sealed in with no way
+    --- out. Folding the two together means this single item now carries that
+    --- exit path, so it inherits that rule. RequestKennelContextual()
+    --- re-runs every real check itself -- including the feature flag, for
+    --- every action except the exit -- so a gate here would remove the way
+    --- out and protect nothing.
+    ---
+    --- NO CanShowK9UI() GATE HERE EITHER, for the same reason and matching
+    --- the old Exit Kennel item and Detach Leash, both of which skip the
+    --- access gate entirely on the way out of a mechanic.
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_kennel',
+        label = locale('radial.kennel_label'),
+        icon = 'house-chimney',
+        onSelect = function()
+            if type(RequestKennelContextual) == 'function' then
+                RequestKennelContextual()
+            end
+        end,
+    }
 
     --- Exit Kennel -- trap-hunt fix, THIS PASS. A "Rest in Kennel" occupant
     --- (client/kennel.lua's enterKennelConfirmed) is attached at
@@ -1671,16 +1688,14 @@ local function RegisterK9RadialMenu()
     --- access gate entirely for the identical reason (that item's own
     --- comment: "Detach never requires consent/access — always available
     --- while leashed").
-    k9SubmenuItems[#k9SubmenuItems + 1] = {
-        id = 'k9_exit_kennel',
-        label = locale('radial.exit_kennel_label'),
-        icon = 'dog',
-        onSelect = function()
-            if type(ExitKennelRest) == 'function' then
-                ExitKennelRest()
-            end
-        end,
-    }
+    --- FOLDED INTO 'k9_kennel' ABOVE, which is now unconditional precisely so
+    --- this exit path survives the feature being switched off. Everything the
+    --- long comment above this describes still holds -- it is kept because it
+    --- is the reasoning that makes the merged item safe, and losing it would
+    --- invite somebody to gate that item and reintroduce the trap. The
+    --- ExitKennelRest() call itself now happens inside
+    --- RequestKennelContextual(), which resolves exit ahead of every other
+    --- action for exactly this reason.
 
     --- Open My Gear -- Phase 4 (K9Inventory). Closes a real gap: client/inventory.lua
     --- exposes RequestOpenOwnK9Inventory() specifically as a "future
