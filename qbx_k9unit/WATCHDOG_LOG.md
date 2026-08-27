@@ -19,6 +19,7 @@ pass itself.
 | 2026-08-26 | First pass recorded in a file rather than only a commit marker; clean, one item honestly unverified |
 | 2026-08-26 | Clean. 85 commits reviewed, 5 regression spot-checks pass, dependency status re-verified upstream, bark-audio gap confirmed closed. No findings. |
 | 2026-08-27 | Watchdog's own checks all clean. The real findings this pass came from a separate 12-agent production-readiness audit running alongside it -- including two live bugs the watchdog's fixed checklist would never have caught. |
+| 2026-08-27 (4th) | Clean on all five checklist items. 19 commits reviewed. The findings this pass again came from elsewhere -- fifteen audit agents run alongside -- including a wellbeing data-loss bug on restart and a vehicle/body-claim seam bug no single-file review could see. Dependency upstream status NOT re-verified: GitHub API 403 through this session's proxy. |
 | 2026-08-27 (2nd) | Clean. 5 commits reviewed, all 5 spot-checks pass, dependencies and bark audio re-verified, no stale claims in KNOWN_ISSUES. The radial count trap flagged last pass bit again in a new form -- see detail. |
 | 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (FEATURE_STRUCTURE_SPEC.md, OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
 
@@ -294,3 +295,78 @@ that this particular claim happened to be true.
 
 **Health baseline:** `luacheck qbx_k9unit` and `tests/run.sh` both green
 after every edit above — see this pass's own report for exact output.
+
+## 2026-08-27 (4th pass) — detail
+
+**Checklist, all five items:**
+
+1. **Commits since the last entry:** 19, every one of them made in this
+   same session and gated before it landed (luacheck 0/0 across 216 files,
+   Lua suite twice, browser suite, locale cross-check exit 0). Nothing
+   arrived unreviewed.
+
+2. **Externally-uncertain facts re-checked:**
+   - *Bark audio (the placeholder-asset gap):* STILL CLOSED. Five real
+     `.ogg` files in `html/sounds/` with a `CREDITS.md` beside them,
+     referenced eight times in `fxmanifest.lua`. Consistent with the
+     2026-08-26 entry; nothing regressed.
+   - *ox_lib / ox_target / oxmysql maintenance status:* **NOT VERIFIED
+     THIS PASS.** `api.github.com` returns 403 through this session's
+     egress proxy for every repo tried. Recording that plainly rather than
+     letting the 2026-08-26 "re-verified upstream" line silently carry
+     forward as if it had been re-confirmed today — it has not been.
+
+3. **Five regression spot-checks, all pass, each verified in real code
+   rather than in a comment that mentions the symbol:**
+   - `Config.Features.AgilityBasicJump` is genuinely read
+     (`client/movement.lua:1928`), not merely referenced in prose.
+   - The role-aware leash structure is intact
+     (`server/main.lua:1369`, `LeashPairs[officerSrc] = { partner = ...,
+     isK9 = false }`) — not the old bare `LeashPairs[a] = b`.
+   - `RevokeCertificationOffline` (`server/certifications.lua:3131`) still
+     calls `RefreshCertificationCache(citizenid, job)` for real.
+   - Both `client/vehicle.lua` and `server/vehicle.lua` still carry
+     `onResourceStop` cleanup.
+   - `client/radial.lua`'s split is still correct: exactly three
+     `lib.addRadialItem` invocations, all three registering the single
+     `k9unit_open` root opener, with every submenu going through
+     `lib.registerRadial`. This is the shape the 2026-08-23 hard-error fix
+     established.
+
+4. **SPEC.md:** does not exist. The checklist still names it (and a
+   "SPEC.md §7" for the bark-audio item); it was folded into
+   `DEVELOPER_REFERENCE.md` during the documentation consolidation two
+   passes ago. Noting it here so the next pass does not spend time looking
+   for a file that was deliberately removed — the checklist itself is the
+   stale artifact, not the repo.
+
+5. **`luac5.4 -p` across all 217 `.lua` files:** clean, zero syntax
+   errors.
+
+**Where the real findings came from, again.** As on 2026-08-27 (1st), the
+watchdog's own fixed checklist found nothing, and that is the honest
+result — but it is worth recording *why* it keeps being the honest result.
+Fifteen audit agents ran alongside this pass on different lenses, and
+between them produced several genuine bugs the checklist has no item for:
+wellbeing stats silently reverting up to sixty seconds on every
+`restart qbx_k9unit` (the one stateful file with no `onResourceStop`); a
+seam bug where `server/vehicle.lua` counts seats while
+`server/bodyclaims.lua` counts people, letting one citizenid void their own
+body claim; a handler-side apprehension warning the server accepted and the
+client refused; `/k9nosehunt` advertised in chat with nothing behind it.
+
+None of those are things a fixed list of five spot-checks can reach. The
+checklist is good at proving specific past fixes have not rotted, which is
+a real job. It is not, and should not be mistaken for, a way of finding
+what is wrong now.
+
+**One open item deliberately not fixed, flagged for a decision:** Handler
+XP is earned, cooldown-protected and written to the database, and there is
+no screen anywhere that displays it. The event meant to show it
+(`qbx_k9unit:client:handlerXpTierChanged`) is fired at nothing — it is the
+only server-to-client event in the resource with no receiver. The config
+comment justifying switching the feature on states "the tablet advertises
+the ranks"; the tablet does not, anywhere. Fixing this properly needs a
+product decision about where a handler should see their rank, so it is
+recorded rather than guessed at.
+
