@@ -523,7 +523,15 @@ end)
 t.test('every wellbeing flag off: the InjuryLimping thread and all commands/ox_target options still REGISTER, but do/gate nothing -- only the on-demand snapshot thread stays load-time-gated', function()
     local f = newWellbeingFixture() -- all five flags false by default
     t.equals(#f.threads, 2, 'the InjuryLimping thread AND the native sprint stamina assist thread now ALWAYS register (idling, per their own LiveFeatureFlags gates) -- only the on-demand snapshot thread (a disclosed, bounded staleness optimization, not a correctness path) stays load-time-gated and is absent here')
-    t.equals(f.addGlobalPlayerCallCount(), 1, 'Pet K9/Feed K9 now ALWAYS register -- canInteract itself refuses while LiveFeatureFlags.MoodSystem is false, proven in section F')
+    -- TWO, not one, and the second is NOT this file's. This fixture also
+    -- loads client/appearance.lua (see the loadInto list above), which now
+    -- registers its own global-player option for the K9 Identity feature --
+    -- the "who is this dog" lookup. client/wellbeing.lua itself still makes
+    -- exactly ONE AddGlobalPlayer call, for Pet K9/Feed K9, unchanged.
+    -- Counted here rather than filtered because the count is what the
+    -- assertion below is really about: registration always happens, and the
+    -- refusal lives at the point of use.
+    t.equals(f.addGlobalPlayerCallCount(), 2, 'Pet K9/Feed K9 (wellbeing) plus Identify K9 (appearance) both ALWAYS register -- canInteract itself refuses while LiveFeatureFlags.MoodSystem is false, proven in section F')
     -- k9meatbait/k9whistle/k9calmdown are ALL always registered now --
     -- each one's OWN body checks LiveFeatureFlags.<Name> first (proven in
     -- sections E/G), never gated by skipping RegisterCommand entirely.
