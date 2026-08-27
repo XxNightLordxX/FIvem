@@ -1609,13 +1609,40 @@ t.test('HandlerDownDefense: always confirms "bite" (the documented single-button
     t.equals(f.calls['ConfirmHandlerDownDefense'][1][1], 'bite')
 end)
 
-t.test('HandlerDownDefense NOT-WIDENED PIN: a High Command/autoAccessGrade-bypass holder (HasK9Access true, CanShowK9UI false) is still denied here -- ConfirmHandlerDownDefense()\'s own internal gate is the full CanShowK9UI() combinator, so widening only this wrapper would be a no-op; left on the broader combinator on purpose (see this entry\'s own comment) and reported upstream as a client/defense.lua finding', function()
+-- THIS PIN WAS FLIPPED. It used to assert the OPPOSITE -- that a High
+-- Command/autoAccessGrade holder is denied here -- on the stated grounds
+-- that ConfirmHandlerDownDefense() re-gated on the full CanShowK9UI()
+-- combinator anyway, so widening this wrapper would be a no-op. That was
+-- true when written and became false when client/defense.lua's own gate was
+-- widened to HasK9Access() alone. The pin then outlived its own premise and
+-- started defending the bug: this wrapper's pre-check was, by then, the ONLY
+-- thing refusing, one layer above an already-correct callee.
+--
+-- A test whose justification has quietly expired is worse than no test,
+-- because it reads as a deliberate decision. When the reasoning in a pin's
+-- own name stops matching the code, the pin must be re-derived, not trusted.
+t.test('HandlerDownDefense WIDENED: a High Command/autoAccessGrade holder (HasK9Access true, CanShowK9UI false) reaches ConfirmHandlerDownDefense -- the callee gates on HasK9Access() alone now, matching server/combat.lua ValidateCombatRequest, so this wrapper must not refuse ahead of it', function()
     local f = newTabletFixture({ canShowK9UI = false, hasK9Access = true })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
+    t.isTrue(result.ok)
+    t.equals(#(f.calls['ConfirmHandlerDownDefense'] or {}), 1, 'the call must actually reach the shared function')
+    t.equals(f.calls['ConfirmHandlerDownDefense'][1][1], 'bite')
+    t.equals(f.denyCalls(), 0, 'this wrapper must not deny -- the callee owns the refusal and its message')
+end)
+
+t.test('CONTROL: HandlerDownDefense still reaches the shared function for an ordinary certified K9 too -- proving the test above is not passing merely because the wrapper now does nothing at all', function()
+    local f = newTabletFixture({ canShowK9UI = true, hasK9Access = true })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
+    t.isTrue(result.ok)
+    t.equals(#(f.calls['ConfirmHandlerDownDefense'] or {}), 1)
+end)
+
+t.test('CONTROL: refusal is the CALLEE\'s job, not this wrapper\'s -- with ConfirmHandlerDownDefense absent entirely (the soft-dependency case this file guards for everywhere), the wrapper reports not_available rather than silently claiming success', function()
+    local f = newTabletFixture({ canShowK9UI = true, hasK9Access = true })
+    f.env.ConfirmHandlerDownDefense = nil
     local result = f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
     t.isFalse(result.ok)
     t.equals(result.error, 'not_available')
-    t.equals(#(f.calls['ConfirmHandlerDownDefense'] or {}), 0)
-    t.equals(f.denyCalls(), 1)
 end)
 
 t.test('HandlerPartnership: toggles exactly like Leash -- partnered releases ungated, else attempts + seam-guarded', function()

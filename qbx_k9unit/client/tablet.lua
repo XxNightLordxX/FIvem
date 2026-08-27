@@ -2127,10 +2127,33 @@ local FEATURE_TRIGGERS = {
     -- client/defense.lua (a file this pass does not own) -- reported to the
     -- team rather than "fixed" here by widening a check that cannot change
     -- the actual outcome.
+    -- NOT GATED HERE, AND THE HISTORY MATTERS. This wrapper used to check
+    -- CanShowK9UI() first, with a comment saying widening it would be a
+    -- no-op because ConfirmHandlerDownDefense() re-gated on the same
+    -- combinator internally. That was true when written. It stopped being
+    -- true the moment client/defense.lua's own gate was widened to
+    -- HasK9Access() alone (matching server/combat.lua's ValidateCombatRequest,
+    -- which checks HasK9Access(src) and nothing else) -- and this pre-check
+    -- then became the ONLY thing still refusing, one layer above an
+    -- already-correct callee. That is this resource's most-repeated bug: a
+    -- correct function re-gated by its caller, twice before this, once with
+    -- a comment calling the gate "redundant with the callee" when it was the
+    -- opposite.
+    --
+    -- The cost was real. A High Command officer whose K9 access comes from
+    -- rank rather than certification would get the handler-down alert, and
+    -- be refused by the tablet and the radial while the KEYBIND worked --
+    -- three routes to one action, disagreeing, in the emergency the feature
+    -- exists for, with nothing telling them which one to use.
+    --
+    -- ConfirmHandlerDownDefense() gates and notifies on its own. Do not add
+    -- a check back here.
     HandlerDownDefense = function()
-        if not CanShowK9UI() then DenyK9UIAccess('common.no_k9_role_or_access'); return false, 'not_available' end
-        if type(ConfirmHandlerDownDefense) == 'function' then ConfirmHandlerDownDefense('bite') end
-        return true
+        if type(ConfirmHandlerDownDefense) == 'function' then
+            ConfirmHandlerDownDefense('bite')
+            return true
+        end
+        return false, 'not_available'
     end,
     -- DISCLOSED SIMPLIFICATION: throw/release toggle only (radial.lua's
     -- own Throw item shape) -- Recall Fetch Ball is a separate action in

@@ -1913,7 +1913,7 @@
         "partner_condition_thirsty": "Thirsty",
         "partner_condition_fine": "Fine",
         "onboarding_title": "K9 Command Tablet",
-        "onboarding_body": "You have K9 gear waiting. Type /k9tablet to open your tablet and see what you can do.",
+        "onboarding_body": "You have K9 gear waiting. Type /k9tablet to open your tablet, then read the Help tab — it lists every key and command you now have.",
         "onboarding_dismiss_hint": "Press %s to dismiss this reminder."
     },
     "announce": {

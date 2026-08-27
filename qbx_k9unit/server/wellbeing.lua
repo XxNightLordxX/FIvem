@@ -1492,12 +1492,12 @@ end
 --- citizenid with an unconfirmed change (`stats.dirty`) or one
 --- `WellbeingLastSeenOnline` still considers recently online -- see this
 --- file's header "DATABASE PERSISTENCE" point 4 for why `IsOnCooldown` is
---- the correct, shared oracle for "stale" here (it also correctly answers
---- `false` — i.e. "not stale, keep" — is wrong for a key `:StartSweep` on
---- that SAME tracker already deleted for exceeding this SAME threshold;
---- `IsOnCooldown` reads that as "never touched," which is the same
---- eviction verdict, just reached from a different, already-correct
---- code path).
+--- the correct, shared oracle for "stale" here. This also correctly
+--- handles a key `:StartSweep` on that SAME tracker has ALREADY deleted
+--- for exceeding this SAME threshold: `IsOnCooldown` reads a missing key
+--- as "never touched" (not on cooldown, i.e. stale), which is the same
+--- eviction verdict this function needs -- reached via a different,
+--- already-correct code path, never a false "not stale, keep."
 --- @param now number
 local nextEvictionSweepAt = 0
 local function EvictStaleWellbeingEntries(now)

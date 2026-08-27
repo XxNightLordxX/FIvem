@@ -789,6 +789,16 @@ t.test('ONBOARDING HINT: appears for a newly-granted player (real citizenid, Can
     t.isNotNil(msg)
     t.isTrue(msg.data.visible)
     t.equals(msg.data.strings.title, 'K9 Command Tablet')
+    -- Ease-of-use audit finding: this persistent nudge exists as the SECOND
+    -- chance for someone who missed the one-shot chat line
+    -- (locales/en.json's appearance.apply_success_target), which explicitly
+    -- names the Help tab, not just "the tablet" -- a body that only says
+    -- "open your tablet" leaves that second chance less specific than the
+    -- first one it is meant to back up. Pinned against the REAL
+    -- locales/en.json text (Sandbox.locale reads the real file, see its own
+    -- header) so a future edit cannot quietly drop the pointer again.
+    t.isTrue(msg.data.strings.body:find('Help tab', 1, true) ~= nil,
+        'the onboarding hint must point at the Help tab specifically, not just "the tablet" -- that is where every key and command is actually listed')
 end)
 
 t.test('ONBOARDING HINT: does NOT appear for someone who has already opened the tablet (pre-seeded KVP)', function()

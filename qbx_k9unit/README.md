@@ -270,6 +270,40 @@ in a document goes stale the first time someone adds a feature.)
 
 ---
 
+## Testing this alone, before you add a second person
+
+Right after step 5 above — certifying yourself and becoming the K9 — you
+can check almost everything by yourself: reaching High Command (a
+department boss already qualifies, and so does anyone at the configured
+`highCommandGrade`), self-certifying (on by default), turning into the
+K9, opening `/k9tablet`, reading its Help tab, and using every
+single-player ability (search, tracking, vision, wellbeing, the radial
+menu, and so on).
+
+**Four features are built around two separate people and cannot be
+exercised alone, on purpose — nothing is broken if they do nothing while
+you are the only one connected:**
+
+- **Leash** and **Handler Partnership** both work by asking a nearby
+  player to accept. With nobody else on the server (or nobody close
+  enough), the game says so plainly: "No nearby player to leash to" /
+  "No nearby player to partner with."
+- **Handler-Down Defense** only ever fires when a K9's own *partnered
+  handler* is actually attacked. With no partner, there is nothing to
+  attack — pressing its key by yourself correctly reports "No active
+  handler-down alert," which means exactly what it says, not that
+  anything is broken.
+- **Scent Lineup** (`/k9lineup`) needs at least two other connected
+  players standing in the line-up with you. Running it alone tells you
+  that directly: "A lineup needs at least 2 other player(s)."
+
+None of the four above will ever work with only one person connected, no
+matter how the server is configured. To actually try them, bring in a
+second account, a friend, or your first real recruit — everything else
+above is safe to check solo first.
+
+---
+
 ## Before real players touch this
 
 Work through all of these first:
