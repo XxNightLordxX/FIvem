@@ -454,6 +454,17 @@ local function newCombatFixture(opts)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (kennel-vs-vehicle-seat race fix pass)
+    -- -- ValidateCombatRequest and the three grant handlers
+    -- (requestBiteHold/HandleTakedownRequest/requestDrag) now call
+    -- ClaimBody/ReleaseBody/IsBodyClaimedByOther, real globals from this
+    -- file, loaded here the same way server/entities.lua's own
+    -- ResolveNetworkEntity already is (never a reimplementation). This
+    -- file's own unconditional periodic sweep thread is harmless here: no
+    -- test in this suite asserts an exact thread-creation count, and
+    -- stepping threadRunner.step() simply resumes it against an empty
+    -- table.
+    Sandbox.loadInto('../server/bodyclaims.lua', env)
     Sandbox.loadInto('../server/combat.lua', env)
 
     --- Drives `netEvents[eventName]` to completion inside a real coroutine,

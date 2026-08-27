@@ -194,6 +194,16 @@ local function newVehicleServerFixture(opts)
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/entities.lua', env)
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (kennel-vs-vehicle-seat race fix pass)
+    -- -- requestVehicleSeatClaim now calls
+    -- ClaimBody/ReleaseBody/IsBodyClaimedByOther, real globals from this
+    -- file, loaded here the same way server/entities.lua's own
+    -- ResolveNetworkEntity already is (never a reimplementation). This file
+    -- ALSO starts its own unconditional periodic sweep thread at load time
+    -- (mirrors server/vehicle.lua's own sweep design) -- see the two
+    -- `threadCreateCount()` assertions below, now 2 instead of 1 for
+    -- exactly this reason.
+    Sandbox.loadInto('../server/bodyclaims.lua', env)
     Sandbox.loadInto('../server/vehicle.lua', env)
 
     return {
@@ -761,13 +771,19 @@ end)
 
 t.test('LIVE-FLIP FIX: the sweep thread is created even with the feature OFF at boot -- it is what makes turning the feature on later safe', function()
     local f = newVehicleServerFixture({ vehicleEntryExit = false })
-    t.equals(f.threadCreateCount(), 1,
+    -- 2, not 1: server/bodyclaims.lua's own unconditional periodic sweep
+    -- thread is created in the SAME sandbox env alongside this file's own
+    -- (see newVehicleServerFixture's loadInto comment above) -- both are
+    -- created regardless of Config.Features.VehicleEntryExit, so this count
+    -- is unaffected by `vehicleEntryExit = false` either way.
+    t.equals(f.threadCreateCount(), 2,
         'gating thread CREATION on a boot-time flag snapshot is the exact bug: the flag can change, the missing thread cannot appear later')
 end)
 
 t.test('feature on: the periodic sweep thread IS created', function()
     local f = newVehicleServerFixture()
-    t.equals(f.threadCreateCount(), 1)
+    -- 2, not 1 -- see the identical note on the FEATURE-OFF test immediately above.
+    t.equals(f.threadCreateCount(), 2)
 end)
 
 t.test('LIVE-FLIP FIX: a feature turned ON after boot still gets its claims expired -- no seat is stranded for the rest of the server\'s uptime', function()

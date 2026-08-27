@@ -1502,9 +1502,45 @@ end
 --- non-certified K9-role party — access via autoAccessGrade or a
 --- server/permissions.lua 'k9.access' grant only — kept their leash on
 --- leaving the department entirely; see that branch's own comment for the
---- fix). This is now the ONE place in this file that means "citizenid has
---- just, provably, lost K9-role access — tear down every ephemeral/
---- session consequence of that."
+--- fix). This is the ONE place in this file that means "citizenid has
+--- just, provably, lost K9-role access — tear down every ephemeral/session
+--- consequence of that THIS FUNCTION IS ABLE TO SAFELY TEAR DOWN" — see the
+--- new SCOPE BOUNDARY paragraph immediately below for the one honest
+--- exception, found and deliberately left as a disclosed gap rather than a
+--- silent one by the kennel-vs-vehicle-seat race fix pass.
+---
+--- SCOPE BOUNDARY, DISCLOSED RATHER THAN SILENT (kennel-vs-vehicle-seat
+--- race fix pass, coder-backend): this function does NOT release an active
+--- server/kennel.lua kennel-rest occupancy or an in-flight
+--- server/vehicle.lua vehicle-seat claim for `citizenid`, even though
+--- losing K9 access while resting in a kennel or mid-vehicle-entry is a
+--- real, reachable state this function's own stated purpose ("tear down
+--- every session consequence") would otherwise seem to promise covering.
+--- FOUND, NOT FIXED, ON PURPOSE: a real fix requires instructing the
+--- affected player's own CLIENT to detach/disembark
+--- (client/kennel.lua/client/vehicle.lua — both outside this pass's file
+--- ownership and explicitly read-only for it). Clearing only the SERVER
+--- registry entry (KennelOccupants[citizenid] / the matching
+--- VehicleSeatClaims row) WITHOUT that client-side detach would leave the
+--- affected player still visually/physically attached to the kennel or
+--- seated in the vehicle while the server now believes the spot is free —
+--- which would let a SECOND citizenid be granted the exact same kennel/seat
+--- moments later, reproducing the double-occupancy hazard the
+--- server/bodyclaims.lua registry pass exists to close, only worse (a
+--- silent one, dressed up as a fix). A half-fix here would therefore be
+--- strictly WORSE than today's honest, if under-documented, gap. LOW
+--- SEVERITY, and the reason this is disclosed-and-deferred rather than
+--- escalated: both states are SELF-ONLY (nobody but `citizenid` is ever
+--- inside their own kennel or seated via their own claim) and both already
+--- have an ALWAYS-AVAILABLE manual exit (requestExitKennel /
+--- releaseVehicleSeatClaim, or simply GET_OUT_OF_VEHICLE for a genuinely
+--- seated player, none of which this function's absence affects in any
+--- way) — a revoked citizenid is inconvenienced by their own kennel/seat
+--- persisting one tick longer than this function's own name implies, never
+--- trapped. FOLLOW-UP NEEDED: closing this properly needs a coordinated
+--- client+server change (a new server->client "you were force-ejected"
+--- event in client/kennel.lua/client/vehicle.lua, paired with this
+--- function calling it) from whoever owns those two client files next.
 ---
 --- Callable from a site with a live, already-resolved `source` for
 --- `citizenid` (pass it as `knownSrc` — RevokeCertification's online

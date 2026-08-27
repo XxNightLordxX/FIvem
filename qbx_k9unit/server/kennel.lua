@@ -281,6 +281,24 @@
     - THIS FILE does NOT touch LeashPairs, PendingLeashRequests, or any
       other server/main.lua-owned state — kennels are a wholly independent
       mechanic from leash/vehicle/bark/door-scratch.
+    - THIS FILE calls `ClaimBody(citizenid, mechanic, ttlMs?)`,
+      `ReleaseBody(citizenid, mechanic)`, and
+      `IsBodyClaimedByOther(citizenid, mechanic)`, exposed by
+      server/bodyclaims.lua (this pass) — the shared exclusive body-claim
+      registry that closes a CONFIRMED race between "Rest in Kennel" and
+      server/vehicle.lua's own vehicle-seat claim (see that file's own
+      header for the full writeup). requestEnterKennel below claims
+      'kennel_rest' with NO ttlMs (a deliberately permanent claim — see that
+      file's header EXPIRY POLICY section for why); requestExitKennel and
+      the playerDropped occupant-disconnect branch each release it. THIS
+      FILE does NOT reach into VehicleSeatClaims or ActiveHolds directly —
+      the whole point of the shared registry is that it does not need to.
+      Also calls `IsK9CurrentlyHolding(src)`, exposed by server/combat.lua
+      (guarded, `type(...) == 'function'`, since that file loads after this
+      one) — a K9 actively holding/dragging a suspect cannot also enter a
+      kennel; see server/bodyclaims.lua's own header for why this is a
+      direct accessor call rather than a fourth participant in that file's
+      own registry.
 
     ONE-KENNEL-PER-HANDLER LIMIT — JUDGMENT CALL, documented per the task
     that scoped this feature ("one-per-handler-or-per-area limit — your
@@ -1383,6 +1401,37 @@ RegisterNetEvent('qbx_k9unit:server:requestEnterKennel', function(netId)
         return
     end
 
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- closes the CONFIRMED kennel-vs-vehicle-seat race that file's own
+    -- header documents in full: without this, a K9 mid-vehicle-seat-claim
+    -- (server/vehicle.lua's own VehicleSeatClaims, granted in the same
+    -- non-yielding tick as its own request, well before the client-side
+    -- SET_PED_INTO_VEHICLE that would have made IsInK9Vehicle() true) could
+    -- still race this handler and get attached inside a kennel too, since
+    -- neither this file nor server/vehicle.lua previously consulted the
+    -- other's registry at all. `citizenid`, never `src`, is the identity
+    -- checked -- server ids are recycled, this registry is keyed durably.
+    if IsBodyClaimedByOther(citizenid, 'kennel_rest') then
+        NotifyPlayer(src, locale('combat.reject_fallback'), 'error')
+        return
+    end
+
+    -- A K9 actively holding/dragging a suspect (BiteAndHold/NonLethalTakedown/
+    -- PropDragging, server/combat.lua) cannot ALSO curl up in a kennel at
+    -- the same instant -- physically the same class of conflict as the
+    -- vehicle-seat check immediately above, just answered by an existing,
+    -- already-tested accessor (K9ActiveEffect-backed) instead of this
+    -- file's own new registry, since a HOLDER's own busy-state is already
+    -- exactly that: see server/bodyclaims.lua's own header "WHY NOT THE
+    -- HOLDER SIDE" paragraph for why this is intentionally NOT a
+    -- ClaimBody/IsBodyClaimedByOther call. Soft dependency, this resource's
+    -- established convention -- server/combat.lua loads after this file in
+    -- fxmanifest.lua's server_scripts.
+    if type(IsK9CurrentlyHolding) == 'function' and IsK9CurrentlyHolding(src) then
+        NotifyPlayer(src, locale('combat.reject_fallback'), 'error')
+        return
+    end
+
     local ownerCitizenId = FindKennelOwnerByNetId(netId, nil)
     if not ownerCitizenId then
         NotifyPlayer(src, locale('kennel.invalid_kennel'), 'error')
@@ -1426,6 +1475,12 @@ RegisterNetEvent('qbx_k9unit:server:requestEnterKennel', function(netId)
         enteredSrc = src,
         enteredAt = GetGameTimer(),
     }
+    -- EXCLUSIVE BODY-CLAIM REGISTRY -- see server/bodyclaims.lua's own
+    -- header EXPIRY POLICY section for why 'kennel_rest' deliberately gets
+    -- NO ttlMs (a permanent claim, released only by requestExitKennel or
+    -- the playerDropped occupant-disconnect branch below, mirroring
+    -- KennelOccupants' own already-established zero-TTL discipline exactly).
+    ClaimBody(citizenid, 'kennel_rest')
 
     TriggerClientEvent('qbx_k9unit:client:enterKennelConfirmed', src, kennel.netId)
 end)
@@ -1449,6 +1504,14 @@ RegisterNetEvent('qbx_k9unit:server:requestExitKennel', function()
 
     if KennelOccupants[citizenid] and KennelOccupants[citizenid].enteredSrc == src then
         KennelOccupants[citizenid] = nil
+        -- EXCLUSIVE BODY-CLAIM REGISTRY release -- mirrors the ClaimBody
+        -- call in requestEnterKennel above. GATE THE STOP, NEVER THE START:
+        -- reached through the exact same unconditional path as the
+        -- KennelOccupants clear immediately above it (self-service exit, or
+        -- the occupant's own disconnect), never re-checking
+        -- Config.Features.DeployableKennel/HasK9Access/anything else that
+        -- could suppress it.
+        ReleaseBody(citizenid, 'kennel_rest')
     end
 end)
 
@@ -1582,6 +1645,122 @@ lib.callback.register('qbx_k9unit:server:getOwnKennelDoorState', function(source
     }
 end)
 
+-- ======================================================================
+-- KENNEL OCCUPANT LIVENESS SWEEP (kennel-vs-vehicle-seat race fix pass,
+-- audit follow-up finding, coder-backend) -- a RELATED but DISTINCT gap
+-- from the race this pass primarily closes: requestEnterKennel grants
+-- occupancy (and, this pass, a permanent, no-TTL 'kennel_rest' body-claim
+-- -- see this file's own ClaimBody call site) on request + proximity
+-- ALONE and trusts the client's own enterKennelConfirmed handler to
+-- perform the real AttachEntityToEntity -- unlike kennel PLACEMENT's own
+-- confirmKennelPlaced handshake, there is no reciprocal "I actually
+-- attached" event coming back from the client at all. A modified client
+-- can accept the grant, never attach, stay fully mobile, and hold that ONE
+-- kennel object -- and, with it, this citizenid's own permanent
+-- 'kennel_rest' claim, blocking every other exclusive mechanic
+-- indefinitely -- against every other player, at zero ongoing cost,
+-- clearing only via a genuine self-service exit or disconnect, neither of
+-- which a client that never attached has any reason to ever trigger.
+--
+-- FIXED HERE, SERVER-ONLY, NO CLIENT CHANGE NEEDED (client/kennel.lua is
+-- outside this pass's file ownership and explicitly read-only for it): a
+-- REAL, physically-attached occupant's ped is, structurally, at (or
+-- extremely near) the kennel object's own live coordinates every tick --
+-- the engine re-clamps an attached child's transform to its parent's every
+-- frame, regardless of whether the kennel itself is currently sitting
+-- still or being carried. A periodic, server-side distance check between
+-- the occupant's own LIVE ped (GetPlayerPed, never a client claim) and the
+-- kennel entity's own live coords is therefore a genuine, authoritative
+-- liveness signal, not a guess: if the two are ever found more than
+-- KENNEL_OCCUPANT_LIVENESS_TOLERANCE_METERS apart, this citizenid either
+-- was never genuinely attached, or has since become detached by some means
+-- this file did not itself perform (a desync, an admin teleport, a
+-- resource hot-reload racing the attach) -- either way, the occupancy is
+-- stale and is force-cleared: the KennelOccupants entry, this pass's own
+-- ClaimBody('kennel_rest') claim, and a best-effort notify to the
+-- (still-connected, by construction -- playerDropped below already clears
+-- a disconnected occupant before this sweep would ever see them) player,
+-- reusing kennel.exit_kennel_lost -- the SAME message this feature already
+-- ships for "you lost track of the kennel," since that is exactly what
+-- this sweep has just determined is true, from server-held facts rather
+-- than the client's own self-report.
+--
+-- NO CLIENT EVENT IS SENT, DELIBERATELY: a client that never attached has
+-- nothing to detach, and a client that WAS genuinely attached and got
+-- desynced needs no instruction either -- client/kennel.lua's own
+-- unconditional local self-release (death/wander/entity-loss/resource-stop,
+-- per this file's header CRITICAL SAFETY section) already independently
+-- reconciles that client's own local state the moment it notices, on its
+-- own, regardless of what this sweep does server-side. This sweep's entire
+-- job is making sure the SERVER's own bookkeeping cannot lag behind reality
+-- indefinitely -- it never instructs any client to do anything, so it
+-- cannot itself introduce a new "trapped inside a deleted/detached prop"
+-- failure the way an unconditional forced-detach INSTRUCTION might.
+--
+-- TOLERANCE CHOSEN GENEROUSLY, deliberately far above
+-- KENNEL_INTERACT_DISTANCE_TOLERANCE/KENNEL_CONFIRM_DISTANCE_TOLERANCE
+-- above: a genuinely attached child's distance from its parent is
+-- essentially always ~0m (bounded only by the prop's own physical size),
+-- so 5.0m has enormous headroom against ordinary network jitter/a
+-- momentary desync while still being FAR tighter than "the occupant simply
+-- walked away," which cannot happen to begin with if they are genuinely
+-- attached -- there is no plausible legitimate reason for this distance to
+-- ever exceed a couple of meters, let alone this tolerance. A LOCAL
+-- constant, not a Config field, same "security-relevant tolerance stays in
+-- code" reasoning this file's own KENNEL_INTERACT_DISTANCE_TOLERANCE/
+-- KENNEL_CONFIRM_DISTANCE_TOLERANCE already establish.
+--
+-- INTERVAL CHOSEN to bound the WORST-CASE abuse window to roughly this
+-- many milliseconds, not to catch every case instantly -- this is a
+-- correctness backstop against an indefinite/unbounded claim, not a
+-- real-time anti-cheat; the same "coarse, cheap, always-on" posture
+-- server/vehicle.lua's own periodic sweep and server/main.lua's own
+-- DoorScratchByDoorCooldown sweep already use for an identical class of
+-- concern.
+--
+-- STARTED UNCONDITIONALLY, no Config.Features.DeployableKennel gate -- this
+-- IS a cleanup path, and gating a cleanup thread on a flag that can flip
+-- live is exactly the trap server/vehicle.lua's own "LIVE-FLIP FIX" and
+-- server/main.lua's own DoorScratchByDoorCooldown sweep were each already
+-- fixed for; genuinely free when the feature is off or no kennel is
+-- occupied (KennelOccupants is then empty, and this walks it every
+-- interval regardless).
+--
+-- Iterating `pairs(KennelOccupants)` while clearing EXISTING keys from
+-- underneath this same loop is safe per the Lua 5.4 reference manual's own
+-- explicit carve-out (only ASSIGNING a previously-nonexistent field during
+-- traversal is undefined) -- the identical property server/vehicle.lua's
+-- own playerDropped loop and server/combat.lua's own shared maintenance
+-- thread already rely on for the same reason.
+local KENNEL_OCCUPANT_LIVENESS_CHECK_INTERVAL_MS = 15000
+local KENNEL_OCCUPANT_LIVENESS_TOLERANCE_METERS = 5.0
+
+CreateThread(function()
+    while true do
+        Wait(KENNEL_OCCUPANT_LIVENESS_CHECK_INTERVAL_MS)
+
+        for citizenid, occupant in pairs(KennelOccupants) do
+            local ped = GetPlayerPed(occupant.enteredSrc)
+            local kennelEntity = ResolveNetworkEntity(occupant.netId, 3)
+
+            local stillLive = false
+            if ped ~= 0 and kennelEntity then
+                local dist = #(GetEntityCoords(ped) - GetEntityCoords(kennelEntity))
+                stillLive = dist <= KENNEL_OCCUPANT_LIVENESS_TOLERANCE_METERS
+            end
+
+            if not stillLive then
+                KennelOccupants[citizenid] = nil
+                ReleaseBody(citizenid, 'kennel_rest')
+                if ped ~= 0 then
+                    NotifyPlayer(occupant.enteredSrc, locale('kennel.exit_kennel_lost'), 'error')
+                end
+            end
+        end
+    end
+end)
+-- ======================================================================
+
 -- Handler-disconnect cleanup (task requirement: kennels must not leak
 -- permanently into the world). Resolves citizenid for the disconnecting
 -- source BEFORE the framework fully tears down the player object, same
@@ -1626,6 +1805,14 @@ AddEventHandler('playerDropped', function(_reason)
     -- simply run.
     if KennelOccupants[citizenid] and KennelOccupants[citizenid].enteredSrc == src then
         KennelOccupants[citizenid] = nil
+        -- EXCLUSIVE BODY-CLAIM REGISTRY release -- mirrors the ClaimBody
+        -- call in requestEnterKennel above. GATE THE STOP, NEVER THE START:
+        -- reached through the exact same unconditional path as the
+        -- KennelOccupants clear immediately above it (self-service exit, or
+        -- the occupant's own disconnect), never re-checking
+        -- Config.Features.DeployableKennel/HasK9Access/anything else that
+        -- could suppress it.
+        ReleaseBody(citizenid, 'kennel_rest')
     end
 
     -- CARRIER DISCONNECT (this pass) -- see this file's header event 12

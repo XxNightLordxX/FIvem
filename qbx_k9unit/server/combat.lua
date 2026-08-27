@@ -417,6 +417,32 @@
       consumed through runtime existence guards, not a load-order
       assumption) — same posture server/medkit.lua's own fxmanifest.lua
       comment already documents for RestoreInjury.
+    - Calls `ClaimBody(citizenid, 'combat_target', ttlMs, detail)` and
+      `ReleaseBody(citizenid, 'combat_target')`, exposed by
+      server/bodyclaims.lua (kennel-vs-vehicle-seat race fix pass,
+      coder-backend) — the shared exclusive body-claim registry. Every one
+      of requestBiteHold/HandleTakedownRequest/requestDrag claims the
+      PLAYER target's own citizenid (never an NPC's, which has none) the
+      instant its own ActiveHolds entry is written, with `ttlMs` set to
+      that exact hold's own remaining duration and `detail` set to the
+      effectType ('bite'/'takedown'/'drag') so a denying caller elsewhere
+      can pick an accurate rejection message; EndHold — the single choke
+      point every termination path already funnels through — releases it.
+      ALSO calls `IsBodyClaimed(citizenid)` (same file) inside
+      ValidateCombatRequest, for the REQUESTING K9's own citizenid — a K9
+      currently resting in a kennel or mid-vehicle-seat-claim must not be
+      grantable as a bite-hold/takedown/drag HOLDER either; see that call
+      site's own comment (immediately after the `already_engaged` check)
+      for the full writeup, including why `IsBodyClaimed` and not
+      `IsBodyClaimedByOther` is the correct primitive for this direction.
+      Also EXPOSES `GetActiveHoldEffectTypeForHolder(holderSrc)` (this pass,
+      alongside the pre-existing `IsK9CurrentlyHolding`) for
+      server/kennel.lua's requestEnterKennel and server/vehicle.lua's
+      requestVehicleSeatClaim to consult directly — a combat HOLDER's own
+      busy-state, from THEIR side of the check, is answered by these two
+      small accessors, not by a fourth participant in the shared registry;
+      see server/bodyclaims.lua's own header for the full reasoning on all
+      three halves of this design.
     ======================================================================
 
     PLAYER-VS-NPC RESOLUTION — DELIBERATE DEVIATION FROM DEVELOPER_REFERENCE.md'S
@@ -1313,6 +1339,22 @@ local COMBAT_REJECT_MESSAGES = {
     -- names why), so this table never risks referencing a key that does not
     -- exist yet.
     not_warned = locale('combat.not_warned'),
+    -- EXCLUSIVE BODY-CLAIM REGISTRY denial (server/bodyclaims.lua, this
+    -- pass — see ValidateCombatRequest's own call site for the full
+    -- writeup). Kept as an explicit mapping here, same "a reader of this
+    -- table sees the reason was deliberately handled, not merely unmapped"
+    -- reasoning 'permission_denied' above already states, even though it
+    -- resolves to the exact same string CombatRejectMessage would already
+    -- fall back to for an unmapped reason — locales/en.json is outside this
+    -- pass's file ownership, so a dedicated key (naming kennel/vehicle
+    -- specifically) is not available to land here the way
+    -- tier_capability_denied's own history shows this file usually prefers.
+    target_body_claimed = locale('combat.reject_fallback'),
+    -- HOLDER-side half of the identical registry check immediately above --
+    -- see ValidateCombatRequest's own `already_engaged`-adjacent call site
+    -- for the full writeup. Same reasoning for reusing combat.reject_fallback
+    -- rather than inventing a locales/en.json key this pass cannot land.
+    holder_body_claimed = locale('combat.reject_fallback'),
 }
 
 --- COMBAT_FEATURE_DISPLAY_LABEL (this pass, coder-backend handoff): the
@@ -1615,6 +1657,44 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'already_engaged'
     end
 
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- THE HOLDER'S OWN SIDE, not just the target's (see the SEPARATE check
+    -- near this function's own `return true` for the target-side half,
+    -- landed earlier in this same pass and flagged by review as
+    -- one-directional on its own -- this closes the other direction).
+    -- Without this, a K9 currently resting in a kennel (a permanent,
+    -- server-confirmed 'kennel_rest' claim) or mid-vehicle-seat-claim
+    -- ('vehicle_seat') could still fire requestBiteHold/requestTakedown/
+    -- requestDrag and be GRANTED as the holder -- attributing a real combat
+    -- effect, and on success a real biteHoldSuccess/takedownSuccess XP
+    -- mint, to a citizenid the server itself believes is attached inside a
+    -- kennel or seated in a vehicle. `IsBodyClaimed` (not
+    -- `IsBodyClaimedByOther`) is used deliberately here: a HOLDER never
+    -- claims anything of its OWN in this registry (see
+    -- server/bodyclaims.lua's own header "WHY NOT THE HOLDER SIDE"
+    -- paragraph), so there is no "own mechanic" to exempt the way
+    -- IsBodyClaimedByOther's renewal semantics exempt a caller re-confirming
+    -- its own prior claim -- passing 'combat_target' here instead would
+    -- WRONGLY exempt the one case that most needs catching: a K9 who is
+    -- ALREADY the TARGET of a different combat effect (someone else's
+    -- ActiveHolds entry against THIS citizenid) trying to ALSO become a
+    -- holder against a third party. GATE THE START, NEVER THE STOP: this
+    -- lives inside ValidateCombatRequest, which this file's own doc comment
+    -- already establishes is ONLY ever called to OPEN a hold — never from
+    -- EndHold, EndActiveEffectForHolder, the maintenance expiry sweep, or
+    -- releaseBiteHold/releaseTakedown/releaseDrag — so a K9 who somehow
+    -- ends up claimed by another mechanic mid-hold (this check cannot
+    -- itself produce that state, since 'already_engaged' above already
+    -- refuses a second grant to an existing holder) can still always let go
+    -- of whatever it already holds, unaffected by this gate.
+    do
+        local holderPlayer = exports.qbx_core:GetPlayer(src)
+        local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
+        if holderCitizenid and IsBodyClaimed(holderCitizenid) then
+            return false, nil, nil, nil, nil, 'holder_body_claimed'
+        end
+    end
+
     -- server/wellbeing.lua §13.5 cross-file dependency, wired here for real
     -- (this file's own header names the exact call site) — a K9 whose OWN
     -- character is currently hesitating (FearStress) or distracted cannot
@@ -1894,6 +1974,27 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'not_warned'
     end
 
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- a PLAYER target already resting inside a kennel (attached to it,
+    -- server-confirmed) or already mid-vehicle-seat-claim cannot ALSO be
+    -- granted as a bite-hold/takedown/drag target at the same instant --
+    -- the identical class of "two exclusive mechanics grant the same body
+    -- at once" race this pass's own audit traced concretely for
+    -- kennel-vs-vehicle, applied here to combat's own target side. NPC
+    -- targets have no citizenid and therefore cannot participate in this
+    -- registry at all -- `isPlayerTarget` gates this to the one case where
+    -- a real citizenid exists to check. `already_held` (ActiveHolds' own
+    -- netId-keyed check, above) already prevents a SECOND combat effect
+    -- from targeting the same entity, so this is checking a DIFFERENT
+    -- exclusive claim, not a redundant re-check of that one.
+    if isPlayerTarget then
+        local targetPlayer = exports.qbx_core:GetPlayer(targetSrc)
+        local targetCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
+        if targetCitizenid and IsBodyClaimedByOther(targetCitizenid, 'combat_target') then
+            return false, nil, nil, nil, nil, 'target_body_claimed'
+        end
+    end
+
     return true, k9Ped, targetPed, isPlayerTarget, targetSrc
 end
 
@@ -1921,6 +2022,20 @@ local function EndHold(targetNetId, reason)
     ActiveHolds[targetNetId] = nil
     if K9ActiveEffect[hold.holderSrc] == targetNetId then
         K9ActiveEffect[hold.holderSrc] = nil
+    end
+
+    -- EXCLUSIVE BODY-CLAIM REGISTRY release (server/bodyclaims.lua, this
+    -- pass) -- mirrors the ClaimBody call at each of this file's three
+    -- grant sites (requestBiteHold/HandleTakedownRequest/requestDrag). EndHold
+    -- is THE single choke point every termination path (manual release,
+    -- timeout, target/holder disconnect, target/holder death) already
+    -- funnels through -- releasing here, once, covers all of them without
+    -- duplicating this call at every one of those call sites. `hold.targetCitizenid`
+    -- is nil for an NPC target (never claimed anything here to begin with)
+    -- or a player target whose citizenid could not be resolved at grant
+    -- time, both harmless no-ops for ReleaseBody.
+    if hold.targetCitizenid then
+        ReleaseBody(hold.targetCitizenid, 'combat_target')
     end
 
     if hold.effectType == 'bite' then
@@ -2157,6 +2272,32 @@ end
 --- @return boolean
 function IsK9CurrentlyHolding(holderSrc)
     return K9ActiveEffect[holderSrc] ~= nil
+end
+
+--- Which effectType (if any) `holderSrc` is CURRENTLY the active holder of
+--- -- 'bite' | 'takedown' | 'drag' | nil. Read-only, same posture as
+--- IsK9CurrentlyHolding/CountActiveHoldsByEffectType immediately above --
+--- never mutates ActiveHolds or K9ActiveEffect.
+---
+--- WHY THIS EXISTS (this pass, kennel-vs-vehicle-seat race fix): a HOLDER's
+--- own busy-state is already fully answered by IsK9CurrentlyHolding above
+--- for a plain yes/no, but server/vehicle.lua's requestVehicleSeatClaim
+--- needs to pick BETWEEN two already-shipped, effect-specific rejection
+--- messages (locale('vehicle.blocked_by_bite_hold') vs.
+--- locale('vehicle.blocked_by_drag'), both pre-existing keys
+--- client/vehicle.lua's own — previously CLIENT-only, therefore racy —
+--- guard already used) rather than one generic one. Exposing the effectType
+--- itself here lets that file choose accurately without reaching into
+--- ActiveHolds/K9ActiveEffect directly, the same "read a small accessor,
+--- never the other file's private table" discipline this resource's
+--- cross-file contracts already establish everywhere else.
+--- @param holderSrc number
+--- @return string? effectType
+function GetActiveHoldEffectTypeForHolder(holderSrc)
+    local targetNetId = K9ActiveEffect[holderSrc]
+    if not targetNetId then return nil end
+    local hold = ActiveHolds[targetNetId]
+    return hold and hold.effectType or nil
 end
 
 --- LIFECYCLE QA FIX (this pass) — closes the gap a lifecycle QA pass found:
@@ -2917,13 +3058,26 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     local expiresAt = now + Config.Combat.BiteAndHold.maxDurationMs
     local k9NetId = NetworkGetNetworkIdFromEntity(k9Ped)
 
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- resolved HERE, once, while targetSrc is confirmed still connected
+    -- (ValidateCombatRequest just re-verified it moments ago), and stored
+    -- on the hold itself so EndHold can release the claim later without
+    -- re-resolving a citizenid for a target who may have disconnected by
+    -- then -- see EndHold's own release call for why.
+    local targetCitizenid = nil
+    if isPlayerTarget then
+        local targetPlayer = exports.qbx_core:GetPlayer(targetSrc)
+        targetCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
+    end
+
     ActiveHolds[targetNetId] = {
-        effectType     = 'bite',
-        holderSrc      = src,
-        isPlayerTarget = isPlayerTarget,
-        targetSrc      = targetSrc,
-        startedAt      = now,
-        expiresAt      = expiresAt,
+        effectType      = 'bite',
+        holderSrc       = src,
+        isPlayerTarget  = isPlayerTarget,
+        targetSrc       = targetSrc,
+        targetCitizenid = targetCitizenid,
+        startedAt       = now,
+        expiresAt       = expiresAt,
         compliance = {
             lastPos               = GetEntityCoords(targetPed),
             lastTime              = now,
@@ -2932,6 +3086,15 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
         },
     }
     K9ActiveEffect[src] = targetNetId
+
+    if targetCitizenid then
+        -- ttlMs = the hold's OWN remaining duration -- this claim can never
+        -- outlive Config.Combat.BiteAndHold.maxDurationMs's own hard cap
+        -- (DEVELOPER_REFERENCE.md §12.0 item 4), and EndHold's own release
+        -- (below in this file) fires well before that TTL in the common
+        -- case regardless.
+        ClaimBody(targetCitizenid, 'combat_target', expiresAt - now, 'bite')
+    end
 
     if isPlayerTarget then
         -- Category B relay -- DEVELOPER_REFERENCE.md §12.0 item 8. Sent ONLY to
@@ -3160,13 +3323,23 @@ local function HandleTakedownRequest(src, targetNetId)
     local now = GetGameTimer()
     local expiresAt = now + Config.Combat.NonLethalTakedown.ragdollDurationMs
 
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- see requestBiteHold's own identical comment above for the full
+    -- writeup this mirrors.
+    local targetCitizenid2 = nil
+    if isPlayerTarget2 then
+        local targetPlayer2 = exports.qbx_core:GetPlayer(targetSrc2)
+        targetCitizenid2 = targetPlayer2 and targetPlayer2.PlayerData and targetPlayer2.PlayerData.citizenid
+    end
+
     ActiveHolds[targetNetId] = {
-        effectType     = 'takedown',
-        holderSrc      = src,
-        isPlayerTarget = isPlayerTarget2,
-        targetSrc      = targetSrc2,
-        startedAt      = now,
-        expiresAt      = expiresAt,
+        effectType      = 'takedown',
+        holderSrc       = src,
+        isPlayerTarget  = isPlayerTarget2,
+        targetSrc       = targetSrc2,
+        targetCitizenid = targetCitizenid2,
+        startedAt       = now,
+        expiresAt       = expiresAt,
         compliance = {
             baselinePos = afterPos,
             lastPos     = afterPos,
@@ -3175,6 +3348,13 @@ local function HandleTakedownRequest(src, targetNetId)
         },
     }
     K9ActiveEffect[src] = targetNetId
+
+    if targetCitizenid2 then
+        -- ttlMs = this hold's OWN remaining duration
+        -- (Config.Combat.NonLethalTakedown.ragdollDurationMs) -- see
+        -- requestBiteHold's own identical comment for the full reasoning.
+        ClaimBody(targetCitizenid2, 'combat_target', expiresAt - now, 'takedown')
+    end
 
     if isPlayerTarget2 then
         -- Category B relay -- DEVELOPER_REFERENCE.md §12.0 item 8.
@@ -3521,13 +3701,23 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     -- Config.Combat.* field in this file is validated this way today.
     local expiresAt = now + Config.Combat.PropDragging.maxDragDurationMs
 
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- see requestBiteHold's own identical comment (above in this file) for
+    -- the full writeup this mirrors.
+    local targetCitizenid = nil
+    if isPlayerTarget then
+        local targetPlayer = exports.qbx_core:GetPlayer(targetSrc)
+        targetCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
+    end
+
     ActiveHolds[targetNetId] = {
-        effectType     = 'drag',
-        holderSrc      = src,
-        isPlayerTarget = isPlayerTarget,
-        targetSrc      = targetSrc,
-        startedAt      = now,
-        expiresAt      = expiresAt,
+        effectType      = 'drag',
+        holderSrc       = src,
+        isPlayerTarget  = isPlayerTarget,
+        targetSrc       = targetSrc,
+        targetCitizenid = targetCitizenid,
+        startedAt       = now,
+        expiresAt       = expiresAt,
         compliance = {
             -- lastPos/lastTime are stamped for parity with bite/takedown's
             -- own compliance records (SampleCompliance's shared tail always
@@ -3540,6 +3730,13 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
         },
     }
     K9ActiveEffect[src] = targetNetId
+
+    if targetCitizenid then
+        -- ttlMs = this hold's OWN remaining duration
+        -- (Config.Combat.PropDragging.maxDragDurationMs) -- see
+        -- requestBiteHold's own identical comment for the full reasoning.
+        ClaimBody(targetCitizenid, 'combat_target', expiresAt - now, 'drag')
+    end
 
     -- Category A: tells the HOLDING K9's own client to start its per-tick
     -- AttachEntityToEntity re-assertion loop (client/combat.lua). isPlayerTarget

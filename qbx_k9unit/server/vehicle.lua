@@ -120,6 +120,31 @@
          while a claim was held) — closing the one gap mechanism 1 alone
          would leave open (a vehicle destroyed mid-claim that nobody ever
          asks about again).
+
+    ======================================================================
+    EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) —
+    closes a SECOND, independently confirmed race this file's own claim
+    table never protected against: server/kennel.lua's requestEnterKennel
+    granting kennel-rest occupancy to the SAME citizenid concurrently with
+    (or, just as broken, at any point AFTER) this file granting a seat
+    claim — neither file previously knew the other's registry existed.
+    requestVehicleSeatClaim above now calls
+    `IsBodyClaimedByOther(citizenid, 'vehicle_seat')` before ever resolving
+    the target vehicle, and `ClaimBody(citizenid, 'vehicle_seat',
+    VEHICLE_SEAT_CLAIM_TTL_MS)` at the exact same non-yielding write this
+    file's own VehicleSeatClaims entry is created — reusing THIS file's own
+    TTL constant so the shared claim can never outlive the authoritative
+    one it mirrors. Every one of the four release mechanisms enumerated
+    above (GetLiveClaim's lazy TTL expiry, ClearVehicleSeatClaim,
+    playerDropped, the periodic sweep) now ALSO calls
+    `ReleaseBody(claim.citizenid, 'vehicle_seat')` at the same point it
+    clears its own VehicleSeatClaims entry — see server/bodyclaims.lua's own
+    header for the full registry design, including why the leash is
+    deliberately NOT a participant and why a combat-mechanic HOLDER's own
+    busy-state (server/combat.lua's `IsK9CurrentlyHolding`/
+    `GetActiveHoldEffectTypeForHolder`, both called directly by
+    requestVehicleSeatClaim above) is answered by an existing accessor
+    rather than a fourth participant in that registry.
 ]]
 
 -- Server-side mirror of client/vehicle.lua's own K9VehicleHashes — built
@@ -185,6 +210,13 @@ local function GetLiveClaim(netId, seatIndex)
     if GetGameTimer() - claim.claimedAt > VEHICLE_SEAT_CLAIM_TTL_MS then
         perVehicle[seatIndex] = nil
         if not next(perVehicle) then VehicleSeatClaims[netId] = nil end
+        -- EXCLUSIVE BODY-CLAIM REGISTRY release -- mirrors the ClaimBody
+        -- call in requestVehicleSeatClaim above. ReleaseBody is a no-op if
+        -- this citizenid's own 'vehicle_seat' claim already separately
+        -- expired via server/bodyclaims.lua's own TTL/sweep, so this is
+        -- never a double-release hazard, only ever a cleanup that might
+        -- occasionally arrive slightly ahead of that file's own.
+        ReleaseBody(claim.citizenid, 'vehicle_seat')
         return nil
     end
 
@@ -207,6 +239,10 @@ local function ClearVehicleSeatClaim(netId, seatIndex, src)
     if claim and claim.src == src then
         perVehicle[seatIndex] = nil
         if not next(perVehicle) then VehicleSeatClaims[netId] = nil end
+        -- EXCLUSIVE BODY-CLAIM REGISTRY release -- see GetLiveClaim's own
+        -- identical release above for why this can never double-release
+        -- unsafely.
+        ReleaseBody(claim.citizenid, 'vehicle_seat')
     end
 end
 
@@ -309,6 +345,65 @@ RegisterNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', function(vehicleNe
         return
     end
 
+    -- A K9 actively holding/dragging a suspect (BiteAndHold/NonLethalTakedown/
+    -- PropDragging, server/combat.lua) cannot ALSO load into a vehicle at
+    -- the same instant. Already this resource's INTENDED behavior --
+    -- client/vehicle.lua's own EnterNearestK9Vehicle already carries this
+    -- exact check (IsDragEngaged()/IsBiteHoldEngaged(), same locale keys
+    -- reused below) -- but only CLIENT-side, and therefore just as racy
+    -- against a concurrent grant as the kennel-vs-vehicle pair this pass's
+    -- own audit traced concretely. Made server-authoritative here via the
+    -- SAME already-tested, K9ActiveEffect-backed accessor server/kennel.lua's
+    -- own requestEnterKennel now also calls -- see server/bodyclaims.lua's
+    -- own header "WHY NOT THE HOLDER SIDE" paragraph for why this is a
+    -- direct accessor call, not a ClaimBody/IsBodyClaimedByOther
+    -- participant. Soft dependency, this resource's established convention
+    -- -- server/combat.lua loads after this file in fxmanifest.lua's
+    -- server_scripts.
+    if type(IsK9CurrentlyHolding) == 'function' and IsK9CurrentlyHolding(src) then
+        local effectType = type(GetActiveHoldEffectTypeForHolder) == 'function' and GetActiveHoldEffectTypeForHolder(src)
+        deny(effectType == 'drag' and locale('vehicle.blocked_by_drag') or locale('vehicle.blocked_by_bite_hold'))
+        return
+    end
+
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+    -- closes the CONFIRMED kennel-vs-vehicle-seat race that file's own
+    -- header documents in full (a K9 resting in a kennel -- attached to it
+    -- server-confirmed, not merely client-claimed -- could still race this
+    -- handler and claim a seat too, since neither file previously consulted
+    -- the other's registry). ALSO closes this same claim's combat-target
+    -- analogue for a PLAYER already the TARGET of a bite-hold/takedown/drag
+    -- -- client/vehicle.lua's own IsDragTargetEngaged() guard already
+    -- covers the drag-target case CLIENT-side (racy, same class of gap);
+    -- this closes it server-side and extends the SAME protection to
+    -- bite-hold/takedown targets, which the client never guarded against at
+    -- all. `citizenid`, never `src`, is the identity checked -- server ids
+    -- are recycled, this registry is keyed durably.
+    do
+        local claimedByOther, otherMechanic, detail = IsBodyClaimedByOther(citizenid, 'vehicle_seat')
+        if claimedByOther then
+            if otherMechanic == 'kennel_rest' then
+                -- Reuses the SAME locale key client/vehicle.lua's own
+                -- pre-existing (racy) kennel-rest guard already reuses for
+                -- this exact scenario (see that file's IsRestingInKennel()
+                -- check, further down its EnterNearestK9Vehicle) -- not a
+                -- new string, an already-established cross-mechanic reuse
+                -- this pass makes server-authoritative.
+                deny(locale('kennel.enter_already_resting'))
+            elseif detail == 'drag' then
+                deny(locale('vehicle.blocked_by_being_dragged'))
+            else
+                -- bite/takedown target, or an unrecognized detail -- no
+                -- existing vehicle.* string names this specific scenario;
+                -- locales/en.json is outside this pass's file ownership, so
+                -- this reuses the generic, already-shipped, honest fallback
+                -- rather than inventing a misleading one.
+                deny(locale('combat.reject_fallback'))
+            end
+            return
+        end
+    end
+
     -- Never trust the client's word for what vehicleNetId names — resolve
     -- it and verify it is a real, currently-existing VEHICLE (type 2, never
     -- a ped or object) whose model is actually a configured K9 vehicle.
@@ -345,6 +440,14 @@ RegisterNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', function(vehicleNe
 
     VehicleSeatClaims[vehicleNetId] = VehicleSeatClaims[vehicleNetId] or {}
     VehicleSeatClaims[vehicleNetId][seatIndex] = { src = src, citizenid = citizenid, claimedAt = GetGameTimer() }
+    -- EXCLUSIVE BODY-CLAIM REGISTRY -- see server/bodyclaims.lua's own
+    -- header EXPIRY POLICY section: 'vehicle_seat' reuses this file's own
+    -- VEHICLE_SEAT_CLAIM_TTL_MS bound so this claim can never outlive the
+    -- authoritative VehicleSeatClaims entry it mirrors. A `src == src`
+    -- renewal (this same client re-requesting the exact seat it already
+    -- holds) simply refreshes this claim's own expiry too -- ClaimBody's
+    -- own RENEWAL semantics handle that for free, no special-case needed.
+    ClaimBody(citizenid, 'vehicle_seat', VEHICLE_SEAT_CLAIM_TTL_MS)
 
     TriggerClientEvent('qbx_k9unit:client:vehicleSeatClaimGranted', src, vehicleNetId, seatIndex, requestToken)
 end)
@@ -376,6 +479,10 @@ AddEventHandler('playerDropped', function(_reason)
         for seatIndex, claim in pairs(seats) do
             if claim.src == src then
                 seats[seatIndex] = nil
+                -- EXCLUSIVE BODY-CLAIM REGISTRY release -- see
+                -- GetLiveClaim's own identical release above for why this
+                -- can never double-release unsafely.
+                ReleaseBody(claim.citizenid, 'vehicle_seat')
             end
         end
         if not next(seats) then
@@ -442,6 +549,10 @@ CreateThread(function()
                 for seatIndex, claim in pairs(seats) do
                     if vehicleGone or (now - claim.claimedAt > VEHICLE_SEAT_CLAIM_TTL_MS) then
                         seats[seatIndex] = nil
+                        -- EXCLUSIVE BODY-CLAIM REGISTRY release -- see
+                        -- GetLiveClaim's own identical release above for why
+                        -- this can never double-release unsafely.
+                        ReleaseBody(claim.citizenid, 'vehicle_seat')
                     end
                 end
 

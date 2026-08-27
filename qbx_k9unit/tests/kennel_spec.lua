@@ -389,6 +389,12 @@ local function newKennelFixture(opts)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (kennel-vs-vehicle-seat race fix pass)
+    -- -- requestEnterKennel/requestExitKennel now call
+    -- ClaimBody/ReleaseBody/IsBodyClaimedByOther, real globals from this
+    -- file, loaded here the same way server/entities.lua's own
+    -- ResolveNetworkEntity already is (never a reimplementation).
+    Sandbox.loadInto('../server/bodyclaims.lua', env)
     Sandbox.loadInto('../server/kennel.lua', env)
 
     return {
@@ -401,6 +407,13 @@ local function newKennelFixture(opts)
         handlerXPTierKennelCalls = handlerXPTierKennelCalls,
         awardHandlerXPCalls = awardHandlerXPCalls,
         createThreadCallCount = function() return createThreadCallCount end,
+        -- KENNEL OCCUPANT LIVENESS SWEEP (this pass) -- resumes every
+        -- captured coroutine once, same shape as
+        -- tests/vehicle_spec.lua's own `stepSweep`. Also resumes
+        -- server/bodyclaims.lua's own periodic sweep thread (loaded into
+        -- this SAME env) -- harmless, it only ever walks an unrelated
+        -- table.
+        stepSweep = threadRunner.step,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
         callbacks = registeredCallbacks,
@@ -1938,6 +1951,169 @@ t.test('requestEnterKennel: a kennel already occupied by a DIFFERENT K9 refuses 
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.enter_kennel_occupied'))
 end)
 
+-- ----------------------------------------------------------------------
+-- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
+-- RED-THEN-GREEN PROOF, in the real cross-file integration context (not
+-- just server/bodyclaims.lua's own isolated unit tests, tests/bodyclaims_spec.lua):
+--   RED, closed: a citizenid already claimed by a DIFFERENT exclusive
+--   mechanic is refused kennel entry -- the exact shape of the confirmed
+--   kennel-vs-vehicle-seat race, proven here from server/kennel.lua's own
+--   side without needing server/vehicle.lua loaded at all (ClaimBody is
+--   called directly, the same way a real requestVehicleSeatClaim grant
+--   would have called it).
+--   GREEN, the control: an ordinary single request with NO prior claim
+--   (every test above this section) still succeeds -- already proven
+--   throughout this file; this section only adds the NEW refusal path.
+--   GREEN, the other control: requestExitKennel still works correctly
+--   WHILE a claim is actively held -- see "requestExitKennel also releases
+--   this citizenid's kennel_rest body-claim" below.
+-- ----------------------------------------------------------------------
+
+t.test('EXCLUSIVE BODY-CLAIM: requestEnterKennel is refused when the SAME citizenid already holds a live vehicle_seat claim', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    -- Simulates server/vehicle.lua's own requestVehicleSeatClaim having
+    -- already granted a seat claim for this exact citizenid, mid-race,
+    -- before this kennel request is processed.
+    f.env.ClaimBody('DOG02', 'vehicle_seat', 10000)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'the race this pass exists to close: entry must be refused, never granted alongside another mechanic\'s live claim')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: requestEnterKennel is refused when the SAME citizenid already holds a live combat_target claim', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.env.ClaimBody('DOG02', 'combat_target', 5000, 'drag')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: a claim that has genuinely EXPIRED no longer blocks entry -- a 300ms race must never become a permanent lockout', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.env.ClaimBody('DOG02', 'vehicle_seat', 10000)
+
+    f.advance(10001) -- past the claim's own 10000ms ttlMs
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'an expired claim must never permanently block a legitimate later request')
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: requestEnterKennel is refused while server/combat.lua\'s own IsK9CurrentlyHolding reports this src as a busy combat holder', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    -- server/combat.lua is not loaded in this fixture -- stubbed directly,
+    -- mirroring the real `type(IsK9CurrentlyHolding) == 'function'` guard's
+    -- own soft-dependency contract.
+    f.env.IsK9CurrentlyHolding = function(src) return src == 2 end
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'))
+end)
+
+t.test('EXCLUSIVE BODY-CLAIM: a granted kennel entry claims this citizenid\'s body -- a DIFFERENT mechanic sees it as claimed', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    local claimed, mechanic = f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat')
+    t.isTrue(claimed)
+    t.equals(mechanic, 'kennel_rest')
+end)
+
+t.test('requestExitKennel also releases this citizenid\'s kennel_rest body-claim -- release paths still work while a claim is actively held', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.isTrue(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'sanity: the claim is genuinely held before exit')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestExitKennel', 2)
+
+    t.isFalse(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'exiting must release the claim -- a DIFFERENT mechanic can now claim the same citizenid')
+    t.isTrue(f.env.ClaimBody('DOG02', 'vehicle_seat', 10000), 'the control: a legitimate claim by a different mechanic succeeds once released')
+end)
+
+t.test('playerDropped (occupant disconnect) also releases this citizenid\'s kennel_rest body-claim', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.firePlayerDropped(2, 'left')
+
+    t.isFalse(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'a disconnecting occupant must not leave a permanent claim behind')
+end)
+
+-- ----------------------------------------------------------------------
+-- KENNEL OCCUPANT LIVENESS SWEEP (this pass) -- a citizenid granted entry
+-- who never genuinely attaches (or becomes detached by some other means)
+-- must not hold the kennel, and this citizenid's own kennel_rest claim,
+-- forever.
+-- ----------------------------------------------------------------------
+
+t.test('LIVENESS SWEEP: a genuinely-attached occupant (ped stays at the kennel\'s own coords) survives the sweep untouched', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    -- Models the real AttachEntityToEntity outcome: the occupant's own ped
+    -- coords now read as the kennel's own (an attached child's transform is
+    -- re-clamped to its parent's every frame).
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 })
+
+    f.advance(15001)
+    f.stepSweep() -- primes the loop's own first Wait()
+    f.stepSweep() -- one full sweep pass
+
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'sanity: entry was genuinely granted earlier')
+    t.isTrue(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'a genuinely-attached occupant must still hold its claim after the sweep')
+end)
+
+t.test('LIVENESS SWEEP: a citizenid who never actually attached (ped stays far from the kennel) is force-cleared -- closes the "accept the grant, never attach, hold it forever" abuse', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    -- Deliberately does NOT move the occupant's ped to the kennel's own
+    -- coords -- models a modified client that accepted the grant and never
+    -- actually called AttachEntityToEntity, staying fully mobile.
+    f.setPed(2, 5002, { x = 200, y = 200, z = 0 })
+
+    f.advance(15001)
+    f.stepSweep() -- primes the loop's own first Wait()
+    f.stepSweep() -- one full sweep pass
+
+    t.isFalse(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'the stale claim must be force-released -- a citizenid that never attached must not block every other mechanic forever')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.exit_kennel_lost'), 'the affected player is told, using the SAME message this feature already ships for "lost track of the kennel"')
+
+    -- The kennel itself is now free for a genuine occupant.
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'), 'a genuine K9 can now enter the kennel the stale claim was blocking')
+end)
+
+t.test('LIVENESS SWEEP: an unoccupied kennel produces no notify and no state change -- the sweep is a genuine no-op when there is nothing to check', function()
+    local f = newKennelFixture()
+    deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+
+    f.advance(15001)
+    f.stepSweep() -- primes the loop's own first Wait()
+    f.stepSweep() -- one full sweep pass
+
+    t.equals(#f.notifyCalls, 1, 'only the earlier deploy\'s own success notify -- the sweep found nothing to act on')
+end)
+
 t.test('requestEnterKennel: cannot climb into a kennel that is currently being carried', function()
     local f = newKennelFixture()
     local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
@@ -2699,6 +2875,12 @@ local function newCombinedFixture()
     -- is the entire point of this fixture.
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- EXCLUSIVE BODY-CLAIM REGISTRY (kennel-vs-vehicle-seat race fix pass)
+    -- -- requestEnterKennel/requestExitKennel now call
+    -- ClaimBody/ReleaseBody/IsBodyClaimedByOther, real globals from this
+    -- file, loaded here the same way server/entities.lua's own
+    -- ResolveNetworkEntity already is (never a reimplementation).
+    Sandbox.loadInto('../server/bodyclaims.lua', env)
     Sandbox.loadInto('../server/kennel.lua', env)
     Sandbox.loadInto('../server/fetch.lua', env)
 
