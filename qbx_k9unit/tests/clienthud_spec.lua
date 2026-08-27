@@ -92,7 +92,7 @@ local function newHudFixture(opts)
     local function GetPlayerSprintStaminaRemaining(_playerId) return staminaRemaining end
     local function PlayerId() return 0 end
 
-    local qbx = { PlayerData = { metadata = {} } }
+    local qbx = { PlayerData = { metadata = {}, citizenid = opts.citizenid } }
 
     local registerNUICallbacks = {}
     local function RegisterNUICallback(name, handler) registerNUICallbacks[name] = handler end
@@ -106,6 +106,52 @@ local function newHudFixture(opts)
 
     local netEventHandlers = {}
     local function RegisterNetEvent(eventName, handler) netEventHandlers[eventName] = handler end
+
+    -- K9 ONBOARDING HINT (this pass) -----------------------------------
+    -- KVP STUB -- a plain in-memory table standing in for this client's
+    -- real KVP store. `opts.kvpStore`, when supplied, lets TWO SEPARATE
+    -- fixture instances share the SAME backing table -- exactly what the
+    -- "recycled server id must not leak another citizenid's state" test
+    -- below needs (two fixtures = two client-side sessions, one shared
+    -- physical KVP store between them, same as two different citizenids
+    -- played from the same PC).
+    --
+    -- HONEST NOTE, per the coordinator's own flag on this feature: real
+    -- GetResourceKvpString/SetResourceKvp are NOT independently verified
+    -- against a live FXServer this pass (see client/hud.lua's own
+    -- "DURABLE STORAGE" section and the root .luacheckrc's matching
+    -- entry). This stub proves this FILE's own persistence LOGIC is
+    -- correct GIVEN a working KVP store -- it does NOT and CANNOT prove
+    -- the real natives behave this way. The dedicated
+    -- "KVP NATIVES ABSENT/NO-OP" section further down this file is the
+    -- one that actually exercises the "what if these silently do
+    -- nothing" case the coordinator asked for -- read that section
+    -- rather than mistaking this stub's own green tests for proof the
+    -- real natives work.
+    local kvpStore = opts.kvpStore or {}
+    local kvpAvailable = opts.kvpAvailable
+    if kvpAvailable == nil then kvpAvailable = true end
+    local function GetResourceKvpString(key)
+        if not kvpAvailable then return nil end
+        return kvpStore[key]
+    end
+    local function SetResourceKvp(key, value)
+        if not kvpAvailable then return end -- mirrors a genuinely-unregistered native silently writing nothing (see the section note above)
+        kvpStore[key] = value
+    end
+
+    -- DISMISS-KEY STUB -- one-shot, matching "JustPressed" semantics: true
+    -- exactly once after pressDismissKey() is called, false every other
+    -- tick, same as a real "just pressed this frame" native would behave
+    -- across repeated polls of a single real key press.
+    local dismissKeyPressedOnce = false
+    local function IsDisabledControlJustPressed(_padIndex, _control)
+        if dismissKeyPressedOnce then
+            dismissKeyPressedOnce = false
+            return true
+        end
+        return false
+    end
 
     local env = Sandbox.newEnv({
         CanShowK9UI = CanShowK9UI,
@@ -121,6 +167,9 @@ local function newHudFixture(opts)
         CreateThread = CreateThread,
         Wait = Wait,
         RegisterNetEvent = RegisterNetEvent,
+        GetResourceKvpString = GetResourceKvpString,
+        SetResourceKvp = SetResourceKvp,
+        IsDisabledControlJustPressed = IsDisabledControlJustPressed,
     })
     if featureBlocksAvailable then
         env.IsK9FeatureBlocked = IsK9FeatureBlocked
@@ -133,6 +182,12 @@ local function newHudFixture(opts)
     end
     for key, value in pairs(opts.features or {}) do
         env.Config.Features[key] = value
+    end
+    if opts.k9OnboardingEnabled ~= nil then
+        env.Config.K9Onboarding.enabled = opts.k9OnboardingEnabled
+    end
+    if opts.k9OnboardingNudgeDurationMinutes ~= nil then
+        env.Config.K9Onboarding.nudgeDurationMinutes = opts.k9OnboardingNudgeDurationMinutes
     end
 
     Sandbox.loadInto('../client/hud.lua', env)
@@ -164,6 +219,44 @@ local function newHudFixture(opts)
         end,
         hasWellbeingHandler = function() return netEventHandlers['qbx_k9unit:client:wellbeingUpdate'] ~= nil end,
         lastMessage = function() return sendNUIMessageCalls[#sendNUIMessageCalls] end,
+        -- HANDLER CONDITION BADGE (this pass) -----------------------------
+        firePartnerConditionUpdate = function(sourceValue, payload)
+            local handler = netEventHandlers['qbx_k9unit:client:partnerConditionUpdate']
+            assert(handler, 'no partnerConditionUpdate handler registered')
+            env.source = sourceValue
+            handler(payload)
+        end,
+        hasPartnerConditionHandler = function() return netEventHandlers['qbx_k9unit:client:partnerConditionUpdate'] ~= nil end,
+        --- The last SendNUIMessage call whose `action` matches, or nil.
+        --- Needed because 'hud:updateVitals' and 'hud:partnerCondition' are
+        --- two INDEPENDENT message streams interleaved in the same
+        --- sendNUIMessageCalls array -- lastMessage() alone cannot tell
+        --- them apart.
+        --- @param action string
+        lastMessageWithAction = function(action)
+            for i = #sendNUIMessageCalls, 1, -1 do
+                if sendNUIMessageCalls[i].action == action then return sendNUIMessageCalls[i] end
+            end
+            return nil
+        end,
+        countMessagesWithAction = function(action)
+            local n = 0
+            for _, msg in ipairs(sendNUIMessageCalls) do
+                if msg.action == action then n = n + 1 end
+            end
+            return n
+        end,
+        -- K9 ONBOARDING HINT (this pass) ------------------------------
+        setCitizenId = function(id) qbx.PlayerData.citizenid = id end,
+        pressDismissKey = function() dismissKeyPressedOnce = true end,
+        kvpStore = kvpStore,
+        fireTabletOpened = function()
+            local handler = assert(registerNUICallbacks['hud:tabletOpened'], 'client/hud.lua did not register a hud:tabletOpened NUI callback')
+            local cbCalls = {}
+            handler({}, function(response) cbCalls[#cbCalls + 1] = response end)
+            return cbCalls
+        end,
+        hasTabletOpenedCallback = function() return registerNUICallbacks['hud:tabletOpened'] ~= nil end,
     }
 end
 
@@ -171,15 +264,15 @@ end
 -- Gating
 -- ----------------------------------------------------------------------
 
-t.test('gating: HealthStaminaHUD = false -- zero NUI callbacks, zero threads, and the wellbeingUpdate listener is not registered even if a wellbeing flag is on', function()
+t.test('gating: HealthStaminaHUD = false -- zero vitals NUI callbacks/threads, and the wellbeingUpdate listener is not registered even if a wellbeing flag is on. The ONE thread that DOES still start is the K9 ONBOARDING HINT thread further down this file -- it is INDEPENDENT of HealthStaminaHUD by design (see that section header) and is on by default in the real, unmodified config.lua this fixture loads.', function()
     local f = newHudFixture({ healthStaminaHUD = false, features = { FatigueSystem = true } })
-    t.equals(f.threadCreateCount(), 0)
+    t.equals(f.threadCreateCount(), 1, 'only the onboarding-hint thread -- see this test comment')
     t.isFalse(f.hasWellbeingHandler())
 end)
 
-t.test('gating: HealthStaminaHUD = true (real shipped default) -- one poll thread', function()
+t.test('gating: HealthStaminaHUD = true (real shipped default) -- one vitals poll thread PLUS the independent onboarding-hint thread (also on by default)', function()
     local f = newHudFixture()
-    t.equals(f.threadCreateCount(), 1)
+    t.equals(f.threadCreateCount(), 2)
 end)
 
 t.test('gating: no wellbeing flag on at all -- the wellbeingUpdate listener is never registered (ANY_WELLBEING_ELEMENT_ENABLED false)', function()
@@ -583,6 +676,278 @@ t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked unde
     t.isNil(f.env.IsK9FeatureBlocked)
     f.step()
     t.isTrue(f.lastMessage().data.visible, 'an unknown block state must never freeze/hide the HUD -- it must fail OPEN')
+end)
+
+-- ========================================================================
+-- HANDLER CONDITION BADGE (this pass) -- see server/wellbeing.lua's own
+-- "HANDLER CONDITION BADGE" header section and this file's own new header
+-- section for the full design. The listener under test here is a pure
+-- forwarding relay: server->client event in, one SendNUIMessage out, no
+-- state, no thread.
+-- ========================================================================
+
+t.test('HANDLER CONDITION BADGE: the listener registers UNCONDITIONALLY, even when HealthStaminaHUD is false -- this is a SEPARATE audience from the K9-vitals HUD', function()
+    local f = newHudFixture({ healthStaminaHUD = false })
+    t.isTrue(f.hasPartnerConditionHandler())
+end)
+
+t.test('HANDLER CONDITION BADGE: registers regardless of every wellbeing flag being off too -- this listener has no Config.Features gate of its own at all (the SERVER decides whether anything is ever sent)', function()
+    local f = newHudFixture({ features = {
+        FatigueSystem = false, MoodSystem = false, FearStressSystem = false,
+        InjuryLimping = false, DistractionSystem = false,
+    } })
+    t.isTrue(f.hasPartnerConditionHandler())
+end)
+
+t.test('HANDLER CONDITION BADGE: a visible=true payload forwards hud:partnerCondition with visible/tags/strings, unaffected by CanShowK9UI or #k9hud state', function()
+    local f = newHudFixture({ healthStaminaHUD = false, canShowK9UI = false })
+    f.firePartnerConditionUpdate(65535, { visible = true, tags = { 'tired', 'hungry' } })
+
+    local msg = f.lastMessageWithAction('hud:partnerCondition')
+    t.isTrue(msg ~= nil)
+    t.isTrue(msg.data.visible)
+    t.equals(#msg.data.tags, 2)
+    t.equals(msg.data.tags[1], 'tired')
+    t.equals(msg.data.tags[2], 'hungry')
+    t.equals(type(msg.data.strings), 'table')
+    t.equals(msg.data.strings.tired, 'Tired')
+    t.equals(msg.data.strings.fine, 'Fine')
+    t.equals(msg.data.strings.label, 'K9 Partner')
+end)
+
+t.test('HANDLER CONDITION BADGE: a visible=false payload forwards visible=false with an EMPTY tags array, even if the payload itself carried stray tags', function()
+    local f = newHudFixture()
+    f.firePartnerConditionUpdate(65535, { visible = false, tags = { 'tired' } })
+
+    local msg = f.lastMessageWithAction('hud:partnerCondition')
+    t.isFalse(msg.data.visible)
+    t.equals(#msg.data.tags, 0)
+end)
+
+t.test('HANDLER CONDITION BADGE: SOURCE-ORIGIN GUARD -- a non-65535 source is ignored, no message forwarded at all', function()
+    local f = newHudFixture()
+    f.firePartnerConditionUpdate(1, { visible = true, tags = { 'tired' } })
+    t.equals(f.countMessagesWithAction('hud:partnerCondition'), 0)
+end)
+
+t.test('HANDLER CONDITION BADGE: a non-table payload is a silent no-op, never a crash', function()
+    local f = newHudFixture()
+    local ok = pcall(f.firePartnerConditionUpdate, 65535, 'not-a-table')
+    t.isTrue(ok)
+    t.equals(f.countMessagesWithAction('hud:partnerCondition'), 0)
+end)
+
+t.test('HANDLER CONDITION BADGE: non-string entries in `tags` are dropped defensively rather than forwarded verbatim', function()
+    local f = newHudFixture()
+    f.firePartnerConditionUpdate(65535, { visible = true, tags = { 'tired', 42, false, 'hungry' } })
+
+    local msg = f.lastMessageWithAction('hud:partnerCondition')
+    t.equals(#msg.data.tags, 2)
+    t.equals(msg.data.tags[1], 'tired')
+    t.equals(msg.data.tags[2], 'hungry')
+end)
+
+t.test('HANDLER CONDITION BADGE: a missing `tags` field on a visible=true payload degrades to an empty array, never a crash', function()
+    local f = newHudFixture()
+    local ok = pcall(f.firePartnerConditionUpdate, 65535, { visible = true })
+    t.isTrue(ok)
+    local msg = f.lastMessageWithAction('hud:partnerCondition')
+    t.isTrue(msg.data.visible)
+    t.equals(#msg.data.tags, 0)
+end)
+
+t.test('HANDLER CONDITION BADGE: every one of the six tag strings plus fine/label resolves via the REAL locale() call against locales/en.json -- proves the keys genuinely exist, not just that this file compiles', function()
+    local f = newHudFixture()
+    f.firePartnerConditionUpdate(65535, { visible = true, tags = {} })
+    local msg = f.lastMessageWithAction('hud:partnerCondition')
+    local strings = msg.data.strings
+    for _, key in ipairs({ 'tired', 'unhappy', 'stressed', 'injured', 'hungry', 'thirsty', 'fine', 'label' }) do
+        t.equals(type(strings[key]), 'string')
+        t.isTrue(#strings[key] > 0)
+    end
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 ONBOARDING HINT (this pass) -- see client/hud.lua's own
+-- "K9 ONBOARDING HINT" section for the full contract this pins: a
+-- persistent, dismissible nudge that reminds a K9/handler the tablet
+-- exists, gone for good the instant they open the tablet OR dismiss it
+-- themselves, and durably keyed by citizenid (never by source/server id)
+-- so a recycled id can never inherit a stranger's state.
+--
+-- THREAD STEPPING: this thread follows the EXACT SAME shape as the vitals
+-- poll thread above (Wait() at the END of each branch, not the top) -- see
+-- this file's own header for why that makes every step() call, including
+-- the first, a complete evaluate-and-maybe-push pass, never a
+-- priming-only one.
+-- ----------------------------------------------------------------------
+
+t.test('ONBOARDING HINT: appears for a newly-granted player (real citizenid, CanShowK9UI true, clean KVP slate)', function()
+    local f = newHudFixture({ citizenid = 'CIT_NEW', canShowK9UI = true })
+    f.step()
+    local msg = f.lastMessageWithAction('hud:onboardingHint')
+    t.isNotNil(msg)
+    t.isTrue(msg.data.visible)
+    t.equals(msg.data.strings.title, 'K9 Command Tablet')
+end)
+
+t.test('ONBOARDING HINT: does NOT appear for someone who has already opened the tablet (pre-seeded KVP)', function()
+    local sharedKvp = { ['qbx_k9unit_onboard_opened_CIT_OPENED'] = '1' }
+    local f = newHudFixture({ citizenid = 'CIT_OPENED', canShowK9UI = true, kvpStore = sharedKvp })
+    f.step()
+    t.isNil(f.lastMessageWithAction('hud:onboardingHint'), 'a citizenid that already durably opened the tablet must never even get a first push')
+end)
+
+t.test('ONBOARDING HINT: opening the tablet (hud:tabletOpened NUI callback) hides it immediately AND marks it durably opened', function()
+    local sharedKvp = {}
+    local f = newHudFixture({ citizenid = 'CIT_OPENS_NOW', canShowK9UI = true, kvpStore = sharedKvp })
+    f.step()
+    t.isTrue(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'sanity: it was showing before the tablet opened')
+
+    local cbCalls = f.fireTabletOpened()
+    t.equals(#cbCalls, 1, 'the NUI callback must call back unconditionally, same convention as hud:ready')
+    t.isFalse(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'opening the tablet must hide the hint immediately, not wait for the next poll tick')
+    t.equals(sharedKvp['qbx_k9unit_onboard_opened_CIT_OPENS_NOW'], '1')
+
+    -- Durable across a reconnect: a brand-new fixture (a fresh session for
+    -- the SAME citizenid, sharing the SAME backing KVP store) must never
+    -- show the hint again.
+    local f2 = newHudFixture({ citizenid = 'CIT_OPENS_NOW', canShowK9UI = true, kvpStore = sharedKvp })
+    f2.step()
+    t.isNil(f2.lastMessageWithAction('hud:onboardingHint'), 'once durably opened, a fresh session for the SAME citizenid must never show the hint again')
+end)
+
+t.test('ONBOARDING HINT: dismissing it (the dismiss control) hides it immediately and STICKS across a reconnect', function()
+    local sharedKvp = {}
+    local f = newHudFixture({ citizenid = 'CIT_DISMISSER', canShowK9UI = true, kvpStore = sharedKvp })
+    f.step()
+    t.isTrue(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'sanity: it was showing before the dismiss key was pressed')
+
+    f.pressDismissKey()
+    f.step()
+    t.isFalse(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'pressing the dismiss control while visible must hide it immediately')
+    t.equals(sharedKvp['qbx_k9unit_onboard_dismissed_CIT_DISMISSER'], '1')
+
+    -- "Sticks" means DURABLE, not just "hidden for the rest of this
+    -- session" -- prove it survives a brand-new fixture (reconnect) for
+    -- the SAME citizenid, sharing the SAME backing KVP store.
+    local f2 = newHudFixture({ citizenid = 'CIT_DISMISSER', canShowK9UI = true, kvpStore = sharedKvp })
+    f2.step()
+    t.isNil(f2.lastMessageWithAction('hud:onboardingHint'), 'a dismissal must survive a reconnect for the same citizenid -- this is the whole point of "sticks"')
+end)
+
+t.test('ONBOARDING HINT: pressing the dismiss control while NOT currently visible is a no-op -- never misread as a real dismiss', function()
+    local sharedKvp = { ['qbx_k9unit_onboard_opened_CIT_ALREADY_DONE'] = '1' } -- already durably opened -- hint never shows this session
+    local f = newHudFixture({ citizenid = 'CIT_ALREADY_DONE', canShowK9UI = true, kvpStore = sharedKvp })
+    f.pressDismissKey()
+    f.step()
+    t.isNil(f.lastMessageWithAction('hud:onboardingHint'), 'nothing was ever shown, so nothing should ever be pushed')
+    t.isNil(sharedKvp['qbx_k9unit_onboard_dismissed_CIT_ALREADY_DONE'], 'a dismiss press with nothing on screen must never write a dismissed flag')
+end)
+
+t.test('ONBOARDING HINT: a RECYCLED identifier never inherits a stranger citizenid durable state -- two different citizenids sharing the SAME underlying KVP store stay fully independent', function()
+    local sharedKvp = {}
+
+    -- "Player A" fully onboards (opens the tablet) on this shared store.
+    local playerA = newHudFixture({ citizenid = 'PLAYER_A', canShowK9UI = true, kvpStore = sharedKvp })
+    playerA.step()
+    playerA.fireTabletOpened()
+    t.equals(sharedKvp['qbx_k9unit_onboard_opened_PLAYER_A'], '1')
+
+    -- "Player B" -- a DIFFERENT citizenid, same shared store (the closest
+    -- client-side analog to "the same server id/connection slot handed to
+    -- a new person") -- must start with a completely clean slate.
+    local playerB = newHudFixture({ citizenid = 'PLAYER_B', canShowK9UI = true, kvpStore = sharedKvp })
+    playerB.step()
+    local msg = playerB.lastMessageWithAction('hud:onboardingHint')
+    t.isNotNil(msg, 'a genuinely new citizenid must not inherit another citizenid already-onboarded state')
+    t.isTrue(msg.data.visible)
+    t.isNil(sharedKvp['qbx_k9unit_onboard_opened_PLAYER_B'], 'player B has not opened anything yet -- their own key must not exist')
+end)
+
+t.test('ONBOARDING HINT: never appears when Config.K9Onboarding.enabled = false -- zero thread, zero NUI callback, zero messages, ever', function()
+    local f = newHudFixture({ citizenid = 'CIT_DISABLED', canShowK9UI = true, k9OnboardingEnabled = false })
+    t.isFalse(f.hasTabletOpenedCallback())
+    f.step()
+    f.step()
+    t.isNil(f.lastMessageWithAction('hud:onboardingHint'))
+end)
+
+t.test('ONBOARDING HINT: never appears when CanShowK9UI() is false -- not a K9/handler right now, regardless of citizenid or KVP state', function()
+    local f = newHudFixture({ citizenid = 'CIT_NOT_K9', canShowK9UI = false })
+    f.step()
+    t.isNil(f.lastMessageWithAction('hud:onboardingHint'))
+end)
+
+t.test('ONBOARDING HINT: auto-hides once Config.K9Onboarding.nudgeDurationMinutes elapses, WITHOUT durably dismissing it -- it must come back next session', function()
+    local sharedKvp = {}
+    local f = newHudFixture({ citizenid = 'CIT_TIMEOUT', canShowK9UI = true, kvpStore = sharedKvp, k9OnboardingNudgeDurationMinutes = 5 })
+    f.step()
+    t.isTrue(f.lastMessageWithAction('hud:onboardingHint').data.visible)
+
+    f.advance(5 * 60000 + 1) -- just past the 5-minute window
+    f.step()
+    t.isFalse(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'the window elapsing must auto-hide the hint')
+    t.isNil(sharedKvp['qbx_k9unit_onboard_dismissed_CIT_TIMEOUT'], 'an auto-hide from the timer running out must NEVER be recorded as a durable dismissal')
+
+    -- Reconnect (fresh fixture, same citizenid, same shared store) -- the
+    -- hint must show again, because the timeout was never a real dismiss.
+    local f2 = newHudFixture({ citizenid = 'CIT_TIMEOUT', canShowK9UI = true, kvpStore = sharedKvp })
+    f2.step()
+    t.isTrue(f2.lastMessageWithAction('hud:onboardingHint').data.visible, 'a session timeout must not be permanent -- the whole point of this feature is a second chance for someone who was tabbed out the whole window')
+end)
+
+t.test('ONBOARDING HINT: a bad Config.K9Onboarding.nudgeDurationMinutes clamps to the safe default (5 minutes) with a warning, never asserts/crashes', function()
+    local ok = pcall(function()
+        local f = newHudFixture({ citizenid = 'CIT_BADCFG', canShowK9UI = true, k9OnboardingNudgeDurationMinutes = -1 })
+        f.step()
+        t.isTrue(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'a clamped-to-default duration must still let the hint show normally, not disable the feature')
+    end)
+    t.isTrue(ok, 'an invalid Config.K9Onboarding.nudgeDurationMinutes must never crash file load or the poll thread -- clamp-and-warn, never assert')
+end)
+
+-- ----------------------------------------------------------------------
+-- KVP NATIVES ABSENT/NO-OP -- direct answer to the coordinator's own
+-- explicit condition on allowlisting GetResourceKvpString/SetResourceKvp
+-- unverified: "THE FEATURE MUST DEGRADE SAFELY IF EITHER RETURNS
+-- NOTHING... a nil read must mean 'we have not seen this player before'".
+-- kvpAvailable = false below makes BOTH stubs behave exactly like a
+-- genuinely-unregistered FXServer native would (per this codebase's own
+-- documented behaviour for that case, .luacheckrc's IsNightvisionActive/
+-- IsSeethroughActive finding): the read always returns nil, the write
+-- always silently does nothing -- no error either way. This section is
+-- what actually proves the safety property; the tests above (which use
+-- the WORKING kvpStore stub) prove this file's own persistence LOGIC is
+-- correct given a working store, which is a different, narrower claim.
+-- ----------------------------------------------------------------------
+
+t.test('KVP NATIVES ABSENT/NO-OP: the hint still shows, and pressing dismiss still hides it FOR THIS SESSION, with zero crashes anywhere', function()
+    local ok = pcall(function()
+        local f = newHudFixture({ citizenid = 'CIT_NOKVP', canShowK9UI = true, kvpAvailable = false })
+        f.step()
+        t.isTrue(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'a read that always returns nil must mean "never seen before" -- the hint must still show')
+
+        f.pressDismissKey()
+        f.step()
+        t.isFalse(f.lastMessageWithAction('hud:onboardingHint').data.visible, 'dismissing must still work THIS session even if the underlying write silently no-ops -- justDismissed is local, in-memory state, never dependent on the KVP write actually landing')
+    end)
+    t.isTrue(ok, 'a totally absent/no-op KVP layer must never crash this file -- worst case is degraded persistence, never a broken feature')
+end)
+
+t.test('KVP NATIVES ABSENT/NO-OP: nothing durable ever actually got written, so the hint reappears next session -- the DISCLOSED worst case, never a stuck/broken state', function()
+    local f = newHudFixture({ citizenid = 'CIT_NOKVP2', canShowK9UI = true, kvpAvailable = false })
+    f.step()
+    f.pressDismissKey()
+    f.step()
+    t.isFalse(f.lastMessageWithAction('hud:onboardingHint').data.visible)
+
+    -- A "reconnect" with the SAME (still-nil-returning) KVP layer: since
+    -- nothing was ever truly persisted, the hint comes back. This is the
+    -- explicitly disclosed, safe worst case -- never a permanent failure
+    -- to dismiss, never a crash.
+    local f2 = newHudFixture({ citizenid = 'CIT_NOKVP2', canShowK9UI = true, kvpAvailable = false })
+    f2.step()
+    t.isTrue(f2.lastMessageWithAction('hud:onboardingHint').data.visible, 'with no working persistence at all, showing once more than strictly necessary is the correct, safe degradation -- never a silently-broken dismiss')
 end)
 
 os.exit(t.summary())

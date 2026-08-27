@@ -207,6 +207,24 @@ function addStatusRow(doc, stat) {
 }
 
 /**
+ * The HANDLER CONDITION BADGE's own (row, label, value) triple -- mirrors
+ * html/index.html's real `#k9partner-badge` markup byte-for-byte (same
+ * `id`/`data-partner="label"`/`data-partner="value"` hooks, same starting
+ * `hidden` class -- see that file's own comment on why this is a SEPARATE
+ * element from `#k9hud`, not one more row inside it).
+ */
+function addPartnerBadge(doc) {
+    const row = doc.createElement('div', { id: 'k9partner-badge', class: 'k9partner-badge hidden', 'aria-hidden': 'true' });
+    doc._register(row, 'k9partner-badge');
+    const label = doc.createElement('span', { 'data-partner': 'label' });
+    label.textContent = 'K9 Partner';
+    doc._register(label);
+    const value = doc.createElement('span', { 'data-partner': 'value' });
+    value.textContent = '--';
+    doc._register(value);
+}
+
+/**
  * Builds a FakeDocument whose element graph mirrors html/index.html's real
  * #k9hud markup byte-for-byte on every attribute/class app.js's init()
  * actually reads -- see this file's header. Returns the FakeDocument
@@ -227,6 +245,7 @@ function buildK9HudDocument() {
     }
     addStatusRow(doc, 'distraction');
     addStatusRow(doc, 'xpTier');
+    addPartnerBadge(doc);
 
     return doc;
 }

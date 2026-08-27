@@ -187,6 +187,30 @@ do
     Config.Peds = validPeds
 end
 
+-- ======================================================================
+-- K9 IDENTITY CONFIG GUARD (THIS PASS) -- same CLAMP-AND-WARN posture as
+-- every guard above: a malformed/missing Config.K9Identity must degrade to
+-- "feature behaves as if switched on, with its default shape" rather than
+-- throwing out of this file's top-level chunk and taking every function
+-- below it down with it (see this section header's own reasoning above for
+-- why an assert here would be the wrong fix). See config.lua's own
+-- Config.K9Identity comment for what an operator actually sees.
+-- ======================================================================
+if type(Config.K9Identity) ~= 'table' then
+    print(
+        '[qbx_k9unit] WARNING: Config.K9Identity is missing or not a table -- using a built-in default ' ..
+        '(enabled=true, showHandlerName=true) so the "Identify K9" target option keeps working while the ' ..
+        'config is fixed. Add the Config.K9Identity settings table back to config.lua.'
+    )
+    Config.K9Identity = {}
+end
+if type(Config.K9Identity.enabled) ~= 'boolean' then
+    Config.K9Identity.enabled = true
+end
+if type(Config.K9Identity.showHandlerName) ~= 'boolean' then
+    Config.K9Identity.showHandlerName = true
+end
+
 --- @param name any
 --- @return boolean
 local function IsValidPedModelName(name)
@@ -988,4 +1012,292 @@ AddEventHandler('playerDropped', function(_reason)
             end
         end
     end
+end)
+
+-- ======================================================================
+-- K9 IDENTITY (THIS PASS) -- "make a K9 identifiable to the people around
+-- it" (ease-of-use audit finding: a K9 has no in-character identity to a
+-- bystander -- other players see a dog, and this resource's own targeting
+-- menu never said whose dog it was, or what they're called on the radio).
+--
+-- WHAT THIS IS: one new lib.callback, 'qbx_k9unit:server:k9Identity'
+-- (targetServerId: number) -> table, backing client/appearance.lua's new
+-- "Identify K9" ox_target(-equivalent) option. Given a target the caller
+-- is standing next to and can already see, it answers with that
+-- character's own name, their roster callsign if the K9 Command Tablet
+-- roster has given them one, and (optionally) their partnered handler's
+-- name -- nothing else.
+--
+-- WHY NOT PUT THE NAME IN THE ox_target OPTION'S OWN `label` FIELD (the
+-- literal text the menu itself shows): every option this resource
+-- registers goes through shared/compat/target.lua's K9Compat abstraction
+-- so it keeps working under qb-target/qtarget/sleepless_interact, not just
+-- ox_target -- read directly this pass (that file's own OxTargetFactory
+-- header, "CONFIRMED against overextended/ox_target's live main branch...
+-- label... is already ox_target's own native shape"): `label` is a plain
+-- STATIC string fixed at registration time, the same for every player and
+-- every look, across every one of those backends -- there is no per-hover
+-- "who am I currently looking at" text slot in any of them. Every existing
+-- ox_target option in this resource (client/wellbeing.lua's "Pet K9"/
+-- "Feed K9", client/movement.lua's "Attach Leash", etc.) is built on that
+-- same static-label assumption. Making the label ITSELF the dog's name
+-- would mean re-registering a per-entity option every time a K9 comes into
+-- view or changes identity, on every nearby client, continuously -- a poll
+-- this task explicitly ruled out ("must not add a poll"), for a smaller
+-- win than it costs. The option's OWN label instead names the ACTION
+-- ("Identify K9", locale('appearance.identity_target_label') --
+-- client/appearance.lua), and selecting it reveals the resolved identity
+-- via a plain notification -- one read, on selection, never per frame,
+-- exactly this task's "read on target, not per frame" instruction.
+--
+-- SERVER-RESOLVED, NEVER CLIENT-SUPPLIED (this task's rule 2): the only
+-- input this callback ever takes from the ASKING client is a
+-- targetServerId (a number) -- the citizenid, name, callsign and handler
+-- name all come from THIS server's own records for whoever that id
+-- resolves to right now, exactly like server/wellbeing.lua's petK9/feedK9
+-- resolve their own target identity server-side rather than trusting
+-- anything the asking client claims. There is no field anywhere in this
+-- callback's signature a modified client could use to claim a citizenid,
+-- name or callsign that is not its own -- RECYCLED SERVER IDS are handled
+-- the same way HasK9Role/every other per-source lookup in this file
+-- already does: targetServerId -> exports.qbx_core:GetPlayer(...) ->
+-- PlayerData.citizenid, resolved fresh on every call, never cached
+-- against a source id across a session.
+--
+-- NOT A TRACKER (this task's rule 3): both peds' positions are read
+-- server-side, right now, and the request is refused ('too_far') unless
+-- the asking player is genuinely standing next to the target -- the exact
+-- same server-authoritative distance re-check server/wellbeing.lua's
+-- petK9/feedK9 already establish for this identical class of "the client
+-- claims to be near something" concern (see K9_IDENTITY_INTERACT_RANGE
+-- below). This can only ever answer about a K9 the caller could already
+-- see and target; it adds no way to ask about a K9 anywhere else on the
+-- map.
+--
+-- NEVER CONDITION/CERTIFICATION/POSITION (this task's rule 1): the
+-- returned table has exactly four possible keys on success --
+-- `ok`, `name`, `callsign`, `handlerName` -- and one more, `reason`, on
+-- failure. No health, fatigue, mood/fear-stress value, certification
+-- tier, specialization/detection capability or coordinate of anyone ever
+-- goes in it. This is an identity surface, not a status readout -- the
+-- same line this resource already drew for a K9's contraband-detection
+-- ability (server/search.lua's own header) applies here identically.
+--
+-- DEGRADES CLEANLY (this task's rule 4): a K9 with no roster row, no
+-- callsign and no partner -- the NORMAL case on a fresh server, since
+-- Config.Features.CommandTablet's roster (server/roster.lua) is the ONLY
+-- writer of a k9_personnel row and server/partnership.lua's Handler
+-- Partnership is its own optional feature -- renders as just the K9's own
+-- name, with `callsign`/`handlerName` both nil rather than blank strings
+-- or the literal text "nil" (client/appearance.lua's own NotifyIdentity
+-- only ever adds a line for a field that is actually a non-empty string).
+--
+-- CHEAP (this task's rule 5): one lib.callback round trip per "Identify
+-- K9" selection -- never a poll, never per-frame. K9Store.Personnel_GetActiveRow
+-- and GetActivePartnerCitizenId (server/partnership.lua's own read-only,
+-- already-live in-memory cache) are both already-cheap, already-existing
+-- reads this file adds no new caching layer in front of: the FIRST cache
+-- in this whole path is client/appearance.lua's own ox_target canInteract
+-- gate deciding whether the option is even offered, which happens for
+-- free as part of hovering, not as a separate poll this file introduces.
+--
+-- DOES NOT DUPLICATE THE ROSTER'S OWN AUTHORIZATION (per this task's own
+-- instruction): server/roster.lua's `qbx_k9unit:server:rosterList`
+-- callback is HIGH-COMMAND-ONLY and returns the WHOLE roster -- the wrong
+-- shape and the wrong authorization circle for "can a nearby officer read
+-- ONE already-visible K9's own callsign". K9Store.Personnel_GetActiveRow
+-- (server/datastore.lua) is the narrow, single-row, read-only accessor
+-- server/roster.lua's own RosterAssignPersonnelRole/RosterSetCallsign
+-- already call directly, and that file's own header states plainly that
+-- these K9Store accessors carry NO baked-in authorization by design --
+-- "reusable building blocks whose caller decides... who may call them".
+-- This file is exactly that: a second, independent caller, deciding (per
+-- this task's own brief) that ANY player standing next to an
+-- already-visible, already-HasK9Role-confirmed K9 may read that one row --
+-- not a bypass of roster.lua's own high-command gate, because that gate
+-- was never meant to cover this narrower, already-public-by-design
+-- question in the first place.
+-- ======================================================================
+
+-- Same physical range as server/wellbeing.lua's own MOOD_INTERACT_RANGE
+-- (petK9/feedK9) -- "close enough to plausibly be looking at/talking to
+-- this K9", not a tuned value specific to this feature.
+local K9_IDENTITY_INTERACT_RANGE = 3.0
+
+--- Bystander-facing display name for `citizenid`, resolved fresh (online
+--- preferred, offline fallback) -- same "online first, offline qbx_core
+--- export next" shape as server/roster.lua's own ResolveDisplayName
+--- (this file's own established "each file keeps its own tiny copy"
+--- convention -- see server/permissions.lua's header on why this resource
+--- does not share small per-file helpers like this one across files with
+--- no load-order relationship), with ONE deliberate difference: this NEVER
+--- falls back to the raw citizenid string. server/roster.lua's own
+--- fallback is safe there because that whole surface is HIGH-COMMAND-only;
+--- this one reaches every bystander who merely looks at a K9, and a
+--- citizenid is an internal database key, not something to hand to anyone
+--- standing nearby. A name that is genuinely unresolvable (charinfo
+--- missing on both an online AND an offline record, and the GetPlayerName
+--- native also failing -- should not happen for a target confirmed online
+--- a moment ago, but never assumed) shows a generic placeholder instead.
+--- @param citizenid string
+--- @return string
+local function ResolveIdentityDisplayName(citizenid)
+    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if onlinePlayer and onlinePlayer.PlayerData then
+        local charinfo = onlinePlayer.PlayerData.charinfo
+        if type(charinfo) == 'table' and type(charinfo.firstname) == 'string' and type(charinfo.lastname) == 'string' then
+            local full = (charinfo.firstname .. ' ' .. charinfo.lastname):match('^%s*(.-)%s*$')
+            if type(full) == 'string' and full ~= '' then return full end
+        end
+        local onlineSrc = onlinePlayer.PlayerData.source
+        if type(onlineSrc) == 'number' then
+            local ok, viaNative = pcall(GetPlayerName, onlineSrc)
+            if ok and type(viaNative) == 'string' and viaNative ~= '' then return viaNative end
+        end
+    end
+
+    local ok, offlinePlayer = pcall(function() return exports.qbx_core:GetOfflinePlayer(citizenid) end)
+    if ok and type(offlinePlayer) == 'table' and offlinePlayer.PlayerData then
+        local charinfo = offlinePlayer.PlayerData.charinfo
+        if type(charinfo) == 'table' and type(charinfo.firstname) == 'string' and type(charinfo.lastname) == 'string' then
+            local full = (charinfo.firstname .. ' ' .. charinfo.lastname):match('^%s*(.-)%s*$')
+            if type(full) == 'string' and full ~= '' then return full end
+        end
+    end
+
+    return locale('appearance.identity_name_fallback')
+end
+
+--- The K9's roster callsign for THEIR CURRENT job, or nil -- nil covers
+--- every "no callsign to show" case uniformly (no k9_personnel row at all,
+--- a row that exists but was never given a callsign, or
+--- Config.Features.CommandTablet having never been on so the table this
+--- reads is simply empty for everyone): server/roster.lua's own
+--- Personnel_GetActiveRow already returns nil for all of those, and this
+--- function adds no special-casing on top of that. READ-ONLY, no
+--- authorization check -- see this section's own header,
+--- "DOES NOT DUPLICATE THE ROSTER'S OWN AUTHORIZATION", for why that is
+--- the deliberate, narrower contract this call site needs, not an
+--- oversight.
+--- @param citizenid string
+--- @param jobName string?
+--- @return string?
+local function ResolveIdentityCallsign(citizenid, jobName)
+    if type(jobName) ~= 'string' or jobName == '' then return nil end
+    if type(K9Store) ~= 'table' or type(K9Store.Personnel_GetActiveRow) ~= 'function' then return nil end
+
+    local ok, row = pcall(K9Store.Personnel_GetActiveRow, citizenid, jobName)
+    if not ok or type(row) ~= 'table' then return nil end
+    if type(row.callsign) ~= 'string' or row.callsign == '' then return nil end
+    return row.callsign
+end
+
+--- The K9's partnered handler's display name, or nil -- nil covers "no
+--- active partnership", "Config.K9Identity.showHandlerName is off",
+--- "server/partnership.lua did not load" and "citizenid is somehow the
+--- HANDLER party, not the K9, in whatever partnership row exists"
+--- uniformly, exactly like ResolveIdentityCallsign above does for its own
+--- set of "nothing to show" cases. GetActivePartnerCitizenId
+--- (server/partnership.lua) is a read-only accessor over that file's own
+--- already-live in-memory cache -- no new DB read, no new poll.
+--- @param citizenid string -- the K9's own citizenid
+--- @return string?
+local function ResolveIdentityHandlerName(citizenid)
+    if not (Config.K9Identity and Config.K9Identity.showHandlerName == true) then return nil end
+    if type(GetActivePartnerCitizenId) ~= 'function' then return nil end
+
+    local partnerCitizenid, isK9 = GetActivePartnerCitizenId(citizenid)
+    if isK9 ~= true then return nil end
+    if type(partnerCitizenid) ~= 'string' or partnerCitizenid == '' then return nil end
+
+    return ResolveIdentityDisplayName(partnerCitizenid)
+end
+
+--- Strips ASCII control characters and clamps length -- defense in depth
+--- for a player-controllable string (a character's own charinfo name,
+--- which this resource does not itself validate at creation time) before
+--- it reaches ANOTHER player's screen via this bystander-facing payload.
+--- Does not attempt to neutralise markdown syntax: the one client-side
+--- renderer this reaches today (ox_lib's lib.notify) goes through
+--- react-markdown with no rehype-raw plugin registered (checked directly
+--- against ox_lib's own web/src/features/notifications/
+--- NotificationWrapper.tsx and web/src/features/config/
+--- MarkdownComponents.tsx source this pass), so markdown syntax in a name
+--- renders as at most odd-looking formatting, never raw HTML/DOM
+--- injection -- this is about keeping a malformed/oversized/
+--- control-character-laden string from ever reaching another client at
+--- all, not a workaround for an injection hole that was not found to
+--- exist in the one renderer this ships against today.
+--- @param value string?
+--- @return string?
+local function SanitizeIdentityDisplayString(value)
+    if type(value) ~= 'string' then return nil end
+    local cleaned = value:gsub('%c', '')
+    cleaned = cleaned:match('^%s*(.-)%s*$')
+    if cleaned == '' then return nil end
+    if #cleaned > 48 then cleaned = cleaned:sub(1, 48) end
+    return cleaned
+end
+
+--- CALLBACK -- qbx_k9unit:server:k9Identity. See this section's own header
+--- for the full design; this is the one entry point that ties the pieces
+--- above together.
+--- @param source number -- the ASKING client
+--- @param targetServerId number
+--- @return table -- { ok = true, name: string, callsign: string?, handlerName: string? } | { ok = false, reason: string }
+lib.callback.register('qbx_k9unit:server:k9Identity', function(source, targetServerId)
+    if not (Config.K9Identity and Config.K9Identity.enabled == true) then
+        return { ok = false, reason = 'disabled' }
+    end
+    if type(targetServerId) ~= 'number' then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    local askingPed = GetPlayerPed(source)
+    local targetPed = GetPlayerPed(targetServerId)
+    if askingPed == 0 or targetPed == 0 or targetPed == askingPed then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    -- SAME server-authoritative pattern as server/wellbeing.lua's petK9/
+    -- feedK9: never trust the asking client's own idea of distance -- both
+    -- peds' positions are read fresh, server-side, right now. This is what
+    -- keeps this feature from ever being a tracker (this task's rule 3):
+    -- it can only ever answer about a K9 the caller is genuinely standing
+    -- next to.
+    local dist = #(GetEntityCoords(askingPed) - GetEntityCoords(targetPed))
+    if dist > K9_IDENTITY_INTERACT_RANGE then
+        return { ok = false, reason = 'too_far' }
+    end
+
+    -- Server-authoritative "is this even a K9 right now" gate -- the SAME
+    -- HasK9Role this whole file's role/model decoupling already treats as
+    -- ground truth (see this file's own header). Refusing here means a
+    -- modified client cannot use this callback to fish for the identity of
+    -- an ordinary bystander it merely dressed up an ox_target option for.
+    if not HasK9Role(targetServerId) then
+        return { ok = false, reason = 'not_k9' }
+    end
+
+    -- CLIENT CANNOT SELF-LABEL AS SOMEONE ELSE'S DOG (this task's rule 2):
+    -- targetServerId is the ONLY thing this callback ever takes from the
+    -- asking client; everything below is resolved fresh from THIS
+    -- server's own qbx_core player record for whoever that id currently
+    -- belongs to. There is no citizenid/name/callsign argument anywhere in
+    -- this signature for a modified client to smuggle a different
+    -- identity through.
+    local Player = exports.qbx_core:GetPlayer(targetServerId)
+    local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if type(citizenid) ~= 'string' or citizenid == '' then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    local jobName = Player.PlayerData.job and Player.PlayerData.job.name
+
+    return {
+        ok = true,
+        name = SanitizeIdentityDisplayString(ResolveIdentityDisplayName(citizenid)) or locale('appearance.identity_name_fallback'),
+        callsign = SanitizeIdentityDisplayString(ResolveIdentityCallsign(citizenid, jobName)),
+        handlerName = SanitizeIdentityDisplayString(ResolveIdentityHandlerName(citizenid)),
+    }
 end)

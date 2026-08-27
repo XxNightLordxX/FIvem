@@ -370,6 +370,18 @@ function createHarness(options) {
         };
     }
 
+    /** The HANDLER CONDITION BADGE's own (row, label, value) triple --
+     * mirrors getBarRow/getStatusRow above, for the SEPARATE
+     * `#k9partner-badge` element (see index.html's own comment on why it
+     * is not one more row inside `#k9hud`). */
+    function getPartnerBadge() {
+        return {
+            row: doc.getElementById('k9partner-badge'),
+            label: doc.querySelector('[data-partner="label"]'),
+            value: doc.querySelector('[data-partner="value"]'),
+        };
+    }
+
     /** The lazily-constructed AudioContext instance app.js's own
      * ensureAudioContext() built internally (undefined until the first
      * message that needs one, e.g. 'audio:play', has been processed) --
@@ -388,6 +400,7 @@ function createHarness(options) {
         getRoot,
         getBarRow,
         getStatusRow,
+        getPartnerBadge,
         getAudioContextInstance,
         fetchCalls,
         AudioContextCtor,

@@ -435,3 +435,118 @@ RegisterNetEvent('qbx_k9unit:client:applyK9Ped', function(requestId, modelNameOr
 
     ConfirmSwap(requestId, true, nil)
 end)
+
+-- ======================================================================
+-- K9 IDENTITY (THIS PASS) -- see server/appearance.lua's own "K9 IDENTITY"
+-- section header for the full design/reasoning; this is the client half:
+-- a new "Identify K9" ox_target(-equivalent) option, ROUTED THROUGH
+-- K9Compat.Get('target') (shared/compat/target.lua) exactly like every
+-- other target option in this resource, never a direct `exports.ox_target`
+-- call -- so it keeps working under qb-target/qtarget/sleepless_interact,
+-- not just ox_target.
+--
+-- WHY A SEPARATE OPTION, NOT THE LABEL ITSELF: see server/appearance.lua's
+-- own header, "WHY NOT PUT THE NAME IN THE ox_target OPTION'S OWN `label`
+-- FIELD" -- every backend this resource supports fixes an option's label
+-- at registration time, the same for every player and every look; there is
+-- no per-hover "who am I looking at" text slot to fill in dynamically
+-- across all of them. The label below names the ACTION
+-- (locale('appearance.identity_target_label'), "Identify K9"); selecting
+-- it reveals the resolved identity via one lib.notify call -- READ ON
+-- TARGET, NEVER PER FRAME, exactly this task's own cheapness rule.
+--
+-- SAME canInteract GATE AS "Pet K9"/"Feed K9" (client/wellbeing.lua):
+-- `IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))`
+-- -- a CONVENIENCE gate only (this file's own IsK9RoleForPlayer doc
+-- comment), never itself a security boundary: the server's own
+-- k9Identity callback independently re-verifies HasK9Role, distance and
+-- Config.K9Identity.enabled regardless of what this predicate answered.
+-- Config.K9Identity.enabled is also checked HERE so the option never even
+-- shows when an operator has switched the feature off -- a static,
+-- boot-time config read, same posture as every other Config.K9Appearance.*
+-- field this file already reads directly (not part of the live
+-- Config.Features admin-override system, by design -- this is cosmetic,
+-- not a security-relevant feature toggle).
+--
+-- LIFECYCLE FIX pattern copied from client/wellbeing.lua's own
+-- RegisterMoodOxTargetOptions/AddEventHandler('onResourceStart', ...) pair
+-- (see that file's own comment for the full "why this needs to survive a
+-- bare restart of whatever resource actually backs 'target'" reasoning) --
+-- not re-derived here, applied identically.
+-- ======================================================================
+do
+    --- @param result table? -- { ok = true, name: string, callsign: string?, handlerName: string? } | { ok = false, reason: string } | nil (pcall failure)
+    local function NotifyIdentity(result)
+        if not (result and result.ok == true and type(result.name) == 'string' and result.name ~= '') then
+            -- Silent no-op on any failure (disabled/too_far/not_k9/
+            -- invalid_target, or a thrown/rejected lib.callback.await) --
+            -- the target walking out of range or losing the role between
+            -- canInteract's own guess and this real server round trip is
+            -- not worth a bystander-facing error message, same posture as
+            -- every other onSelect handler in this resource that treats a
+            -- falsy/failed result as a quiet no-op (see
+            -- client/wellbeing.lua's own NotifyResult).
+            return
+        end
+
+        local lines = { locale('appearance.identity_line_name'):format(result.name) }
+        if type(result.callsign) == 'string' and result.callsign ~= '' then
+            lines[#lines + 1] = locale('appearance.identity_line_callsign'):format(result.callsign)
+        end
+        if type(result.handlerName) == 'string' and result.handlerName ~= '' then
+            lines[#lines + 1] = locale('appearance.identity_line_handler'):format(result.handlerName)
+        end
+
+        lib.notify({
+            title = locale('appearance.identity_notify_title'),
+            description = table.concat(lines, '\n'),
+            type = 'inform',
+        })
+    end
+
+    local function RegisterIdentityOxTargetOptions()
+        K9Compat.Get('target').AddGlobalPlayer({
+            {
+                name = 'qbx_k9unit:k9Identity',
+                icon = 'fas fa-id-badge',
+                label = locale('appearance.identity_target_label'),
+                distance = 3.0,
+                canInteract = function(entity)
+                    if not (Config.K9Identity and Config.K9Identity.enabled == true) then return false end
+                    return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
+                end,
+                onSelect = function(data)
+                    local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
+                    if not targetServerId then return end
+
+                    -- FAIL-CLOSED GUARD -- same reasoning as every other
+                    -- onSelect handler in this resource that awaits a
+                    -- lib.callback (see client/wellbeing.lua's "Pet K9"
+                    -- onSelect for the full ox_lib/FiveM source citation):
+                    -- lib.callback.await throws rather than returning nil
+                    -- on a timeout/unregistered-callback rejection.
+                    -- NotifyIdentity's own guard already treats a nil
+                    -- `result` as a silent no-op.
+                    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:k9Identity', false, targetServerId)
+                    if not ok then result = nil end
+                    NotifyIdentity(result)
+                end,
+            },
+        })
+    end
+
+    -- Sole call site for RegisterIdentityOxTargetOptions() above: this
+    -- resource's own start, or whichever resource backs 'target'
+    -- restarting -- see this section's own header for the full citation.
+    AddEventHandler('onResourceStart', function(resourceName)
+        if resourceName == GetCurrentResourceName() then
+            RegisterIdentityOxTargetOptions()
+            return
+        end
+
+        K9Compat.Redetect()
+        if resourceName == K9Compat.Which('target') then
+            RegisterIdentityOxTargetOptions()
+        end
+    end)
+end

@@ -110,6 +110,9 @@ Config = {}
 --   Config.AllowSelfCertification ... whether an officer may certify
 --                                     themselves
 --   Config.CertifyProximityMeters ... how close you must stand to certify
+--   Config.CertifyMaxNewGranteesPerDay . the daily cap on how many
+--                                     DIFFERENT people one officer can be
+--                                     paid handler XP for certifying
 --   Config.CertificationExpiry* ..... whether certifications lapse, and the
 --                                     warning before they do
 --
@@ -433,11 +436,48 @@ Config.Features = {
     -- budget still caps the damage (nobody can mint UNLIMITED XP), but it
     -- would make kennel-deploy-spam the fastest way to cap out a
     -- citizenid's TOTAL K9+handler XP for the hour, crowding out every
-    -- legitimate award. Flip this to `true` only once a real per-actor mint
-    -- cooldown has landed in server/medkit.lua AND server/kennel.lua AND
-    -- each file's own success path actually calls AwardHandlerXP -- same
-    -- "landed as a foundation, reviewed before go-live" posture
-    -- Config.Features.HandlerPartnership itself went through above.
+    -- legitimate award.
+    --
+    -- CLOSED (WIRING PASS, coder-backend -- the "top handler rank cannot be
+    -- reached by playing" anti-farm audit finding): the "flip this only
+    -- once..." condition directly above is now MET, for real, not just on
+    -- paper. server/medkit.lua now declares a dedicated HandlerTreatXpMintCooldown
+    -- (a per-ACTOR, citizenid-keyed mint cooldown, 30 real minutes, entirely
+    -- separate from MedkitCooldown) and awards handlerTreatK9 (12 XP) only
+    -- through it, and only for a GENUINE heal -- never a no-op top-off of an
+    -- already-healthy K9. server/kennel.lua now declares
+    -- HandlerKennelDeployXpMintCooldown (per-actor, citizenid-keyed, 60 real
+    -- minutes, entirely separate from DeployCooldown) and awards
+    -- handlerKennelDeploy (8 XP) only at a CONFIRMED new placement, through
+    -- it. Both new trackers survive the actor's own disconnect/reconnect
+    -- (citizenid-keyed, swept, never cleared on playerDropped) -- closing
+    -- the specific farm shape this section's own arithmetic above
+    -- describes, including the disconnect/reconnect loop that would
+    -- otherwise let a scripted relog force a fresh kennel deploy (and a
+    -- fresh mint) on demand. RESULT: handlerTreatK9 is capped at
+    -- 12 XP / 30 min = 24 XP/hr per actor; handlerKennelDeploy at
+    -- 8 XP / 60 min = 8 XP/hr per actor -- 32 XP/hr combined, nowhere near
+    -- the shared 3,600 XP/hr budget, and nowhere near fast enough to reach
+    -- Master (500 XP) "in an afternoon" (see Config.HandlerXPTiers' own
+    -- header below for the full time-to-Master arithmetic, both theoretical-
+    -- ceiling and realistic-pace). Full derivation and file-by-file citation:
+    -- server/progression.lua's own "HANDLER XP TIER UNLOCKS" section,
+    -- "CLOSED (WIRING PASS...)" paragraph.
+    --
+    -- STILL SHIPS `false` HERE, DELIBERATELY, AS A SEPARATE GO-LIVE DECISION
+    -- FROM THE ANTI-FARM FIX ABOVE: this flag also controls THREE
+    -- already-wired awards (handlerCertifyK9, the three
+    -- handlerPartnershipTenure{1,7,30}Day milestones) that would go live for
+    -- every server the instant this flips, and tests/featuregroups_spec.lua
+    -- pins this exact shipped default (`false`) as a "never silently
+    -- re-enable" regression guard. Flipping a flag with that much blast
+    -- radius, and that dedicated a regression test guarding it, deserves its
+    -- own explicit go-live review by whoever owns that rollout -- not a
+    -- silent flip bundled into the anti-farm fix that merely makes it SAFE
+    -- to flip. The gap this flag used to guard against (an unsafe award) is
+    -- closed; whether and when to actually turn Handler XP Progression on
+    -- for your server is now a genuine choice, not a forced "no" -- set this
+    -- to `true` once you're ready.
     HandlerXPProgression = false,
 
     HealthStaminaHUD     = true,
@@ -1205,6 +1245,38 @@ Config.K9Appearance = {
 }
 
 -- ======================================================================
+-- K9 IDENTITY — makes a K9 recognisable to the people standing near it.
+--
+-- Right now a K9 is just a dog to anyone who isn't already in on it OOC —
+-- other players see a dog, and this resource's own targeting menu never
+-- said whose dog it was. With this on, an officer who targets a K9 gets an
+-- "Identify K9" option: it shows the character's own name, their callsign
+-- if the K9 Command Tablet roster has given them one, and (optionally)
+-- their partnered handler's name.
+--
+-- WHAT THIS NEVER SHOWS, on purpose: health, fatigue, mood/fear, what the
+-- K9 is certified to detect, or anyone's position. This is an identity
+-- check, not a status readout — see server/appearance.lua's own
+-- k9Identity callback for the exact, narrow payload shape.
+--
+-- SERVER-RESOLVED, the same as everything else in this file: the name and
+-- callsign shown always come from the server's own records for whoever is
+-- actually standing there, never from the viewer's or the K9's own client.
+-- It also only ever works on a K9 you can already see and are standing
+-- next to — this is not a way to locate a K9 anywhere else on the map.
+-- ======================================================================
+Config.K9Identity = {
+    -- Master switch. Set this false if you don't want K9s identifiable
+    -- this way at all — everything else in this resource keeps working
+    -- exactly the same either way.
+    enabled = true,
+
+    -- Also show the K9's partnered handler's name, when they have one.
+    -- Turn this off to show only the K9's own name/callsign.
+    showHandlerName = true,
+}
+
+-- ======================================================================
 -- DEPARTMENTS — admin-editable list of job names with K9 access, plus the
 -- rank threshold required to grant/revoke certifications for that job.
 -- ======================================================================
@@ -1699,6 +1771,56 @@ Config.CommandTablet = {
 }
 
 -- ======================================================================
+-- K9 ONBOARDING HINT (Config.K9Onboarding.enabled) -- client/hud.lua.
+-- Tuning for the small, dismissible on-screen nudge that reminds a
+-- brand-new K9 or handler where the tablet is and how to open it. NOT a
+-- Config.Features entry -- this is a purely client-side, cosmetic
+-- discovery aid with no server-side decision behind it at all, so it does
+-- not need (and deliberately skips) the runtime-control/tablet-domain/
+-- per-person-block machinery every Config.Features entry carries. Same
+-- "extra, independent kill-switch" posture as Config.LeashVisual.enabled
+-- elsewhere in this file.
+-- ======================================================================
+Config.K9Onboarding = {
+    -- Turn the nudge off entirely if you would rather rely on the one-time
+    -- chat line a player already gets the moment their K9 role is granted
+    -- (locales/en.json's appearance.apply_success_target). Leaving this on
+    -- is a SECOND chance at that same message for anyone who missed it --
+    -- tabbed out, mid-conversation, chat scrolled -- with no other way to
+    -- ever learn the tablet exists.
+    enabled = true,
+
+    -- How many minutes the nudge stays on screen, once shown, before it
+    -- automatically hides itself for the rest of that play session.
+    -- HIGHER = more time for someone who is tabbed out or mid-conversation
+    -- to notice it. It is not gone for good after this -- as long as they
+    -- still have not opened the tablet even once, and have not dismissed
+    -- it themselves (see dismissControl below), it comes back and shows
+    -- again the next time they reconnect, so someone who missed the whole
+    -- window is not permanently out of luck either. A non-positive or
+    -- non-number value falls back to the default below rather than
+    -- meaning "forever" or "never".
+    nudgeDurationMinutes = 5,
+
+    -- The key/button that dismisses the nudge for good, as a raw game
+    -- control number rather than a key name -- this is NOT the same kind
+    -- of setting as Config.CameraFeed.toggleKey elsewhere in this file, so
+    -- you cannot just type a letter here. Leave this at its default (202,
+    -- Backspace on keyboard / B on a controller) unless you already know
+    -- it clashes with something else on your server. A missing or invalid
+    -- number falls back to 202.
+    dismissControl = 202,
+
+    -- Plain-English name of the key/button above, shown to the player in
+    -- the nudge text itself (e.g. "Press Backspace to dismiss this
+    -- reminder."). Purely cosmetic -- this does not change which key
+    -- actually works, it only changes what the on-screen text SAYS the
+    -- key is. If you change dismissControl above, update this to match,
+    -- or the hint will tell players the wrong key name.
+    dismissControlLabel = 'Backspace',
+}
+
+-- ======================================================================
 -- CERTIFICATION DEPTH -- tiers, expiry and specializations.
 --
 -- CORRECTED: this used to say tiers were "deliberately HARDCODED... rather
@@ -1906,6 +2028,30 @@ Config.K9DownDispatch = {
 
 Config.AllowSelfCertification = true   -- see §4.1
 Config.CertifyProximityMeters = 5.0    -- server-enforced max distance for grant/revoke (§4.2.4)
+
+-- FARM FIX (audit finding, this pass) -- Config.CertifyProximityMeters and
+-- CertifyXpMintCooldown (server/certifications.lua, 24h, per person you
+-- certify) stop someone from farming XP off the SAME person over and over.
+-- Neither one stops a certifier from farming XP by certifying a large
+-- number of DIFFERENT people instead -- real alt characters made and
+-- deleted cheaply, or (through /k9certifyoffline) simply typed citizenid
+-- strings that do not even need to belong to a real character. This
+-- setting is the backstop for that: the most people, in total, one
+-- certifying officer can be PAID handler XP for certifying in any rolling
+-- 24-hour day. It never stops anyone from certifying someone -- the
+-- certification itself always works -- it only stops the BONUS XP from
+-- paying out past this many NEW people in one day; anyone certified past
+-- the limit simply is not paid for it until the next day.
+--
+-- HOW TO SET THIS: picture the busiest a real training officer would
+-- plausibly get -- a big recruitment night, not an ordinary one -- and set
+-- this a little above that. LOWER is STRICTER (closes this gap tighter, at
+-- the cost of your busiest trainers occasionally having to wait until
+-- tomorrow for the bonus XP on their last few certifications of the
+-- night). HIGHER is more LENIENT (a farmer using fake or throwaway people
+-- can collect more XP per day before this stops them). The certifications
+-- themselves are never affected either way.
+Config.CertifyMaxNewGranteesPerDay = 8
 
 -- ======================================================================
 -- VEHICLES — which vehicle models expose the "Load K9" / "Release K9"
@@ -2335,6 +2481,25 @@ Config.XPTiers = {
 -- milestone is only 100 XP) -- named for completeness, not because it
 -- shapes the numbers below.
 --
+-- UPDATE (WIRING PASS, coder-backend -- closes the gap this whole section
+-- above describes): handlerTreatK9 (12 XP) and handlerKennelDeploy (8 XP)
+-- are NO LONGER unwired. Both now pay, each gated by its own dedicated
+-- per-actor mint cooldown (server/medkit.lua's HandlerTreatXpMintCooldown,
+-- 30 real minutes; server/kennel.lua's HandlerKennelDeployXpMintCooldown,
+-- 60 real minutes -- see each file's own declaration comment for the full
+-- arithmetic, and server/progression.lua's "HANDLER XP TIER UNLOCKS"
+-- section, "CLOSED (WIRING PASS...)" paragraph, for the consolidated
+-- write-up). This is now exactly the repeatable, solo, hours-based handler
+-- mechanic the "STILL A REAL GAP" note below the table used to say this
+-- ladder was missing: handlerTreatK9 caps at 24 XP/hr per actor,
+-- handlerKennelDeploy at 8 XP/hr per actor, 32 XP/hr combined -- small next
+-- to a K9's own 500+ XP/hr realistic pace (by design: this is a support
+-- action, not the main K9 gameplay loop), but real, repeatable, and
+-- entirely independent of certifying anyone or maintaining a partnership.
+-- A handler who never personally certifies anyone new is THEREFORE NO
+-- LONGER CAPPED AT 155 XP -- see the table's own "STILL A REAL GAP" note
+-- below, now itself corrected, for the recomputed time-to-Master.
+--
 -- RESCALED THRESHOLDS BELOW, anchored to what a handler can ACTUALLY,
 -- REPEATABLY earn today (certifying + tenure), not to an hours-of-duty
 -- curve the way Config.XPTiers' own K9 arithmetic is -- there is currently
@@ -2412,6 +2577,61 @@ Config.HandlerXPTiers = {
 -- this pass (needs edits to two files outside this rescale's own scope),
 -- flagged here so the next person who tunes this table does not have to
 -- rediscover it.
+--
+-- CLOSED (WIRING PASS, coder-backend). The paragraph above is now history,
+-- not the current state -- kept rather than deleted so the next reader can
+-- see what was wrong and why, per this file's own established "correct in
+-- place, do not silently rewrite" convention. handlerTreatK9 and
+-- handlerKennelDeploy are both wired now (see the "UPDATE (WIRING PASS...)"
+-- note a few screens up, and server/progression.lua's own "HANDLER XP TIER
+-- UNLOCKS" section for the full file-by-file citation). A handler who never
+-- personally certifies anyone new is NO LONGER hard-capped at Senior
+-- Handler.
+--
+-- RECOMPUTED TIME-TO-MASTER (500 XP), for exactly that handler (never
+-- certifies, so handlerCertifyK9 contributes nothing) -- both the
+-- theoretical, never-missed-a-beat CEILING (proves this is not an afternoon
+-- farm) and a REALISTIC pace (proves it is genuinely reachable through
+-- ordinary duty, not a wall):
+--   * WITH a normal partnership (earns the full 155-XP tenure trickle over
+--     30 real-world days in parallel, at zero effort beyond staying
+--     partnered): the remaining 500 - 155 = 345 XP must come from
+--     handlerTreatK9/handlerKennelDeploy, capped at a combined 32 XP/hr
+--     theoretical ceiling (see the "UPDATE" note above) -- 345 / 32 =
+--     10.78 hours of continuous, never-missed, back-to-back action at that
+--     ceiling. THIS CANNOT BE DONE IN AN AFTERNOON: it requires an injured
+--     K9 to treat every single 30 minutes and a kennel to redeploy every
+--     single 60 minutes, without a single miss, for nearly 11 straight
+--     real hours -- not a realistic single sitting, let alone the seconds-
+--     to-minutes the pre-fix, unwired arithmetic above would have allowed
+--     once wired without a mint cooldown.
+--   * WITHOUT any partnership at all (zero tenure income, the worst case):
+--     the full 500 XP must come from these two actions alone -- 500 / 32 =
+--     15.625 hours theoretical ceiling.
+--   * REALISTIC PACE (the number that actually matters for "is this
+--     reachable by playing"): a handler organically treats a genuinely
+--     injured K9 a handful of times per shift (not once every 30 minutes on
+--     the dot) and redeploys a kennel roughly once per session (this
+--     action's own natural cadence -- Kennels[citizenid] blocks a second
+--     deploy while the first object still exists, and an ordinary logout
+--     clears it, so "redeploy" naturally recurs about once per login, not
+--     more). A rough, representative session earning ~3 treats (36 XP) + 1
+--     deploy (8 XP) = 44 XP nets the 345-XP remainder (with tenure) in
+--     roughly 8 sessions -- on the order of one to a few weeks of ordinary,
+--     regular duty, the SAME order of magnitude this table's own
+--     certifying-handler estimate already uses for Master ("several weeks
+--     to a couple of months," a few screens up). Genuinely reachable, not a
+--     wall, and not a same-day grind either.
+--
+-- THRESHOLDS (0/50/150/500) LEFT UNCHANGED BY THIS PASS, DELIBERATELY: the
+-- arithmetic above shows they are already comfortably in the "reachable in
+-- weeks, not an afternoon and not a lifetime" band this ladder is built to
+-- sit in -- re-tuning them was not needed to close the reachability gap,
+-- only wiring the two awards was. A future balance pass may still want to
+-- revisit them now that a genuine hours-of-duty mechanic exists (the "would
+-- likely justify re-reviewing these thresholds upward" note above is still
+-- a fair observation for that future pass) -- that is a separate, optional
+-- balance decision, not a correctness gap this pass leaves open.
 
 -- ======================================================================
 -- XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
@@ -2563,19 +2783,25 @@ Config.XP = {
 --     for a day, not because repeating it was already hard.
 --   * handlerTreatK9 -- server/medkit.lua's RunUseK9MedkitMutation, paid to
 --     the USING player (never the K9 being healed) on a genuine injury
---     restore. Bounded today by that file's own per-TARGET MedkitCooldown
---     (Config.K9Medkit.cooldownMs, 60000ms default) and by a real injury
---     needing to exist first -- NOT YET bounded by any per-ACTOR cooldown,
---     so a handler roaming between several simultaneously-injured K9s has
---     no throttle of their own yet. See Config.Features.HandlerXPProgression's
---     own comment above for why this keeps the feature off by default
---     until that lands.
---   * handlerKennelDeploy -- server/kennel.lua's deploy/pickup success
---     path. Bounded ONLY by that file's own per-actor DeployCooldown
---     (Config.DeployableKennel.deployCooldownMs, 5000ms default) today --
---     see Config.Features.HandlerXPProgression's own comment above for the
---     measured 5,760 XP/hr worst case this implies without a dedicated
---     mint cooldown, and why this feature ships off until one exists.
+--     restore (never a no-op top-off of an already-healthy K9). Bounded by
+--     that file's own per-TARGET MedkitCooldown (Config.K9Medkit.cooldownMs,
+--     60000ms default) AND, WIRED THIS PASS, by a DEDICATED per-ACTOR mint
+--     cooldown (HandlerTreatXpMintCooldown, 30 real minutes, citizenid-keyed,
+--     survives the actor's own disconnect/reconnect) -- a handler roaming
+--     between several simultaneously-injured K9s is capped at 24 XP/hr
+--     regardless. See Config.Features.HandlerXPProgression's own comment
+--     above for the full arithmetic this closes.
+--   * handlerKennelDeploy -- server/kennel.lua's confirmKennelPlaced success
+--     path (a CONFIRMED new placement only -- never the earlier
+--     requestDeployKennel step, which can still fail). Bounded by that
+--     file's own per-connection DeployCooldown (Config.DeployableKennel.
+--     deployCooldownMs, 5000ms default) AND, WIRED THIS PASS, by a
+--     DEDICATED per-actor mint cooldown (HandlerKennelDeployXpMintCooldown,
+--     60 real minutes, citizenid-keyed, survives disconnect/reconnect --
+--     closing the specific loop where a scripted relog would otherwise
+--     force a fresh deploy, and a fresh mint, on demand) -- capped at
+--     8 XP/hr regardless. See Config.Features.HandlerXPProgression's own
+--     comment above for the full arithmetic this closes.
 --   * handlerPartnershipTenure{1,7,30}Day -- paid to `handler_citizenid`
 --     by the SAME milestone-crossing check server/tenure.lua already runs
 --     for the K9 side (Config.Partnership.TenureBonus.milestones' own
@@ -3223,14 +3449,17 @@ Config.Vision = {
     Night   = { toggleKey = 'J' }, -- drives SetNightvision(true/false) -- see §11.6
 }
 -- The K and J keys above still jump straight to that one specific mode --
--- nothing above changed. There is ALSO now a single "/k9vision" cycle
--- (default key I, also in the K9 radial menu as "K9: Vision") that steps
--- Off -> Night -> Thermal -> Off in one press, skipping whichever of
--- ThermalVision/NightVision you turn off below in Config.Features. Turn
--- both off and the cycle just tells the player nothing is available right
--- now, rather than doing nothing with no explanation. This does not add a
--- new setting to turn off on its own -- it simply respects the two flags
--- above, the same way the K/J keys already do.
+-- nothing above changed. Each also has its own K9 radial menu entry ("K9:
+-- Thermal Vision" / "K9: Night Vision"), independent of the other. There is
+-- ALSO a single "/k9vision" cycle (default key I, also in the K9 radial
+-- menu as "K9: Vision"), kept as an extra, optional convenience alongside
+-- the two above, not a replacement for them -- it steps Off -> Night ->
+-- Thermal -> Off in one press, skipping whichever of ThermalVision/
+-- NightVision you turn off below in Config.Features. Turn both off and the
+-- cycle just tells the player nothing is available right now, rather than
+-- doing nothing with no explanation. This does not add a new setting to
+-- turn off on its own -- it simply respects the two flags above, the same
+-- way the K/J keys already do.
 
 -- ======================================================================
 -- COMBAT & ADVANCED AGILITY (DEVELOPER_REFERENCE.md §12.2).
@@ -5126,6 +5355,36 @@ Config.SARCalls = {
     -- milliseconds (ten minutes). This is on REQUESTING a call, not on
     -- finishing one.
     startCooldownMs = 600000,
+
+    -- A second officer can now ask to help with someone else's active
+    -- call -- these four settings tune that. Joining never pays XP by
+    -- itself (only whoever originally took the call ever earns the find
+    -- reward, no matter who actually locates it), so none of these are an
+    -- anti-farm knob -- they only shape how easy it is to team up.
+
+    -- How close a second officer must stand to the officer running the
+    -- call before they may ask to join, in meters. LOWER = they must be
+    -- right next to that officer to ask (stricter). HIGHER = they can ask
+    -- from farther away (looser).
+    joinProximityMeters = 10.0,
+
+    -- How many officers, INCLUDING the one who started it, may work the
+    -- same call at once. LOWER = fewer helpers allowed. HIGHER = a bigger
+    -- team can pile onto one call.
+    maxMembers = 4,
+
+    -- How long a "let me help" request stays open before it silently
+    -- expires if the officer running the call never answers, in
+    -- milliseconds (thirty seconds). LOWER = a slower-to-respond officer
+    -- misses more requests. HIGHER = requests linger longer, which can
+    -- start to feel like nagging.
+    joinRequestTTLMs = 30000,
+
+    -- Minimum gap between one officer's own join requests, in milliseconds
+    -- (one second). This only slows down someone mashing the button; it
+    -- has nothing to do with how often a call itself can be taken -- see
+    -- startCooldownMs above for that.
+    joinRequestCooldownMs = 1000,
 
     -- What the "we found them" moment looks like. Scenery only, drawn on
     -- the finder's own screen after the call has already resolved, then

@@ -183,6 +183,31 @@
         <span class="k9partner-badge-value" data-partner="value">--</span>
     </div>
 
+    <!--
+        K9 ONBOARDING HINT (Config.K9Onboarding.enabled) -- see app.js's own
+        "ONBOARDING HINT CONTRACT" section, and client/hud.lua's own
+        "K9 ONBOARDING HINT" section, for the full design. A SECOND chance
+        at the one-time chat line a brand-new K9/handler gets the moment
+        their role is granted (easy to miss entirely -- tabbed out,
+        mid-conversation, chat scrolled). Deliberately a SEPARATE element
+        from #k9hud (bottom-left) and #k9partner-badge (top-left), placed
+        top-right so none of the three can ever overlap. Starts hidden;
+        only unhidden by a `hud:onboardingHint` push carrying
+        `visible: true`.
+
+        NO CLICKABLE DISMISS CONTROL ANYWHERE IN THIS MARKUP, ON PURPOSE:
+        this page never calls SetNuiFocus (see app.js's own header), and
+        without focus there is no visible cursor for a player to click
+        anything with -- see client/hud.lua's own comment on
+        IsDisabledControlJustPressed for why dismissing this is a native
+        key read on the Lua side instead, never a click here.
+    -->
+    <div id="k9onboarding-hint" class="k9onboarding-hint hidden" aria-hidden="true">
+        <span class="k9onboarding-hint-title" data-onboarding="title">K9 Command Tablet</span>
+        <span class="k9onboarding-hint-body" data-onboarding="body">--</span>
+        <span class="k9onboarding-hint-dismiss" data-onboarding="dismiss">--</span>
+    </div>
+
     <script src="app.js"></script>
 
     <!--

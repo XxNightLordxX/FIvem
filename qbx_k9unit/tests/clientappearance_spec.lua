@@ -53,6 +53,13 @@ local function newFixture(opts)
     local roleCallbackCallCount = 0
     local roleForTargetCallbackQueue = {}
     local roleForTargetCallCount = 0
+    -- K9 IDENTITY (THIS PASS) -- same FIFO-queue-plus-call-count shape as
+    -- the two queues above, backing the new 'qbx_k9unit:server:k9Identity'
+    -- callback client/appearance.lua's "Identify K9" onSelect handler
+    -- awaits.
+    local identityCallbackQueue = {}
+    local identityCallCount = 0
+    local identityCallArgs = {} -- [n] = targetServerId, one entry per call, in order
 
     local function lib_callback_await(name, ...)
         if name == 'qbx_k9unit:server:hasK9Role' then
@@ -63,6 +70,16 @@ local function newFixture(opts)
         elseif name == 'qbx_k9unit:server:isK9RoleForTarget' then
             roleForTargetCallCount = roleForTargetCallCount + 1
             local response = table.remove(roleForTargetCallbackQueue, 1)
+            if getmetatable(response) == ThrowMarkerMT then error(response.message, 0) end
+            return response
+        elseif name == 'qbx_k9unit:server:k9Identity' then
+            identityCallCount = identityCallCount + 1
+            -- lib.callback.await(name, false, targetServerId) -- the SECOND
+            -- vararg is the real payload (ox_lib's own "no timeout override"
+            -- convention, same shape as the two branches above), so this is
+            -- select(2, ...), not select(1, ...).
+            identityCallArgs[#identityCallArgs + 1] = select(2, ...)
+            local response = table.remove(identityCallbackQueue, 1)
             if getmetatable(response) == ThrowMarkerMT then error(response.message, 0) end
             return response
         end
@@ -106,6 +123,61 @@ local function newFixture(opts)
     local function IsLocalPlayerForceRagdolled() return engaged.forceRagdolled == true end
     local function IsBiteHoldTargetEngaged() return engaged.biteHoldTarget == true end
     local function IsRestingInKennel() return engaged.restingInKennel == true end
+
+    -- K9 IDENTITY (THIS PASS) -- client/appearance.lua's new "Identify K9"
+    -- ox_target(-equivalent) registration needs AddEventHandler (the
+    -- 'onResourceStart' lifecycle hook, same pattern client/wellbeing.lua's
+    -- RegisterMoodOxTargetOptions already established -- see that file's
+    -- own comment), GetCurrentResourceName (to recognise "this resource
+    -- just started" as the sole unconditional trigger), a K9Compat stub
+    -- (captures the ONE AddGlobalPlayer call this registration makes,
+    -- close enough to shared/compat/target.lua's real
+    -- K9Compat.Get('target').AddGlobalPlayer(options) shape for this
+    -- file's own call site), lib.notify (captures what "Identify K9"'s
+    -- onSelect actually shows), and IsEntityModelK9/
+    -- ResolvePlayerServerIdFromPed -- both REAL resource-globals from
+    -- client/main.lua in production (not this file), independently
+    -- settable stand-ins here exactly like every other externally-owned
+    -- predicate this fixture already stubs (IsLeashed, IsBiteHoldEngaged,
+    -- etc., all above).
+    local capturedEventHandlers = {} -- [name] = { fn, fn, ... }, ALL handlers for that name, in registration order
+    local function AddEventHandler(name, fn)
+        capturedEventHandlers[name] = capturedEventHandlers[name] or {}
+        capturedEventHandlers[name][#capturedEventHandlers[name] + 1] = fn
+    end
+
+    local CURRENT_RESOURCE_NAME = 'qbx_k9unit'
+    local function GetCurrentResourceName() return CURRENT_RESOURCE_NAME end
+
+    local targetAddGlobalPlayerCalls = {} -- [n] = options table passed to AddGlobalPlayer
+    local k9CompatWhichTarget = 'ox_target'
+    local K9Compat = {
+        Get = function(systemName)
+            if systemName ~= 'target' then
+                error('unstubbed K9Compat.Get in clientappearance_spec fixture: ' .. tostring(systemName))
+            end
+            return {
+                AddGlobalPlayer = function(options)
+                    targetAddGlobalPlayerCalls[#targetAddGlobalPlayerCalls + 1] = options
+                    return { kind = 'player' }
+                end,
+            }
+        end,
+        Redetect = function() end,
+        Which = function(systemName)
+            if systemName == 'target' then return k9CompatWhichTarget end
+            return nil
+        end,
+    }
+
+    local notifyCalls = {}
+    local function libNotify(payload) notifyCalls[#notifyCalls + 1] = payload end
+
+    local entityModelK9 = {}         -- [entity] = true/false
+    local function IsEntityModelK9(entity) return entityModelK9[entity] == true end
+
+    local playerServerIdByEntity = {} -- [entity] = serverId or nil
+    local function ResolvePlayerServerIdFromPed(entity) return playerServerIdByEntity[entity] end
 
     -- RequestModel/HasModelLoaded/SetModelAsNoLongerNeeded/IsModelValid --
     -- same shape as tests covering client/kennel.lua's identical
@@ -156,13 +228,25 @@ local function newFixture(opts)
         K9Appearance = {
             modelLoadTimeoutMs = opts.modelLoadTimeoutMs or 5000,
         },
+        -- K9 IDENTITY (THIS PASS) -- defaults match config.lua's own
+        -- shipped defaults; `opts.k9Identity` lets a test override either
+        -- field (see the "switched off" test below).
+        K9Identity = {
+            enabled = (opts.k9Identity and opts.k9Identity.enabled) ~= false,
+            showHandlerName = (opts.k9Identity and opts.k9Identity.showHandlerName) ~= false,
+        },
     }
 
     local env = Sandbox.newEnv({
         GetGameTimer = GetGameTimer,
-        lib = { callback = { await = lib_callback_await } },
+        lib = { callback = { await = lib_callback_await }, notify = libNotify },
         RegisterNetEvent = RegisterNetEvent,
         TriggerServerEvent = TriggerServerEvent,
+        AddEventHandler = AddEventHandler,
+        GetCurrentResourceName = GetCurrentResourceName,
+        K9Compat = K9Compat,
+        IsEntityModelK9 = IsEntityModelK9,
+        ResolvePlayerServerIdFromPed = ResolvePlayerServerIdFromPed,
         IsLeashed = IsLeashed,
         IsBiteHoldEngaged = IsBiteHoldEngaged,
         IsDragEngaged = IsDragEngaged,
@@ -218,6 +302,42 @@ local function newFixture(opts)
         releaseModelCalls = releaseModelCalls,
         setPlayerModelCalls = setPlayerModelCalls,
         waitCallCount = function() return waitCalls end,
+
+        -- K9 IDENTITY (THIS PASS) --------------------------------------
+        queueIdentityResponse = function(v) identityCallbackQueue[#identityCallbackQueue + 1] = v end,
+        queueIdentityThrow = function(msg) identityCallbackQueue[#identityCallbackQueue + 1] = callbackThrow(msg or 'thrown') end,
+        identityCallCount = function() return identityCallCount end,
+        identityCallArgs = identityCallArgs,
+        notifyCalls = notifyCalls,
+        setEntityModelK9 = function(entity, v) entityModelK9[entity] = v end,
+        setPlayerServerIdForEntity = function(entity, id) playerServerIdByEntity[entity] = id end,
+        --- Fires the captured 'onResourceStart' handler(s) as if `resourceName`
+        --- just started -- the ONLY way client/appearance.lua's new
+        --- "Identify K9" registration actually runs (see that file's own
+        --- section header: registration is deferred behind this event, never
+        --- run at file-load time). Defaults to THIS resource's own name (the
+        --- unconditional bootstrap trigger every real server also fires once
+        --- at this resource's own startup).
+        --- @param resourceName string?
+        triggerResourceStart = function(resourceName)
+            local handlers = capturedEventHandlers['onResourceStart']
+            if not handlers then return end
+            for _, fn in ipairs(handlers) do fn(resourceName or CURRENT_RESOURCE_NAME) end
+        end,
+        --- The single ox_target(-equivalent) option this pass's
+        --- RegisterIdentityOxTargetOptions() registers, or nil if
+        --- triggerResourceStart() was never called (or K9Compat.Get('target')
+        --- was never reached for some other reason). AddGlobalPlayer is only
+        --- ever called ONCE per registration pass in production, with an
+        --- array of exactly one option -- indexed here accordingly rather
+        --- than exposing the raw call log.
+        --- @return table?
+        identityTargetOption = function()
+            local lastCall = targetAddGlobalPlayerCalls[#targetAddGlobalPlayerCalls]
+            return lastCall and lastCall[1]
+        end,
+        targetAddGlobalPlayerCallCount = function() return #targetAddGlobalPlayerCalls end,
+        setK9CompatWhichTarget = function(v) k9CompatWhichTarget = v end,
     }
 end
 
@@ -572,6 +692,185 @@ t.test('applyK9Ped: an empty/non-string requestId is ignored -- no crash, nothin
 
     t.equals(#f.requestModelCalls, 0)
     t.equals(#f.serverEvents, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 IDENTITY (THIS PASS) -- "Identify K9" ox_target(-equivalent) option.
+-- See client/appearance.lua's own "K9 IDENTITY" section header for the
+-- full design; this section proves the CLIENT half: registration only
+-- happens on 'onResourceStart' (never at file-load time), the option is
+-- gated correctly, and NotifyIdentity renders exactly what the server
+-- handed back -- nothing more, nothing invented, nothing shown for a
+-- field the server left nil.
+-- ----------------------------------------------------------------------
+
+local IDENTITY_ENTITY = 777
+
+t.test('K9 IDENTITY: registration is DEFERRED -- no option exists until onResourceStart fires for this resource', function()
+    local f = newFixture()
+    t.isNil(f.identityTargetOption(), 'nothing registered yet -- Sandbox.loadInto only ran this file\'s top-level chunk, which merely ADDS the onResourceStart handler')
+    f.triggerResourceStart() -- defaults to this resource's own name
+    t.isTrue(f.identityTargetOption() ~= nil, 'registration happens the moment this resource\'s own onResourceStart fires')
+end)
+
+t.test('K9 IDENTITY: re-registers when whichever resource backs "target" restarts, but NOT for an unrelated resource', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    t.equals(f.targetAddGlobalPlayerCallCount(), 1)
+
+    f.triggerResourceStart('some_unrelated_resource')
+    t.equals(f.targetAddGlobalPlayerCallCount(), 1, 'an unrelated resource starting must never re-register')
+
+    f.setK9CompatWhichTarget('ox_target')
+    f.triggerResourceStart('ox_target')
+    t.equals(f.targetAddGlobalPlayerCallCount(), 2, 'the resource that actually backs "target" restarting DOES re-register (survives a bare restart of that resource)')
+end)
+
+t.test('K9 IDENTITY: the option itself -- name/label/distance are exactly what production promises', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+    t.equals(option.name, 'qbx_k9unit:k9Identity')
+    t.equals(option.label, 'Identify K9') -- real locale('appearance.identity_target_label') via Sandbox.locale -- proves the key is landed in locales/en.json
+    t.equals(option.distance, 3.0)
+end)
+
+t.test('K9 IDENTITY canInteract: false outright when Config.K9Identity.enabled is false, regardless of model or role', function()
+    local f = newFixture({ k9Identity = { enabled = false } })
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+
+    f.setEntityModelK9(IDENTITY_ENTITY, true)
+    t.isFalse(option.canInteract(IDENTITY_ENTITY), 'switched off means switched off -- even a real K9 model never shows this option')
+end)
+
+t.test('K9 IDENTITY canInteract: true for a real K9 model even with no resolvable server id', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+
+    f.setEntityModelK9(IDENTITY_ENTITY, true)
+    t.isTrue(option.canInteract(IDENTITY_ENTITY))
+end)
+
+t.test('K9 IDENTITY canInteract: true for a role-holder on a NON-K9 model (the role/model decoupling case)', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+
+    f.setEntityModelK9(IDENTITY_ENTITY, false)
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 55)
+    f.queueRoleForTargetResponse(true)
+    t.isTrue(option.canInteract(IDENTITY_ENTITY))
+end)
+
+t.test('K9 IDENTITY canInteract: false for an ordinary bystander -- not a K9 model, and not a role-holder', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+
+    f.setEntityModelK9(IDENTITY_ENTITY, false)
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 55)
+    f.queueRoleForTargetResponse(false)
+    t.isFalse(option.canInteract(IDENTITY_ENTITY))
+end)
+
+t.test('K9 IDENTITY onSelect: an unresolvable target (not a real player ped) never touches the network', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, nil)
+    option.onSelect({ entity = IDENTITY_ENTITY })
+
+    t.equals(f.identityCallCount(), 0)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('K9 IDENTITY onSelect: awaits the server callback with the resolved targetServerId', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 91)
+    f.queueIdentityResponse({ ok = true, name = 'Rex Callahan' })
+    option.onSelect({ entity = IDENTITY_ENTITY })
+
+    t.equals(f.identityCallCount(), 1)
+    t.equals(f.identityCallArgs[1], 91, 'the exact targetServerId this onSelect resolved, and nothing else, is what reaches the server')
+end)
+
+t.test('K9 IDENTITY onSelect: name + callsign + handler all present -- every line shown, in order', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 91)
+
+    f.queueIdentityResponse({ ok = true, name = 'Rex Callahan', callsign = '9-Lincoln-3', handlerName = 'Officer Alvarez' })
+    option.onSelect({ entity = IDENTITY_ENTITY })
+
+    t.equals(#f.notifyCalls, 1)
+    local shown = f.notifyCalls[1]
+    t.equals(shown.title, 'K9 Identity') -- real locale('appearance.identity_notify_title')
+    t.equals(shown.description, 'K9: Rex Callahan\nCallsign: 9-Lincoln-3\nHandler: Officer Alvarez')
+end)
+
+-- THE NORMAL CASE ON A FRESH SERVER: no roster row, no callsign, no
+-- partner at all -- degrades to showing just the name, never a blank
+-- line, never the literal text "nil".
+t.test('K9 IDENTITY onSelect: DEGRADES CLEANLY -- a dog with no callsign and no partner shows ONLY its name', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 91)
+
+    f.queueIdentityResponse({ ok = true, name = 'Rex Callahan', callsign = nil, handlerName = nil })
+    option.onSelect({ entity = IDENTITY_ENTITY })
+
+    t.equals(#f.notifyCalls, 1)
+    local shown = f.notifyCalls[1]
+    t.equals(shown.description, 'K9: Rex Callahan')
+    t.isNil(shown.description:find('Callsign', 1, true))
+    t.isNil(shown.description:find('Handler', 1, true))
+    t.isNil(shown.description:find('nil', 1, true), 'never the literal text "nil" for a field the server left unset')
+end)
+
+t.test('K9 IDENTITY onSelect: SWITCHED OFF server-side (ok=false, reason=disabled) -- no notification, same as every other failure reason', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 91)
+
+    f.queueIdentityResponse({ ok = false, reason = 'disabled' })
+    option.onSelect({ entity = IDENTITY_ENTITY })
+
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('K9 IDENTITY onSelect: too_far / not_k9 / invalid_target all degrade to a silent no-op, never a crash or a bystander-facing error', function()
+    for _, reason in ipairs({ 'too_far', 'not_k9', 'invalid_target' }) do
+        local f = newFixture()
+        f.triggerResourceStart()
+        local option = f.identityTargetOption()
+        f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 91)
+
+        f.queueIdentityResponse({ ok = false, reason = reason })
+        option.onSelect({ entity = IDENTITY_ENTITY })
+
+        t.equals(#f.notifyCalls, 0, 'reason=' .. reason)
+    end
+end)
+
+t.test('K9 IDENTITY onSelect: a thrown/rejected lib.callback.await (timeout) is caught -- no crash, no notification', function()
+    local f = newFixture()
+    f.triggerResourceStart()
+    local option = f.identityTargetOption()
+    f.setPlayerServerIdForEntity(IDENTITY_ENTITY, 91)
+
+    f.queueIdentityThrow()
+    option.onSelect({ entity = IDENTITY_ENTITY }) -- must not raise out of this test
+
+    t.equals(#f.notifyCalls, 0)
 end)
 
 os.exit(t.summary())

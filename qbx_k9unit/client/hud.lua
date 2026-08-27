@@ -354,6 +354,364 @@ RegisterNetEvent(PARTNER_CONDITION_EVENT, function(payload)
     })
 end)
 
+-- ============================================================================
+-- K9 ONBOARDING HINT (Config.K9Onboarding.enabled) -- ease-of-use audit
+-- finding, this pass: a brand-new K9 or handler's ENTIRE onboarding is one
+-- fire-and-forget chat line (locales/en.json's
+-- appearance.apply_success_target), sent exactly once, at the moment their
+-- role is granted -- "You are now a K9. Open your tablet with /k9tablet and
+-- read the Help tab...". Miss that one line (tabbed out, mid-conversation,
+-- chat scrolled) and there is nothing else anywhere in this resource that
+-- ever tells them the tablet exists at all. This section is the second
+-- chance: a small, PERSISTENT, DISMISSIBLE on-screen nudge that keeps
+-- coming back -- across reconnects, not just within one session -- until
+-- they either open the tablet for real or dismiss it themselves.
+--
+-- DELIBERATELY ABOVE Config.Features.HealthStaminaHUD's early-return below,
+-- same reasoning as the HANDLER CONDITION BADGE section immediately above
+-- this one: this nudge has nothing to do with the K9's own vitals bars, and
+-- gating it behind that flag would make it permanently invisible on any
+-- server that turns HealthStaminaHUD off for an entirely unrelated reason.
+--
+-- DELIBERATELY NOT A Config.Features KEY: this resource's own drift-guard
+-- suite (tests/runtimefeaturetiers_spec.lua, tests/tabletfeaturedomains_spec.lua,
+-- tests/customizationregistry_spec.lua and others) requires EVERY
+-- Config.Features key to carry a runtime-control tier
+-- (server/runtimecontrol.lua), a tablet feature-domain
+-- (server/tablet.lua), and either a per-person server-side block path or a
+-- reviewed exemption -- real governance machinery for a feature with a
+-- server-side access decision to gate. This nudge has none of that: it is
+-- a purely client-local, cosmetic discovery aid with no server round trip
+-- at all, closer in kind to Config.LeashVisual.enabled (an "extra operator
+-- kill-switch... independent of" the governed feature it rides on) than to
+-- a governed Config.Features entry. Config.K9Onboarding.enabled below is
+-- that same kind of switch: still config-driven, still off-able by a
+-- non-technical owner, without pulling in machinery built for a different
+-- kind of feature.
+--
+-- ELIGIBILITY (re-derived every tick, never cached beyond one poll
+-- interval): CanShowK9UI() is true (the SAME "on-duty, access-granted K9 or
+-- role holder" combinator every other K9 UI element in this resource
+-- already gates on -- client/main.lua) AND this specific CITIZENID has
+-- never durably opened the tablet AND never durably dismissed this hint.
+-- No per-person block check here (unlike the vitals poll thread further
+-- down, which checks IsK9FeatureBlocked('HealthStaminaHUD')) -- that
+-- mechanism exists for governed Config.Features keys, which this
+-- deliberately is not (see above); wiring it in for a name nothing could
+-- ever actually set would just imply a control surface that does not
+-- exist.
+--
+-- TIME WINDOW, PER SESSION, NOT PER LIFETIME: once eligible, the nudge stays
+-- visible for up to Config.K9Onboarding.nudgeDurationMinutes minutes of
+-- THIS session, then auto-hides. That auto-hide is NOT a durable dismissal
+-- -- it comes back and shows again next time this citizenid reconnects (or
+-- the next time CanShowK9UI() turns true mid-session, whichever happens
+-- first), for as long as they still have not opened the tablet or
+-- dismissed it. This is deliberate: a player who was genuinely tabbed out
+-- for the entire window must not be left permanently unhelped just because
+-- one timer ran out while they were not looking -- that is the exact bug
+-- this section exists to fix, and a one-shot timer would just move it
+-- somewhere else.
+--
+-- GONE FOR GOOD, IMMEDIATELY, the instant EITHER of these two happens
+-- (never both required, and both are recorded DURABLY -- see "DURABLE
+-- STORAGE" below):
+--   1. The tablet is opened -- through ANY door (command, item, or the K9
+--      radial menu), all of which funnel through client/tablet.lua's
+--      OpenTablet(), which always SendNUIMessage({action = 'tablet:open',
+--      ...}) before anything else. That message lands on the SAME
+--      top-level window this page's own html/app.js already listens on --
+--      html/tablet-bridge.js's own header already establishes that a
+--      second, independent `message` listener on that one window coexists
+--      with zero interference; app.js's own listener picking up this SAME
+--      message is the identical pattern, not a new one. app.js relays that
+--      fact into THIS file's own 'hud:tabletOpened' NUI callback below.
+--      NOTHING in client/tablet.lua, html/tablet.js, or
+--      html/tablet-bridge.js is touched, or needs to be, for this to work.
+--   2. The player presses Config.K9Onboarding.dismissControl (default:
+--      Backspace / Xbox B) WHILE the nudge is actually on screen. See
+--      ONBOARD_DISMISS_CONTROL's own comment below for why this is a raw
+--      IsDisabledControlJustPressed() read rather than a RegisterCommand/
+--      RegisterKeyMapping pair.
+--
+-- DURABLE STORAGE -- BY CITIZENID, NEVER BY SOURCE/SERVER ID: this file
+-- uses this CLIENT's own KVP store (GetResourceKvpString/
+-- SetResourceKvp), keyed by this literal citizenid string, for both
+-- "opened the tablet" and "dismissed the hint". Never keyed by `source`
+-- (the numeric server id) -- server ids are RECYCLED the moment a
+-- connection drops, so a brand-new player's very first connection this
+-- session could be handed a stranger's old, already-onboarded id; keying
+-- by citizenid instead means a new citizenid always starts with a clean
+-- slate, and switching characters never lets one identity's history leak
+-- into another's.
+-- HONEST LIMITATION, DISCLOSED: KVP is local to THIS FiveM client install,
+-- not this server's own central database -- it is not touched by, and does
+-- not touch, server/*.lua at all (this section adds no new server file, no
+-- new net event, no new table). A player who plays the same citizenid from
+-- a genuinely different PC sees the hint again there once, which is the
+-- correct, safe failure mode for a fresh device -- a future pass could
+-- upgrade this to a server-persisted flag (metadata, mirroring how
+-- `k9certified` already round-trips through Player.Functions.SetMetaData),
+-- but that touches server files outside this pass's edit scope, so it is
+-- flagged here rather than silently half-built.
+-- ============================================================================
+local ONBOARD_CFG = type(Config.K9Onboarding) == 'table' and Config.K9Onboarding or {}
+
+-- Gate at registration, same "check once at file-load time" convention
+-- this file's own header already establishes for
+-- Config.Features.HealthStaminaHUD below -- while
+-- Config.K9Onboarding.enabled is false, nothing inside this `if` ever
+-- runs: zero NUI callbacks, zero threads. Read with `~= false` rather
+-- than `== true`/truthy: an operator who adds a Config.K9Onboarding table
+-- of their own without an explicit `enabled` line (nil) gets the feature
+-- ON, matching this table's own shipped default and every other boolean
+-- field in this resource that defaults to "on unless explicitly turned
+-- off". Deliberately a plain `if ... then ... end`, NOT a `do return end`
+-- guard -- unlike Config.Features.HealthStaminaHUD's own file-level early
+-- return a few dozen lines below (which is correct there because nothing
+-- after it should ever run with that flag off), a bare `return` here
+-- would abort this entire file -- including the vitals HUD/wellbeing/
+-- partner-badge sections below, which have nothing to do with this flag.
+if ONBOARD_CFG.enabled ~= false then
+    local onboardCfg = ONBOARD_CFG
+
+    -- CONFIG SAFETY -- clamp-and-warn, NEVER a bare assert (this resource's
+    -- own standing rule; mirrors client/leashvisual.lua's
+    -- ResolvePositiveNumber precedent exactly). A bad Config.K9Onboarding
+    -- value must never take this file's registration down for the rest of
+    -- this client's session.
+    local ONBOARD_DEFAULT_NUDGE_MINUTES = 5
+    local nudgeMinutes = onboardCfg.nudgeDurationMinutes
+    if type(nudgeMinutes) ~= 'number' or nudgeMinutes ~= nudgeMinutes or nudgeMinutes <= 0 then
+        print(('[qbx_k9unit] hud.lua: Config.K9Onboarding.nudgeDurationMinutes is missing or not a positive number (found: %s). Using %s instead.')
+            :format(tostring(nudgeMinutes), tostring(ONBOARD_DEFAULT_NUDGE_MINUTES)))
+        nudgeMinutes = ONBOARD_DEFAULT_NUDGE_MINUTES
+    end
+    local ONBOARD_NUDGE_WINDOW_MS = nudgeMinutes * 60000
+
+    -- Raw GTA control ID for the dismiss action -- deliberately NOT a
+    -- RegisterCommand/RegisterKeyMapping pair. Adding any new
+    -- RegisterCommand('...') literal anywhere in this resource requires a
+    -- matching html/tablet.js COMMAND_REFERENCE entry
+    -- (tests/commandreferenceregistry_spec.lua drift-guards this) AND a
+    -- matching client/commandsuggestions.lua entry
+    -- (tests/commandsuggestions_spec.lua drift-guards THAT) -- both outside
+    -- this pass's edit scope (html/tablet.js is explicitly off-limits, and
+    -- client/commandsuggestions.lua has another agent live in it this same
+    -- pass). A pure IsDisabledControlJustPressed() read below registers
+    -- nothing at all: it cannot desync from either drift guard because it
+    -- never adds the one thing either of them looks for.
+    --
+    -- WHY IsDisabledControlJustPressed, NOT IsControlJustPressed: the
+    -- former is ALREADY the exact native this resource's own
+    -- client/tablet.lua relies on for its own Escape-key handling (see the
+    -- root .luacheckrc's own read_globals entry for the verification
+    -- citation -- IS_DISABLED_CONTROL_JUST_PRESSED, hash
+    -- 0x91AEF906BCA88877, confirmed against the native hash database), and
+    -- it reads the control regardless of whatever ELSE may have disabled
+    -- it that frame -- the more robust choice for a background hotkey read
+    -- that must not silently miss a press just because some other system
+    -- disabled controls that frame. This never disables the control
+    -- itself (that would need a separate DisableControlAction call, never
+    -- made here) -- it is a passive read, same as IsControlJustPressed
+    -- would have been, just less likely to miss the press.
+    --
+    -- CONTROL ID CONFIDENCE NOTE -- HONEST, NOT INDEPENDENTLY VERIFIED
+    -- IN-ENGINE THIS PASS (same posture as this file's own "STAMINA
+    -- NATIVE" note above -- this is about the NUMBER 202, not about
+    -- whether the native itself exists, which the citation above already
+    -- settles): 202 is widely and consistently documented, across
+    -- independent FiveM/GTA native control-ID references, as
+    -- INPUT_FRONTEND_CANCEL -- Backspace on keyboard, B on an Xbox pad --
+    -- a "back/cancel/close" control the base game itself only actively
+    -- uses inside its own menus, not during ordinary on-foot/vehicle play,
+    -- and one none of this resource's own RegisterKeyMapping defaults
+    -- (H/J/K/I and friends -- client/vision.lua, client/keybinds.lua,
+    -- client/announce.lua, client/recall.lua) ever claim. Change
+    -- Config.K9Onboarding.dismissControl (and its matching
+    -- dismissControlLabel, shown in the hint text itself) if this ever
+    -- turns out to collide with something else on your own server.
+    local ONBOARD_DEFAULT_DISMISS_CONTROL = 202
+    local dismissControl = onboardCfg.dismissControl
+    if type(dismissControl) ~= 'number' or dismissControl ~= dismissControl or dismissControl < 0 then
+        print(('[qbx_k9unit] hud.lua: Config.K9Onboarding.dismissControl is missing or not a non-negative number (found: %s). Using %s (INPUT_FRONTEND_CANCEL) instead.')
+            :format(tostring(dismissControl), tostring(ONBOARD_DEFAULT_DISMISS_CONTROL)))
+        dismissControl = ONBOARD_DEFAULT_DISMISS_CONTROL
+    end
+    local ONBOARD_DISMISS_CONTROL = math.floor(dismissControl)
+
+    local ONBOARD_DEFAULT_DISMISS_LABEL = 'Backspace'
+    local dismissLabel = onboardCfg.dismissControlLabel
+    if type(dismissLabel) ~= 'string' or dismissLabel == '' then
+        dismissLabel = ONBOARD_DEFAULT_DISMISS_LABEL
+    end
+    local ONBOARD_DISMISS_LABEL = dismissLabel
+
+    -- Resolved ONCE, at file-load time -- same "never re-resolved per
+    -- message" posture as PARTNER_CONDITION_STRINGS above.
+    local ONBOARD_STRINGS = {
+        title = locale('hud.onboarding_title'),
+        body = locale('hud.onboarding_body'),
+        dismissHint = locale('hud.onboarding_dismiss_hint', ONBOARD_DISMISS_LABEL),
+    }
+
+    -- Tick cadence -- same idle/active TWO-SPEED PATTERN this file already
+    -- established for the vitals poll thread below (HUD_POLL_TICK_MS/
+    -- HUD_IDLE_TICK_MS), reused here rather than inventing a third scheme.
+    -- Nothing in THIS thread needs 250ms responsiveness the way a
+    -- live-changing numeric bar does -- a second's delay noticing a
+    -- dismiss keypress, or noticing the timer ran out, is imperceptible
+    -- for a discovery hint -- so both numbers here are deliberately
+    -- coarser than HUD_POLL_TICK_MS/HUD_IDLE_TICK_MS, not copies of them.
+    local ONBOARD_ACTIVE_TICK_MS = 1000  -- while eligible (showing or about to show)
+    local ONBOARD_IDLE_TICK_MS = 10000   -- while not currently eligible at all -- nothing here can change any faster than a role grant/revoke or a reconnect, both already slow events
+
+    local ONBOARD_KVP_OPENED_PREFIX = 'qbx_k9unit_onboard_opened_'
+    local ONBOARD_KVP_DISMISSED_PREFIX = 'qbx_k9unit_onboard_dismissed_'
+
+    --- @return string|nil -- nil while QBX.PlayerData has not populated a
+    --- citizenid yet (mirrors this file's own "hunger/thirst" defensive
+    --- read of QBX.PlayerData.metadata above -- same early-session gap,
+    --- same posture: never trust it is already there).
+    local function GetOwnCitizenId()
+        local playerData = QBX and QBX.PlayerData
+        local citizenid = playerData and playerData.citizenid
+        if type(citizenid) == 'string' and citizenid ~= '' then return citizenid end
+        return nil
+    end
+
+    --- @param citizenid string
+    --- @return boolean
+    local function HasDurablyOpenedTablet(citizenid)
+        return GetResourceKvpString(ONBOARD_KVP_OPENED_PREFIX .. citizenid) == '1'
+    end
+
+    --- @param citizenid string
+    local function MarkDurablyOpenedTablet(citizenid)
+        SetResourceKvp(ONBOARD_KVP_OPENED_PREFIX .. citizenid, '1')
+    end
+
+    --- @param citizenid string
+    --- @return boolean
+    local function HasDurablyDismissedHint(citizenid)
+        return GetResourceKvpString(ONBOARD_KVP_DISMISSED_PREFIX .. citizenid) == '1'
+    end
+
+    --- @param citizenid string
+    local function MarkDurablyDismissedHint(citizenid)
+        SetResourceKvp(ONBOARD_KVP_DISMISSED_PREFIX .. citizenid, '1')
+    end
+
+    -- Last-pushed visibility + this session's own window start time. Kept
+    -- SEPARATE from `hudState` above -- this feature has its own
+    -- independent flag (Config.K9Onboarding.enabled), its own message
+    -- action ('hud:onboardingHint'), and no data in common with the
+    -- vitals HUD's own state.
+    local onboardState = {
+        visible = false,
+        windowStartedAt = nil, -- GetGameTimer() timestamp this session's window began, or nil before it ever has
+        citizenidWhenStarted = nil, -- see the thread body below for why this is re-checked every tick, not just read once
+    }
+
+    --- @param visible boolean
+    local function PushOnboardVisibility(visible)
+        onboardState.visible = visible
+        SendNUIMessage({
+            action = 'hud:onboardingHint',
+            data = { visible = visible, strings = ONBOARD_STRINGS },
+        })
+    end
+
+    -- ------------------------------------------------------------------
+    -- 'hud:tabletOpened' -- see this section's header point 1 above. Fired
+    -- by html/app.js the instant it independently observes a 'tablet:open'
+    -- SendNUIMessage push arrive on the shared top-level window -- see
+    -- that file's own handleTabletOpened() for the JS half of this
+    -- handshake. cb({}) fires immediately and unconditionally, same
+    -- convention as 'hud:ready' above (an uninvoked NUI callback hangs the
+    -- calling fetch forever).
+    -- ------------------------------------------------------------------
+    RegisterNUICallback('hud:tabletOpened', function(_, cb)
+        cb({})
+
+        local citizenid = GetOwnCitizenId()
+        if citizenid then
+            MarkDurablyOpenedTablet(citizenid)
+        end
+        if onboardState.visible then
+            PushOnboardVisibility(false)
+        end
+    end)
+
+    -- ------------------------------------------------------------------
+    -- Poll thread -- see this section's header for the full eligibility/
+    -- window/dismiss contract this implements.
+    -- ------------------------------------------------------------------
+    CreateThread(function()
+        while true do
+            local citizenid = GetOwnCitizenId()
+
+            if citizenid ~= onboardState.citizenidWhenStarted then
+                -- Either the very first citizenid this session has ever
+                -- seen, or (defensive: a character switch WITHOUT a
+                -- reconnect, which some frameworks allow -- QBX.PlayerData
+                -- would update in place with no resource restart at all)
+                -- a genuinely NEW identity replacing a previous one.
+                -- Either way, any in-progress window belongs to whichever
+                -- citizenid was active when it started, never to this new
+                -- one -- forget it and let the checks below decide fresh.
+                onboardState.citizenidWhenStarted = citizenid
+                onboardState.windowStartedAt = nil
+                if onboardState.visible then
+                    PushOnboardVisibility(false)
+                end
+            end
+
+            -- No per-person block check here (unlike the vitals poll
+            -- thread further down's IsK9FeatureBlocked('HealthStaminaHUD')
+            -- check) -- see this section's own header "DELIBERATELY NOT A
+            -- Config.Features KEY" note for why: that mechanism exists for
+            -- governed Config.Features keys, which this deliberately is
+            -- not.
+            local durablySuppressed = citizenid == nil
+                or HasDurablyOpenedTablet(citizenid)
+                or HasDurablyDismissedHint(citizenid)
+            local eligible = (not durablySuppressed) and CanShowK9UI()
+
+            if not eligible then
+                onboardState.windowStartedAt = nil
+                if onboardState.visible then
+                    PushOnboardVisibility(false)
+                end
+                Wait(ONBOARD_IDLE_TICK_MS)
+            else
+                local now = GetGameTimer()
+                if not onboardState.windowStartedAt then
+                    onboardState.windowStartedAt = now
+                end
+
+                -- Only worth reading the dismiss control while the hint is
+                -- ACTUALLY on screen right now (onboardState.visible
+                -- reflects what was pushed as of the end of the last
+                -- pass) -- pressing this key while nothing is showing has
+                -- nothing to dismiss, and must not be misread as one.
+                local justDismissed = false
+                if onboardState.visible and IsDisabledControlJustPressed(0, ONBOARD_DISMISS_CONTROL) then
+                    MarkDurablyDismissedHint(citizenid)
+                    justDismissed = true
+                end
+
+                local withinWindow = (not justDismissed) and (now - onboardState.windowStartedAt) < ONBOARD_NUDGE_WINDOW_MS
+                if withinWindow ~= onboardState.visible then
+                    PushOnboardVisibility(withinWindow)
+                end
+
+                Wait(ONBOARD_ACTIVE_TICK_MS)
+            end
+        end
+    end)
+end
+
 if not Config.Features.HealthStaminaHUD then return end
 
 -- ----------------------------------------------------------------------

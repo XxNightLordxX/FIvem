@@ -1674,6 +1674,8 @@
         "vehicle_toggle_label": "Enter/Exit Vehicle",
         "kennel_label": "Kennel",
         "utility_menu_label": "Utility",
+        "thermal_vision_label": "K9: Thermal Vision",
+        "night_vision_label": "K9: Night Vision",
         "vision_cycle_label": "K9: Vision"
     },
     "recall": {

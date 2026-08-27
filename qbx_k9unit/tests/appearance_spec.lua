@@ -288,8 +288,61 @@ local function newFixture(opts)
         return key
     end
 
-    local function GetPlayerPed(source) return playersBySource[source] and 1 or 0 end
+    -- CORRECTED for this pass's own K9 IDENTITY tests: the ped handle used
+    -- to be a CONSTANT `1` for every connected source -- harmless for
+    -- every test that existed before this pass (none ever needed two
+    -- DIFFERENT online players' peds distinguishable from one another at
+    -- once), but the k9Identity callback below compares
+    -- GetEntityCoords(askingPed) against GetEntityCoords(targetPed), which
+    -- would silently collide onto the SAME fake coordinate row for any two
+    -- different sources under the old constant. Using `source` itself as
+    -- the ped handle keeps every existing behaviour identical (still
+    -- non-zero for a connected source, still exactly 0 for a disconnected
+    -- one) while giving each connected player their own distinct handle.
+    local function GetPlayerPed(source) return playersBySource[source] and source or 0 end
     local function GetEntityModel(_ped) return 55555 end -- arbitrary "current live model" hash for PlayerLoaded's capture path
+
+    -- K9 IDENTITY (THIS PASS) -- Vec3-alike stub, IDENTICAL shape/reasoning
+    -- to tests/wellbeing_spec.lua's/tests/defense_spec.lua's/
+    -- tests/tenure_spec.lua's own copies (the only other files needing
+    -- GetEntityCoords' real `-`/`#` operators -- see that file's own
+    -- comment; Sandbox.vector3 is deliberately too minimal for this, per
+    -- its own disclosed limitation).
+    local Vec3MT = {}
+    Vec3MT.__index = Vec3MT
+    Vec3MT.__sub = function(a, b)
+        return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, Vec3MT)
+    end
+    Vec3MT.__len = function(v)
+        return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+    end
+    local function vec3(x, y, z) return setmetatable({ x = x, y = y, z = z }, Vec3MT) end
+
+    local coordsByPed = {} -- [ped] = vec3, defaults to the origin for any ped this fixture never explicitly positioned
+    local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
+
+    -- K9 IDENTITY (THIS PASS) -- k9_personnel row stand-in, monkey-patched
+    -- directly onto env.K9Store AFTER server/datastore.lua loads (below):
+    -- simpler and more direct than extending the mysql stub above for one
+    -- narrow, single-row accessor, and does not risk drifting from
+    -- server/roster.lua's/server/datastore.lua's own SQL text (this
+    -- fixture never asserts on that text at all, unlike the k9_certifications/
+    -- k9_permissions/k9_ped_assignments tables above, which this file's own
+    -- production code under test DOES read via raw MySQL.*.await calls).
+    local fakePersonnelRows = {} -- fakePersonnelRows[citizenid][job] = { role = ..., callsign = ... }
+
+    -- K9 IDENTITY (THIS PASS) -- GetActivePartnerCitizenId stand-in.
+    -- server/partnership.lua is deliberately NOT loaded into this fixture
+    -- (same "surgical load list" reasoning as server/certifications.lua's
+    -- own exclusion, this file's header) -- this is a plain, independent
+    -- override, exactly like HasK9Access below, answering ONLY from this
+    -- fixture's own fakePartnerships table.
+    local fakePartnerships = {} -- fakePartnerships[citizenid] = { partner = citizenid, isK9 = boolean }
+    local function GetActivePartnerCitizenId(citizenid)
+        local row = fakePartnerships[citizenid]
+        if not row then return nil, nil end
+        return row.partner, row.isK9
+    end
 
     -- Minimal, HONEST stand-in for server/certifications.lua's real
     -- HasK9Access -- NOT loaded in this fixture (see this file's header),
@@ -328,6 +381,13 @@ local function newFixture(opts)
             fallbackHumanModel = opts.fallbackHumanModel, -- default nil (opt-in per test)
             modelLoadTimeoutMs = opts.modelLoadTimeoutMs or 8000,
         },
+        -- K9 IDENTITY (THIS PASS) -- defaults match config.lua's own
+        -- shipped defaults; `opts.k9Identity` lets a test override either
+        -- field (see the "switched off" test below).
+        K9Identity = {
+            enabled = (opts.k9Identity and opts.k9Identity.enabled) ~= false,
+            showHandlerName = (opts.k9Identity and opts.k9Identity.showHandlerName) ~= false,
+        },
     }
 
     local overrides = {
@@ -347,6 +407,9 @@ local function newFixture(opts)
         GetPlayerPed = GetPlayerPed,
         GetEntityModel = GetEntityModel,
         HasK9Access = HasK9Access,
+        GetEntityCoords = GetEntityCoords,
+        GetPlayerName = function(_source) return nil end, -- every registered test player below carries a full charinfo, so this native fallback is never actually exercised by this file's own tests
+        GetActivePartnerCitizenId = GetActivePartnerCitizenId,
     }
 
     local env = Sandbox.newEnv(overrides)
@@ -361,6 +424,21 @@ local function newFixture(opts)
     -- to this fixture's own `mysql` stub above, unchanged.
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
+
+    -- K9 IDENTITY (THIS PASS) -- monkey-patch, AFTER the real
+    -- server/datastore.lua has defined the real K9Store table (so this
+    -- REPLACES just the one accessor, on the SAME table object
+    -- server/appearance.lua's own bare `K9Store.Personnel_GetActiveRow`
+    -- global read resolves against), BEFORE server/appearance.lua loads
+    -- (irrelevant to correctness -- global resolution is at CALL time, per
+    -- this resource's own established convention -- but kept in this order
+    -- for readability, grouped with the other K9Store.* setup above it).
+    env.K9Store.Personnel_GetActiveRow = function(citizenid, job)
+        local row = fakePersonnelRows[citizenid] and fakePersonnelRows[citizenid][job]
+        if not row then return nil end
+        return { role = row.role, callsign = row.callsign }
+    end
+
     Sandbox.loadInto('../server/highcommand.lua', env)
     Sandbox.loadInto('../server/permissions.lua', env)
     Sandbox.loadInto('../server/appearance.lua', env)
@@ -467,6 +545,37 @@ local function newFixture(opts)
             if player and eventHandlers['QBCore:Server:PlayerLoaded'] then
                 eventHandlers['QBCore:Server:PlayerLoaded'][1](player)
             end
+        end,
+
+        -- K9 IDENTITY (THIS PASS) ----------------------------------------
+        --- Positions a source's ped at (x, y, z) -- GetEntityCoords(GetPlayerPed(source))
+        --- reads this back, since this fixture's own GetPlayerPed returns
+        --- `source` itself as the ped handle (see that function's own
+        --- CORRECTED comment above).
+        setCoords = function(source, x, y, z) coordsByPed[source] = vec3(x, y, z) end,
+        --- Sets `citizenid`'s charinfo directly on the already-registered
+        --- player table `registerPlayer` returned -- this fixture's own
+        --- registerPlayer never sets charinfo (no existing test before
+        --- this pass needed a real display name), and ResolveIdentityDisplayName
+        --- falls through, past a nil GetPlayerName, all the way to the
+        --- generic locale fallback without one.
+        --- @param player table -- exactly what f.registerPlayer(...) returned
+        setCharinfo = function(player, firstname, lastname)
+            player.PlayerData.charinfo = { firstname = firstname, lastname = lastname }
+        end,
+        --- @param citizenid string
+        --- @param job string
+        --- @param role string? -- 'k9' | 'handler' | nil
+        --- @param callsign string?
+        setPersonnelRow = function(citizenid, job, role, callsign)
+            fakePersonnelRows[citizenid] = fakePersonnelRows[citizenid] or {}
+            fakePersonnelRows[citizenid][job] = { role = role, callsign = callsign }
+        end,
+        --- @param k9Citizenid string
+        --- @param handlerCitizenid string
+        setPartnership = function(k9Citizenid, handlerCitizenid)
+            fakePartnerships[k9Citizenid] = { partner = handlerCitizenid, isK9 = true }
+            fakePartnerships[handlerCitizenid] = { partner = k9Citizenid, isK9 = false }
         end,
     }
 end
@@ -1221,6 +1330,314 @@ t.test('SECURITY BACKSTOP: a stale-row clear whose DB write fails still refuses 
     t.equals(#f.clientEvents, 0, 'the K9 model must never be re-applied to a citizenid who no longer holds the role, DB write outcome notwithstanding')
     t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'the clear-write genuinely failed -- the row is left exactly as it was, for a future attempt')
     t.contains(table.concat(f.printLog, '\n'), 'k9AppearancePlayerLoaded(citizenid=CITIZEN_TARGET) -> stale_row_clear_db_error')
+end)
+
+-- ----------------------------------------------------------------------
+-- 7. K9 IDENTITY -- 'qbx_k9unit:server:k9Identity' lib.callback. See
+--    server/appearance.lua's own "K9 IDENTITY" section header for the
+--    full design this exercises: bystander identity for an already-
+--    visible, already-in-range, already-HasK9Role-confirmed K9 -- name,
+--    roster callsign, optional partnered-handler name, nothing else.
+-- ----------------------------------------------------------------------
+
+local ASKING_SRC = 20
+local K9_SRC = 21
+local HANDLER_SRC = 22
+local OTHER_K9_SRC = 23
+
+--- Registers an asking player and a K9-role-holding target, both left at
+--- GetEntityCoords' own default origin (vec3(0,0,0) -- see this fixture's
+--- own GetEntityCoords doc comment) -- i.e. already "in range" unless a
+--- test explicitly repositions one of them via f.setCoords.
+--- @param f table
+--- @return table asking
+--- @return table k9
+local function setupIdentityScene(f)
+    local asking = f.registerPlayer(ASKING_SRC, 'CITIZEN_ASKING', { name = 'police', isboss = false, grade = { level = 0 } })
+    local k9 = f.registerPlayer(K9_SRC, 'CITIZEN_K9', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.setCharinfo(asking, 'Alex', 'Asker')
+    f.setCharinfo(k9, 'Rex', 'Callahan')
+    f.grantCertDirect('CITIZEN_K9', 'police') -- HasK9Role(K9_SRC) == true
+    return asking, k9
+end
+
+--- @param f table
+--- @param askingSrc number
+--- @param targetSrc any
+--- @return table
+local function callIdentity(f, askingSrc, targetSrc)
+    return f.callbacks['qbx_k9unit:server:k9Identity'](askingSrc, targetSrc)
+end
+
+t.test('K9 IDENTITY: shows the real name and callsign for a dog that has them', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.setPersonnelRow('CITIZEN_K9', 'police', 'k9', '9-Lincoln-3')
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+
+    t.isTrue(result.ok)
+    t.equals(result.name, 'Rex Callahan')
+    t.equals(result.callsign, '9-Lincoln-3')
+    t.isNil(result.handlerName)
+end)
+
+t.test('K9 IDENTITY: DEGRADES CLEANLY -- no roster row, no callsign, no partner at all -- the NORMAL case on a fresh server', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    -- No f.setPersonnelRow, no f.setPartnership -- exactly a fresh install.
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+
+    t.isTrue(result.ok)
+    t.equals(result.name, 'Rex Callahan')
+    t.isNil(result.callsign)
+    t.isNil(result.handlerName)
+end)
+
+t.test('K9 IDENTITY: a personnel row that exists but was never given a callsign shows just the name', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.setPersonnelRow('CITIZEN_K9', 'police', 'k9', nil)
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+    t.isNil(result.callsign)
+end)
+
+t.test('K9 IDENTITY: shows the partnered handler\'s name when Config.K9Identity.showHandlerName is on', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    local handler = f.registerPlayer(HANDLER_SRC, 'CITIZEN_HANDLER', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.setCharinfo(handler, 'Jordan', 'Alvarez')
+    f.setPartnership('CITIZEN_K9', 'CITIZEN_HANDLER')
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+    t.equals(result.handlerName, 'Jordan Alvarez')
+end)
+
+t.test('K9 IDENTITY: Config.K9Identity.showHandlerName = false suppresses the handler name even with an active partnership', function()
+    local f = newFixture({ k9Identity = { showHandlerName = false } })
+    setupIdentityScene(f)
+    local handler = f.registerPlayer(HANDLER_SRC, 'CITIZEN_HANDLER', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.setCharinfo(handler, 'Jordan', 'Alvarez')
+    f.setPartnership('CITIZEN_K9', 'CITIZEN_HANDLER')
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+    t.isNil(result.handlerName)
+end)
+
+t.test('K9 IDENTITY: never shows a handler name for the BACKWARDS case -- citizenid is the HANDLER party, not the K9, in whatever partnership row exists', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    -- Deliberately reaches past f.setPartnership's own always-K9-first
+    -- convention (that helper always sets isK9=true for its first
+    -- argument) to prove ResolveIdentityHandlerName's own `isK9 ~= true`
+    -- guard, not merely that the helper never produces this shape.
+    f.env.GetActivePartnerCitizenId = function(citizenid)
+        if citizenid == 'CITIZEN_K9' then return 'CITIZEN_HANDLER', false end
+        return nil, nil
+    end
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+    t.isNil(result.handlerName)
+end)
+
+t.test('K9 IDENTITY: a thrown K9Store.Personnel_GetActiveRow (DB error) degrades to no callsign, never crashes the whole callback', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.env.K9Store.Personnel_GetActiveRow = function() error('simulated DB outage') end
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+    t.isNil(result.callsign)
+end)
+
+t.test('K9 IDENTITY: too_far when the asking player is not actually standing next to the target', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.setCoords(K9_SRC, 100, 100, 0) -- asking player stays at the origin
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'too_far')
+end)
+
+t.test('K9 IDENTITY: exactly at the interact range boundary still works -- the server re-check mirrors the client option\'s own 3.0m distance', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.setCoords(K9_SRC, 3.0, 0, 0)
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+end)
+
+t.test('K9 IDENTITY: not_k9 when the target does not currently hold the K9 role, even standing right next to them', function()
+    local f = newFixture()
+    f.registerPlayer(ASKING_SRC, 'CITIZEN_ASKING', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.registerPlayer(K9_SRC, 'CITIZEN_BYSTANDER', { name = 'police', isboss = false, grade = { level = 0 } })
+    -- No grantCertDirect, no k9.access permission -- HasK9Role is false.
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'not_k9')
+end)
+
+t.test('K9 IDENTITY: SWITCHED OFF -- Config.K9Identity.enabled = false refuses outright, even for a legitimate in-range K9', function()
+    local f = newFixture({ k9Identity = { enabled = false } })
+    setupIdentityScene(f)
+    f.setPersonnelRow('CITIZEN_K9', 'police', 'k9', '9-Lincoln-3')
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'disabled')
+end)
+
+t.test('K9 IDENTITY: an unresolvable/never-registered targetServerId is refused, not crashed on', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+
+    local result = callIdentity(f, ASKING_SRC, 9999)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_target')
+end)
+
+t.test('K9 IDENTITY: a non-number targetServerId is refused, not crashed on', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+
+    local result = callIdentity(f, ASKING_SRC, 'not-a-number')
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_target')
+end)
+
+t.test('K9 IDENTITY: an asking player with no live ped is refused, not crashed on', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+
+    local result = f.callbacks['qbx_k9unit:server:k9Identity'](99999, K9_SRC) -- 99999 never registered -- GetPlayerPed(99999) == 0
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_target')
+end)
+
+t.test('K9 IDENTITY: cannot target yourself', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+
+    local result = callIdentity(f, K9_SRC, K9_SRC)
+    t.isFalse(result.ok)
+end)
+
+-- ----------------------------------------------------------------------
+-- CANNOT SELF-LABEL AS SOMEONE ELSE'S DOG (this task's rule 2) -- the
+-- ONLY input this callback ever takes from the asking client is
+-- targetServerId; everything else is resolved fresh, server-side.
+-- ----------------------------------------------------------------------
+
+t.test('CANNOT SELF-LABEL: extra/spoofed arguments beyond (source, targetServerId) are silently ignored -- Lua drops them, this callback declares no parameter for them', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.setPersonnelRow('CITIZEN_K9', 'police', 'k9', '9-Lincoln-3')
+
+    -- Exactly what a modified client trying to smuggle a spoofed
+    -- citizenid/name/callsign through an extra argument would send.
+    local result = f.callbacks['qbx_k9unit:server:k9Identity'](ASKING_SRC, K9_SRC, 'FAKE_CITIZENID', 'Fake Name', '0-Fake-0')
+
+    t.isTrue(result.ok)
+    t.equals(result.name, 'Rex Callahan')
+    t.equals(result.callsign, '9-Lincoln-3')
+end)
+
+t.test('CANNOT SELF-LABEL: two different K9s in the same scene never cross-contaminate -- asking about one never returns the other\'s name/callsign', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    local otherK9 = f.registerPlayer(OTHER_K9_SRC, 'CITIZEN_K9_OTHER', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.setCharinfo(otherK9, 'Buddy', 'Otherdog')
+    f.grantCertDirect('CITIZEN_K9_OTHER', 'police')
+    f.setPersonnelRow('CITIZEN_K9', 'police', 'k9', '9-Lincoln-3')
+    f.setPersonnelRow('CITIZEN_K9_OTHER', 'police', 'k9', '9-Lincoln-9')
+
+    local resultA = callIdentity(f, ASKING_SRC, K9_SRC)
+    local resultB = callIdentity(f, ASKING_SRC, OTHER_K9_SRC)
+
+    t.equals(resultA.name, 'Rex Callahan')
+    t.equals(resultA.callsign, '9-Lincoln-3')
+    t.equals(resultB.name, 'Buddy Otherdog')
+    t.equals(resultB.callsign, '9-Lincoln-9')
+end)
+
+-- ----------------------------------------------------------------------
+-- PAYLOAD SHAPE (this task's rule 1) -- asserted on the REAL returned
+-- table's own key set, never on intent. See server/appearance.lua's own
+-- "K9 IDENTITY" section header, "NEVER CONDITION/CERTIFICATION/POSITION".
+-- ----------------------------------------------------------------------
+
+local ALLOWED_SUCCESS_KEYS = { ok = true, name = true, callsign = true, handlerName = true }
+local ALLOWED_FAILURE_KEYS = { ok = true, reason = true }
+
+--- @param result table
+--- @param allowed table<string, boolean>
+local function assertOnlyAllowedKeys(result, allowed)
+    for k in pairs(result) do
+        if not allowed[k] then
+            error(('PAYLOAD LEAK: unexpected key %q found in k9Identity result -- this must never carry anything beyond identity'):format(tostring(k)), 2)
+        end
+    end
+end
+
+t.test('PAYLOAD SHAPE: a successful result carries ONLY ok/name/callsign/handlerName -- nothing about condition, certification or position, ever', function()
+    local f = newFixture()
+    setupIdentityScene(f)
+    f.setPersonnelRow('CITIZEN_K9', 'police', 'k9', '9-Lincoln-3')
+    local handler = f.registerPlayer(HANDLER_SRC, 'CITIZEN_HANDLER', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.setCharinfo(handler, 'Jordan', 'Alvarez')
+    f.setPartnership('CITIZEN_K9', 'CITIZEN_HANDLER')
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    assertOnlyAllowedKeys(result, ALLOWED_SUCCESS_KEYS)
+
+    -- Named explicitly, not just "no extra keys": the exact fields this
+    -- task singled out as forbidden must be absent BY NAME, not merely
+    -- coincidentally missing from an allowlist that could itself be wrong.
+    for _, forbidden in ipairs({
+        'health', 'fatigue', 'mood', 'fear', 'fearStress', 'stress', 'thirst', 'hunger',
+        'condition', 'certification', 'tier', 'certTier', 'specialization', 'specializations',
+        'detects', 'detection', 'coords', 'position', 'x', 'y', 'z', 'citizenid', 'job',
+    }) do
+        t.isNil(result[forbidden], 'forbidden field must never appear: ' .. forbidden)
+    end
+end)
+
+t.test('PAYLOAD SHAPE: a failure result carries ONLY ok/reason', function()
+    local f = newFixture({ k9Identity = { enabled = false } })
+    setupIdentityScene(f)
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    assertOnlyAllowedKeys(result, ALLOWED_FAILURE_KEYS)
+end)
+
+-- ----------------------------------------------------------------------
+-- SANITIZATION -- defense in depth for a player-controllable display
+-- string reaching ANOTHER player's screen (this task's own render-safely
+-- instruction). See SanitizeIdentityDisplayString's own doc comment for
+-- why this stops at stripping/clamping rather than neutralising markdown.
+-- ----------------------------------------------------------------------
+
+t.test('SANITIZATION: control characters are stripped and an oversized name is clamped before it ever reaches another client', function()
+    local f = newFixture()
+    local asking = f.registerPlayer(ASKING_SRC, 'CITIZEN_ASKING', { name = 'police', isboss = false, grade = { level = 0 } })
+    local k9 = f.registerPlayer(K9_SRC, 'CITIZEN_K9', { name = 'police', isboss = false, grade = { level = 0 } })
+    f.setCharinfo(asking, 'Alex', 'Asker')
+    f.grantCertDirect('CITIZEN_K9', 'police')
+    f.setCharinfo(k9, 'Rex\7\27[31m', ('X'):rep(80))
+
+    local result = callIdentity(f, ASKING_SRC, K9_SRC)
+    t.isTrue(result.ok)
+    t.isNil(result.name:find('\7', 1, true), 'a raw control character must never survive into another client\'s notification')
+    t.isTrue(#result.name <= 48, 'an oversized name must be clamped, not passed through as-is')
 end)
 
 os.exit(t.summary())
