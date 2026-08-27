@@ -339,6 +339,10 @@ Config.Features = {
     -- HandlerDownDefense all having gone through the same review and now
     -- shipping `true` too.
     HandlerPartnership   = true,
+    -- ALSO gates the "handler condition badge" (server/wellbeing.lua) --
+    -- turning this off means a partnered handler's HUD never shows their
+    -- own dog's condition, on top of everything else this flag already
+    -- controls.
 
     -- server/tenure.lua (DEVELOPER_REFERENCE.md Part B §7). Grants a one-time,
     -- flat XP bonus to the K9-role party when a partnership's CONTINUOUS
@@ -4373,7 +4377,7 @@ Config.Wellbeing = {
     Thirst = {
         max                    = 100,
         decayPerTick           = 0.139, -- empties in ~60 minutes if never watered -- faster than Hunger, dogs need water more often
-        lowThreshold           = 30,
+        lowThreshold           = 30, -- also the exact line where a bonded handler's HUD badge starts calling their dog "Thirsty" -- raise it and that word shows up sooner, lower it and it shows up later
         speedPenaltyMultiplier = 0.95,
         drinkRegenAmount       = 35,    -- restored per giveK9Water (/k9drink) use, the item path
         -- PLACEHOLDER item name -- see Config.Features.HungerThirstSystem's
