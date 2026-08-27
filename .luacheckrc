@@ -1147,6 +1147,28 @@ globals = {
     -- respectively -- see server/roster.lua's own file header for the
     -- exact integration this allowlists in advance.
     "RosterAssignPersonnelRole", "RosterSetCallsign", "ClearPersonnelRowForCitizenJob",
+    -- config.lua -- FEATURE GROUPS (FEATURE_STRUCTURE_SPEC.md, the nested
+    -- Config.FeatureGroups tree). Deliberately global, not local, same
+    -- documented exception this codebase already makes elsewhere (see
+    -- GetXPTier above): each has a REAL caller beyond the test suite.
+    -- GetFeatureGroupFamily/IsStandaloneFeatureFlag are read by
+    -- tests/featuregroups_spec.lua to prove the family-membership drift
+    -- guard against the real function, never a hand-typed duplicate of it.
+    -- IsFeatureGroupParentEnabled is read by server/runtimecontrol.lua's
+    -- own "PARENT-OFF REFUSES CHILD-ON" gate (runtimeSetFeature) and its
+    -- boot-time override-reapply loop, both behind a
+    -- `type(IsFeatureGroupParentEnabled) == 'function'` runtime existence
+    -- guard, same soft-dependency convention as every other cross-file
+    -- global in this list -- config.lua loads before server/runtimecontrol.lua
+    -- either way (fxmanifest.lua), so the guard is defensive, not a real
+    -- load-order gap.
+    -- ResolveFeatureGroups itself -- called once, unconditionally, at the
+    -- bottom of config.lua's own "FEATURE GROUPS RESOLVER" section; global
+    -- for the identical reason as the three above (tests/featuregroups_spec.lua
+    -- re-invokes the real function against a mutated Config.FeatureGroups
+    -- rather than testing a duplicate of its logic).
+    "ResolveFeatureGroups",
+    "GetFeatureGroupFamily", "IsStandaloneFeatureFlag", "IsFeatureGroupParentEnabled",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

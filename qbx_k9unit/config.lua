@@ -149,7 +149,11 @@ Config = {}
 -- TRAINING AND PLAY
 --   Config.TrainingZones ............ where the practice yards are
 --   Config.Training ................. how the practice drills behave
---   Config.ScentTrailHunt ........... follow-your-nose hunts
+--   Config.ScentTrailHunt ........... follow-your-nose hunts (switch
+--                                     removed, owner-approved -- see
+--                                     Config.Features' own comment for
+--                                     the full writeup; this tuning table
+--                                     is kept, untouched, unused)
 --   Config.ScentLineup .............. sniff the row and pick the match
 --   Config.SARCalls ................. missing-person and rescue calls
 --
@@ -231,14 +235,43 @@ Config.Features = {
     -- you already get is unchanged; this is on top of it, not instead of it.
     FindAlerts           = true,
 
-    -- client/scenttrail.lua + server/scenttrail.lua (PROJECT_HISTORY.md §2,
-    -- "follow your nose"). Turns a search into a hunt: the K9 sets off
-    -- after a hidden spot somewhere near them, guided ONLY by a growl that
-    -- pulses faster as they get warmer. No marker, no blip, and -- this is
-    -- the part that makes it honest -- the hiding place's coordinates are
-    -- never sent to the player's game at all, only a distance. Nobody can
-    -- read the answer out of their own client. Awards no XP.
-    ScentTrailHunt       = true,
+    -- REMOVED (owner-approved, "Overhaul all the features if they are
+    -- redundant... remove it" -- see FEATURE_STRUCTURE_SPEC.md §2.2.1 and
+    -- OVERHAUL_PLAN.md's "Stage 7" for the full reasoning and the
+    -- dependency check that cleared it). Was `ScentTrailHunt`, gating
+    -- client/scenttrail.lua + server/scenttrail.lua ("follow your nose" --
+    -- PROJECT_HISTORY.md §2): the K9 sets off after a hidden, made-up spot,
+    -- guided only by a growl that pulses faster as they get warmer.
+    -- Judged genuinely redundant, not merely thin: it duplicates
+    -- Detection's own "walk toward a fading signal" interaction shape
+    -- (see Config.FeatureGroups.Detection below) against a fake
+    -- destination instead of a real one, feeds no other system (no XP, no
+    -- search/contraband/rescue tie-in), and owns no database table (this
+    -- was a live, in-memory session only -- nothing was left behind to
+    -- preserve). Neither client/scenttrail.lua nor server/scenttrail.lua
+    -- was touched or deleted -- both files are untouched, inert, and fully
+    -- intact; they already no-op correctly the instant this key reads
+    -- `nil` (their own top-level `if not Config.Features.ScentTrailHunt
+    -- then return end`), exactly the same way any other feature here goes
+    -- inert when its flag is off.
+    --
+    -- HOW TO BRING THIS BACK, exactly, either flavour:
+    --   1. AS-IS: add the line `ScentTrailHunt = true,` back here (or set
+    --      it under a Config.FeatureGroups family below, see that table's
+    --      own header for how to wire a new key into it).
+    --   2. AS A TRAINING DRILL INSTEAD (the alternative OVERHAUL_PLAN.md
+    --      offered and the owner may still take -- a nose-following
+    --      practice exercise, since TrainingMode's own dummy drills below
+    --      cover bite-and-hold and searching but nothing for tracking):
+    --      same step 1, but nest it under Config.FeatureGroups.Training
+    --      instead of Config.FeatureGroups.Detection, and update
+    --      server/tablet.lua's FEATURE_DOMAINS entry from 'training' (it
+    --      is still there, harmless and unused while this key is absent --
+    --      see tests/runtimefeaturetiers_spec.lua's own documented "an
+    --      orphaned entry has zero behavioural consequence" guarantee) to
+    --      match wherever it actually ends up.
+    -- No other file needs editing to remove OR restore this -- this was a
+    -- single-key, config-only change on both ends.
 
     -- client/pursuitsprint.lua + server/pursuitsprint.lua (PROJECT_HISTORY.md §5).
     -- A short burst where the dog is genuinely faster than the person it is
@@ -646,6 +679,386 @@ Config.Features = {
 }
 
 -- ======================================================================
+-- FEATURE GROUPS -- the nested capability tree an operator actually edits
+-- day to day. Full design rationale (family boundaries; the four-bucket
+-- classification -- real feature / sub-feature / behaviour / removed --
+-- of every flag above; why six flags sit outside every parent; the
+-- lineup/recall/admin-split reasoning) lives in FEATURE_STRUCTURE_SPEC.md
+-- -- this comment is the short version, not a duplicate of it.
+--
+-- HOW THIS WORKS: each capability below has an `enabled` switch. Turning
+-- it OFF forces every one of its listed children OFF too, regardless of
+-- that child's own value here or Config.Features' own value above -- a
+-- parent's `false` always wins (a real, structural effect this pass
+-- landed for the first time; the group boundaries drawn a pass earlier,
+-- commit d00fd60, were labelling only). Turning a child on/off here
+-- OVERRIDES the shipped default in Config.Features above; LEAVING a child
+-- out of a family entirely here means "use whatever Config.Features
+-- already says for it" -- you never have to list every child just to
+-- change one.
+--
+-- BACKWARD COMPATIBILITY, EXACTLY: delete this whole table (or never add
+-- it, e.g. an old copy of this file) and NOTHING below changes -- every
+-- flag in Config.Features above is used exactly as written, exactly like
+-- every version of this resource before this table existed. A console
+-- line at boot says which mode is active. Every value below was chosen to
+-- be a NO-OP against Config.Features' own shipped defaults above --
+-- tests/featuregroups_spec.lua pins this for all 60 keys, including the
+-- four that ship `false` (HandlerXPProgression, DiscordWebhook,
+-- CertificationExpiry, DangerWarn) -- so simply adding this table to an
+-- existing install changes nothing on its own; only editing a value in it
+-- does.
+--
+-- ADDING A NEW Config.Features KEY LATER: add it to the flat table above
+-- as always, THEN add it to exactly one of FEATURE_GROUP_MEMBERS or
+-- STANDALONE_FEATURE_KEYS just below this table (whichever family it
+-- belongs to, or the standalone list if it genuinely has no parent -- see
+-- FEATURE_STRUCTURE_SPEC.md §3 for how that call was made for the
+-- existing six). tests/featuregroups_spec.lua fails loudly, naming the
+-- key, if this step is skipped -- this is deliberate: a feature landing
+-- mid-session with no home in this tree is exactly the kind of silent gap
+-- this table exists to prevent (this happened for real, once, while this
+-- table was being designed -- HungerThirstSystem below is that key).
+-- ======================================================================
+Config.FeatureGroups = {
+    Detection = {
+        enabled   = true, -- was the standalone ScentTracking switch -- scent tracking IS this capability's baseline, see FEATURE_STRUCTURE_SPEC.md §3.5, so there is no separate ScentTracking slot here
+        Blood     = true, -- BloodTracking
+        Gunpowder = true, -- GunpowderSniffing
+        Water     = true, -- WaterTrackingDecay
+        Vision    = true, -- ScentVision -- own keybind/entry point, kept deliberately unmerged, see spec §2.1
+        Lineup    = true, -- ScentLineup -- kept deliberately (spec §2.2.1); its pick/cancel actions stay ungated by K9 access regardless of this switch, see spec §7.2
+        -- ScentTrailHunt is not listed here or anywhere else in this tree
+        -- -- REMOVED, not folded. See Config.Features' own comment above
+        -- (where that key used to live) for the full writeup and exactly
+        -- how to bring it back, including as a sibling of FetchMechanic
+        -- under Training instead of here.
+    },
+    Search = {
+        enabled          = true, -- was the standalone SearchZones switch
+        ContrabandAlerts = true,
+        FindAlerts       = true,
+        ScreenFX         = true, -- ContrabandScreenFX
+        SARCalls         = true,
+    },
+    Sensory = {
+        -- NEW switch -- no single existing flag was this capability's
+        -- natural baseline (spec §3.5), unlike Detection/Search above.
+        enabled        = true,
+        NightVision    = true,
+        ThermalVision  = true,
+        CameraFeedPiP  = true, -- own entry point, requires an active partnership, deliberately not folded into the night/thermal cycle -- spec §2, Sensory table
+        ProximityAudio = true, -- ProximityAudioFX
+    },
+    Combat = {
+        -- NEW switch, same reasoning as Sensory above -- BiteAndHold/
+        -- NonLethalTakedown/PropDragging are parallel siblings, not a
+        -- base+variants relationship, so none of them collapses into this.
+        -- Deliberately never merged into one entry point (spec §7.1): a
+        -- wrong guess here has a real, unrecoverable consequence for
+        -- another player, unlike a wrong guess on a kennel or a fetch
+        -- ball.
+        enabled            = true,
+        BiteAndHold        = true,
+        NonLethalTakedown  = true,
+        PropDragging       = true,
+        PursuitSprint      = true,
+        HandlerDownDefense = true,
+        DangerWarn         = false, -- ships off -- see Config.Features.DangerWarn's own comment above before ever flipping this to true
+    },
+    Movement = {
+        enabled            = true, -- was the standalone LeashMechanics switch
+        BasicBarkSounds    = true,
+        AdvancedBarkRadial = true,
+        AgilityBasicJump   = true,
+        AgilityAdvanced    = true,
+        VehicleEntryExit   = true,
+        DoorInteraction    = true,
+        -- Recall is deliberately NOT a member of this family (or any
+        -- family) -- see the standalone list below and
+        -- FEATURE_STRUCTURE_SPEC.md §3.2: it is the shared way to call off
+        -- a bite, a takedown, OR a drag, so it must never be forced off by
+        -- a switch belonging to any ONE of Combat/Movement alone.
+    },
+    Wellbeing = {
+        enabled        = true, -- was the standalone FatigueSystem switch
+        Mood           = true, -- MoodSystem
+        FearStress     = true, -- FearStressSystem
+        Distraction    = true, -- DistractionSystem
+        InjuryLimping  = true,
+        HUD            = true, -- HealthStaminaHUD
+        K9DownDispatch = true,
+        Medkit         = true, -- K9Medkit -- moved here from a "gear" grouping, see spec §3.3: its entry point belongs with feed/pet/drink, not with kennels/shop/attachments
+        HungerThirst   = true, -- HungerThirstSystem -- landed mid-session after this tree's first draft; this is the key that proved tests/featuregroups_spec.lua's drift guard actually catches an unclassified addition
+    },
+    Progression = {
+        enabled             = true, -- was the standalone XPProgression switch
+        HandlerXP           = false, -- HandlerXPProgression -- SHIPS FALSE, see Config.Features.HandlerXPProgression's own long comment above before ever flipping this: two of its six award keys still lack a real per-actor mint cooldown
+        CertificationExpiry = false,
+        Leaderboard         = true, -- K9Leaderboard
+    },
+    Partnership = {
+        -- Split out of a combined "progression" grouping (spec §3.4) --
+        -- HandlerPartnership has its own real entry point (Partner Up)
+        -- unrelated to XP; nothing requires XP tracking to be on for a
+        -- partnership to exist.
+        enabled     = true, -- was the standalone HandlerPartnership switch
+        TenureBonus = true, -- PartnershipTenureBonus
+    },
+    Gear = {
+        enabled          = true, -- was the standalone K9Inventory switch
+        EquipmentShop    = true, -- K9EquipmentShop
+        DeployableKennel = true,
+        PropAttachments  = true,
+    },
+    Training = {
+        enabled       = true, -- was the standalone TrainingMode switch
+        FetchMechanic = true,
+    },
+    Tablet = {
+        -- Split out of a combined "admin" grouping (spec §3.6) --
+        -- config.lua's own comment on AdminAuditCommands documents
+        -- `CommandTablet = false` + `AdminAuditCommands = true` as "a
+        -- real, plausible config, not a contrived one"; a shared parent
+        -- here would make that documented, intentional combination
+        -- impossible to express. Only the tablet's own two intrinsic
+        -- screens live under it.
+        enabled               = true, -- was the standalone CommandTablet switch
+        RuntimeFeatureControl = true,
+        Theming               = true, -- TabletTheming
+    },
+    Integrations = {
+        -- Narrowed from a combined "admin"/"integration" grouping (spec
+        -- §3.7) -- RadialMenu was removed from this family entirely: it is
+        -- the delivery mechanism for most OTHER families' entry points,
+        -- not a member of this one, so it lives standalone below instead.
+        enabled            = true,
+        DiscordWebhook     = false, -- ships off, see Config.Features.DiscordWebhook's own comment above
+        ResourceAutoDetect = true,
+    },
+
+    -- STANDALONE -- deliberately outside every parent above. Each reason
+    -- is specific, not a shrug; see FEATURE_STRUCTURE_SPEC.md §3 for the
+    -- full writeup on all six:
+    Recall             = true, -- the shared way to call off a bite, a takedown, OR a drag (Combat) -- must never share a parent with any of the three, or with Movement, its former display grouping
+    HighCommand        = true, -- proven independent in this resource's own code; the single highest-blast-radius flag in this file, already carrying its own lockout protection in server/runtimecontrol.lua
+    PermissionGrants   = true, -- proven independent of the tablet -- server/permissions.lua's grant/revoke command path is gated on IsHighCommand, never CommandTablet
+    AdminAuditCommands = true, -- see this table's own Tablet-family comment above -- the documented, load-bearing reason this cannot share CommandTablet's fate
+    BoneSweepDevTool   = true, -- dev-only, already double-gated by its own convar + ACE, must never share fate with anything else
+    RadialMenu         = true, -- delivery mechanism for most other families' entry points, not a member of any one capability
+}
+
+-- ======================================================================
+-- FEATURE GROUPS RESOLVER -- narrows Config.Features (above) using
+-- Config.FeatureGroups (also above). Runs exactly once, synchronously, at
+-- the ResolveFeatureGroups() call immediately below this comment block --
+-- every other file in this resource is loaded by fxmanifest.lua AFTER
+-- config.lua finishes running top to bottom, so every other file only
+-- ever observes the FINAL, resolved Config.Features, never an
+-- intermediate state.
+--
+-- CLAMP AND WARN ON ANYTHING MALFORMED. NEVER ASSERT: one family's typo
+-- must never take down every other feature in this resource. Every
+-- malformed shape below prints one line naming the exact table/field and
+-- this file, then falls back to the safest available value (the family's
+-- own existing Config.Features value, or `true`/on for a missing
+-- `enabled`) and keeps going.
+--
+-- `ResolveFeatureGroups`, `GetFeatureGroupFamily`, `IsStandaloneFeatureFlag`,
+-- and `IsFeatureGroupParentEnabled` are deliberately GLOBAL (no `local`),
+-- an intentional, commented exception to this codebase's usual "don't
+-- export a local just for a test to poke at" convention (see
+-- tests/tabletfeaturedomains_spec.lua's own header for that convention
+-- stated in full) -- both have a REAL production caller beyond the test
+-- suite: server/runtimecontrol.lua calls IsFeatureGroupParentEnabled to
+-- refuse a tablet override that a disabled parent would make inert (see
+-- that file's own "PARENT-OFF REFUSES CHILD-ON" section), and
+-- ResolveFeatureGroups/GetFeatureGroupFamily are the two hooks
+-- tests/featuregroups_spec.lua uses to prove the drift guard, the no-op-
+-- on-defaults pin, and the clamp-and-warn behaviour all actually work
+-- against the REAL function, not a hand-typed duplicate of it.
+-- ======================================================================
+local FEATURE_GROUP_MEMBERS = {
+    Detection    = { base = 'ScentTracking', Blood = 'BloodTracking', Gunpowder = 'GunpowderSniffing', Water = 'WaterTrackingDecay', Vision = 'ScentVision', Lineup = 'ScentLineup' },
+    Search       = { base = 'SearchZones', ContrabandAlerts = 'ContrabandAlerts', FindAlerts = 'FindAlerts', ScreenFX = 'ContrabandScreenFX', SARCalls = 'SARCalls' },
+    Sensory      = { NightVision = 'NightVision', ThermalVision = 'ThermalVision', CameraFeedPiP = 'CameraFeedPiP', ProximityAudio = 'ProximityAudioFX' },
+    Combat       = { BiteAndHold = 'BiteAndHold', NonLethalTakedown = 'NonLethalTakedown', PropDragging = 'PropDragging', PursuitSprint = 'PursuitSprint', HandlerDownDefense = 'HandlerDownDefense', DangerWarn = 'DangerWarn' },
+    Movement     = { base = 'LeashMechanics', BasicBarkSounds = 'BasicBarkSounds', AdvancedBarkRadial = 'AdvancedBarkRadial', AgilityBasicJump = 'AgilityBasicJump', AgilityAdvanced = 'AgilityAdvanced', VehicleEntryExit = 'VehicleEntryExit', DoorInteraction = 'DoorInteraction' },
+    Wellbeing    = { base = 'FatigueSystem', Mood = 'MoodSystem', FearStress = 'FearStressSystem', Distraction = 'DistractionSystem', InjuryLimping = 'InjuryLimping', HUD = 'HealthStaminaHUD', K9DownDispatch = 'K9DownDispatch', Medkit = 'K9Medkit', HungerThirst = 'HungerThirstSystem' },
+    Progression  = { base = 'XPProgression', HandlerXP = 'HandlerXPProgression', CertificationExpiry = 'CertificationExpiry', Leaderboard = 'K9Leaderboard' },
+    Partnership  = { base = 'HandlerPartnership', TenureBonus = 'PartnershipTenureBonus' },
+    Gear         = { base = 'K9Inventory', EquipmentShop = 'K9EquipmentShop', DeployableKennel = 'DeployableKennel', PropAttachments = 'PropAttachments' },
+    Training     = { base = 'TrainingMode', FetchMechanic = 'FetchMechanic' },
+    Tablet       = { base = 'CommandTablet', RuntimeFeatureControl = 'RuntimeFeatureControl', Theming = 'TabletTheming' },
+    Integrations = { DiscordWebhook = 'DiscordWebhook', ResourceAutoDetect = 'ResourceAutoDetect' },
+}
+
+local STANDALONE_FEATURE_KEYS = {
+    'Recall', 'HighCommand', 'PermissionGrants', 'AdminAuditCommands', 'BoneSweepDevTool', 'RadialMenu',
+}
+
+-- Reverse index (flat Config.Features name -> family name), built once
+-- below, right after FEATURE_GROUP_MEMBERS -- never hand-maintained
+-- separately from it, so the two can never drift apart.
+local FLAT_KEY_TO_FAMILY = {}
+for familyName, members in pairs(FEATURE_GROUP_MEMBERS) do
+    for childKey, flatName in pairs(members) do
+        FLAT_KEY_TO_FAMILY[flatName] = familyName
+    end
+end
+
+--- @param flatName string -- a Config.Features key
+--- @return string? -- the Config.FeatureGroups family name it belongs to, or nil if it is standalone (see IsStandaloneFeatureFlag) or genuinely unrecognized
+function GetFeatureGroupFamily(flatName)
+    return FLAT_KEY_TO_FAMILY[flatName]
+end
+
+--- @param flatName string -- a Config.Features key
+--- @return boolean
+function IsStandaloneFeatureFlag(flatName)
+    for _, key in ipairs(STANDALONE_FEATURE_KEYS) do
+        if key == flatName then return true end
+    end
+    return false
+end
+
+--- Whether `flatName`'s own parent capability, if it has one, currently
+--- resolves `enabled`. A flag with no parent (standalone, or genuinely
+--- unrecognized) always reports true here -- there is nothing to be
+--- blocked BY. Also true whenever Config.FeatureGroups itself is absent
+--- (old flat shape -- there is no parent concept to consult at all) or the
+--- family entry is malformed (already clamped to "on" by
+--- ResolveFeatureGroups itself, so this stays consistent with that).
+--- @param flatName string
+--- @return boolean
+function IsFeatureGroupParentEnabled(flatName)
+    local family = GetFeatureGroupFamily(flatName)
+    if not family then return true end
+    if type(Config.FeatureGroups) ~= 'table' then return true end
+    local familyTable = Config.FeatureGroups[family]
+    if type(familyTable) ~= 'table' then return true end
+    return familyTable.enabled ~= false
+end
+
+--- Runs the resolution described in this section's own header comment.
+--- Safe to call more than once (tests do; production calls it exactly
+--- once, below). Genuinely idempotent against its own prior output --
+--- re-running it against an unchanged Config.FeatureGroups reproduces the
+--- same Config.Features values, never compounds -- because every
+--- "not overridden here" default below is read from
+--- Config.FeaturesBeforeGrouping (captured ONCE, on the first call ever,
+--- and never overwritten again), NOT from Config.Features' own live,
+--- already-narrowed value. Reading the live value instead would be a real
+--- bug, not a style choice: a second call, after a family's `enabled` had
+--- been flipped false then back to true between calls, would find its
+--- unset children already forced false by the FIRST call with nothing left
+--- to recover the true original default from, silently losing it forever
+--- rather than genuinely re-resolving.
+function ResolveFeatureGroups()
+    -- Snapshot Config.Features EXACTLY as authored above, before any
+    -- narrowing -- but ONLY ONCE, ever (the `if` guard below), specifically
+    -- so a second-or-later call can never capture an already-narrowed
+    -- value as if it were the original default -- see this function's own
+    -- doc comment above. Cheap (60 booleans) and always correct. Real use
+    -- beyond the test suite: an operator can inspect this table to see
+    -- what Config.Features would be with Config.FeatureGroups entirely
+    -- ignored, without editing anything.
+    if type(Config.FeaturesBeforeGrouping) ~= 'table' then
+        Config.FeaturesBeforeGrouping = {}
+        for key, value in pairs(Config.Features) do
+            Config.FeaturesBeforeGrouping[key] = value
+        end
+    end
+
+    if type(Config.FeatureGroups) ~= 'table' then
+        print('[qbx_k9unit] config.lua: Config.FeatureGroups not found -- Config.Features is in the classic flat format and is loaded unchanged. See FEATURE_STRUCTURE_SPEC.md if you want the new grouped format.')
+        return
+    end
+
+    for familyName, members in pairs(FEATURE_GROUP_MEMBERS) do
+        local family = Config.FeatureGroups[familyName]
+        if family ~= nil and type(family) ~= 'table' then
+            print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s is not a table (got %s) -- ignoring it, Config.Features keeps its existing value(s) for this family. Fix Config.FeatureGroups.%s in config.lua.'):format(familyName, type(family), familyName))
+            family = nil
+        end
+
+        local enabled = true -- also the correct value when the family is omitted entirely -- "not mentioned" means "on, nothing overridden", never "off"
+        if family ~= nil then
+            if family.enabled == nil then
+                enabled = true
+            elseif type(family.enabled) ~= 'boolean' then
+                print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.enabled is not a boolean (got %s) -- using true. Fix Config.FeatureGroups.%s.enabled in config.lua.'):format(familyName, type(family.enabled), familyName))
+                enabled = true
+            else
+                enabled = family.enabled
+            end
+        end
+
+        -- Named here, per family, and printed below ONLY if non-empty --
+        -- see this function's own header ("SILENT ON THE NORMAL PATH").
+        -- This is the one thing genuinely worth an operator's attention: a
+        -- child whose OWN configured value (explicit here, or its
+        -- original shipped default if not overridden here) was `true`,
+        -- forced to `false` anyway because its parent's `enabled` is
+        -- `false` -- the exact invisible-state shape rule 2 of this
+        -- resource's own task brief exists to surface, not hide.
+        local forcedOff = {}
+
+        for childKey, flatName in pairs(members) do
+            if childKey == 'base' then
+                -- The family's own baseline flag (e.g. ScentTracking for
+                -- Detection) has no separate child slot in
+                -- Config.FeatureGroups -- see that table's own comment,
+                -- and FEATURE_STRUCTURE_SPEC.md §3.5. Its resolved value
+                -- IS `enabled`, directly. Its "own configured value" for
+                -- the forced-off check is its original shipped default,
+                -- same as any other member -- there is no separate slot
+                -- for it to have been set to something else here.
+                Config.Features[flatName] = enabled
+                if not enabled and Config.FeaturesBeforeGrouping[flatName] == true then
+                    forcedOff[#forcedOff + 1] = flatName
+                end
+            else
+                -- Default: the PRISTINE original shipped value (see this
+                -- function's own doc comment on why this must never read
+                -- Config.Features' own live value here) -- i.e. "not
+                -- overridden in Config.FeatureGroups".
+                local childValue = Config.Features[flatName]
+                if family ~= nil and family[childKey] ~= nil then
+                    if type(family[childKey]) ~= 'boolean' then
+                        print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.%s is not a boolean (got %s) -- using Config.Features.%s\'s original shipped value instead. Fix Config.FeatureGroups.%s.%s in config.lua.'):format(familyName, childKey, type(family[childKey]), flatName, familyName, childKey))
+                    else
+                        childValue = family[childKey]
+                    end
+                end
+                Config.Features[flatName] = enabled and childValue
+                if not enabled and childValue == true then
+                    forcedOff[#forcedOff + 1] = flatName
+                end
+            end
+        end
+
+        if forcedOff[1] then
+            table.sort(forcedOff)
+            print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s.enabled is false -- this also forced the following, which were themselves set (or default) to true, off: %s. This is not a bug; it is what a parent switch does. Set Config.FeatureGroups.%s.enabled = true if any of these should actually be reachable.'):format(familyName, table.concat(forcedOff, ', '), familyName))
+        end
+    end
+
+    for _, flatName in ipairs(STANDALONE_FEATURE_KEYS) do
+        local value = Config.FeatureGroups[flatName]
+        if value ~= nil then
+            if type(value) ~= 'boolean' then
+                print(('[qbx_k9unit] config.lua: Config.FeatureGroups.%s is not a boolean (got %s) -- Config.Features.%s keeps its existing value. Fix Config.FeatureGroups.%s in config.lua.'):format(flatName, type(value), flatName, flatName))
+            else
+                Config.Features[flatName] = value
+            end
+        end
+    end
+end
+
+ResolveFeatureGroups()
+
+-- ======================================================================
 -- PED ROSTER — extensible, no code changes needed to add a streamed model.
 --
 -- ANY ped model works here. Nothing in this resource assumes a dog: every
@@ -1005,12 +1418,9 @@ Config.FeatureControl = {
         -- reason the original four were chosen, not as a rule limiting what
         -- may appear here.
         FindAlerts        = true,
-        -- Listed for a different reason than the four above: not because it
-        -- acts on another player (it does not), but so high command can
-        -- phase the hunt in per person -- reserve it for K9s who have
-        -- finished search training, or stage a rollout -- instead of only
-        -- being able to flip it for the whole server at once.
-        ScentTrailHunt    = true,
+        -- ScentTrailHunt's own RequireGrant entry was removed alongside the
+        -- feature itself (Config.Features' own comment where that key used
+        -- to live has the full removal writeup and revert instructions).
         PursuitSprint     = true,
         -- Fits the original "acts on another player" rationale squarely:
         -- a lineup summons named players and then publicly names one of
@@ -1639,6 +2049,38 @@ Config.LeashVisual = {
 -- run faster than 2x normal past that point, you will not -- that is a
 -- separate, deliberate decision left to you, not a bug in this setting.
 Config.MaxSpeedScentMultiplier = 10.0
+
+-- ======================================================================
+-- OWNER-EDITABLE CEILING for sprintDecayPerTick (server/k9profiles.lua's
+-- per-INDIVIDUAL-K9 stamina override, "god mode over one dog"). Owner's own
+-- words, same breath as the speed/scent ask above: "be able to make the
+-- stamina as high as i want and be able to make the stamina as high as i
+-- want or permanant."
+--
+-- THE DIRECTION IS INVERTED FROM Config.MaxSpeedScentMultiplier ABOVE --
+-- READ THIS BEFORE CHANGING EITHER ONE. speedMultiplier/scentRangeMultiplier
+-- are GOOD when bigger (a faster, longer-ranged dog), so that setting is a
+-- ceiling on how good you can make one. sprintDecayPerTick is a DRAIN
+-- RATE -- a BIGGER number drains a K9's stamina FASTER while sprinting, a
+-- WORSE dog, not a better one. So this setting is a ceiling on how BAD you
+-- can make one, not how good. Do not reuse Config.MaxSpeedScentMultiplier
+-- for this value -- they are different quantities measuring opposite
+-- things, and an owner raising one should never silently move the other.
+--
+-- ZERO IS ALWAYS VALID REGARDLESS OF THIS CEILING -- it is the "never runs
+-- out" permanent-stamina sentinel the owner explicitly asked for (a real,
+-- distinct value from "unset", never confused with it), and this setting
+-- only ever bounds how HIGH a drain rate can be set, never how LOW one
+-- (server/k9profiles.lua's own IsValidStaminaDrain accepts `>= 0`, not
+-- `> 0`, specifically so this ceiling can never catch it).
+--
+-- Read by server/k9profiles.lua's own ResolveMaxStaminaDrainPerTick,
+-- which CLAMPS AND WARNS rather than asserts -- same shape as
+-- Config.MaxSpeedScentMultiplier's own resolver immediately above: a
+-- missing, non-numeric, NaN, infinite, zero, or negative value here falls
+-- back to the 20.0 default below with a loud console warning naming this
+-- exact setting, never a silently-broken tablet.
+Config.MaxStaminaDrainPerTick = 20.0
 
 -- ======================================================================
 -- XP TIERS — Phase 4, placeholder numbers pending economy-balance-agent review
@@ -2521,23 +2963,133 @@ Config.Tracking = {
         keybind = 'Z',
 
         -- One fixed, curated swatch per `maxVisibleTrails` slot -- NOT a
-        -- hash into an arbitrarily large colour space. Colour assignment is
-        -- scoped to the small, proximity-ranked visible set above, so a
-        -- fixed one-swatch-per-slot palette this length makes a colour
-        -- collision between two SIMULTANEOUSLY SHOWN trails structurally
-        -- impossible, as long as this array is at least `maxVisibleTrails`
-        -- long. Chosen for maximum hue/lightness separation at a glance,
-        -- not a rigorous colour-vision-deficiency-optimised set -- flagged
-        -- for a coder-ui/native-api-assistant pass if that guarantee is
-        -- ever needed. Extra entries beyond `maxVisibleTrails` are simply
-        -- never used; fewer entries than `maxVisibleTrails` triggers the
-        -- reuse warning noted above.
+        -- hash into an arbitrarily large colour space. Chosen for maximum
+        -- hue/lightness separation at a glance, not a rigorous
+        -- colour-vision-deficiency-optimised set -- flagged for a
+        -- coder-ui/native-api-assistant pass if that guarantee is ever
+        -- needed.
+        --
+        -- UPDATE (owner-directed follow-up, 2026-08-26 -- "hold a colour
+        -- stable... the same person is the same colour... for every handler
+        -- looking"): colour is now assigned DETERMINISTICALLY from the
+        -- trail owner's own durable citizenid (a stable hash into this same
+        -- array), not from a per-observer "first-come" slot the way it used
+        -- to be -- see server/tracking.lua's own HashStringToIndex/
+        -- ResolveScentVisionColors for the resolution. This is STRONGER
+        -- than before in one way (the SAME person is now the SAME colour
+        -- for every handler watching, and across the whole session, not
+        -- just "stable for as long as one handler keeps them in view") and
+        -- WEAKER in another, disclosed honestly rather than silently
+        -- swapped: the OLD per-observer-slot scheme made a colour collision
+        -- between two people SIMULTANEOUSLY shown to the same K9
+        -- structurally impossible as long as this array was at least
+        -- `maxVisibleTrails` long (each slot got its own untouched swatch).
+        -- The NEW hash-based scheme cannot promise that -- two different
+        -- citizenids can hash to the same swatch and, if both happen to be
+        -- in range of the same K9 at once, show the SAME colour even though
+        -- there are only a "handful" of them and plenty of unused swatches
+        -- below. This is the SAME "colours repeat once there are more
+        -- distinct people than swatches" limitation `maxVisibleTrails`'s
+        -- own comment above already discloses for this feature, just
+        -- arriving via a hash collision instead of literally running out of
+        -- slots -- accepted for the same reason: telling two trails apart
+        -- most of the time, with a real handful-sized palette, is the
+        -- actual ask, not a cryptographic no-collision guarantee. More
+        -- entries below lowers the odds of that coincidence; it can never
+        -- fully remove it once hashing (rather than slot order) decides the
+        -- colour.
         palette = {
             { r = 230, g = 25,  b = 75  }, -- red
             { r = 60,  g = 180, b = 75  }, -- green
             { r = 255, g = 225, b = 25  }, -- yellow
             { r = 0,   g = 130, b = 200 }, -- blue
             { r = 245, g = 130, b = 48  }, -- orange
+        },
+
+        -- ==================================================================
+        -- CONTRABAND BODY HIGHLIGHT (owner-directed follow-up, 2026-08-26 --
+        -- "diffrent colors on there body if they have explosives drugs
+        -- etc"). While a handler is looking at scent vision, a person
+        -- standing right next to the K9 ALSO gets a small stack of coloured
+        -- marks near their body if they are CURRENTLY carrying contraband --
+        -- one colour per contraband CATEGORY (a Config.K9Specializations
+        -- key, e.g. narcotics/explosives), gated by the EXACT SAME
+        -- specialization rule a real search already uses
+        -- (Config.SearchContrabandItems' categorised entries,
+        -- server/search.lua): a dog with no narcotics certification never
+        -- sees a drug highlight, the same way it can never actually FIND
+        -- drugs on a real search. Uncategorised contraband (the shared
+        -- baseline every K9 with search access can already find, e.g. this
+        -- file's own shipped Config.SearchContrabandItems placeholder list,
+        -- which is 100% this shape today) shows its OWN single generic
+        -- colour below regardless of specialization, matching search's own
+        -- "found by everyone" baseline exactly.
+        --
+        -- THIS IS DELIBERATELY NOT A SUBSTITUTE FOR A REAL SEARCH, ON
+        -- PURPOSE, NOT AS AN OVERSIGHT. It only ever tells a handler THAT
+        -- something in a matching category is present on that person RIGHT
+        -- NOW -- never what item, never how many, never how much it weighs
+        -- -- and it never fires the ContrabandAlerts broadcast and never
+        -- mints any XP (same "cosmetic reveal, no real capability granted"
+        -- framing this whole ScentVision feature already carries). Only an
+        -- actual "Search Person" (Config.SearchZones below) reveals any of
+        -- that detail, and remains the one and only action that mints XP,
+        -- logs to k9_search_log, and can trigger a bystander alert. Think of
+        -- this as a nose twitch that tells the handler to go run the real
+        -- search -- it does not replace running it, and a handler who never
+        -- searches never learns anything more than "something's there".
+        contrabandHighlight = {
+            -- false: footprint trails above still show exactly as before,
+            -- but nobody's body is ever recoloured for contraband on this
+            -- server, for anybody, regardless of specialization. A
+            -- deliberately SEPARATE on/off switch from Config.Features.
+            -- ScentVision itself, so an operator who wants the coloured
+            -- footprint trails WITHOUT the contraband half can turn just
+            -- this off without losing the other.
+            enabled = true,
+
+            -- HOW CLOSE the K9 must actually be to a person before this
+            -- ever checks what they are carrying. Deliberately SHORT --
+            -- capped in code (server/tracking.lua) at
+            -- Config.SearchZones.personSearchDistance below (2.0m, the same
+            -- distance a real "Search Person" interaction already
+            -- requires): raising this past that ceiling is refused and
+            -- CLAMPED back down to it, with a console warning, rather than
+            -- honoured. This is deliberately NOT the same number as
+            -- `queryRangeMeters` above (40m, how far away a footprint trail
+            -- is still visible) -- a wide range here would turn this
+            -- feature into exactly the "scan a whole crowd from 40m away"
+            -- x-ray it must never become. Lower = the K9 has to be closer
+            -- (stronger guardrail, more like a real sniff); this file's own
+            -- ceiling is the strongest this can ever be turned up to.
+            rangeMeters = 2.0,
+
+            -- One colour per Config.K9Specializations key, assigned the
+            -- SAME deterministic-hash way `palette` above assigns a trail
+            -- colour per citizenid (see that field's own updated comment
+            -- for the honest collision-odds writeup, which applies here
+            -- too) -- so a given category (e.g. narcotics) always renders
+            -- the same colour for every handler, every session, and
+            -- colours repeat only once there are more specializations than
+            -- swatches here. Deliberately a SEPARATE palette from the trail
+            -- one above, so a category highlight can never be mistaken for
+            -- a person's own footprint-trail colour at a glance.
+            categoryPalette = {
+                { r = 155, g = 89,  b = 182 }, -- purple
+                { r = 230, g = 126, b = 34  }, -- orange
+                { r = 26,  g = 188, b = 156 }, -- teal
+                { r = 231, g = 76,  b = 60  }, -- red
+                { r = 52,  g = 152, b = 219 }, -- light blue
+            },
+
+            -- The ONE colour used for UNCATEGORISED contraband -- the
+            -- shared baseline every K9 with search access already finds
+            -- regardless of specialization (see this table's own header
+            -- above). Deliberately a single FIXED colour, never drawn from
+            -- `categoryPalette` above, so a handler can always tell
+            -- "generic contraband, no specialization needed" apart from a
+            -- specialization-specific category at a glance.
+            baselineColor = { r = 241, g = 196, b = 15 }, -- amber/yellow
         },
     },
 }
@@ -4306,8 +4858,18 @@ Config.K9EquipmentShop = {
 }
 
 -- ======================================================================
--- SCENT TRAIL HUNT (Config.Features.ScentTrailHunt) -- PROJECT_HISTORY.md §2.
--- client/scenttrail.lua + server/scenttrail.lua.
+-- SCENT TRAIL HUNT -- PROJECT_HISTORY.md §2. client/scenttrail.lua +
+-- server/scenttrail.lua.
+--
+-- The Config.Features.ScentTrailHunt SWITCH THAT GATED THIS WAS REMOVED
+-- (owner-approved -- see Config.Features' own comment, in the block
+-- above, where that key used to live, for the full reasoning and exactly
+-- how to bring it back). This TUNING TABLE was deliberately left in place
+-- rather than deleted along with it -- neither client/scenttrail.lua nor
+-- server/scenttrail.lua was touched, and this file's own convention is
+-- "leave what a removed switch owns in place, remove only the switch" --
+-- so this table now sits here, correct and untouched, simply unused.
+-- Restoring the flag above needs nothing further here.
 --
 -- Different from the scent tracking above, and deliberately so: that one
 -- reveals a location and draws a trail to it. This one reveals NOTHING.

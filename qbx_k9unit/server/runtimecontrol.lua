@@ -572,7 +572,16 @@ local FEATURE_TIERS = {
     PartnershipTenureBonus = { tier = 'live', note = 'The milestone check itself re-verifies HandlerPartnership/XPProgression/PartnershipTenureBonus fresh every tick. The tick thread only starts if all three were already true when server/tenure.lua loaded -- if it was off at boot, turning it on mid-session has nothing polling to notice a milestone until this resource restarts.' },
     -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
     FindAlerts             = { tier = 'live', note = 'server/findalert.lua registers both AddEventHandlers (qbx_k9unit:events:searchCompleted, qbx_k9unit:server:reportTrackSourceArrival) unconditionally at file-load time -- no raw top-level gate exists in this file at all. The shared DispatchFindAlertReaction helper both handlers funnel through re-checks Config.Features.FindAlerts fresh on every single call (its own first line: "if not Config.Features.FindAlerts then return end -- real no-op, not just hidden"), so toggling this off/on stops/starts the bark-on-find reaction genuinely and immediately, with nothing captured once at registration time.' },
-    ScentTrailHunt         = { tier = 'live', note = 'server/scenttrail.lua also has no raw top-level gate -- startScentHunt and pollScentHunt (both lib.callback.register) are always registered and each re-checks Config.Features.ScentTrailHunt fresh on every call ("if not Config.Features.ScentTrailHunt then return { started = false, reason = \'denied\' } end" / "... return { active = false } end"). stopScentHunt is UNCONDITIONAL by design (this resource\'s own "no unbounded trap" rule for a termination path, matching server/recall.lua\'s requestRecall) -- never gated on this flag at all, so an already-active hunt can always be cancelled regardless of this flag\'s state.' },
+    -- ScentTrailHunt's own entry was removed here alongside the feature
+    -- itself (owner-approved removal -- see config.lua's own comment where
+    -- Config.Features.ScentTrailHunt used to be defined for the full
+    -- writeup and exactly how to bring it back). An orphaned FEATURE_TIERS
+    -- entry for a feature that no longer exists has zero behavioural
+    -- consequence either way (see tests/runtimefeaturetiers_spec.lua's own
+    -- documented guarantee of that) -- removed anyway, alongside its
+    -- TUNABLE_REGISTRY entries further below, for a clean, single-commit,
+    -- easy-to-revert change rather than leaving three separate stale
+    -- traces in a file this pass could reach.
     -- ADDED post-2026-08-26 (coder-frontend/coder-architect's ScentVision
     -- feature, landed concurrently with this pass -- classified here per
     -- their own analysis, independently re-confirmed by direct read of
@@ -1158,20 +1167,16 @@ local TUNABLE_REGISTRY = {
     ['K9DownDispatch.minDurationMs']            = { path = { 'K9DownDispatch', 'minDurationMs' },                min = 0,     max = 60000,     integer = true },
     ['K9DownDispatch.pollIntervalMs']           = { path = { 'K9DownDispatch', 'pollIntervalMs' },               min = 500,   max = 30000,     integer = true },
 
-    -- server/scenttrail.lua (Config.Features.ScentTrailHunt, live).
-    -- `local ScentHuntConfig = Config.ScentTrailHunt` is likewise a live
-    -- reference -- RollHuntTarget reads minRadius/maxRadius fresh per hunt
-    -- start, pollScentHunt reads arrivalRadius/maxHuntDurationMs fresh per
-    -- poll. startCooldownMs is EXCLUDED (baked into StartHuntCooldown's own
-    -- NewCooldown(...) constructor). pollIntervalMs is EXCLUDED -- it is
-    -- never read anywhere in server/scenttrail.lua at all (grepped); the
-    -- growl's actual poll cadence is a client/scenttrail.lua-only value this
-    -- file has no enforcement point over, matching the "clientonly, no
-    -- server read point" exclusion this registry has always applied.
-    ['ScentTrailHunt.minRadius']                = { path = { 'ScentTrailHunt', 'minRadius' },                    min = 1.0,   max = 100.0,     integer = false },
-    ['ScentTrailHunt.maxRadius']                = { path = { 'ScentTrailHunt', 'maxRadius' },                    min = 5.0,   max = 150.0,     integer = false },
-    ['ScentTrailHunt.arrivalRadius']            = { path = { 'ScentTrailHunt', 'arrivalRadius' },                min = 1.0,   max = 20.0,      integer = false },
-    ['ScentTrailHunt.maxHuntDurationMs']        = { path = { 'ScentTrailHunt', 'maxHuntDurationMs' },            min = 30000, max = 1800000,   integer = true },
+    -- The four ScentTrailHunt.* tunables that used to live here were
+    -- removed alongside the feature's own FEATURE_TIERS entry above and
+    -- Config.Features.ScentTrailHunt itself (config.lua's own comment
+    -- there has the full writeup) -- server/scenttrail.lua's own top-level
+    -- flag check now returns before Config.ScentTrailHunt's values (still
+    -- intact, untouched, see that table's own comment in config.lua) are
+    -- ever read, so a live tuning slider for them would have controlled
+    -- nothing. Removed rather than left registered-but-inert, so the
+    -- tablet's own Runtime Control screen never offers a knob for a
+    -- feature that no longer runs.
 
     -- server/pursuitsprint.lua (Config.Features.PursuitSprint, rawtoplevel).
     -- requestRangeMeters is re-read directly off Config in the request
@@ -2515,8 +2520,28 @@ AddEventHandler('onResourceStart', function(resourceName)
             -- config fix is a real bricking bug, not a hypothetical one.
             local tier = GetFeatureTier(name)
             local sessionOnly = GetFeatureSessionOnly(name)
-            if name and Config.Features and Config.Features[name] ~= nil and tier ~= 'protected' and tier ~= 'unaudited' and not sessionOnly then
-                local storedValue = row.value == 'true'
+            -- PARENT-OFF SKIP (FEATURE_STRUCTURE_SPEC.md §11) -- a stored
+            -- override trying to turn a child ON while config.lua's own
+            -- Config.FeatureGroups now has its parent `enabled = false`
+            -- must NOT be silently re-applied here: ApplyFeatureOverride
+            -- would flip Config.Features[name] true in memory for this
+            -- boot, directly contradicting what runtimeSetFeature's own
+            -- "PARENT-OFF REFUSES CHILD-ON" gate (above) would have
+            -- refused had the same request been made live, and reproducing
+            -- the exact "override says one thing, config.lua says another,
+            -- nothing tells the operator" bug this whole re-apply loop's
+            -- own "SILENT-CLOBBER LOG" exists to close. Checked BEFORE the
+            -- generic apply below, same "skip and say why, do not apply
+            -- and stay quiet" shape as the sessionOnly branch just below
+            -- it -- and, like that branch, the row itself is left alone
+            -- (never deleted) so it re-applies correctly on a LATER boot
+            -- once the parent is enabled again.
+            local storedValueForParentCheck = row.value == 'true'
+            local parentBlocksThis = storedValueForParentCheck
+                and type(IsFeatureGroupParentEnabled) == 'function'
+                and not IsFeatureGroupParentEnabled(name)
+            if name and Config.Features and Config.Features[name] ~= nil and tier ~= 'protected' and tier ~= 'unaudited' and not sessionOnly and not parentBlocksThis then
+                local storedValue = storedValueForParentCheck
                 local fileValue = CONFIG_LUA_DEFAULT_FEATURES[name]
                 if fileValue ~= nil and fileValue ~= storedValue then
                     clobbered[#clobbered + 1] = ('Config.Features.%s -- config.lua says %s, a tablet change says %s (the tablet wins)')
@@ -2524,6 +2549,11 @@ AddEventHandler('onResourceStart', function(resourceName)
                 end
                 ApplyFeatureOverride(name, storedValue)
                 applied = true
+            elseif name and parentBlocksThis then
+                handledAsSessionOnly = true -- reuses the SAME "already explained, do not ALSO fall into the generic stale/unrecognized branch" routing sessionOnly rows use -- see that flag's own doc comment just below for why a flag, not a goto, is used here
+                skippedCount = skippedCount + 1
+                local parentName = type(GetFeatureGroupFamily) == 'function' and GetFeatureGroupFamily(name) or nil
+                print(('[qbx_k9unit] runtimecontrol.lua: NOT re-applying persisted override %s -- Config.FeatureGroups.%s.enabled is false in config.lua, so turning %s on would have no real effect and would only re-drift right back to false. The stored override is kept, untouched, and will be re-applied correctly on a future restart once %s.enabled is true again.'):format(tostring(row.override_key), tostring(parentName), name, tostring(parentName)))
             elseif name and sessionOnly then
                 -- Distinct from the generic "stale/unrecognized" skip
                 -- message below -- this is EXPECTED, BY DESIGN, not a sign
@@ -2748,6 +2778,40 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
         LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s'):format(name), 'unaudited_feature')
         print(('[qbx_k9unit] runtimecontrol.lua: WARNING: refused to toggle %q -- this Config.Features key has no FEATURE_TIERS entry in this file, so this file does not know what toggling it would actually do. Read its real server/client implementation and add FEATURE_TIERS.%s = { tier = ... } to server/runtimecontrol.lua before it can be toggled at runtime -- see this file\'s header "THE FULL AUDIT" for the five tiers and how each is decided.'):format(name, name))
         return { ok = false, reason = 'unaudited_feature' }
+    end
+
+    -- PARENT-OFF REFUSES CHILD-ON (owner-directed, FEATURE_STRUCTURE_SPEC.md
+    -- §11) -- config.lua's Config.FeatureGroups tree (see that file's own
+    -- header) can force a whole family of Config.Features keys off via one
+    -- `enabled = false`. Accepting an override that turns ONE of those keys
+    -- back on while its parent is off would store a value that can never
+    -- take effect -- ApplyFeatureOverride below still WOULD flip
+    -- Config.Features[name] true for this session, but the very next
+    -- config.lua reload/restart re-runs ResolveFeatureGroups, which forces
+    -- it straight back to false regardless, silently. That is exactly the
+    -- invisible-state bug class this file already closed for
+    -- HighCommand/PermissionGrants/RuntimeFeatureControl/TabletTheming's
+    -- own lockout protection (see those entries' own history above) --
+    -- refused here loudly instead, naming the parent, rather than accepted
+    -- silently. Only checked when `newValue == true`: turning a child OFF
+    -- never needs a working parent, so that direction is never refused by
+    -- this gate (matches this file's own "gate the start, never the stop"
+    -- convention applied to this file's own machinery, not just the
+    -- features it controls).
+    --
+    -- OLD FLAT-SHAPE CONFIGS ARE UNAFFECTED: IsFeatureGroupParentEnabled
+    -- (config.lua) always reports true for every key when
+    -- Config.FeatureGroups does not exist at all -- there is no parent
+    -- concept to consult, so this gate can never fire for an install that
+    -- has not adopted the grouped format. Also never fires for one of the
+    -- six standalone flags (Recall/HighCommand/PermissionGrants/
+    -- AdminAuditCommands/BoneSweepDevTool/RadialMenu) -- none of those has
+    -- a parent to be disabled by, by design.
+    if newValue == true and type(IsFeatureGroupParentEnabled) == 'function' and not IsFeatureGroupParentEnabled(name) then
+        local parentName = type(GetFeatureGroupFamily) == 'function' and GetFeatureGroupFamily(name) or nil
+        LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s parent=%s'):format(name, tostring(parentName)), 'parent_disabled')
+        return { ok = false, reason = 'parent_disabled', parent = parentName,
+            note = ('Config.FeatureGroups.%s.enabled is false in config.lua, so %s cannot be turned on from here -- it would be forced back off the next time this resource restarts regardless of this override. Enable %s.enabled in config.lua (or under the family it belongs to) first, then restart, then this can be toggled live.'):format(tostring(parentName), name, tostring(parentName)) }
     end
 
     -- LOCKOUT-RISK CONFIRMATION GATE (see FEATURE_TIERS' own lockoutRisk

@@ -242,6 +242,18 @@ local function newAgilityFixture(opts)
         env.Config.Combat.AgilityAdvanced.vaultCooldownMs = opts.vaultCooldownMs
     end
 
+    -- RESET printLog HERE, AFTER config.lua's own load finishes and BEFORE
+    -- client/agility.lua's -- config.lua's own ResolveFeatureGroups() (see
+    -- that file's "FEATURE GROUPS RESOLVER" section) unconditionally
+    -- prints one status line every time it loads ("Config.FeatureGroups
+    -- found/not found..."), same as server/datastore.lua's own
+    -- Config.Database startup line -- real, correct, and out of scope for
+    -- what THIS fixture's printLog exists to check (client/agility.lua's
+    -- own clamp-and-warn behaviour). Without this reset, every "must print
+    -- nothing" assertion below would see config.lua's unrelated startup
+    -- line and fail for a reason that has nothing to do with agility.
+    for key in pairs(printLog) do printLog[key] = nil end
+
     local ok, err = pcall(Sandbox.loadInto, '../client/agility.lua', env)
     if opts.expectLoadError then
         return { loadOk = ok, loadError = err, printLog = printLog }

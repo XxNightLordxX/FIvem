@@ -180,9 +180,13 @@ t.test('sanity: the eleven features this spec was written to catch are present i
         rowByName[row.name] = row
     end
 
+    -- ScentTrailHunt removed from this list (2026-08-26): the feature
+    -- itself was removed, owner-approved (see config.lua's own comment
+    -- where Config.Features.ScentTrailHunt used to be defined for the
+    -- full writeup) -- it is correctly ABSENT from config.lua now, not a
+    -- classification regression this sanity check should catch.
     local expectedTiers = {
         FindAlerts         = 'live',
-        ScentTrailHunt     = 'live',
         K9EquipmentShop    = 'onstart',
         ResourceAutoDetect = 'onstart',
         K9DownDispatch     = 'rawtoplevel',
