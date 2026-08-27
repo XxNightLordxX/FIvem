@@ -363,13 +363,18 @@ end)
 --- the very same two server events) already use on themselves -- not a new
 --- idiom. NOTE FOR THE NEXT READER: client/radial.lua's 'k9unit_defense'
 --- submenu (k9_defense_bite/k9_defense_takedown) and client/tablet.lua's
---- own HandlerDownDefense trigger BOTH still carry their own separate,
+--- own HandlerDownDefense trigger BOTH used to carry their own separate,
 --- redundant CanShowK9UI() pre-check ahead of calling this function,
 --- written and justified at the time as "widening only here would be a
---- no-op because the callee re-gates anyway" -- that justification no
---- longer holds now that THIS gate is widened, so those two are a residual
---- instance of the same bug, in files this pass does not own; reported
---- upstream rather than fixed here.
+--- no-op because the callee re-gates anyway" -- that justification stopped
+--- holding once THIS gate widened. Both call sites have SINCE been
+--- corrected (verified by reading each directly): client/radial.lua's
+--- 'k9unit_defense' submenu now calls ConfirmHandlerDownDefense() straight
+--- through with no pre-check of its own (see that file's own "UPDATED
+--- (three-surfaces-agree pass...)" note), and client/tablet.lua's
+--- HandlerDownDefense wrapper likewise removed its pre-check (see that
+--- file's own "NOT GATED HERE, AND THE HISTORY MATTERS" note) -- no
+--- residual gap remains at either call site as of this comment.
 --- @param actionType 'bite'|'takedown'
 function ConfirmHandlerDownDefense(actionType)
     if not HasK9Access() then
