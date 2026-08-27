@@ -739,6 +739,22 @@
         close_label: 'Close',
         tab_console: 'Command Console',
         tab_my_record: 'My Record',
+        // PROGRESSION SCREEN (owner-directed: "do progression put in the
+        // tablet"). {xp}/{rank}/{remaining} are replaced in buildLadderBlock
+        // -- deliberately named placeholders rather than %s ordering, since
+        // a translator reordering a sentence must not silently swap which
+        // number means what.
+        tab_progression: "Progression",
+        progression_intro: "Your rank on each ladder. The K9 ladder is earned by working as the dog; the handler ladder is earned by working with one. They advance separately, and your server can run either without the other.",
+        progression_k9_heading: "K9 Rank",
+        progression_handler_heading: "Handler Rank",
+        progression_k9_off: "This server does not track K9 XP, so there is no rank to show here.",
+        progression_handler_off: "This server does not track handler XP, so there is no rank to show here.",
+        progression_standing: "{xp} XP -- {rank}",
+        progression_no_rank_yet: "Unranked",
+        progression_next_rank: "Next: {rank}, {remaining} XP away.",
+        progression_top_rank: "You are at the top of this ladder.",
+        progression_rank_row: "{rank} -- {xp} XP",
         loading: 'Loading...',
         error_generic: 'Something went wrong. Try again.',
         error_not_authorized: 'You are not authorized to view this.',
@@ -1963,6 +1979,7 @@
         help_tabs_intro: "Only the tabs you can actually use are listed below -- if a tab is not shown here, you cannot see it on your own tablet either.",
         help_tab_home_desc: "Your starting point every time you open the tablet. Shows who you are, whether you are certified and partnered, and the abilities you can use right now. Open it whenever you are not sure what to do next.",
         help_tab_my_record_desc: "The full, detailed version of your own record: every certification (active or expired), your XP, and every single ability with its exact status, not just the ready-to-use ones Home shows. Open it to check something specific about yourself.",
+        help_tab_progression_desc: "Where you stand on both XP ladders: the K9 one, earned by working as the dog, and the handler one, earned by working with one. Each shows your total, your current rank, the next rank and exactly how far away it is, plus the whole ladder so you can see what is ahead. The two advance separately, and your server can run either without the other -- if one says it is not tracked, that is a server setting, not a fault.",
         help_tab_commands_desc: "A searchable list of every command this tablet's resource has, grouped by what you are trying to do, each with a live yes/no on whether you personally can use it right now and why. Open it when you know roughly what you want to do and need the exact command.",
         help_tab_help_desc: "This page. Open it any time something else on the tablet does not make sense.",
         help_tab_console_desc: "Open a specific handler or K9's record by their exact citizen ID -- this always works, even for someone who has never been certified. If you also hold the Audit capability or are High Command, this tab additionally lets you browse and search the full roster by name, citizen ID, or department (that search only ever shows people who already hold a certification, so it will never find someone brand new -- open them by citizen ID instead).",
@@ -2753,7 +2770,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'home', // 'home' | 'my_record' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
+        screen: 'home', // 'home' | 'my_record' | 'progression' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
@@ -4074,7 +4091,14 @@
             panel.appendChild(buildFlowTuningScreen());
         } else if (state.screen === 'audit' && canViewAudit()) {
             panel.appendChild(buildAuditScreen());
+        } else if (state.screen === 'progression') {
+            panel.appendChild(buildProgressionScreen());
         } else {
+            // buildMyRecordScreen is the FALLBACK, deliberately -- an
+            // unrecognised or no-longer-permitted screen name lands on the
+            // viewer's own record rather than a blank panel. Every new
+            // branch must therefore be added ABOVE this one; putting it
+            // below is unreachable code that silently never renders.
             panel.appendChild(buildMyRecordScreen());
         }
 
@@ -4299,6 +4323,22 @@
             loadMyRecord();
         });
         tabs.appendChild(myTab);
+
+        // PROGRESSION -- owner-directed ("do progression put in the
+        // tablet"). ALWAYS shown, same as Home / My Record / Partnerships
+        // above and for the same reason: it is a read of your own record,
+        // not an admin surface, so there is nothing here to gate on. It
+        // stays visible even when BOTH ladders are switched off, because
+        // the screen's honest answer in that case ("your server does not
+        // track this") is more useful than a tab that silently is not
+        // there -- a missing tab reads as a broken tablet, not as a
+        // deliberate server setting.
+        var progressionTab = mkButton(S('tab_progression'), 'k9tablet-tab' + (state.screen === 'progression' ? ' k9tablet-tab--active' : ''), function () {
+            state.screen = 'progression';
+            render();
+            loadMyRecord();
+        });
+        tabs.appendChild(progressionTab);
 
         // PARTNERSHIPS -- owner, verbatim: "a partnership tab should be
         // shown on all tablets as a tab... high command is a handler or a
@@ -5308,6 +5348,7 @@
     var HELP_TAB_CATALOG = [
         { tabLabelKey: 'tab_home', descKey: 'help_tab_home_desc', visible: helpAlwaysVisible },
         { tabLabelKey: 'tab_my_record', descKey: 'help_tab_my_record_desc', visible: helpAlwaysVisible },
+        { tabLabelKey: 'tab_progression', descKey: 'help_tab_progression_desc', visible: helpAlwaysVisible },
         // Partnerships tab (sibling pass, landed concurrently with this
         // one) -- ALWAYS shown, same as every other entry on this line,
         // per that tab's own buildTabs() comment: "high command sees THIS
@@ -5684,6 +5725,162 @@
 
         wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('my_abilities_heading') }));
         wrap.appendChild(buildMyFeaturesList());
+
+        return wrap;
+    }
+
+    /* ==================================================================
+     * PROGRESSION SCREEN (owner-directed: "do progression put in the
+     * tablet"). Shows BOTH ladders -- the K9's and the handler's -- each
+     * with the viewer's own total, their current rank, the next rank, and
+     * the exact gap to it.
+     *
+     * WHY BOTH ON ONE SCREEN: one player is usually both. Someone plays
+     * the dog on one character and handles on another, and the two ladders
+     * advance independently on independent switches. Splitting them across
+     * two screens would make the common question -- "where am I on each of
+     * these" -- take two clicks and a comparison the player has to hold in
+     * their head.
+     *
+     * NULL IS NOT ZERO, and this screen is the reason the server payload
+     * keeps them distinct all the way here. A null total means that ladder
+     * is switched off on this server; 0 means you are on it and have not
+     * earned anything yet. Those get different text, because telling
+     * someone "0 XP" about a system their server does not run would send
+     * them off to grind something that does not exist.
+     * ================================================================== */
+
+    /** The rank the viewer currently holds, and the next one up, from a
+     * ladder and a total. Returns { current, next } where either may be
+     * null: current is null below the first threshold, next is null at the
+     * top of the ladder.
+     * @param {Array} ladder -- ascending [{ xp, label }]
+     * @param {number} total
+     * @returns {{current: Object|null, next: Object|null}} */
+    function resolveLadderPosition(ladder, total) {
+        var current = null;
+        var next = null;
+        for (var i = 0; i < ladder.length; i++) {
+            var row = ladder[i];
+            if (typeof row.xp !== 'number' || typeof row.label !== 'string') continue;
+            if (total >= row.xp) {
+                // Ascending order means each pass overwrites the last, so
+                // this lands on the HIGHEST threshold already met.
+                current = row;
+            } else if (next === null) {
+                // First threshold not yet met -- the ladder is ascending,
+                // so this is the nearest one above.
+                next = row;
+            }
+        }
+        return { current: current, next: next };
+    }
+
+    /** One ladder's block: heading, your standing, the gap to the next
+     * rank, and the full ladder with your position marked.
+     * @param {string} headingKey
+     * @param {number|null|undefined} total
+     * @param {string|null|undefined} tierLabel
+     * @param {Array} ladder
+     * @param {string} offKey -- what to say when this ladder is switched off
+     * @returns {Element} */
+    function buildLadderBlock(headingKey, total, tierLabel, ladder, offKey) {
+        var block = mk('div', { class: 'k9tablet-progression-block' });
+        block.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S(headingKey) }));
+
+        // SWITCHED OFF -- said plainly, and never as a number. An empty
+        // ladder means the same thing as a null total here (the server
+        // returns [] for a ladder whose feature is off), so either alone
+        // is enough to take this branch.
+        if (total === null || total === undefined || !ladder || ladder.length === 0) {
+            block.appendChild(mk('p', { class: 'k9tablet-muted', text: S(offKey) }));
+            return block;
+        }
+
+        var pos = resolveLadderPosition(ladder, total);
+        var currentLabel = (typeof tierLabel === 'string' && tierLabel.length > 0)
+            ? tierLabel
+            : (pos.current ? pos.current.label : S('progression_no_rank_yet'));
+
+        block.appendChild(mk('p', {
+            class: 'k9tablet-xp-line',
+            text: S('progression_standing').replace('{xp}', String(total)).replace('{rank}', currentLabel)
+        }));
+
+        if (pos.next) {
+            var remaining = pos.next.xp - total;
+            block.appendChild(mk('p', {
+                class: 'k9tablet-progression-next',
+                text: S('progression_next_rank')
+                    .replace('{rank}', pos.next.label)
+                    .replace('{remaining}', String(remaining))
+            }));
+        } else {
+            block.appendChild(mk('p', {
+                class: 'k9tablet-progression-next',
+                text: S('progression_top_rank')
+            }));
+        }
+
+        var list = mk('ul', { class: 'k9tablet-progression-ladder' });
+        for (var i = 0; i < ladder.length; i++) {
+            var row = ladder[i];
+            if (typeof row.xp !== 'number' || typeof row.label !== 'string') continue;
+            var reached = total >= row.xp;
+            var isCurrent = pos.current && pos.current.label === row.label && pos.current.xp === row.xp;
+            var cls = 'k9tablet-progression-rank'
+                + (reached ? ' k9tablet-progression-rank--reached' : '')
+                + (isCurrent ? ' k9tablet-progression-rank--current' : '');
+            list.appendChild(mk('li', {
+                class: cls,
+                text: S('progression_rank_row')
+                    .replace('{rank}', row.label)
+                    .replace('{xp}', String(row.xp))
+            }));
+        }
+        block.appendChild(list);
+
+        return block;
+    }
+
+    /** @returns {Element} */
+    function buildProgressionScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+
+        // Same loading / error / empty sequencing every other screen in
+        // this file uses -- never a blank panel, and never a table with no
+        // explanation of why it is empty.
+        if (state.myRecordLoading && !state.myRecord) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.myRecordError && !state.myRecord) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.myRecordError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadMyRecord));
+            return wrap;
+        }
+        if (!state.myRecord) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('progression_intro') }));
+
+        wrap.appendChild(buildLadderBlock(
+            'progression_k9_heading',
+            state.myRecord.xp,
+            state.myRecord.tierLabel,
+            state.myRecord.xpLadder || [],
+            'progression_k9_off'
+        ));
+
+        wrap.appendChild(buildLadderBlock(
+            'progression_handler_heading',
+            state.myRecord.handlerXp,
+            state.myRecord.handlerTierLabel,
+            state.myRecord.handlerXpLadder || [],
+            'progression_handler_off'
+        ));
 
         return wrap;
     }
@@ -12351,6 +12548,21 @@
                 certifications: result.certifications || [],
                 xp: typeof result.xp === 'number' ? result.xp : null,
                 tierLabel: typeof result.tierLabel === 'string' ? result.tierLabel : null,
+                // HANDLER LADDER + BOTH LADDER SHAPES (owner-directed
+                // progression pass). Normalised the SAME way as the K9 pair
+                // directly above -- a wrong-typed value becomes null, never
+                // a rendered "undefined".
+                //
+                // `typeof === 'number'` is load-bearing here, not
+                // defensive habit: `result.handlerXp || null` would turn a
+                // genuine 0 into null, and 0-versus-null is exactly the
+                // distinction this whole screen rests on (0 means "on this
+                // ladder, nothing earned yet"; null means "this server does
+                // not run this ladder"). Those get different sentences.
+                handlerXp: typeof result.handlerXp === 'number' ? result.handlerXp : null,
+                handlerTierLabel: typeof result.handlerTierLabel === 'string' ? result.handlerTierLabel : null,
+                xpLadder: Array.isArray(result.xpLadder) ? result.xpLadder : [],
+                handlerXpLadder: Array.isArray(result.handlerXpLadder) ? result.handlerXpLadder : [],
                 myFeatures: result.myFeatures || [],
             };
             // CLIENT-LOCAL role signal -- client/tablet.lua's own

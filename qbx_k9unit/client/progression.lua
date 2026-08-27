@@ -242,6 +242,118 @@
     ======================================================================
 ]]
 
+-- ======================================================================
+-- HANDLER XP LADDER (owner-directed, this pass: "add both those features
+-- and do progression put in the tablet").
+--
+-- DELIBERATELY ABOVE THIS FILE'S OWN `if not Config.Features.XPProgression
+-- then return end` GATE, and this placement is the whole point, not a
+-- stylistic choice. The two ladders are INDEPENDENT switches:
+-- Config.Features.XPProgression governs the K9's ladder, and
+-- Config.Features.HandlerXPProgression governs the handler's. Putting this
+-- receiver below that gate would mean a server running handler progression
+-- with K9 progression off never receives a single handler tier update, and
+-- the failure would be completely silent -- no error, no log, just a rank
+-- that never appears. That is this codebase's most-repeated bug shape (a
+-- correct thing made unreachable by a gate one layer up), so it is closed
+-- here by construction rather than guarded against.
+--
+-- THE GAP THIS CLOSES: server/progression.lua has been firing
+-- 'qbx_k9unit:client:handlerXpTierChanged' at the handler's own client for
+-- some time, carrying { totalXp, tier, live }. Nothing anywhere in client/
+-- registered it -- it was the ONLY server-to-client event in this entire
+-- resource with no receiver. Handlers earned real, cooldown-protected,
+-- database-backed XP and had no way to see any of it. config.lua's own
+-- justification for switching the feature on reads "the tablet advertises
+-- the ranks... A rank a player can see and can never earn is worse than no
+-- rank at all"; what actually shipped was the exact inverse -- earnable and
+-- invisible.
+-- ======================================================================
+
+--- Last handler snapshot from the server this session, or nil before the
+--- first event arrives. Read through GetHandlerXPState() below, never
+--- directly.
+--- @type { totalXp: number, tier: table }|nil
+local handlerXPState = nil
+
+--- Same "never announce a level-up on the initial snapshot" guard the K9
+--- side above uses, for the same reason: the first payload of a session is
+--- a state sync, not something the player just earned.
+local hasReceivedInitialHandlerTier = false
+
+--- The SERVER's current Config.Features.HandlerXPProgression value, kept
+--- fresh by the `.live` field on every payload -- never this client's own
+--- static copy, which is fixed at resource start and is not updated by a
+--- runtime tablet toggle. Mirrors LiveXPProgressionEnabled below exactly.
+--- Seeded true so an unpatched server (no `.live` field) behaves as it
+--- always did.
+local LiveHandlerXPEnabled = true
+
+--- Resource-global, read by client/tablet.lua for the Progression screen.
+--- Returns nil until the first snapshot lands, which callers must treat as
+--- "not known yet" rather than "zero" -- a handler with genuinely 0 XP
+--- still gets a real payload with totalXp = 0, so nil and 0 are different
+--- answers and must not be collapsed.
+--- @return { totalXp: number, tier: table, live: boolean }|nil
+function GetHandlerXPState()
+    if not handlerXPState then return nil end
+    return {
+        totalXp = handlerXPState.totalXp,
+        tier = handlerXPState.tier,
+        live = LiveHandlerXPEnabled,
+    }
+end
+
+--- @param payload table -- { totalXp: number, tier: table, live: boolean? }
+RegisterNetEvent('qbx_k9unit:client:handlerXpTierChanged', function(payload)
+    -- SOURCE-ORIGIN GUARD, this resource's standard convention -- see
+    -- client/combat.lua's own header block for the full confidence writeup.
+    -- Matters less here than on the K9 side (nothing in this payload feeds
+    -- a move rate or any other real effect -- it is display-only), but the
+    -- convention is applied uniformly rather than case-by-case, so that a
+    -- future change which DOES give this payload teeth inherits the guard
+    -- instead of needing someone to remember to add it.
+    if source ~= 65535 then return end
+
+    if type(payload) ~= 'table' then return end
+    if type(payload.totalXp) ~= 'number' or type(payload.tier) ~= 'table' then return end
+
+    -- LIVE FLAG INGEST, before anything else reads it -- same ordering and
+    -- same optionality as the K9 handler below. A missing or non-boolean
+    -- field leaves the current value alone and never invents one.
+    if type(payload.live) == 'boolean' then
+        LiveHandlerXPEnabled = payload.live
+    end
+
+    local previous = handlerXPState
+    handlerXPState = { totalXp = payload.totalXp, tier = payload.tier }
+
+    -- RANK-UP NOTICE. Four conditions, each doing real work:
+    --   * the live flag is on -- a push sent purely to tell this client the
+    --     feature was just switched OFF must never read as a promotion;
+    --   * the initial snapshot has already been seen -- otherwise every
+    --     login announces a promotion the player earned days ago;
+    --   * there is a previous tier to have moved FROM;
+    --   * and the label genuinely changed -- defensive, since the server
+    --     only pushes on a real crossing today, but this file does not
+    --     assume that invariant holds forever.
+    -- This mirrors the K9 tier-up notice below exactly, deliberately: a
+    -- handler earning a rank should feel the same as a K9 earning one.
+    if LiveHandlerXPEnabled
+        and hasReceivedInitialHandlerTier
+        and previous
+        and previous.tier
+        and previous.tier.label ~= payload.tier.label then
+        lib.notify({
+            title = locale('common.notify_title'),
+            description = locale('progression.handler_tier_up', tostring(payload.tier.label)),
+            type = 'success',
+        })
+    end
+
+    hasReceivedInitialHandlerTier = true
+end)
+
 if not Config.Features.XPProgression then return end
 
 --- Last tier snapshot received from the server this session, or nil before

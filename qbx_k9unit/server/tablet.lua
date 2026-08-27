@@ -1656,6 +1656,40 @@ local function ResolveXpAndTierLabel(citizenid)
     return xp, tierLabel
 end
 
+--- HANDLER-LADDER counterpart to ResolveXpAndTierLabel above (owner-directed
+--- progression pass). Same shape, same soft-dependency guards, same
+--- nil-when-off contract -- and DELIBERATELY A SEPARATE FUNCTION reading a
+--- SEPARATE FLAG rather than an extra return value bolted onto that one.
+---
+--- Config.Features.XPProgression and Config.Features.HandlerXPProgression
+--- are independent switches: a server can legitimately run either ladder
+--- without the other. Folding both into one resolver would have meant one
+--- flag check deciding both answers, so turning the K9 ladder off would
+--- have silently taken the handler ladder's numbers down with it -- the
+--- same one-gate-too-few shape that left this whole feature invisible in
+--- the first place.
+---
+--- nil means "this ladder is off, or the total is not knowable", NOT zero.
+--- A handler genuinely sitting at 0 XP returns 0, and the two must stay
+--- distinguishable all the way to the screen: "not tracked here" and "you
+--- have not earned any yet" are different things to tell someone.
+--- @param citizenid string
+--- @return number? handlerXp
+--- @return string? handlerTierLabel
+local function ResolveHandlerXpAndTierLabel(citizenid)
+    if not (Config.Features and Config.Features.HandlerXPProgression == true) then
+        return nil, nil
+    end
+
+    local handlerXp = type(GetHandlerXP) == 'function' and GetHandlerXP(citizenid) or nil
+    local handlerTierLabel = nil
+    if type(GetHandlerXPTier) == 'function' then
+        local tier = GetHandlerXPTier(citizenid)
+        handlerTierLabel = type(tier) == 'table' and type(tier.label) == 'string' and tier.label or nil
+    end
+    return handlerXp, handlerTierLabel
+end
+
 --- Read-only rank/grade display for PersonSummaryResult -- owner-directed
 --- "the roster panel should show everything about a person" pass. Reads
 --- the EXACT SAME PlayerData.job shape every rank gate in this resource
@@ -1759,6 +1793,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
     local blockNamespaceUnreliable = BlockNamespaceUnreliable(permReadOk)
     local effectivePermissions = ResolveEffectivePermissions(source, activePermSet, isHighCommandCaller)
     local xp, tierLabel = ResolveXpAndTierLabel(citizenid)
+    local handlerXp, handlerTierLabel = ResolveHandlerXpAndTierLabel(citizenid)
     local hasK9Access = type(HasK9Access) == 'function' and HasK9Access(source) == true
 
     -- SERVER-TRUSTWORTHY ROLE SIGNAL (owner-directed
@@ -1806,6 +1841,28 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(citizenid)),
         xp = xp,
         tierLabel = tierLabel,
+        -- HANDLER LADDER (owner-directed progression pass). Carried
+        -- ALONGSIDE the K9 pair above, never merged into it: the two are
+        -- separate ladders on separate feature switches, and either can be
+        -- nil while the other has a real value. null here means "this
+        -- ladder is switched off", NOT zero -- a handler genuinely on 0 XP
+        -- sends 0, and the UI must be able to tell those apart.
+        handlerXp = handlerXp,
+        handlerTierLabel = handlerTierLabel,
+        -- THE TWO LADDERS, for the Progression screen. Sent ONLY on the
+        -- caller's own record, never on roster rows: the ladders are
+        -- server-wide and identical for everyone, so repeating them per row
+        -- would multiply an unchanging payload by the roster size for no
+        -- gain. Label and threshold only -- see
+        -- server/progression.lua's GetXPLadderForDisplay for why the
+        -- multipliers are deliberately withheld.
+        --
+        -- Each is an EMPTY ARRAY, never null, when its own ladder is
+        -- switched off, so the UI's iteration never needs a null check and
+        -- "off" renders the same as "no ranks configured" -- which is the
+        -- honest thing to show for both.
+        xpLadder = type(GetXPLadderForDisplay) == 'function' and GetXPLadderForDisplay() or {},
+        handlerXpLadder = type(GetHandlerXPLadderForDisplay) == 'function' and GetHandlerXPLadderForDisplay() or {},
         -- isHighCommandCaller is already a FRESH, correctly-job-scoped
         -- IsHighCommand(source) answer for this exact caller (computed
         -- above) -- reused verbatim as the DISPLAY-STATE bypass rather
@@ -1917,6 +1974,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
             or candidate.departmentLabel:lower():find(needle, 1, true) ~= nil
         if matches then
             local xp, tierLabel = ResolveXpAndTierLabel(candidate.citizenid)
+            local handlerXp, handlerTierLabel = ResolveHandlerXpAndTierLabel(candidate.citizenid)
             filtered[#filtered + 1] = {
                 citizenid = candidate.citizenid,
                 name = name,
@@ -1924,6 +1982,8 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
                 certified = true,
                 xp = xp,
                 tierLabel = tierLabel,
+                handlerXp = handlerXp,
+                handlerTierLabel = handlerTierLabel,
             }
         end
     end
@@ -2274,6 +2334,7 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
 
     local activePermSet = QueryActivePermissionSet(targetCitizenId)
     local xp, tierLabel = ResolveXpAndTierLabel(targetCitizenId)
+    local handlerXp, handlerTierLabel = ResolveHandlerXpAndTierLabel(targetCitizenId)
 
     -- CATALOG-AWARE (see "PERMISSION-KEY CATALOG AWARENESS"
     -- section above ResolveEffectivePermissions for the full writeup this
@@ -2308,6 +2369,14 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
         certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(targetCitizenId)),
         xp = xp,
         tierLabel = tierLabel,
+        -- HANDLER LADDER (owner-directed progression pass). Carried
+        -- ALONGSIDE the K9 pair above, never merged into it: the two are
+        -- separate ladders on separate feature switches, and either can be
+        -- nil while the other has a real value. null here means "this
+        -- ladder is switched off", NOT zero -- a handler genuinely on 0 XP
+        -- sends 0, and the UI must be able to tell those apart.
+        handlerXp = handlerXp,
+        handlerTierLabel = handlerTierLabel,
         permissions = permissions,
         -- Owner-directed "one screen shows everything about a person" feature
         -- (roster panel: cert+tier, rank, XP+tier, partnership, permissions).

@@ -97,6 +97,18 @@ local function newProgressionFixture(opts)
             handler(newTier)
         end,
         hasEventHandler = function() return netEventHandlers['qbx_k9unit:client:xpTierChanged'] ~= nil end,
+        --- HANDLER LADDER (owner-directed progression pass). Separate
+        --- helpers, deliberately -- the two ladders are on independent
+        --- feature switches and a fixture that drove both through one
+        --- entry point could not express the case that matters most:
+        --- K9 progression off, handler progression on.
+        fireHandlerTierChanged = function(sourceValue, payload)
+            local handler = assert(netEventHandlers['qbx_k9unit:client:handlerXpTierChanged'],
+                'client/progression.lua did not register a qbx_k9unit:client:handlerXpTierChanged handler')
+            env.source = sourceValue
+            handler(payload)
+        end,
+        hasHandlerEventHandler = function() return netEventHandlers['qbx_k9unit:client:handlerXpTierChanged'] ~= nil end,
     }
 end
 
@@ -306,6 +318,103 @@ t.test('THE FIX: composer ABSENT -- a live=false payload is still accepted with 
     local f = newProgressionFixture({ withComposer = false })
     local ok = pcall(f.fireTierChanged, 65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = false })
     t.isTrue(ok)
+end)
+
+
+-- ========================================================================
+-- HANDLER XP LADDER (owner-directed: "add both those features").
+--
+-- server/progression.lua had been firing
+-- 'qbx_k9unit:client:handlerXpTierChanged' at handlers for some time and
+-- NOTHING anywhere in client/ registered it -- the only server-to-client
+-- event in the entire resource with no receiver. Handlers earned real,
+-- cooldown-protected, database-backed XP with no way to see any of it.
+--
+-- The FIRST test below is the one that matters most structurally: the
+-- receiver sits ABOVE this file's own `if not Config.Features.XPProgression
+-- then return end` gate, because the two ladders are INDEPENDENT switches.
+-- Below that gate, a server running handler progression without K9
+-- progression would receive nothing, silently, forever.
+-- ========================================================================
+t.test('STRUCTURAL: the handler receiver is registered even with XPProgression OFF -- the two ladders are independent switches, and a gate one layer up must not silently kill the other one', function()
+    local f = newProgressionFixture({ xpProgression = false })
+    t.isFalse(f.hasEventHandler(), 'the K9 side is genuinely off in this fixture -- otherwise this test proves nothing')
+    t.isTrue(f.hasHandlerEventHandler(), 'the handler side must still be listening')
+    t.isNotNil(f.env.GetHandlerXPState, 'and its reader must still exist')
+end)
+
+t.test('a handler tier snapshot is stored and readable through GetHandlerXPState()', function()
+    local f = newProgressionFixture()
+    t.isNil(f.env.GetHandlerXPState(), 'nil before the first snapshot -- "not known yet", which callers must not read as zero')
+
+    f.fireHandlerTierChanged(65535, { totalXp = 60, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+
+    local state = f.env.GetHandlerXPState()
+    t.isNotNil(state)
+    t.equals(state.totalXp, 60)
+    t.equals(state.tier.label, 'Certified Handler')
+    t.isTrue(state.live)
+end)
+
+t.test('a genuine 0 total is stored as 0, never collapsed to nil -- "on the ladder with nothing earned" and "not known yet" are different answers', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(65535, { totalXp = 0, tier = { xp = 0, label = 'Rookie Handler' }, live = true })
+    local state = f.env.GetHandlerXPState()
+    t.isNotNil(state)
+    t.equals(state.totalXp, 0)
+end)
+
+t.test('SOURCE-ORIGIN GUARD: a forged local trigger is ignored entirely', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(1, { totalXp = 9999, tier = { xp = 500, label = 'Master Handler' }, live = true })
+    t.isNil(f.env.GetHandlerXPState())
+end)
+
+t.test('a malformed payload is ignored rather than stored -- wrong type, missing tier, missing total, not a table at all', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(65535, nil)
+    f.fireHandlerTierChanged(65535, 'not-a-table')
+    f.fireHandlerTierChanged(65535, { totalXp = 'lots', tier = { label = 'X' } })
+    f.fireHandlerTierChanged(65535, { totalXp = 10 })
+    t.isNil(f.env.GetHandlerXPState())
+end)
+
+t.test('RANK-UP NOTICE: never fires on the FIRST snapshot of a session -- that is a state sync, not something just earned', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(65535, { totalXp = 60, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+    t.equals(#f.notifyCalls, 0, 'logging in must not announce a promotion earned days ago')
+end)
+
+t.test('RANK-UP NOTICE: fires on a REAL crossing after the initial snapshot', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(65535, { totalXp = 60, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+    f.fireHandlerTierChanged(65535, { totalXp = 160, tier = { xp = 150, label = 'Senior Handler' }, live = true })
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].type, 'success')
+end)
+
+t.test('RANK-UP NOTICE: never fires for a no-op repeat of the SAME rank, however many times the server pushes it', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(65535, { totalXp = 60, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+    f.fireHandlerTierChanged(65535, { totalXp = 90, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+    f.fireHandlerTierChanged(65535, { totalXp = 120, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+    t.equals(#f.notifyCalls, 0, 'earning XP within a rank is not a promotion')
+end)
+
+t.test('RANK-UP NOTICE: never fires while the live flag reads OFF -- a push sent to say the feature was just switched off must not read as a promotion', function()
+    local f = newProgressionFixture()
+    f.fireHandlerTierChanged(65535, { totalXp = 60, tier = { xp = 50, label = 'Certified Handler' }, live = true })
+    f.fireHandlerTierChanged(65535, { totalXp = 160, tier = { xp = 150, label = 'Senior Handler' }, live = false })
+    t.equals(#f.notifyCalls, 0)
+    t.isFalse(f.env.GetHandlerXPState().live, 'and the off state is still recorded, so a display can gray itself out')
+end)
+
+t.test('CONTROL: the handler receiver never touches the K9 move-rate composer -- this ladder is display-only and must have no physical effect', function()
+    local f = newProgressionFixture()
+    local before = f.recomputeCallCount()
+    f.fireHandlerTierChanged(65535, { totalXp = 60, tier = { xp = 50, label = 'Certified Handler', speedMultiplier = 9.0 }, live = true })
+    t.equals(f.recomputeCallCount(), before, 'a speedMultiplier riding along on a handler payload must never reach the move rate')
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.0)
 end)
 
 os.exit(t.summary())

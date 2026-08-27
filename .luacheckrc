@@ -1356,6 +1356,18 @@ globals = {
     -- deferred, since it is already a real, tested, resource-global
     -- function as of this pass.
     "AwardHandlerXP", "GetHandlerXPTier",
+    -- server/progression.lua. Handler-side twin of GetXP, added for the
+    -- tablet's Progression screen: GetHandlerXPTier alone cannot answer "how
+    -- far into this rank am I" because a tier's own `xp` field is a
+    -- THRESHOLD, not a running total. Read by server/tablet.lua.
+    "GetHandlerXP",
+    -- server/progression.lua. Display-safe copies of the two XP ladders
+    -- (label + threshold only -- never the multipliers, which are internal
+    -- tuning a player has no use for and which would publish how a server
+    -- has tuned its own K9s). Read by server/tablet.lua's Progression
+    -- screen to answer "what is my next rank and how far away is it".
+    "GetXPLadderForDisplay",
+    "GetHandlerXPLadderForDisplay",
     -- server/progression.lua -- HANDLER XP TIER COOLDOWN EFFECTS
     -- (Config.HandlerXPTiers' medkitTreatCooldownMultiplier/
     -- kennelDeployCooldownMultiplier, previously defined but read by
@@ -1398,6 +1410,13 @@ globals = {
     -- authorization surface" framing), not currently consumed elsewhere in
     -- this resource.
     "GetCurrentXPTier",
+    -- client/progression.lua's handler-ladder counterpart to GetCurrentXPTier
+    -- above (owner-directed progression pass). Declared ABOVE that file's own
+    -- `if not Config.Features.XPProgression then return end` gate on purpose:
+    -- the handler ladder is a SEPARATE switch (HandlerXPProgression), so a
+    -- server running one without the other must still get this. Consumed by
+    -- client/tablet.lua's Progression screen.
+    "GetHandlerXPState",
     -- client/combat.lua (Phase 3 completion pass, BiteAndHold/
     -- NonLethalTakedown self-initiated triggers) -- for a future
     -- client/radial.lua "Bite & Hold"/"Takedown" entry to call, same

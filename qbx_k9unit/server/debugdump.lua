@@ -678,6 +678,21 @@ local function CheckRuntimeOverrides()
     return state, worthChecking
 end
 
+--- PERFORMANCE FIX (load audit, this pass): server/datastore.lua (~238KB)
+--- cannot change while this resource is running, so its
+--- EXPECTED_TABLE_COLUMNS extraction below is invariant for the lifetime of
+--- the process -- re-reading and re-parsing the whole file on every single
+--- /k9debug run (CheckDatabaseSchemaState calls ExtractDatastoreTableNames
+--- unconditionally, every BuildReport) was pure waste past the first call.
+--- Memoized here, module-level, nil-checked -- a SUCCESSFUL extraction is
+--- cached forever; a FAILED one (nil -- unreadable file, anchors not found,
+--- zero names parsed) is deliberately NEVER cached, so one transient read
+--- failure (e.g. a hypothetical future sandboxed/restricted environment, or
+--- a fixture in this file's own spec) can never poison every later run for
+--- the remainder of this resource's uptime. See ExtractSelfcheckDependencies
+--- below for the identical pattern applied to the sibling extraction.
+local datastoreTableNamesCache = nil
+
 --- A3 -- reads server/datastore.lua's own EXPECTED_TABLE_COLUMNS table
 --- NAMES straight out of its source text, so this list can never drift out
 --- of sync with the real one (see this file's own header). Deliberately
@@ -686,6 +701,8 @@ end
 --- never a generic sweep of the file's text.
 --- @return string[]?
 local function ExtractDatastoreTableNames()
+    if datastoreTableNamesCache ~= nil then return datastoreTableNamesCache end
+
     local src = ReadOwnResourceFile('server/datastore.lua')
     if not src then return nil end
     local startPos = src:find('local EXPECTED_TABLE_COLUMNS = {', 1, true)
@@ -698,6 +715,7 @@ local function ExtractDatastoreTableNames()
         names[#names + 1] = name
     end
     if #names == 0 then return nil end
+    datastoreTableNamesCache = names -- only a SUCCESSFUL parse is ever cached -- see this cache's own declaration comment above
     return names
 end
 
@@ -763,11 +781,21 @@ local function CheckDatabaseSchemaState()
     return findings, state
 end
 
+--- PERFORMANCE FIX (load audit, this pass) -- same reasoning/technique as
+--- datastoreTableNamesCache above, applied to this sibling extraction:
+--- server/selfcheck.lua (~45KB) cannot change while this resource is
+--- running, so a successful DEPENDENCIES extraction is memoized forever; a
+--- failed one is never cached, for the identical "one transient failure
+--- must not poison every later run" reason given above.
+local selfcheckDependenciesCache = nil
+
 --- A4 -- reads server/selfcheck.lua's own DEPENDENCIES table straight out
 --- of its source text, same reasoning/technique as ExtractDatastoreTableNames
 --- above.
 --- @return { name: string, minVersion: string }[]?
 local function ExtractSelfcheckDependencies()
+    if selfcheckDependenciesCache ~= nil then return selfcheckDependenciesCache end
+
     local src = ReadOwnResourceFile('server/selfcheck.lua')
     if not src then return nil end
     local startPos = src:find('local DEPENDENCIES = {', 1, true)
@@ -780,6 +808,7 @@ local function ExtractSelfcheckDependencies()
         deps[#deps + 1] = { name = name, minVersion = minVersion }
     end
     if #deps == 0 then return nil end
+    selfcheckDependenciesCache = deps -- only a SUCCESSFUL parse is ever cached -- see this cache's own declaration comment above
     return deps
 end
 

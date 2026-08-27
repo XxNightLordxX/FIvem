@@ -1090,6 +1090,76 @@ function GetHandlerXPTier(citizenid)
     return ResolveHandlerTier(HandlerXP[citizenid] or 0)
 end
 
+--- Resource-global -- the handler-side twin of GetXP above, added this pass
+--- because the tablet needed a handler's accumulated TOTAL and there was no
+--- way to ask for one. GetHandlerXPTier existed and returns a tier object
+--- whose own `xp` field is that tier's THRESHOLD, not the handler's running
+--- total, so it could not answer "how far into this rank am I" or "how much
+--- until the next one" -- the two things a progression screen is for.
+---
+--- Same 0-not-nil contract as GetXP: an unknown or uncached citizenid reads
+--- as 0, which is also the genuine starting total, so callers never have to
+--- distinguish the two here. The one place that distinction DOES matter is
+--- the tablet payload, and it draws it from whether the FEATURE is on
+--- (server/tablet.lua's ResolveHandlerXpAndTierLabel returns nil when the
+--- ladder is switched off) rather than from this value.
+--- @param citizenid string
+--- @return number
+function GetHandlerXP(citizenid)
+    return HandlerXP[citizenid] or 0
+end
+
+-- ======================================================================
+-- LADDERS FOR DISPLAY (owner-directed progression pass) --
+-- server/tablet.lua's Progression screen needs the shape of each ladder to
+-- answer "what is my next rank, and how far away is it". Both validated
+-- ladder builders are file-local here and stay that way; these two return
+-- a DISPLAY-SAFE COPY instead of exposing them.
+--
+-- LABEL AND THRESHOLD ONLY, DELIBERATELY. A tier row also carries
+-- speedMultiplier / scentRangeMultiplier / medkitCooldownMultiplier and the
+-- handler equivalents -- internal tuning the player has no use for, and
+-- which would quietly publish how a server has tuned its own K9s to anyone
+-- who opens a tablet. A progression screen needs to know that Veteran
+-- starts at 3000 XP; it does not need to know what Veteran does to a move
+-- rate. Narrow on purpose, not an oversight to "complete" later.
+--
+-- Sorted ascending by threshold so a caller can walk it in rank order
+-- without re-sorting, and returned as a fresh table every call so a
+-- consumer mutating what it got back cannot corrupt the validated ladder.
+-- ======================================================================
+
+--- @param tiers table -- a validated ladder
+--- @return table -- array of { xp = number, label = string }, ascending
+local function LadderForDisplay(tiers)
+    local out = {}
+    for _, tier in ipairs(tiers or {}) do
+        if type(tier) == 'table' and type(tier.xp) == 'number' and type(tier.label) == 'string' then
+            out[#out + 1] = { xp = tier.xp, label = tier.label }
+        end
+    end
+    table.sort(out, function(a, b) return a.xp < b.xp end)
+    return out
+end
+
+--- Resource-global. Empty array (never nil) when the ladder is switched
+--- off, so a caller never has to nil-check before iterating -- "off" and
+--- "on but empty" render identically and correctly as "no ranks to show".
+--- @return table
+function GetXPLadderForDisplay()
+    if not (Config.Features and Config.Features.XPProgression == true) then return {} end
+    return LadderForDisplay(GetValidatedXPTiers())
+end
+
+--- Resource-global. Handler-side twin of the above, on its own independent
+--- feature switch -- see GetHandlerXP's own comment for why these two
+--- ladders are never resolved through one shared flag check.
+--- @return table
+function GetHandlerXPLadderForDisplay()
+    if not (Config.Features and Config.Features.HandlerXPProgression == true) then return {} end
+    return LadderForDisplay(GetValidatedHandlerXPTiers())
+end
+
 -- ======================================================================
 -- HANDLER XP TIER UNLOCKS -- the two of Config.HandlerXPTiers' three effect
 -- fields actually wired to a live consumer this pass (dead-config-field

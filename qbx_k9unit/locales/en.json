@@ -1019,6 +1019,18 @@
         "cmdref_k9debug_usage": "/k9debug [normal|verbose]",
         "cmdref_k9debug_does": "Writes a diagnostic report about your own K9 state to a file inside the script folder, for you to hand to a developer. Nothing is printed to the console.",
         "cmdref_k9debug_needs": "Your server owner must switch this on first (Config.DebugDump.enabled). It reports only on you -- never on anyone else.",
+        "tab_progression": "Progression",
+        "progression_intro": "Your rank on each ladder. The K9 ladder is earned by working as the dog; the handler ladder is earned by working with one. They advance separately, and your server can run either without the other.",
+        "progression_k9_heading": "K9 Rank",
+        "progression_handler_heading": "Handler Rank",
+        "progression_k9_off": "This server does not track K9 XP, so there is no rank to show here.",
+        "progression_handler_off": "This server does not track handler XP, so there is no rank to show here.",
+        "progression_standing": "{xp} XP -- {rank}",
+        "progression_no_rank_yet": "Unranked",
+        "progression_next_rank": "Next: {rank}, {remaining} XP away.",
+        "progression_top_rank": "You are at the top of this ladder.",
+        "progression_rank_row": "{rank} -- {xp} XP",
+        "help_tab_progression_desc": "Where you stand on both XP ladders: the K9 one, earned by working as the dog, and the handler one, earned by working with one. Each shows your total, your current rank, the next rank and exactly how far away it is, plus the whole ladder so you can see what is ahead. The two advance separately, and your server can run either without the other -- if one says it is not tracked, that is a server setting, not a fault.",
         "cmdref_k9dog_usage": "/k9dog <target>",
         "cmdref_k9dog_does": "Shows or changes whether a character is permanently pinned as a K9. One command for both: /k9setdog and /k9removedog still work too.",
         "cmdref_k9dog_needs": "High Command only.",
@@ -1658,6 +1670,7 @@
         "too_far": "You are too far apart to partner up."
     },
     "progression": {
+        "handler_tier_up": "You have been promoted to %s.",
         "tier_up": "Your K9 has reached the %s tier!"
     },
     "propattachment": {

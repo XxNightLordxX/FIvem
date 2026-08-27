@@ -1275,6 +1275,19 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9kennel_usage', 'cmdref_k9kennel_does', 'cmdref_k9kennel_needs',
     -- k9debug -- server/debugdump.lua's diagnostic dump command.
     'cmdref_k9debug_usage', 'cmdref_k9debug_does', 'cmdref_k9debug_needs',
+    -- Progression screen (owner-directed progression pass).
+    'tab_progression',
+    'progression_intro',
+    'progression_k9_heading',
+    'progression_handler_heading',
+    'progression_k9_off',
+    'progression_handler_off',
+    'progression_standing',
+    'progression_no_rank_yet',
+    'progression_next_rank',
+    'progression_top_rank',
+    'progression_rank_row',
+    'help_tab_progression_desc',
     -- k9dog (family #2, dog record) and k9train (family #4, training) --
     -- the remaining two merged entry points from the same spec. Grouped
     -- here with k9kennel rather than beside their own old per-command

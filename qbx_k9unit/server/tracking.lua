@@ -367,9 +367,30 @@
 -- NOT persisted, mirrors server/main.lua's `LeashPairs` precedent (DEVELOPER_REFERENCE.md
 -- §10 flags this precedent as still needing db-schema's confirmation, not
 -- assumed settled here).
--- TrackableLog[trackType][i] = { coords = vector3, loggedAt = <GetGameTimer() ms>,
--- ticketIssued = boolean }. trackType in {'scent', 'blood', 'gunpowder'}.
--- `ticketIssued` ADDED this pass (ANTI-FARM FIX, see findTrackableSource's
+--
+-- PERFORMANCE FIX (load audit, this pass -- follow-up to the ENTRY-COUNT
+-- CEILING section further down): each TrackableLog.<type> is now a RING
+-- BUFFER, not a plain chronologically-ordered array. { entries = {},
+-- writeIndex = 0, count = 0 } -- `entries[i]` holds a live logged entry
+-- ({ coords = vector3, loggedAt = <GetGameTimer() ms>, ticketIssued =
+-- boolean }) at PHYSICAL slot `i`, but physical slot order stops matching
+-- chronological (append) order the moment `count` first reaches this
+-- type's own TRACKABLE_LOG_MAX_ENTRIES ceiling and a write wraps around --
+-- see AppendTrackableLogEntry's own doc comment for why, and
+-- TrackableRingLogEntriesOldestFirst for the ONLY sanctioned way to read
+-- these back out in true oldest-first order. `writeIndex` is the physical
+-- slot most recently written (0 before the first write ever); `count` is
+-- the number of currently-live logical entries, 0..TRACKABLE_LOG_MAX_ENTRIES
+-- (never higher -- the ring never grows past its own ceiling). This
+-- replaced a plain array evicted via `table.remove(log, 1)` on every write
+-- once at the cap -- an O(n)-per-write shape that, at this resource's own
+-- documented worst case (128 players bleeding, 500ms relay floor), cost
+-- roughly 2 million slot copies per second purely from eviction. The ring
+-- shape here follows server/debugdump.lua's own DecisionTrail ring-index
+-- pattern (`writeIndex = (writeIndex % CAP) + 1`) exactly, per that pass's
+-- own explicit instruction to reuse the in-repo pattern rather than invent a
+-- new one -- see AppendTrackableLogEntry below.
+-- `ticketIssued` ADDED an earlier pass (ANTI-FARM FIX, see findTrackableSource's
 -- own doc comment below for the full writeup) — false at log-append time,
 -- flipped true the one time (ever) this exact entry is selected as the
 -- nearest match AND clears MIN_TRACK_XP_DISTANCE, i.e. the one time it is
@@ -378,9 +399,9 @@
 -- independent of how many times it is later re-resolved (cosmetically) or
 -- how long it remains within maxAgeSeconds.
 local TrackableLog = {
-    scent = {},
-    blood = {},
-    gunpowder = {},
+    scent = { entries = {}, writeIndex = 0, count = 0 },
+    blood = { entries = {}, writeIndex = 0, count = 0 },
+    gunpowder = { entries = {}, writeIndex = 0, count = 0 },
 }
 
 -- Per-(source, trackType) QUERY-side cooldown backing
@@ -849,18 +870,82 @@ local TRACKABLE_LOG_MAX_ENTRIES = {
     gunpowder = ResolveTrackableLogMaxEntries(Config.Tracking.Gunpowder.maxLoggedEntries, 6000, 'Config.Tracking.Gunpowder.maxLoggedEntries'),
 }
 
---- Appends `entry` to `log` (one of TrackableLog.scent/blood/gunpowder),
---- then evicts entries from the FRONT (oldest first -- see the ENTRY-COUNT
---- CEILING header above for why the log is always chronologically ordered)
---- until the log is back at or under `maxEntries`. Enforced on EVERY write,
---- never accumulated and filtered only at prune time.
---- @param log table -- TrackableLog.scent | .blood | .gunpowder
+--- PERFORMANCE FIX (load audit, this pass): appends `entry` to `ringLog`
+--- (one of TrackableLog.scent/blood/gunpowder) in O(1), REPLACING the former
+--- O(n)-per-write shape (`log[#log+1] = entry; while #log > maxEntries do
+--- table.remove(log, 1) end`) -- `table.remove(t, 1)` shifts every remaining
+--- element down by one, so once a log is saturated at its cap (8000 for
+--- Blood, 6000 each for Scent/Gunpowder), EVERY write was paying for a full
+--- shift of up to that many slots. At this resource's own documented worst
+--- case (128 players bleeding, Blood's 500ms relay floor) that was roughly 2
+--- million slot copies per second purely from eviction.
+---
+--- Follows server/debugdump.lua's own DecisionTrail ring-index pattern
+--- exactly (`writeIndex = (writeIndex % CAP) + 1`) -- the SAME formula is
+--- correct whether `ringLog` is still filling up for the first time
+--- (`count < maxEntries`) or has already wrapped and is now overwriting old
+--- slots in place (`count == maxEntries`): once full, the physical slot
+--- about to be written is ALWAYS exactly the slot holding the current
+--- oldest live entry (see TrackableRingLogEntriesOldestFirst below for why),
+--- so eviction is not a separate step at all here -- it is a side effect of
+--- the write itself, at zero extra cost. Physical slot order does NOT match
+--- chronological order once `ringLog` has wrapped -- see
+--- TrackableRingLogEntriesOldestFirst below for the only sanctioned way to
+--- read these back out in true oldest-first order; every consumer of
+--- TrackableLog.scent/blood/gunpowder (PruneTrackableLogs and
+--- FindNearestFreshTrackableEntry, the only two in this file) goes through
+--- it, never a raw `ipairs`/`#ringLog` on the ring itself.
+--- @param ringLog table -- TrackableLog.scent | .blood | .gunpowder -- { entries, writeIndex, count }
 --- @param entry table -- { coords, loggedAt, ticketIssued }
---- @param maxEntries number
-local function AppendTrackableLogEntry(log, entry, maxEntries)
-    log[#log + 1] = entry
-    while #log > maxEntries do
-        table.remove(log, 1) -- index 1 is always the oldest entry -- never the one just appended
+--- @param maxEntries number -- this exact type's TRACKABLE_LOG_MAX_ENTRIES[trackType] -- must be the SAME value on every call for a given ringLog, or the physical/logical mapping breaks
+local function AppendTrackableLogEntry(ringLog, entry, maxEntries)
+    ringLog.writeIndex = (ringLog.writeIndex % maxEntries) + 1
+    ringLog.entries[ringLog.writeIndex] = entry
+    if ringLog.count < maxEntries then
+        ringLog.count = ringLog.count + 1
+    end
+end
+
+--- Iterates `ringLog`'s currently-live entries OLDEST FIRST, in true
+--- chronological (append) order -- REQUIRED reading for both of this file's
+--- own TrackableLog consumers (PruneTrackableLogs' age filter and
+--- FindNearestFreshTrackableEntry's nearest-match scan) now that
+--- AppendTrackableLogEntry above overwrites slots in place once a log has
+--- wrapped: the physical `entries` array stops being in append order at
+--- that point (e.g. cap 3, 4 appends -- physical slot 1 now holds the
+--- 4th/newest entry, not the 1st), so a plain `ipairs(ringLog.entries)`
+--- would silently visit entries in the WRONG order -- among other things,
+--- flipping FindNearestFreshTrackableEntry's own documented "ties keep the
+--- OLDEST-encountered entry" behavior (`dist < nearestDist`, strict) into
+--- "ties keep whatever happens to sit in the lowest physical slot", which is
+--- not the same guarantee at all once wrapped.
+---
+--- When `count < maxEntries` (never wrapped yet), physical slot 1 already
+--- IS the oldest entry, so the walk starts there. Once `count == maxEntries`
+--- (wrapped at least once), the physical slot about to be overwritten NEXT
+--- (`(writeIndex % maxEntries) + 1`, the exact same expression
+--- AppendTrackableLogEntry itself just used to pick where it wrote) is
+--- always exactly the current oldest live entry -- so that is where this
+--- walk starts, then wraps forward through every other live slot exactly
+--- once. O(1) per `next()` call, O(n) total for a full walk -- the SAME
+--- total complexity a plain `ipairs` walk over the old plain array always
+--- had; this changes WHICH slot order is visited, not how much work a full
+--- walk costs (this file's own periodic PruneTrackableLogs sweep, and each
+--- individual findTrackableSource query's own nearest-match scan, both stay
+--- exactly as expensive as before -- only the O(n)-per-WRITE cost is what
+--- this pass closes).
+--- @param ringLog table -- TrackableLog.scent | .blood | .gunpowder
+--- @param maxEntries number -- this type's ceiling (TRACKABLE_LOG_MAX_ENTRIES[trackType]) -- MUST match what AppendTrackableLogEntry was called with for this ringLog
+--- @return fun(): number?, table? -- use with a generic `for _, entry in TrackableRingLogEntriesOldestFirst(...) do`
+local function TrackableRingLogEntriesOldestFirst(ringLog, maxEntries)
+    local count = ringLog.count
+    local startIndex = (count < maxEntries) and 1 or ((ringLog.writeIndex % maxEntries) + 1)
+    local i = 0
+    return function()
+        i = i + 1
+        if i > count then return nil end
+        local physicalIndex = ((startIndex - 1 + i - 1) % maxEntries) + 1
+        return i, ringLog.entries[physicalIndex]
     end
 end
 
