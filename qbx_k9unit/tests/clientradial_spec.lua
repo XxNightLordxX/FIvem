@@ -434,6 +434,12 @@ local function newRadialFixture(opts)
         ReleaseBiteHold = record('ReleaseBiteHold'),
         RequestBiteHold = record('RequestBiteHold'),
         RequestTakedown = record('RequestTakedown'),
+        -- Takedown became a TOGGLE this pass -- see the k9_takedown tests
+        -- at the end of this file. Stubbed in the same shape as bite hold's
+        -- own trio directly above, so the item can be driven through both
+        -- of its states.
+        IsTakedownEngaged = queryFn('IsTakedownEngaged', 'isTakedownEngaged'),
+        ReleaseTakedown = record('ReleaseTakedown'),
         IsDragEngaged = queryFn('IsDragEngaged', 'isDragEngaged'),
         ReleaseDrag = record('ReleaseDrag'),
         RequestDrag = record('RequestDrag'),
@@ -2577,6 +2583,62 @@ t.test('PERIODIC ICON REFRESH: a handler who is DECERTIFIED mid-session (HasK9Ac
     f.stepIconRefreshThread()
 
     t.isNil(f.findRootItem('k9unit_open').menu, 'access revoked mid-session, with no ongoing engagement to protect, must degrade the icon to inert within one refresh pass')
+end)
+
+
+-- ========================================================================
+-- NON-LETHAL TAKEDOWN IS NOW A TOGGLE (completeness QA finding, this pass;
+-- the keybind half landed first in client/keybinds.lua).
+--
+-- This item's own header used to argue, correctly at the time, that
+-- takedown was a one-shot because client/combat.lua "exposes only
+-- RequestTakedown(), with no matching release/cancel counterpart and no
+-- IsTakedownEngaged()-style query". Both functions landed later and this
+-- item was never updated -- so ReleaseTakedown() was reachable from
+-- nothing at all.
+--
+-- It matters because RequestTakedown() picks the NEAREST eligible ped,
+-- which client/combat.lua's own comment admits is "not necessarily the
+-- intended one". Take down the wrong person and they stayed ragdolled and
+-- damage-immune for the full configured duration. The only other early end
+-- is /k9recall, a handler-side action needing an active partnership, so a
+-- solo K9 had no route at all.
+-- ========================================================================
+t.test('k9_takedown: NOT engaged -> requests a takedown, exactly as before', function()
+    local f = newRadialFixture({ features = { NonLethalTakedown = true } })
+    f.findInMenu('k9unit', 'k9_takedown').onSelect()
+    t.equals(#(f.calls.RequestTakedown or {}), 1)
+    t.equals(#(f.calls.ReleaseTakedown or {}), 0)
+end)
+
+t.test('k9_takedown: ENGAGED -> releases instead, and never falls through to fire a second request', function()
+    local f = newRadialFixture({ features = { NonLethalTakedown = true } })
+    f.setState('isTakedownEngaged', true)
+    f.findInMenu('k9unit', 'k9_takedown').onSelect()
+    t.equals(#(f.calls.ReleaseTakedown or {}), 1, 'the wrongly-taken-down target must be releasable from the radial too, not only the keybind')
+    t.equals(#(f.calls.RequestTakedown or {}), 0)
+end)
+
+t.test('k9_takedown: the Release branch is UNGATED -- it fires with no K9 access at all, because that is the STOP half', function()
+    local f = newRadialFixture({ features = { NonLethalTakedown = true }, hasK9Access = false, canShowK9UI = false })
+    f.setState('isTakedownEngaged', true)
+    f.findInMenu('k9unit', 'k9_takedown').onSelect()
+    t.equals(#(f.calls.ReleaseTakedown or {}), 1, 'a K9 decertified mid-takedown must still be able to let go -- gate the start, never the stop')
+    t.equals(f.denyCallCount(), 0, 'and must never be told it cannot use K9 features while doing so')
+end)
+
+t.test('CONTROL: the Start branch still carries its access gate -- wiring the release must not have widened the start', function()
+    local f = newRadialFixture({ features = { NonLethalTakedown = true }, hasK9Access = false, canShowK9UI = false })
+    f.setState('isTakedownEngaged', false)
+    f.findInMenu('k9unit', 'k9_takedown').onSelect()
+    t.equals(#(f.calls.RequestTakedown or {}), 0)
+    t.isTrue(f.denyCallCount() > 0)
+end)
+
+t.test('CONTROL: tolerates IsTakedownEngaged/ReleaseTakedown being entirely absent (soft dependency), exactly as the bite-hold and drag releases already are', function()
+    local f = newRadialFixture({ features = { NonLethalTakedown = true }, omit = { 'IsTakedownEngaged', 'ReleaseTakedown' } })
+    local ok = pcall(function() f.findInMenu('k9unit', 'k9_takedown').onSelect() end)
+    t.isTrue(ok)
 end)
 
 os.exit(t.summary())

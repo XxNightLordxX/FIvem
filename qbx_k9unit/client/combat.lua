@@ -874,21 +874,21 @@ end
 --- server/combat.lua's new releaseTakedown handler, which likewise never
 --- re-checks HasK9Access/feature-flag on the way out, only that THIS src is
 --- the current holder).
---- WIRED INTO client/keybinds.lua, NOT client/radial.lua (partial update,
---- verified by reading both files directly). This comment used to say NOT
---- YET WIRED into either client/radial.lua's "Non-Lethal Takedown" item or
---- client/keybinds.lua's k9takedown keymapping. client/keybinds.lua's
---- 'k9takedown' command has since been turned into a real toggle that
---- calls this function on its release branch (see that file's own
---- "NOW A TOGGLE, not a one-shot" note). client/radial.lua's own
---- "Non-Lethal Takedown" item remains a one-shot action item with no
---- matching release/cancel counterpart (that file's own comment says so
---- explicitly), so this function is still not called from there — exposed
---- here with the exact same Request*/Release*/IsEngaged naming convention
---- as RequestBiteHold/ReleaseBiteHold/IsBiteHoldEngaged and
---- RequestDrag/ReleaseDrag/IsDragEngaged specifically so wiring it into
---- that file, if wanted, is a drop-in copy of the existing Bite & Hold/Drag
---- toggle pattern, not a new shape to design.
+--- FULLY WIRED (verified by reading both files directly). This comment has
+--- now said three different true things in sequence, which is the point of
+--- keeping it accurate rather than deleting it: first "NOT YET WIRED into
+--- either client/radial.lua's Non-Lethal Takedown item or
+--- client/keybinds.lua's k9takedown keymapping", then "wired into keybinds,
+--- not radial" once the first half landed, and now both.
+---
+--- client/keybinds.lua's 'k9takedown' command and client/radial.lua's
+--- 'k9_takedown' item are each a real toggle that calls this function on
+--- their release branch, ungated, ahead of their own access check -- the
+--- same shape RequestBiteHold/ReleaseBiteHold and RequestDrag/ReleaseDrag
+--- already had. That naming convention is exactly why wiring it was a
+--- drop-in copy of an existing pattern rather than a new shape to design,
+--- which is what this comment argued for when the function was first
+--- exposed with no caller at all.
 function ReleaseTakedown()
     TriggerServerEvent('qbx_k9unit:server:releaseTakedown')
 end

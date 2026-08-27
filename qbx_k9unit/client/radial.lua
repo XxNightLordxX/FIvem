@@ -1259,16 +1259,23 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Non-Lethal Takedown — DEVELOPER_REFERENCE.md §12.5.2. A single one-shot action
-    --- item, NOT a context-sensitive toggle like Bite & Hold above:
-    --- client/combat.lua exposes only RequestTakedown(), with no matching
-    --- "release"/"cancel" counterpart and no IsTakedownEngaged()-style query —
-    --- the forced ragdoll it triggers always ends on its own (server-driven
-    --- EndHold on timeout, per client/combat.lua's own CLOCK-DOMAIN NOTE and
-    --- DEFENSE IN DEPTH backstop), never by a second player action the way
-    --- releasing a bite hold does. This mirrors Sit's shape (a single always-
-    --- "go" action), not Leash/Bite & Hold's toggle shape, because the
-    --- underlying capability itself has no second state to toggle back from.
+    --- Non-Lethal Takedown — DEVELOPER_REFERENCE.md §12.5.2. A CONTEXT-SENSITIVE
+    --- TOGGLE, the same shape as Bite & Hold above and Drag / Release below.
+    ---
+    --- THIS USED TO BE A ONE-SHOT, and this paragraph used to justify that:
+    --- "client/combat.lua exposes only RequestTakedown(), with no matching
+    --- release/cancel counterpart and no IsTakedownEngaged()-style query —
+    --- the forced ragdoll it triggers always ends on its own... never by a
+    --- second player action the way releasing a bite hold does... the
+    --- underlying capability itself has no second state to toggle back
+    --- from." Every sentence of that was true when written. It stopped
+    --- being true when client/combat.lua gained both ReleaseTakedown() and
+    --- IsTakedownEngaged(), and this item was simply never updated -- so
+    --- the release stayed reachable from nothing at all until the pass that
+    --- rewrote this comment also wired the branch below.
+    ---
+    --- Kept flat (not nested), same "Track precedent over Bark precedent"
+    --- reasoning as Bite & Hold above.
     --- Kept flat (not nested), same "Track precedent over Bark precedent"
     --- reasoning as Bite & Hold above. Config.Features.NonLethalTakedown gate
     --- (stays `false` by default — see config.lua).
@@ -1284,6 +1291,41 @@ local function RegisterK9RadialMenu()
             label = locale('radial.takedown_label'),
             icon = 'zzz',
             onSelect = function()
+                -- NOW A TOGGLE, matching Bite & Hold and Drag / Release
+                -- above (completeness QA finding, this pass; the keybind
+                -- half landed first, in client/keybinds.lua). This item's
+                -- own header above used to argue at length that takedown
+                -- was correctly a ONE-SHOT because "client/combat.lua
+                -- exposes only RequestTakedown(), with no matching
+                -- release/cancel counterpart and no IsTakedownEngaged()-
+                -- style query... the underlying capability itself has no
+                -- second state to toggle back from." That was true when
+                -- written. Both functions exist now, and that header has
+                -- been corrected alongside this change.
+                --
+                -- WHY IT MATTERS: RequestTakedown() picks the NEAREST
+                -- eligible ped, which client/combat.lua's own comment
+                -- admits is "not necessarily the intended one". Take down
+                -- the wrong person in a crowd and they stayed force-
+                -- ragdolled and damage-immune for the full configured
+                -- duration with no undo. The only other early end is
+                -- /k9recall -- a HANDLER-side action needing an active
+                -- partnership -- so a solo K9, which this resource
+                -- documents as a supported way to play, had no route at
+                -- all.
+                --
+                -- RELEASE BRANCH FIRST AND UNGATED, exactly as Bite &
+                -- Hold's own branch above documents for itself: this is
+                -- the STOP half, so it asks no access question. Gating it
+                -- would strand a K9 decertified mid-takedown. Only the
+                -- request branch below carries a gate.
+                if type(IsTakedownEngaged) == 'function' and IsTakedownEngaged() then
+                    if type(ReleaseTakedown) == 'function' then
+                        ReleaseTakedown()
+                    end
+                    return
+                end
+
                 if not HasK9Access() then
                     DenyK9UIAccess('combat.no_access')
                     return
