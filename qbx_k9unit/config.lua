@@ -1594,6 +1594,12 @@ Config.CommandTablet = {
     -- changes nothing in-game until you separately edit items.lua to
     -- match. See client/tablet.lua's own useTabletItem handler for the
     -- full mechanism this note describes.
+    -- THIS SETTING DOES NOTHING. Nothing in this resource reads it, and
+    -- changing it changes nothing in game. It is a REMINDER, not a switch:
+    -- whether the tablet item is consumed when used is decided in your own
+    -- ox_inventory items.lua, which this resource does not own and cannot
+    -- change. Left here, clearly labelled, rather than deleted, because
+    -- what it is reminding you of is real and easy to forget.
     consumeItemOnUse = false,
 
     -- Max roster rows returned in one query. Clamped server-side; a
@@ -1698,12 +1704,22 @@ Config.CommandTablet = {
 -- ======================================================================
 -- CERTIFICATION DEPTH -- tiers, expiry and specializations.
 --
--- Tiers (trainee / certified / senior) are deliberately HARDCODED in
--- server/certifications.lua rather than configured here. A fixed, ordinal
--- three-step vocabulary cannot be misconfigured into something the gate
--- code is unable to rank, and an operator can hold the whole model in
--- their head. If you want finer-grained distinctions, use specializations
--- below -- that is what they are for.
+-- CORRECTED: this used to say tiers were "deliberately HARDCODED... rather
+-- than configured here" and to send you to specializations if you wanted
+-- more of them. That was wrong, and it contradicted Config.CertificationTiers'
+-- own heading a few hundred lines above, which correctly tells you that you
+-- can add tiers. server/certtiers.lua really does read that table -- it is
+-- where tiers come from. Somebody who wanted a fourth rank and read only
+-- this paragraph would have gone off and built it out of specializations,
+-- which are a different tool for a different job.
+--
+-- So: the three shipped tiers (trainee / certified / senior) are a DEFAULT,
+-- not a fixture. Add or reorder them in Config.CertificationTiers. Do not
+-- rename the three that ship -- existing records refer to them by name.
+--
+-- Specializations are still the right tool for a different question: tiers
+-- are how FAR through training somebody is, specializations are WHAT they
+-- were trained to find.
 -- ======================================================================
 
 -- Days from grant or renewal until a certification is treated as expired.
@@ -4070,7 +4086,7 @@ Config.K9Inventory = {
 Config.K9Medkit = {
     itemName      = 'k9_medkit', -- PLACEHOLDER item name — must exist in the target server's ox_inventory items table; NOT registered as a hotbar-"useable" item by this resource, see server/medkit.lua's header for why
     healthRestore = 50,          -- native health units restored to the K9's REAL ped health, clamped to GetEntityMaxHealth server-side, never allowed to overheal
-    injuryRestore = 40,          -- restores Config.Wellbeing.Injury's tracked value once server/wellbeing.lua (DEVELOPER_REFERENCE.md §13.1 sub-phase 4c/4d) exists — a no-op today, see server/medkit.lua's header
+    injuryRestore = 40,          -- how much of a dog's injury a medkit heals. THIS IS LIVE: the comment here used to say it was "a no-op today", waiting on a file that has since been written, and an owner reading only this line would have believed changing the number did nothing. It is read by server/medkit.lua on every use. HIGHER = each medkit heals more.
     range         = 2.0,         -- meters — server-enforced max distance between the using player and the target K9's own live positions, checked BEFORE any item consumption or health mutation
     cooldownMs    = 60000,       -- per-target (K9 citizenid) cooldown, prevents repeated instant-heal spam against the same K9
     -- Job names, in addition to any job ∈ Config.Departments, allowed to use
@@ -4892,6 +4908,18 @@ Config.K9EquipmentShop = {
 -- growl. So there is nothing in the player's game to read the answer out
 -- of. It awards no XP either.
 -- ======================================================================
+-- INERT AS SHIPPED -- NOTHING BELOW THIS LINE IS READ. The scent trail
+-- hunt's own switch was removed (owner-approved, judged redundant with the
+-- merged tracking action, which is the same walk-toward-a-fading-signal
+-- interaction). The two files that implement it correctly go inert the
+-- moment that switch is absent, so every number in this table is currently
+-- dead weight -- tuning any of them changes nothing.
+--
+-- It is kept, rather than deleted, so the tuning survives if the feature is
+-- ever brought back; the steps to do that are written where the switch used
+-- to be, in Config.Features above. This banner is on the table itself
+-- because the explanation up there is several hundred lines away, and an
+-- owner scrolling to these numbers would have no way of knowing.
 Config.ScentTrailHunt = {
     -- How far from the K9 the hidden spot can be, in meters.
     minRadius         = 10.0,
