@@ -599,4 +599,86 @@ t.test('every comment that asserts what a config flag SHIPS AS matches the shipp
         '\n  Fix the sentence to match config.lua, or reword it so it is not asserting a default.')
 end)
 
+
+-- ======================================================================
+-- THE K9 IS ALWAYS A REAL PLAYER, NEVER AN NPC
+--
+-- This server's single standing rule about dogs, restated by the owner
+-- across sessions: every K9 is a person playing one. No NPC fallback, ever.
+--
+-- FOUND BY THIS CHECK, 2026-08-31: Config.K9EquipmentShop.pedModel shipped
+-- as 'a_c_shepherd' -- the first entry in Config.Peds -- with pedScenario
+-- 'WORLD_DOG_SITTING_SHEPHERD'. The K9 supply point had an NPC German
+-- Shepherd sitting at it. config.lua argued the ped was "a shop attendant,
+-- not a K9", but that distinction only exists in the config file: to a
+-- player it is a dog that is not a person, standing exactly where K9
+-- handlers gather. Now a uniformed quartermaster.
+--
+-- WHAT THIS GUARDS, precisely: any ped this resource SPAWNS as scenery must
+-- not use a model that Config.Peds lists as a K9. It does not care what
+-- model a real K9 player wears -- that is the whole point of Config.Peds
+-- and is checked nowhere here.
+-- ======================================================================
+
+t.test('CONSTRAINT: no scenery ped this resource spawns may use a K9 model', function()
+    local shippedCfg = env.Config
+    t.isNotNil(shippedCfg, 'shipped Config must load')
+
+    local k9Models = {}
+    local k9Count = 0
+    for _, entry in ipairs(shippedCfg.Peds or {}) do
+        if type(entry) == 'table' and type(entry.model) == 'string' then
+            k9Models[entry.model:lower()] = true
+            k9Count = k9Count + 1
+        end
+    end
+    t.isTrue(k9Count > 0, 'Config.Peds must list at least one K9 model for this check to mean anything')
+
+    -- Every config path that feeds a CreatePed call in this resource.
+    -- Keep this list in step with the CreatePed sites in client/*.lua.
+    local sceneryPedPaths = {
+        { path = 'Config.K9EquipmentShop.pedModel',
+          value = shippedCfg.K9EquipmentShop and shippedCfg.K9EquipmentShop.pedModel,
+          what  = 'the equipment-shop attendant (client/equipmentshop.lua)' },
+        { path = 'Config.SARCalls.missingPersonPedModel',
+          value = shippedCfg.SARCalls and shippedCfg.SARCalls.missingPersonPedModel,
+          what  = 'the SAR missing-person victim (client/sarcalls.lua)' },
+    }
+
+    local offenders = {}
+    for _, entry in ipairs(sceneryPedPaths) do
+        if type(entry.value) == 'string' and k9Models[entry.value:lower()] then
+            offenders[#offenders + 1] = ('%s = %q -- %s'):format(entry.path, entry.value, entry.what)
+        end
+    end
+    -- Per-location overrides get the same treatment as the default.
+    local locations = shippedCfg.K9EquipmentShop and shippedCfg.K9EquipmentShop.locations
+    if type(locations) == 'table' then
+        for key, loc in pairs(locations) do
+            if type(loc) == 'table' and type(loc.model) == 'string' and k9Models[loc.model:lower()] then
+                offenders[#offenders + 1] = ('a shop location (%s) overrides model = %q'):format(tostring(key), loc.model)
+            end
+        end
+    end
+
+    table.sort(offenders)
+    t.equals(#offenders, 0,
+        'these spawn an NPC using a model this resource calls a K9:\n    ' .. table.concat(offenders, '\n    ') ..
+        '\n  Every K9 on this server is a real player. A dog-shaped NPC standing in the world ' ..
+        'breaks that on sight, whatever role the config assigns it. Use a human model (and a ' ..
+        'matching human pedScenario).')
+end)
+
+t.test('CONSTRAINT: the shop attendant scenario matches a human, not a dog', function()
+    local shippedCfg = env.Config
+    local scenario = shippedCfg.K9EquipmentShop and shippedCfg.K9EquipmentShop.pedScenario
+    if scenario == false or scenario == nil then return end -- "just stand there" is fine
+    t.isTrue(type(scenario) == 'string', 'pedScenario must be a string or false')
+    -- Paired with the model check above: a dog scenario on a human model
+    -- plays wrong, and is also the tell-tale of a reverted model change.
+    t.isNil(scenario:upper():match('DOG'),
+        ('Config.K9EquipmentShop.pedScenario is %q -- a dog animation. Either the attendant ')
+            :format(scenario) .. 'model was reverted to a dog (see the check above), or the two are out of step.')
+end)
+
 os.exit(t.summary())

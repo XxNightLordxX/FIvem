@@ -5610,30 +5610,45 @@ Config.K9EquipmentShop = {
     currencyItem = 'money',
 
     -- ==================================================================
-    -- THE SHOP DOG. The walk-up point is a real, visible ped you approach,
-    -- not an invisible patch of ground. The four fields below are the
-    -- defaults for every location; any single location can override them.
-    -- This is a shop attendant, not a K9 -- ANY streamed model works,
-    -- including one that never appears in Config.Peds.
+    -- THE SHOP ATTENDANT. The walk-up point is a real, visible ped you
+    -- approach, not an invisible patch of ground. The four fields below are
+    -- the defaults for every location; any single location can override
+    -- them. ANY streamed model works, including one that never appears in
+    -- Config.Peds.
+    --
+    -- WHY THIS IS A PERSON AND NOT A DOG (changed 2026-08-31, and please
+    -- keep it that way). This shipped as `a_c_shepherd` with a sitting-dog
+    -- scenario -- an NPC German Shepherd sat at the K9 supply point. The
+    -- old comment here argued it was "a shop attendant, not a K9", but that
+    -- distinction only exists in the config file. To anyone playing, it is
+    -- a dog that is not a person, standing in the one place K9 handlers
+    -- gather -- which is exactly what this server's K9s are never allowed
+    -- to be. Every K9 here is a real player; nothing about a dog should
+    -- read as scenery. A human quartermaster issuing gear carries no such
+    -- confusion, and the shop behaves identically either way.
+    --
+    -- If you do set a dog model here, set pedScenario to a dog animation
+    -- too (the two must match) -- but the intent above is the reason not to.
     -- ==================================================================
 
-    -- Default model for the shop ped.
-    pedModel = 'a_c_shepherd',
+    -- Default model for the shop attendant. A uniformed officer handing out
+    -- K9 gear reads correctly at a police/sheriff supply point.
+    pedModel = 's_m_y_cop_01',
 
     -- Default direction it faces, in degrees.
     pedHeading = 0.0,
 
     -- What it does while standing there. Set to false and it just stands.
-    -- The default is a verified sitting-dog animation; if you change
-    -- pedModel to something that is not a dog, change this too.
-    pedScenario = 'WORLD_DOG_SITTING_SHEPHERD',
+    -- A clipboard suits someone issuing equipment; it must match pedModel's
+    -- species (a human scenario on a dog model, or the reverse, plays wrong).
+    pedScenario = 'WORLD_HUMAN_CLIPBOARD',
 
     -- How long to wait for a shop ped's model to load before giving up, in
     -- milliseconds. On timeout that ONE location is skipped with a console
     -- warning -- the shop does not hang and the other locations still work.
     pedModelLoadTimeoutMs = 10000,
 
-    -- Where the shop dogs stand. PLACEHOLDER -- see the note above. Add,
+    -- Where the shop attendants stand. PLACEHOLDER -- see the note above. Add,
     -- remove or reorder entries freely; no code change is needed, and high
     -- command can also do it live from the tablet. Any entry may set its
     -- own `model`, `heading`, `scenario` or `label` to override the
