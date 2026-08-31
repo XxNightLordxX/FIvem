@@ -310,16 +310,21 @@ you are the only one connected:**
 
 - **Leash** and **Handler Partnership** both work by asking a nearby
   player to accept. With nobody else on the server (or nobody close
-  enough), the game says so plainly: "No nearby player to leash to" /
+  enough), the game says so plainly: "No nearby player to leash to." /
   "No nearby player to partner with."
 - **Handler-Down Defense** only ever fires when a K9's own *partnered
   handler* is actually attacked. With no partner, there is nothing to
   attack — pressing its key by yourself correctly reports "No active
-  handler-down alert," which means exactly what it says, not that
+  handler-down alert." That means exactly what it says, not that
   anything is broken.
 - **Scent Lineup** (`/k9lineup`) needs at least two other connected
-  players standing in the line-up with you. Running it alone tells you
-  that directly: "A lineup needs at least 2 other player(s)."
+  players, and you name them explicitly — it is not proximity-based.
+  The command takes their server IDs (`/k9lineup 12 47`), each of whom
+  then gets an invite to accept, with a 30-second window. Running it
+  bare by yourself shows the usage line, not a "not enough players"
+  error: "Usage: /k9lineup <serverId1> <serverId2> ...> (2-6 other
+  players)". You only see "A lineup needs at least 2 other player(s)."
+  if you supply too few IDs.
 
 None of the four above will ever work with only one person connected, no
 matter how the server is configured. To actually try them, bring in a
