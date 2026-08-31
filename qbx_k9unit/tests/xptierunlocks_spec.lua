@@ -383,11 +383,19 @@ t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownM
     t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-senior', 5000), 3750, '5000 * 0.75 = 3750')
 end)
 
-t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: Master Handler tier -- the shipped ladder\'s own worst-case floors this pass\'s doc comments cite (31500ms combined medkit, 3000ms kennel)', function()
+-- NOTE ON THIS TEST'S NUMBERS: they are THIS FIXTURE'S ladder (0.70 /
+-- 0.60), which is no longer the SHIPPED ladder -- the XP-rebalance pass
+-- retuned config.lua's real Master Handler row to 0.50 / 0.45. This test
+-- deliberately keeps its own fixture numbers (it is testing the ACCESSOR'S
+-- ARITHMETIC, which must not change when a server owner retunes their
+-- config); the shipped ladder's own real values are pinned separately by
+-- the SHIPPED-CONFIG TRIPWIRE at the bottom of this file, which is what
+-- actually fails if config.lua and the doc comments drift apart again.
+t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: Master Handler tier -- this FIXTURE ladder\'s worst-case floors (31500ms combined medkit, 3000ms kennel); the shipped ladder is pinned separately below', function()
     grindTowardHandler('handler-master', 101) -- 101 * 60 = 6060 >= 6000 (Master), < 20000 (Legendary)
     t.equals(GetHandlerXPTier('handler-master').label, 'Master Handler', 'sanity check on this test\'s own arithmetic')
     t.equals(GetHandlerXPTierMedkitCooldownMs('handler-master', 60000), 42000, '60000 * 0.70 = 42000 -- combined with a Veteran-tier K9 target\'s own 0.75 (GetXPTierMedkitCooldownMs, applied by the caller BEFORE this function per server/medkit.lua\'s real chained call site), the true worst case is 60000 * 0.75 * 0.70 = 31500')
-    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', 5000), 3000, '5000 * 0.60 = 3000 -- the exact worst-case floor server/kennel.lua\'s own wiring comment and server/progression.lua\'s doc comment both cite')
+    t.equals(GetHandlerXPTierKennelDeployCooldownMs('handler-master', 5000), 3000, '5000 * 0.60 = 3000 -- this fixture ladder\'s own floor, not the shipped one (see the note above this test)')
 end)
 
 t.test('GetHandlerXPTierMedkitCooldownMs / GetHandlerXPTierKennelDeployCooldownMs: a multiplier > 1 is rejected on EACH function independently -- an unlock must never LENGTHEN a cooldown', function()
@@ -449,6 +457,87 @@ t.test('CROSS-LADDER INDEPENDENCE: a citizenid\'s K9-side tier (Config.XPTiers) 
     t.equals(GetHandlerXPTier('shared-cid').label, 'Certified Handler')
     t.equals(GetXPTierMedkitCooldownMs('shared-cid', 60000), 60000, 'K9 side: Elite\'s own medkitCooldownMultiplier (0) is rejected, unchanged')
     t.equals(GetHandlerXPTierMedkitCooldownMs('shared-cid', 60000), 54000, 'Handler side: Certified\'s own 0.90 still applies normally, unaffected by the K9 side\'s Elite standing')
+end)
+
+-- ========================================================================
+-- SHIPPED-CONFIG TRIPWIRE (XP-rebalance pass).
+--
+-- WHY THIS EXISTS. Every other test in this file runs against a FIXTURE
+-- ladder, on purpose -- they test the accessor's arithmetic, which must
+-- hold for whatever numbers a server owner configures. That is correct, and
+-- it is also exactly why the shipped ladder itself went unpinned: three
+-- separate doc comments (config.lua's Master Handler block,
+-- server/progression.lua's "THE NUMBERS" section, and the SOURCE AUDIT
+-- headers in tests/medkit_spec.lua and tests/kennel_spec.lua) quote precise
+-- worst-case floors derived from config.lua's REAL multipliers, and nothing
+-- in the suite read those real multipliers at all. When the rebalance pass
+-- retuned them, all four comments went stale and every test stayed green.
+--
+-- This test closes that specific hole: it loads the REAL config.lua and
+-- asserts the shipped multipliers still produce the exact floors those
+-- comments quote. Retune a multiplier in config.lua and this goes RED,
+-- naming the comments that need updating with it. It intentionally pins
+-- the MULTIPLIERS and the derived floors only -- never the xp thresholds,
+-- which are pure server-owner balance and which no comment's arithmetic
+-- depends on.
+-- ========================================================================
+
+t.test('SHIPPED-CONFIG TRIPWIRE: config.lua\'s real multipliers still produce the exact worst-case floors every doc comment quotes', function()
+    local shipped = { Config = { Features = {}, FeatureGroups = {} } }
+    shipped._G = shipped
+    setmetatable(shipped, { __index = _G })
+    Sandbox.loadInto('../config.lua', shipped)
+
+    local k9 = shipped.Config.XPTiers
+    local handler = shipped.Config.HandlerXPTiers
+    t.isTrue(type(k9) == 'table' and #k9 >= 4, 'sanity: the shipped K9 ladder loaded')
+    t.isTrue(type(handler) == 'table' and #handler >= 4, 'sanity: the shipped handler ladder loaded')
+
+    local master = handler[#handler]
+    local elite = k9[#k9]
+    t.equals(master.label, 'Master Handler', 'sanity: the top handler rank is still the one these floors are derived from')
+    t.equals(elite.label, 'Elite K9', 'sanity: the top K9 rank is still the one these floors are derived from')
+
+    -- The two multipliers every quoted floor is derived from.
+    t.equals(master.medkitTreatCooldownMultiplier, 0.50,
+        'config.lua Master Handler medkitTreatCooldownMultiplier changed -- update the quoted medkit floors in config.lua\'s own Master Handler block, server/progression.lua\'s "THE NUMBERS" section, and tests/medkit_spec.lua\'s SOURCE AUDIT header')
+    t.equals(master.kennelDeployCooldownMultiplier, 0.45,
+        'config.lua Master Handler kennelDeployCooldownMultiplier changed -- update the quoted kennel floors in config.lua\'s own Master Handler block, server/progression.lua\'s "THE NUMBERS" section, and tests/kennel_spec.lua\'s SOURCE AUDIT header')
+    t.equals(elite.medkitCooldownMultiplier, 0.60,
+        'config.lua Elite K9 medkitCooldownMultiplier changed -- it is the TARGET-side half of the combined medkit floor, so every quoted combined figure moves with it')
+
+    -- The derived floors themselves, computed the same way server/medkit.lua
+    -- and server/kennel.lua compose them (target-side first, then
+    -- handler-side), so a drift in either half is caught as an arithmetic
+    -- failure and not just a changed constant.
+    t.equals(math.floor(60000 * master.medkitTreatCooldownMultiplier), 30000,
+        'medkit floor, handler rank alone: the 30000ms every doc comment quotes')
+    t.equals(math.floor(60000 * elite.medkitCooldownMultiplier * master.medkitTreatCooldownMultiplier), 18000,
+        'medkit floor, combined worst case against an Elite K9 target: the 18000ms every doc comment quotes')
+    t.equals(math.floor(5000 * master.kennelDeployCooldownMultiplier), 2250,
+        'kennel-deploy floor: the 2250ms every doc comment quotes')
+
+    -- ANTI-FARM SEPARATION, asserted rather than assumed (see
+    -- server/progression.lua's BINDING REQUIREMENT note): the dedicated
+    -- per-actor MINT cooldowns must stay far above the rank-reduced ACTION
+    -- floors above, so deepening a rank multiplier can never speed up
+    -- earning. If a future pass shortens a mint cooldown toward these
+    -- floors, this fails before the farm ships.
+    local function mintMsFrom(path, pattern)
+        local handle = assert(io.open(path, 'r'))
+        local text = handle:read('a')
+        handle:close()
+        local expr = text:match(pattern)
+        t.isTrue(expr ~= nil, 'could not find the mint cooldown declaration in ' .. path)
+        return assert(load('return ' .. expr))()
+    end
+
+    local treatMint = mintMsFrom('../server/medkit.lua', 'local%s+TREAT_XP_MINT_COOLDOWN_MS%s*=%s*([^\r\n-]+)')
+    local deployMint = mintMsFrom('../server/kennel.lua', 'local%s+KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS%s*=%s*([^\r\n-]+)')
+    t.isTrue(treatMint >= 18000 * 20,
+        'TREAT_XP_MINT_COOLDOWN_MS (' .. tostring(treatMint) .. 'ms) is no longer far above the 18000ms rank-reduced medkit action floor -- a handler rank could now shorten its own earning rate, the exact loop server/progression.lua\'s BINDING REQUIREMENT note rules out')
+    t.isTrue(deployMint >= 2250 * 20,
+        'KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS (' .. tostring(deployMint) .. 'ms) is no longer far above the 2250ms rank-reduced kennel-deploy action floor -- same loop, same rule')
 end)
 
 os.exit(t.summary())

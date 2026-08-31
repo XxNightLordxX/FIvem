@@ -1214,15 +1214,20 @@ end
 --   fix here is to leave that arithmetic sitting right next to the risk,
 --   not in a report nobody rereads before wiring the award):
 --     * MEDKIT: Config.K9Medkit.cooldownMs ships at 60000ms. A Master
---       Handler (medkitTreatCooldownMultiplier = 0.70) alone shortens that
---       to 42000ms via GetHandlerXPTierMedkitCooldownMs below. STACKED with
---       a Veteran-or-better TARGET K9's own medkitCooldownMultiplier
---       (0.75, Config.XPTiers, GetXPTierMedkitCooldownMs) -- both apply to
---       the SAME MedkitCooldown threshold, server/medkit.lua composes them
---       in sequence -- the real worst-case floor is 60000 * 0.75 * 0.70 =
---       31500ms (31.5s), not 60000ms. AT THAT FLOOR, IF handlerTreatK9
---       (12 XP) WERE PAID ON EVERY SUCCESS: 12 XP / 31.5s = ~1,371 XP/hr
---       PER (actor, target) PAIR -- already over a third of the whole
+--       Handler (medkitTreatCooldownMultiplier = 0.50, RETUNED from 0.70 by
+--       the XP-rebalance pass) alone shortens that to 30000ms via
+--       GetHandlerXPTierMedkitCooldownMs below. STACKED with the TARGET
+--       K9's own medkitCooldownMultiplier (Config.XPTiers,
+--       GetXPTierMedkitCooldownMs) -- both apply to the SAME MedkitCooldown
+--       threshold, server/medkit.lua composes them in sequence -- the real
+--       worst-case floor is 60000 * 0.60 * 0.50 = 18000ms (18s) against an
+--       ELITE-tier K9, or 22500ms against a Veteran (0.75). NOTE THE ELITE
+--       FIGURE IS NEW: before the rebalance, Elite carried NO
+--       medkitCooldownMultiplier at all and Veteran's 0.75 was the deepest
+--       target-side reduction in existence, which is why this note
+--       previously cited 31500ms as the floor. AT TODAY'S FLOOR, IF
+--       handlerTreatK9 (12 XP) WERE PAID ON EVERY SUCCESS: 12 XP / 18s =
+--       2,400 XP/hr PER (actor, target) PAIR -- two thirds of the whole
 --       shared 3,600 XP/hr budget from ONE pair alone, and MedkitCooldown
 --       is keyed by the TARGET's citizenid, not the actor's (this file's
 --       own Config.Features.HandlerXPProgression header, verified above),
@@ -1231,23 +1236,24 @@ end
 --       the way at all. A future per-actor mint cooldown for this award
 --       MUST be keyed by the ACTOR (never reuse MedkitCooldown's
 --       target-keyed shape, which cannot see a multi-target actor at all)
---       and sized well below what 31,500ms alone would suggest.
+--       and sized well below what 18,000ms alone would suggest.
 --     * KENNEL DEPLOY: Config.DeployableKennel.deployCooldownMs ships at
 --       5000ms -- config.lua's own header already measured this as
 --       5,760 XP/hr gross UNWIRED (8 XP every 5s), enough alone to exhaust
 --       the shared budget in under 40 minutes. A Master Handler
---       (kennelDeployCooldownMultiplier = 0.60) shortens that floor to
---       3000ms via GetHandlerXPTierKennelDeployCooldownMs below -- 8 XP
---       every 3s = 9,600 XP/hr gross, PER ACTOR (DeployCooldown, unlike
+--       (kennelDeployCooldownMultiplier = 0.45, RETUNED from 0.60 by the
+--       XP-rebalance pass) shortens that floor to 2250ms via
+--       GetHandlerXPTierKennelDeployCooldownMs below -- 8 XP every 2.25s =
+--       12,800 XP/hr gross, PER ACTOR (DeployCooldown, unlike
 --       MedkitCooldown, is already keyed by the deploying actor's own
 --       source) -- i.e. this pass makes the already-judged-unsafe number
---       67% WORSE. A future per-actor mint cooldown for this award must be
---       sized against 3000ms, never the unreduced 5000ms config default.
+--       122% WORSE. A future per-actor mint cooldown for this award must be
+--       sized against 2250ms, never the unreduced 5000ms config default.
 --
 --   BINDING REQUIREMENT FOR WHOEVER WIRES handlerTreatK9/handlerKennelDeploy
 --   NEXT: gate that award through a DEDICATED per-actor MINT cooldown,
 --   entirely separate from MedkitCooldown/DeployCooldown, sized against
---   the RANK-REDUCED floors above (31500ms / 3000ms), not the unreduced
+--   the RANK-REDUCED floors above (18000ms / 2250ms), not the unreduced
 --   config defaults (60000ms / 5000ms) -- mirroring server/certifications.lua's
 --   own CertifyXpMintCooldown fix for handlerCertifyK9 (keyed by the actor,
 --   its own TTL, independent of the action-throttling cooldown). Never

@@ -2504,6 +2504,33 @@ Config.MaxStaminaDrainPerTick = 20.0
 -- ======================================================================
 -- XP TIERS — Phase 4, placeholder numbers pending economy-balance-agent review
 -- ======================================================================
+-- REBALANCED (owner-directed: "make the xp progression actually do things
+-- to help improve the k9 experience... make it actually mean something").
+--
+-- EVERY RANK NOW GIVES SOMETHING YOU CAN FEEL. The old first step was +5%
+-- speed and +5% scent range, awarded after 1250 XP -- hours of real work
+-- for a change no player could perceive. A reward nobody notices is the
+-- same as no reward, and it made the whole early ladder read as
+-- decorative.
+--
+-- SCENT RANGE CARRIES MORE OF THE WEIGHT THAN SPEED, deliberately. Speed
+-- is the dangerous lever: a K9 fast enough to run down any suspect on foot
+-- flattens every pursuit it touches, so the top of the ladder stops well
+-- short of that. Scent range is where a veteran dog SHOULD outclass a
+-- rookie -- it makes tracking work at distances a new dog cannot reach,
+-- which is felt every single time you track, without letting the dog win
+-- fights on its own. Base tracking range is 40m, so the ladder now reads
+-- as roughly 40 / 46 / 54 / 64 metres.
+--
+-- ELITE NO LONGER GETS ONLY A BADGE. It previously had no cooldown unlock
+-- at all -- Veteran was the only rank that got one -- so the final, most
+-- expensive rank was the one that changed the least. It now deepens medkit
+-- recovery as well.
+--
+-- TUNE THESE. They are gameplay balance for YOUR server, not physics. The
+-- ceiling is Config.MaxSpeedScentMultiplier (10.0), so there is headroom
+-- for a far more dramatic ladder -- but read the speed warning above before
+-- pushing speedMultiplier much past 1.20.
 Config.XPTiers = {
     -- scentRangeMultiplier REPLACED the old absolute `scentRange` field, and
     -- the unit changed, which is why the name had to change with it. The old
@@ -2554,15 +2581,29 @@ Config.XPTiers = {
     -- figure was anchored to the ~9000 XP/hr contraband farm, which is now
     -- closed; reapplying it against the corrected ceiling would overshoot.
     { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
-    { xp = 1250, label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
+    { xp = 1250, label = 'Trained K9', speedMultiplier = 1.06, scentRangeMultiplier = 1.15 },
     -- Veteran unlocks a shorter K9 medkit cooldown. A multiplier, not an
     -- absolute: 0.75 means "three quarters of the configured wait".
     -- Deliberately a NUMBER and never a boolean -- it is consulted only
     -- AFTER an existing gate has already allowed the action, so reaching a
     -- tier can shorten a wait but can never grant access to anything.
-    { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10, medkitCooldownMultiplier = 0.75 },
-    -- Elite gets a cosmetic HUD badge. Display only, no mechanical effect.
-    { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, badge = 'elite' },
+    { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.12, scentRangeMultiplier = 1.35, medkitCooldownMultiplier = 0.75 },
+    -- Elite gets the deepest K9-side medkit cooldown reduction (0.60 --
+    -- deeper than Veteran's 0.75, and cumulative in the same
+    -- already-gated, never-granting sense that field's note above
+    -- describes), PLUS a cosmetic HUD badge.
+    --
+    -- HONEST NOTE ON THAT BADGE: `badge = 'elite'` is read by nothing.
+    -- No HUD, tablet or nameplate code in this resource looks the field
+    -- up (grep `badge` -- the only hits are this line and its own
+    -- comments). It is kept because it costs nothing and documents the
+    -- intent for whoever wires a rank badge later, but DO NOT read it as
+    -- a reward a player can currently see -- that is exactly why this
+    -- rank needed a real mechanical unlock of its own. Before this
+    -- rebalance, Elite -- the most expensive rank on the ladder -- was
+    -- the ONLY rank whose entire distinguishing reward was that dead
+    -- field.
+    { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.18, scentRangeMultiplier = 1.60, medkitCooldownMultiplier = 0.60, badge = 'elite' },
 }
 
 -- ======================================================================
@@ -2770,7 +2811,7 @@ Config.HandlerXPTiers = {
     -- (the 1-day + 7-day tenure milestones alone already total 55 XP, with
     -- zero certifying). Reachable within a handler's first few real
     -- shifts either way -- this is the "first promotion" rung.
-    { xp = 50,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.90 },
+    { xp = 50,  label = 'Certified Handler', medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.85 },
     -- SENIOR HANDLER (kennelDeployCooldownMultiplier -- WIRED,
     -- server/kennel.lua, via GetHandlerXPTierKennelDeployCooldownMs. Same
     -- header, same note). WHAT IT TAKES: the full 30-day tenure trickle
@@ -2779,7 +2820,7 @@ Config.HandlerXPTiers = {
     -- required -- about a month of ordinary, regular partnered play. A
     -- handler who DOES certify gets here faster (three certifications, 150
     -- XP, is already enough by itself).
-    { xp = 150, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.80, kennelDeployCooldownMultiplier = 0.75 },
+    { xp = 150, label = 'Senior Handler',    medkitTreatCooldownMultiplier = 0.65, kennelDeployCooldownMultiplier = 0.65 },
     -- MASTER HANDLER -- deliberately ABOVE the 155-XP tenure ceiling: this
     -- rank cannot be reached by tenure alone, on purpose (a genuine
     -- long-term goal, not a passive one). WHAT IT TAKES: actually being
@@ -2793,16 +2834,32 @@ Config.HandlerXPTiers = {
     --
     -- Master Handler's own combined MULTIPLIER worst-case floors (both
     -- cooldowns stack with any lower tier already earned, by design -- see
-    -- "cumulative by design" above -- unaffected by this xp-threshold
-    -- rescale, since only the xp values above changed, not these
-    -- multipliers): medkit 60000ms * 0.70 = 42000ms alone, 31500ms
-    -- combined with a Veteran-tier K9 TARGET's own 0.75 (Config.XPTiers);
-    -- kennel deploy 5000ms * 0.60 = 3000ms. These are the exact numbers
-    -- server/progression.lua's own doc comment and the SOURCE AUDIT tests
-    -- cite -- if you retune either MULTIPLIER here, that comment and those
-    -- tests go stale and need updating too (the xp threshold itself is not
-    -- referenced by either).
-    { xp = 500, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.70, kennelDeployCooldownMultiplier = 0.60 },
+    -- "cumulative by design" above). RECOMPUTED FOR THE REBALANCED
+    -- MULTIPLIERS (0.70 -> 0.50 and 0.60 -> 0.45 on this line, and Elite K9
+    -- gaining a medkitCooldownMultiplier of 0.60 it did not previously
+    -- have): medkit 60000ms * 0.50 = 30000ms alone; 22500ms combined with a
+    -- Veteran-tier K9 TARGET's own 0.75, and 18000ms -- the true worst case
+    -- now -- combined with an ELITE-tier K9 target's 0.60 (Config.XPTiers);
+    -- kennel deploy 5000ms * 0.45 = 2250ms.
+    --
+    -- WHY DEEPENING THESE IS STILL ANTI-FARM SAFE, checked rather than
+    -- assumed: both handlerTreatK9 and handlerKennelDeploy mint their XP
+    -- through DEDICATED per-actor mint cooldowns
+    -- (TREAT_XP_MINT_COOLDOWN_MS = 30 real minutes, server/medkit.lua;
+    -- KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS = 60 real minutes,
+    -- server/kennel.lua), never through the ACTION cooldowns these
+    -- multipliers shorten. That separation is precisely the
+    -- climbing-the-ladder-makes-the-ladder-faster loop server/progression.lua's
+    -- BINDING REQUIREMENT note exists to rule out, and it holds here: these
+    -- multipliers change how often a handler may ACT, and cannot change how
+    -- often they EARN. Anyone re-tuning them should re-verify that
+    -- separation still holds before assuming it.
+    --
+    -- These are the exact numbers server/progression.lua's own doc comment
+    -- and the SOURCE AUDIT tests cite -- if you retune either MULTIPLIER
+    -- here, that comment and those tests go stale and need updating too
+    -- (the xp threshold itself is not referenced by either).
+    { xp = 500, label = 'Master Handler',    medkitTreatCooldownMultiplier = 0.50, kennelDeployCooldownMultiplier = 0.45 },
 }
 -- STILL A REAL GAP, DISCLOSED RATHER THAN PAPERED OVER BY THIS RESCALE: a
 -- handler who never personally certifies anyone new is HARD-CAPPED at

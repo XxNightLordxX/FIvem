@@ -704,16 +704,20 @@ end)
 -- ========================================================================
 -- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass;
 -- handlerKennelDeploy WIRED this pass, coder-backend -- see below): this
--- cooldown is handler-rank-reduced (worst case 3000ms, down from the
--- 5000ms default -- see GetHandlerXPTierKennelDeployCooldownMs's own doc
+-- cooldown is handler-rank-reduced (worst case 2250ms, down from the
+-- 5000ms default, after the XP-rebalance pass retuned Master Handler's
+-- kennelDeployCooldownMultiplier from 0.60 to 0.45 -- see
+-- GetHandlerXPTierKennelDeployCooldownMs's own doc
 -- comment, server/progression.lua). handlerKennelDeploy (8 XP,
 -- Config.HandlerXP.awards) is NOW wired -- server/kennel.lua's
 -- confirmKennelPlaced calls AwardHandlerXP(citizenid, 'handlerKennelDeploy')
 -- at a CONFIRMED new placement, gated by
 -- HandlerKennelDeployXpMintCooldown, a dedicated per-actor MINT cooldown
 -- (mirroring server/certifications.lua's CertifyXpMintCooldown fix for
--- handlerCertifyK9), sized well below the RANK-REDUCED 3000ms floor
--- (60 real minutes), never derived from DeployCooldown itself. This is a
+-- handlerCertifyK9), sized well below the RANK-REDUCED 2250ms floor
+-- (60 real minutes -- 1600x that floor, so the rebalance's deeper
+-- multiplier does not move the mint rate at all), never derived from
+-- DeployCooldown itself. This is a
 -- RED TEST, not a comment: it fails the moment handlerKennelDeploy is
 -- awarded from this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker
 -- alongside it -- now GREEN because that tracker genuinely exists. Mirrors
@@ -747,7 +751,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDep
     t.isTrue(text:find('local%s+[%w_]*XpMintCooldown%s*=%s*NewCooldown') ~= nil,
         'handlerKennelDeploy is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-actor mint cooldown (a second, separate tracker, never DeployCooldown itself, now ' ..
-        'handler-rank-shortened to a 3000ms worst-case floor) named with the XP_MINT_COOLDOWN convention ' ..
+        'handler-rank-shortened to a 2250ms worst-case floor) named with the XP_MINT_COOLDOWN convention ' ..
         '(server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown precedent) so this test ' ..
         'can find it, sized against that rank-reduced floor rather than the unreduced 5000ms config default, then ' ..
         'update this test\'s own expectations to match. See server/progression.lua\'s ' ..

@@ -1454,7 +1454,10 @@ end)
 -- ========================================================================
 -- SOURCE AUDIT TRIPWIRE (coordinator-directed, dead-config-field pass;
 -- handlerTreatK9 WIRED this pass, coder-backend -- see below): this
--- cooldown is handler-rank-reduced (combined worst case 31500ms -- see
+-- cooldown is handler-rank-reduced (combined worst case 18000ms, after the
+-- XP-rebalance pass retuned Master Handler's medkitTreatCooldownMultiplier
+-- from 0.70 to 0.50 and gave Elite K9 a 0.60 target-side multiplier it did
+-- not previously have -- see
 -- GetHandlerXPTierMedkitCooldownMs's own doc comment, server/progression.lua,
 -- "THE NUMBERS" section). handlerTreatK9 (12 XP, Config.HandlerXP.awards)
 -- is NOW wired -- server/medkit.lua's RunUseK9MedkitMutation calls
@@ -1463,7 +1466,8 @@ end)
 -- (mirroring server/certifications.lua's CertifyXpMintCooldown fix for
 -- handlerCertifyK9) -- never a per-target one (MedkitCooldown's own shape,
 -- which a multi-target actor could otherwise bypass entirely) -- sized well
--- below the rank-reduced 31500ms floor (30 real minutes). This is a RED
+-- below the rank-reduced 18000ms floor (30 real minutes -- 100x that floor,
+-- so the rebalance's deeper multipliers do not move the mint rate at all). This is a RED
 -- TEST, not a comment: it fails the moment handlerTreatK9 is awarded from
 -- this file WITHOUT a same-file *_XP_MINT_COOLDOWN tracker alongside it --
 -- now GREEN because that tracker genuinely exists. Mirrors
@@ -1497,7 +1501,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 w
     t.isTrue(text:find('local%s+[%w_]*XpMintCooldown%s*=%s*NewCooldown') ~= nil,
         'handlerTreatK9 is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-ACTOR mint cooldown (a second, separate tracker, never MedkitCooldown itself, which is ' ..
-        'target-keyed and now handler-rank-shortened to a 31500ms combined worst-case floor) named with the ' ..
+        'target-keyed and now handler-rank-shortened to an 18000ms combined worst-case floor) named with the ' ..
         'XP_MINT_COOLDOWN convention (server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown ' ..
         'precedent) so this test can find it, then update this test\'s own expectations to match. See ' ..
         'server/progression.lua\'s GetHandlerXPTierMedkitCooldownMs header for the full writeup.')
