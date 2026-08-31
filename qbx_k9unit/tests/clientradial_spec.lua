@@ -491,6 +491,12 @@ local function newRadialFixture(opts)
         -- gate of its own either -- see that item's own comment in
         -- client/radial.lua.
         CycleVision = record('CycleVision'),
+        -- DISCOVERABILITY PASS: k9_scent_vision / k9_camera_feed, both
+        -- previously command-and-keybind-only. Same no-gate-of-their-own
+        -- posture as every other perception item here -- each callee
+        -- performs its own real check and notifies specifically on failure.
+        ToggleScentVision = record('ToggleScentVision'),
+        ToggleCameraFeed = record('ToggleCameraFeed'),
     }
 
     local overrides = {
@@ -816,7 +822,7 @@ t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order grou
     for _, id in ipairs({
         'k9_open_tablet', 'k9_bark', 'k9_leash', 'k9_vehicle', 'k9_utility',
         'k9_partner_up', 'k9_break_partnership',
-        'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_vision_cycle',
+        'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_scent_vision', 'k9_camera_feed', 'k9_vision_cycle',
         'k9_bite_hold', 'k9_takedown', 'k9_drag', 'k9_defense', 'k9_dangerwarn', 'k9_recall',
         'k9_fetch', 'k9_kennel', 'k9_sar_call', 'k9_sar_call_join_nearest', 'k9_training',
     }) do
@@ -847,7 +853,9 @@ t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order grou
     -- one.
     t.isTrue(order.k9_track_certified < order.k9_thermal_vision)
     t.isTrue(order.k9_thermal_vision < order.k9_night_vision)
-    t.isTrue(order.k9_night_vision < order.k9_vision_cycle)
+    t.isTrue(order.k9_night_vision < order.k9_scent_vision, 'Scent Vision joins the perception family after the two innate vision modes')
+    t.isTrue(order.k9_scent_vision < order.k9_camera_feed)
+    t.isTrue(order.k9_camera_feed < order.k9_vision_cycle, 'Cycle Vision stays last in the family, as the catch-all convenience it has always been')
     t.isTrue(order.k9_vision_cycle < order.k9_bite_hold, 'the whole Perception family must precede Combat')
 
     -- Combat/Emergency family is grouped together, ending on Recall (the
@@ -2639,6 +2647,77 @@ t.test('CONTROL: tolerates IsTakedownEngaged/ReleaseTakedown being entirely abse
     local f = newRadialFixture({ features = { NonLethalTakedown = true }, omit = { 'IsTakedownEngaged', 'ReleaseTakedown' } })
     local ok = pcall(function() f.findInMenu('k9unit', 'k9_takedown').onSelect() end)
     t.isTrue(ok)
+end)
+
+-- ----------------------------------------------------------------------
+-- k9_scent_vision / k9_camera_feed -- DISCOVERABILITY PASS.
+--
+-- Both abilities shipped with a command and a keybind and no radial entry
+-- at all, so the only players who ever found them were the ones who read
+-- the keybind list. Both now sit in the perception family.
+--
+-- Unlike ThermalVision/NightVision, both of these default to TRUE in
+-- config.lua, so they are present in this file's baseline rather than
+-- absent from it -- which is why the presence tests below use the baseline
+-- fixture and the absence tests pin the flag off explicitly.
+-- ----------------------------------------------------------------------
+
+t.test('k9_scent_vision: present at the shipped default (Config.Features.ScentVision defaults true), with the real locale-backed label', function()
+    local f = newRadialFixture()
+    local item = f.findInMenu('k9unit', 'k9_scent_vision')
+    t.isNotNil(item, 'an ability with a command and a keybind but no wheel entry is one only keybind-list readers ever find')
+    t.equals(item.label, locale('radial.scent_vision_label'))
+end)
+
+t.test('k9_scent_vision: absent when Config.Features.ScentVision is off', function()
+    local f = newRadialFixture({ features = { ScentVision = false } })
+    t.isNil(f.findInMenu('k9unit', 'k9_scent_vision'))
+end)
+
+t.test('k9_scent_vision: onSelect calls ToggleScentVision() exactly once, and gates on nothing itself', function()
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    f.findInMenu('k9unit', 'k9_scent_vision').onSelect()
+    t.equals(#f.calls.ToggleScentVision, 1)
+    t.equals(f.canShowK9UICallCount(), 0, 'the item must not pre-gate -- ToggleScentVision() does the real CanShowK9UI() check on its turning-ON branch, and turning OFF is never gated')
+end)
+
+t.test('FIXED-SHAPE GUARD: k9_scent_vision does not throw when ToggleScentVision is entirely absent', function()
+    local f = newRadialFixture({ omit = { 'ToggleScentVision' } })
+    assertGuardDoesNotThrow(f.findInMenu('k9unit', 'k9_scent_vision'))
+end)
+
+t.test('k9_camera_feed: present at the shipped default (Config.Features.CameraFeedPiP defaults true), with the real locale-backed label', function()
+    local f = newRadialFixture()
+    local item = f.findInMenu('k9unit', 'k9_camera_feed')
+    t.isNotNil(item)
+    t.equals(item.label, locale('radial.camera_feed_label'))
+end)
+
+t.test('k9_camera_feed: absent when Config.Features.CameraFeedPiP is off', function()
+    local f = newRadialFixture({ features = { CameraFeedPiP = false } })
+    t.isNil(f.findInMenu('k9unit', 'k9_camera_feed'))
+end)
+
+t.test('k9_camera_feed: onSelect calls ToggleCameraFeed() exactly once, and is NOT pre-filtered on partnership', function()
+    -- Deliberate: pre-filtering on partnership would make the control
+    -- vanish exactly when a handler is trying to work out why they cannot
+    -- see their dog, replacing ToggleCameraFeed()'s own "you are not
+    -- partnered with anyone" message with nothing at all.
+    local f = newRadialFixture({ canShowK9UI = false, hasK9Access = false })
+    f.findInMenu('k9unit', 'k9_camera_feed').onSelect()
+    t.equals(#f.calls.ToggleCameraFeed, 1)
+    t.equals(f.canShowK9UICallCount(), 0)
+end)
+
+t.test('FIXED-SHAPE GUARD: k9_camera_feed does not throw when ToggleCameraFeed is entirely absent', function()
+    local f = newRadialFixture({ omit = { 'ToggleCameraFeed' } })
+    assertGuardDoesNotThrow(f.findInMenu('k9unit', 'k9_camera_feed'))
+end)
+
+t.test('the two new items are INDEPENDENT: switching one flag off leaves the other in place', function()
+    local f = newRadialFixture({ features = { ScentVision = false } })
+    t.isNil(f.findInMenu('k9unit', 'k9_scent_vision'))
+    t.isNotNil(f.findInMenu('k9unit', 'k9_camera_feed'), 'one perception ability being off must never take another down with it')
 end)
 
 os.exit(t.summary())

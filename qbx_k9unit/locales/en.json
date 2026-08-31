@@ -1731,6 +1731,8 @@
         "kennel_label": "Kennel (Deploy/Enter/Exit)",
         "utility_menu_label": "Utility",
         "thermal_vision_label": "Thermal Vision",
+        "scent_vision_label": "Scent Vision",
+        "camera_feed_label": "K9 Camera Feed",
         "night_vision_label": "Night Vision",
         "vision_cycle_label": "Cycle Vision"
     },
@@ -1871,6 +1873,8 @@
         "trail_lost_water": "The trail is lost at the water's edge.",
         "scent_vision_keybind_label": "K9: Toggle Scent Vision",
         "scent_vision_lost_death": "You went down — the scent trails fade from view.",
+        "scent_vision_on": "Scent vision on — nose down. Nothing will show until there is a scent in range.",
+        "scent_vision_off": "Scent vision off.",
         "scent_vision_mode_off": "Scent vision is turned off on this server.",
         "scent_vision_mode_always_notice": "Scent vision is always on for you here — there's nothing to toggle.",
         "scent_vision_disabled_live": "Scent vision was just turned off."

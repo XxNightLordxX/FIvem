@@ -1256,6 +1256,70 @@ t.test('MODE: an unrecognised Config.Tracking.ScentVision.mode falls back to "ke
     t.equals(#f.threads, 4)
 end)
 
+-- ----------------------------------------------------------------------
+-- KEYPRESS FEEDBACK. Thermal and night vision each announce themselves
+-- (client/vision.lua's vision.thermal_on/thermal_off); scent vision used
+-- to flip state on both edges in total silence.
+--
+-- It matters more here than a consistency argument would suggest. Thermal
+-- and night change the whole screen the instant they engage, so they are
+-- self-evidencing even without their notify. Scent vision draws dots only
+-- where the server reports a scent, and only after the first poll returns
+-- -- so switching it on with nothing in range, which is the ORDINARY case
+-- since you switch it on to go looking, produced no observable effect
+-- whatsoever. Indistinguishable from a dead keybind.
+-- ----------------------------------------------------------------------
+
+t.test('KEYPRESS FEEDBACK: turning scent vision ON says so, even though nothing is rendered yet', function()
+    local f = newTrackingFixture()
+    local before = #f.notifyCalls
+
+    f.env.ToggleScentVision()
+
+    t.isTrue(f.env.IsScentVisionActive(), 'sanity: it really did turn on')
+    t.equals(#f.notifyCalls, before + 1, 'a keypress that changes state must never be answered with silence')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('tracking.scent_vision_on'))
+    t.equals(f.notifyCalls[#f.notifyCalls].type, 'inform', 'engaging an ability is not an error')
+end)
+
+t.test('KEYPRESS FEEDBACK: turning scent vision OFF says so too -- both edges, not just the interesting one', function()
+    local f = newTrackingFixture()
+    f.env.ToggleScentVision()
+    local afterOn = #f.notifyCalls
+
+    f.env.ToggleScentVision()
+
+    t.isFalse(f.env.IsScentVisionActive())
+    t.equals(#f.notifyCalls, afterOn + 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('tracking.scent_vision_off'))
+end)
+
+t.test('KEYPRESS FEEDBACK: the on and off messages are distinct -- a player must be able to tell which way the toggle went', function()
+    local f = newTrackingFixture()
+    f.env.ToggleScentVision()
+    local onText = f.notifyCalls[#f.notifyCalls].description
+    f.env.ToggleScentVision()
+    local offText = f.notifyCalls[#f.notifyCalls].description
+
+    t.isFalse(onText == offText)
+end)
+
+t.test('KEYPRESS FEEDBACK: a caller DENIED for lack of K9 access gets the denial only -- never a phantom "scent vision on"', function()
+    -- The confirmation must sit AFTER the access gate, not before it:
+    -- telling someone the ability engaged and then refusing them is worse
+    -- than either message alone.
+    local f = newTrackingFixture({ canShowK9UI = false })
+
+    f.env.ToggleScentVision()
+
+    t.isFalse(f.env.IsScentVisionActive())
+    t.isTrue(f.denyCallCount() >= 1, 'the ordinary no-access denial still fires')
+    for i = 1, #f.notifyCalls do
+        t.isFalse(f.notifyCalls[i].description == locale('tracking.scent_vision_on'),
+            'a refused toggle must never claim the ability turned on')
+    end
+end)
+
 t.test('MODE: "off" makes ToggleScentVision() a genuine no-op -- no activation, no poll thread -- even though Config.Features.ScentVision is on', function()
     local f = newTrackingFixture({ scentVisionMode = 'off' })
 

@@ -1579,6 +1579,10 @@ function ToggleScentVision()
     if scentVisionActive then
         scentVisionGeneration = scentVisionGeneration + 1
         scentVisionActive = false
+        -- Confirmed, not silent. See the ON branch below for why this
+        -- ability in particular cannot be left to speak through its own
+        -- visuals.
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.scent_vision_off'), type = 'inform' })
         return
     end
 
@@ -1589,6 +1593,23 @@ function ToggleScentVision()
 
     scentVisionGeneration = scentVisionGeneration + 1
     scentVisionActive = true
+    -- SAYS SO, both edges, matching client/vision.lua's own thermal/night
+    -- toggles (vision.thermal_on / vision.thermal_off) rather than being
+    -- the one ability in the set that answers a keypress with nothing.
+    --
+    -- THE REASON THIS ONE MATTERS MORE THAN A CONSISTENCY ARGUMENT: thermal
+    -- and night vision change the whole screen the instant they engage, so
+    -- they are self-evidencing even without their notify. Scent vision
+    -- draws dots ONLY where the server reports a scent, and only after the
+    -- first poll returns. Turn it on with nothing in range -- the ordinary
+    -- case, since you switch it on to go looking -- and absolutely nothing
+    -- happens on screen. Silence there is indistinguishable from a dead
+    -- keybind, and gets reported as one.
+    --
+    -- The message says so outright rather than just "on", so a handler
+    -- standing in an empty street knows the ability engaged and there is
+    -- simply nothing to smell yet, instead of pressing the key again.
+    lib.notify({ title = locale('common.notify_title'), description = locale('tracking.scent_vision_on'), type = 'inform' })
     EnsureScentVisionPollThreadRunning()
 end
 

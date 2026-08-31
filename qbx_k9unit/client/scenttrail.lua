@@ -570,10 +570,28 @@ local function StartScentHunt()
     lib.notify({ description = locale('scenttrail.hunt_started'), type = 'success' })
 end
 
--- '/k9nosehunt' starts a hunt; '/k9nosehunt stop' abandons one. Mirrors
--- this resource's existing command-only entry points for a feature not
--- (yet) wired into client/radial.lua (k9recall, k9calmdown,
--- k9deploykennel) -- see this file's header item 3 for the full reasoning.
+-- '/k9nosehunt' starts a hunt; '/k9nosehunt stop' abandons one. Still
+-- command-only, deliberately -- see this file's header item 3 for the full
+-- reasoning.
+--
+-- COMPANY LIST CORRECTED (radial discoverability pass): this used to cite
+-- k9recall and k9deploykennel as fellow command-only features. Both have
+-- since been wired into client/radial.lua (Recall and Kennel are ordered
+-- items in K9_SUBMENU_DISPLAY_ORDER), so that list was stale and made this
+-- feature's own omission look like a shared house style rather than the
+-- single outlier it now is. Of the four originally named, only k9calmdown
+-- is still genuinely command-only alongside this one.
+--
+-- WHY THIS ONE STAYED OUT while ScentVision and CameraFeedPiP were added
+-- to the wheel in that same pass: those two already exposed
+-- resource-globals (ToggleScentVision/ToggleCameraFeed) for the radial to
+-- call. StartScentHunt/StopScentHunt are deliberately file-local -- this
+-- file's own header commits to ZERO new resource-global functions -- so a
+-- radial entry would mean either breaking that commitment or reaching in
+-- through ExecuteCommand, which no other item in that menu does. That is a
+-- design decision worth making on purpose rather than as a side effect of
+-- a discoverability pass, so it is left open and named here rather than
+-- quietly done.
 -- `false` (not ACE-restricted): access is enforced by
 -- CanShowK9UI()/HasK9Access() above and server-side, the same posture
 -- every other unrestricted K9 command in this resource uses.

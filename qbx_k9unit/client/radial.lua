@@ -1121,6 +1121,65 @@ local function RegisterK9RadialMenu()
         }
     end
 
+    --- Scent Vision — DISCOVERABILITY GAP, closed this pass. The ability
+    --- has had its own command and keybind since it shipped, and no radial
+    --- entry at all, so the only players who knew it existed were the ones
+    --- who read the keybind list. That is the exact "someone may prefer the
+    --- wheel" case the two items above were restored for.
+    ---
+    --- GATED ON Config.Features.ScentVision ALONE — display-only, same
+    --- convention as every other flag-gated item here. NOT gated on the
+    --- ScentVision *mode* (Config.Tracking.ScentVision.mode): a server
+    --- running 'off' or 'always' still gets the item, and
+    --- ToggleScentVision() answers with its own dedicated message for each
+    --- ("turned off on this server" / "always on for you here, nothing to
+    --- toggle"). Hiding the item in those modes would trade a clear
+    --- explanation for a silently missing control, which is the opposite of
+    --- what this entry is for. The mode is also resolvable live from the
+    --- server, so a menu built at one moment could be wrong by the next.
+    ---
+    --- Access is left to ToggleScentVision()'s own CanShowK9UI() check,
+    --- which runs on the turning-ON branch only -- turning off is never
+    --- gated, matching every other release path in this file.
+    if Config.Features.ScentVision then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_scent_vision',
+            label = locale('radial.scent_vision_label'),
+            icon = 'paw',
+            onSelect = function()
+                if type(ToggleScentVision) == 'function' then
+                    ToggleScentVision()
+                end
+            end,
+        }
+    end
+
+    --- K9 Camera Feed — the same discoverability gap as Scent Vision above,
+    --- and the same fix. Command + keybind since it shipped, never on the
+    --- wheel.
+    ---
+    --- Config.Features.CameraFeedPiP only, display-only, for the same
+    --- reason: ToggleCameraFeed() performs every real check itself and
+    --- notifies specifically on each failure (feature disabled, not
+    --- partnered with anyone, partner offline, partner out of range, camera
+    --- creation failed). Pre-filtering the item on partnership here would
+    --- ALSO be wrong on its own terms -- it would make the control vanish
+    --- exactly when a handler is trying to work out why they cannot see
+    --- their dog, replacing "you are not partnered with anyone" with
+    --- nothing at all.
+    if Config.Features.CameraFeedPiP then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_camera_feed',
+            label = locale('radial.camera_feed_label'),
+            icon = 'video',
+            onSelect = function()
+                if type(ToggleCameraFeed) == 'function' then
+                    ToggleCameraFeed()
+                end
+            end,
+        }
+    end
+
     --- K9 Vision — EXTRA, OPTIONAL CONVENIENCE, kept alongside the two
     --- explicit items immediately above (owner's own steer: "keep it as an
     --- extra... it costs nothing, someone may prefer it"), not a
@@ -2492,22 +2551,31 @@ local function RegisterK9RadialMenu()
     --      item's own gating changed -- Break Partnership still carries no
     --      CanShowK9UI() gate of any kind (see its own comment above,
     --      unaffected by display order).
-    --   8-11. K9: Search (tracking), Thermal Vision, Night Vision, Cycle
-    --      Vision -- the perception family, grouped together and placed
-    --      before Combat: a K9 finds/reads a scene before it acts on one.
-    --   12-17. Bite & Hold, Non-Lethal Takedown, Drag, Handler-Down
+    --   8-13. K9: Search (tracking), Thermal Vision, Night Vision, Scent
+    --      Vision, K9 Camera Feed, Cycle Vision -- the perception family,
+    --      grouped together and placed before Combat: a K9 finds/reads a
+    --      scene before it acts on one. Scent Vision and Camera Feed were
+    --      ADDED to this family (discoverability pass) -- both had a command
+    --      and a keybind from the day they shipped and no wheel entry at
+    --      all, so the only players who knew they existed were the ones who
+    --      read the keybind list. Both sit after the two innate vision modes
+    --      and before Cycle Vision, which stays last in the family as the
+    --      catch-all convenience it has always been. Camera Feed is the one
+    --      HANDLER-side perception item among them, grouped here by what it
+    --      does (see through the dog) rather than by who presses it.
+    --   14-19. Bite & Hold, Non-Lethal Takedown, Drag, Handler-Down
     --      Response, Danger Warn, Recall -- the combat/emergency family,
     --      immediately following Perception (search, then engage), ending on
     --      Recall -- the universal "call it off" action that can end any of
     --      the three engagement types immediately before it, and the natural
     --      hinge point back to lighter, non-combat items after it.
-    --   18-19. Fetch, then Kennel -- recreational/logistics items, kept
+    --   20-21. Fetch, then Kennel -- recreational/logistics items, kept
     --      together and placed after the serious combat/emergency cluster.
-    --   20-21. Search & Rescue Call, then Join Nearest Search & Rescue Call
+    --   22-23. Search & Rescue Call, then Join Nearest Search & Rescue Call
     --      -- unchanged relative order (already adjacent and already
     --      correctly sequenced: start the toggle before its own
     --      no-argument join convenience).
-    --   22. Training -- last: a practice/administrative feature, never a
+    --   24. Training -- last: a practice/administrative feature, never a
     --      live-duty action, matching how every other "not actually urgent"
     --      item in this list already trends toward the back.
     --
@@ -2525,7 +2593,7 @@ local function RegisterK9RadialMenu()
         'k9_open_tablet',
         'k9_bark', 'k9_leash', 'k9_vehicle', 'k9_utility',
         'k9_partner_up', 'k9_break_partnership',
-        'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_vision_cycle',
+        'k9_track_certified', 'k9_thermal_vision', 'k9_night_vision', 'k9_scent_vision', 'k9_camera_feed', 'k9_vision_cycle',
         'k9_bite_hold', 'k9_takedown', 'k9_drag', 'k9_defense', 'k9_dangerwarn', 'k9_recall',
         'k9_fetch', 'k9_kennel',
         'k9_sar_call', 'k9_sar_call_join_nearest',
