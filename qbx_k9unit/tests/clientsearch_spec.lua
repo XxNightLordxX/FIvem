@@ -729,7 +729,25 @@ end)
 
 --- Every reason string server/search.lua's searchTarget callback can
 --- return, confirmed by reading that file directly this pass.
-local SILENT_REASONS = { 'on_cooldown', 'search_in_progress' }
+--- WAS `SILENT_REASONS`, DELIBERATELY REVERSED (cooldown-UX pass). These
+--- two used to be pinned as silent no-ops, following this resource's
+--- low-key cooldown convention. That convention is right for an INSTANT
+--- refusal -- press a key, nothing happens, the absence of a response is
+--- itself the answer -- and it is still applied that way to the CLIENT-side
+--- `searchInProgress` double-click guard, which fires before any animation
+--- (its own silence test further down is unchanged, on purpose).
+---
+--- It was wrong HERE. These two reasons come back from the SERVER, which
+--- means the player has already stood through the full sniff progress bar
+--- with movement disabled before hearing anything. Staying silent then
+--- means the dog visibly searched and produced no result at all -- not
+--- readable as "wait a moment", just readable as broken. Both now name
+--- themselves in 'inform' styling: low-key, because a cooldown is a normal
+--- rhythm of the feature, but no longer invisible.
+local POST_ANIMATION_LOW_KEY_REASONS = {
+    on_cooldown = 'search.on_cooldown_after_search',
+    search_in_progress = 'search.already_searching_after_search',
+}
 
 --- UX PASS (this pass): every one of these now gets its OWN, distinct
 --- plain-English locale key naming that specific reason -- collapsing all
@@ -746,22 +764,49 @@ local NAMED_DENIED_REASONS = {
     access_revoked = 'search.access_revoked_denied', -- see the DISCLOSED FINDING sub-test below
 }
 
-for _, reason in ipairs(SILENT_REASONS) do
-    t.test(('reason %q: silent, no-notify rejection (routine traffic, not an error worth interrupting the player over)'):format(reason), function()
+for reason, localeKey in pairs(POST_ANIMATION_LOW_KEY_REASONS) do
+    t.test(('reason %q: answers the player rather than leaving a four-second animation with no outcome at all'):format(reason), function()
         local f = newSearchFixture()
         f.setEntityExists(500, true)
         f.setNetIdForEntity(500, 111)
         f.queueCallbackResponse({ ok = false, reason = reason })
         f.vehicleOption().onSelect({ entity = 500 })
-        t.equals(#f.notifyCalls, 0, ('reason %q must produce zero notifications'):format(reason))
 
-        -- "Silent" must still mean "handled," not "stuck": a fresh attempt
-        -- right after must be able to proceed normally.
+        t.equals(#f.notifyCalls, 1, ('reason %q must say something -- by this point the player has already paid the full sniff animation'):format(reason))
+        t.equals(f.notifyCalls[1].description, locale(localeKey), 'and must name which of the two it actually is')
+        t.equals(f.notifyCalls[1].type, 'inform',
+            'LOW-KEY, not error-styled: a cooldown is a normal rhythm of using the feature, not a mistake the player made')
+
+        -- Handled, not stuck: a fresh attempt right after must proceed.
         f.queueCallbackResponse({ ok = true, contrabandFound = false })
         f.vehicleOption().onSelect({ entity = 500 })
         t.equals(f.callbackCallCount(), 2)
     end)
 end
+
+t.test('the two post-animation reasons are told APART, not merged into one shared message', function()
+    -- "Wait a moment" and "another search is already running" are different
+    -- facts, and waiting out a cooldown does not explain the second one.
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.queueCallbackResponse({ ok = false, reason = 'on_cooldown' })
+    f.vehicleOption().onSelect({ entity = 500 })
+    f.queueCallbackResponse({ ok = false, reason = 'search_in_progress' })
+    f.vehicleOption().onSelect({ entity = 500 })
+
+    t.equals(#f.notifyCalls, 2)
+    t.isFalse(f.notifyCalls[1].description == f.notifyCalls[2].description)
+end)
+
+t.test('neither post-animation reason collapses into the generic catch-all', function()
+    local f = newSearchFixture()
+    f.setEntityExists(500, true)
+    f.setNetIdForEntity(500, 111)
+    f.queueCallbackResponse({ ok = false, reason = 'on_cooldown' })
+    f.vehicleOption().onSelect({ entity = 500 })
+    t.isFalse(f.notifyCalls[1].description == locale('search.generic_denied'))
+end)
 
 for reason, localeKey in pairs(NAMED_DENIED_REASONS) do
     t.test(('reason %q: names the real reason (%s) -- never silent, never the generic catch-all, never confused with a clean result'):format(reason, localeKey), function()

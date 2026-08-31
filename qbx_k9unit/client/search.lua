@@ -78,6 +78,28 @@
        own defensive re-check and server/search.lua's real mutex are what
        actually enforce this, unchanged).
 
+       COOLDOWN UX, CORRECTED (later pass): 'on_cooldown' and
+       'search_in_progress' used to be a deliberate silent no-op here too,
+       following this resource's usual low-key cooldown convention. That was
+       wrong at THIS call site specifically, and the reason is worth keeping
+       written down. The convention is sound for an INSTANT refusal -- press
+       a key, nothing happens, the absence of a response is itself readable.
+       But by the time the SERVER answers here, the player has already stood
+       through the entire sniffAnimDurationMs progress bar with their
+       movement disabled. Saying nothing at that point means the dog visibly
+       searched and produced no result whatsoever, which a player cannot
+       tell apart from the feature being broken -- and reports as such. Both
+       now name themselves, in 'inform' styling rather than 'error': a
+       cooldown is a normal rhythm of using the feature, not a mistake.
+
+       The CLIENT-side `searchInProgress` double-click guard further down
+       stays silent, and that is the same rule applied consistently rather
+       than an inconsistency: it fires BEFORE any animation plays, so it
+       really is the instant, self-explanatory refusal the convention was
+       written for. What changed is not the convention -- it is recognising
+       that a refusal costing four seconds is not the same kind of event as
+       one costing nothing.
+
     RESOLVED — bystander-alert broadcast event (DEVELOPER_REFERENCE.md §11.4 item 2 does
     not name it, only that it broadcasts "the same way server/main.lua's
     relayBark does"). Confirmed by reading server/search.lua's own header
@@ -413,9 +435,31 @@ local function PerformSearch(targetType, targetEntity)
                 -- same copy as contrabandFound = false, per this file's
                 -- EVENT/CALLBACK CONTRACT above.
                 lib.notify({ title = locale('common.notify_title'), description = locale('search.failed'), type = 'error' })
-            elseif reason == 'on_cooldown' or reason == 'search_in_progress' then -- luacheck: ignore 542
-                -- Low-key / no notification, per the contract note's Rejection UX note.
-                -- Deliberately empty branch (silent no-op UX), not a missed implementation.
+            elseif reason == 'on_cooldown' then
+                -- SPEAKS UP HERE, unlike this resource's usual silent
+                -- cooldown convention, and the difference is deliberate.
+                -- That convention exists for an INSTANT refusal: you press
+                -- a key, nothing happens, and the absence of a response is
+                -- itself readable. This refusal arrives only AFTER the
+                -- player has already stood through the full
+                -- sniffAnimDurationMs progress bar with their movement
+                -- disabled -- the cost is already paid by the time the
+                -- server answers. Saying nothing then means the dog
+                -- visibly searched and produced no result at all, which is
+                -- indistinguishable from a broken feature and reads as one.
+                --
+                -- Kept LOW-KEY rather than error-styled ('inform', not
+                -- 'error'), which is the part of the convention that still
+                -- applies: a cooldown is a normal rhythm of using the
+                -- feature, not a mistake the player made.
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.on_cooldown_after_search'), type = 'inform' })
+            elseif reason == 'search_in_progress' then
+                -- Same reasoning as on_cooldown immediately above: paid for
+                -- with a four-second animation, so it gets an answer. Named
+                -- separately because it is a different fact -- another
+                -- search is already running, which no amount of waiting out
+                -- a cooldown explains.
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.already_searching_after_search'), type = 'inform' })
             elseif reason == 'too_far' then
                 lib.notify({ title = locale('common.notify_title'), description = locale('search.too_far_denied'), type = 'error' })
             elseif reason == 'feature_disabled' then

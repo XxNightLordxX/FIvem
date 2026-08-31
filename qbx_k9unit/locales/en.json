@@ -1844,6 +1844,8 @@
         "progress_person_label": "Searching person...",
         "failed": "The search could not be completed — try again, and if it keeps happening, tell an admin.",
         "generic_denied": "Unable to search right now — try again, and if it keeps happening, tell an admin.",
+        "on_cooldown_after_search": "Your K9 needs a moment before searching again.",
+        "already_searching_after_search": "Your K9 is already searching something.",
         "too_far_denied": "You're too far away to search that.",
         "feature_disabled_denied": "Searching is turned off right now.",
         "invalid_target_denied": "That isn't something your K9 can search.",
