@@ -295,8 +295,9 @@ in a document goes stale the first time someone adds a feature.)
 
 ## Testing this alone, before you add a second person
 
-Right after step 5 above — certifying yourself and becoming the K9 — you
-can check almost everything by yourself: reaching High Command (a
+Right after certifying yourself and becoming the K9 (step 7 of Installing,
+and step 2 of "Your first session" below) — you can check almost everything
+by yourself: reaching High Command (a
 department boss already qualifies, and so does anyone at the configured
 `highCommandGrade`), self-certifying (on by default), turning into the
 K9, opening `/k9tablet`, reading its Help tab, and using every
@@ -456,6 +457,117 @@ possible with FiveM today. What's actually built and working: pressing
 a key (`H` by default) switches your *entire* screen to your active
 partner's viewpoint until you press it again. Needs `HandlerPartnership`
 on and an active partnership between the two players.
+
+---
+
+## Your first session — proving it actually works
+
+Everything above is configuration. This is verification: a short, ordered
+walkthrough where each step shows you something on screen. Do it on a test
+server before real players are on.
+
+Worth being straight about why this section exists. This resource has a
+large automated test suite, and it passes — but every one of those tests
+runs against stubs, not a running game. They cannot see a game function
+that quietly does nothing, an event nobody is listening for, or two players
+colliding over the same dog. Those only appear when it actually runs. Ten
+minutes here is worth more than any amount of re-reading the code.
+
+**1. Start the server and read one line.**
+
+In the server console, find the line beginning:
+
+```
+[qbx_k9unit] selfcheck: boot summary --
+```
+
+It is one line covering the version, how many of the five dependencies are
+at or above their minimum, how many `Config.Features` keys were recognised,
+and the database mode — plus, on some configurations, a note about supply
+shop enforcement. Read the whole line.
+
+- `database: memory-only BY CONFIG` is correct and expected — that is the
+  shipped default, and it means nothing is saved past a restart.
+- `database: memory-only UNEXPECTEDLY` means something forced it. The line
+  tells you to look above for a warning from `server/datastore.lua`, and
+  there will be one.
+- Anything less than `5/5` dependencies, or unrecognised feature keys, is
+  named explicitly in warnings printed just above.
+
+*Proves:* the resource loaded, found its dependencies, and parsed your
+config. *Does not prove:* any feature works.
+
+**2. Certify yourself.** Get a job and rank that qualify under your
+`Config.Departments` (`Config.AllowSelfCertification` ships `true`, so you
+do not need a second person for this), then run:
+
+```
+/k9certify [your own server id]
+```
+
+*Proves:* the certification path works end-to-end — permission check,
+grant, and storage. This is the single most load-bearing step; almost
+everything else is gated behind it.
+
+**3. Open the tablet** with `/k9tablet`. Check the **Home**, **My Record**
+and **Progression** tabs. Progression should show your K9 and Handler rank
+blocks, and My Record your certification from step 2.
+
+*Proves:* the whole NUI layer — the page loads, its callbacks reach the
+server, and the server's answers render.
+
+**4. Become a K9 and try the basics.** With a K9 ped model, press **V**
+(sit) and **C** (bark), then open your ox_lib radial menu and find the "K9
+Unit" submenu.
+
+*Proves:* keybinds, the radial, and client-side actions are wired. If a
+radial entry is missing, its feature is switched off in config — that is
+the menu working correctly, not failing.
+
+**5. Know where the diagnostic is, before you need it.** `/k9debug` writes
+a report about your own K9 state to a file inside the resource folder (not
+to the console). It is worth knowing this exists now rather than hunting
+for it mid-problem.
+
+**It ships switched off** — `Config.DebugDump.enabled` defaults to `false`,
+so on a fresh install the command is not registered and typing it does
+nothing. Set that to `true` when you want it. Leaving it off day to day is
+a reasonable choice; just remember it is a setting and not a missing
+feature the first time you reach for it.
+
+*Proves:* nothing by itself — this step exists so the tool is not a
+surprise later.
+
+**6. Get a second person on. This is the step that matters most.**
+
+Everything above is single-player, and single-player proves the least
+interesting half. ("Testing this alone, before you add a second person"
+above lists the four features that genuinely cannot work solo, and what
+each correctly says when you try — worth reading first so you do not chase
+a non-bug.) The mechanics most likely to break are the ones where two
+clients can disagree:
+
+- **Partner up**, then break the partnership.
+- **Attach the leash**, walk apart until it stops you, detach.
+- **Get the dog into a vehicle** — it should take a real seat, rear
+  preferred, and never the driver's.
+- **Deploy a kennel**, have the dog rest in it, then get out.
+- **Have one person disconnect** mid-leash and mid-kennel, separately.
+  Nothing should be left attached, frozen, or stuck.
+
+*Proves:* the two-client seams — which is where the genuinely hard bugs
+live, and where nothing in the test suite can reach.
+
+**7. Restart the server once, deliberately.** On the shipped default your
+certification from step 2 will be gone. That is correct behaviour, not a
+fault — and seeing it once now is much better than discovering it after
+your handlers have earned ranks they cared about. If you would rather it
+persisted, that is exactly what `Config.Database.enabled = true` and one
+run of `sql/install.sql` buy you.
+
+**If something fails at any step**, the console output from step 1 is the
+first thing worth capturing — and if you have turned `Config.DebugDump.enabled`
+on, a `/k9debug` report alongside it. Capture both before changing anything.
 
 ---
 
