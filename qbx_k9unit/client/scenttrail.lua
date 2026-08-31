@@ -570,28 +570,45 @@ local function StartScentHunt()
     lib.notify({ description = locale('scenttrail.hunt_started'), type = 'success' })
 end
 
--- '/k9nosehunt' starts a hunt; '/k9nosehunt stop' abandons one. Still
--- command-only, deliberately -- see this file's header item 3 for the full
--- reasoning.
+-- '/k9nosehunt' starts a hunt; '/k9nosehunt stop' abandons one -- ON A
+-- SERVER WHERE THIS FEATURE IS SWITCHED ON. On the shipped configuration it
+-- is not, and this command is never registered on any client.
 --
--- COMPANY LIST CORRECTED (radial discoverability pass): this used to cite
--- k9recall and k9deploykennel as fellow command-only features. Both have
--- since been wired into client/radial.lua (Recall and Kennel are ordered
--- items in K9_SUBMENU_DISPLAY_ORDER), so that list was stale and made this
--- feature's own omission look like a shared house style rather than the
--- single outlier it now is. Of the four originally named, only k9calmdown
--- is still genuinely command-only alongside this one.
+-- READ THE TOP OF THIS FILE BEFORE ANYTHING HERE. Line 245 is
+-- `if not Config.Features.ScentTrailHunt then return end`, and config.lua
+-- does not define that key at all -- it was REMOVED outright (owner-
+-- approved, judged redundant with the scent-tracking action; see
+-- Config.Features' own "REMOVED" block and README.md). The key reads nil,
+-- so this entire file returns at line 245 and every line below it,
+-- including this command, is unreachable on a stock install. The file is
+-- kept intact and inert on purpose, exactly so restoring the feature is a
+-- one-line config change.
 --
--- WHY THIS ONE STAYED OUT while ScentVision and CameraFeedPiP were added
--- to the wheel in that same pass: those two already exposed
--- resource-globals (ToggleScentVision/ToggleCameraFeed) for the radial to
--- call. StartScentHunt/StopScentHunt are deliberately file-local -- this
--- file's own header commits to ZERO new resource-global functions -- so a
--- radial entry would mean either breaking that commitment or reaching in
--- through ExecuteCommand, which no other item in that menu does. That is a
--- design decision worth making on purpose rather than as a side effect of
--- a discoverability pass, so it is left open and named here rather than
--- quietly done.
+-- CORRECTION, and the reason this note is worth its length: the paragraphs
+-- that used to sit here described this as "still command-only,
+-- deliberately" and went on to reason about why it had not been added to
+-- the radial menu alongside ScentVision and CameraFeedPiP. That framing was
+-- simply wrong -- it presented a switched-off feature as a working one kept
+-- off the wheel by choice, and a maintainer reading it would have gone
+-- looking for a discoverability problem that does not exist. The real
+-- answer to "why isn't this on the radial" is that there is nothing to put
+-- there. Written during a radial pass that checked which entry points
+-- existed without ever checking whether the feature behind them was on.
+--
+-- STILL TRUE from that note, and kept because it is the useful half: of the
+-- features once listed here as command-only company, k9recall and
+-- k9deploykennel have since been wired into client/radial.lua (both are
+-- ordered ids in K9_SUBMENU_DISPLAY_ORDER), and k9calmdown
+-- (client/wellbeing.lua) is genuinely live, ungated at registration, and
+-- genuinely still command-only -- the one real candidate in that old list
+-- for a future radial entry.
+--
+-- IF THIS FEATURE IS EVER TURNED BACK ON, the radial question becomes live
+-- again, and the answer then is not automatic: StartScentHunt/StopScentHunt
+-- are deliberately file-local (this file's header commits to adding ZERO
+-- resource-globals), so a radial entry would mean either revisiting that
+-- commitment or reaching in through ExecuteCommand, which no other item in
+-- that menu does. A real decision to make at that point, not before.
 -- `false` (not ACE-restricted): access is enforced by
 -- CanShowK9UI()/HasK9Access() above and server-side, the same posture
 -- every other unrestricted K9 command in this resource uses.
