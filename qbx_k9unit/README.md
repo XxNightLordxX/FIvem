@@ -229,9 +229,9 @@ resource, not flipping a switch.
    off **nothing is remembered past a restart**. Certifications, ranks and
    XP, partnerships, permission grants, callsigns, tablet themes and pinned
    dog appearances all reset when the server restarts — crash, update or
-   scheduled reboot alike — and the audit trail (who certified whom, what a
-   K9 searched, who granted which permission) is never written at all
-   rather than merely delayed. That is fine for an evening's testing and
+   scheduled reboot alike. The audit trail does still work during the
+   session, but it is capped (500 search entries, 200 of everything else)
+   and goes with the restart too. That is fine for an evening's testing and
    wrong for a server people invest hours in.
 
 4. **When you decide to keep the server, turn persistence on.** Set
@@ -472,9 +472,18 @@ players — the trade is entirely about memory, not features:
   update, or scheduled restart loses all of it — everyone starts over.
   Nothing corrupts and nothing crashes; it simply never remembers past
   today.
-- **What's permanently gone, not just unsaved**: the audit trail. No
-  record of who certified whom, no search log, no permission-grant
-  history. If a dispute comes up later, there's nothing to check.
+- **The audit trail still works, but only for today.** This bullet used to
+  say the opposite — "no record of who certified whom, no search log, no
+  permission-grant history" — and that was wrong. With the database off,
+  certification history, the search log and the permission/override audits
+  are all genuinely recorded in memory, and the tablet's Audit screens read
+  them back, so a dispute about something that happened *this session* can
+  be checked. Two real limits: it is **capped** (the most recent 500 search
+  entries, 200 of every other kind — older ones fall off as new ones
+  arrive, and a busy night can turn the search log over in hours), and it
+  **dies with the process**, so after a restart there is nothing to check
+  about yesterday. Fine for "what happened an hour ago"; useless for "what
+  happened last week".
 - **`oxmysql` is still required, installed and running, regardless.**
   It's a hard dependency checked before `config.lua` is ever read. This
   setting means the resource never *uses* it — it doesn't mean you can

@@ -379,4 +379,53 @@ t.test('DRAG-AND-DROP IS REAL: memory mode actually REMEMBERS within the session
     t.equals(K9.XP_Get('CID_FRESH'), 35, 'and writing one must not disturb the other')
 end)
 
+t.test('MEMORY MODE KEEPS AN AUDIT TRAIL -- capped and session-scoped, but genuinely there', function()
+    -- Pinned because the documentation said the exact opposite in four
+    -- places at once ("no record of who certified whom, no search log, no
+    -- permission-grant history... not a smaller record. None."). It was
+    -- wrong, and it mattered: it would have talked an operator out of
+    -- checking a dispute they could actually have checked.
+    --
+    -- The real limits are different and smaller -- capped, and lost on
+    -- restart -- and that is what the docs now say. This test is what stops
+    -- either claim drifting again.
+    local cfgEnv = Sandbox.newEnv({ print = function() end })
+    Sandbox.loadInto('../config.lua', cfgEnv)
+    local store = Sandbox.newEnv({ Config = cfgEnv.Config, MySQL = {}, print = function() end })
+    Sandbox.loadInto('../server/datastore.lua', store)
+    local K9 = store.K9Store
+    t.isFalse(K9.IsDatabaseEnabled(), 'sanity: memory mode')
+
+    K9.Cert_Insert('CID_AUDIT', 'police', 'GRANTER1', nil)
+    t.equals(#K9.Cert_GetHistory('CID_AUDIT', 10), 1, 'certification history is recorded and readable')
+
+    K9.SearchLog_Insert('CID_AUDIT', 'police', 'vehicle', 'PLATE1', nil, 'clean', 0, nil)
+    t.equals(#K9.SearchLog_GetRecent(10), 1, 'the search log is recorded and readable')
+    t.equals(#K9.SearchLog_GetByOfficer('CID_AUDIT', 10), 1, 'and is queryable by officer, as the tablet does')
+
+    K9.OverrideAudit_Append('FeatureX', 'grant', 'ADMIN1', 'Chief', 'reason')
+    t.equals(#K9.OverrideAudit_GetRecent(10), 1, 'the override audit is recorded and readable')
+end)
+
+t.test('MEMORY MODE audit growth is CAPPED, so a long-running drag-and-drop server cannot leak memory through it', function()
+    -- The other half of the corrected claim, and the reason "capped" is
+    -- the honest word rather than "complete". With the database off now
+    -- being the shipped default, an unbounded audit table would be a slow
+    -- memory leak on exactly the servers least likely to notice.
+    local cfgEnv = Sandbox.newEnv({ print = function() end })
+    Sandbox.loadInto('../config.lua', cfgEnv)
+    local store = Sandbox.newEnv({ Config = cfgEnv.Config, MySQL = {}, print = function() end })
+    Sandbox.loadInto('../server/datastore.lua', store)
+    local K9 = store.K9Store
+
+    for i = 1, 520 do
+        K9.SearchLog_Insert('CID_CAP', 'police', 'vehicle', 'P' .. i, nil, 'clean', 0, nil)
+    end
+
+    -- Asked for far more than the cap, so the number returned is the
+    -- store's own ceiling rather than the query limit.
+    t.equals(#K9.SearchLog_GetRecent(100000), 500,
+        'the search log must stop at its 500-row memory cap, discarding oldest-first, not grow without bound')
+end)
+
 os.exit(t.summary())

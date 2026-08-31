@@ -755,9 +755,16 @@ local function BuildDatabaseStatePhrase()
     -- memory-only because another resource owns a k9_* table -- IS a fault,
     -- DOES print a warning above, and must keep pointing at it.
     if type(Config) == 'table' and type(Config.Database) == 'table' and Config.Database.enabled == false then
+        -- "capped, not absent" is deliberate wording: the audit trail DOES
+        -- work in memory mode (server/datastore.lua records it and the
+        -- tablet reads it back), it is just bounded and lost on restart.
+        -- An earlier version of this line said no audit trail was written
+        -- at all, which was simply untrue and would have talked an operator
+        -- out of checking a dispute they could actually have checked.
         return 'memory-only BY CONFIG (Config.Database.enabled = false -- the shipped default). '
             .. 'Everything works, but nothing survives a restart: certifications, XP, partnerships, permissions, '
-            .. 'callsigns and themes all reset, and no audit trail is written. '
+            .. 'callsigns and themes all reset. The audit trail works this session but is capped '
+            .. '(500 search entries, 200 of everything else) and resets too. '
             .. 'Set Config.Database.enabled = true and run sql/install.sql once to keep them.'
     end
 

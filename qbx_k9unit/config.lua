@@ -5752,13 +5752,30 @@ Config.ScentTrailHunt = {
 -- and not a surprise: every certification, rank and XP total, partnership,
 -- permission grant, callsign, tablet theme and pinned dog appearance is
 -- gone on the next restart -- crash, update or scheduled reboot alike --
--- and the audit trail is not merely delayed but never written at all.
+-- and the audit trail, which DOES still work during the session, is capped
+-- (500 search entries, 200 of everything else) and goes with it. See the
+-- audit paragraph further down for exactly what that means in a dispute.
 --
--- PERMANENTLY LOST, not merely delayed: THE AUDIT TRAIL. No record of
--- who certified whom, no search log -- "did this K9 really search my
--- car" -- and no permission-grant history. If a dispute comes up there
--- is nothing to check. Not a smaller record. None. Most police servers
--- decide that alone is worth running the database for.
+-- THE AUDIT TRAIL STILL EXISTS, BUT ONLY FOR TODAY. This paragraph used
+-- to say the opposite -- "no record of who certified whom, no search log,
+-- no permission-grant history... not a smaller record. None." That was
+-- wrong, and checked against the running code rather than re-read: with
+-- the database off, server/datastore.lua's memory backend genuinely
+-- records certification history, the search log and the permission-grant
+-- and override audits, and the tablet's Audit screens genuinely read them
+-- back. A dispute about something that happened this session CAN be
+-- checked.
+--
+-- What is actually true, which is a smaller claim and a different one:
+--   * It is CAPPED, not complete. The search log keeps the most recent
+--     500 entries and every other audit table the most recent 200; older
+--     entries fall off the end as new ones arrive. On a busy night the
+--     search log can turn over in hours.
+--   * It dies with the process, like everything else here. After a
+--     restart there is nothing to check about yesterday, ever.
+-- So: fine for "what happened an hour ago", useless for "what happened
+-- last week". Most police servers want the second, and that alone is
+-- usually worth running the database for.
 --
 -- A SAFETY RULE THE CODE FOLLOWS SO YOU DO NOT HAVE TO THINK ABOUT IT:
 -- with this off, nobody ever ends up with MORE access than they would

@@ -16,9 +16,12 @@ up the first time, it is explained right there.
   at all — drop it in, start it, everything works. This whole page is the
   *opt-in* step you take when you decide to keep the server, because with
   the database off nothing survives a restart: certifications, ranks and
-  XP, partnerships, permissions, callsigns and themes all reset, and no
-  audit trail is ever written. Set `enabled = true` in `config.lua` and
-  follow Part 1 below when you are ready.
+  XP, partnerships, permissions, callsigns and themes all reset. The audit
+  trail does still work during a session, but it is capped (the most recent
+  500 search entries, 200 of everything else) and resets too — so you can
+  check what happened an hour ago, never what happened last week. Set
+  `enabled = true` in `config.lua` and follow Part 1 below when you are
+  ready.
 - **Putting it in touches only this resource's own tables.** It never
   looks at, changes, or deletes a table belonging to qbx_core, your
   player data, or any other resource.
