@@ -62,21 +62,15 @@
     cannot be blind to a character class again, because it no longer has
     one. If a name is between the quotes, this guard sees it.
 
-    HAND-MAINTAINED FILE LIST, SAME DISCLOSED TRADEOFF
-    tests/customizationregistry_spec.lua's OWN SERVER_LUA_FILES already
-    accepts this exact tradeoff for its own, narrower scan (see that file's
-    header "HAND-MAINTAINED FILE LIST"): this plain-Lua suite has no
-    directory-listing primitive anywhere, by design. SERVER_LUA_FILES /
-    CLIENT_LUA_FILES below are a full, independent snapshot of every real
-    server/*.lua and client/*.lua filename, taken 2026-08-26 -- a brand-new
-    server/*.lua or client/*.lua file that registers its own command must be
-    added to the matching list here in the SAME change, or this spec will
-    not know to look at it and will report a false "documented but not
-    real" gap for that command (never the more dangerous "real but
-    undocumented" direction going silently unnoticed, since a genuinely
-    missing FILE simply yields fewer real names, which can only ever make
-    the "documented has no real match" side of the comparison fire, loudly,
-    never let a real command through unchecked).
+    FILE LIST IS READ FROM DISK, NOT SNAPSHOTTED
+    SERVER_LUA_FILES / CLIENT_LUA_FILES below enumerate the real folders at
+    run time, so a brand-new file that registers a command is covered the
+    moment it exists, with nothing to remember. They used to be two literal
+    lists, and they drifted repeatedly -- see LuaFilesIn's own comment below
+    for the history, for why the "no directory-listing primitive" reason
+    the snapshot rested on is no longer true, and for why the old header's
+    reassurance about which direction a missing file could fail in was
+    backwards.
 
     WHY THIS CANNOT BE "DERIVE COMMAND_REFERENCE FROM THE REAL REGISTRY"
     INSTEAD (the option this task's own brief names first): there is no
@@ -114,52 +108,49 @@ local function ReadFile(path)
     return text
 end
 
--- Snapshot taken 2026-08-26 -- see this file's header "HAND-MAINTAINED FILE
--- LIST" above for the disclosed tradeoff and the "add a new file here in
--- the same change" obligation.
--- 'announce.lua', 'selfcheck.lua', 'vehicle.lua', 'webhook.lua' added this
--- pass -- all four were missing from this hand-maintained snapshot; none of
--- the four registers any command today (confirmed by reading each file, not
--- assumed), so adding them changes nothing about either loop below, only
--- future-proofs this list against the exact "silently missing FILE" gap
--- class dangerwarn.lua's own command was found in. 'dogcharacter.lua'
--- (family #2, k9setdog/k9removedog) is added separately, alongside that
--- family's own HIDDEN_ALIAS_COMMANDS entries, since those two names need
--- the allowlist skip to land in the SAME change as this list gaining
--- visibility into them.
-local SERVER_LUA_FILES = {
-    'admin.lua', 'announce.lua', 'appearance.lua', 'bonetool.lua', 'certifications.lua', 'certtiers.lua',
-    'combat.lua', 'cooldowns.lua', 'datastore.lua', 'defense.lua', 'dogcharacter.lua', 'entities.lua',
-    'equipmentshop.lua', 'events.lua', 'exports.lua', 'fetch.lua', 'findalert.lua',
-    'highcommand.lua', 'integrations.lua', 'inventory.lua', 'k9profiles.lua', 'kennel.lua',
-    'leaderboard.lua', 'main.lua', 'medkit.lua', 'notify.lua', 'partnership.lua',
-    'permissionkeycatalog.lua', 'permissions.lua', 'progression.lua', 'propattachment.lua',
-    'pursuitsprint.lua', 'recall.lua', 'runtimecontrol.lua', 'sarcalls.lua', 'scentlineup.lua',
-    'scenttrail.lua', 'search.lua', 'selfcheck.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
-    'vehicle.lua', 'webhook.lua', 'wellbeing.lua', 'xptiers.lua',
-    -- Added with /k9debug's own COMMAND_REFERENCE entry, in the same change
-    -- -- this snapshot is exactly the mechanism that would otherwise report
-    -- that entry as naming a command nothing registers.
-    'debugdump.lua',
-}
+--- Every `server/*.lua` / `client/*.lua` filename, read from DISK at run
+--- time rather than kept as a hand-maintained snapshot.
+---
+--- WHY THIS CHANGED. Two literal lists used to live here, and they drifted
+--- exactly as you would expect: `dangerwarn.lua`, `announce.lua` and
+--- several others were each found missing later, after the fact, every one
+--- of them a file that registers a real command. KNOWN_ISSUES.md carried
+--- the gap as an open item -- "a new file that registers a command and
+--- isn't added to that list will drift silently: the command will work
+--- in-game but never show up on the tablet, and nothing will fail to warn
+--- you."
+---
+--- The old header justified the snapshot with "this plain-Lua suite has no
+--- directory-listing primitive anywhere, by design". That stopped being
+--- true: tests/localecallsites_spec.lua already enumerates source files
+--- with `io.popen`/`find` for this same reason, and so does
+--- tests/featureflagexistence_spec.lua. The constraint the tradeoff rested
+--- on no longer exists, so the tradeoff does not need accepting.
+---
+--- IT ALSO MATTERED IN THE DIRECTION THE OLD HEADER SAID IT DID NOT. That
+--- header reassured the reader that a missing file "can only ever make the
+--- 'documented has no real match' side of the comparison fire, loudly,
+--- never let a real command through unchecked". That is backwards. A file
+--- absent from the list has its commands never discovered at all, so a
+--- real command in it with no COMMAND_REFERENCE entry is precisely what
+--- goes unnoticed -- the "real but undocumented" direction, and the one
+--- KNOWN_ISSUES.md was actually worried about.
+--- @param dir string -- '../server' or '../client'
+--- @return string[] filenames
+local function LuaFilesIn(dir)
+    local handle = assert(io.popen('ls ' .. dir .. '/*.lua 2>/dev/null'))
+    local names = {}
+    for line in handle:lines() do
+        local base = line:match('([^/]+%.lua)$')
+        if base then names[#names + 1] = base end
+    end
+    handle:close()
+    table.sort(names)
+    return names
+end
 
--- 'announce.lua'/'dangerwarn.lua' added this pass -- both were missing from
--- this hand-maintained snapshot despite each registering a real command
--- (k9announce, qbx_k9unit:dangerWarnAlert) that ALREADY has a full
--- COMMAND_REFERENCE/DEFAULT_STRINGS/TABLET_STRING_KEYS entry -- confirmed by
--- reading html/tablet.js and client/tablet.lua directly, not assumed --
--- so this closes a pure list-gap with no documentation debt behind it,
--- the same class of gap dangerwarn.lua's own command was found in on the
--- client/commandsuggestions.lua side.
-local CLIENT_LUA_FILES = {
-    'agility.lua', 'announce.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua', 'dangerwarn.lua', 'defense.lua',
-    'equipmentshop.lua', 'exports.lua', 'featureblocks.lua', 'fetch.lua', 'findalert.lua',
-    'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'leashvisual.lua', 'main.lua', 'medkit.lua',
-    'movement.lua', 'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
-    'pursuitsprint.lua', 'radial.lua', 'recall.lua', 'sarcalls.lua', 'scentlineup.lua',
-    'scenttrail.lua', 'screenfx.lua', 'search.lua', 'tablet.lua', 'tracking.lua', 'training.lua',
-    'vehicle.lua', 'vision.lua', 'wellbeing.lua',
-}
+local SERVER_LUA_FILES = LuaFilesIn('../server')
+local CLIENT_LUA_FILES = LuaFilesIn('../client')
 
 -- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3) -- SAME
 -- MEMBERSHIP as tests/commandsuggestions_spec.lua's own table of the same
@@ -618,7 +609,7 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
             "'...', adminOnly: ..., usageKey: '...', doesKey: '...', needsKey: '...', gate: { ... } } entry to " ..
             'COMMAND_REFERENCE (plus its three usageKey/doesKey/needsKey strings to DEFAULT_STRINGS and the same ' ..
             'three key names to client/tablet.lua\'s TABLET_STRING_KEYS) in the SAME change that registers the ' ..
-            'command -- or, if SERVER_LUA_FILES/CLIENT_LUA_FILES above is simply missing the new FILE the command ' ..
+            'command -- the file list is read from disk, so a new file is covered automatically; a mismatch here is a real ' ..
             'lives in, add that filename to the matching list in this spec instead.'
         ):format(#undocumented, table.concat(undocumented, ', ')), 0)
     end

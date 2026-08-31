@@ -133,13 +133,6 @@ and citations.
 Things that are either genuinely broken in a narrow way, or work as
 designed but have an edge worth knowing about before you rely on them.
 
-- **The tablet's "Commands" reference page can silently go out of date.**
-  A test compares every real, registered command against what the page
-  documents — but it does this by checking a hand-maintained list of
-  filenames, not by scanning the actual `server`/`client` folders. A new
-  file that registers a command and isn't added to that list will drift
-  silently: the command will work in-game but never show up on the
-  tablet, and nothing will fail to warn you.
 
 - **High command can now grant almost anything to themselves, by owner
   decision, not a bug.** A high-command officer can self-grant a
@@ -248,11 +241,17 @@ designed but have an edge worth knowing about before you rely on them.
   avoids a class of ghost-entity bug — but worth knowing if you expect a
   whole team to see the same marker.
 
-- **The tenure check runs a small database query every five minutes for
+- **The tenure check does a small lookup every five minutes for
   every fully-tenured partnership**, rather than skipping it entirely.
   This is deliberate and tested — the alternative (a cache that could go
   stale relative to a broken partnership) was judged the worse tradeoff.
   Not something to "optimize" without re-reading why first.
+
+  *Reworded from "runs a small database query": it goes through
+  `K9Store.Partner_GetTenureRow`, so on the shipped configuration
+  (`Config.Database.enabled = false`) it is a plain in-memory table read
+  and touches no database at all. It only becomes a real query on a server
+  that has turned persistence on.*
 
 - **Every XP anti-farm cooldown in this resource lives in memory only, so
   restarting the resource (or the whole server) resets all of them at
@@ -270,6 +269,13 @@ designed but have an edge worth knowing about before you rely on them.
   so an owner who restarts very often is quietly a little more generous
   with XP than the stated hourly ceilings promise. Not a security hole,
   just worth knowing if your ceilings need to be exact.
+
+  *Smaller than it reads on the shipped configuration. With
+  `Config.Database.enabled = false` (the default) the XP TOTALS reset on
+  restart too, so a cleared cooldown cannot help anyone accumulate past a
+  ceiling — there is no surviving total to accumulate into. The concern
+  above is really about a server that has turned persistence on, where the
+  totals survive a restart and the cooldowns guarding them do not.*
 
 - **`html/images/logo.png` is a placeholder, not a real logo.** It's a
   plain crimson circle on a near-black background — matched to the
@@ -314,6 +320,32 @@ designed but have an edge worth knowing about before you rely on them.
 ---
 
 ## 3. Fixed — worth remembering
+
+- **The tablet's "Commands" reference page could silently go out of
+  date.** Two specs compared every real, registered command against what
+  the tablet documents — but each did it against a *hand-maintained list of
+  filenames* rather than the real folders, so a new file registering a
+  command was invisible to them: the command would work in-game, never show
+  up on the tablet, and nothing would warn you. The lists had already
+  drifted repeatedly (`dangerwarn.lua`, `announce.lua`, `vehicle.lua` and
+  others were each found missing after the fact). Both specs now enumerate
+  `server/*.lua` and `client/*.lua` from disk, so a new file is covered the
+  moment it exists. Verified by dropping a throwaway file that registers an
+  undocumented command into each folder and watching both guards name it.
+
+  Two things worth keeping from the fix. The old justification — "this
+  plain-Lua suite has no directory-listing primitive anywhere, by design" —
+  had stopped being true; two other specs already enumerate files with
+  `io.popen`. And the old header's reassurance that a missing file could
+  only cause a *loud* "documented but not real" failure was backwards: an
+  unlisted file has its commands never discovered at all, so a real command
+  with no documentation is exactly what went unnoticed.
+
+  Removing the blindfold immediately surfaced one command the guard had
+  never seen — `/k9debug`, which is registered dynamically because its
+  switch (`Config.DebugDump.enabled`) is not a `Config.Features` key. The
+  code was right; it is now exempted deliberately and in writing, rather
+  than being invisible.
 
 Kept short on purpose. These aren't a changelog entry each — they're here
 because each one taught a rule worth not re-learning.

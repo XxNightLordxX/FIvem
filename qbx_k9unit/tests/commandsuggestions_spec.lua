@@ -61,36 +61,34 @@ end
 -- PART 1: DRIFT GUARD
 -- ============================================================================
 
--- Snapshot taken 2026-08-26 -- see this file's own header "HAND-MAINTAINED
--- FILE LIST" above for the disclosed tradeoff and obligation.
--- 'announce.lua', 'selfcheck.lua', 'vehicle.lua', 'webhook.lua' added this
--- pass -- see tests/commandreferenceregistry_spec.lua's matching comment
--- for the full reasoning (all four register zero commands today; this only
--- closes the "silently missing FILE" gap class for the future).
--- 'dogcharacter.lua' (family #2, k9setdog/k9removedog) added alongside that
--- family's own HIDDEN_ALIAS_COMMANDS entries.
-local SERVER_LUA_FILES = {
-    'admin.lua', 'announce.lua', 'appearance.lua', 'bonetool.lua', 'certifications.lua', 'certtiers.lua',
-    'combat.lua', 'cooldowns.lua', 'datastore.lua', 'defense.lua', 'dogcharacter.lua', 'entities.lua',
-    'equipmentshop.lua', 'events.lua', 'exports.lua', 'fetch.lua', 'findalert.lua',
-    'highcommand.lua', 'integrations.lua', 'inventory.lua', 'k9profiles.lua', 'kennel.lua',
-    'leaderboard.lua', 'main.lua', 'medkit.lua', 'notify.lua', 'partnership.lua',
-    'permissionkeycatalog.lua', 'permissions.lua', 'progression.lua', 'propattachment.lua',
-    'pursuitsprint.lua', 'recall.lua', 'runtimecontrol.lua', 'sarcalls.lua', 'scentlineup.lua',
-    'scenttrail.lua', 'search.lua', 'selfcheck.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
-    'vehicle.lua', 'webhook.lua', 'wellbeing.lua', 'xptiers.lua',
-}
+--- Every `server/*.lua` / `client/*.lua` filename, read from DISK at run
+--- time rather than kept as a hand-maintained snapshot -- same change, same
+--- reasoning, and the same drift history as
+--- tests/commandreferenceregistry_spec.lua's own pair (read LuaFilesIn's
+--- comment there for the full writeup).
+---
+--- Kept as an INDEPENDENT enumeration rather than importing that file's,
+--- which is the one property of the old two-snapshot arrangement worth
+--- preserving: these two specs check different catalogs (COMMAND_REFERENCE
+--- vs COMMAND_SUGGESTIONS) and a shared helper would let one bug blind both
+--- at once. Enumerating the same folders twice costs nothing and keeps them
+--- genuinely independent.
+--- @param dir string
+--- @return string[]
+local function LuaFilesIn(dir)
+    local handle = assert(io.popen('ls ' .. dir .. '/*.lua 2>/dev/null'))
+    local names = {}
+    for line in handle:lines() do
+        local base = line:match('([^/]+%.lua)$')
+        if base then names[#names + 1] = base end
+    end
+    handle:close()
+    table.sort(names)
+    return names
+end
 
-local CLIENT_LUA_FILES = {
-    'agility.lua', 'announce.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua',
-    'commandsuggestions.lua', 'dangerwarn.lua', 'defense.lua',
-    'equipmentshop.lua', 'exports.lua', 'featureblocks.lua', 'fetch.lua', 'findalert.lua',
-    'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'leashvisual.lua', 'main.lua', 'medkit.lua',
-    'movement.lua', 'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
-    'pursuitsprint.lua', 'radial.lua', 'recall.lua', 'sarcalls.lua', 'scentlineup.lua',
-    'scenttrail.lua', 'screenfx.lua', 'search.lua', 'tablet.lua', 'tracking.lua', 'training.lua',
-    'vehicle.lua', 'vision.lua', 'wellbeing.lua',
-}
+local SERVER_LUA_FILES = LuaFilesIn('../server')
+local CLIENT_LUA_FILES = LuaFilesIn('../client')
 
 -- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3) -- old,
 -- single-purpose command names that a command-family merge (§5) folded
@@ -103,6 +101,23 @@ local CLIENT_LUA_FILES = {
 -- test immediately below this table for what stops a genuinely removed
 -- command from hiding in here forever instead of being caught.
 local HIDDEN_ALIAS_COMMANDS = {
+    -- NOT AN ALIAS -- REGISTERED DYNAMICALLY, so the static-table scan
+    -- below cannot see it. server/debugdump.lua's /k9debug IS suggested to
+    -- the player, but from client/commandsuggestions.lua's live block at
+    -- the bottom of that file rather than from its COMMAND_SUGGESTIONS
+    -- table, because its switch is Config.DebugDump.enabled -- not a
+    -- Config.Features key, which is the only kind the table's `featureFlag`
+    -- field can express. Read that block's own comment before touching
+    -- this; the code is right and this entry is the test catching up to it.
+    --
+    -- Surfaced the moment this spec started enumerating source files from
+    -- disk instead of a hand-maintained snapshot: the old list was missing
+    -- debugdump.lua entirely (it had been added to
+    -- tests/commandreferenceregistry_spec.lua's twin snapshot and not to
+    -- this one), so this command was invisible to this guard rather than
+    -- exempted by it. Exempting it deliberately, in writing, is the whole
+    -- difference.
+    k9debug = true,
     -- family #1: audit (5 -> 1, 'k9audit') -- server/admin.lua
     k9auditcert = true,
     k9auditpartner = true,
@@ -263,8 +278,8 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
             '%d real RegisterCommand(...) name(s) exist in server/*.lua or client/*.lua with NO matching entry in ' ..
             "client/commandsuggestions.lua's COMMAND_SUGGESTIONS: %s.\n\nA player has no chat:addSuggestion for " ..
             'this command at all. FIX THIS BY: adding a { command = \'<name>\', keySuffix = \'<suffix>\' } entry to ' ..
-            'COMMAND_SUGGESTIONS in the SAME change that registers the command -- or, if SERVER_LUA_FILES/' ..
-            'CLIENT_LUA_FILES above is simply missing the new FILE the command lives in, add that filename to the ' ..
+            'COMMAND_SUGGESTIONS in the SAME change that registers the command -- the file list is read from disk, so a ' ..
+            'new file is covered automatically and a mismatch here is a real documentation gap, not a stale list. ' ..
             'matching list in this spec instead.'
         ):format(#unsuggested, table.concat(unsuggested, ', ')), 0)
     end
