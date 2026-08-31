@@ -5735,10 +5735,24 @@ Config.ScentTrailHunt = {
 -- you run no database at all, you still need the oxmysql resource
 -- present, pointed at any reachable database.
 --
--- THIS IS NOT THE RECOMMENDED WAY TO RUN THIS. It is here for someone
--- who genuinely does not want to do a database import, for a trial
--- server, or for a test before committing to a real install. If you can
--- run sql/install.sql, do -- your handlers keep what they earned.
+-- THIS SHIPS OFF, SO THE RESOURCE IS DRAG-AND-DROP (owner-directed).
+-- Drop the folder in, start it, and everything works with no database
+-- import at all. That is a deliberate choice about the FIRST RUN, not a
+-- recommendation for the long run.
+--
+-- TURN IT ON ONCE YOU ARE KEEPING THE SERVER. Set `enabled = true` below
+-- and run sql/install.sql (one file, one time -- see sql/DATABASE_GUIDE.md).
+-- Nothing else in this config changes, and nothing you do in the meantime
+-- is wasted except the session's own memory. If you run with it off for a
+-- week and then switch it on, you start persisting from that moment; the
+-- week's certifications and XP are simply not there, because they were
+-- never written anywhere.
+--
+-- WHAT "OFF" ACTUALLY COSTS YOU, in one line each, so this is a decision
+-- and not a surprise: every certification, rank and XP total, partnership,
+-- permission grant, callsign, tablet theme and pinned dog appearance is
+-- gone on the next restart -- crash, update or scheduled reboot alike --
+-- and the audit trail is not merely delayed but never written at all.
 --
 -- PERMANENTLY LOST, not merely delayed: THE AUDIT TRAIL. No record of
 -- who certified whom, no search log -- "did this K9 really search my
@@ -5752,12 +5766,23 @@ Config.ScentTrailHunt = {
 -- easier to LOSE than a saved one, never easier to get.
 -- ======================================================================
 Config.Database = {
-    -- true (recommended, and the default) saves certifications, XP,
-    -- partnerships, permissions, runtime overrides, tablet theming and K9
-    -- appearance so they survive a restart. false means none of that is
-    -- ever read from or written to a database -- it lives in memory for
-    -- this server session only. See the block above for what that costs.
-    enabled = true,
+    -- SHIPS false (owner-directed, so the resource is drag-and-drop): none
+    -- of this resource's state is ever read from or written to a database,
+    -- no .sql file needs importing, and everything lives in memory for this
+    -- server session only.
+    --
+    -- Set this to `true` -- and run sql/install.sql once -- to save
+    -- certifications, XP, partnerships, permissions, runtime overrides,
+    -- tablet theming and K9 appearance so they survive a restart. That is
+    -- the right setting for a server you intend to keep; this default is
+    -- about making the first run work with no setup, not about which mode
+    -- is better. See the block above for exactly what "off" costs.
+    --
+    -- Changing this is the ONLY edit required either way. Every feature
+    -- behaves identically in both modes (server/datastore.lua's K9Store is
+    -- the single seam, with one branch per function); the difference is
+    -- solely whether anything is remembered past a restart.
+    enabled = false,
 }
 
 -- ======================================================================

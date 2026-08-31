@@ -217,7 +217,33 @@ resource, not flipping a switch.
 ## Installing
 
 1. Drop `qbx_k9unit` into your `resources` folder.
-2. **Set up the database.** From the resource's `sql/` folder:
+2. Add `ensure qbx_k9unit` to `server.cfg`, **after** the five
+   dependencies above.
+3. Start the server. **That is the whole install.**
+
+   This resource ships with `Config.Database.enabled = false`, so it runs
+   drag-and-drop: no `.sql` file to import, nothing to configure first.
+   Every feature works immediately.
+
+   The catch, stated plainly because it is easy to skip: with the database
+   off **nothing is remembered past a restart**. Certifications, ranks and
+   XP, partnerships, permission grants, callsigns, tablet themes and pinned
+   dog appearances all reset when the server restarts — crash, update or
+   scheduled reboot alike — and the audit trail (who certified whom, what a
+   K9 searched, who granted which permission) is never written at all
+   rather than merely delayed. That is fine for an evening's testing and
+   wrong for a server people invest hours in.
+
+4. **When you decide to keep the server, turn persistence on.** Set
+   `Config.Database.enabled = true` in `config.lua` and set up the database
+   as below. It is one file, once. Nothing else in the config changes, and
+   no other step in this list is different.
+
+   Switching later is safe and loses nothing that was ever saved — but it
+   does not backfill: anything earned while the database was off was never
+   written anywhere, so persistence starts from the moment you switch.
+
+5. **Setting up the database.** From the resource's `sql/` folder:
    ```bash
    cd qbx_k9unit/sql
    ./k9_setup.sh -d your_database_name -u your_mysql_user
@@ -244,14 +270,11 @@ resource, not flipping a switch.
    this in plain English**, including turning the database off, taking it
    back out, and upgrading later; read it if any of the above is unclear.
 
-   **Don't want a database at all?** Set `Config.Database.enabled = false`
-   in `config.lua` instead of importing anything. Every feature still
-   works tonight, but read "Running with no database" below before you
-   choose this for a real server.
-3. Add `ensure qbx_k9unit` to `server.cfg`, **after** the five
-   dependencies above.
-4. Work through "Before real players touch this" below.
-5. Certify your first handler: get an eligible job at a high enough
+   **Staying with no database?** That is the shipped default and needs no
+   action at all — but read "Running with no database" below before you
+   choose it for a server with real players on it.
+6. Work through "Before real players touch this" below.
+7. Certify your first handler: get an eligible job at a high enough
    rank (or department boss), then run `/k9certify [your own server id]`.
 
    **Your "server id" is not your Steam name or your citizen ID.** It is
@@ -438,9 +461,10 @@ on and an active partnership between the two players.
 
 ## Running with no database
 
-`Config.Database.enabled = false` is a real, supported mode — every
-feature still works, tonight. Read this before choosing it for a server
-with real players:
+`Config.Database.enabled = false` is **what this resource ships with**, so
+that dropping it in works with no setup at all. Every feature works
+immediately. Read this before *staying* on it for a server with real
+players — the trade is entirely about memory, not features:
 
 - **What you lose**: certifications, XP, partnerships, permission
   grants, runtime overrides, tablet theming, and K9 appearance are held

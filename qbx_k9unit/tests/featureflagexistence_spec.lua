@@ -267,4 +267,116 @@ t.test('THE CASE THAT PROMPTED THIS FILE: ScentTrailHunt is absent, allowlisted,
         .. 'server while the feature is off is refused rather than silently unhandled')
 end)
 
+-- ======================================================================
+-- SHIPPED DEFAULT: Config.Database.enabled
+--
+-- Pinned here because nothing else pinned it, and the whole suite stayed
+-- green when the default was flipped -- every datastore test builds its
+-- own fixture Config (correctly: it tests BOTH backends), so none of them
+-- read the shipped file. A default this consequential should not be
+-- changeable without a test saying so out loud.
+--
+-- It is not a correctness constraint. Both values are fully supported and
+-- exercised: server/datastore.lua's K9Store has one branch per function
+-- and tests/datastore_spec.lua runs both. This is a "say it deliberately"
+-- guard on a product decision, in the same spirit as INTENTIONALLY_ABSENT
+-- above.
+-- ======================================================================
+
+t.test('Config.Database.enabled ships FALSE -- the resource is drag-and-drop out of the box', function()
+    t.equals(type(env.Config.Database), 'table', 'the Config.Database block must exist at all')
+    t.isFalse(env.Config.Database.enabled,
+        'The shipped default was deliberately set to false so the resource runs with no .sql import: drop it in, '
+        .. 'start it, everything works. If you are flipping this to true, that is a real product decision -- the '
+        .. 'trade is that with it OFF nothing survives a restart (certifications, XP, partnerships, permissions, '
+        .. 'callsigns, themes) and no audit trail is written at all. Update this test, config.lua\'s own '
+        .. 'Config.Database block, README.md\'s Installing section, and sql/DATABASE_GUIDE.md together -- all four '
+        .. 'state the default in prose and will otherwise contradict each other.')
+end)
+
+t.test('DatabaseEnabled fails SAFE to true on a missing Config.Database -- an operator who deletes the block gets persistence, not silent data loss', function()
+    -- The one asymmetry worth pinning about this flag: only a LITERAL
+    -- false turns the database off. A missing or malformed block means
+    -- "on", so a config edit that accidentally removes it cannot quietly
+    -- stop writing everyone's progress to disk -- the failure mode is a
+    -- loud missing-table error, never silent amnesia.
+    local probe = Sandbox.newEnv({ print = function() end })
+    Sandbox.loadInto('../config.lua', probe)
+    probe.Config.Database = nil
+
+    local store = Sandbox.newEnv({ Config = probe.Config, MySQL = {}, print = function() end })
+    Sandbox.loadInto('../server/datastore.lua', store)
+    t.isTrue(store.K9Store.IsDatabaseEnabled(),
+        'with Config.Database absent entirely, the store must report ENABLED -- failing safe toward persistence')
+end)
+
+t.test('DRAG-AND-DROP IS REAL: with the shipped config, NO K9Store function touches MySQL at all', function()
+    -- The guarantee the shipped default rests on. server/datastore.lua's
+    -- architecture is "one `if DatabaseEnabled() then <SQL> else <memory>
+    -- end` branch per function" -- 100+ functions, each of which has to
+    -- remember the branch. One function added without it would issue a
+    -- real query on a server that has no tables, and the operator would
+    -- see a missing-table error for a feature they never set up.
+    --
+    -- Rather than eyeball 100+ branches, this hands the store a MySQL
+    -- object that ERRORS on any field access whatsoever and then calls
+    -- every function it exposes. Nothing may reach it.
+    local cfgEnv = Sandbox.newEnv({ print = function() end })
+    Sandbox.loadInto('../config.lua', cfgEnv)
+    t.isFalse(cfgEnv.Config.Database.enabled, 'sanity: this test only means something with the DB off')
+
+    local touched = {}
+    local trapMySQL = setmetatable({}, { __index = function(_, key)
+        touched[#touched + 1] = tostring(key)
+        error('MySQL.' .. tostring(key) .. ' was accessed with the database OFF', 2)
+    end })
+
+    local store = Sandbox.newEnv({ Config = cfgEnv.Config, MySQL = trapMySQL, print = function() end })
+    Sandbox.loadInto('../server/datastore.lua', store)
+
+    local names = {}
+    for name, value in pairs(store.K9Store) do
+        if type(value) == 'function' then names[#names + 1] = name end
+    end
+    table.sort(names)
+    t.isTrue(#names > 90, 'sanity: expected the full K9Store surface, found ' .. #names)
+
+    -- Benign args. A function that rejects them returns early or raises on
+    -- its own arithmetic -- either way it has already passed the branch
+    -- point, which is the only thing being measured here.
+    for _, name in ipairs(names) do
+        pcall(store.K9Store[name], 'CID_TEST', 'police', 1)
+    end
+
+    t.equals(#touched, 0,
+        'These MySQL fields were accessed with Config.Database.enabled = false: ' .. table.concat(touched, ', ')
+        .. '. A K9Store function is missing its `if DatabaseEnabled() then ... else ... end` branch, so a '
+        .. 'drag-and-drop server with no tables would hit a real query. Add the memory-mode branch.')
+end)
+
+t.test('DRAG-AND-DROP IS REAL: memory mode actually REMEMBERS within the session -- it is not a silent no-op', function()
+    -- The other half, and the easier one to get wrong: a store that
+    -- discarded every write would also pass the test above. Memory mode
+    -- has to behave like a database that simply forgets on restart, not
+    -- like a black hole -- otherwise XP is unearnable rather than
+    -- unsaved, and the mode is broken in a way nobody notices until a
+    -- player asks why their rank never moves.
+    local cfgEnv = Sandbox.newEnv({ print = function() end })
+    Sandbox.loadInto('../config.lua', cfgEnv)
+    local store = Sandbox.newEnv({ Config = cfgEnv.Config, MySQL = {}, print = function() end })
+    Sandbox.loadInto('../server/datastore.lua', store)
+    local K9 = store.K9Store
+
+    t.isNil(K9.XP_Get('CID_FRESH'), 'a citizenid with no history reads as nil, exactly as it would from an empty table')
+
+    K9.XP_UpsertAdd('CID_FRESH', 25)
+    t.equals(K9.XP_Get('CID_FRESH'), 25, 'a write must be readable back in the same session')
+    K9.XP_UpsertAdd('CID_FRESH', 10)
+    t.equals(K9.XP_Get('CID_FRESH'), 35, 'and must ACCUMULATE, not overwrite')
+
+    K9.HandlerXP_UpsertAdd('CID_FRESH', 10)
+    t.equals(K9.HandlerXP_Get('CID_FRESH'), 10, 'the handler ladder is stored independently of the K9 one')
+    t.equals(K9.XP_Get('CID_FRESH'), 35, 'and writing one must not disturb the other')
+end)
+
 os.exit(t.summary())

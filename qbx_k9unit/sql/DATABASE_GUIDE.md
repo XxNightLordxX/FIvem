@@ -11,6 +11,14 @@ up the first time, it is explained right there.
 
 ## The short version
 
+- **You may not need any of this yet.** The resource ships with
+  `Config.Database.enabled = false`, which means it runs with no database
+  at all — drop it in, start it, everything works. This whole page is the
+  *opt-in* step you take when you decide to keep the server, because with
+  the database off nothing survives a restart: certifications, ranks and
+  XP, partnerships, permissions, callsigns and themes all reset, and no
+  audit trail is ever written. Set `enabled = true` in `config.lua` and
+  follow Part 1 below when you are ready.
 - **Putting it in touches only this resource's own tables.** It never
   looks at, changes, or deletes a table belonging to qbx_core, your
   player data, or any other resource.
