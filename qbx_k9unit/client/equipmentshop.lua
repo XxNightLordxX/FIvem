@@ -525,10 +525,34 @@ local function DespawnShopPed(key)
     SpawnedTargetHandles[key] = nil
     SpawnedLocSnapshot[key] = nil
 
+    -- TARGET REMOVAL IS UNCONDITIONAL, AND DELIBERATELY OUTSIDE THE
+    -- DoesEntityExist CHECK BELOW. It used to sit inside it, which meant a
+    -- ped that had ALREADY ceased to exist -- streamed out, cleaned up by
+    -- the game, or deleted by another resource -- skipped its own target
+    -- removal entirely. And because SpawnedTargetHandles[key] is cleared a
+    -- few lines above (correctly: this function must be re-entrant), the
+    -- handle was gone too, so nothing could ever remove that registration
+    -- afterwards. It leaked for the rest of the session, once per despawn
+    -- that raced the entity disappearing.
+    --
+    -- GATE THE START OF A THING, NEVER THE STOP: DoesEntityExist is exactly
+    -- the sort of condition that is false PRECISELY when cleanup matters
+    -- most, so it must never stand in front of one. It still guards
+    -- DeleteEntity, which is the only half that genuinely needs a live
+    -- entity.
+    --
+    -- Safe to call with a stale handle: the ox_target adapter
+    -- (shared/compat/target.lua) type-checks the handle and routes through
+    -- SafeCall, and removing an option from an entity that no longer exists
+    -- is a no-op in every adapter. This also makes that adapter's own
+    -- doc-comment true again -- it states this caller "always tears it down
+    -- completely, never partially", which is what the old placement
+    -- quietly broke.
+    if handle then
+        K9Compat.Get('target').RemoveLocalEntity(handle)
+    end
+
     if DoesEntityExist(ped) then
-        if handle then
-            K9Compat.Get('target').RemoveLocalEntity(handle)
-        end
         DeleteEntity(ped)
     end
 end

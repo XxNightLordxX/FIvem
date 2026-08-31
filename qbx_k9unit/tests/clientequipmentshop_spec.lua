@@ -437,6 +437,51 @@ t.test('a spawned ped is despawned once the player leaves PED_DESPAWN_RADIUS -- 
     t.isTrue((function() for _, e in ipairs(f.removedEntities) do if e == ped.handle then return true end end return false end)())
 end)
 
+t.test('LEAK FIX: a ped that has ALREADY ceased to exist still gets its ox_target registration removed', function()
+    -- The removal used to sit inside `if DoesEntityExist(ped)`, so a ped
+    -- that vanished before its own despawn ran -- streamed out, cleaned up
+    -- by the game, deleted by another resource -- skipped it. And since the
+    -- handle is cleared from SpawnedTargetHandles first (correctly, so this
+    -- function stays re-entrant), nothing could ever remove that
+    -- registration afterwards: it leaked for the rest of the session, once
+    -- per despawn that raced the entity disappearing.
+    --
+    -- GATE THE START OF A THING, NEVER THE STOP: DoesEntityExist is exactly
+    -- the kind of condition that is false precisely when cleanup matters
+    -- most.
+    local f = newFixture({ config = BASE_CONFIG, playerCoords = vec3(0.0, 0.0, 0.0), callbackResult = SERVER_RESOLVED_LOCATIONS })
+    f.runner.step()
+    local ped = f.createdPeds[1]
+    t.isNotNil(f.targetedEntities[ped.handle], 'sanity: the option is registered while the ped is alive')
+
+    -- The entity disappears out from under this resource, without any
+    -- despawn of ours having run.
+    f.pedExists[ped.handle] = nil
+
+    f.setPlayerCoords(vec3(500.0, 500.0, 0.0))
+    f.runner.step()
+
+    t.isNil(f.targetedEntities[ped.handle],
+        'the target registration must be gone even though the entity was already dead -- otherwise it is unreachable forever')
+    t.isTrue((function() for _, e in ipairs(f.removedEntities) do if e == ped.handle then return true end end return false end)(),
+        'RemoveLocalEntity must actually have been called, not merely skipped quietly')
+end)
+
+t.test('LEAK FIX, THE CONTROL: DeleteEntity is still NOT called for an entity that no longer exists', function()
+    -- Only the target removal was moved out of the existence check. Deleting
+    -- a handle the engine has already reclaimed is the one half that
+    -- genuinely does need a live entity, so that guard must stay.
+    local f = newFixture({ config = BASE_CONFIG, playerCoords = vec3(0.0, 0.0, 0.0), callbackResult = SERVER_RESOLVED_LOCATIONS })
+    f.runner.step()
+    local ped = f.createdPeds[1]
+    f.pedExists[ped.handle] = nil
+
+    f.setPlayerCoords(vec3(500.0, 500.0, 0.0))
+    f.runner.step()
+
+    t.equals(#f.deletedPeds, 0, 'nothing should be deleted -- the entity was already gone')
+end)
+
 t.test('re-approaching after a distance despawn spawns a FRESH ped -- never re-uses a stale handle', function()
     local f = newFixture({ config = BASE_CONFIG, playerCoords = vec3(0.0, 0.0, 0.0), callbackResult = SERVER_RESOLVED_LOCATIONS })
     f.runner.step()
