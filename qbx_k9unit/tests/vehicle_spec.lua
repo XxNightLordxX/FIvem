@@ -620,11 +620,56 @@ t.test('releaseVehicleSeatClaim: the genuine holder releasing frees the seat imm
     t.isTrue(grantedThree)
 end)
 
-t.test('releaseVehicleSeatClaim: malformed payload is a silent no-op', function()
+t.test('releaseVehicleSeatClaim: malformed payload is a silent no-op that cannot disturb a real claim', function()
+    -- STRENGTHENED 2026-08-31. This was `t.isTrue(true)` with a comment
+    -- saying there was "nothing else observable to assert". The bare
+    -- assertion did carry real weight -- the fixture's dispatchNetEvent
+    -- calls the handler with no pcall, so a throw fails the test outright --
+    -- but the comment was wrong, and a test whose only assertion is a
+    -- literal is indistinguishable from one someone forgot to finish.
+    --
+    -- There are two observable things worth pinning: the malformed call must
+    -- not release someone else's claim, and it must not corrupt the table
+    -- such that a legitimate claim afterwards stops working.
+    --
+    -- WHAT THIS DOES NOT DO, verified rather than assumed: it does not catch
+    -- a mutation. Deleting the handler's `type(vehicleNetId) ~= 'number'`
+    -- guard leaves this green, because ClearVehicleSeatClaim then looks up
+    -- VehicleSeatClaims['nope'], finds nil, and returns on the next line
+    -- anyway. Both mutations tried against it are semantically equivalent.
+    -- That is a good sign about the code -- the property holds through two
+    -- independent layers -- but it means this test's value is as a
+    -- REGRESSION guard for future refactors, not as a detector of anything
+    -- wrong today. Said plainly so nobody mistakes it for coverage it does
+    -- not provide.
     local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+
+    -- A real claim, held by src 2.
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    -- Junk in every argument position. None may throw.
     f.dispatchNetEvent('qbx_k9unit:server:releaseVehicleSeatClaim', 2, 'nope', 1)
-    -- Must not error -- nothing else observable to assert.
-    t.isTrue(true)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseVehicleSeatClaim', 2, 500, 'nope')
+    f.dispatchNetEvent('qbx_k9unit:server:releaseVehicleSeatClaim', 2, nil, nil)
+
+    -- src 2's claim must still stand: a DIFFERENT player asking for the same
+    -- seat is still refused. If any malformed call had cleared the claim,
+    -- src 3 would be granted here.
+    f.setAccess(3, true)
+    f.setPlayer(3, 'CIT2')
+    f.setPed(3, 11, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 3, 500, 1, 2)
+
+    local grantedThree = false
+    for _, c in ipairs(f.clientEvents) do
+        if c.event == 'qbx_k9unit:client:vehicleSeatClaimGranted' and c.target == 3 then grantedThree = true end
+    end
+    t.isFalse(grantedThree,
+        'a malformed release must not free the seat -- src 2 still holds it, so src 3 must be refused')
 end)
 
 -- ========================================================================
