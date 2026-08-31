@@ -23,6 +23,7 @@ pass itself.
 | 2026-08-27 (2nd) | Clean. 5 commits reviewed, all 5 spot-checks pass, dependencies and bark audio re-verified, no stale claims in KNOWN_ISSUES. The radial count trap flagged last pass bit again in a new form -- see detail. |
 | 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (FEATURE_STRUCTURE_SPEC.md, OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
 | 2026-08-31 | Clean on all five checks; 13 backlogged firings (Aug 28-31) covered by this one pass. 8 commits reviewed, all authored and gated this session. The rank-visibility finding left open by an earlier pass is now CLOSED BY CODE, not by editing the comment. Dependency status re-verified upstream and answered properly for the first time: all three alive, none archived. |
+| 2026-08-31 (2nd) | NOT a watchdog pass -- a directed work session, logged here because it changed a SHIPPED DEFAULT the next pass must know about: `Config.Database.enabled` now ships **false** (drag-and-drop, no SQL import). Memory-only is now the ordinary path, not a fault. Also corrected a false doc claim in four places (memory mode DOES keep a capped audit trail) and closed the KNOWN_ISSUES command-drift item. |
 
 ## 2026-08-26 — detail
 
@@ -458,3 +459,60 @@ decertified player stuck in a kennel, and the tablet corrupting
 operator-renamed rank labels) are both invisible to every item on this list.
 Worth the owner considering whether this routine's checklist should be
 rotated rather than repeated.
+
+## 2026-08-31 (2nd) — detail
+
+Not a watchdog run. Recorded here because the next one will spot-check
+things this session moved, and would otherwise read the change as drift.
+
+**THE ONE THING TO KNOW: `Config.Database.enabled` now ships `false`.**
+The resource is drag-and-drop — no `.sql` import, everything works on
+first start, nothing survives a restart. Memory-only is therefore the
+ORDINARY state now, not a symptom. Two consequences for future passes:
+
+  * A boot summary reading `memory-only BY CONFIG` is correct and expected.
+    Only `memory-only UNEXPECTEDLY` indicates a fault (the schema probe
+    forced it), and that wording is now the signal to look for.
+  * Any check that assumes the database is on will read a healthy server as
+    broken. `tests/featureflagexistence_spec.lua` pins the shipped default
+    deliberately, so if it goes red the default was changed, not violated.
+
+**A DOCUMENTED CLAIM THAT WAS FALSE, now corrected in four places.**
+config.lua, README.md, sql/DATABASE_GUIDE.md and the boot summary all said
+that with the database off there is no audit trail at all — "not a smaller
+record. None." Verified against the running store: certification history,
+the search log and the permission/override audits are all genuinely
+recorded in memory and read back. The real limits are that it is CAPPED
+(500 search entries, 200 of everything else — the 500 boundary confirmed
+exactly) and dies with the process. Worth knowing because the false version
+pointed the wrong way: it would have talked an operator out of checking a
+dispute they could actually have checked.
+
+**KNOWN_ISSUES item closed: the command-reference drift guard.** Two specs
+compared registered commands against a hand-maintained list of FILENAMES
+rather than the real folders, so a new file registering a command was
+invisible to them. Both now enumerate `server/*.lua` and `client/*.lua`
+from disk. Removing the blindfold immediately surfaced `/k9debug`, which
+neither guard had ever seen — not a bug (it is registered dynamically
+because its switch is not a `Config.Features` key) but invisible rather
+than exempted; now exempted in writing.
+
+**New standing guards, so the next pass need not re-derive any of this:**
+
+  * Every `Config.Features.<Name>` gated in code exists in the shipped
+    config, or is allowlisted with a written reason.
+  * No K9Store function touches MySQL with the shipped config (all 109
+    called against a MySQL object that errors on any access).
+  * Memory mode genuinely remembers within a session, and its audit tables
+    stop at their caps.
+  * Every `k9_` table in `sql/install.sql` has a per-table memory gate, so
+    no feature can become SQL-only.
+
+**Two self-inflicted near-misses worth carrying forward**, both the same
+shape — an edit that looks applied and silently does less than it claims:
+a `gsub` replacement function that received a capture rather than the
+match and deleted every newline it was written to preserve, and a Lua
+pattern using `%w` (which excludes `_`) that matched 17 of 28 table names.
+Both were caught only by re-reading the output rather than trusting the
+edit, and both are now guarded by sanity assertions on the scan size. Any
+future scan-based guard in this repo should carry one.
