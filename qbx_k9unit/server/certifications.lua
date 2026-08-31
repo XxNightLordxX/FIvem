@@ -1509,38 +1509,40 @@ end
 --- exception, found and deliberately left as a disclosed gap rather than a
 --- silent one by the kennel-vs-vehicle-seat race fix pass.
 ---
---- SCOPE BOUNDARY, DISCLOSED RATHER THAN SILENT (kennel-vs-vehicle-seat
---- race fix pass, coder-backend): this function does NOT release an active
---- server/kennel.lua kennel-rest occupancy or an in-flight
---- server/vehicle.lua vehicle-seat claim for `citizenid`, even though
---- losing K9 access while resting in a kennel or mid-vehicle-entry is a
---- real, reachable state this function's own stated purpose ("tear down
---- every session consequence") would otherwise seem to promise covering.
---- FOUND, NOT FIXED, ON PURPOSE: a real fix requires instructing the
---- affected player's own CLIENT to detach/disembark
---- (client/kennel.lua/client/vehicle.lua — both outside this pass's file
---- ownership and explicitly read-only for it). Clearing only the SERVER
---- registry entry (KennelOccupants[citizenid] / the matching
---- VehicleSeatClaims row) WITHOUT that client-side detach would leave the
---- affected player still visually/physically attached to the kennel or
---- seated in the vehicle while the server now believes the spot is free —
---- which would let a SECOND citizenid be granted the exact same kennel/seat
---- moments later, reproducing the double-occupancy hazard the
---- server/bodyclaims.lua registry pass exists to close, only worse (a
---- silent one, dressed up as a fix). A half-fix here would therefore be
---- strictly WORSE than today's honest, if under-documented, gap. LOW
---- SEVERITY, and the reason this is disclosed-and-deferred rather than
---- escalated: both states are SELF-ONLY (nobody but `citizenid` is ever
---- inside their own kennel or seated via their own claim) and both already
---- have an ALWAYS-AVAILABLE manual exit (requestExitKennel /
---- releaseVehicleSeatClaim, or simply GET_OUT_OF_VEHICLE for a genuinely
---- seated player, none of which this function's absence affects in any
---- way) — a revoked citizenid is inconvenienced by their own kennel/seat
---- persisting one tick longer than this function's own name implies, never
---- trapped. FOLLOW-UP NEEDED: closing this properly needs a coordinated
---- client+server change (a new server->client "you were force-ejected"
---- event in client/kennel.lua/client/vehicle.lua, paired with this
---- function calling it) from whoever owns those two client files next.
+--- RELEASES AN EXCLUSIVE BODY CLAIM (kennel-vs-vehicle-seat race fix pass;
+--- CLOSED this pass). Losing K9 access while resting inside a deployable
+--- kennel or holding a vehicle seat claim is a real, reachable state, and
+--- this function's own stated purpose -- tear down every session
+--- consequence -- now genuinely covers it.
+---
+--- IT DOES NOT DO THE RELEASE ITSELF, AND THAT IS THE WHOLE DESIGN. The
+--- state involved lives in three places: server/kennel.lua's KennelOccupants
+--- table, server/vehicle.lua's VehicleSeatClaims table (both file-local by
+--- deliberate design), and the affected player's own CLIENT, which is still
+--- attached to the kennel prop or still sitting in the seat. Clearing only
+--- the server registry -- the obvious shortcut -- would free that kennel or
+--- seat for a SECOND citizenid while the first is visibly still in it: a
+--- silent double-occupancy, strictly worse than the gap it appeared to
+--- close. So this function makes ONE call, to
+--- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher (see
+--- the call site below), which routes to whichever mechanic owns that state
+--- and lets that mechanic tear down its own registry AND tell the client to
+--- physically let go, together or not at all.
+---
+--- Read ForceReleaseBodyClaimForCitizenId's own header for the rest: why
+--- each mechanic registers its own releaser rather than exposing its tables,
+--- why the live source is always resolved fresh instead of reusing this
+--- function's `src`, why an offline target is a success rather than a
+--- failure, and why a 'combat_target' claim -- held AGAINST this citizenid
+--- by a third party mid-bite -- is deliberately the one thing left alone.
+---
+--- GATE THE STOP, NEVER THE START, and here that rule does real work:
+--- neither the dispatcher nor any releaser may consult HasK9Access, a
+--- certification lookup, a Config.Features flag or a cooldown, because this
+--- entire path runs for a citizenid whose access has ALREADY been revoked.
+--- An access check anywhere in it would be guaranteed false at exactly the
+--- moment it matters, and would seal a decertified player inside their own
+--- kennel.
 ---
 --- Callable from a site with a live, already-resolved `source` for
 --- `citizenid` (pass it as `knownSrc` — RevokeCertification's online
@@ -1612,6 +1614,27 @@ local function EndK9AccessForCitizenId(citizenid, reason, knownSrc)
 
     if type(ForceBreakPartnershipForCitizenId) == 'function' then
         ForceBreakPartnershipForCitizenId(citizenid, reason)
+    end
+
+    -- EXCLUSIVE BODY-CLAIM RELEASE -- lets go of a kennel this citizenid is
+    -- resting in, or a vehicle seat they hold, so losing access does not
+    -- leave them attached to something the server has stopped tracking. The
+    -- dispatcher routes to whichever mechanic actually owns that state and
+    -- tells the player's client to physically let go; see
+    -- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId header for
+    -- why a registry-only clear here would be worse than no fix at all, and
+    -- for why a 'combat_target' claim (held AGAINST this citizenid by
+    -- someone else) is deliberately left alone.
+    --
+    -- Deliberately UNCONDITIONAL, in the same shape as
+    -- ForceBreakPartnershipForCitizenId immediately above: a runtime
+    -- existence guard rather than a load-order dependency, and no access
+    -- check of any kind. Never pass `src` -- the dispatcher resolves this
+    -- citizenid's live source fresh, precisely because this function is
+    -- also reachable for an offline citizenid and because server ids are
+    -- recycled.
+    if type(ForceReleaseBodyClaimForCitizenId) == 'function' then
+        ForceReleaseBodyClaimForCitizenId(citizenid, reason)
     end
 end
 

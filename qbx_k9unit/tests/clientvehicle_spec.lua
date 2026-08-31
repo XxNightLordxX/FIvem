@@ -663,6 +663,24 @@ end)
 -- Sanity + pre-flight guards
 -- ========================================================================
 
+t.test('FORCED RELEASE: the forceExitVehicleSeat handler is registered and calls ExitK9Vehicle with the access-revoked notice', function()
+    local f = newVehicleFixture()
+    -- dispatchClientEvent asserts a handler exists, so this is the
+    -- registration proof: with no handler it fails loudly rather than
+    -- silently passing.
+    f.dispatchClientEvent('qbx_k9unit:client:forceExitVehicleSeat', 65535, 'cert_revoked')
+end)
+
+t.test('FORCED RELEASE: the handler is a safe no-op when this client is not in a K9 vehicle at all', function()
+    -- A duplicate or late event must never throw, and must never notify
+    -- someone standing on a pavement that they have been let out of a
+    -- vehicle.
+    local f = newVehicleFixture()
+    local before = #f.notifyCalls
+    f.dispatchClientEvent('qbx_k9unit:client:forceExitVehicleSeat', 65535, 'cert_revoked')
+    t.equals(#f.notifyCalls, before, 'ExitK9Vehicle\'s own IsInK9Vehicle() early return makes this inert')
+end)
+
 t.test('feature on: exposes the three documented globals, and IsInK9Vehicle starts false', function()
     local f = newVehicleFixture()
     t.isNotNil(f.env.EnterNearestK9Vehicle)

@@ -518,11 +518,21 @@ end
 -- internally no-op.
 -- ========================================================================
 
-t.test('FIXED: feature off registers no net events, onResourceStart/onResourceStop handlers, or threads -- ONLY k9kennel survives, unconditionally, exit-path-critical (COMMAND_CONSOLIDATION_SPEC.md #5)', function()
+t.test('FIXED: feature off registers no GATED net events, onResourceStart/onResourceStop handlers, or threads -- ONLY k9kennel and the forced-exit event survive, unconditionally, both exit-path-critical (COMMAND_CONSOLIDATION_SPEC.md #5)', function()
     local f = newKennelFixture({ deployableKennel = false })
     t.equals(#f.commands, 1, 'k9deploykennel is not registered with the feature off, but k9kennel IS -- its own exit branch must survive a toggled-off feature, same reasoning as k9exitkennel')
     t.equals(f.commands[1].name, 'k9kennel')
-    t.equals(f.netEventCount(), 0, 'none of this file\'s six net events is registered with the feature off')
+    -- ONE net event survives the feature being off, deliberately:
+    -- 'forceExitKennelRest'. It is the client half of server/kennel.lua's
+    -- forced release when a player loses K9 access while resting inside a
+    -- kennel, and it is a pure EXIT path -- exactly the k9kennel command's
+    -- own reasoning one line above. GATE THE START OF A THING, NEVER THE
+    -- STOP: an operator toggling DeployableKennel off mid-session must not
+    -- be able to strand a resting player by removing the only thing that
+    -- could let them out. The other six, all of which START or MUTATE
+    -- something, stay gated.
+    t.equals(f.netEventCount(), 1, 'only the forced-exit release event is registered with the feature off -- none of this file\'s six GATED net events is')
+    t.isNotNil(f.netEventNames['qbx_k9unit:client:forceExitKennelRest'], 'the forced-exit release path must survive a toggled-off feature')
     t.equals(f.onResourceStartHandlerCount(), 0)
     t.equals(f.onResourceStopHandlerCount(), 0)
     t.equals(f.watchdogThreadCount(), 0, 'the shared watchdog thread must not even start with the feature off')
@@ -549,20 +559,24 @@ t.test('FIXED: feature off -- none of this file\'s six net events exists to disp
     t.isNil(f.netEventNames['qbx_k9unit:client:putDownKennelAt'])
     t.isNil(f.netEventNames['qbx_k9unit:client:enterKennelConfirmed'])
     t.isNil(f.netEventNames['qbx_k9unit:client:kennelCarrierLost'])
+    -- Deliberately NOT asserted nil here: forceExitKennelRest is the
+    -- seventh event and is registered unconditionally on purpose -- see the
+    -- first feature-off test above.
 end)
 
 -- ========================================================================
 -- Sanity + happy path
 -- ========================================================================
 
-t.test('feature on: registers exactly 2 commands (k9deploykennel + the additive k9kennel), 6 net events, 1 onResourceStart, 1 onResourceStop, and starts the shared watchdog thread', function()
+t.test('feature on: registers exactly 2 commands (k9deploykennel + the additive k9kennel), 7 net events (6 gated + the always-on forced-exit release), 1 onResourceStart, 1 onResourceStop, and starts the shared watchdog thread', function()
     local f = newKennelFixture()
     t.equals(#f.commands, 2)
     local names = {}
     for _, c in ipairs(f.commands) do names[c.name] = true end
     t.isTrue(names['k9deploykennel'])
     t.isTrue(names['k9kennel'])
-    t.equals(f.netEventCount(), 6)
+    t.equals(f.netEventCount(), 7)
+    t.isNotNil(f.netEventNames['qbx_k9unit:client:forceExitKennelRest'], 'registered unconditionally -- see the feature-off test above')
     t.isNotNil(f.netEventNames['qbx_k9unit:client:deployKennelAt'])
     t.isNotNil(f.netEventNames['qbx_k9unit:client:removeKennel'])
     t.isNotNil(f.netEventNames['qbx_k9unit:client:pickupKennelConfirmed'])
@@ -1100,6 +1114,50 @@ t.test('REST POSE: EVERY exit path ends the pose -- the manual exit, and the aut
     g.dispatchNetEvent('qbx_k9unit:client:removeKennel', 65535, 869)
     t.isFalse(g.env.IsRestingInKennel())
     t.equals(#g.clearTasksCalls, 2, 'the removal backstop ends the pose too')
+end)
+
+t.test('FORCED RELEASE: forceExitKennelRest detaches this client\'s ped, restores collision, and says WHY -- the client half of a server-side access revoke', function()
+    local f = newKennelFixture()
+    local netId = 800
+    f.registerForeignEntity(netId, 90, GetHashKey(PRIMARY_MODEL), { x = 50.0, y = 60.0, z = 10.0 })
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel(), 'sanity: resting before the revoke')
+
+    f.dispatchNetEvent('qbx_k9unit:client:forceExitKennelRest', 65535, 'cert_revoked')
+
+    t.isFalse(f.env.IsRestingInKennel(), 'the player must actually be let out, not merely forgotten by the server')
+    t.isTrue(f.detachCalls[#f.detachCalls] ~= nil, 'the ped is physically detached from the kennel prop')
+    local lastCollision = f.collisionCalls[#f.collisionCalls]
+    t.isTrue(lastCollision.handle == MY_PED and lastCollision.toggle == true,
+        'collision restored -- leaving it off would be its own trap')
+    t.equals(f.lastNotify().description, locale('kennel.exit_access_revoked'),
+        'and the player is told why they were moved, rather than being silently teleported out')
+end)
+
+t.test('FORCED RELEASE: forceExitKennelRest is a safe no-op when this client is not resting at all', function()
+    local f = newKennelFixture()
+    local before = #f.notifyCalls
+
+    f.dispatchNetEvent('qbx_k9unit:client:forceExitKennelRest', 65535, 'cert_revoked')
+
+    t.equals(#f.notifyCalls, before, 'a duplicate or late event must not tell someone standing in the street they have been let out of a kennel')
+end)
+
+t.test('FORCED RELEASE: forceExitKennelRest still works with the feature toggled off mid-session -- the release must outlive the feature', function()
+    -- GATE THE START OF A THING, NEVER THE STOP. The handler is registered
+    -- outside this file's feature gate on purpose; an operator switching
+    -- DeployableKennel off must not be able to strand someone inside one.
+    local f = newKennelFixture()
+    local netId = 800
+    f.registerForeignEntity(netId, 90, GetHashKey(PRIMARY_MODEL), { x = 50.0, y = 60.0, z = 10.0 })
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    f.env.Config.Features.DeployableKennel = false
+
+    f.dispatchNetEvent('qbx_k9unit:client:forceExitKennelRest', 65535, 'cert_revoked')
+
+    t.isFalse(f.env.IsRestingInKennel())
+    t.equals(f.lastNotify().description, locale('kennel.exit_access_revoked'))
 end)
 
 t.test('enterKennelConfirmed: source guard rejects a forged local trigger', function()

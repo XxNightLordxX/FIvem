@@ -78,6 +78,8 @@ Sandbox.loadInto('../server/bodyclaims.lua', env)
 local ClaimBody = env.ClaimBody
 local ReleaseBody = env.ReleaseBody
 local IsBodyClaimedByOther = env.IsBodyClaimedByOther
+local RegisterBodyClaimReleaser = env.RegisterBodyClaimReleaser
+local ForceReleaseBodyClaimForCitizenId = env.ForceReleaseBodyClaimForCitizenId
 
 t.isNotNil(ClaimBody, 'server/bodyclaims.lua must define global ClaimBody')
 t.isNotNil(ReleaseBody, 'server/bodyclaims.lua must define global ReleaseBody')
@@ -248,6 +250,151 @@ end)
 
 t.test('the periodic sweep thread is created unconditionally at file load', function()
     t.equals(threadCreateCount, 1, 'server/bodyclaims.lua has no feature flag of its own to gate this on -- it must always start')
+end)
+
+-- ========================================================================
+-- FORCED RELEASE -- ForceReleaseBodyClaimForCitizenId + the
+-- RegisterBodyClaimReleaser dispatcher it routes through.
+--
+-- THE DEFECT THIS CLOSES: server/certifications.lua's
+-- EndK9AccessForCitizenId tore down every session consequence of holding K9
+-- access EXCEPT a kennel-rest occupancy and a vehicle-seat claim, leaving a
+-- decertified player still attached to a kennel prop, or seated, with the
+-- server still recording them as the occupant.
+--
+-- WHAT THESE TESTS ARE REALLY GUARDING. The dangerous fix here was always
+-- the SHORTCUT -- clearing the body claim alone and calling it done, which
+-- frees the kennel for a second citizenid while the first is visibly still
+-- in it. So the load-bearing assertions below are the ones proving the two
+-- halves are inseparable: a mechanic with no registered releaser has its
+-- claim LEFT INTACT rather than half-released, and every releaser is
+-- reached with no access check of any kind in front of it.
+--
+-- The cross-file half (server/kennel.lua and server/vehicle.lua really
+-- registering their own releasers, clearing their own private tables, and
+-- firing their own client events) lives in kennel_spec.lua and
+-- vehicle_spec.lua, mirroring this file's own established split -- see the
+-- header.
+-- ========================================================================
+
+t.isNotNil(RegisterBodyClaimReleaser, 'server/bodyclaims.lua must define global RegisterBodyClaimReleaser')
+t.isNotNil(ForceReleaseBodyClaimForCitizenId, 'server/bodyclaims.lua must define global ForceReleaseBodyClaimForCitizenId')
+
+t.test('ForceReleaseBodyClaimForCitizenId: a citizenid holding NOTHING is a safe no-op returning false', function()
+    t.isFalse(ForceReleaseBodyClaimForCitizenId('CIT_F001', 'revoked'))
+end)
+
+t.test('ForceReleaseBodyClaimForCitizenId: a malformed citizenid never errors and never releases anything', function()
+    t.isFalse(ForceReleaseBodyClaimForCitizenId(nil, 'revoked'))
+    t.isFalse(ForceReleaseBodyClaimForCitizenId(12345, 'revoked'))
+    t.isFalse(ForceReleaseBodyClaimForCitizenId('', 'revoked'))
+end)
+
+t.test('ForceReleaseBodyClaimForCitizenId: routes to the OWNING mechanic\'s releaser, passes the reason through, and clears the claim', function()
+    local seen = {}
+    RegisterBodyClaimReleaser('kennel_rest', function(citizenid, reason)
+        seen[#seen + 1] = { citizenid = citizenid, reason = reason }
+        return true
+    end)
+
+    t.isTrue(ClaimBody('CIT_F002', 'kennel_rest'))
+    t.isTrue(ForceReleaseBodyClaimForCitizenId('CIT_F002', 'cert_revoked'))
+
+    t.equals(#seen, 1, 'the owning mechanic\'s releaser must be called exactly once')
+    t.equals(seen[1].citizenid, 'CIT_F002')
+    t.equals(seen[1].reason, 'cert_revoked', 'the reason must reach the mechanic so it can tell the player why')
+    t.isFalse(IsBodyClaimedByOther('CIT_F002', 'vehicle_seat'),
+        'the body claim must be gone afterwards -- a DIFFERENT mechanic now sees this citizenid as free')
+end)
+
+t.test('ForceReleaseBodyClaimForCitizenId: only the OWNING mechanic\'s releaser runs, never every registered one', function()
+    local kennelCalls, vehicleCalls = 0, 0
+    RegisterBodyClaimReleaser('kennel_rest', function() kennelCalls = kennelCalls + 1; return true end)
+    RegisterBodyClaimReleaser('vehicle_seat', function() vehicleCalls = vehicleCalls + 1; return true end)
+
+    t.isTrue(ClaimBody('CIT_F003', 'vehicle_seat', 60000))
+    t.isTrue(ForceReleaseBodyClaimForCitizenId('CIT_F003', 'revoked'))
+
+    t.equals(vehicleCalls, 1, 'the mechanic actually holding the claim is torn down')
+    t.equals(kennelCalls, 0, 'a mechanic holding nothing must never be asked to tear down state it does not have')
+end)
+
+t.test('LOAD-BEARING: a mechanic with NO registered releaser has its claim LEFT INTACT, never registry-only released', function()
+    -- The whole point of the dispatcher. A registry-only clear here would
+    -- free the body for a second mechanic while the first is still
+    -- physically holding it -- a silent double-occupancy, which is strictly
+    -- worse than the gap this function closes. Leaving the claim and
+    -- complaining loudly is the correct, conservative failure.
+    local before = #printedLines
+    t.isTrue(ClaimBody('CIT_F004', 'mechanic_that_forgot_to_register', 60000))
+    t.isFalse(ForceReleaseBodyClaimForCitizenId('CIT_F004', 'revoked'))
+
+    t.isTrue(IsBodyClaimedByOther('CIT_F004', 'kennel_rest'),
+        'the claim MUST still be held -- releasing it with nobody able to tell the client is the double-occupancy hazard this design exists to refuse')
+    t.isTrue(#printedLines > before, 'and it must complain loudly, because it means a claiming mechanic shipped without a teardown')
+end)
+
+t.test('LOAD-BEARING: a \'combat_target\' claim is deliberately NEVER force-released -- it is held AGAINST this citizenid by someone else', function()
+    local combatCalls = 0
+    RegisterBodyClaimReleaser('combat_target', function() combatCalls = combatCalls + 1; return true end)
+
+    t.isTrue(ClaimBody('CIT_F005', 'combat_target', 60000, 'bite'))
+    t.isFalse(ForceReleaseBodyClaimForCitizenId('CIT_F005', 'revoked'))
+
+    t.equals(combatCalls, 0, 'even WITH a releaser registered, combat_target must be skipped')
+    t.isTrue(IsBodyClaimedByOther('CIT_F005', 'kennel_rest'),
+        'the claim stays: ending a third party\'s in-flight bite from the registry side, while their own client carries on, is the same desync pointed at someone else. These claims carry a real TTL and expire on their own.')
+end)
+
+t.test('a releaser that ERRORS is caught, logged, and the body claim is cleared anyway', function()
+    -- A permanent 'kennel_rest' claim left behind after a failed teardown
+    -- would block every other exclusive mechanic for that citizenid
+    -- forever -- a worse outcome than the failed teardown itself.
+    RegisterBodyClaimReleaser('kennel_rest', function() error('releaser blew up') end)
+
+    local before = #printedLines
+    t.isTrue(ClaimBody('CIT_F006', 'kennel_rest'))
+    t.isFalse(ForceReleaseBodyClaimForCitizenId('CIT_F006', 'revoked'), 'returns false -- the teardown genuinely did not fully succeed')
+    t.isTrue(#printedLines > before, 'and says so, rather than failing silently')
+    t.isFalse(IsBodyClaimedByOther('CIT_F006', 'vehicle_seat'),
+        'but the claim itself is gone -- a stuck permanent claim would lock this citizenid out of every exclusive mechanic')
+end)
+
+t.test('a releaser that finds nothing of its own (returns false) still clears the claim -- no orphan left behind', function()
+    RegisterBodyClaimReleaser('kennel_rest', function() return false end)
+    t.isTrue(ClaimBody('CIT_F007', 'kennel_rest'))
+    t.isTrue(ForceReleaseBodyClaimForCitizenId('CIT_F007', 'revoked'))
+    t.isFalse(IsBodyClaimedByOther('CIT_F007', 'vehicle_seat'),
+        'the registry must not keep a claim whose owning mechanic has already forgotten it')
+end)
+
+t.test('an EXPIRED claim is treated as absent -- the releaser is never called for one', function()
+    local calls = 0
+    RegisterBodyClaimReleaser('vehicle_seat', function() calls = calls + 1; return true end)
+
+    t.isTrue(ClaimBody('CIT_F008', 'vehicle_seat', 1000))
+    fakeNow = fakeNow + 5000
+    t.isFalse(ForceReleaseBodyClaimForCitizenId('CIT_F008', 'revoked'))
+    t.equals(calls, 0, 'nothing is held any more, so there is nothing to tear down')
+end)
+
+t.test('RegisterBodyClaimReleaser: a malformed registration is refused and logged, never stored', function()
+    local before = #printedLines
+    RegisterBodyClaimReleaser('', function() return true end)
+    RegisterBodyClaimReleaser('some_mechanic', 'not a function')
+    RegisterBodyClaimReleaser(nil, function() return true end)
+    t.isTrue(#printedLines >= before + 3, 'each malformed registration must complain')
+end)
+
+t.test('RegisterBodyClaimReleaser: re-registering the same mechanic REPLACES it -- a resource restart must not stack releasers', function()
+    local first, second = 0, 0
+    RegisterBodyClaimReleaser('kennel_rest', function() first = first + 1; return true end)
+    RegisterBodyClaimReleaser('kennel_rest', function() second = second + 1; return true end)
+
+    t.isTrue(ClaimBody('CIT_F009', 'kennel_rest'))
+    t.isTrue(ForceReleaseBodyClaimForCitizenId('CIT_F009', 'revoked'))
+    t.equals(first, 0, 'the superseded releaser must not run')
+    t.equals(second, 1)
 end)
 
 os.exit(t.summary())

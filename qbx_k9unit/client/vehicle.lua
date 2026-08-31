@@ -955,7 +955,18 @@ end)
 --- all). Either way, this file's own bookkeeping should stop claiming the
 --- ride is active the instant the player asks to end it, not only once an
 --- animation finishes playing.
-function ExitK9Vehicle()
+--- @param notifyLocaleKey string? -- defaults to 'vehicle.released'. Mirrors
+--- client/kennel.lua's ReleaseKennelRest(notifyLocaleKey) shape, so a
+--- caller with a more specific reason (a forced exit on access loss, say)
+--- can say so instead of firing a second, contradicting notification.
+function ExitK9Vehicle(notifyLocaleKey)
+    -- Default resolved HERE, into the parameter itself, rather than inline
+    -- at the locale() call below. tests/localecallsites_spec.lua resolves a
+    -- locale() argument that is a bare function parameter by tracing this
+    -- file's own call sites; an `x or 'literal'` expression at the call is
+    -- opaque to it and would have to be allowlisted as unresolvable
+    -- instead. Same shape as client/kennel.lua's ReleaseKennelRest.
+    notifyLocaleKey = notifyLocaleKey or 'vehicle.released'
     if not IsInK9Vehicle() then return end
 
     local ped = PlayerPedId()
@@ -994,8 +1005,43 @@ function ExitK9Vehicle()
         ForceLeaveVehicle(ped)
     end)
 
-    lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.released'), type = 'success' })
+    lib.notify({ title = locale('common.notify_title'), description = locale(notifyLocaleKey), type = 'success' })
 end
+
+--- Server-initiated forced exit -- the client half of
+--- server/vehicle.lua's RegisterBodyClaimReleaser('vehicle_seat', ...),
+--- which fires when server/certifications.lua's EndK9AccessForCitizenId
+--- revokes this player's K9 access while they still hold a seat claim.
+---
+--- WHY THE SERVER CANNOT JUST FORGET THEM. Clearing the seat row without
+--- this event would let a second citizenid be granted the exact seat this
+--- player is visibly still sitting in. The registry clear and this event
+--- are deliberately inseparable -- see server/bodyclaims.lua's
+--- ForceReleaseBodyClaimForCitizenId header.
+---
+--- GATE THE STOP, NEVER THE START: no feature flag, no HasK9Access, no
+--- per-person feature control, no cooldown -- getting out is never gated,
+--- and the caller has ALREADY revoked this player's access, so any such
+--- check would be false exactly when it matters. ExitK9Vehicle's own
+--- IsInK9Vehicle() early return makes a duplicate or late event a harmless
+--- no-op, and its stall fallback means a jammed door still cannot strand
+--- anyone.
+--- ASYMMETRY WITH client/kennel.lua's OWN forceExitKennelRest, deliberate
+--- and safe: that one is registered OUTSIDE its file's feature gate,
+--- because client/kennel.lua keeps loading past the gate and its exit paths
+--- must survive an operator toggling DeployableKennel off mid-session. THIS
+--- file returns outright at its own gate (see the early return near the
+--- top), so when Config.Features.VehicleEntryExit is false AT LOAD nothing
+--- in here exists at all -- including every path that could have seated a
+--- K9 or claimed a seat in the first place. A client that never loaded the
+--- vehicle system cannot be holding a seat, so there is nothing for an
+--- always-on handler to release. A client that loaded WITH the feature on
+--- and saw it toggled off later has already registered this handler, and
+--- keeps it. Either way the release path is reachable exactly when a
+--- release is possible.
+RegisterNetEvent('qbx_k9unit:client:forceExitVehicleSeat', function(_reason)
+    ExitK9Vehicle('vehicle.exit_access_revoked')
+end)
 
 -- ======================================================================
 -- CHAT COMMAND -- Enter/Exit K9 Vehicle (menu-parity pass: "chat commands,

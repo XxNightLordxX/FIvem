@@ -921,6 +921,18 @@ globals = {
     -- server/combat.lua. Same "a Release path must never be gated" note as
     -- immediately above applies here too.
     "ClaimBody", "ReleaseBody", "IsBodyClaimedByOther", "IsBodyClaimed",
+    -- server/bodyclaims.lua, FORCED-RELEASE dispatcher (same file, same
+    -- registry). ForceReleaseBodyClaimForCitizenId is called from
+    -- server/certifications.lua's EndK9AccessForCitizenId when a player
+    -- loses K9 access while still resting in a kennel or holding a vehicle
+    -- seat; RegisterBodyClaimReleaser is how server/kennel.lua and
+    -- server/vehicle.lua hand it their OWN teardown, so no file ever
+    -- reaches into another's private occupancy table. A release path must
+    -- never be gated -- see the identical note above, which is load-bearing
+    -- here specifically: this dispatcher runs for a citizenid whose access
+    -- has ALREADY been revoked, so any access check inside it would seal
+    -- them inside the kennel it exists to let them out of.
+    "RegisterBodyClaimReleaser", "ForceReleaseBodyClaimForCitizenId",
     -- server/progression.lua -- validates a Config-supplied XP mint budget
     -- parameter. Exists because a boundary value must never silently mean
     -- "blocked forever": server/cooldowns.lua's IsOnCooldown already treats a

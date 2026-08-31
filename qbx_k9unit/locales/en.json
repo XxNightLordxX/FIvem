@@ -1545,6 +1545,7 @@
         "exit_own_downed": "You were downed and are no longer resting in the kennel.",
         "exit_keybind_label": "K9: Exit Kennel",
         "exit_success": "You climb out of the kennel.",
+        "exit_access_revoked": "Your K9 access was revoked — you have been let out of the kennel.",
         "exit_target_label": "Exit Kennel",
         "invalid_kennel": "That doesn't look like a valid kennel.",
         "no_suitable_ground": "No suitable ground to place the kennel here.",
@@ -1904,7 +1905,8 @@
         "entry_not_permitted": "High Command has blocked you from loading your K9 into vehicles. This is not a missing certification -- ask them why.",
         "claim_too_far": "You need to be closer to the vehicle to load your K9 in.",
         "target_enter_label": "Get in the Back Seat",
-        "target_exit_label": "Get Out of the Vehicle"
+        "target_exit_label": "Get Out of the Vehicle",
+        "exit_access_revoked": "Your K9 access was revoked — you have been let out of the vehicle."
     },
     "vision": {
         "thermal_on": "Thermal vision on.",

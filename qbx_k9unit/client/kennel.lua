@@ -496,6 +496,33 @@ function ExitKennelRest()
     ReleaseKennelRest('kennel.exit_success')
 end
 
+--- Server-initiated forced exit -- the client half of
+--- server/kennel.lua's RegisterBodyClaimReleaser('kennel_rest', ...), which
+--- fires when server/certifications.lua's EndK9AccessForCitizenId revokes
+--- this player's K9 access while they are still resting inside a kennel.
+---
+--- WHY THE SERVER CANNOT JUST FORGET THEM. The server clearing its own
+--- KennelOccupants row without this event would free the kennel for a
+--- second occupant while this player is still physically attached to the
+--- prop with collision disabled -- a silent double-occupancy. This event is
+--- the other half of that release, and the two are deliberately inseparable
+--- (see server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId header).
+---
+--- Registered OUTSIDE the registration-time feature gate further down, for
+--- the same reason ExitKennelRest itself is: a release path must stay
+--- reachable even when Config.Features.DeployableKennel was false at load,
+--- or was toggled off mid-session. GATE THE START OF A THING, NEVER THE
+--- STOP -- and doubly so here, where the whole point is that this player's
+--- access has ALREADY been taken away.
+---
+--- Harmless when there is nothing to release: ReleaseKennelRest returns
+--- immediately on a nil restState, so a duplicate or late event does
+--- nothing. The requestExitKennel it fires back at the server is likewise a
+--- no-op -- the server cleared its own row before sending this.
+RegisterNetEvent('qbx_k9unit:client:forceExitKennelRest', function(_reason)
+    ReleaseKennelRest('kennel.exit_access_revoked')
+end)
+
 --- Runs RequestDeployKennel()'s own client-side gating and, if it passes,
 --- asks the server to compute a spawn point. See FILE-TO-FILE CONTRACT
 --- above for why this is exposed globally rather than kept command-local,

@@ -1516,6 +1516,65 @@ RegisterNetEvent('qbx_k9unit:server:requestExitKennel', function()
 end)
 
 -- ======================================================================
+-- FORCED EXIT ON ACCESS LOSS -- this file's half of
+-- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher.
+--
+-- Registered at file load so that when server/certifications.lua's
+-- EndK9AccessForCitizenId revokes someone's K9 access while they are
+-- resting inside a kennel, this file -- the only one that owns
+-- KennelOccupants -- performs its own teardown. See
+-- RegisterBodyClaimReleaser's own doc comment for the contract; the short
+-- version is that clearing the registry WITHOUT telling the client would
+-- free the kennel for a second occupant while the first is visibly still
+-- inside it.
+--
+-- GATE THE STOP, NEVER THE START. Consults nothing: not
+-- Config.Features.DeployableKennel, not HasK9Access, not
+-- IsDeployableKennelPermittedForCitizenId, not any cooldown -- exactly
+-- like requestExitKennel immediately above, and for a sharper reason here.
+-- The caller has ALREADY revoked this citizenid's access; a HasK9Access
+-- check would therefore be guaranteed false at this exact moment and would
+-- seal a decertified player inside their own kennel permanently.
+--
+-- Guarded existence check rather than a hard load-order dependency: this
+-- file loads after server/bodyclaims.lua today, but registration is
+-- optional behaviour, not a load-time requirement, and this file must not
+-- fail to load because a registry it merely cooperates with was reordered.
+if type(RegisterBodyClaimReleaser) == 'function' then
+    RegisterBodyClaimReleaser('kennel_rest', function(citizenid, reason)
+        local occupant = KennelOccupants[citizenid]
+        if not occupant then return false end
+
+        -- Registry clear first, so that even if the client event below
+        -- cannot be delivered (target offline) the kennel is no longer
+        -- misreported as occupied to a future requestEnterKennel caller.
+        KennelOccupants[citizenid] = nil
+        ReleaseBody(citizenid, 'kennel_rest')
+
+        -- Resolve the live source FRESH rather than trusting
+        -- occupant.enteredSrc. Server ids are recycled, and a revoke can
+        -- race a reconnect -- the recorded source could by now belong to a
+        -- completely different player, who would then be yanked out of
+        -- whatever they are doing. This is the same durable-citizenid
+        -- discipline the wellbeing cooldown rekey established.
+        local player = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local liveSrc = player and player.PlayerData and player.PlayerData.source
+        if liveSrc then
+            TriggerClientEvent('qbx_k9unit:client:forceExitKennelRest', liveSrc, reason)
+        end
+
+        -- OFFLINE IS A SUCCESS, NOT A FAILURE (mirroring
+        -- ForceBreakPartnershipForCitizenId's own OFFLINE-CAPABLE BY DESIGN
+        -- precedent): with no live source there is no client rendering an
+        -- attachment to desync from, and the disconnecting player's own ped
+        -- was torn down by the platform. The registry clear alone is the
+        -- complete and correct teardown in that case.
+        return true
+    end)
+end
+-- ======================================================================
+
+-- ======================================================================
 -- CLOSEABLE KENNEL -- new events, this pass. See this file's own header
 -- "CLOSEABLE KENNEL" section for the full design writeup.
 -- ======================================================================

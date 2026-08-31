@@ -280,6 +280,73 @@ local function FindOtherLiveSeatClaimFor(citizenid, exceptNetId, exceptSeatIndex
     return nil
 end
 
+-- ======================================================================
+-- FORCED EXIT ON ACCESS LOSS -- this file's half of
+-- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher.
+--
+-- Registered at file load so that when server/certifications.lua's
+-- EndK9AccessForCitizenId revokes someone's K9 access while they are
+-- holding a seat claim, this file -- the only one that owns
+-- VehicleSeatClaims -- performs its own teardown. See
+-- RegisterBodyClaimReleaser's own doc comment for the contract.
+--
+-- GATE THE STOP, NEVER THE START. Consults nothing: not
+-- Config.Features.VehicleEntryExit, not HasK9Access, not the per-person
+-- feature control below, not any cooldown. Getting OUT of a vehicle and
+-- giving up a claim are never gated on anything -- this file's own oldest
+-- rule, and load-bearing here specifically, since the caller has ALREADY
+-- revoked this citizenid's access and any access check would be guaranteed
+-- false at this exact moment.
+--
+-- Sweeps EVERY seat rather than assuming one: FindOtherLiveSeatClaimFor's
+-- own header documents how a citizenid could historically end up recorded
+-- against two seats at once through the addressing-scheme seam. That is
+-- fixed on the grant path now, but a teardown that stops after the first
+-- match would silently leave the second behind if it ever recurred -- and a
+-- teardown is the wrong place to assume an invariant holds.
+if type(RegisterBodyClaimReleaser) == 'function' then
+    RegisterBodyClaimReleaser('vehicle_seat', function(citizenid, reason)
+        local held = {}
+        for netId, perVehicle in pairs(VehicleSeatClaims) do
+            for seatIndex, claim in pairs(perVehicle) do
+                if claim.citizenid == citizenid then
+                    held[#held + 1] = { netId = netId, seatIndex = seatIndex }
+                end
+            end
+        end
+        -- Raw table reads above, not GetLiveClaim: an EXPIRED entry for this
+        -- citizenid still needs clearing, and routing through GetLiveClaim
+        -- would both mutate the table mid-iteration and skip exactly the
+        -- stale rows a teardown most wants gone.
+
+        if #held == 0 then return false end
+
+        for _, seat in ipairs(held) do
+            local perVehicle = VehicleSeatClaims[seat.netId]
+            if perVehicle then
+                perVehicle[seat.seatIndex] = nil
+                if not next(perVehicle) then VehicleSeatClaims[seat.netId] = nil end
+            end
+        end
+        ReleaseBody(citizenid, 'vehicle_seat')
+
+        -- Live source resolved FRESH, never a recorded claim.src: server ids
+        -- are recycled, and a revoke can race a reconnect, so a stale source
+        -- could belong to an unrelated player who would then be thrown out of
+        -- their own vehicle.
+        local player = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local liveSrc = player and player.PlayerData and player.PlayerData.source
+        if liveSrc then
+            TriggerClientEvent('qbx_k9unit:client:forceExitVehicleSeat', liveSrc, reason)
+        end
+
+        -- Offline is a success, not a failure -- see the kennel releaser's
+        -- own identical note.
+        return true
+    end)
+end
+-- ======================================================================
+
 --- Clears (netId, seatIndex)'s claim, but ONLY if it is currently recorded
 --- against the EXACT `src` supplied — mirrors server/entities.lua's
 --- ReleaseNetworkEntity's own "never blindly clears whatever is there"

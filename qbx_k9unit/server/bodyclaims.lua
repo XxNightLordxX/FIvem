@@ -427,3 +427,139 @@ CreateThread(function()
         end
     end
 end)
+
+-- ======================================================================
+-- FORCED RELEASE -- "this citizenid just lost K9 access, let go of them"
+--
+-- WHY THIS EXISTS. server/certifications.lua's EndK9AccessForCitizenId
+-- tears down every session consequence of holding K9 access. Two
+-- consequences were missing from that teardown: a K9 resting inside a
+-- deployable kennel, and a K9 holding a vehicle seat claim. Both are
+-- reachable states at the moment access is revoked, and both left the
+-- decertified player still physically attached/seated with the server's
+-- own registries still recording them as the occupant.
+--
+-- WHY IT IS A DISPATCHER AND NOT A DIRECT CLEAR. The obvious shortcut --
+-- have EndK9AccessForCitizenId clear BodyClaims[citizenid] and be done --
+-- is actively WORSE than the gap it closes. The body claim is only half
+-- the state. server/kennel.lua's own KennelOccupants table and
+-- server/vehicle.lua's own VehicleSeatClaims table are the other half, both
+-- file-local by deliberate design (see each file's own "never read directly
+-- by another file" note), and the affected player's CLIENT is a third half
+-- again -- it is still attached to the kennel prop, or still sitting in the
+-- seat, and nothing has told it otherwise. Clearing only the registry would
+-- free the kennel/seat for a SECOND citizenid while the first is visibly
+-- still in it: a silent double-occupancy, dressed up as a fix, of exactly
+-- the kind this whole file exists to prevent.
+--
+-- So each owning mechanic registers its OWN releaser here, at its own file
+-- load time, and keeps ownership of its own private table and its own
+-- server->client event. This file only knows which mechanic holds the claim
+-- and how to reach that mechanic's teardown. Nothing reaches across a file
+-- boundary into someone else's state.
+--
+-- GATE THE STOP, NEVER THE START. Neither this function nor any releaser
+-- registered with it may consult HasK9Access, any certification lookup, any
+-- Config.Features flag, or any cooldown. The single caller is a teardown
+-- for an ALREADY-CONFIRMED access loss; re-checking access here is exactly
+-- how a decertified player would end up sealed inside their own kennel with
+-- the thing that would have let them out now switched off. This is the
+-- resource's oldest rule and it is load-bearing here.
+-- ======================================================================
+
+-- mechanic -> function(citizenid, reason) -> boolean released
+-- File-local by the same discipline as BodyClaims itself.
+local BodyClaimReleasers = {}
+
+--- Registers `mechanic`'s own forced-release teardown, called by
+--- ForceReleaseBodyClaimForCitizenId below when that mechanic is the one
+--- holding a claim on a citizenid losing access.
+---
+--- THE CONTRACT A RELEASER MUST SATISFY, in one step with no yield between
+--- its halves:
+---   1. Clear the mechanic's OWN private registry entry for `citizenid`
+---      (KennelOccupants[citizenid] / the matching VehicleSeatClaims row).
+---   2. Resolve `citizenid`'s CURRENT live source FRESH (via
+---      exports.qbx_core:GetPlayerByCitizenId) and fire the mechanic's own
+---      server->client force-exit event to that source alone. Never reuse a
+---      source captured earlier -- server ids are recycled, and a revoke
+---      can race a reconnect.
+--- Both halves, or neither. A registry clear without the client event is
+--- the double-occupancy hazard described above.
+---
+--- A releaser MUST be a true no-op (returning false, never erroring) when
+--- `citizenid` holds nothing in its registry -- the common case. If the
+--- player is genuinely offline and no live source resolves, the registry
+--- clear ALONE is correct and safe: there is no client rendering anything
+--- to desync from. This mirrors ForceBreakPartnershipForCitizenId's own
+--- established "OFFLINE-CAPABLE BY DESIGN" precedent at the same call site.
+--- @param mechanic string
+--- @param releaser fun(citizenid: string, reason: string?): boolean
+function RegisterBodyClaimReleaser(mechanic, releaser)
+    if type(mechanic) ~= 'string' or mechanic == '' or type(releaser) ~= 'function' then
+        print(('[qbx_k9unit] bodyclaims: RegisterBodyClaimReleaser(%s, %s) ignored -- a releaser must be registered under a non-empty string mechanic name.')
+            :format(tostring(mechanic), type(releaser)))
+        return
+    end
+    BodyClaimReleasers[mechanic] = releaser
+end
+
+--- Releases whatever exclusive body claim `citizenid` currently holds,
+--- tearing down the owning mechanic's own state and telling that player's
+--- client to physically let go. Called from
+--- server/certifications.lua's EndK9AccessForCitizenId.
+---
+--- 'combat_target' IS DELIBERATELY NOT RELEASED HERE, and this is the one
+--- exclusion worth reading twice. That claim is not held BY the citizenid;
+--- it is held AGAINST them, by a DIFFERENT player who is currently biting,
+--- taking down, or dragging them. Clearing it because the TARGET lost K9
+--- access would end a third party's in-flight combat effect from the
+--- registry side only, while that holder's own client carries happily on --
+--- the same desync this function exists to avoid, merely pointed at someone
+--- else. Those claims carry a real TTL and expire on their own (unlike
+--- 'kennel_rest', which is deliberately permanent), so leaving them is
+--- bounded, not a leak. Losing K9 access has never ended a bite already in
+--- progress and does not start doing so here.
+---
+--- Returns false when there was nothing to do -- no claim, or a claim whose
+--- mechanic has no registered releaser. Never errors: a releaser that
+--- throws is caught, logged, and the body claim is still cleared, because
+--- leaving a permanent 'kennel_rest' claim behind after a failed teardown
+--- would block every other exclusive mechanic for that citizenid forever.
+--- @param citizenid string
+--- @param reason string? -- free-form, passed through to the releaser and on to the client for its notification
+--- @return boolean released
+function ForceReleaseBodyClaimForCitizenId(citizenid, reason)
+    if type(citizenid) ~= 'string' or citizenid == '' then return false end
+
+    local claim = GetLiveBodyClaim(citizenid)
+    if not claim then return false end
+
+    local mechanic = claim.mechanic
+    if mechanic == 'combat_target' then return false end
+
+    local releaser = BodyClaimReleasers[mechanic]
+    if not releaser then
+        -- A mechanic claims bodies but never registered a teardown. Do NOT
+        -- clear the claim: without a releaser there is no way to tell that
+        -- mechanic or the client, so clearing would be precisely the
+        -- registry-only half-release this file refuses to perform. Loud,
+        -- because it means a new claiming mechanic shipped without one.
+        print(('[qbx_k9unit] bodyclaims: ForceReleaseBodyClaimForCitizenId(%s) found a live "%s" claim with NO registered releaser -- leaving it intact rather than performing a registry-only release. Whichever file claims "%s" must call RegisterBodyClaimReleaser at its own load time.')
+            :format(tostring(citizenid), tostring(mechanic), tostring(mechanic)))
+        return false
+    end
+
+    local ok, err = pcall(releaser, citizenid, reason)
+    if not ok then
+        print(('[qbx_k9unit] bodyclaims: the "%s" releaser errored for %s: %s -- clearing the body claim anyway so this citizenid is not locked out of every other exclusive mechanic.')
+            :format(tostring(mechanic), tostring(citizenid), tostring(err)))
+    end
+
+    -- Unconditional, and deliberately AFTER the releaser: a releaser is
+    -- expected to release its own body claim as part of its ordinary
+    -- teardown, and ReleaseBody is idempotent, so this is a backstop for the
+    -- error path above, never a double-release hazard.
+    ReleaseBody(citizenid, mechanic)
+    return ok
+end

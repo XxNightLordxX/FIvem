@@ -127,6 +127,20 @@ local function newVehicleServerFixture(opts)
                 if not citizenid then return nil end
                 return { PlayerData = { citizenid = citizenid } }
             end,
+            -- Reverse lookup, added for the forced-release pass: the
+            -- 'vehicle_seat' releaser resolves a citizenid's CURRENT live
+            -- source rather than trusting the one recorded on the claim.
+            -- Derived from the SAME playersBySource table as the forward
+            -- lookup, so a test that disconnects someone makes them offline
+            -- in both directions at once and cannot drift.
+            GetPlayerByCitizenId = function(_self, citizenid)
+                for src, cid in pairs(playersBySource) do
+                    if cid == citizenid then
+                        return { PlayerData = { citizenid = cid, source = src } }
+                    end
+                end
+                return nil
+            end,
         },
     }
 
@@ -1063,6 +1077,114 @@ t.test('EXCLUSIVE BODY-CLAIM: playerDropped also releases this citizenid\'s vehi
     f.firePlayerDropped(2, 'left')
 
     t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'a disconnecting claimant must not leave a permanent body-claim behind')
+end)
+
+-- ----------------------------------------------------------------------
+-- FORCED RELEASE ON ACCESS LOSS -- this file's half of
+-- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher.
+--
+-- tests/bodyclaims_spec.lua proves the dispatcher's routing in isolation.
+-- What can only be proven HERE is that server/vehicle.lua genuinely
+-- registers a 'vehicle_seat' releaser and that it does BOTH halves: clears
+-- its own VehicleSeatClaims row AND tells the affected client to get out.
+-- A registry-only clear would hand the exact seat this player is still
+-- sitting in to a second citizenid.
+-- ----------------------------------------------------------------------
+
+t.test('FORCED RELEASE: server/vehicle.lua registers a vehicle_seat releaser, and it does BOTH halves -- frees the seat AND tells the client to get out', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    t.isTrue(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'sanity: the seat claim is held')
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('CIT1', 'cert_revoked'),
+        'server/vehicle.lua must have registered a vehicle_seat releaser at its own file load')
+
+    -- HALF ONE: the seat row itself is gone, so somebody else can have it.
+    t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'), 'the body claim is released')
+    f.setAccess(3, true)
+    f.setPlayer(3, 'CIT2')
+    f.setPed(3, 11, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 3, 500, 1, 1)
+    t.isNotNil(f.lastClientEventNamed('qbx_k9unit:client:vehicleSeatClaimGranted'),
+        'a SECOND citizenid can now claim that exact seat -- proving VehicleSeatClaims was cleared, not just the body claim')
+
+    -- HALF TWO: and the first player was told to get out, so the seat is
+    -- not handed over underneath someone still sitting in it.
+    local forced
+    for i = 1, #f.clientEvents do
+        if f.clientEvents[i].event == 'qbx_k9unit:client:forceExitVehicleSeat' then forced = f.clientEvents[i] end
+    end
+    t.isNotNil(forced, 'THE LOAD-BEARING HALF: clearing the seat row without this event hands the seat to a second player while the first is still in it')
+    t.equals(forced.target, 2, 'targeted at the affected player alone, never broadcast')
+    t.equals(forced.args[1], 'cert_revoked', 'the reason reaches the client so it can say why')
+end)
+
+t.test('FORCED RELEASE: the client event is aimed at the citizenid\'s CURRENT live source, never the one recorded on the claim', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    f.setPlayer(2, nil)
+    f.setPlayer(9, 'CIT1') -- same person, reconnected on a new source
+
+    f.env.ForceReleaseBodyClaimForCitizenId('CIT1', 'cert_revoked')
+
+    local forced
+    for i = 1, #f.clientEvents do
+        if f.clientEvents[i].event == 'qbx_k9unit:client:forceExitVehicleSeat' then forced = f.clientEvents[i] end
+    end
+    t.isNotNil(forced)
+    t.equals(forced.target, 9, 'resolved fresh -- source 2 may now belong to an unrelated player who would be thrown out of their own vehicle')
+end)
+
+t.test('FORCED RELEASE: an OFFLINE citizenid still gets the seat row cleared, with no client event attempted', function()
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    f.setPlayer(2, nil)
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('CIT1', 'cert_revoked'),
+        'offline is a SUCCESS -- no client is rendering a seated ped to desync from')
+    t.isFalse(f.env.IsBodyClaimedByOther('CIT1', 'kennel_rest'))
+end)
+
+t.test('FORCED RELEASE: a citizenid holding NO seat is a clean no-op', function()
+    local f = newVehicleServerFixture()
+    f.setPlayer(2, 'CIT1')
+    t.isFalse(f.env.ForceReleaseBodyClaimForCitizenId('CIT1', 'cert_revoked'))
+end)
+
+t.test('FORCED RELEASE IS UNGATED: it still frees a seat whose holder\'s access has ALREADY been revoked', function()
+    -- GATE THE STOP, NEVER THE START. The caller is
+    -- EndK9AccessForCitizenId, which has already taken this citizenid's
+    -- access away -- a HasK9Access check anywhere in the release path would
+    -- be guaranteed false at exactly the moment it matters.
+    local f = newVehicleServerFixture()
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+
+    f.setAccess(2, false) -- revoked while seated
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('CIT1', 'cert_revoked'))
+    local forced
+    for i = 1, #f.clientEvents do
+        if f.clientEvents[i].event == 'qbx_k9unit:client:forceExitVehicleSeat' then forced = f.clientEvents[i] end
+    end
+    t.isNotNil(forced, 'losing access must never be what stops you getting out of a vehicle')
 end)
 
 t.test('EXCLUSIVE BODY-CLAIM: the periodic sweep also releases this citizenid\'s vehicle_seat body-claim for a TTL-expired claim nobody ever asks about again', function()

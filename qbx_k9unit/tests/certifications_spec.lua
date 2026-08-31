@@ -247,6 +247,7 @@ local function newFixture(opts)
     local leashDetachCalls = {}         -- ForceDetachLeashForSource(src, reason)
     local officerLeashDetachCalls = {}  -- ForceDetachOfficerLeashForSource(src, reason)
     local partnershipBreakCalls = {}    -- ForceBreakPartnershipForCitizenId(citizenid, reason)
+    local bodyClaimReleaseCalls = {}    -- ForceReleaseBodyClaimForCitizenId(citizenid, reason)
     local effectEndCalls = {}           -- EndActiveEffectForHolder(src) -- server/combat.lua, called via pcall at every "must not outlive certification" call site in the production file; never previously stubbed/observed by this spec (opts.includeEffectHook, default true, mirrors opts.includePartnershipHook's own existence-guard test below)
     -- APPEARANCE HOOK (coder-security, this pass -- "prove role and model
     -- are genuinely separate, everywhere" audit): ApplyK9AppearanceOnGrant/
@@ -493,6 +494,17 @@ local function newFixture(opts)
             effectEndCalls[#effectEndCalls + 1] = src
         end
     end
+    -- ForceReleaseBodyClaimForCitizenId (server/bodyclaims.lua) is
+    -- runtime-existence-guarded at its call site in exactly the same shape
+    -- as ForceBreakPartnershipForCitizenId above. Included by default so
+    -- tests can assert it fires; pass includeBodyClaimHook = false to
+    -- confirm the guard tolerates the global being absent entirely
+    -- (server/bodyclaims.lua not loaded).
+    if opts.includeBodyClaimHook ~= false then
+        overrides.ForceReleaseBodyClaimForCitizenId = function(citizenid, reason)
+            bodyClaimReleaseCalls[#bodyClaimReleaseCalls + 1] = { citizenid, reason }
+        end
+    end
     -- See appearanceApplyCalls/appearanceRevertCalls's own declaration-site
     -- comment above for the full writeup.
     if opts.includeAppearanceHook ~= false then
@@ -559,6 +571,7 @@ local function newFixture(opts)
         leashDetachCalls = leashDetachCalls,
         officerLeashDetachCalls = officerLeashDetachCalls,
         partnershipBreakCalls = partnershipBreakCalls,
+        bodyClaimReleaseCalls = bodyClaimReleaseCalls,
         effectEndCalls = effectEndCalls,
         appearanceApplyCalls = appearanceApplyCalls,
         appearanceRevertCalls = appearanceRevertCalls,
@@ -2655,6 +2668,55 @@ t.test('OnJobUpdate: ForceBreakPartnershipForCitizenId is called for a real depa
         if call[1] == 'CIT70' and call[2] == 'department_changed' then found = true end
     end
     t.isTrue(found)
+end)
+
+-- ======================================================================
+-- FORCED BODY-CLAIM RELEASE (this pass) -- EndK9AccessForCitizenId's own
+-- last missing teardown. A player who lost K9 access while resting in a
+-- kennel or holding a vehicle seat kept both: still attached to the prop,
+-- still seated, with the server's own registries still recording them.
+--
+-- These tests pin the CALL and its guard. The dispatcher's routing is
+-- proven in tests/bodyclaims_spec.lua; the two mechanics' own teardowns in
+-- tests/kennel_spec.lua and tests/vehicle_spec.lua. What is proven here is
+-- only that this file makes the call at all, with the durable citizenid and
+-- never a source, and that it survives the global being absent.
+-- ======================================================================
+
+t.test('FORCED BODY-CLAIM RELEASE: losing department membership entirely releases any kennel-rest or vehicle-seat claim this citizenid holds', function()
+    local f = newFixture({
+        departments = {
+            police = { label = 'Police Department', certifierGrade = 4, autoAccessGrade = 5 },
+        },
+    })
+    f.registerPlayer(96, 'CIT96', { name = 'police', grade = { level = 5 } })
+    t.isTrue(f.env.HasK9Access(96), 'sanity: has access before the change')
+
+    fireJobUpdate(f, 96, { name = 'taxi', grade = { level = 5 } })
+
+    local last = f.bodyClaimReleaseCalls[#f.bodyClaimReleaseCalls]
+    t.isNotNil(last, 'a K9 resting in a kennel when their access is revoked must not stay attached to it')
+    t.equals(last[1], 'CIT96', 'keyed by the DURABLE citizenid, never a source -- server ids are recycled and this is also reachable for an offline player')
+    t.equals(last[2], 'department_changed', 'the reason travels through so the player can be told why')
+end)
+
+t.test('FORCED BODY-CLAIM RELEASE: the runtime-existence guard tolerates server/bodyclaims.lua not being loaded at all', function()
+    local f = newFixture({
+        includeBodyClaimHook = false,
+        departments = {
+            police = { label = 'Police Department', certifierGrade = 4, autoAccessGrade = 5 },
+        },
+    })
+    f.registerPlayer(97, 'CIT97', { name = 'police', grade = { level = 5 } })
+
+    -- The real assertion is that this does not error, and that the rest of
+    -- the teardown still completes -- one absent optional global must never
+    -- take the whole access-revocation path down with it.
+    fireJobUpdate(f, 97, { name = 'taxi', grade = { level = 5 } })
+
+    t.equals(#f.bodyClaimReleaseCalls, 0)
+    t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][1], 'CIT97',
+        'the teardown steps around the absent global still run')
 end)
 
 -- ======================================================================

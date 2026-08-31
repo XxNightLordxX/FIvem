@@ -235,6 +235,20 @@ local function newKennelFixture(opts)
                 if not citizenid then return nil end
                 return { PlayerData = { citizenid = citizenid } }
             end,
+            -- Reverse lookup, added for the forced-release pass: the
+            -- 'kennel_rest' releaser resolves a citizenid's CURRENT live
+            -- source rather than trusting the one recorded at entry time.
+            -- Deliberately derived from the SAME playersBySource table the
+            -- forward lookup uses, so a test that disconnects someone makes
+            -- them offline in both directions at once and cannot drift.
+            GetPlayerByCitizenId = function(_self, citizenid)
+                for src, cid in pairs(playersBySource) do
+                    if cid == citizenid then
+                        return { PlayerData = { citizenid = cid, source = src } }
+                    end
+                end
+                return nil
+            end,
         },
     }
 
@@ -2048,6 +2062,117 @@ t.test('requestExitKennel also releases this citizenid\'s kennel_rest body-claim
     t.isTrue(f.env.ClaimBody('DOG02', 'vehicle_seat', 10000), 'the control: a legitimate claim by a different mechanic succeeds once released')
 end)
 
+-- ----------------------------------------------------------------------
+-- FORCED RELEASE ON ACCESS LOSS -- this file's half of
+-- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher.
+--
+-- tests/bodyclaims_spec.lua proves the dispatcher's own routing contract in
+-- isolation. What can ONLY be proven here is that server/kennel.lua
+-- genuinely registers a 'kennel_rest' releaser against that same registry
+-- and that the releaser does BOTH halves of the teardown: clears its own
+-- KennelOccupants row AND tells the affected client to physically let go.
+-- Either half alone is a bug -- a registry-only clear frees the kennel for
+-- a second occupant while the first is still attached to the prop.
+-- ----------------------------------------------------------------------
+
+t.test('FORCED RELEASE: server/kennel.lua registers a kennel_rest releaser, and it does BOTH halves -- frees the kennel AND tells the client to let go', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+    t.isTrue(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'sanity: resting, claim held')
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('DOG02', 'cert_revoked'),
+        'server/kennel.lua must have registered a kennel_rest releaser at its own file load')
+
+    -- HALF ONE: the server no longer records them as the occupant, so the
+    -- kennel is genuinely free.
+    t.isFalse(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'the body claim is released')
+    makeK9(f, 3, 'DOG03', 5003, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 3, netId)
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:enterKennelConfirmed'),
+        'a SECOND K9 can now enter -- proving KennelOccupants was cleared, not just the body claim')
+
+    -- HALF TWO: and the first player was actually told, so they are not
+    -- left attached to the prop while a second occupant moves in.
+    local forced = lastClientEvent(f, 'qbx_k9unit:client:forceExitKennelRest')
+    t.isNotNil(forced, 'THE LOAD-BEARING HALF: clearing the registry without this event is a silent double-occupancy')
+    t.equals(forced.target, 2, 'targeted at the affected player alone, never broadcast')
+    t.equals(forced.args[1], 'cert_revoked', 'the reason reaches the client so it can say why')
+end)
+
+t.test('FORCED RELEASE: the client event is aimed at the citizenid\'s CURRENT live source, never the one recorded at entry', function()
+    -- Server ids are recycled and a revoke can race a reconnect. If this
+    -- used occupant.enteredSrc, a completely different player who happened
+    -- to inherit that id would be yanked out of whatever they were doing.
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    -- The same citizenid is now live on a DIFFERENT source (reconnected).
+    f.setPlayer(2, nil)
+    f.setPlayer(9, 'DOG02')
+
+    f.env.ForceReleaseBodyClaimForCitizenId('DOG02', 'cert_revoked')
+
+    local forced = lastClientEvent(f, 'qbx_k9unit:client:forceExitKennelRest')
+    t.isNotNil(forced)
+    t.equals(forced.target, 9, 'resolved fresh -- the stale source 2 may now belong to someone else entirely')
+end)
+
+t.test('FORCED RELEASE: an OFFLINE citizenid still gets the registry cleared, with no client event attempted', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.setPlayer(2, nil) -- gone; no live source resolves
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('DOG02', 'cert_revoked'),
+        'offline is a SUCCESS, not a failure -- there is no client rendering an attachment to desync from')
+    t.isFalse(f.env.IsBodyClaimedByOther('DOG02', 'vehicle_seat'), 'the registry clear alone is the complete teardown here')
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:forceExitKennelRest'), 'and nothing is sent into the void')
+end)
+
+t.test('FORCED RELEASE: a citizenid resting in NO kennel is a clean no-op -- the common case must never error', function()
+    local f = newKennelFixture()
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    t.isFalse(f.env.ForceReleaseBodyClaimForCitizenId('DOG02', 'cert_revoked'))
+    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:forceExitKennelRest'))
+end)
+
+t.test('FORCED RELEASE IS UNGATED: it still frees a resting K9 whose access has ALREADY been revoked -- the exact state it exists for', function()
+    -- GATE THE STOP, NEVER THE START. This is the whole point: the caller
+    -- is server/certifications.lua's EndK9AccessForCitizenId, which has
+    -- already taken this citizenid's access away. Any HasK9Access check in
+    -- the release path would be guaranteed false here and would seal a
+    -- decertified player inside their own kennel permanently.
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.setAccess(2, false) -- access revoked WHILE resting
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('DOG02', 'cert_revoked'))
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:forceExitKennelRest'),
+        'losing access must never be what stops you getting out')
+end)
+
+t.test('FORCED RELEASE IS UNGATED: it still works with Config.Features.DeployableKennel turned OFF mid-session', function()
+    local f = newKennelFixture()
+    local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
+    makeK9(f, 2, 'DOG02', 5002, { x = 1.0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestEnterKennel', 2, netId)
+
+    f.config.Features.DeployableKennel = false -- operator toggles it off while someone is inside
+
+    t.isTrue(f.env.ForceReleaseBodyClaimForCitizenId('DOG02', 'cert_revoked'))
+    t.isNotNil(lastClientEvent(f, 'qbx_k9unit:client:forceExitKennelRest'),
+        'an operator toggling a feature off must not be able to strand someone inside it')
+end)
+
 t.test('playerDropped (occupant disconnect) also releases this citizenid\'s kennel_rest body-claim', function()
     local f = newKennelFixture()
     local netId = deploySuccessfully(f, 1, 'OWNER01', 5001, { x = 0, y = 0, z = 0 })
@@ -2762,6 +2887,20 @@ local function newCombinedFixture()
                 local citizenid = playersBySource[src]
                 if not citizenid then return nil end
                 return { PlayerData = { citizenid = citizenid } }
+            end,
+            -- Reverse lookup, added for the forced-release pass: the
+            -- 'kennel_rest' releaser resolves a citizenid's CURRENT live
+            -- source rather than trusting the one recorded at entry time.
+            -- Deliberately derived from the SAME playersBySource table the
+            -- forward lookup uses, so a test that disconnects someone makes
+            -- them offline in both directions at once and cannot drift.
+            GetPlayerByCitizenId = function(_self, citizenid)
+                for src, cid in pairs(playersBySource) do
+                    if cid == citizenid then
+                        return { PlayerData = { citizenid = cid, source = src } }
+                    end
+                end
+                return nil
             end,
         },
     }
