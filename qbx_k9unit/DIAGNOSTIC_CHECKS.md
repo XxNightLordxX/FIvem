@@ -235,7 +235,13 @@ already written and tested.
   and `Config.Wellbeing.Thirst.drinkItemName` actually resolve to real,
   registered items (ox_inventory exposes an item list; qb-inventory
   equivalent via the compat layer this resource already has in
-  `server/compatinventory.lua`/`server/inventory.lua`). Report a plain
+  `shared/compat/inventory.lua` — path corrected 2026-08-31; this line
+  previously said `server/compatinventory.lua`, which has never existed.
+  The layer itself is real: `shared/compat/inventory.lua` resolves
+  ox_inventory and qb-inventory as CONFIRMED backends and names six
+  further candidates it treats as unconfirmed. `server/inventory.lua` is
+  not part of it — that file is the `K9Inventory` feature and talks to
+  ox_inventory directly). Report a plain
   "item `k9_food` was not found in your inventory system" if not.
 - **Tier:** FINDING. Either the item exists in the inventory system's own
   item table or it doesn't — no judgment call.

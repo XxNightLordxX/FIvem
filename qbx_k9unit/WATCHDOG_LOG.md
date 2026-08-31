@@ -25,6 +25,7 @@ pass itself.
 | 2026-08-31 | Clean on all five checks; 13 backlogged firings (Aug 28-31) covered by this one pass. 8 commits reviewed, all authored and gated this session. The rank-visibility finding left open by an earlier pass is now CLOSED BY CODE, not by editing the comment. Dependency status re-verified upstream and answered properly for the first time: all three alive, none archived. |
 | 2026-08-31 (2nd) | NOT a watchdog pass -- a directed work session, logged here because it changed a SHIPPED DEFAULT the next pass must know about: `Config.Database.enabled` now ships **false** (drag-and-drop, no SQL import). Memory-only is now the ordinary path, not a fault. Also corrected a false doc claim in four places (memory mode DOES keep a capped audit trail) and closed the KNOWN_ISSUES command-drift item. |
 | 2026-08-31 (3rd) | **THIS ROUTINE'S OWN PROMPT WAS REWRITTEN.** It referenced a `SPEC.md` that has not existed for many passes (twice), asked about a bark-audio gap closed long ago, and did not know the database now ships OFF -- so it would have read a healthy server as broken. Checklist also rebalanced toward doc-vs-code drift, which is where every real finding has come from lately. |
+| 2026-08-31 (4th) | Six real doc-vs-code drifts found and fixed, all by extracting every file path cited in prose/comments and testing whether it resolves. Worst: `client/tablet.lua` named a NONEXISTENT spec as the guard for the three-way locale contract, and claimed "255 keys total" where the real count is 1078. `DEVELOPER_REFERENCE.md` §14.3 named the wrong file for `PropAttachments` and said it had **no server file** when `server/propattachment.lua` ships. All six gates green; the `audio_play_spec.js` blip did NOT recur and is recorded as unreproduced, not diagnosed. Dependency currency NOT re-verified -- proxy blocks non-repo GitHub. |
 
 ## 2026-08-26 — detail
 
@@ -561,3 +562,125 @@ as already-handled so a future pass does not re-report them.
 The instruction not to manufacture findings is kept and strengthened: a
 clean pass honestly reported is the correct outcome, and has been the usual
 one.
+
+## 2026-08-31 (4th) — detail
+
+Trigger `trig_018744yNqJtjKBeCczeKjbFu`, fired 06:45 UTC, first pass run
+against the rewritten prompt.
+
+**1. Commits reviewed.** 13 since `d1e1e45`, all authored this session and
+each gated before it landed. Nothing unreviewed.
+
+**2. Dependency currency — NOT DONE, and this is the honest reason.**
+This session's egress proxy binds `github.com` to the configured
+repository only: release atom feeds and `api.github.com` both return 403
+(`"sessions are bound to their configured repositories"`). The one page
+that did come back through `WebFetch` reported ox_lib's latest as
+`v3.39.0` and dated it **July 13, 2024**, while a web search reported the
+same tag as **July 13, 2026**. Two sources, same tag, two-year
+disagreement — so the date is not established and no claim is recorded
+from it. The previously logged dates (ox_lib 2026-08-17, oxmysql
+2026-07-03, ox_target 2026-06-09) therefore stand UNCONFIRMED as of this
+pass rather than being refreshed or quietly re-asserted.
+
+One thing worth carrying forward that *did* check out: `CommunityOx/ox_lib`
+(a fork of `overextended/ox_lib` that appears in search results and could
+easily be mistaken for the live upstream) was **archived on 2026-04-28**
+and is read-only. If a future pass or an owner lands on that repo, it is
+the dead one.
+
+**3. Regression spot-checks — all five verified against real code, not
+against the comments describing it.**
+
+- `AgilityBasicJump` — the suppression loop's own `while` condition IS its
+  release check, re-read every iteration, and covers the block clearing,
+  the model changing, and death. `DisableControlAction` needs no undo, so
+  no `onResourceStop` handler is required. Correct as documented.
+- `LeashPairs` — `doDetachLeash` resolves the partner and clears BOTH
+  directions; no caller reaches into the table directly.
+  `ForceDetachLeashForSource` correctly refuses to detach when the revoked
+  citizenid is only the officer/handler half of someone else's valid
+  pairing.
+- `RevokeCertificationOffline` — calls `RefreshCertificationCache` AND
+  `EndK9AccessForCitizenId`, and handles the race where the "offline"
+  target connected mid-operation.
+- Vehicle `onResourceStop`, both sides — client releases any pending seat
+  claim then force-leaves; server has `playerDropped`, `onResourceStop`
+  and a periodic sweep.
+- Radial `registerRadial`/`addRadialItem` split — 7 `registerRadial` calls
+  for submenu contents, and the 3 `addRadialItem` calls are mutually
+  exclusive branches all registering the SAME single `k9unit_open` opener
+  id. The split the header warns about is intact; the "only ever used for
+  the single root opener item" comment is accurate.
+
+**4. Doc-vs-code drift — where every finding came from, again.**
+
+Method, recorded so the next pass can rerun it in one command: extract
+every `<dir>/<file>.<ext>` path cited anywhere in the `.md` files and in
+Lua/JS comments, then test whether each one resolves on disk. Most
+non-resolving hits are legitimate citations of OTHER resources' source
+(ox_lib's `client/notify.lua`, qbx_core's `server/player.lua`,
+qb-inventory's `client/vehicles.lua`) or extraction artifacts from the
+`a.lua/b.lua` slash-joined writing style — filter those and the real
+drifts fall out. Six did:
+
+1. **`client/tablet.lua` named a spec that does not exist.** It pointed at
+   `tests/tablet_strings_spec.lua` as the guard enforcing the three-way
+   locale contract. There is no such file. The real enforcer is
+   `tests/tabletlocalization_spec.lua`. This was the worst of the six: the
+   comment sent anyone verifying the contract to a dead end.
+2. **The same comment claimed "255 keys total".** The real count is
+   **1078** — off by a factor of four — plus stale narrative about "this
+   pass added the 53 K9 Audit Trail viewer keys". Fixed by DELETING the
+   count rather than refreshing it: a hand-maintained number beside a list
+   that grows every pass is a comment that lies by default.
+   - The contract itself is HEALTHY, which was checked rather than
+     assumed: `TABLET_STRING_KEYS` and `html/tablet.js`'s
+     `DEFAULT_STRINGS` are the same 1078-key SET exactly, and every one of
+     those keys exists in `locales/en.json`'s `tablet` group. The group's
+     other 144 keys are Lua-side and correctly not shipped to the NUI.
+3. **`DEVELOPER_REFERENCE.md` §14.3 named the wrong file.**
+   `client/attachments.lua` does not exist; the shipped file is
+   `client/propattachment.lua`. This one was genuinely misleading because
+   the rest of that plan table shipped intact, so the row looked trustworthy.
+4. **The same row said `PropAttachments` has "No server file".**
+   `server/propattachment.lua` ships and is in `fxmanifest.lua`. §14.4.2's
+   trust-model discussion still reads as though no server file exists; the
+   correction note now says to treat the code as authoritative there.
+5. **`DIAGNOSTIC_CHECKS.md` B2 cited `server/compatinventory.lua`.** No
+   such file. The advice it gives ("reuse the compat layer, don't hardcode
+   ox_inventory") is SOUND — the layer is real, at
+   `shared/compat/inventory.lua` — only the path was wrong. Worth noting
+   the first read of this looked like a much bigger finding (advice
+   depending on a capability that does not exist); checking before writing
+   it up showed it was just a stale path.
+6. **`server/equipmentshop.lua` cited `server/sar.lua`** in its list of
+   sibling files with the same three-way refusal shape. That file has never
+   existed; the SAR file is `server/sarcalls.lua`. Checking the CLAIM and
+   not only the spelling turned up a second, smaller inaccuracy in the same
+   sentence: the reason set is two or three wide depending on the file, not
+   uniformly three, because `pursuitsprint`/`sarcalls`/`scentlineup`
+   top-level `return` when their flag is off. Both corrected.
+
+A seventh, cosmetic: `tests/equipmentshopitems_spec.lua` wrote
+`server/certtiers_spec.lua` where it meant `tests/certtiers_spec.lua`.
+
+**5. Health gates — all six green.**
+
+`luacheck` 0 warnings / 0 errors across 217 files; 116 Lua spec files pass;
+42 browser spec files pass; locale cross-check passes with 0 MISSING across
+1936 keys and 1099 call sites.
+
+**The `audio_play_spec.js` intermittent failure — closed as UNREPRODUCED,
+not as diagnosed.** It failed once inside a suite run at the start of this
+pass. It has not failed since: 103 runs during the investigation (60
+sequential, 40 concurrent 8-way, 3 full suite) plus this pass's own final
+suite run, all clean. Disk (15G free) and memory (15GB free) showed no
+pressure and `dmesg` showed no OOM. There IS a plausible mechanism — the
+spec's `RACE:` test drains the event loop with three
+`await new Promise((r) => setImmediate(r))` calls, which is a heuristic
+rather than a deterministic barrier — but it is UNPROVEN speculation and is
+recorded as such. No fix was made on a guess. If a future pass sees this
+spec fail again, that mechanism is the first place to look, and a second
+occurrence would justify replacing the setImmediate drain with a real
+barrier.

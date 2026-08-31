@@ -1517,10 +1517,20 @@ end
 --- Command has blocked you" for either of those is not just imprecise,
 --- it is WRONG -- it blames a person for a decision nobody made about
 --- them individually. Every sibling feature with this same three-way
---- shape (server/pursuitsprint.lua, server/scenttrail.lua, server/sar.lua,
---- server/scentlineup.lua, server/findalert.lua) already reports these as
---- three distinct, accurately-worded messages; this function now returns
---- a `reason` string so its two call sites can do the same.
+--- shape (server/pursuitsprint.lua, server/scenttrail.lua,
+--- server/sarcalls.lua, server/scentlineup.lua, server/findalert.lua)
+--- already returns a `reason` string so its call sites can word each
+--- refusal accurately instead of blaming a person; this function now does
+--- the same. (Filename corrected 2026-08-31: this list previously said
+--- `server/sar.lua`, which has never existed -- the SAR file is
+--- `server/sarcalls.lua`. The same pass also checked the claim itself
+--- rather than only the spelling: the reason SET is two or three wide
+--- depending on the file, not uniformly three. pursuitsprint, sarcalls and
+--- scentlineup top-level `return` when their feature flag is off, so a
+--- 'feature_disabled' reason is unreachable in their permitted-check and
+--- findalert returns only 'blocked'/'not_granted'. This function does need
+--- all three, because Config.Features.K9EquipmentShop is re-read per call
+--- rather than gating the file's load.)
 --- @param citizenid string
 --- @return boolean allowed
 --- @return string? reason -- 'feature_disabled' | 'blocked' | 'not_granted', present only when allowed is false

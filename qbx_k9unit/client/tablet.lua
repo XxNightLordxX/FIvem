@@ -838,12 +838,22 @@ end
 --- Every DEFAULT_STRINGS key from html/tablet.js, in that file's own
 --- declared order -- kept as an explicit list (rather than derived from
 --- anything at runtime) so BuildTabletStrings() below and
---- tests/tablet_strings_spec.lua both iterate the SAME set, and so a key
---- added to html/tablet.js without a matching addition here/in
+--- tests/tabletlocalization_spec.lua both iterate the SAME set, and so a
+--- key added to html/tablet.js without a matching addition here/in
 --- locales/en.json's `tablet` group is caught by that spec instead of
---- silently falling back to English forever. 255 keys total (this pass
---- added the 53 K9 Audit Trail viewer keys at the end of this list; see
---- this pass's own report for the count this changed from).
+--- silently falling back to English forever.
+---
+--- DELIBERATELY NOT STATING A KEY COUNT HERE. An earlier version of this
+--- comment claimed "255 keys total (this pass added the 53 K9 Audit Trail
+--- viewer keys...)". By the 2026-08-31 watchdog pass the real count was
+--- 1078 -- the comment had rotted by a factor of four, and the narrative
+--- about "this pass" had long since stopped meaning anything. A count
+--- maintained by hand next to a list that grows every pass is a comment
+--- that lies by default, so it is gone rather than merely refreshed. The
+--- spec named above is the count's real keeper: it compares this list
+--- against html/tablet.js's DEFAULT_STRINGS as SETS and fails on any
+--- disagreement, which is the property that actually matters. To see the
+--- current number, count the list -- do not re-enshrine one here.
 local TABLET_STRING_KEYS = {
     'title', 'close_label', 'tab_console', 'tab_my_record', 'loading',
     'error_generic', 'error_not_authorized', 'error_timeout', 'error_network',

@@ -580,7 +580,7 @@ t.test('two concurrent edits to the SAME item_key: the second is refused busy wh
     -- Simulate "already mid-edit" by acquiring the mutex from OUTSIDE this
     -- callback -- the mutex itself is a file-local upvalue not exposed to
     -- this test directly, so instead this test proves the SAME real
-    -- observable property server/certtiers_spec.lua's own equivalent test
+    -- observable property tests/certtiers_spec.lua's own equivalent test
     -- proves: TWO upserts fired back-to-back for the SAME key, with no
     -- yield between them (this sandbox's MySQL.query.await is fully
     -- synchronous), can never corrupt state -- the second call's own

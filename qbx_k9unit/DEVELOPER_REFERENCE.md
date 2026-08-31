@@ -1907,7 +1907,19 @@ Config.FetchMechanic = {
 | `client/proximityaudio.lua` | New | `ProximityAudioFX`'s tick loop, evaluating `SuspectDistanceSource()`, picking a tier, sending `relayGrowl`; also the receiving `playGrowl` handler. |
 | `server/main.lua` | Extends | `relayGrowl` handler — a near-identical sibling of `relayBark`, own cooldown table/length cap (fork 4). |
 | `client/main.lua` | Extends (small) | New exported `CanActAsK9Handler() -> boolean` — needed because `FetchMechanic`'s "Throw" is a **human handler** action, not necessarily a K9-riding player. |
-| `client/attachments.lua` | New | `PropAttachments`'s entire implementation: one radial item per configured slot, tracked local object handles, unequip on model swap/disconnect/`onResourceStop`. **No server file** — see §14.4.2's trust-model decision. |
+| `client/propattachment.lua` | New | `PropAttachments`'s client implementation: one radial item per configured slot, tracked local object handles, unequip on model swap/disconnect/`onResourceStop`. Also owns the generic `AttachPropToOwnPed`/`DetachAndDeleteProp` mechanic that `client/bonetool.lua`, `client/fetch.lua` and `client/leashvisual.lua` all reuse. |
+| `server/propattachment.lua` | New | The server half this plan originally said would not exist — see the correction note below. |
+
+> **Corrected 2026-08-31 (watchdog pass).** As written, the two rows above
+> said `client/attachments.lua` and **"No server file"**. Both were wrong
+> against what actually shipped, and the plan around them shipped
+> otherwise intact (`Config.Features.PropAttachments` is `true` by default
+> and the radial gate is live at `client/radial.lua`), so a reader had
+> every reason to trust them. The real files are
+> `client/propattachment.lua` and `server/propattachment.lua`, both listed
+> in `fxmanifest.lua`. §14.4.2's trust-model discussion still reads as
+> though no server file exists; treat the shipped code as authoritative
+> over that section.
 | `client/radial.lua` | Extends (small) | An "Equipment" submenu opener, and a "Throw Fetch Ball" item gated via `CanActAsK9Handler()`. |
 | `client/fetch.lua` / `server/fetch.lua` | New pair | `FetchMechanic`'s full lifecycle, modeled on `client/kennel.lua`/`server/kennel.lua`'s spawn/confirm/cleanup pattern. |
 | `config.lua` / `fxmanifest.lua` | Extend | Add §14.2's tables; add the new files. `dev/bone_sweep.lua` is never added to the manifest. |
