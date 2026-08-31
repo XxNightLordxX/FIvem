@@ -930,6 +930,36 @@ do
         t.equals(outcome, 'denied')
     end)
 
+    t.test('GrantPermission: a malformed permission key is rejected without throwing', function()
+        -- FOUND BY MUTATION TESTING (2026-08-31): deleting
+        -- IsValidPermissionKey's `type(value) ~= 'string' or value == '' or
+        -- #value > 50` line left the whole suite green. Every existing key
+        -- test above passes a well-formed string, so the shape guard itself
+        -- was never exercised.
+        --
+        -- Both halves are observable, which is what makes this a real gap
+        -- rather than an equivalent mutation:
+        --   * a non-string key reaches `value:match('^feature%.(.+)$')`
+        --     further down and THROWS -- aborting the grant mid-call
+        --     instead of returning a clean refusal its caller can report.
+        --   * `permission_key` is VARCHAR(50) in sql/install.sql, so an
+        --     over-long key is a truncation or a write error at the DB.
+        for _, bad in ipairs({ 123, true, {}, '' }) do
+            f.advanceTime(2000)
+            local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', bad)
+            t.isFalse(ok, ('a %s permission key must be refused'):format(type(bad)))
+            t.equals(outcome, 'invalid_permission',
+                ('a %s permission key must refuse as invalid_permission, not throw or succeed'):format(type(bad)))
+        end
+
+        -- 51 characters: one past the VARCHAR(50) the schema declares.
+        f.advanceTime(2000)
+        local tooLong = string.rep('k', 51)
+        local okLong, outcomeLong = f.env.GrantPermission(hcSrc, 'TARGET-A', tooLong)
+        t.isFalse(okLong, 'a 51-character key exceeds permission_key VARCHAR(50) and must be refused before the write')
+        t.equals(outcomeLong, 'invalid_permission')
+    end)
+
     t.test('GrantPermission: an unconfigured permission key is rejected', function()
         f.advanceTime(2000)
         local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'not.real')

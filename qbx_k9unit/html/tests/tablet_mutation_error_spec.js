@@ -268,6 +268,46 @@ t.test('certifying YOURSELF from the Person screen also re-fetches tablet:reques
     t.isTrue(myRecordCalls >= 2, 'a self-targeted certify re-pulled the viewer\'s own record, not just the Person screen\'s personSummary copy of the identical data');
 });
 
+t.test("a refusal's server-written `message` is shown verbatim, never collapsed into a generic code", async () => {
+    // FOUND BY MUTATION TESTING (2026-08-31): making every error renderer
+    // ignore `result.message` left all 42 browser specs green. Fourteen
+    // renderers in html/tablet.js open with that passthrough, and it is not
+    // decorative -- server/highcommand.lua attaches a real sentence to the
+    // XP-grant refusals that matter most to an admin (self_grant_disabled,
+    // invalid_amount, not_authorized, xp_system_unavailable), and
+    // server/tablet.lua does the same for an unresolvable citizenid.
+    //
+    // Without the passthrough the admin gets a bare code for all of them --
+    // the exact "collapses a dozen reasons into one generic line" failure
+    // html/tablet.js's own error-handling was written to prevent, and the
+    // same class fixed twice already this session for the `note` field.
+    const SERVER_SENTENCE = 'You cannot grant XP to yourself on this server.';
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER('SELF1', true), certifications: [], xp: 0, tierLabel: null, myFeatures: [] }),
+            'tablet:requestRoster': () => ({ ok: true, rows: [{ citizenid: 'SELF1', name: 'Self', departmentLabel: 'Police', certified: true, xp: 0, tierLabel: 'Recruit K9' }], truncated: false }),
+            'tablet:requestPersonSummary': () => ({ ok: true, target: { citizenid: 'SELF1', name: 'Self' }, certifications: [], xp: 0, tierLabel: 'Recruit K9' }),
+            'tablet:givexp': () => ({ ok: false, error: 'self_grant_blocked', message: SERVER_SENTENCE }),
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await settle();
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Manage')[0].click();
+    await settle(3);
+
+    const input = require('./tablet-dom-stub').findByTag(h.getRoot(), 'input').find((n) => n.getAttribute('type') === 'number' && n.getAttribute('placeholder'));
+    t.isDefined(input, 'the Give XP amount input exists');
+    input.typeValue('50');
+    findByText(h.getRoot(), 'Give XP')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.isTrue(findByText(h.getRoot(), SERVER_SENTENCE).length > 0,
+        "the server's own sentence must be rendered verbatim -- it is more specific than any code the client could map, and for several refusals it is the only explanation that exists");
+});
+
 t.test('giving XP to YOURSELF (allowSelfGrant on) also re-fetches tablet:requestMyRecord', async () => {
     let myRecordCalls = 0;
     const h = createHarness({
