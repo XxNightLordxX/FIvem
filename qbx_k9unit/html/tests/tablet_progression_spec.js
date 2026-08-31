@@ -143,4 +143,60 @@ t.test('an empty record still renders the screen with both off-messages, never a
     t.isTrue(findByText(h.getRoot(), 'This server does not track handler XP, so there is no rank to show here.').length >= 1);
 });
 
+// ------------------------------------------------------------------
+// PLACEHOLDER COLLISION -- a rank LABEL that itself contains a token.
+//
+// Rank labels are not fixed strings: high command renames them live
+// through the Rank Editor, and server/xptiers.lua's label validator
+// rejects `<>&"'` but has no reason to reject braces. The render path
+// used to substitute tokens one at a time with chained .replace(), so a
+// label substituted by the FIRST replace was still sitting in the string
+// when the SECOND one scanned it -- and got eaten. Cosmetic only (every
+// value goes through textContent, never innerHTML) but a rank reading
+// "reach {remaining} XP" instead of a number is a bug a player reports.
+//
+// The fix is a single-pass formatTemplate, so these also stand as the
+// regression guard for every other template in the file that interpolates
+// operator- or player-supplied text next to a second token.
+// ------------------------------------------------------------------
+
+t.test('PLACEHOLDER COLLISION: a rank named with another token in it renders that name verbatim, and the real number still lands', async () => {
+    const h = await openProgression({
+        xp: 500,
+        tierLabel: 'Rookie {remaining} K9',
+        xpLadder: [{ xp: 0, label: 'Rookie {remaining} K9' }, { xp: 2000, label: 'Trained K9' }],
+    });
+    t.isTrue(findByText(h.getRoot(), '500 XP -- Rookie {remaining} K9').length >= 1,
+        'the label must survive intact -- the second replace must not reach into what the first one substituted');
+    t.isTrue(findByText(h.getRoot(), 'Next: Trained K9, 1500 XP away.').length >= 1,
+        'and the genuine token still resolves to the real number');
+});
+
+t.test('PLACEHOLDER COLLISION: a NEXT-rank name containing {remaining} does not swallow the countdown', async () => {
+    const h = await openProgression({
+        xp: 100,
+        tierLabel: 'Green K9',
+        xpLadder: [{ xp: 0, label: 'Green K9' }, { xp: 900, label: 'Almost {remaining} There' }],
+    });
+    t.isTrue(findByText(h.getRoot(), 'Next: Almost {remaining} There, 800 XP away.').length >= 1,
+        'the countdown a player is actually reading must not be replaced by a number pulled out of the rank name');
+});
+
+t.test('PLACEHOLDER COLLISION: an {xp} inside a ladder row label leaves that row\'s real threshold intact', async () => {
+    const h = await openProgression({
+        xp: 0,
+        tierLabel: 'Green K9',
+        xpLadder: [{ xp: 0, label: 'Green K9' }, { xp: 7500, label: 'Elite {xp} Unit' }],
+    });
+    t.isTrue(findByText(h.getRoot(), 'Elite {xp} Unit -- 7500 XP').length >= 1,
+        'the row must show the rank name AND its own real threshold, not the threshold twice');
+});
+
+t.test('PLACEHOLDER COLLISION: an unknown token in a template is left verbatim rather than rendering "undefined"', async () => {
+    const h = await openProgression({ xp: 300, tierLabel: 'Some {nosuchtoken} Rank' });
+    t.equals(findByText(h.getRoot(), 'undefined').length, 0,
+        'a typo in a template must never surface to a player as the word undefined');
+    t.isTrue(findByText(h.getRoot(), '300 XP -- Some {nosuchtoken} Rank').length >= 1);
+});
+
 t.run();

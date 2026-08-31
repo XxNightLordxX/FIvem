@@ -170,3 +170,118 @@ t.test('a hostile department/grade/partner name reaches the DOM only via textCon
 });
 
 t.run();
+
+// ----------------------------------------------------------------------
+// HANDLER XP -- the second ladder on the person screen.
+//
+// server/tablet.lua has always sent handlerXp/handlerTierLabel on this
+// payload; the state mapping dropped both and nothing rendered them, so
+// every person-summary fetch computed a handler's rank and threw it away.
+//
+// NULL IS NOT ZERO is the whole reason this renders in a branch instead of
+// calling xpLine() the way the K9 line does: null means the handler ladder
+// is switched off server-wide, 0 means a real handler who has not earned
+// anything yet, and xpLine collapses both to "No XP record yet" -- which
+// would send someone off to grind a system their server does not run.
+// ----------------------------------------------------------------------
+
+function xpLines(h) {
+    return findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-xp-line')).map((n) => n._textContent);
+}
+
+async function openPersonWithSummary(extra) {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestPersonSummary': () => Object.assign({
+                ok: true, target: { citizenid: 'TARGET1', name: 'K9 Rex' }, certifications: [],
+                xp: 500, tierLabel: 'Trained K9', permissions: [], job: null, partnership: null,
+            }, extra || {}),
+        })),
+    });
+    await openPersonScreen(h);
+    return h;
+}
+
+t.test('HANDLER XP: a handler\'s own rank renders in its own section, separate from the K9 one', async () => {
+    const h = await openPersonWithSummary({ handlerXp: 220, handlerTierLabel: 'Senior Handler' });
+
+    t.equals(findByText(h.getRoot(), 'Handler XP').length, 1, 'its own heading -- the two ladders are never merged into one line');
+    t.equals(findByText(h.getRoot(), 'K9 XP').length, 1, 'and the K9 heading now says which ladder it means');
+    const lines = xpLines(h);
+    t.isTrue(lines.indexOf('500 — Trained K9') >= 0, 'the K9 line is unchanged');
+    t.isTrue(lines.indexOf('220 — Senior Handler') >= 0, 'and the handler line is genuinely rendered, not computed and discarded');
+});
+
+t.test('HANDLER XP: 0 is a real standing on the ladder, NOT "switched off"', async () => {
+    const h = await openPersonWithSummary({ handlerXp: 0, handlerTierLabel: 'Rookie Handler' });
+
+    t.isTrue(xpLines(h).indexOf('0 — Rookie Handler') >= 0, 'a handler who has earned nothing yet is still on the ladder');
+    t.equals(findByText(h.getRoot(), 'This server does not track handler XP.').length, 0,
+        'a falsy-but-real 0 must never be mistaken for the feature being off');
+});
+
+t.test('HANDLER XP: null says the ladder is switched off, rather than showing a misleading "no record yet"', async () => {
+    const h = await openPersonWithSummary({ handlerXp: null, handlerTierLabel: null });
+
+    t.equals(findByText(h.getRoot(), 'This server does not track handler XP.').length, 1);
+    t.equals(findByText(h.getRoot(), 'No XP record yet.').length, 0,
+        'that phrasing would send an operator looking for XP a handler can never earn here');
+});
+
+t.test('HANDLER XP: the ladders are independent -- a real handler rank shows even with the K9 ladder off', async () => {
+    const h = await openPersonWithSummary({ xp: null, tierLabel: null, handlerXp: 500, handlerTierLabel: 'Master Handler' });
+
+    t.isTrue(xpLines(h).indexOf('500 — Master Handler') >= 0, 'one ladder being off must never blank the other');
+});
+
+t.test('HANDLER XP: a person whose ONLY record is a handler standing is not written off as "no record found"', async () => {
+    // personSummaryLooksLikeNoRecord() predates the handler ladder and only
+    // ever considered the K9 one. Everything else about this person is
+    // genuinely empty -- no job, no partner, no K9 XP, no certification, no
+    // explicit permission -- so before handlerXp was added to that guard the
+    // whole screen collapsed to "no record found" and threw away a standing
+    // the server had just sent. Narrow, but the guard exists precisely to
+    // tell "the server knows nothing" apart from "this person is quiet".
+    const h = await openPersonWithSummary({
+        xp: null, tierLabel: null, certifications: [], permissions: [], job: null, partnership: null,
+        handlerXp: 500, handlerTierLabel: 'Master Handler',
+    });
+
+    t.equals(findByText(h.getRoot(), 'No record found for this citizen ID. Double-check the ID -- it may be a typo, or belong to a deleted character.').length, 0,
+        'handler XP is something the server knows about them, so the screen must render');
+    t.isTrue(xpLines(h).indexOf('500 — Master Handler') >= 0);
+});
+
+t.test('HANDLER XP: a genuinely empty person IS still written off as "no record found" -- the control', async () => {
+    // The guard must not be defeated wholesale by the change above: a person
+    // the server really knows nothing about still gets the honest message.
+    const h = await openPersonWithSummary({
+        xp: null, tierLabel: null, certifications: [], permissions: [], job: null, partnership: null,
+        handlerXp: null, handlerTierLabel: null,
+    });
+
+    t.equals(findByText(h.getRoot(), 'No record found for this citizen ID. Double-check the ID -- it may be a typo, or belong to a deleted character.').length, 1);
+});
+
+t.test('HANDLER XP: a handler on a genuine 0 also counts as a record -- 0 is not absence', async () => {
+    const h = await openPersonWithSummary({
+        xp: null, tierLabel: null, certifications: [], permissions: [], job: null, partnership: null,
+        handlerXp: 0, handlerTierLabel: 'Rookie Handler',
+    });
+
+    t.equals(findByText(h.getRoot(), 'No record found for this citizen ID. Double-check the ID -- it may be a typo, or belong to a deleted character.').length, 0,
+        'a falsy-but-real 0 must not be read as an absent record');
+    t.isTrue(xpLines(h).indexOf('0 — Rookie Handler') >= 0);
+});
+
+t.test('HANDLER XP: there is NO give-handler-XP control -- handler XP is earned, never granted by hand', async () => {
+    const h = await openPersonWithSummary({ handlerXp: 220, handlerTierLabel: 'Senior Handler' });
+
+    // The K9 side DOES have a grant control for a viewer holding k9.givexp
+    // (HIGH_COMMAND_VIEWER holds it). The handler side deliberately has no
+    // equivalent: every handler award is minted by Config.HandlerXP's own
+    // actions behind per-actor mint cooldowns, and an admin grant path
+    // would route straight around them.
+    t.equals(findByText(h.getRoot(), 'Give Handler XP').length, 0);
+    t.equals(findByText(h.getRoot(), 'Grant Handler XP').length, 0);
+});

@@ -770,6 +770,10 @@
         column_department: 'Department',
         column_certified: 'Certified',
         column_xp: 'XP / Tier',
+        // The HANDLER ladder, kept visibly distinct from column_xp above:
+        // they are two separate ladders on two separate feature switches
+        // and a person can be high on one and nowhere on the other.
+        column_handler_xp: 'Handler XP / Rank',
         column_actions: 'Actions',
         // ONLINE PLAYERS LIST (owner-directed, 2026-08-26: "make the add
         // permission section... where its a list when i choose a player
@@ -863,7 +867,9 @@
         capability_self_grant_disabled_title: 'You cannot grant a permission to yourself.',
         capability_rate_limited_wait_title: 'Please wait a moment before changing another permission -- grants and revokes share one cooldown.',
         person_certifications_heading: 'Certifications',
-        person_xp_heading: 'XP',
+        person_xp_heading: 'K9 XP',
+        person_handler_xp_heading: 'Handler XP',
+        person_handler_xp_untracked: 'This server does not track handler XP.',
         xp_tier_unknown: 'No XP record yet.',
         use_label: 'Use',
         not_available_short: 'Unavailable',
@@ -5804,16 +5810,17 @@
 
         block.appendChild(mk('p', {
             class: 'k9tablet-xp-line',
-            text: S('progression_standing').replace('{xp}', String(total)).replace('{rank}', currentLabel)
+            // formatTemplate, not chained .replace() -- a rank label
+            // containing another token would otherwise be re-scanned by the
+            // next replace. See formatTemplate's own header.
+            text: formatTemplate(S('progression_standing'), { xp: total, rank: currentLabel })
         }));
 
         if (pos.next) {
             var remaining = pos.next.xp - total;
             block.appendChild(mk('p', {
                 class: 'k9tablet-progression-next',
-                text: S('progression_next_rank')
-                    .replace('{rank}', pos.next.label)
-                    .replace('{remaining}', String(remaining))
+                text: formatTemplate(S('progression_next_rank'), { rank: pos.next.label, remaining: remaining })
             }));
         } else {
             block.appendChild(mk('p', {
@@ -5833,9 +5840,7 @@
                 + (isCurrent ? ' k9tablet-progression-rank--current' : '');
             list.appendChild(mk('li', {
                 class: cls,
-                text: S('progression_rank_row')
-                    .replace('{rank}', row.label)
-                    .replace('{xp}', String(row.xp))
+                text: formatTemplate(S('progression_rank_row'), { rank: row.label, xp: row.xp })
             }));
         }
         block.appendChild(list);
@@ -6439,7 +6444,7 @@
         var table = mk('table', { class: 'k9tablet-table' });
         var thead = mk('thead');
         var headRow = mk('tr');
-        [S('column_name'), S('column_citizenid'), S('column_department'), S('column_certified'), S('column_xp'), S('column_actions')].forEach(function (h) {
+        [S('column_name'), S('column_citizenid'), S('column_department'), S('column_certified'), S('column_xp'), S('column_handler_xp'), S('column_actions')].forEach(function (h) {
             headRow.appendChild(mk('th', { text: h }));
         });
         thead.appendChild(headRow);
@@ -6460,6 +6465,13 @@
         tr.appendChild(mk('td', { text: row.departmentLabel }));
         tr.appendChild(mk('td', { class: row.certified ? 'k9tablet-cert-status--yes' : 'k9tablet-cert-status--no', text: row.certified ? S('certified_yes') : S('certified_no') }));
         tr.appendChild(mk('td', { text: xpLine(row.xp, row.tierLabel) }));
+        // The HANDLER ladder, alongside the K9 one and never merged with
+        // it. The server has always sent this pair (server/tablet.lua's own
+        // rosterList row) and nothing rendered it, so a handler's rank was
+        // computed on every roster fetch and thrown away. Same xpLine
+        // helper, so an untracked ladder reads as "No XP record yet"
+        // exactly like the K9 column does rather than as a blank cell.
+        tr.appendChild(mk('td', { text: xpLine(row.handlerXp, row.handlerTierLabel) }));
 
         var actionsTd = mk('td');
         actionsTd.appendChild(mkButton(S('manage_label'), 'k9tablet-btn', function () {
@@ -6618,6 +6630,21 @@
         return !summary.job
             && !summary.partnership
             && summary.xp === null
+            // HANDLER XP COUNTS AS A RECORD (progression pass). This guard
+            // predates the handler ladder and only ever considered the K9
+            // one, so a person the server had genuinely returned a handler
+            // standing for -- but who happened to have no resolvable job,
+            // no partner, no K9 XP, no certification row and no explicit
+            // permission grant -- was shown "no record found" and had that
+            // standing thrown away with the rest of the screen. Narrow, but
+            // the guard's whole job is to distinguish "the server knows
+            // nothing about this person" from "this person is quiet", and
+            // handler XP is something the server knows.
+            //
+            // `=== null` rather than a falsy check, deliberately, matching
+            // the `summary.xp` line above: 0 is a real handler standing and
+            // must NOT read as an absent one.
+            && (summary.handlerXp === null || summary.handlerXp === undefined)
             && (!summary.certifications || summary.certifications.length === 0)
             && (!summary.permissions || summary.permissions.length === 0);
     }
@@ -7150,6 +7177,34 @@
             wrap.appendChild(mk('p', { class: 'k9tablet-xp-line', text: xpLine(state.personSummary.xp, state.personSummary.tierLabel) }));
             if (canGiveXp) {
                 wrap.appendChild(buildGiveXpControl());
+            }
+
+            // HANDLER LADDER -- its own heading, deliberately not folded
+            // into the K9 one above. They are separate ladders on separate
+            // feature switches, and the same person is routinely high on
+            // one and nowhere on the other; a single merged "XP" line would
+            // make a Master Handler on a rookie dog unreadable. The server
+            // has always sent this pair on this payload and nothing
+            // rendered it.
+            //
+            // NULL IS NOT ZERO, and the distinction is why this branches
+            // rather than calling xpLine unconditionally: null means the
+            // handler ladder is switched off server-wide, while 0 means a
+            // real handler who has not earned anything yet. xpLine collapses
+            // both to "No XP record yet", which would tell someone to go
+            // grind a system their server does not run. There is NO
+            // give-handler-XP control here to match the K9 one: handler XP
+            // is earned through the awards in Config.HandlerXP, never
+            // granted by hand, and inventing an admin grant path for it is
+            // not this change.
+            wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_handler_xp_heading') }));
+            if (typeof state.personSummary.handlerXp === 'number') {
+                wrap.appendChild(mk('p', {
+                    class: 'k9tablet-xp-line',
+                    text: xpLine(state.personSummary.handlerXp, state.personSummary.handlerTierLabel)
+                }));
+            } else {
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('person_handler_xp_untracked') }));
             }
 
             wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_partnership_heading') }));
@@ -12918,6 +12973,16 @@
                 certifications: result.certifications || [],
                 xp: typeof result.xp === 'number' ? result.xp : null,
                 tierLabel: typeof result.tierLabel === 'string' ? result.tierLabel : null,
+                // HANDLER ladder, carried alongside the K9 pair above and
+                // never merged with it -- separate ladders, separate feature
+                // switches, either can be null while the other has a value.
+                // The typeof check is load-bearing, not a defensive habit:
+                // `result.handlerXp || null` would turn a genuine 0 (a real
+                // handler who has earned nothing yet) into null (the ladder
+                // is switched off server-wide), which are different facts
+                // that must reach the screen as different sentences.
+                handlerXp: typeof result.handlerXp === 'number' ? result.handlerXp : null,
+                handlerTierLabel: typeof result.handlerTierLabel === 'string' ? result.handlerTierLabel : null,
                 permissions: result.permissions || [],
                 // READ-ONLY rank/partnership (owner-directed "roster panel
                 // shows everything about a person" pass) -- both null-safe,
@@ -13123,15 +13188,41 @@
      * several *_template-suffixed locale keys throughout this file, e.g.
      * cert_tier_error_tier_in_use's `{count}`), so a tiny token replace is
      * used rather than pulling in a template-literal/sprintf dependency.
+     *
+     * SINGLE PASS, DELIBERATELY. This used to loop the keys and run one
+     * `split().join()` per key, which meant every value substituted by an
+     * earlier key was still sitting in the string when a LATER key's pass
+     * scanned it -- so a value that happened to contain another key's token
+     * got replaced in turn. Not hypothetical: several of this file's own
+     * templates interpolate operator- or player-supplied text into a
+     * template that has a second token. A supply shop item named
+     * `{count}` corrupts cert_tier_error_tier_in_use_by_shop_items (whose
+     * `{items}` value is a joined list of item names), and a rank renamed
+     * to contain `{xp}` or `{remaining}` in the live Rank Editor corrupts
+     * the progression ladder -- server/xptiers.lua's own label validator
+     * rejects `<>&"'` but has no reason to reject braces.
+     *
+     * A single regex pass fixes the whole class: the replacer's return
+     * value is never re-scanned, so a substituted value can never be
+     * treated as a token no matter what it contains, and the order of keys
+     * stops mattering. Cosmetic corruption only, never an injection route
+     * -- every consumer puts the result through mk()'s textContent, never
+     * innerHTML -- but a rank label reading "reach {remaining} XP" instead
+     * of a number is still a bug a player would report.
+     *
+     * A token with no matching key is left verbatim, which is both what the
+     * old implementation did and far better than rendering "undefined" over
+     * a typo. Every key this file actually passes is `[A-Za-z0-9_]+` (the
+     * pattern below is the enforcement, not just a description) -- a future
+     * key with a dot or dash would silently stop resolving, so keep to
+     * that shape.
      * @param {string} template @param {Record<string, string|number>} replacements @returns {string} */
     function formatTemplate(template, replacements) {
-        var out = template;
-        for (var key in replacements) {
-            if (Object.prototype.hasOwnProperty.call(replacements, key)) {
-                out = out.split('{' + key + '}').join(String(replacements[key]));
-            }
-        }
-        return out;
+        var map = replacements || {};
+        return String(template).replace(/\{([A-Za-z0-9_]+)\}/g, function (token, key) {
+            if (!Object.prototype.hasOwnProperty.call(map, key)) return token;
+            return String(map[key]);
+        });
     }
 
     /** Fetched fresh every time the Cert Tiers tab is opened (see

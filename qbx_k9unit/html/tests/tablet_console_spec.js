@@ -391,4 +391,72 @@ t.test('WORKFLOW AUDIT #2: the "open by exact citizen ID" box always carries its
     t.isTrue(findByTextContaining(h.getRoot(), 'even someone who has never held a certification').length >= 1);
 });
 
+// ----------------------------------------------------------------------
+// HANDLER RANK ON THE ROSTER.
+//
+// server/tablet.lua's rosterList row has always carried handlerXp/
+// handlerTierLabel and the table rendered neither, so a handler's rank was
+// resolved on every roster fetch and thrown away. Console operators had no
+// way to see handler standing at a glance -- the exact "who is my most
+// experienced handler" question a roster is for.
+// ----------------------------------------------------------------------
+
+t.test('HANDLER RANK: the roster table carries a Handler XP column alongside the K9 one, and renders both per row', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'VIEWER1', name: 'Officer Viewer', isHighCommand: true, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false },
+                certifications: [], xp: null, tierLabel: null, myFeatures: [],
+            }),
+            'tablet:requestRoster': () => ({
+                ok: true,
+                rows: [{
+                    citizenid: 'TARGET1', name: 'K9 Rex', departmentLabel: 'Police', certified: true,
+                    xp: 1250, tierLabel: 'Trained K9',
+                    handlerXp: 220, handlerTierLabel: 'Senior Handler',
+                }],
+                truncated: false,
+            }),
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(h);
+
+    t.isTrue(findByText(h.getRoot(), 'XP / Tier').length >= 1, 'the K9 column header is unchanged');
+    t.isTrue(findByText(h.getRoot(), 'Handler XP / Rank').length >= 1, 'and the handler column header is present');
+    t.isTrue(findByText(h.getRoot(), '1250 — Trained K9').length >= 1, 'the K9 cell still renders');
+    t.isTrue(findByText(h.getRoot(), '220 — Senior Handler').length >= 1,
+        'the handler cell renders too -- the server has always sent this and it was being discarded');
+});
+
+t.test('HANDLER RANK: a row the server sent no handler standing for reads as "no record yet", never as a blank cell', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'VIEWER1', name: 'Officer Viewer', isHighCommand: true, effectivePermissions: ['k9.certify', 'k9.audit'], allowSelfGrant: false },
+                certifications: [], xp: null, tierLabel: null, myFeatures: [],
+            }),
+            'tablet:requestRoster': () => ({
+                ok: true,
+                rows: [{ citizenid: 'T2', name: 'No Handler XP', departmentLabel: 'Police', certified: true, xp: 5, tierLabel: 'Recruit K9' }],
+                truncated: false,
+            }),
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(h);
+
+    // Same xpLine() helper as the K9 column, so an absent standing reads
+    // consistently across both rather than leaving one column ragged.
+    t.isTrue(findByText(h.getRoot(), 'No XP record yet.').length >= 1);
+});
+
 t.run();

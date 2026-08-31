@@ -859,7 +859,7 @@ local TABLET_STRING_KEYS = {
     'high_command_required_notice',
     'retry_label', 'search_placeholder', 'refresh_label', 'empty_roster',
     'column_name', 'column_citizenid', 'column_department', 'column_certified',
-    'column_xp', 'column_actions', 'certified_yes', 'certified_no',
+    'column_xp', 'column_handler_xp', 'column_actions', 'certified_yes', 'certified_no',
     -- ONLINE PLAYERS LIST (owner-directed, 2026-08-26: "make the add
     -- permission section... where its a list when i choose a player id")
     -- -- see html/tablet.js's buildOnlinePlayersSection() for the full
@@ -921,6 +921,7 @@ local TABLET_STRING_KEYS = {
     'capability_no_description', 'capability_self_grant_disabled_title',
     'capability_rate_limited_wait_title',
     'person_certifications_heading', 'person_xp_heading', 'xp_tier_unknown',
+    'person_handler_xp_heading', 'person_handler_xp_untracked',
     'use_label', 'not_available_short', 'opening_person',
     'person_no_record_found',
     'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',
