@@ -19,9 +19,19 @@
         sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql,
         both carry `tenure_bonus_tier_granted TINYINT UNSIGNED NOT NULL
         DEFAULT 0` matching this file's SELECT/UPDATE text exactly.
-      - config.lua carries `Config.Features.PartnershipTenureBonus = false`
-        (still off by default, per this file's own design question 2/3
-        reasoning -- landing the schema/config did not flip it on),
+      - config.lua carries `Config.Features.PartnershipTenureBonus = true`
+        (config.lua:362 -- CORRECTED 2026-08-31; this line previously said
+        `= false` and "still off by default, per this file's own design
+        question 2/3 reasoning -- landing the schema/config did not flip it
+        on". The flag was flipped on at some later point and this header was
+        not updated, so the file that OWNS the tenure bonus told anyone
+        reading it that the feature was inert. That is worse than a bare
+        wrong value: an owner auditing why their XP economy pays out more
+        than expected would read this and rule the tenure bonus out. The
+        award values below were re-checked at the same time and are still
+        accurate. Note the irony recorded a few lines down -- a previous
+        pass corrected a DIFFERENT stale status claim in this same header
+        and left this one standing),
         `Config.XP.awards.partnershipTenure{1,7,30}Day = 15/40/100`, and
         `Config.Partnership.TenureBonus` (checkIntervalMs + the same
         three-milestone table) -- all matching the values this file's own

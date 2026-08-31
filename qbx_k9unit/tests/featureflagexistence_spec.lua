@@ -495,4 +495,108 @@ t.test('DRAG-AND-DROP IS REAL: every table the schema creates has a memory-mode 
         .. 'the way server/dogcharacter.lua does.')
 end)
 
+
+-- ======================================================================
+-- STATUS CLAIMS: a comment that says what a flag SHIPS AS must be right
+--
+-- FOUND BY THIS CHECK, 2026-08-31: server/tenure.lua's header stated
+-- "config.lua carries `Config.Features.PartnershipTenureBonus = false`
+-- (still off by default...)". It ships TRUE (config.lua:362), and has for
+-- some time -- the flag was flipped on and the header was not updated. So
+-- the file that OWNS the tenure bonus told anyone reading it the feature
+-- was inert, while it was quietly awarding 15/40/100 XP at the 1/7/30-day
+-- milestones. An owner auditing why their XP economy pays out more than
+-- expected would read that and rule it out.
+--
+-- WHY THIS IS NARROW ON PURPOSE. Only sentences that ASSERT a default are
+-- checked -- "ships", "by default", "defaults to", "off by default". A bare
+-- `Config.X = false` in a comment is almost always conditional prose ("the
+-- Config.Features.RadialMenu=false path") or an instruction to the operator
+-- ("Set `Config.Database.enabled = true`"), both correct and neither a
+-- claim. A first draft of this check without that filter reported 24
+-- disagreements, every one of them a false positive.
+-- ======================================================================
+
+t.test('every comment that asserts what a config flag SHIPS AS matches the shipped value', function()
+    local shippedConfig = env.Config
+    t.isNotNil(shippedConfig, 'shipped Config must load')
+
+    --- Flattens Config into dotted paths -> stringified scalar values.
+    local flat = {}
+    local function flatten(tbl, prefix)
+        for key, value in pairs(tbl) do
+            local path = prefix .. '.' .. tostring(key)
+            if type(value) == 'table' then
+                flatten(value, path)
+            elseif type(value) == 'boolean' then
+                flat[path] = tostring(value)
+            end
+        end
+    end
+    flatten(shippedConfig, 'Config')
+
+    local STATUS_WORDS = {
+        'ships', 'shipped', 'by default', 'defaults to', 'default is',
+        'off by default', 'on by default', 'still off', 'still on',
+    }
+    local function assertsADefault(text)
+        local lowered = text:lower()
+        for _, word in ipairs(STATUS_WORDS) do
+            if lowered:find(word, 1, true) then return true end
+        end
+        return false
+    end
+
+    local files = {}
+    local pipe = io.popen([[cd .. && find client server shared -name '*.lua' | sort]])
+    if pipe then
+        for line in pipe:lines() do files[#files + 1] = line end
+        pipe:close()
+    end
+    t.isTrue(#files > 50, ('expected >50 lua files to scan, found %d'):format(#files))
+
+    local wrong = {}
+    for _, rel in ipairs(files) do
+        local fh = io.open('../' .. rel, 'r')
+        if fh then
+            local lines = {}
+            for line in fh:lines() do lines[#lines + 1] = line end
+            fh:close()
+            -- BLOCK COMMENTS COUNT TOO. The first draft of this check only
+            -- matched `^%s*%-%-` line comments, and stayed GREEN against the
+            -- very defect that motivated it: server/tenure.lua's wrong claim
+            -- lives inside a `--[[ ]]` header block, whose lines start with
+            -- plain text. Caught by running the check against the reverted
+            -- defect instead of trusting a passing run.
+            local inBlock = false
+            for i, line in ipairs(lines) do
+                local opensBlock = line:find('%-%-%[%[')
+                local closesBlock = line:find('%]%]')
+                local isComment = inBlock or line:match('^%s*%-%-') ~= nil
+                if opensBlock and not closesBlock then inBlock = true end
+                if closesBlock then inBlock = false end
+                if isComment then
+                    -- Neighbour lines included: these are wrapped comment
+                    -- blocks, so the asserting phrase and the flag routinely
+                    -- sit on different lines.
+                    local ctx = table.concat({ lines[i - 1] or '', line, lines[i + 1] or '' }, ' ')
+                    if assertsADefault(ctx) then
+                        for path, claimed in line:gmatch('(Config%.[%a_][%w_.]*)%s*=%s*`?(%a+)`?') do
+                            if (claimed == 'true' or claimed == 'false')
+                                and flat[path] ~= nil and flat[path] ~= claimed then
+                                wrong[#wrong + 1] = ('%s:%d  %s -- comment says %s, ships %s')
+                                    :format(rel, i, path, claimed, flat[path])
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.sort(wrong)
+    t.equals(#wrong, 0,
+        'these comments state a shipped default that is wrong:\n    ' .. table.concat(wrong, '\n    ') ..
+        '\n  Fix the sentence to match config.lua, or reword it so it is not asserting a default.')
+end)
+
 os.exit(t.summary())
