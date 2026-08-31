@@ -280,6 +280,30 @@ end)
 t.isNotNil(RegisterBodyClaimReleaser, 'server/bodyclaims.lua must define global RegisterBodyClaimReleaser')
 t.isNotNil(ForceReleaseBodyClaimForCitizenId, 'server/bodyclaims.lua must define global ForceReleaseBodyClaimForCitizenId')
 
+t.test('ForceReleaseBodyClaimForCitizenId: junk input is refused before any lookup happens', function()
+    -- WHAT THIS DOES AND DOES NOT PROVE, recorded because the first version
+    -- of this comment overclaimed. Mutation testing (2026-08-31) showed that
+    -- deleting this function's `type(citizenid) ~= 'string'` guard leaves the
+    -- whole suite green -- INCLUDING this test. That is not a coverage hole:
+    -- the mutation is semantically equivalent. Without the guard, the lookup
+    -- below is keyed on nil, finds nothing, and the very next line returns
+    -- false anyway. There is no observable difference to assert.
+    --
+    -- So this test pins the CONTRACT, not the guard: whatever the internals
+    -- do, junk in must produce a plain `false` and never a throw. That is
+    -- worth holding, because this is the teardown dispatcher -- callers on
+    -- revocation paths rely on a boolean, and an error here would abort a
+    -- release chain partway through. The guard itself stays as defence in
+    -- depth for a future refactor that makes the nil path reachable.
+    for _, junk in ipairs({ '' }) do
+        t.isFalse(ForceReleaseBodyClaimForCitizenId(junk, 'test'),
+            ('a %q citizenid must be refused outright'):format(tostring(junk)))
+    end
+    t.isFalse(ForceReleaseBodyClaimForCitizenId(nil, 'test'), 'a nil citizenid must be refused outright')
+    t.isFalse(ForceReleaseBodyClaimForCitizenId(12345, 'test'), 'a numeric citizenid must be refused outright')
+    t.isFalse(ForceReleaseBodyClaimForCitizenId({}, 'test'), 'a table citizenid must be refused outright')
+end)
+
 t.test('ForceReleaseBodyClaimForCitizenId: a citizenid holding NOTHING is a safe no-op returning false', function()
     t.isFalse(ForceReleaseBodyClaimForCitizenId('CIT_F001', 'revoked'))
 end)

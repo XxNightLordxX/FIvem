@@ -540,4 +540,82 @@ t.test('SHIPPED-CONFIG TRIPWIRE: config.lua\'s real multipliers still produce th
         'KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS (' .. tostring(deployMint) .. 'ms) is no longer far above the 2250ms rank-reduced kennel-deploy action floor -- same loop, same rule')
 end)
 
+
+-- ========================================================================
+-- SHIPPED-LADDER INVARIANTS (mutation-testing pass, 2026-08-31).
+--
+-- FOUND BY MUTATION TESTING, not by reading: changing the shipped Elite
+-- threshold from 9000 to 90 -- and Veteran 4000 to 40, and Trained 1250 to
+-- 12500 -- left the ENTIRE 117-file suite green. No test read the shipped
+-- thresholds at all.
+--
+-- THE TRIPWIRE ABOVE DECLINED TO PIN THEM ON PURPOSE, and it was right to:
+-- thresholds are "pure server-owner balance", and freezing exact numbers
+-- would fight the owner every time they retune. This test does not pin
+-- values. It pins the INVARIANTS that must hold whatever numbers anyone
+-- picks -- which is what separates a retune from a typo:
+--
+--   * 9000 -> 8000 is a retune. Still ascending. Stays green.
+--   * 9000 -> 90 is a typo. Now lower than Veteran's 4000. Goes RED.
+--
+-- WHY IT MATTERS BEYOND TIDINESS: server/xptiers.lua ALREADY enforces
+-- exactly this (IsStrictlyAscending) on tablet edits and on persisted
+-- overrides at boot -- but never on Config.XPTiers itself. So the identical
+-- bad value is rejected when typed into the tablet and accepted when typed
+-- into config.lua. A non-ascending ladder does not error; it silently makes
+-- a rank unreachable, because tier resolution walks the list and takes the
+-- highest threshold the player has passed.
+-- ========================================================================
+
+t.test('SHIPPED LADDERS: both are strictly ascending, start at 0, and hold plain non-negative integers', function()
+    local shipped = { Config = { Features = {}, FeatureGroups = {} } }
+    shipped._G = shipped
+    setmetatable(shipped, { __index = _G })
+    Sandbox.loadInto('../config.lua', shipped)
+
+    local ladders = {
+        { name = 'Config.XPTiers (K9)', rows = shipped.Config.XPTiers },
+        { name = 'Config.HandlerXPTiers', rows = shipped.Config.HandlerXPTiers },
+    }
+
+    for _, ladder in ipairs(ladders) do
+        local rows = ladder.rows
+        t.isTrue(type(rows) == 'table' and #rows >= 2,
+            ('%s must load with at least two ranks'):format(ladder.name))
+
+        t.equals(rows[1].xp, 0,
+            ('%s: the first rank must start at 0 xp -- every player begins there, and a ' ..
+             'non-zero floor leaves brand-new players with NO rank at all'):format(ladder.name))
+
+        local seen = {}
+        for index, tier in ipairs(rows) do
+            local xp = tier.xp
+            t.isTrue(type(xp) == 'number',
+                ('%s rank %d (%s): xp must be a number, got %s')
+                    :format(ladder.name, index, tostring(tier.label), type(xp)))
+            t.isTrue(xp == xp and xp >= 0 and xp < math.huge,
+                ('%s rank %d (%s): xp must be a finite, non-negative number, got %s')
+                    :format(ladder.name, index, tostring(tier.label), tostring(xp)))
+            t.equals(math.floor(xp), xp,
+                ('%s rank %d (%s): xp must be a whole number, got %s')
+                    :format(ladder.name, index, tostring(tier.label), tostring(xp)))
+            t.isNil(seen[xp],
+                ('%s rank %d (%s): two ranks share the threshold %s -- one of them is ' ..
+                 'unreachable'):format(ladder.name, index, tostring(tier.label), tostring(xp)))
+            seen[xp] = true
+
+            if index > 1 then
+                local prev = rows[index - 1]
+                t.isTrue(xp > prev.xp,
+                    ('%s: %s (%s xp) must sit ABOVE %s (%s xp). A ladder that is not strictly ' ..
+                     'ascending silently makes a rank unreachable -- server/xptiers.lua already ' ..
+                     'refuses this exact shape from the tablet, and config.lua must meet the ' ..
+                     'same bar.')
+                        :format(ladder.name, tostring(tier.label), tostring(xp),
+                                tostring(prev.label), tostring(prev.xp)))
+            end
+        end
+    end
+end)
+
 os.exit(t.summary())
