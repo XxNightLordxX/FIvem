@@ -743,4 +743,67 @@ t.test('END-TO-END: K9Compat entirely absent from the environment never throws -
     t.contains(lastLine, 'K9 Supply shop: NOT offered', 'no K9Compat at all means no usable backend either -- must still fail closed, never silently say nothing')
 end)
 
+
+-- ======================================================================
+-- CONFIG.DEPARTMENTS vs THE SERVER'S REAL JOBS
+--
+-- The worst day-one misconfiguration: Config.Departments ships 'police',
+-- 'sheriff', 'bcso', and a server whose jobs are named anything else gets a
+-- resource that is completely inert while the boot summary reports all
+-- green -- because the feature keys and dependencies genuinely ARE fine.
+-- Nothing checked this before 2026-08-31.
+-- ======================================================================
+
+t.test('FindUnknownDepartmentJobs: names that do not exist on the server are reported, sorted', function()
+    local missing = K9SelfCheck.FindUnknownDepartmentJobs(
+        { police = {}, lspd = {}, bcso = {} },
+        { police = {}, sheriff = {}, ambulance = {} })
+    t.equals(#missing, 2)
+    t.equals(missing[1], 'bcso')
+    t.equals(missing[2], 'lspd')
+end)
+
+t.test('FindUnknownDepartmentJobs: accepts either job-list shape, and is case-insensitive', function()
+    -- A framework may hand back { police = {...} } or { 'police', ... }.
+    t.equals(#K9SelfCheck.FindUnknownDepartmentJobs({ police = {} }, { 'police', 'ems' }), 0,
+        'an array of job names must work as well as a keyed table')
+    t.equals(#K9SelfCheck.FindUnknownDepartmentJobs({ POLICE = {} }, { police = {} }), 0,
+        'job names must not be treated as case-sensitive')
+end)
+
+t.test('FindUnknownDepartmentJobs: an unreadable or empty job list reports NOTHING rather than everything', function()
+    -- The critical fail-safe. If the server's job list comes back empty or
+    -- malformed, every configured department would look "unknown" and the
+    -- warning would scream that a correctly-configured server is broken.
+    -- Silence is the only honest output when the comparison has no basis.
+    t.equals(#K9SelfCheck.FindUnknownDepartmentJobs({ police = {} }, {}), 0)
+    t.equals(#K9SelfCheck.FindUnknownDepartmentJobs({ police = {} }, nil), 0)
+    t.equals(#K9SelfCheck.FindUnknownDepartmentJobs({ police = {} }, 'not a table'), 0)
+end)
+
+t.test('FormatUnknownDepartmentWarning: says nothing when every configured job exists', function()
+    t.isNil(K9SelfCheck.FormatUnknownDepartmentWarning({}, 3))
+    t.isNil(K9SelfCheck.FormatUnknownDepartmentWarning(nil, 3))
+end)
+
+t.test('FormatUnknownDepartmentWarning: a PARTIAL mismatch names the bad entries and what it costs', function()
+    local line = K9SelfCheck.FormatUnknownDepartmentWarning({ 'bcso', 'lspd' }, 3)
+    t.isNotNil(line)
+    t.contains(line, 'bcso')
+    t.contains(line, 'lspd')
+    t.contains(line, '2 of 3')
+    t.contains(line, 'config.lua', 'the warning must say where to fix it')
+end)
+
+t.test('FormatUnknownDepartmentWarning: a TOTAL mismatch says the resource is effectively off', function()
+    -- This is the case worth wording differently. With no valid department
+    -- at all, nobody can certify, reach High Command, or open the tablet --
+    -- and the owner needs to be told that plainly, not given a count.
+    local line = K9SelfCheck.FormatUnknownDepartmentWarning({ 'lspd', 'sast' }, 2)
+    t.isNotNil(line)
+    t.contains(line, 'NONE')
+    t.contains(line, 'effectively off')
+    t.contains(line, 'NOBODY')
+end)
+
 os.exit(t.summary())

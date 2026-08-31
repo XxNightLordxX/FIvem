@@ -719,6 +719,119 @@ local function RunEquipmentShopEnforcementCheck()
     return { status = status }
 end
 
+--- ----------------------------------------------------------------------
+--- PART 5 -- CONFIG.DEPARTMENTS vs THE SERVER'S REAL JOBS
+---
+--- THE FAILURE THIS EXISTS FOR. Config.Departments ships with 'police',
+--- 'sheriff' and 'bcso'. A server whose jobs are named anything else --
+--- 'lspd', 'sast', a custom framework's own naming -- gets a resource that
+--- is COMPLETELY INERT and says nothing about it. Every gate in this
+--- resource is `Config.Departments[job.name]`, so nobody can certify,
+--- nobody is high command, no radial item appears, and the tablet refuses
+--- everyone. Meanwhile the boot summary reports 61/61 feature keys
+--- recognized and 4/4 dependencies fine, because both of those ARE fine.
+---
+--- It is the single most likely day-one misconfiguration and the one with
+--- the worst symptom: everything looks healthy and nothing works.
+---
+--- WHY THIS PROBES AND NEVER ASSUMES. There is no export in this file's
+--- verified set that lists a server's jobs -- this resource only ever calls
+--- GetPlayer/GetPlayerByCitizenId/GetOfflinePlayer/Notify on qbx_core. An
+--- unregistered native or export returns nil forever and logs nothing (see
+--- client/vision.lua's IsSeethroughActive finding for what that costs), so
+--- calling a guessed `GetJobs` would produce a check that silently never
+--- runs while looking like it does. Instead this uses the same two-step
+--- probe shape shared/compat/target.lua's IsExportCapable established:
+--- confirm the resource is started, then confirm the method is really a
+--- function, both pcall-guarded. If it is not there, this says so in one
+--- line and checks nothing -- an honest "could not verify" rather than a
+--- false all-clear.
+--- ----------------------------------------------------------------------
+
+--- Pure comparison, kept separate from the probe so it is testable without
+--- a live qbx_core.
+--- @param configuredDepartments table -- Config.Departments
+--- @param realJobNames table -- set-like or array of job names the server actually defines
+--- @return string[] missing -- configured names with no matching real job, sorted
+function K9SelfCheck.FindUnknownDepartmentJobs(configuredDepartments, realJobNames)
+    local missing = {}
+    if type(configuredDepartments) ~= 'table' or type(realJobNames) ~= 'table' then return missing end
+
+    -- Accept either shape: { police = {...} } or { 'police', 'sheriff' }.
+    local known = {}
+    for key, value in pairs(realJobNames) do
+        if type(key) == 'string' then known[key:lower()] = true end
+        if type(value) == 'string' then known[value:lower()] = true end
+    end
+    if next(known) == nil then return missing end
+
+    for jobName in pairs(configuredDepartments) do
+        if type(jobName) == 'string' and not known[jobName:lower()] then
+            missing[#missing + 1] = jobName
+        end
+    end
+    table.sort(missing)
+    return missing
+end
+
+--- @param missing string[]
+--- @param totalConfigured number
+--- @return string? line -- nil when there is nothing to say
+function K9SelfCheck.FormatUnknownDepartmentWarning(missing, totalConfigured)
+    if type(missing) ~= 'table' or #missing == 0 then return nil end
+
+    if #missing >= totalConfigured then
+        return ('[qbx_k9unit] selfcheck: !! NONE of your Config.Departments job names exist on this server (%s). '):format(table.concat(missing, ', '))
+            .. 'Every K9 feature is gated on the player\'s job being one of these, so right now NOBODY can certify, '
+            .. 'reach High Command, or use the tablet -- the resource is effectively off. '
+            .. 'Fix the job names in config.lua to match your server\'s real ones.'
+    end
+
+    return ('[qbx_k9unit] selfcheck: !! %d of %d Config.Departments job name(s) do not exist on this server: %s. ')
+        :format(#missing, totalConfigured, table.concat(missing, ', '))
+        .. 'Nobody in those departments can certify, reach High Command, or use the tablet. '
+        .. 'Either fix the name in config.lua or remove the entry.'
+end
+
+--- Probes for a job-listing export and, if one is really there, checks the
+--- configured department names against it. Never throws.
+local function RunDepartmentJobNameCheck()
+    if type(Config) ~= 'table' or type(Config.Departments) ~= 'table' then return end
+
+    local total = 0
+    for _ in pairs(Config.Departments) do total = total + 1 end
+    if total == 0 then
+        print('[qbx_k9unit] selfcheck: !! Config.Departments is empty -- no job can use any K9 feature. '
+            .. 'Add at least one real job name from your server.')
+        return
+    end
+
+    -- Two-step probe, per this section's header. GetJobs is the shape Qbox
+    -- is expected to expose; it is NOT assumed to exist.
+    local capable = false
+    if type(GetResourceState) == 'function' and GetResourceState('qbx_core') == 'started' then
+        local ok, method = pcall(function() return exports.qbx_core.GetJobs end)
+        capable = ok and type(method) == 'function'
+    end
+    if not capable then
+        print('[qbx_k9unit] selfcheck: could not read this server\'s job list (qbx_core exposes no GetJobs here), '
+            .. 'so Config.Departments job names were NOT verified. If K9 features do nothing for everyone, '
+            .. 'a mismatched job name in Config.Departments is the first thing to check.')
+        return
+    end
+
+    local ok, jobs = pcall(function() return exports.qbx_core:GetJobs() end)
+    if not ok or type(jobs) ~= 'table' then
+        print('[qbx_k9unit] selfcheck: this server\'s job list could not be read, so Config.Departments job '
+            .. 'names were NOT verified. See the note above if nothing K9-related works.')
+        return
+    end
+
+    local line = K9SelfCheck.FormatUnknownDepartmentWarning(
+        K9SelfCheck.FindUnknownDepartmentJobs(Config.Departments, jobs), total)
+    if line then print(line) end
+end
+
 --- Short, honest phrase for the final summary line's database clause.
 --- Waits (bounded) for server/datastore.lua's own schema-collision probe
 --- to settle first -- the same K9Store.WaitForSchemaCheckToSettle() every
@@ -783,6 +896,9 @@ if type(AddEventHandler) == 'function' then
         local depResult = RunDependencyCheck()
         local featureResult = RunFeatureKeyCheck()
         RunSpecializationGateCheck()
+        -- Placed before the summary so a job-name mismatch is read BEFORE
+        -- the all-green tallies, not after them.
+        RunDepartmentJobNameCheck()
         local equipmentShopResult = RunEquipmentShopEnforcementCheck()
         local databaseState = BuildDatabaseStatePhrase()
 
