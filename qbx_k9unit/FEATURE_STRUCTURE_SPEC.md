@@ -173,6 +173,30 @@ reasoning on the other two.
 
 ### 2.2.1 The two keys the owner asked me to answer directly
 
+> **BOTH DECIDED SINCE THIS WAS WRITTEN — read the recommendations below as
+> history, not as open questions.**
+>
+> - **`ScentTrailHunt`: removed.** The owner signed off and the removal
+>   shipped. `Config.Features.ScentTrailHunt` no longer exists at all, so
+>   the key reads `nil` and `client/scenttrail.lua` /
+>   `server/scenttrail.lua` return at the top — both files are kept intact
+>   and inert on purpose, so restoring it is a one-line config change.
+>   See `Config.Features`' own "REMOVED" block, `README.md`, and
+>   `tests/featureflagexistence_spec.lua`, which allowlists this key as
+>   deliberately absent precisely so nobody later mistakes it for a flag
+>   somebody forgot to define.
+>
+>   The onboarding alternative raised below — keeping it as a nose-following
+>   *training drill* under `TrainingMode` — was **not** taken, and remains a
+>   genuinely open option if the owner ever wants it back in that shape.
+>
+> - **`ScentLineup`: kept.** The recommendation against removal was
+>   accepted; it still ships `true`.
+>
+> The reasoning underneath is left exactly as written, because it is the
+> record of *why* those two calls went the way they did, and that is worth
+> more than a tidied-up summary.
+
 **`ScentTrailHunt` — recommend (d), removal, pending his sign-off.**
 Dependency check (§1.2): grepped every `.lua` file for `ScentTrailHunt`/
 `scenttrail`/`ScentHunt` outside its own two implementing files. Every

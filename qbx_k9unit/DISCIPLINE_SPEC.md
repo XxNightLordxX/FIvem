@@ -1,5 +1,22 @@
 # K9 Discipline Gating — Spec
 
+> **A NOTE ON THE `file.lua:123` REFERENCES BELOW — READ BEFORE FOLLOWING ONE.**
+> The line numbers are **historical and no longer reliable.** They were
+> accurate when written; the files have since grown by hundreds of lines
+> and every one checked during a later audit pointed at the wrong place.
+>
+> They fail in the worst way available: not by pointing past the end of a
+> file, which would be obvious, but by landing on real, plausible-looking
+> code that simply is not the code meant.
+>
+> **Search by the NAME instead** — the function, config key or table named
+> alongside each citation is stable and greppable, and is what the citation
+> is really identifying. The numbers are left in place rather than
+> renumbered because renumbering buys nothing: the next edit to any of
+> these files invalidates them all again, and a fresh set of wrong numbers
+> is worse than an admitted set of wrong ones.
+
+
 Status: DRAFT for coder review. No production code accompanies this file.
 Author: product (this pass). Scope: `qbx_k9unit` only.
 
@@ -17,17 +34,35 @@ Confirmed by direct read of the current tree (2026-08-26):
   plumbing (certtiers.lua/certifications.lua/datastore.lua) is
   `server/equipmentshop.lua:2329`, gating a single optional
   `requiredSpecialization` field on a shop catalog item.
-- `server/search.lua` never calls `HasSpecialization` at all. Contraband
-  detection is driven entirely by `Config.SearchContrabandItems`
-  (`config.lua:2352`), a **flat, uncategorized** list — currently
-  `{ 'weed_bud', 'coke_brick', 'meth_bag', 'weapon_pistol' }`, explicitly
-  marked as placeholder pending an economy pass (`DEVELOPER_REFERENCE.md:544`).
-  `ContrabandItemSet` (`server/search.lua:500`) is a flat set built from it;
-  `SumContrabandWeight` (`server/search.lua:526`) sums weight with no
-  category dimension whatsoever.
-- Net effect confirmed: an "Explosives detection" dog and a "Narcotics
-  detection" dog produce byte-identical search results today. The
-  specialization is a label with no gameplay behind it.
+- ~~`server/search.lua` never calls `HasSpecialization` at all.~~
+  **OUT OF DATE — this was fixed by the specialization-categories pass
+  (2026-08-26), after this document was written.** `server/search.lua` now
+  does call `HasSpecialization`, resolves the searcher's held categories,
+  and `SumContrabandWeight` takes those categories and skips any item whose
+  `category` the dog does not hold. Search by name rather than line number:
+  the call site and `SumContrabandWeight`'s `heldCategories` parameter are
+  both in `server/search.lua`.
+
+  `Config.SearchContrabandItems` now accepts **two entry shapes in one
+  table**: a plain array entry (`'weed_bud'`) meaning UNCATEGORISED, and a
+  keyed entry (`coke_brick = 'narcotics'`) meaning categorised. An
+  uncategorised item is found by every dog; a categorised one only by a dog
+  holding that specialization.
+
+  `ContrabandItemSet` no longer exists under that name at all — do not go
+  looking for it.
+- **The observable behaviour on a stock install is still what the next
+  bullet described, but for a different reason, and it is now the owner's
+  choice rather than a limitation.** The shipped
+  `Config.SearchContrabandItems` deliberately lists all four placeholder
+  items as UNCATEGORISED (shape 1), specifically so an upgrading server's
+  search results do not change until somebody opts an item in. So yes — out
+  of the box, an "Explosives detection" dog and a "Narcotics detection" dog
+  still produce identical search results. The difference is that the
+  mechanism is now real and wired: categorise an item in config and the
+  specializations immediately start mattering. It is no longer "a label
+  with no gameplay behind it"; it is a label whose gameplay the default
+  config does not yet switch on.
 - Separately, `bite_hold_and_takedown` — a **capability on
   `Config.CertificationTiers`** (`config.lua:630-645`), not a
   specialization — is the one real, enforced gate on bite/takedown, wired

@@ -1,5 +1,22 @@
 # Diagnostic Checks — a catalogue mined from this project's own history
 
+> **A NOTE ON THE `file.lua:123` REFERENCES BELOW — READ BEFORE FOLLOWING ONE.**
+> The line numbers are **historical and no longer reliable.** They were
+> accurate when written; the files have since grown by hundreds of lines
+> and every one checked during a later audit pointed at the wrong place.
+>
+> They fail in the worst way available: not by pointing past the end of a
+> file, which would be obvious, but by landing on real, plausible-looking
+> code that simply is not the code meant.
+>
+> **Search by the NAME instead** — the function, config key or table named
+> alongside each citation is stable and greppable, and is what the citation
+> is really identifying. The numbers are left in place rather than
+> renumbered because renumbering buys nothing: the next edit to any of
+> these files invalidates them all again, and a fresh set of wrong numbers
+> is worse than an admitted set of wrong ones.
+
+
 This file is input for whoever builds `server/debugdump.lua` /
 `client/debugdump.lua`. It is not a generic "is the server healthy"
 checklist. Every check below is either (a) tied to a bug that actually
