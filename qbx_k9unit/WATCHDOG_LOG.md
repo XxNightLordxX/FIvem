@@ -22,6 +22,7 @@ pass itself.
 | 2026-08-27 (4th) | Clean on all five checklist items. 19 commits reviewed. The findings this pass again came from elsewhere -- fifteen audit agents run alongside -- including a wellbeing data-loss bug on restart and a vehicle/body-claim seam bug no single-file review could see. Dependency upstream status NOT re-verified: GitHub API 403 through this session's proxy. |
 | 2026-08-27 (2nd) | Clean. 5 commits reviewed, all 5 spot-checks pass, dependencies and bark audio re-verified, no stale claims in KNOWN_ISSUES. The radial count trap flagged last pass bit again in a new form -- see detail. |
 | 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (FEATURE_STRUCTURE_SPEC.md, OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
+| 2026-08-31 | Clean on all five checks; 13 backlogged firings (Aug 28-31) covered by this one pass. 8 commits reviewed, all authored and gated this session. The rank-visibility finding left open by an earlier pass is now CLOSED BY CODE, not by editing the comment. Dependency status re-verified upstream and answered properly for the first time: all three alive, none archived. |
 
 ## 2026-08-26 — detail
 
@@ -370,3 +371,90 @@ the ranks"; the tablet does not, anywhere. Fixing this properly needs a
 product decision about where a handler should see their rank, so it is
 recorded rather than guessed at.
 
+
+## 2026-08-31 — detail
+
+**Thirteen firings, one pass.** The routine fired every six hours from
+2026-08-28 00:45 to 2026-08-31 00:45 while this session was busy, and all
+thirteen arrived at once carrying an identical checklist. Running it
+thirteen times would produce thirteen identical entries, so it was run once
+against current HEAD and this entry covers the whole window.
+
+**1. Commits since the last pass:** 8 (`9c9408c` through `297860d`). All
+were authored in this session, each with the full gate set (luacheck 0/0
+across 216 files, 115 Lua spec files, 42 browser spec files, locale
+cross-check 0 missing) and most with an explicit red-then-green proof.
+Nothing landed unreviewed.
+
+**2. Externally-uncertain facts, both re-verified.**
+
+*Dependency maintenance status* — answered properly this time. The 4th pass
+on 2026-08-27 had to record this as NOT verified (GitHub API 403 through the
+session proxy); the API is still 403 but the repositories' own commit atom
+feeds are reachable, which is what got past it:
+
+  * `overextended/ox_lib` — not archived, last commit **2026-08-17** (two
+    weeks ago). Actively maintained.
+  * `overextended/ox_target` — last commit **2026-06-09**. Quieter, but that
+    commit is a README update rather than a final one, and the repository is
+    not archived.
+  * `overextended/oxmysql` — last commit **2026-07-03**, not archived.
+
+  No action. Nothing here changes a dependency decision; recorded so the next
+  pass can compare rather than re-derive. The atom-feed route is the one to
+  reuse — `/commits/main.atom`, not the API.
+
+*Bark-audio placeholder gap* — confirmed closed, as the 2026-08-26 pass
+found. `html/sounds/` holds five real, distinct `.ogg` files (bark,
+bark_alert, bark_aggressive, bark_calm, growl_ambient — 5.6KB to 28KB, all
+different) with a 55KB CREDITS.md documenting provenance, and all are listed
+in `fxmanifest.lua`'s `files{}`.
+
+**3. Regression spot-checks — all five pass.** Each verified against real
+code, not a comment mentioning it, which matters here: four of the five
+matched only comment text on a first grep and needed a second look to
+confirm the actual construct still exists.
+
+  * `AgilityBasicJump` — read at the point of use, `client/movement.lua:1928`
+    (`Config.Features.AgilityBasicJump`), plus `client/hud.lua`.
+  * Role-aware `LeashPairs` — intact, `server/main.lua:243-262`, still the
+    `{ partner = b, isK9 = <bool> }` shape rather than the old bare
+    `LeashPairs[a] = b`.
+  * `RevokeCertificationOffline` → `RefreshCertificationCache` — intact. The
+    function spans 3154-3326 in `server/certifications.lua` and the call is
+    at 3262, inside it.
+  * Vehicle `onResourceStop` — present on BOTH sides,
+    `client/vehicle.lua:1115` and `server/vehicle.lua:638`.
+  * Radial `lib.registerRadial` / `lib.addRadialItem` split — correct. Real
+    `registerRadial` calls at 794, 1745, 1811, 1894 and `addRadialItem` at
+    2689, 2708.
+
+**4. Stale "Done"/"Resolved" claims:** none found — and one previously-open
+finding is now closed.
+
+  The trigger still asks for `SPEC.md §7`. **There is no SPEC.md in this
+  resource**; it was split into DEVELOPER_REFERENCE.md and the other specs
+  some passes ago. The trigger text is stale, not the repository. Left as-is
+  rather than edited, since the trigger is owned outside this repo, but the
+  next pass should read that step as "check the live docs".
+
+  The finding the previous pass left open — config.lua's comment justifying
+  the HandlerXPProgression flip states "the tablet advertises the ranks",
+  which was false because nothing in the tablet showed a handler rank
+  anywhere — **is now true**. It was closed by code rather than by editing
+  the comment: `8ae7d86` added the Progression tab (both ladders), and
+  `4f71e4f` added the roster's Handler XP column and the person screen's
+  Handler XP section. That pass recorded it as needing a product decision
+  about where a handler should see their rank; the answer turned out to be
+  all three places.
+
+**5. `luac5.4 -p`:** clean across all 217 `.lua` files.
+
+**No regressions, so nothing dispatched.** Consistent with every pass since
+2026-08-26: this fixed checklist keeps coming back clean while the real
+findings come from work aimed at specific features. The eight commits above
+are the evidence again — the two bugs worth having found this window (a
+decertified player stuck in a kennel, and the tablet corrupting
+operator-renamed rank labels) are both invisible to every item on this list.
+Worth the owner considering whether this routine's checklist should be
+rotated rather than repeated.
