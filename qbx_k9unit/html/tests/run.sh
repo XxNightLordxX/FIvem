@@ -13,8 +13,14 @@
 # calls, and t.run() calls process.exit(0|1) itself (all passed / at least
 # one failure). This script aggregates those exit codes into one overall
 # pass/fail and prints a final summary line, exiting non-zero if ANY spec
-# file failed -- suitable for a CI job alongside tests/run.sh's own
-# .github/workflows/lua-check.yml, once one is added for this side.
+# file failed.
+#
+# THIS IS WHAT CI RUNS. .github/workflows/lua-check.yml's `js-tests` job
+# calls this script directly, exactly as its `lua-tests` job calls
+# tests/run.sh -- so a local run and a CI run execute the same code, and
+# "it passes on my machine" means the same thing as "it passes in CI".
+# (That job used to inline its own copy of this glob-and-aggregate loop,
+# written before this file existed; the duplicate is gone.)
 #
 # IMPORTANT: this directory is html/tests/, NOT tests/ -- tests/run.sh
 # glob-discovers *_spec.lua in ITS OWN directory only, so these *_spec.js
