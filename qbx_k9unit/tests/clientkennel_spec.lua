@@ -1134,6 +1134,24 @@ t.test('FORCED RELEASE: forceExitKennelRest detaches this client\'s ped, restore
         'and the player is told why they were moved, rather than being silently teleported out')
 end)
 
+t.test('FORCED RELEASE: a FORGED local trigger is rejected -- the source-origin guard holds on this handler too', function()
+    -- This handler shipped without the guard every other server->client
+    -- handler in this file carries. The effect of a forged trigger is
+    -- self-only and harmless (you can already leave voluntarily), which is
+    -- exactly why it was easy to miss -- and exactly why the convention is
+    -- "every event, no per-event judgement calls": the next payload added
+    -- to this event would otherwise arrive forgeable.
+    local f = newKennelFixture()
+    local netId = 800
+    f.registerForeignEntity(netId, 90, GetHashKey(PRIMARY_MODEL), { x = 50.0, y = 60.0, z = 10.0 })
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel(), 'sanity: resting via a legitimate server event')
+
+    f.dispatchNetEvent('qbx_k9unit:client:forceExitKennelRest', 1, 'cert_revoked')
+
+    t.isTrue(f.env.IsRestingInKennel(), 'a locally-forged trigger (source ~= 65535) must be ignored outright')
+end)
+
 t.test('FORCED RELEASE: forceExitKennelRest is a safe no-op when this client is not resting at all', function()
     local f = newKennelFixture()
     local before = #f.notifyCalls

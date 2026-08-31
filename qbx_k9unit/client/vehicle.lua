@@ -1040,6 +1040,16 @@ end
 --- keeps it. Either way the release path is reachable exactly when a
 --- release is possible.
 RegisterNetEvent('qbx_k9unit:client:forceExitVehicleSeat', function(_reason)
+    -- SOURCE-ORIGIN GUARD, matching every other server->client handler in
+    -- this file (see client/combat.lua's own header block for the full
+    -- writeup). Added after this handler shipped without one: the effect
+    -- of a forged local trigger is self-only and harmless today (you can
+    -- already leave voluntarily), but this resource treats the guard as
+    -- mandatory on EVERY server->client event precisely so nobody has to
+    -- re-derive that per-event judgement -- and so a later change that
+    -- gives this event a meaningful payload cannot quietly become
+    -- forgeable.
+    if source ~= 65535 then return end
     ExitK9Vehicle('vehicle.exit_access_revoked')
 end)
 

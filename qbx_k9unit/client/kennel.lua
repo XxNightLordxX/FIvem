@@ -520,6 +520,16 @@ end
 --- nothing. The requestExitKennel it fires back at the server is likewise a
 --- no-op -- the server cleared its own row before sending this.
 RegisterNetEvent('qbx_k9unit:client:forceExitKennelRest', function(_reason)
+    -- SOURCE-ORIGIN GUARD, matching every other server->client handler in
+    -- this file (see client/combat.lua's own header block for the full
+    -- writeup). Added after this handler shipped without one: the effect
+    -- of a forged local trigger is self-only and harmless today (you can
+    -- already leave voluntarily), but this resource treats the guard as
+    -- mandatory on EVERY server->client event precisely so nobody has to
+    -- re-derive that per-event judgement -- and so a later change that
+    -- gives this event a meaningful payload cannot quietly become
+    -- forgeable.
+    if source ~= 65535 then return end
     ReleaseKennelRest('kennel.exit_access_revoked')
 end)
 

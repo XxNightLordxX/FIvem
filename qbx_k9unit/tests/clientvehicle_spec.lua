@@ -671,6 +671,29 @@ t.test('FORCED RELEASE: the forceExitVehicleSeat handler is registered and calls
     f.dispatchClientEvent('qbx_k9unit:client:forceExitVehicleSeat', 65535, 'cert_revoked')
 end)
 
+t.test('FORCED RELEASE: a FORGED local trigger is rejected -- the source-origin guard holds on this handler too', function()
+    -- Same omission, same file-wide convention, same reasoning as the
+    -- kennel side: harmless today because the effect is self-only, guarded
+    -- anyway so a future payload on this event cannot become forgeable.
+    -- MUST BE GENUINELY SEATED FIRST. An earlier version of this test
+    -- forged the event with the client standing on the pavement and
+    -- asserted no notification -- which passes with OR without the guard,
+    -- because ExitK9Vehicle early-returns on IsInK9Vehicle() anyway. It
+    -- proved nothing, and only showed itself when the guard was removed on
+    -- purpose and the test stayed green.
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+    t.isTrue(f.env.IsInK9Vehicle(), 'sanity: genuinely seated before the forged trigger')
+
+    f.dispatchClientEvent('qbx_k9unit:client:forceExitVehicleSeat', 1, 'cert_revoked')
+
+    t.isTrue(f.env.IsInK9Vehicle(),
+        'a locally-forged trigger (source ~= 65535) must be ignored outright -- the client stays seated')
+end)
+
 t.test('FORCED RELEASE: the handler is a safe no-op when this client is not in a K9 vehicle at all', function()
     -- A duplicate or late event must never throw, and must never notify
     -- someone standing on a pavement that they have been let out of a
