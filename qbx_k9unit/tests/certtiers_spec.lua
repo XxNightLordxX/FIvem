@@ -330,6 +330,52 @@ t.test('AUTHORIZATION: certTiersList denies a non-high-command source', function
     t.equals(result.reason, 'denied')
 end)
 
+t.test('SHAPE: certTiersUpsert refuses a label that is empty, non-string, or past the VARCHAR(60) column', function()
+    -- FOUND BY MUTATION TESTING (2026-08-31): deleting IsValidTierLabel's
+    -- `len == 0 or len > 60` line left the whole suite green. The existing
+    -- tests here all pass a well-formed label, so the length bound itself
+    -- was never exercised -- the same "strong on behaviour, weak on shape"
+    -- pattern the previous two mutation rounds found elsewhere.
+    --
+    -- Both ends are observable. `label` is VARCHAR(60) NOT NULL in
+    -- sql/install.sql, so an over-long label is a truncation or a write
+    -- error; and an EMPTY label is worse than a rejected one, because it
+    -- writes a rank whose name renders as blank everywhere it appears --
+    -- the tablet's tier list, the roster, and every certification row.
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+
+    for _, bad in ipairs({ '', 123, true, {} }) do
+        -- Advance past CERT_TIER_ACTION_COOLDOWN_MS between attempts, or the
+        -- second onward come back 'rate_limited' and this test would be
+        -- asserting the cooldown instead of the label check. (That is exactly
+        -- what the first draft did.)
+        f.fakeNow.value = f.fakeNow.value + 2000
+        local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+            key = 'shapecheck', label = bad, capabilities = {},
+        })
+        t.isFalse(result.ok,
+            ('a %s label must be refused, not written'):format(bad == '' and 'empty' or type(bad)))
+        t.equals(result.reason, 'invalid_label',
+            ('a %s label must refuse as invalid_label'):format(bad == '' and 'empty' or type(bad)))
+    end
+
+    -- 61 characters: one past what the column can hold.
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local tooLong = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'shapecheck', label = string.rep('L', 61), capabilities = {},
+    })
+    t.isFalse(tooLong.ok, 'a 61-character label exceeds label VARCHAR(60) and must be refused before the write')
+    t.equals(tooLong.reason, 'invalid_label')
+
+    -- CONTROL: exactly 60 is legal and must still be accepted, so this test
+    -- pins the boundary rather than just "long strings are bad".
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local atLimit = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'shapecheck', label = string.rep('L', 60), capabilities = {},
+    })
+    t.isTrue(atLimit.ok, 'exactly 60 characters fits the column and must be accepted')
+end)
+
 t.test('AUTHORIZATION: certTiersUpsert denies a non-high-command source even with a well-formed payload', function()
     local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
     local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](NON_HC_SOURCE, { key = 'master', label = 'Master', capabilities = {} })
