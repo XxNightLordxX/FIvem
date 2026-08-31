@@ -124,7 +124,29 @@ end, false)
 
 RegisterKeyMapping('qbx_k9unit:dangerWarnAlert',
     SafeLocale('dangerwarn.keybind_label', 'K9: Danger Warning (Alert)'),
-    'keyboard', (type(Config.DangerWarn) == 'table' and Config.DangerWarn.keybind) or 'N')
+    -- FALLBACK FIX (this pass, QA sweep): was `or 'N'`. config.lua's own
+    -- Config.DangerWarn.keybind default is 'P', chosen specifically (see
+    -- that field's own comment, "CHANGED FROM 'N' ON 2026-08-27") to stop
+    -- colliding with client/pursuitsprint.lua's hardcoded 'N' default,
+    -- which ships ON by default -- a collision that fires BOTH actions on
+    -- one keypress (danger-warn AND pursuit-sprint) the moment an operator
+    -- turns DangerWarn on. This line's own defensive last-resort fallback
+    -- (for a missing/malformed Config.DangerWarn table, or a config that
+    -- dropped the `keybind` field specifically) still hard-coded the OLD,
+    -- already-fixed-elsewhere 'N' value, silently reopening the exact
+    -- collision config.lua's own history section documents fixing --
+    -- reachable any time an operator's config keeps `Config.DangerWarn` as
+    -- a table but omits `keybind`, not just when the whole block is
+    -- missing. tests/keybindcollisions_spec.lua's own literal-key scanner
+    -- cannot see this expression at all (it only matches a bare string
+    -- literal as RegisterKeyMapping's last argument, not a conditional
+    -- expression), so this fallback's own value was never cross-checked
+    -- against every other shipped default the way every literal default in
+    -- this resource is. Fixed by matching config.lua's real default ('P')
+    -- instead of the pre-fix value, so a malformed/partial config degrades
+    -- to the SAME non-colliding key config.lua itself ships, never back to
+    -- the one already proven to double-fire.
+    'keyboard', (type(Config.DangerWarn) == 'table' and Config.DangerWarn.keybind) or 'P')
 
 -- ======================================================================
 -- CHAT COMMAND ONLY, DELIBERATELY NO KEYBIND -- Danger Warn "Threat"

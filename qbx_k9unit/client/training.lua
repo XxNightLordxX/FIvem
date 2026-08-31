@@ -302,18 +302,33 @@ local function RunTrainingDrill(eventName, progressLabel, onSuccess)
 
         if not result or not result.ok then
             local reason = result and result.reason
+            -- Per-reason dispatch, mirroring client/search.lua's own
+            -- PerformSearch (see that file's identical if/elseif chain).
             -- 'on_cooldown' is a silent, low-key no-op -- matches this
             -- resource's established cooldown-UX convention
             -- (client/search.lua's own PerformSearch treats 'on_cooldown'
-            -- identically). Every OTHER reason ('not_training' / 'too_far'
-            -- / 'no_access' / an unrecognized/missing reason) gets a plain
-            -- notify: server/training.lua's own
-            -- CheckTrainingActionEligibility ALSO fires
-            -- trainingModeChanged(false) for the first two of those when it
+            -- identically). Every OTHER reason names itself in plain
+            -- English instead of collapsing into one generic "wait"
+            -- message -- 'too_far' and 'no_access' are cases where
+            -- waiting is actively wrong advice (the player needs to move
+            -- into a training zone, or is not certified at all):
+            -- server/training.lua's own CheckTrainingActionEligibility
+            -- ALSO fires trainingModeChanged(false) for those two when it
             -- detects the drift server-side -- this notify is purely the
-            -- player-facing explanation, not what turns the banner off (the
-            -- event above is the only thing that does that).
-            if reason ~= 'on_cooldown' then
+            -- player-facing explanation, not what turns the banner off
+            -- (the event above is the only thing that does that). A
+            -- genuinely unrecognized/missing reason (or a future server
+            -- value this file hasn't been taught yet) falls back to the
+            -- generic 'action_denied' catch-all.
+            if reason == 'on_cooldown' then -- luacheck: ignore 542
+                -- Deliberately empty branch (silent no-op UX), not a missed implementation.
+            elseif reason == 'too_far' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('training.too_far'), type = 'error' })
+            elseif reason == 'no_access' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('training.no_access'), type = 'error' })
+            elseif reason == 'not_training' then
+                lib.notify({ title = locale('common.notify_title'), description = locale('training.not_training'), type = 'error' })
+            else
                 lib.notify({ title = locale('common.notify_title'), description = locale('training.action_denied'), type = 'error' })
             end
             return
