@@ -428,4 +428,71 @@ t.test('MEMORY MODE audit growth is CAPPED, so a long-running drag-and-drop serv
         'the search log must stop at its 500-row memory cap, discarding oldest-first, not grow without bound')
 end)
 
+t.test('DRAG-AND-DROP IS REAL: every table the schema creates has a memory-mode gate, so no feature is SQL-only', function()
+    -- The structural half of the drag-and-drop guarantee. The other tests
+    -- above prove no K9Store function reaches MySQL and that memory mode
+    -- remembers -- but both only cover tables K9Store already knows about.
+    -- A table added to sql/install.sql with a real-SQL accessor and no
+    -- memory branch would slip past them entirely: its own feature would
+    -- query a table the operator never created, on the SHIPPED default,
+    -- and fail for them alone.
+    --
+    -- So this walks the schema itself and requires each table to be gated
+    -- somewhere. Almost all of them are gated inside server/datastore.lua;
+    -- k9_dog_characters is a disclosed exception gated in
+    -- server/dogcharacter.lua instead (that file could not edit datastore
+    -- when the table was added, and uses the same public
+    -- K9Store.IsDatabaseEnabled(tableName) check). Both shapes count --
+    -- what must never happen is a table gated NOWHERE.
+    local function stripComments(text)
+        text = text:gsub('(%-%-%[(=*)%[.-%]%2%])', function(w) return (w:gsub('[^\n]', '')) end)
+        return (text:gsub('%-%-[^\n]*', ''))
+    end
+
+    local function readStripped(path)
+        local handle = assert(io.open(path, 'r'), 'could not open ' .. path)
+        local text = handle:read('a')
+        handle:close()
+        return stripComments(text)
+    end
+
+    local schema = readStripped('../sql/install.sql')
+    -- `[%w_]+`, NOT `%w+`: Lua's %w is alphanumeric and does NOT include
+    -- the underscore, so `k9_%w+` matched only single-underscore names and
+    -- silently found 17 of the 28 tables. The sanity assertion below is
+    -- what caught it -- without it this test would have passed while
+    -- checking well under half the schema.
+    local tables = {}
+    for name in schema:gmatch('CREATE TABLE%s+IF NOT EXISTS%s+`?(k9_[%w_]+)`?') do tables[name:lower()] = true end
+    for name in schema:gmatch('CREATE TABLE%s+`?(k9_[%w_]+)`?') do tables[name:lower()] = true end
+
+    local sorted = {}
+    for name in pairs(tables) do sorted[#sorted + 1] = name end
+    table.sort(sorted)
+    t.isTrue(#sorted >= 25, 'sanity: expected the full shipped schema, found ' .. #sorted .. ' k9_ tables')
+
+    -- Every server file may hold a gate, not just datastore.lua -- see the
+    -- k9_dog_characters exception above.
+    local listing = assert(io.popen('ls ../server/*.lua 2>/dev/null'))
+    local gateText = {}
+    for path in listing:lines() do gateText[#gateText + 1] = readStripped(path) end
+    listing:close()
+    local allServer = table.concat(gateText, '\n')
+
+    local ungated = {}
+    for _, name in ipairs(sorted) do
+        if not allServer:find("DatabaseEnabled('" .. name .. "')", 1, true) then
+            ungated[#ungated + 1] = name
+        end
+    end
+
+    t.equals(#ungated, 0,
+        'These tables exist in sql/install.sql but nothing anywhere calls DatabaseEnabled(\'<table>\') for them: '
+        .. table.concat(ungated, ', ')
+        .. '. On the shipped default (Config.Database.enabled = false) their feature would query a table the '
+        .. 'operator never created. Add the memory-mode branch, gated per-table, in server/datastore.lua -- or, '
+        .. 'if that file genuinely cannot own it, via K9Store.IsDatabaseEnabled(\'<table>\') where it does live, '
+        .. 'the way server/dogcharacter.lua does.')
+end)
+
 os.exit(t.summary())
