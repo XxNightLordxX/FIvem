@@ -263,9 +263,10 @@
     always be taken back out, only never re-deposited once removed if it is
     no longer on the list.
 
-    RUNTIME CAPABILITY GUARD: same posture server/tracking.lua's
-    `IsOxInventoryHookCapable`/ScentTracking `onResourceStart` block
-    originally established for this exact same `registerHook` export (that
+    RUNTIME CAPABILITY GUARD: same posture the since-deleted
+    `IsOxInventoryHookCapable` helper and server/tracking.lua's ScentTracking
+    `onResourceStart` block originally established for this same
+    `registerHook` export (that
     file's own header has the full "why a runtime check, not a
     `dependencies` version pin" writeup — not re-derived here). UPDATE: the
     small LOCAL copy of that capability check this file used to keep

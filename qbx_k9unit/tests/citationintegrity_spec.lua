@@ -504,4 +504,212 @@ t.test('REGRESSION: PropAttachments is documented under the filenames that actua
         'server/propattachment.lua should exist -- §14.3 once claimed PropAttachments had no server file at all')
 end)
 
+-- ======================================================================
+-- PART 4 -- function names written in comments
+--
+-- A comment that says `FooBar()` is a citation like any other, and it rots
+-- the same way -- except worse, because a deleted function leaves no trace
+-- and the comment keeps reading as current.
+--
+-- FOUND BY THIS CHECK, 2026-08-31: `IsOxInventoryHookCapable` was cited
+-- NINETEEN times across NINE files as a live capability probe gating
+-- ox_inventory hook registration. It had been deleted in the compat-layer
+-- migration and its job moved into the boolean
+-- `K9Compat.Get('inventory').RegisterHook` returns. Four sites recorded
+-- that correctly; fifteen still described it in the present tense, so a
+-- reader would hunt for a function long gone and could reasonably conclude
+-- the ox_inventory version guard had been lost.
+-- ======================================================================
+
+--- Names that are written as `Something()` in a comment but are correctly
+--- not defined here. Both-directions hygiene, as above.
+local EXTERNAL_FUNCTION_ALLOWLIST = {
+    -- The two most valuable entries in this file. Both are cited PRECISELY
+    -- because they do not exist: an earlier pass assumed these natives were
+    -- real, and an unregistered native returns nil forever while logging
+    -- nothing, so thermal/night vision silently never worked. The comments
+    -- naming them are the record of that finding and must stay.
+    -- DELETED, and the comments that still name it do so in the PAST tense,
+    -- as the history of a refactor. That is correct content, so the name
+    -- stays exempt here -- but the dedicated regression test at the bottom
+    -- of this file separately forbids describing it as CURRENT again, which
+    -- is the failure this whole entry exists to prevent from recurring.
+    IsOxInventoryHookCapable = 'deleted in the compat-layer migration; its job is now the boolean K9Compat.Get(\'inventory\').RegisterHook returns',
+    -- The single most valuable entry here. It is cited PRECISELY because it
+    -- does not exist: an earlier pass assumed this native was real, and an
+    -- unregistered native returns nil forever while logging nothing, so
+    -- thermal vision silently never worked. The comment naming it IS the
+    -- record of that finding and must stay. (Its sibling
+    -- IsNightvisionActive is named without parentheses everywhere, so this
+    -- scan never sees it and it needs no entry.)
+    IsSeethroughActive = 'a native that does NOT exist -- cited as the documented finding, see client/vision.lua',
+    Await              = 'prose in client/combat.lua describing a yield, not a call to anything',
+    -- Named in a comment explaining why it was deliberately NOT added.
+    CanActAsK9Handler = 'server/fetch.lua explains why this combinator was not added; naming it is the point',
+    -- Other resources / other languages.
+    GetCoreObject = "es_extended's shared/main.lua export, cited by shared/compat/framework.lua",
+    GREATEST      = 'a SQL function, not Lua -- appears in a query in server/partnership.lua',
+    -- Illustrative placeholder names inside spec prose.
+    DoThing = 'placeholder in tests/commandreferenceregistry_spec.lua prose, not a real function',
+}
+
+--- Every function name this resource defines, in any form the codebase uses.
+local function DefinedFunctionNames()
+    local names = {}
+    for _, file in ipairs(SCANNED) do
+        if file:match('%.lua$') then
+            local body = ReadFile(file)
+            if body then
+                for name in body:gmatch('\n%s*function%s+([%w_.:]+)') do
+                    -- `Foo.Bar` / `Foo:Bar` -> `Bar`. Guarded: a trailing
+                    -- separator (`function Foo.`) makes the match nil, and
+                    -- `names[nil] = true` is a hard error, not a skip.
+                    local bare = name:match('([%w_]+)$')
+                    if bare then names[bare] = true end
+                end
+                for name in body:gmatch('\n%s*local%s+function%s+([%w_]+)') do
+                    names[name] = true
+                end
+                for name in body:gmatch('\n%s*local%s+([%w_]+)%s*=%s*function') do
+                    names[name] = true
+                end
+                for name in body:gmatch('\n%s*([%w_]+)%s*=%s*function') do
+                    names[name] = true
+                end
+                -- `exports('Name', fn)` and table fields `Name = function`
+                for name in body:gmatch("exports%(%s*['\"]([%w_]+)['\"]") do
+                    names[name] = true
+                end
+            end
+        end
+    end
+    return names
+end
+
+local DEFINED_FUNCTIONS = DefinedFunctionNames()
+
+local function CitedFunctionNames()
+    local cited = {}
+    for _, file in ipairs(SCANNED) do
+        if file:match('%.lua$') and not SELF_QUOTING_FILES[file] then
+            local body = ReadFile(file)
+            if body then
+                local prevEndsMidWord = false
+                for line in body:gmatch('[^\n]+') do
+                    -- Comment lines only. A real call is the compiler's
+                    -- problem (and luacheck's); only prose can lie.
+                    if line:match('^%s*%-%-') then
+                        local text = line:match('^%s*%-%-+%s*(.*)$') or ''
+                        for pre, name in ('\1' .. text):gmatch('([^%w_*])([A-Z][%w]+)%(%)') do
+                            -- WRAP-FRAGMENT GUARD. A long identifier split
+                            -- across two comment lines leaves its tail alone
+                            -- at the start of the second one, so
+                            -- `...newFixtureWith\n-- Access()` looks exactly
+                            -- like a citation of `Access()`. If the previous
+                            -- comment line ended mid-word and this candidate
+                            -- is the first thing on this one, it is a
+                            -- continuation, not a citation. Without this the
+                            -- scan reported ~40 phantom names.
+                            local atLineStart = (pre == '\1')
+                            if #name >= 5 and not (atLineStart and prevEndsMidWord) then
+                                cited[name] = cited[name] or {}
+                                cited[name][#cited[name] + 1] = file
+                            end
+                        end
+                        prevEndsMidWord = text:match('[%w_]$') ~= nil
+                    else
+                        prevEndsMidWord = false
+                    end
+                end
+            end
+        end
+    end
+    return cited
+end
+
+local CITED_FUNCTIONS = CitedFunctionNames()
+
+t.test('SANITY: the function-name scan found both definitions and citations', function()
+    local defs, cites = 0, 0
+    for _ in pairs(DEFINED_FUNCTIONS) do defs = defs + 1 end
+    for _ in pairs(CITED_FUNCTIONS) do cites = cites + 1 end
+    t.isTrue(defs > 1000, ('expected >1000 defined function names, found %d'):format(defs))
+    t.isTrue(cites > 100, ('expected >100 function names cited in comments, found %d'):format(cites))
+end)
+
+t.test('Every FooBar() named in a comment is a function that exists', function()
+    local broken = {}
+    for name, citers in pairs(CITED_FUNCTIONS) do
+        if not DEFINED_FUNCTIONS[name] and not EXTERNAL_FUNCTION_ALLOWLIST[name] then
+            table.sort(citers)
+            broken[#broken + 1] = ('%s() -- cited in %s (%d site(s))'):format(name, citers[1], #citers)
+        end
+    end
+    table.sort(broken)
+    t.equals(#broken, 0,
+        'these functions are named in comments but do not exist:\n    ' .. table.concat(broken, '\n    ') ..
+        '\n  A deleted function leaves no trace, so the comment keeps reading as current. ' ..
+        'Either repoint the comment at what replaced it, or -- if the name is external, or is ' ..
+        'cited precisely BECAUSE it does not exist -- add it to EXTERNAL_FUNCTION_ALLOWLIST with a reason.')
+end)
+
+t.test('ALLOWLIST HYGIENE: no function allowlist entry has quietly become real or unused', function()
+    local stale = {}
+    for name, reason in pairs(EXTERNAL_FUNCTION_ALLOWLIST) do
+        if DEFINED_FUNCTIONS[name] then
+            stale[#stale + 1] = ('%s -- now DEFINED in this repo, so the exemption (%s) is wrong'):format(name, reason)
+        elseif not CITED_FUNCTIONS[name] then
+            stale[#stale + 1] = ('%s -- no longer cited in any comment, so the exemption is dead weight'):format(name)
+        end
+    end
+    table.sort(stale)
+    t.equals(#stale, 0, 'stale function-allowlist entries:\n    ' .. table.concat(stale, '\n    '))
+end)
+
+t.test('REGRESSION: no comment describes IsOxInventoryHookCapable as a thing that currently exists', function()
+    -- Words that mark a mention as HISTORY rather than a live description.
+    -- Checked on the mentioning line AND the one above it, because these are
+    -- wrapped comment blocks: the framing ("...has since been deleted") and
+    -- the name routinely land on different lines.
+    local PAST_TENSE = {
+        'deleted', 'used to', 'was once', 'migration', 'originally',
+        'WAS a', 'since', 'no longer', 'replaced',
+    }
+    local function marksHistory(line)
+        if not line then return false end
+        -- Case-insensitive: this codebase shouts its section headers, so the
+        -- marker is as likely to read "COMPAT-LAYER MIGRATION:" as "migration".
+        local lowered = line:lower()
+        for _, word in ipairs(PAST_TENSE) do
+            if lowered:find(word:lower(), 1, true) then return true end
+        end
+        return false
+    end
+
+    local offenders = {}
+    for _, file in ipairs(SCANNED) do
+        if not SELF_QUOTING_FILES[file] and file:match('%.lua$') then
+            local body = ReadFile(file)
+            if body then
+                local prev = ''
+                for line in body:gmatch('[^\n]*') do
+                    if line:find('IsOxInventoryHookCapable', 1, true)
+                        and not marksHistory(line) and not marksHistory(prev) then
+                        offenders[#offenders + 1] = ('%s: %s'):format(file, (line:gsub('^%s+', '')):sub(1, 90))
+                    end
+                    prev = line
+                end
+            end
+        end
+    end
+    table.sort(offenders)
+    t.equals(#offenders, 0,
+        'IsOxInventoryHookCapable is being described in the present tense again:\n    ' ..
+        table.concat(offenders, '\n    ') ..
+        '\n  That function was deleted in the compat-layer migration. Its job is now the boolean ' ..
+        "K9Compat.Get('inventory').RegisterHook returns. Nineteen comments across nine files once " ..
+        'described it as live, which would send a reader hunting for a version guard they would ' ..
+        'not find. Naming it as HISTORY is fine; naming it as CURRENT is the bug.')
+end)
+
 os.exit(t.summary())
