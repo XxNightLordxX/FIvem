@@ -465,4 +465,26 @@ t.test('SOURCE-LEVEL: server/leaderboard.lua never references AwardXP, INSERT, U
     t.notContains(code:upper(), 'DELETE ')
 end)
 
+t.test('ClampLimit: a REAL NaN -- not the string "nan" -- falls back to the default', function()
+    -- THE ONE CASE THE BATTERY ABOVE CANNOT REACH, and the reason this
+    -- file's ClampLimit silently drifted from admin.lua's while looking
+    -- thoroughly covered. Every test above passes with or without the
+    -- `parsed ~= parsed` guard, because they all pass STRINGS and
+    -- tonumber('nan') is nil in PUC Lua -- the `or defaultMaxRows` fallback
+    -- catches those on its own. Only a real NaN number reaches the guard.
+    --
+    -- OBSERVED, not predicted: with the guard removed this fails with a
+    -- LIMIT of 1 instead of the configured 20 -- a silently wrong query,
+    -- not a crash. Worth stating precisely, because in ISOLATION the same
+    -- value throws instead: math.floor(0/0) is -nan, both clamp
+    -- comparisons against it are false, and ('LIMIT %d'):format(-nan)
+    -- raises "number has no integer representation". Both are wrong; the
+    -- guard removes both.
+    --
+    -- Not reachable through /k9stats today (args[1] is always a string or
+    -- nil). This pins the boundary so the guard cannot be dropped again,
+    -- and so wiring this to a callback that CAN carry a real float is safe.
+    t.equals(clampLimitViaCommand(0 / 0), 20)
+end)
+
 os.exit(t.summary())

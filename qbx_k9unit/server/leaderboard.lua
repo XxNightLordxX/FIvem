@@ -213,10 +213,39 @@ StatsCooldown.RegisterPlayerDropped()
 --- duplicated here, not imported (see this file's header). Never trusts
 --- the raw value directly into a query -- always returns a plain Lua
 --- integer already clamped into [1, HARD_MAX_RESULTS].
---- @param rawArg string? -- args[1] from the RegisterCommand handler, or nil
+---
+--- THE `parsed ~= parsed` LINE IS THE NaN GUARD, and it is why this now
+--- really is identical to admin.lua's copy rather than only claiming to be.
+--- It was missing here until 2026-08-31, and the divergence was checked
+--- empirically before being called a defect: given a NaN, admin.lua's copy
+--- returns its default (25) while this one returned `-nan`, and
+--- `('LIMIT %d'):format(-nan)` then raises "number has no integer
+--- representation" -- an uncaught error inside the query builder, exactly
+--- the failure server/datastore.lua's own ClampLimit note warns about.
+---
+--- NOT REACHABLE TODAY, stated plainly rather than overclaimed: the only
+--- caller is the `/k9stats` RegisterCommand handler, whose `args[1]` is
+--- always a string or nil, and no string parses to NaN (`tonumber('nan')`
+--- is nil, which the `or defaultMaxRows` fallback already handles). This is
+--- a latent trap being closed, not a live bug being fixed -- it would bite
+--- the first time anyone wired this to a callback that can carry a real
+--- float, which is precisely the sort of change a "this is identical to the
+--- hardened copy" comment invites someone to make safely.
+---
+--- WHY A THOROUGH-LOOKING TEST BATTERY MISSED IT, since that is the more
+--- useful lesson: tests/leaderboard_spec.lua already had ten ClampLimit
+--- cases (nil, garbage, 'nan', '-nan', 'inf', '1e400', '-1e400',
+--- fractional, negative, zero) mirroring admin_spec.lua's. Every one of
+--- them passes with or without this guard, because every one passes a
+--- STRING, and the `or defaultMaxRows` fallback handles all of those by
+--- itself. Only a real NaN number reaches the guard at all. One test for
+--- that case has been added; the battery was not the problem, its input
+--- type was.
+--- @param rawArg string?|number -- args[1] from the RegisterCommand handler, or nil
 --- @return number limit
 local function ClampLimit(rawArg)
-    local parsed = tonumber(rawArg) or defaultMaxRows
+    local parsed = tonumber(rawArg)
+    if parsed == nil or parsed ~= parsed then parsed = defaultMaxRows end
     parsed = math.floor(parsed)
     if parsed < 1 then return 1 end
     if parsed > HARD_MAX_RESULTS then return HARD_MAX_RESULTS end
