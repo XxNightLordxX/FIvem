@@ -968,4 +968,85 @@ t.test('a `confirmation_required` refusal (the server disagreeing with a stale/b
     );
 });
 
+// ======================================================================
+// THE SERVER'S OWN `note` PROSE (2026-08-31)
+//
+// server/runtimecontrol.lua writes a plain-English `note` in three places,
+// and until this pass no renderer in html/tablet.js read `result.note`, so
+// every one of them was discarded on the way to the screen. Two of the
+// three are the ONLY explanation the admin would ever get.
+// ======================================================================
+
+t.test("parent_disabled renders the server's note naming the blocking config flag, not a bare failure", async () => {
+    const NOTE = 'Config.FeatureGroups.Combat.enabled is false in config.lua, so BiteAndHold cannot be turned on from here.';
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BiteAndHold', currentValue: false, tier: 'live', overridden: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': () => ({ ok: false, error: 'parent_disabled', parent: 'Combat', note: NOTE }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const enableBtn = findByText(h.getRoot(), 'Enable')[0];
+    enableBtn.click();
+    enableBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.isTrue(findByText(h.getRoot(), NOTE).length > 0,
+        "the server's own note must be shown -- it names the exact config.lua flag to change, and `parent_disabled` has no case in the switch, so without this the admin saw only the generic failure line");
+});
+
+t.test('a SESSION-ONLY success still warns that the change will not survive a restart', async () => {
+    const NOTE = 'SESSION-ONLY: this change is NOT persisted -- the next resource restart reverts Config.Features.BiteAndHold.';
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'BiteAndHold', currentValue: false, tier: 'live', overridden: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': () => ({ ok: true, appliedLive: true, restartRequired: false, tier: 'live', sessionOnly: true, note: NOTE }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const enableBtn = findByText(h.getRoot(), 'Enable')[0];
+    enableBtn.click();
+    enableBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const shown = findAll(h.getRoot(), (n) => typeof n.textContent === 'string' && n.textContent.indexOf('SESSION-ONLY') !== -1);
+    t.isTrue(shown.length > 0,
+        'dropping this is worse than dropping a refusal: the admin is told the action SUCCEEDED, watches it take effect, and finds it reverted after a restart with nothing having warned them');
+});
+
+t.test('a failure with no note still falls back to the mapped sentence for its code', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [{ name: 'SomeFeature', currentValue: false, tier: 'live', overridden: false }] }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+            'tablet:runtimeSetFeature': () => ({ ok: false, error: 'rate_limited' }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const enableBtn = findByText(h.getRoot(), 'Enable')[0];
+    enableBtn.click();
+    enableBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // CONTROL for the two tests above: reading `note` must not shadow the
+    // existing switch when the server did not write one. Asserted against
+    // the real mapped sentence rather than a whole-tree textContent scrape,
+    // which the DOM stub does not aggregate.
+    t.isTrue(findByText(h.getRoot(), 'Please wait a moment before trying again.').length > 0,
+        'with no note present the switch must still map rate_limited to its own sentence');
+    t.equals(findByText(h.getRoot(), 'undefined').length, 0,
+        'a missing note must never render as the string "undefined"');
+});
+
 t.run();

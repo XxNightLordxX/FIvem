@@ -9862,9 +9862,55 @@
     }
 
     /** @param {object|undefined} result @returns {string} */
+    /**
+     * The server's own `note` field, when it set one.
+     *
+     * server/runtimecontrol.lua attaches `note` as PLAIN, PLAYER-FACING
+     * ENGLISH PROSE -- not a code to look up -- in three places, and until
+     * 2026-08-31 no renderer in this file read it, so all three were
+     * silently discarded:
+     *
+     *   1. `parent_disabled` (a REFUSAL). The note names the exact
+     *      `Config.FeatureGroups.<X>.enabled` flag that is blocking the
+     *      toggle and says the change would be forced back off on the next
+     *      restart. Without it this refusal fell to `default:` and rendered
+     *      as the bare "action failed" line -- the single least useful
+     *      thing an admin tool can say, and actively misleading here, since
+     *      the fix is one line in config.lua.
+     *   2. `sessionOnly` (a SUCCESS). "this change is NOT persisted -- the
+     *      next resource restart reverts it". Dropping this is worse than
+     *      dropping a refusal: the admin is told the action SUCCEEDED, sees
+     *      it take effect, and finds it reverted after a restart with
+     *      nothing anywhere having warned them.
+     *   3. The no-confirmed-enforcement-point caveat, same shape as 2.
+     *
+     * Safe to render as-is: mk() assigns through `textContent`, never
+     * innerHTML, so this is inert text even though it is server-authored
+     * English rather than a locale key.
+     * @param {object|undefined} result @returns {string} '' when absent
+     */
+    function serverNoteText(result) {
+        if (!result || typeof result.note !== 'string') return '';
+        var note = result.note.trim();
+        return note.length > 0 ? note : '';
+    }
+
+    /** Joins a locale sentence with the server's own note, when there is one. */
+    function withServerNote(baseText, result) {
+        var note = serverNoteText(result);
+        if (note === '') return baseText;
+        if (!baseText) return note;
+        return baseText + ' ' + note;
+    }
+
     function runtimeFeatureErrorText(result) {
         if (!result) return S('action_failed');
         if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        // Checked BEFORE the switch: when the server wrote a note it is
+        // strictly more specific than any code this switch could map,
+        // and for `parent_disabled` it is the only explanation there is.
+        var note = serverNoteText(result);
+        if (note !== '') return note;
         switch (result.error) {
             case 'denied': return S('runtime_error_denied');
             case 'rate_limited': return S('runtime_error_rate_limited');
@@ -9896,6 +9942,11 @@
     function runtimeTunableErrorText(result) {
         if (!result) return S('action_failed');
         if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        // Checked BEFORE the switch: when the server wrote a note it is
+        // strictly more specific than any code this switch could map,
+        // and for `parent_disabled` it is the only explanation there is.
+        var note = serverNoteText(result);
+        if (note !== '') return note;
         switch (result.error) {
             case 'denied': return S('runtime_error_denied');
             case 'rate_limited': return S('runtime_error_rate_limited');
@@ -14087,7 +14138,7 @@
                 // Only close a lockout confirmation panel that is still
                 // open for THIS SAME feature -- never someone else's.
                 if (state.runtimeLockoutConfirm && state.runtimeLockoutConfirm.name === name) state.runtimeLockoutConfirm = null;
-                state.actionNotice = { kind: 'ok', text: runtimeTierDescription(tier) };
+                state.actionNotice = { kind: 'ok', text: withServerNote(runtimeTierDescription(tier), result) };
                 loadRuntimeFeatures();
             } else {
                 var text = runtimeFeatureErrorText(result);
@@ -14123,7 +14174,7 @@
             state.pendingAction = false;
             if (result && result.ok === true) {
                 if (state.runtimeLockoutConfirm && state.runtimeLockoutConfirm.name === name) state.runtimeLockoutConfirm = null;
-                state.actionNotice = { kind: 'ok', text: runtimeTierDescription(tier) };
+                state.actionNotice = { kind: 'ok', text: withServerNote(runtimeTierDescription(tier), result) };
                 loadRuntimeFeatures();
             } else {
                 var text = runtimeFeatureErrorText(result);
