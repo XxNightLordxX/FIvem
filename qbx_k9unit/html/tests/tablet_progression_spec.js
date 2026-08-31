@@ -18,7 +18,7 @@
 
 const t = require('./testkit');
 const { createHarness, jsonResponse } = require('./tablet-sandbox');
-const { findByText } = require('./tablet-dom-stub');
+const { findByText, findAll } = require('./tablet-dom-stub');
 
 function routeFetch(handlers) {
     return function (url) {
@@ -197,6 +197,70 @@ t.test('PLACEHOLDER COLLISION: an unknown token in a template is left verbatim r
     t.equals(findByText(h.getRoot(), 'undefined').length, 0,
         'a typo in a template must never surface to a player as the word undefined');
     t.isTrue(findByText(h.getRoot(), '300 XP -- Some {nosuchtoken} Rank').length >= 1);
+});
+
+// ------------------------------------------------------------------
+// LADDER ORDER. The server does sort ascending
+// (server/progression.lua's LadderForDisplay), so these are not fixing a
+// payload seen in practice -- they pin that this screen no longer DEPENDS
+// on that, because the dependency was invisible from this side: a ladder
+// arriving unsorted would have rendered in the wrong order and marked the
+// wrong row as current, with no error anywhere.
+// ------------------------------------------------------------------
+
+t.test('LADDER ORDER: an out-of-order ladder still resolves the correct current rank and the correct next one', async () => {
+    const h = await openProgression({
+        xp: 2500,
+        tierLabel: null, // force the label to come from the position maths, not the server's own string
+        xpLadder: [
+            { xp: 9000, label: 'Elite K9' },
+            { xp: 0, label: 'Green K9' },
+            { xp: 3000, label: 'Veteran K9' },
+            { xp: 1000, label: 'Trained K9' },
+        ],
+    });
+
+    t.isTrue(findByText(h.getRoot(), '2500 XP -- Trained K9').length >= 1,
+        'current must be the HIGHEST threshold at or below the total (1000), not whichever row happened to come last');
+    t.isTrue(findByText(h.getRoot(), 'Next: Veteran K9, 500 XP away.').length >= 1,
+        'next must be the LOWEST threshold above the total (3000), not the first one encountered');
+});
+
+t.test('LADDER ORDER: the rendered rank list is displayed ascending regardless of the order it arrived in', async () => {
+    const h = await openProgression({
+        xp: 0,
+        tierLabel: 'Green K9',
+        xpLadder: [
+            { xp: 9000, label: 'Elite K9' },
+            { xp: 0, label: 'Green K9' },
+            { xp: 3000, label: 'Veteran K9' },
+        ],
+    });
+
+    const items = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-progression-rank'))
+        .map((n) => n._textContent);
+    const order = ['Green K9', 'Veteran K9', 'Elite K9'].map((name) => items.findIndex((txt) => txt.indexOf(name) >= 0));
+    t.isTrue(order[0] >= 0 && order[1] >= 0 && order[2] >= 0, 'all three ranks render');
+    t.isTrue(order[0] < order[1] && order[1] < order[2],
+        'a rank list shown out of order is unreadable as a progression -- the whole point is seeing what is ahead');
+});
+
+t.test('LADDER ORDER: an out-of-order ladder with a malformed row in it still drops only the malformed row', async () => {
+    const h = await openProgression({
+        xp: 5000,
+        tierLabel: null,
+        xpLadder: [
+            { xp: 9000, label: 'Elite K9' },
+            { xp: 'not-a-number', label: 'Broken' },
+            { xp: 3000, label: 'Veteran K9' },
+            { label: 'No XP' },
+            { xp: 0, label: 'Green K9' },
+        ],
+    });
+
+    t.isTrue(findByText(h.getRoot(), '5000 XP -- Veteran K9').length >= 1);
+    t.isTrue(findByText(h.getRoot(), 'Next: Elite K9, 4000 XP away.').length >= 1);
+    t.equals(findByText(h.getRoot(), 'undefined').length, 0);
 });
 
 t.run();

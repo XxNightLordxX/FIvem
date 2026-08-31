@@ -5756,11 +5756,44 @@
      * them off to grind something that does not exist.
      * ================================================================== */
 
+    /** Drops malformed rows and returns a NEW array sorted ascending by xp.
+     *
+     * The server does already sort (server/progression.lua's
+     * LadderForDisplay ends in a table.sort by xp), so this is not fixing a
+     * payload seen in practice. It removes a coupling: without it, both the
+     * position maths and the rendered list below silently depend on a
+     * guarantee made in a different file, in a different language, that
+     * nothing on this side asserts or can see. A future ladder assembled
+     * from a second source, or a server whose sort is refactored out,
+     * would show a rank list in the wrong order and mark the wrong row as
+     * current -- with no error anywhere.
+     *
+     * Copies rather than sorting in place: `ladder` comes straight off
+     * `state.myRecord`, and reordering caller-owned state as a side effect
+     * of rendering it is its own bug waiting to happen.
+     * @param {Array} ladder
+     * @returns {Array} */
+    function sortedLadderRows(ladder) {
+        var rows = [];
+        for (var i = 0; i < (ladder || []).length; i++) {
+            var row = ladder[i];
+            if (row && typeof row.xp === 'number' && typeof row.label === 'string') rows.push(row);
+        }
+        rows.sort(function (a, b) { return a.xp - b.xp; });
+        return rows;
+    }
+
     /** The rank the viewer currently holds, and the next one up, from a
      * ladder and a total. Returns { current, next } where either may be
      * null: current is null below the first threshold, next is null at the
      * top of the ladder.
-     * @param {Array} ladder -- ascending [{ xp, label }]
+     *
+     * Order-independent: it takes the HIGHEST threshold at or below `total`
+     * and the LOWEST above it, rather than relying on the array's order to
+     * make each overwrite land correctly. Callers pass a sorted array
+     * anyway (see sortedLadderRows), so this costs nothing and means the
+     * two are not silently load-bearing on each other.
+     * @param {Array} ladder -- [{ xp, label }], any order
      * @param {number} total
      * @returns {{current: Object|null, next: Object|null}} */
     function resolveLadderPosition(ladder, total) {
@@ -5770,12 +5803,8 @@
             var row = ladder[i];
             if (typeof row.xp !== 'number' || typeof row.label !== 'string') continue;
             if (total >= row.xp) {
-                // Ascending order means each pass overwrites the last, so
-                // this lands on the HIGHEST threshold already met.
-                current = row;
-            } else if (next === null) {
-                // First threshold not yet met -- the ladder is ascending,
-                // so this is the nearest one above.
+                if (current === null || row.xp > current.xp) current = row;
+            } else if (next === null || row.xp < next.xp) {
                 next = row;
             }
         }
@@ -5803,7 +5832,11 @@
             return block;
         }
 
-        var pos = resolveLadderPosition(ladder, total);
+        // Sorted once, up front, and used for BOTH the position maths and
+        // the rendered list below -- so the two can never disagree about
+        // what order the ladder is in.
+        var rows = sortedLadderRows(ladder);
+        var pos = resolveLadderPosition(rows, total);
         var currentLabel = (typeof tierLabel === 'string' && tierLabel.length > 0)
             ? tierLabel
             : (pos.current ? pos.current.label : S('progression_no_rank_yet'));
@@ -5830,9 +5863,8 @@
         }
 
         var list = mk('ul', { class: 'k9tablet-progression-ladder' });
-        for (var i = 0; i < ladder.length; i++) {
-            var row = ladder[i];
-            if (typeof row.xp !== 'number' || typeof row.label !== 'string') continue;
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
             var reached = total >= row.xp;
             var isCurrent = pos.current && pos.current.label === row.label && pos.current.xp === row.xp;
             var cls = 'k9tablet-progression-rank'
