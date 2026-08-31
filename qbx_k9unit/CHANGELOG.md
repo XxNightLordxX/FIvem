@@ -23,7 +23,73 @@ here has been through a numbered release yet, so everything below is
 "since the beginning" rather than "since the last version". The first
 tagged release will draw a line under this section.
 
+### Breaking changes — you need to do something
+
+- **The database now ships switched OFF, and if you are already running
+  this resource that will cost you everything you have saved.**
+
+  `Config.Database.enabled` used to default to `true`. It now defaults to
+  `false`, so a fresh install is drag-and-drop: drop the folder in, start
+  the server, and every feature works with no `.sql` file to import. That
+  is the point of the change, and for a brand-new install there is nothing
+  to do.
+
+  **If you are UPGRADING and you already run the database, read this
+  twice.** Taking the new `config.lua` without editing it will silently
+  switch your server to memory-only. Nothing errors and nothing is deleted
+  — your tables sit there untouched — but from that moment the resource
+  stops reading and writing them, and every certification, rank, XP total,
+  partnership, permission grant, callsign and theme resets on your next
+  restart. You would most likely discover this the morning after.
+
+  **What to do:** after upgrading, open `config.lua` and set
+
+  ```lua
+  Config.Database = {
+      enabled = true,
+  }
+  ```
+
+  Nothing else changes. Your existing tables and data are picked up exactly
+  as before — this only ever stopped the resource looking at them, it never
+  touched them.
+
+  Worth knowing either way: with the database off, the audit trail still
+  works during a session (certification history, the search log, permission
+  and override audits are all recorded in memory and readable from the
+  tablet), but it is capped at the most recent 500 search entries and 200 of
+  everything else, and it resets with the restart like everything else.
+
 ### Fixed — things that were broken for players
+
+- **A decertified handler stayed stuck in their kennel or vehicle seat.**
+  Losing K9 access tore down the leash, any bite in progress and the
+  partnership, but not a kennel you were resting in or a seat you were
+  holding — you stayed physically attached while the server had stopped
+  tracking you, and the spot could be handed to somebody else.
+- **The tablet mangled rank names that contained certain characters.**
+  Renaming a rank to something with `{xp}` or `{remaining}` in it — which
+  the Rank Editor lets you do — corrupted the progression screen. The same
+  fault hit the "tier in use" warning if a supply shop item was named with
+  a matching word.
+- **A search could take four seconds and then tell you nothing.** If your
+  K9 was still on cooldown, or already searching, the dog played the full
+  sniff animation and then produced no result and no message at all —
+  indistinguishable from the feature being broken. Both cases now say which
+  one it was.
+- **Scent vision answered a keypress with silence.** Thermal and night
+  vision each announce themselves; scent vision just flipped state. Turn it
+  on with nothing in range — the ordinary case, since you turn it on to go
+  looking — and nothing at all happened on screen. It now confirms both on
+  and off, and the "on" message says outright that nothing will show until
+  there is a scent nearby.
+- **A training drill's refusal always said "wait".** Being too far from a
+  training area, or not being certified, both produced "wait for the
+  current one to finish" — advice that cannot work. Each reason now names
+  itself.
+- **A supply shop ped could leak its interaction prompt.** If the ped
+  vanished before the resource cleaned it up, its third-eye option was
+  never removed and could not be removed afterwards.
 
 - **Thermal and night vision could be switched on but never off.** Both
   "is it currently on" checks asked the game a question it has never had an
@@ -100,6 +166,34 @@ tagged release will draw a line under this section.
   dog already on duty until they reconnected.
 
 ### Changed — things that behave differently now
+
+- **Every K9 and handler rank now gives something you can feel.** The
+  ladders were placeholder numbers: the first K9 promotion cost 1250 XP —
+  hours of work — and paid five percent more speed and scent range, which
+  nobody could notice. Elite, the most expensive rank, was the only one
+  that unlocked nothing new at all: bigger numbers than Veteran, but where
+  Veteran gained a medkit cooldown reduction, Elite's one distinguishing
+  reward was a cosmetic badge that nothing in the resource actually
+  displays.
+
+  Scent range now carries most of the weight — roughly 40 / 46 / 54 / 64
+  metres across the four ranks — because a dog fast enough to run anyone
+  down flattens every pursuit, while a dog that tracks further is felt
+  every time you use it. Elite gains a real medkit cooldown reduction of
+  its own. On the handler side the first promotion now unlocks two things
+  instead of shaving a tenth off one cooldown.
+
+  **Nothing anyone has earned is affected, and nobody's rank moves.** Not a
+  single XP threshold changed on either ladder — only what each rank gives
+  you once you reach it.
+- **Handler rank is now visible where you would look for it.** The roster
+  has a Handler XP column beside the K9 one, and a person's screen has its
+  own Handler XP section. The server had always been working this out and
+  then throwing it away. It is kept separate from K9 rank deliberately: the
+  same person is routinely high on one and nowhere on the other.
+- **Scent Vision and the K9 Camera Feed are on the radial menu.** Both had
+  a command and a keybind from the day they shipped and no wheel entry, so
+  only players who read the keybind list ever found them.
 
 - **Dragging has cooldowns.** It had none, per-dog or per-person, while the
   documentation said it had both. The per-person one matters most: without
