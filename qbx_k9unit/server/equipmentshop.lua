@@ -1521,9 +1521,12 @@ end
 --- server/sarcalls.lua, server/scentlineup.lua, server/findalert.lua)
 --- already returns a `reason` string so its call sites can word each
 --- refusal accurately instead of blaming a person; this function now does
---- the same. (Filename corrected 2026-08-31: this list previously said
---- `server/sar.lua`, which has never existed -- the SAR file is
---- `server/sarcalls.lua`. The same pass also checked the claim itself
+--- the same. (Filename corrected 2026-08-31: this list previously named a
+--- `server/sar` file that has never existed -- the real SAR file is
+--- `server/sarcalls.lua`, above. The dead name is not written out in full
+--- because tests/citationintegrity_spec.lua sweeps every path in the repo,
+--- so quoting one to correct it puts it back. The same pass also checked
+--- the claim itself
 --- rather than only the spelling: the reason SET is two or three wide
 --- depending on the file, not uniformly three. pursuitsprint, sarcalls and
 --- scentlineup top-level `return` when their feature flag is off, so a

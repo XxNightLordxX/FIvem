@@ -126,7 +126,7 @@
     DIFFERENT department's roster than the caller's own. This mirrors an
     existing precedent already established in this resource —
     GrantCertification explicitly allows cross-department certification
-    (§4.2.3: "this only requires the target be in *some* configured
+    (§4.2 item 3: "this only requires the target be in *some* configured
     department, not the SAME one as the granter") — rather than inventing a
     new, narrower same-department-only rule found nowhere else in this
     codebase. Flagged for coder-security/project-owner to confirm or

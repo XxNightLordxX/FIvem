@@ -2186,7 +2186,7 @@ Config.K9DownDispatch = {
 }
 
 Config.AllowSelfCertification = true   -- see §4.1
-Config.CertifyProximityMeters = 5.0    -- server-enforced max distance for grant/revoke (§4.2.4)
+Config.CertifyProximityMeters = 5.0    -- server-enforced max distance for grant/revoke (§4.2 item 4)
 
 -- FARM FIX (audit finding, this pass) -- Config.CertifyProximityMeters and
 -- CertifyXpMintCooldown (server/certifications.lua, 24h, per person you

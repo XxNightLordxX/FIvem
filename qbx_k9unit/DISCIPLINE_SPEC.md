@@ -600,7 +600,7 @@ Numbered so a reviewer can check each independently. Negative
 - `client/findalert.lua` — reads the same `alertTier`/reaction shape it
   already does; no discipline-specific client logic needed since the
   server already resolves which shape to send (server-side enforcement,
-  criterion §8.18).
+  criterion §8 item 18).
 - `client/tablet.lua` / `html/tablet.js` — surfaces
   `disciplines.tablet_gate_note_soft` / `disciplines.tablet_non_detection_note`
   next to each specialization, computed from whether
@@ -608,4 +608,4 @@ Numbered so a reviewer can check each independently. Negative
 - `locales/en.json` — new `"disciplines"` namespace (§7).
 - No changes required to `server/certifications.lua`, `server/certtiers.lua`,
   `server/equipmentshop.lua`, `server/combat.lua`, or any `sql/` file
-  (pending the open question in §9.1).
+  (pending the open question in §9 item 1).

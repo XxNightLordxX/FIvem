@@ -1,0 +1,507 @@
+--[[
+    tests/citationintegrity_spec.lua
+
+    ONE GUARANTEE: every citation this resource writes about ITSELF points
+    at something that exists. Two kinds are checked:
+
+      1. FILE PATHS -- a `client/foo.lua` / `tests/bar_spec.lua` /
+         `sql/baz.sql` written in any comment or doc resolves on disk.
+      2. SECTION REFERENCES -- a `§4.2` written anywhere resolves to a real
+         markdown heading in one of this resource's own .md files.
+
+    WHY THIS FILE EXISTS. Two consecutive watchdog passes (2026-08-31)
+    found real drift here, and both times the same method found it: extract
+    every path, test whether it resolves. Doing that by hand once a week is
+    not a guard, it is a habit, and habits lapse. What the two passes found:
+
+      - `client/tablet.lua` named `tests/tablet_strings_spec.lua` as the
+        spec enforcing the three-way locale contract. No such file has ever
+        existed (the real one is tests/tabletlocalization_spec.lua), so
+        anyone trying to verify that contract hit a dead end.
+      - `DEVELOPER_REFERENCE.md` §14.3 named `client/attachments.lua` for
+        PropAttachments. The shipped file is `client/propattachment.lua`.
+      - `DIAGNOSTIC_CHECKS.md` cited `server/compatinventory.lua`; the real
+        compat layer is `shared/compat/inventory.lua`.
+      - `server/equipmentshop.lua` cited `server/sar.lua`; the SAR file is
+        `server/sarcalls.lua`.
+      - Twenty separate `§4.2.3` / `§4.2.4` / `§4.2.5` / `§9.2` references
+        across seven files, all inventing subsection numbers for what are
+        really NUMBERED LIST ITEMS inside `### 4.2` and `## 9`. The rules
+        they cite (cross-department certifying, the 5m proximity check, the
+        grant-only model check) are real and correctly described -- but a
+        reader searching the doc for "4.2.3" finds nothing and concludes
+        the rule is undocumented.
+
+    WHY THIS FAILURE MODE IS WORSE THAN IT LOOKS. A wrong citation does not
+    break the game, so nothing catches it: not luacheck, not any behavioural
+    spec, not a play session. It costs the NEXT reader instead -- the person
+    trying to confirm a security rule is really enforced, or to find the
+    test that guards a contract before changing it. The cost is paid quietly
+    and repeatedly, by whoever is least equipped to absorb it.
+
+    WHAT MAKES THIS A REAL GUARD AND NOT A RESTATEMENT. Both allowlists
+    below are checked in BOTH directions. An entry that stops being needed
+    (someone created the file, or the citation was removed) fails just as
+    loudly as a new dangling citation. So this file cannot rot into a pile
+    of stale exemptions that quietly permits real breakage -- the same
+    discipline tests/featureflagexistence_spec.lua applies to its own
+    allowlist, and for the same reason.
+
+    WHAT IS DELIBERATELY NOT CHECKED. `file.lua:123` line numbers. They are
+    known-rotten and admitted as such at the top of DISCIPLINE_SPEC.md and
+    DIAGNOSTIC_CHECKS.md; renumbering them buys nothing because the next
+    edit invalidates them all again. The NAME in each citation is the stable
+    part, and the name is what this file checks.
+]]
+
+local t = dofile('testkit.lua')
+
+-- ======================================================================
+-- Helpers
+-- ======================================================================
+
+--- Every file in the resource this spec should scan for citations, found
+--- from disk rather than from a hand-kept list -- a snapshot list would
+--- itself be a citation that rots, which is the exact bug this file exists
+--- to prevent. `..` is the resource root (this spec runs from tests/).
+local function ScannedFiles()
+    local out = {}
+    local pipe = io.popen([[cd .. && find . -type f \( -name '*.lua' -o -name '*.js' -o -name '*.md' \) ]] ..
+        [[-not -path './.git/*' -not -path './node_modules/*' | sort]])
+    if not pipe then return out end
+    for line in pipe:lines() do
+        out[#out + 1] = (line:gsub('^%./', ''))
+    end
+    pipe:close()
+    return out
+end
+
+local function ReadFile(relPath)
+    local fh = io.open('../' .. relPath, 'r')
+    if not fh then return nil end
+    local body = fh:read('a')
+    fh:close()
+    return body
+end
+
+local function FileExists(relPath)
+    local fh = io.open('../' .. relPath, 'r')
+    if not fh then return false end
+    fh:close()
+    return true
+end
+
+--- Files excluded from the SWEEPS (they are still checked by the targeted
+--- regression tests at the bottom, where the assertion is precise).
+---
+--- Both are documents whose JOB is to quote wrong citations verbatim: this
+--- spec quotes `client/foo.lua` and `§4.2.3` as examples of the very
+--- mistakes it forbids, and WATCHDOG_LOG.md records, as history, the exact
+--- dead paths each pass found. Scanning them makes the guard flag its own
+--- documentation forever. This is a real tension and worth naming: the
+--- exclusion is narrow (two files, both non-shipping) and neither can hide
+--- a live wrong citation, because neither is a place any reader looks to
+--- find out where code lives.
+local SELF_QUOTING_FILES = {
+    ['tests/citationintegrity_spec.lua'] = true,
+    ['WATCHDOG_LOG.md'] = true,
+}
+
+--- Extensions that name a real file in this resource. Deliberately a
+--- closed list: an open `%a+` pattern matches the tail of a bare domain
+--- name too, and `dev/gtahash.com` (a URL in config.lua) was reported as a
+--- missing file before this existed.
+local REAL_EXTENSIONS = {
+    lua = true, js = true, json = true, sql = true,
+    html = true, css = true, sh = true, md = true,
+}
+
+local SCANNED = ScannedFiles()
+
+-- ======================================================================
+-- PART 1 -- file paths cited in prose and comments
+-- ======================================================================
+
+--- Paths that legitimately do not resolve inside this repository. Every
+--- entry needs a reason, and every entry is re-verified below to still be
+--- absent AND still be cited -- a stale exemption fails.
+---
+--- The overwhelming majority are citations of OTHER resources' source,
+--- which is a good practice this resource uses deliberately: when a claim
+--- rests on ox_lib's or qbx_core's real behavior, the comment names the
+--- upstream file it was verified against. Those must stay citable without
+--- vendoring the file.
+local EXTERNAL_PATH_ALLOWLIST = {
+    -- ox_lib / ox_target upstream source, cited where this resource's
+    -- behavior depends on having read it.
+    --
+    -- Only bare `<dir>/<file>` forms need listing. A citation written with
+    -- its full upstream prefix (ox_lib's `resource/interface/client/notify.lua`)
+    -- is read whole, does not start with an owned prefix, and is ignored --
+    -- which is why writing the fuller path is the better habit.
+    ['client/api.lua']       = "ox_target's own client/api.lua (addEntity signature)",
+    -- qbx_core / qb-core upstream source.
+    ['server/player.lua']    = "qbx_core's server/player.lua",
+    ['client/functions.lua'] = 'QBCore/ESX client-side player-data accessor, compat-layer citation',
+    ['server/functions.lua'] = 'QBCore/ESX server-side Player object accessor, compat-layer citation',
+    ['shared/functions.lua'] = "qbx_core's shared/functions.lua (HasPlayerGotGroup)",
+    ['shared/main.lua']      = "es_extended's shared/main.lua (getSharedObject)",
+    -- qb-inventory upstream source, cited by shared/compat/inventory.lua.
+    ['client/drops.lua']     = 'qb-inventory ground-drop file',
+    ['client/vehicles.lua']  = 'qb-inventory vehicle-storage file',
+    ['server/commands.lua']  = 'qb-inventory server/commands.lua',
+    ['server/hooks.lua']     = 'qb-inventory server/hooks.lua',
+    -- Other resources.
+    ['client/dead.lua']      = "an ambulance resource's client/dead.lua (statebag origin)",
+    -- Planning-document placeholders that are deliberately not real files.
+    -- Documents deleted by the 2026-08-25 consolidation. DEVELOPER_REFERENCE.md's
+    -- own opening paragraph lists them BY NAME as the files it replaced, which
+    -- is a record of a deletion, not a live pointer -- naming them is the
+    -- whole point of that paragraph.
+    ['locales/README.md']    = 'deleted in the 2026-08-25 consolidation; named in DEVELOPER_REFERENCE.md as one of the files it replaced',
+    ['tests/README.md']      = 'deleted in the 2026-08-25 consolidation; its coverage table became DEVELOPER_REFERENCE.md §20',
+    ['sql/README.md']        = 'deleted in the 2026-08-25 consolidation; folded into README.md',
+    ['dev/bone_sweep.lua']   = 'throwaway dev tool, never added to fxmanifest.lua (see DEVELOPER_REFERENCE.md §14.3)',
+}
+
+--- Directory prefixes worth scanning for. Anything outside these is not a
+--- path into this resource and is not this file's business.
+local OWNED_PREFIXES = {
+    'client/', 'server/', 'shared/', 'html/', 'locales/', 'sql/', 'tests/', 'dev/',
+}
+
+local function LooksLikeOwnedPath(path)
+    for _, prefix in ipairs(OWNED_PREFIXES) do
+        if path:sub(1, #prefix) == prefix then return true end
+    end
+    return false
+end
+
+--- Collects every `<dir>/<file>.<ext>` written anywhere in the scanned
+--- files, mapped to the files that cite it.
+---
+--- NOTE ON THE PATTERN. `[%w_.-]` deliberately EXCLUDES `/` after the
+--- first separator, so the `a.lua/b.lua` slash-joined writing style this
+--- codebase uses everywhere ("client/kennel.lua/client/vehicle.lua")
+--- yields two atomic paths rather than one composite that resolves to
+--- nothing. An earlier draft of this scan allowed `/` and produced ~100
+--- phantom "missing" paths, all artifacts. Lua `%w` also excludes the
+--- underscore, hence the explicit `_` in the class -- the same trap that
+--- made tests/featureflagexistence_spec.lua's schema scan silently miss
+--- eleven tables before it was caught.
+---
+--- RESOLUTION IS RELATIVE TO THE CITING FILE FIRST, then to the resource
+--- root. `html/tests/audio_play_spec.js` cites its siblings as
+--- `tests/audio_play_spec.js`, which is correct FROM html/ and nonsense
+--- from the root -- an earlier draft of this scan reported all 42 browser
+--- specs as missing for exactly that reason.
+local function CollectCitedPaths()
+    local cited = {}
+    for _, file in ipairs(SCANNED) do
+        if not SELF_QUOTING_FILES[file] then
+            local dir = file:match('^(.*)/[^/]*$')
+            local body = ReadFile(file)
+            if body then
+                -- The leading `[^%w_/.-]` boundary matters: without it, gmatch
+                -- happily starts mid-path and pulls `tests/foo.js` out of a
+                -- perfectly correct `html/tests/foo.js`, then reports the
+                -- fragment as missing. Found by this spec's own red-green
+                -- proof run. `\n%s*` also admits a path at the very start of
+                -- a line, and the body is prefixed with a newline below so a
+                -- path in byte 1 of a file is not skipped.
+                for _, path, ext in ('\n' .. body):gmatch('([^%w_/.-])([%a][%w_]*/[%w_.-]+%.(%a+))') do
+                    if REAL_EXTENSIONS[ext:lower()] and LooksLikeOwnedPath(path) then
+                        -- Try the citing file's own directory, then each
+                        -- ancestor, then the resource root. html/tests/*.js
+                        -- cite their siblings as `tests/foo.js`, which is
+                        -- right FROM html/ -- one level up from the citing
+                        -- file. Root-only resolution reported all 42 browser
+                        -- specs as missing.
+                        local resolved = path
+                        local base = dir
+                        while base do
+                            if FileExists(base .. '/' .. path) then
+                                resolved = base .. '/' .. path
+                                break
+                            end
+                            base = base:match('^(.*)/[^/]*$')
+                        end
+                        cited[resolved] = cited[resolved] or {}
+                        cited[resolved][#cited[resolved] + 1] = file
+                    end
+                end
+            end
+        end
+    end
+    return cited
+end
+
+local CITED_PATHS = CollectCitedPaths()
+
+t.test('SANITY: the citation scan actually found citations (a silently-empty scan would pass every test below)', function()
+    local count = 0
+    for _ in pairs(CITED_PATHS) do count = count + 1 end
+    t.isTrue(count > 150,
+        ('expected the scan to find >150 distinct cited paths across %d files, found %d -- ' ..
+         'the scan itself is broken, not the citations'):format(#SCANNED, count))
+    t.isTrue(#SCANNED > 100,
+        ('expected to scan >100 files, scanned %d'):format(#SCANNED))
+end)
+
+t.test('Every file path this resource cites about itself resolves on disk', function()
+    local broken = {}
+    for path, citers in pairs(CITED_PATHS) do
+        if not EXTERNAL_PATH_ALLOWLIST[path] and not FileExists(path) then
+            table.sort(citers)
+            broken[#broken + 1] = ('%s (cited in %s)'):format(path, citers[1])
+        end
+    end
+    table.sort(broken)
+    t.equals(#broken, 0,
+        'these cited paths do not exist:\n    ' .. table.concat(broken, '\n    ') ..
+        '\n  Either fix the citation to name the real file, or -- if it names another ' ..
+        "resource's source on purpose -- add it to EXTERNAL_PATH_ALLOWLIST with a reason.")
+end)
+
+t.test('ALLOWLIST HYGIENE: no path allowlist entry has quietly become real or unused', function()
+    local stale = {}
+    for path, reason in pairs(EXTERNAL_PATH_ALLOWLIST) do
+        if FileExists(path) then
+            stale[#stale + 1] = ('%s -- now EXISTS in this repo, so the exemption (%s) is wrong'):format(path, reason)
+        elseif not CITED_PATHS[path] then
+            stale[#stale + 1] = ('%s -- no longer cited anywhere, so the exemption is dead weight'):format(path)
+        end
+    end
+    table.sort(stale)
+    t.equals(#stale, 0, 'stale allowlist entries:\n    ' .. table.concat(stale, '\n    '))
+end)
+
+-- ======================================================================
+-- PART 2 -- section references
+-- ======================================================================
+
+--- `§N` / `§N.N` references that point at something outside this
+--- resource's own docs. Same both-directions hygiene check as above.
+local EXTERNAL_SECTION_ALLOWLIST = {
+    ['3.4.1'] = 'the Lua 5.4 reference manual §3.4.1 (arithmetic coercion), cited in server/tracking.lua',
+    ['0.5']   = 'native_natives.md §0.5, an external natives document',
+}
+
+--- Text that marks a §ref as an ANCHORED PINPOINT rather than a citation of
+--- a numbered heading. These are deliberately unresolvable and this
+--- resource says so in writing.
+---
+--- DEVELOPER_REFERENCE.md §15's own header: "A finer-grained pinpoint (e.g.
+--- `#tracking §2.4`, `#door-interaction Finding 3`) cited in a code comment
+--- will NOT resolve to anything below." The pre-2026-08-25 research archive
+--- numbered findings inside each of its twelve topic anchors; the flattening
+--- to prose kept the anchor names and dropped the internal numbering, and
+--- §15 declines to rewrite 100+ comment sites over it, flagging it centrally
+--- instead. That is a reasoned position, so this guard respects it rather
+--- than fighting it: a §ref reached through an anchor is exempt, a bare one
+--- is not.
+---
+--- Kept deliberately narrow. It matches only the two markers that really
+--- introduce an anchored pinpoint, and only on the SAME LINE, so an ordinary
+--- dangling §ref elsewhere in the same file is still caught.
+local ANCHORED_PINPOINT_MARKERS = { '#[%w-]+', 'design note' }
+
+local function IsAnchoredPinpoint(line)
+    for _, marker in ipairs(ANCHORED_PINPOINT_MARKERS) do
+        if line:find(marker) then return true end
+    end
+    return false
+end
+
+--- Every heading number that really exists across this resource's own .md
+--- files -- e.g. `## 4. Hard requirement 2` and `### 4.2 Certifier
+--- eligibility` both contribute.
+local function RealHeadingNumbers()
+    local heads = {}
+    for _, file in ipairs(SCANNED) do
+        if file:match('%.md$') then
+            local body = ReadFile(file)
+            if body then
+                for line in body:gmatch('[^\n]+') do
+                    local num = line:match('^#+%s+([%d.]+)')
+                    if num then
+                        heads[(num:gsub('%.$', ''))] = true
+                    end
+                    -- A markdown table row whose FIRST cell is just a §ref
+                    -- DEFINES that ref rather than citing it. §15's
+                    -- hud-bridge anchor carries exactly such a table,
+                    -- mapping the old design-note numbering onto the prose
+                    -- that survived consolidation -- so `| §5.3 |` is the
+                    -- thing a `§5.3` citation now resolves TO.
+                    local defined = line:match('^[>%s]*|%s*§([%d][%d.]*)%s*|')
+                    if defined then
+                        heads[(defined:gsub('%.+$', ''))] = true
+                    end
+                end
+            end
+        end
+    end
+    return heads
+end
+
+local REAL_HEADINGS = RealHeadingNumbers()
+
+local function CollectCitedSections()
+    local cited = {}
+    for _, file in ipairs(SCANNED) do
+        if not SELF_QUOTING_FILES[file] then
+            local body = ReadFile(file)
+            if body then
+                local prev = ''
+                for line in body:gmatch('[^\n]*') do
+                    -- The marker is checked on the previous line too: these
+                    -- are wrapped comment blocks, so "DEVELOPER_REFERENCE.md#tracking"
+                    -- routinely ends one line and its "§0.1 item 2" begins
+                    -- the next.
+                    if not (IsAnchoredPinpoint(line) or IsAnchoredPinpoint(prev)) then
+                        for num in line:gmatch('§([%d]+[%d.]*)') do
+                            -- Strip ALL trailing dots, not one: "§3.." (a §3
+                            -- ending a sentence) yielded a literal "§3." key.
+                            num = (num:gsub('%.+$', ''))
+                            cited[num] = cited[num] or {}
+                            cited[num][#cited[num] + 1] = file
+                        end
+                    end
+                    prev = line
+                end
+            end
+        end
+    end
+    return cited
+end
+
+local CITED_SECTIONS = CollectCitedSections()
+
+t.test('SANITY: the section scan found section references', function()
+    local count = 0
+    for _ in pairs(CITED_SECTIONS) do count = count + 1 end
+    t.isTrue(count > 50,
+        ('expected >50 distinct §refs, found %d -- the scan is broken'):format(count))
+end)
+
+t.test('Every §section reference resolves to a real heading in this resource\'s docs', function()
+    local broken = {}
+    for num, citers in pairs(CITED_SECTIONS) do
+        if not REAL_HEADINGS[num] and not EXTERNAL_SECTION_ALLOWLIST[num] then
+            table.sort(citers)
+            broken[#broken + 1] = ('§%s (cited in %s)'):format(num, citers[1])
+        end
+    end
+    table.sort(broken)
+    t.equals(#broken, 0,
+        'these §references point at no heading that exists:\n    ' .. table.concat(broken, '\n    ') ..
+        '\n  Most often this is a NUMBERED LIST ITEM being written as though it were a subsection: ' ..
+        '"§4.2.3" for item 3 of the list under `### 4.2`. This resource\'s own convention for that ' ..
+        'is "§4.2 item 3" -- DEVELOPER_REFERENCE.md §9 uses it and states plainly that its numbering ' ..
+        'is fixed BECAUSE code comments cite it by number.')
+end)
+
+t.test('ALLOWLIST HYGIENE: no section allowlist entry has quietly become real or unused', function()
+    local stale = {}
+    for num, reason in pairs(EXTERNAL_SECTION_ALLOWLIST) do
+        if REAL_HEADINGS[num] then
+            stale[#stale + 1] = ('§%s -- a heading with this number now exists, so the exemption (%s) is wrong'):format(num, reason)
+        elseif not CITED_SECTIONS[num] then
+            stale[#stale + 1] = ('§%s -- no longer cited anywhere, so the exemption is dead weight'):format(num)
+        end
+    end
+    table.sort(stale)
+    t.equals(#stale, 0, 'stale section-allowlist entries:\n    ' .. table.concat(stale, '\n    '))
+end)
+
+-- ======================================================================
+-- PART 3 -- regression pins for the specific drifts that motivated this file
+--
+-- These are not redundant with the sweeps above. A sweep proves "nothing is
+-- broken right now"; these prove the SPECIFIC corrections are still in
+-- place and were not reverted, and they name the real file so the next
+-- reader can find it. They are cheap and they are the actual bugs found.
+-- ======================================================================
+
+t.test('REGRESSION: client/tablet.lua names the spec that really enforces the locale contract', function()
+    local body = ReadFile('client/tablet.lua')
+    t.isNotNil(body, 'client/tablet.lua unreadable')
+    t.notContains(body, 'tests/tablet_strings_spec.lua',
+        'client/tablet.lua is again naming tests/tablet_strings_spec.lua, which has never existed')
+    t.contains(body, 'tests/tabletlocalization_spec.lua',
+        'client/tablet.lua should name tests/tabletlocalization_spec.lua as the enforcing spec')
+end)
+
+t.test('REGRESSION: client/tablet.lua states no hand-maintained key count (it rotted from 255 to 1078 once)', function()
+    local body = ReadFile('client/tablet.lua')
+    local header = body:match('(.-)local TABLET_STRING_KEYS')
+    t.isNotNil(header, 'could not isolate the TABLET_STRING_KEYS header')
+    t.isNil(header:match('%d+ keys total'),
+        'a "<N> keys total" count is back in the TABLET_STRING_KEYS header. That number is ' ..
+        'maintained by hand beside a list that grows every pass, so it rots by default -- it ' ..
+        'was wrong by a factor of four last time. tests/tabletlocalization_spec.lua compares ' ..
+        'the two sides as SETS, which is the property that actually matters.')
+end)
+
+t.test('REGRESSION: the three-way locale contract itself is intact (the count comment was wrong, the contract was not)', function()
+    local lua = ReadFile('client/tablet.lua')
+    local js = ReadFile('html/tablet.js')
+    t.isNotNil(lua)
+    t.isNotNil(js)
+
+    local luaBlock = lua:match('local TABLET_STRING_KEYS = (%b{})')
+    t.isNotNil(luaBlock, 'could not find the TABLET_STRING_KEYS table')
+    luaBlock = luaBlock:gsub('%-%-[^\n]*', '')
+    local luaKeys, luaCount = {}, 0
+    for key in luaBlock:gmatch("'([%w_]+)'") do
+        luaKeys[key] = true
+        luaCount = luaCount + 1
+    end
+
+    local jsBlock = js:match('var DEFAULT_STRINGS = (%b{})')
+    t.isNotNil(jsBlock, 'could not find DEFAULT_STRINGS')
+    jsBlock = jsBlock:gsub('//[^\n]*', '')
+    local jsKeys, jsCount = {}, 0
+    for key in jsBlock:gmatch('\n%s*([%w_]+)%s*:') do
+        jsKeys[key] = true
+        jsCount = jsCount + 1
+    end
+
+    t.isTrue(luaCount > 900, ('expected >900 tablet string keys, found %d -- the scan is broken'):format(luaCount))
+    t.equals(luaCount, jsCount, 'TABLET_STRING_KEYS and DEFAULT_STRINGS differ in size')
+
+    local onlyLua = {}
+    for key in pairs(luaKeys) do if not jsKeys[key] then onlyLua[#onlyLua + 1] = key end end
+    local onlyJs = {}
+    for key in pairs(jsKeys) do if not luaKeys[key] then onlyJs[#onlyJs + 1] = key end end
+    table.sort(onlyLua); table.sort(onlyJs)
+    t.equals(#onlyLua, 0, 'in TABLET_STRING_KEYS but not DEFAULT_STRINGS: ' .. table.concat(onlyLua, ', '))
+    t.equals(#onlyJs, 0, 'in DEFAULT_STRINGS but not TABLET_STRING_KEYS: ' .. table.concat(onlyJs, ', '))
+end)
+
+t.test('REGRESSION: the §4.2 certifier rules are cited as list items, not as invented subsections', function()
+    local offenders = {}
+    for _, file in ipairs(SCANNED) do
+        if file ~= 'tests/citationintegrity_spec.lua' then
+            local body = ReadFile(file)
+            if body and body:match('§4%.2%.%d') then offenders[#offenders + 1] = file end
+        end
+    end
+    table.sort(offenders)
+    t.equals(#offenders, 0,
+        '§4.2.N is back in: ' .. table.concat(offenders, ', ') ..
+        '. DEVELOPER_REFERENCE.md `### 4.2` is a NUMBERED LIST, not a set of subsections. ' ..
+        'Write "§4.2 item 3" -- the form §9 item 2 of that same doc already uses.')
+end)
+
+t.test('REGRESSION: PropAttachments is documented under the filenames that actually ship', function()
+    local ref = ReadFile('DEVELOPER_REFERENCE.md')
+    t.isNotNil(ref)
+    t.notContains(ref, 'client/attachments.lua',
+        'DEVELOPER_REFERENCE.md is again naming client/attachments.lua, which has never existed')
+    t.isTrue(FileExists('client/propattachment.lua'), 'client/propattachment.lua should exist')
+    t.isTrue(FileExists('server/propattachment.lua'),
+        'server/propattachment.lua should exist -- §14.3 once claimed PropAttachments had no server file at all')
+end)
+
+os.exit(t.summary())

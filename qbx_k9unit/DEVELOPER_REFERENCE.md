@@ -1910,14 +1910,18 @@ Config.FetchMechanic = {
 | `client/propattachment.lua` | New | `PropAttachments`'s client implementation: one radial item per configured slot, tracked local object handles, unequip on model swap/disconnect/`onResourceStop`. Also owns the generic `AttachPropToOwnPed`/`DetachAndDeleteProp` mechanic that `client/bonetool.lua`, `client/fetch.lua` and `client/leashvisual.lua` all reuse. |
 | `server/propattachment.lua` | New | The server half this plan originally said would not exist — see the correction note below. |
 
-> **Corrected 2026-08-31 (watchdog pass).** As written, the two rows above
-> said `client/attachments.lua` and **"No server file"**. Both were wrong
+> **Corrected 2026-08-31 (watchdog pass).** As written, the first row named
+> a client file that has never existed, and both rows together asserted
+> **"No server file"**. Both were wrong
 > against what actually shipped, and the plan around them shipped
 > otherwise intact (`Config.Features.PropAttachments` is `true` by default
 > and the radial gate is live at `client/radial.lua`), so a reader had
 > every reason to trust them. The real files are
 > `client/propattachment.lua` and `server/propattachment.lua`, both listed
-> in `fxmanifest.lua`. §14.4.2's trust-model discussion still reads as
+> in `fxmanifest.lua`. (The wrong filename is deliberately not reproduced
+> here: `tests/citationintegrity_spec.lua` sweeps every path written
+> anywhere in this repo, so quoting a dead one — even to correct it — puts
+> it back.) §14.4.2's trust-model discussion still reads as
 > though no server file exists; treat the shipped code as authoritative
 > over that section.
 | `client/radial.lua` | Extends (small) | An "Equipment" submenu opener, and a "Throw Fetch Ball" item gated via `CanActAsK9Handler()`. |
@@ -2247,6 +2251,38 @@ asked to serve.
 ### Vitality HUD — Lua↔JS bridge design
 
 Implemented in `client/hud.lua` + `html/index.html`/`style.css`/`app.js`.
+
+> **Where the `design note §N` citations in `client/hud.lua` point.** That
+> file cites this material about twenty-five times as "design note §3",
+> "design note §5.4" and so on — numbering from the standalone HUD design
+> note folded in here on 2026-08-25. §15's own header already discloses,
+> for all twelve anchors, that such pinpoints no longer resolve and that
+> the anchor name alone is the real target; it declines to fix them
+> comment-by-comment given 100+ sites, which is the right call. This table
+> does something different and additive: for this one anchor — the densest
+> cluster of those citations in the codebase — it RECOVERS the mapping
+> instead of only disclaiming it, so a reader chasing `§5.3` gets the
+> actual sentence rather than a whole subsection to re-read. Added
+> 2026-08-31.
+>
+> | Cited as | Now reads as |
+> |---|---|
+> | §3 | **Payload** (plus the vitals-field details in §6.6 and `client/hud.lua`'s own header) |
+> | §4 | **Focus** — passive overlay, no `SetNuiFocus`, nothing to interact with |
+> | §5 | **Cadence** |
+> | §5.1 | "poll every ~250ms" (`HUD_POLL_TICK_MS`) |
+> | §5.2 | "only actually push when a value moved past a small epsilon" (`HUD_CHANGE_EPSILON`) |
+> | §5.3 | "force a heartbeat push at least every ~1000ms" (`HUD_HEARTBEAT_MS`) |
+> | §5.4 | **No surviving text here.** The idle-backoff rule behind `HUD_IDLE_TICK_MS = 1000`; read `client/hud.lua` at that constant instead |
+> | §5.5 | "push immediately on any visibility transition" |
+> | §5 point 6 | "push an immediate snapshot the moment `hud:ready` fires" |
+> | §6 | **Visibility gate** |
+>
+> **§1 and §2 have no surviving text either**, and are named here rather
+> than quietly dropped — whatever they covered was cut as superseded during
+> consolidation. Together with §5.4 in the table above, those are the three
+> citations this map cannot resolve to a sentence; for all three, treat
+> `client/hud.lua` as authoritative over this document.
 
 **Naming**: NUI callback/message names use a `<surface>:<verbNoun>` shape
 (`hud:ready`, `hud:updateVitals`) rather than this resource's

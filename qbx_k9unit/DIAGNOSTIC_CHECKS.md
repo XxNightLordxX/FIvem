@@ -236,8 +236,9 @@ already written and tested.
   registered items (ox_inventory exposes an item list; qb-inventory
   equivalent via the compat layer this resource already has in
   `shared/compat/inventory.lua` — path corrected 2026-08-31; this line
-  previously said `server/compatinventory.lua`, which has never existed.
-  The layer itself is real: `shared/compat/inventory.lua` resolves
+  previously named a `server/` file that has never existed (the dead name
+  is not reproduced, since `tests/citationintegrity_spec.lua` sweeps every
+  path written anywhere in this repo). The layer itself is real: it resolves
   ox_inventory and qb-inventory as CONFIRMED backends and names six
   further candidates it treats as unconfirmed. `server/inventory.lua` is
   not part of it — that file is the `K9Inventory` feature and talks to

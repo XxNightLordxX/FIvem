@@ -397,7 +397,7 @@ local function newFixture(opts)
         CertifyMaxNewGranteesPerDay = opts.certifyMaxNewGranteesPerDay,
         -- K9 role/model decoupling (coder-architect, server/appearance.lua,
         -- landed concurrently with this pass): GrantCertification's own
-        -- §4.2.5 model check now only runs when
+        -- §4.2 item 5 model check now only runs when
         -- Config.K9Appearance.requireK9ModelForRole is explicitly true --
         -- absent here by default so most tests match this file's own
         -- pre-decoupling shape (Config.Peds/model-hash tests below opt

@@ -1073,7 +1073,7 @@ local function RegisterCertifyOxTargetOptions()
             canInteract = function(entity, distance, coords, name)
                 if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
 
-                -- DEVELOPER_REFERENCE.md §4.2.5: the model check applies to GRANT only, not
+                -- DEVELOPER_REFERENCE.md §4.2 item 5: the model check applies to GRANT only, not
                 -- revoke (revoking must remain possible even if the target has
                 -- already left K9 form) — but this predicate still reuses
                 -- IsEntityModelK9 as the display-only plausibility gate rather

@@ -35,7 +35,7 @@
        Config.CertifyProximityMeters proximity via live server-side
        coordinates, never client-claimed.
     3. 'qbx_k9unit:server:revokeHandler' (targetServerId: number) [THIS FILE]
-       Same re-validation as certify MINUS the model check (§4.2.5 —
+       Same re-validation as certify MINUS the model check (§4.2 item 5 —
        "applies to grant only, not revoke").
     4. 'qbx_k9unit:server:relayBark' (barkType: string) [server/main.lua]
 
@@ -116,7 +116,7 @@
             cache for them too, since no fresh player-loaded event fires
             for already-connected players).
         IsConfiguredK9Model(modelHash) -> boolean
-            Used here for the §4.2.5 grant-time model check, and reused by
+            Used here for the §4.2 item 5 grant-time model check, and reused by
             server/main.lua's leash-role determination (§6.1/§9 item 3b —
             leash roles are assigned by which party is actually K9-modeled,
             server-verified, never client-claimed) — one shared model
@@ -794,7 +794,7 @@ local function ResolveConfiguredPositiveNumber(configuredValue, fallback, config
 end
 
 -- CLAMP-AND-WARN (this pass): unchanged if valid; otherwise every online
--- grant/revoke's proximity check (§4.2.4) falls back to the shipped
+-- grant/revoke's proximity check (§4.2 item 4) falls back to the shipped
 -- 5.0-meter default rather than this whole file aborting. See
 -- ResolveConfiguredPositiveNumber's own doc comment above.
 Config.CertifyProximityMeters = ResolveConfiguredPositiveNumber(Config.CertifyProximityMeters, 5.0, 'Config.CertifyProximityMeters')
@@ -2349,8 +2349,8 @@ local function GrantCertification(granterSrc, targetServerId)
         return false, 'target_must_be_online'
     end
 
-    -- §4.2.3: cross-department granting IS currently allowed (open
-    -- question §9.2 in DEVELOPER_REFERENCE.md, not resolved here) — this only requires
+    -- §4.2 item 3: cross-department granting IS currently allowed (open
+    -- question §9 item 2 in DEVELOPER_REFERENCE.md, not resolved here) — this only requires
     -- the target be in *some* configured department, not the SAME one as
     -- the granter. Do not silently restrict to same-department.
     local targetJob = targetPlayer.PlayerData.job
@@ -2359,7 +2359,7 @@ local function GrantCertification(granterSrc, targetServerId)
         return false, 'target_not_in_department'
     end
 
-    -- §4.2.4 proximity — skipped only for self-cert (nothing to measure
+    -- §4.2 item 4 proximity — skipped only for self-cert (nothing to measure
     -- distance to). Live server-side coordinates only, never client-claimed.
     if not isSelfCert then
         local granterPed = GetPlayerPed(granterSrc)
@@ -2371,7 +2371,7 @@ local function GrantCertification(granterSrc, targetServerId)
         end
     end
 
-    -- §4.2.5 (grant-only, applies UNIFORMLY even to self-certification):
+    -- §4.2 item 5 (grant-only, applies UNIFORMLY even to self-certification):
     -- target's LIVE server-side ped model must be a configured K9 model --
     -- but ONLY when Config.K9Appearance.requireK9ModelForRole is explicitly
     -- true (coder-architect, K9 role/model decoupling pass,
@@ -2806,12 +2806,12 @@ end
 --- it is now STALE against the actual shipped default and would otherwise
 --- mislead the next reader.
 ---
---- THE STALE PREMISE: the original reasoning was that §4.2.5's model check
+--- THE STALE PREMISE: the original reasoning was that §4.2 item 5's model check
 --- (`IsConfiguredK9Model(GetEntityModel(GetPlayerPed(targetServerId)))`)
 --- reads a LIVE ped's model with no persisted substitute for an offline
 --- target, so an "offline grant" would have to skip a real check the
 --- online path enforces -- a materially weaker feature, not a smaller one.
---- That was true when it was written, but GrantCertification's own §4.2.5
+--- That was true when it was written, but GrantCertification's own §4.2 item 5
 --- comment (above) was updated in the K9 role/model decoupling pass to
 --- gate the model check ENTIRELY behind `Config.K9Appearance.requireK9ModelForRole`
 --- -- which DEFAULTS TO FALSE (config.lua's own words: "a CONVENIENCE
@@ -2860,7 +2860,7 @@ end
 --- @param citizenid string
 --- @param departmentKey string -- validated against Config.Departments as an
 --- input-sanity/UX check only; NOT used to override the target's actual
---- live job -- GrantCertification (per its own §4.2.3 comment) always
+--- live job -- GrantCertification (per its own §4.2 item 3 comment) always
 --- certifies into whatever department the target's LIVE, server-read job
 --- actually is, exactly as a live '/k9certify [server id]' attempt would.
 --- A live job that does not match `departmentKey` is reported as
@@ -2894,7 +2894,7 @@ end
 
 --- DEVELOPER_REFERENCE.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
 --- command 7. Must work even when the target is offline (§4.3). Does NOT
---- run the model check (§4.2.5 applies to grant only).
+--- run the model check (§4.2 item 5 applies to grant only).
 --- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a NEW, OPTIONAL
 --- third argument — nil/omitted (every pre-existing caller) behaves
 --- exactly as before, recording a NULL `revoke_reason`. See this file's
@@ -2948,7 +2948,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         targetCitizenid = targetPlayer.PlayerData.citizenid
         targetJobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
 
-        -- Online target: same proximity rule as grant (§4.2.4), skipped
+        -- Online target: same proximity rule as grant (§4.2 item 4), skipped
         -- only for self-cert (nothing to measure distance to).
         if not isSelfCert then
             local granterPed = GetPlayerPed(granterSrc)
@@ -3136,7 +3136,7 @@ end
 --- in right now). Same eligibility rule as the online path. Deliberately
 --- has NO proximity check (impossible against a disconnected target — the
 --- entire point of this path) and NO model check (revoke never runs the
---- model check regardless of online/offline status, per §4.2.5 being
+--- model check regardless of online/offline status, per §4.2 item 5 being
 --- grant-only).
 --- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a NEW, OPTIONAL
 --- fourth argument — see RevokeCertification's own identical doc comment.
@@ -3692,7 +3692,7 @@ end
 --- GrantCertificationForTablet's own "OFFLINE-GRANT ASYMMETRY" writeup and
 --- GrantSpecializationForTablet's own doc comment below for why THOSE two
 --- have no offline path), a tier change has NO live-ped dependency (no
---- model check, ever -- tier is orthogonal to §4.2.5) and NO
+--- model check, ever -- tier is orthogonal to §4.2 item 5) and NO
 --- TierCapabilityPermits gate to keep correct against a possibly-stale
 --- cache (that gate exists only for GRANTING a specialization, never for
 --- moving an already-certified handler between tiers) -- it is "paperwork"
@@ -5160,7 +5160,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
             -- own IsCertifiedK9ForAnyJob reconciliation still correctly
             -- no-ops if a SEPARATE active certification for a different
             -- department independently justifies keeping the appearance
-            -- (cross-department certs are allowed -- DEVELOPER_REFERENCE.md §4.2.3).
+            -- (cross-department certs are allowed -- DEVELOPER_REFERENCE.md §4.2 item 3).
             if type(MaybeRevertK9Appearance) == 'function' then
                 MaybeRevertK9Appearance(citizenid)
             end

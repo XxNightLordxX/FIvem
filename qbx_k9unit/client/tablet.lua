@@ -844,10 +844,11 @@ end
 --- silently falling back to English forever.
 ---
 --- DELIBERATELY NOT STATING A KEY COUNT HERE. An earlier version of this
---- comment claimed "255 keys total (this pass added the 53 K9 Audit Trail
---- viewer keys...)". By the 2026-08-31 watchdog pass the real count was
---- 1078 -- the comment had rotted by a factor of four, and the narrative
---- about "this pass" had long since stopped meaning anything. A count
+--- comment stated an exact total, plus a narrative about which keys "this
+--- pass" had just added. By the 2026-08-31 watchdog pass the stated total
+--- was wrong by a factor of four (it read a few hundred; the real figure
+--- was over a thousand), and the narrative had long since stopped meaning
+--- anything. A count
 --- maintained by hand next to a list that grows every pass is a comment
 --- that lies by default, so it is gone rather than merely refreshed. The
 --- spec named above is the count's real keeper: it compares this list
