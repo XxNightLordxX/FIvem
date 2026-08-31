@@ -385,6 +385,68 @@ t.test('END-TO-END: an unrecognized Config.Features key prints a named warning a
     t.isTrue(warned, 'expected a named warning for the unrecognized key ScentTraking')
 end)
 
+-- ----------------------------------------------------------------------
+-- MEMORY-ONLY, FOR TWO VERY DIFFERENT REASONS.
+--
+-- Config.Database.enabled = false is the SHIPPED DEFAULT (the resource is
+-- drag-and-drop out of the box), so memory-only is now the ordinary case,
+-- not a fault. The summary used to say "see any warning above from
+-- server/datastore.lua for why" unconditionally, which sent every operator
+-- running the default configuration hunting for an explanation that was
+-- never printed -- the deliberate path prints no warning precisely because
+-- nothing is wrong.
+--
+-- The other reason (the schema probe forcing memory-only because another
+-- resource owns a k9_* table) IS a fault, DOES print a warning, and must
+-- keep pointing at it.
+-- ----------------------------------------------------------------------
+
+t.test('MEMORY-ONLY BY CONFIG: the summary says it was the config, names the cost, and does NOT point at a warning that was never printed', function()
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB },
+        config = { Features = {}, Database = { enabled = false } },
+        k9Store = { IsDatabaseEnabled = function() return false end },
+    })
+    local lastLine = f.printedLines[#f.printedLines]
+
+    t.contains(lastLine, 'memory-only BY CONFIG')
+    t.contains(lastLine, 'nothing survives a restart')
+    t.contains(lastLine, 'sql/install.sql')
+    t.notContains(lastLine, 'see the warning above')
+    t.notContains(lastLine, 'UNEXPECTEDLY')
+end)
+
+t.test('MEMORY-ONLY UNEXPECTEDLY: with the config NOT set to false, the summary says it was forced and still points at the warning', function()
+    -- The runtime-forced case: Config says the database is on, but the
+    -- store reports it off, which only happens when the schema probe
+    -- forced it. That genuinely does have a warning above to read.
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB },
+        config = { Features = {}, Database = { enabled = true } },
+        k9Store = { IsDatabaseEnabled = function() return false end },
+    })
+    local lastLine = f.printedLines[#f.printedLines]
+
+    t.contains(lastLine, 'UNEXPECTEDLY')
+    t.contains(lastLine, 'server/datastore.lua')
+    t.notContains(lastLine, 'BY CONFIG')
+end)
+
+t.test('MEMORY-ONLY: a MISSING Config.Database block reads as the unexpected case, not the deliberate one', function()
+    -- Only a literal false is deliberate. An absent block means the
+    -- operator did not choose memory mode, so if the store still reports
+    -- off, something forced it and they should be told to look.
+    local f = boot({
+        resourceVersions = ALL_OK_VERSIONS,
+        resourceFiles = { ['server/runtimecontrol.lua'] = REGISTRY_WITH_ALL_58_KEYS_STUB },
+        config = { Features = {} },
+        k9Store = { IsDatabaseEnabled = function() return false end },
+    })
+    t.contains(f.printedLines[#f.printedLines], 'UNEXPECTEDLY')
+end)
+
 t.test('END-TO-END: the final line is a single, informative summary printed last, after any warnings', function()
     local f = boot({
         resourceVersions = ALL_OK_VERSIONS,

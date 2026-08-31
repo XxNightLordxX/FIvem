@@ -740,7 +740,29 @@ local function BuildDatabaseStatePhrase()
     if enabled then
         return 'connected (no whole-resource schema collision detected -- see any warning above for individual tables)'
     end
-    return 'memory-only (see any warning above from server/datastore.lua for why)'
+
+    -- TWO VERY DIFFERENT REASONS TO BE MEMORY-ONLY, and telling them apart
+    -- is the whole point of this branch.
+    --
+    -- Config.Database.enabled = false is the SHIPPED DEFAULT (the resource
+    -- is drag-and-drop out of the box), so it is the ordinary case, not a
+    -- fault, and there is no warning above explaining it. This used to
+    -- return "see any warning above for why" unconditionally, which sent
+    -- every operator running the default configuration hunting for an
+    -- explanation that was never printed.
+    --
+    -- The other reason -- datastore.lua's schema-collision probe forcing
+    -- memory-only because another resource owns a k9_* table -- IS a fault,
+    -- DOES print a warning above, and must keep pointing at it.
+    if type(Config) == 'table' and type(Config.Database) == 'table' and Config.Database.enabled == false then
+        return 'memory-only BY CONFIG (Config.Database.enabled = false -- the shipped default). '
+            .. 'Everything works, but nothing survives a restart: certifications, XP, partnerships, permissions, '
+            .. 'callsigns and themes all reset, and no audit trail is written. '
+            .. 'Set Config.Database.enabled = true and run sql/install.sql once to keep them.'
+    end
+
+    return 'memory-only UNEXPECTEDLY -- Config.Database.enabled is not false, so this was forced at runtime. '
+        .. 'See the warning above from server/datastore.lua for which table collided and why.'
 end
 
 if type(AddEventHandler) == 'function' then
