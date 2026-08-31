@@ -970,6 +970,8 @@ local TABLET_STRING_KEYS = {
     'cert_tier_error_invalid_label', 'cert_tier_error_invalid_capabilities',
     'cert_tier_error_busy', 'cert_tier_error_too_many_tiers',
     'cert_tier_error_unknown_tier', 'cert_tier_error_protected_tier',
+    'cert_tier_error_ordinal_write_failed', 'cert_tier_error_capability_write_failed',
+    'shop_item_error_sort_order_write_failed',
     'cert_tier_error_tier_in_use',
     -- The OTHER referrer a tier delete can be blocked by -- a supply shop
     -- item requiring the tier (server/certtiers.lua's DeleteTier, commit

@@ -687,4 +687,47 @@ t.test('Delete refusal "tier_in_use_by_shop_items" renders its own "cannot, and 
     t.equals(findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf('certification record(s)') !== -1).length, 0, 'never confused with the certification-record refusal text -- these are two different reasons with two different fixes');
 });
 
+t.test('a PARTIAL tier-reorder write names the tiers that did not save, instead of a bare failure', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:certTiersList': () => ({
+                ok: true,
+                tiers: [
+                    { key: 'trainee', label: 'Trainee', ordinal: 1, capabilities: {} },
+                    { key: 'certified', label: 'Certified', ordinal: 2, capabilities: {} },
+                ],
+                capabilityCatalog: {},
+            }),
+            // server/certtiers.lua's real partial-failure shape. Until
+            // 2026-08-31 `ordinal_write_failed` had no case in
+            // certTierErrorText, so it fell to the generic "action failed"
+            // line and `failedKeys` was thrown away -- on a PARTIAL write,
+            // where knowing what did NOT save is the whole point.
+            'tablet:certTiersReorder': () => ({
+                ok: false, reason: undefined, error: 'ordinal_write_failed',
+                failedKeys: ['certified'],
+                tiers: [
+                    { key: 'trainee', label: 'Trainee', ordinal: 1, capabilities: {} },
+                    { key: 'certified', label: 'Certified', ordinal: 2, capabilities: {} },
+                ],
+            }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    await settle();
+
+    const moveDown = findAll(h.getRoot(), (n) => n.tagName === 'button' && n._textContent === '\u2193');
+    moveDown[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Asserted against the full rendered sentence, never a bare search for
+    // 'certified' -- that key is already on screen in its own tier row, so a
+    // substring search would pass with or without the fix.
+    const expected = 'The new order could not be saved for these tiers: certified. Nothing else was changed'
+        + ' \u2014 reopen this screen to see the order that is actually stored, then try again.';
+    t.isTrue(findByText(h.getRoot(), expected).length > 0,
+        'the failing tier key must be named IN THE ERROR, not collapsed into a generic failure');
+});
+
 t.run();

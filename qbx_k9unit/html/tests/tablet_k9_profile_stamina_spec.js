@@ -305,4 +305,62 @@ t.test('STAMINA PERSISTENCE WARNING IS CONDITIONAL (post migration 0021, commit 
     t.equals(findByClass(h.getRoot(), 'k9tablet-warning-note').length, 0, 'no .k9tablet-warning-note element is rendered when the server omits staminaPersistenceWarning');
 });
 
+// ======================================================================
+// SPEED-OVERRIDE CEILING NOTE (2026-08-31)
+//
+// server/k9profiles.lua computes `speedOverrideCeilingNote` on k9ProfileGet
+// for one stated purpose, in its own comment's words: so an officer opening
+// the tablet to INSPECT an already-set high override "gets told the same
+// honest truth a fresh save would have told them, not just silence."
+// No renderer read the field, so silence is exactly what they got -- the
+// one outcome the server went out of its way to prevent.
+// ======================================================================
+
+t.test('INSPECTING an already-set high speed override shows the server\'s ceiling note, not silence', async () => {
+    const NOTE = 'This K9 is set to 6.00x speed. There is no hard ceiling, but values this far above 1.00x are visibly unnatural and can outrun vehicles.';
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HC_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
+            'tablet:k9ProfilesList': () => ({ ok: true, overrides: [] }),
+            'tablet:k9ProfileGet': () => ({
+                ok: true, citizenid: 'DOG9', tierLabel: 'Recruit K9',
+                effective: { speedMultiplier: 6, scentRangeMultiplier: 1, medkitCooldownMultiplier: 1, overridden: { speedMultiplier: true } },
+                override: { speedMultiplier: 6 },
+                speedOverrideCeilingNote: NOTE,
+            }),
+        }),
+    });
+    await openK9OverridesTab(h);
+    lookupInput(h).typeValue('DOG9');
+    findByText(h.getRoot(), 'Look Up')[0].click();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), NOTE).length > 0,
+        "the server owns this wording verbatim and computes it precisely so an inspecting officer is not met with silence");
+});
+
+t.test('CONTROL: a profile with no ceiling note renders no ceiling note (and never the string "undefined")', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HC_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
+            'tablet:k9ProfilesList': () => ({ ok: true, overrides: [] }),
+            'tablet:k9ProfileGet': () => ({
+                ok: true, citizenid: 'DOG1', tierLabel: 'Recruit K9',
+                effective: { speedMultiplier: 1, scentRangeMultiplier: 1, medkitCooldownMultiplier: 1, overridden: {} },
+                override: null,
+                // no speedOverrideCeilingNote key at all -- the ordinary case
+            }),
+        }),
+    });
+    await openK9OverridesTab(h);
+    lookupInput(h).typeValue('DOG1');
+    findByText(h.getRoot(), 'Look Up')[0].click();
+    await settle();
+
+    t.equals(findByText(h.getRoot(), 'undefined').length, 0,
+        'an omitted note must render nothing at all, never a placeholder');
+});
+
 t.run();

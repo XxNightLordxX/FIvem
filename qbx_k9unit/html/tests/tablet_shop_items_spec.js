@@ -597,4 +597,41 @@ t.test('ESCAPING: a hostile item label reaches the table row and the edit-draft 
     t.equals(everyElementInnerHTMLWriteCount(), 0);
 });
 
+t.test('a PARTIAL reorder write names the items that did not save, instead of a bare failure', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:equipmentShopItemsList': () => ({
+                ok: true,
+                items: [
+                    { key: 'a_item', label: 'A', price: 1, currency: null, sortOrder: 1, requiredTierKey: null, requiredSpecialization: null },
+                    { key: 'b_item', label: 'B', price: 2, currency: null, sortOrder: 2, requiredTierKey: null, requiredSpecialization: null },
+                ],
+            }),
+            // server/equipmentshop.lua's real partial-failure shape: it knows
+            // exactly which keys did not persist and says so. Until 2026-08-31
+            // this reason had no case in shopItemErrorText, so it fell to the
+            // generic line and `failedKeys` was discarded -- the worst copy
+            // for a PARTIAL write, where "what actually saved?" is the only
+            // question the admin has.
+            'tablet:equipmentShopItemsReorder': () => ({ ok: false, error: 'sort_order_write_failed', failedKeys: ['b_item'] }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Shop Items')[0].click();
+    await settle();
+
+    const moveDownButtons = findAll(h.getRoot(), (n) => n.tagName === 'button' && n._textContent === '↓');
+    moveDownButtons[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Asserted against the REAL rendered sentence, not a bare search for
+    // 'b_item': that key is already on screen in its own list row, so a
+    // substring search passes whether or not the error renders at all --
+    // this assertion was written that way first and passed without the fix.
+    const expected = 'The new order could not be saved for these items: b_item. Nothing else was changed'
+        + ' \u2014 reopen this screen to see the order that is actually stored, then try again.';
+    t.isTrue(findByText(h.getRoot(), expected).length > 0,
+        'the failing item key must be named IN THE ERROR so the admin knows what to re-check');
+});
+
 t.run();

@@ -976,6 +976,9 @@
         cert_tier_error_busy: 'This tier is being edited elsewhere right now -- try again in a moment.',
         cert_tier_error_too_many_tiers: 'The maximum number of certification tiers has been reached.',
         cert_tier_error_unknown_tier: 'That tier no longer exists.',
+        cert_tier_error_ordinal_write_failed: "The new order could not be saved for these tiers: {keys}. Nothing else was changed \u2014 reopen this screen to see the order that is actually stored, then try again.",
+        cert_tier_error_capability_write_failed: "Some capability changes could not be saved. Reopen this screen to see what is actually stored before changing anything else.",
+        shop_item_error_sort_order_write_failed: "The new order could not be saved for these items: {keys}. Nothing else was changed \u2014 reopen this screen to see the order that is actually stored, then try again.",
         cert_tier_error_protected_tier: '"Certified" is a protected tier and can never be deleted.',
         cert_tier_error_tier_in_use: 'This tier cannot be deleted -- {count} certification record(s) still reference it. Move them to a different tier first, then delete.',
         // Deliberately a SEPARATE key/message from cert_tier_error_tier_in_use
@@ -9171,6 +9174,13 @@
             case 'denied': return S('shop_item_error_denied');
             case 'rate_limited': return S('shop_item_error_rate_limited');
             case 'invalid_payload': return S('shop_item_error_invalid_payload');
+            // Same partial-failure gap as certTierErrorText's own
+            // ordinal_write_failed case above -- server/equipmentshop.lua
+            // names the items whose new order did not persist, and nothing
+            // here read them.
+            case 'sort_order_write_failed': return formatTemplate(S('shop_item_error_sort_order_write_failed'), {
+                keys: Array.isArray(result.failedKeys) ? result.failedKeys.join(', ') : '?',
+            });
             case 'invalid_key': return S('shop_item_error_invalid_key');
             case 'invalid_price': return S('shop_item_error_invalid_price');
             case 'invalid_label': return S('shop_item_error_invalid_label');
@@ -10790,6 +10800,7 @@
         state.k9ProfileActionError = null;
         state.k9ProfileWarning = null;
         state.k9ProfileStaminaWarning = null;
+        state.k9ProfileSpeedCeilingNote = null;
         render();
         loadK9ProfilesList();
     }
@@ -10914,6 +10925,16 @@
         // all (see buildK9ProfileDetail() below) when the server omits it.
         state.k9ProfileStaminaWarning = (typeof profile.staminaPersistenceWarning === 'string' && profile.staminaPersistenceWarning.length > 0)
             ? profile.staminaPersistenceWarning : null;
+        // SAME TREATMENT, SAME REASON (added 2026-08-31).
+        // server/k9profiles.lua computes speedOverrideCeilingNote for one
+        // stated purpose, in its own words: so an officer opening the tablet
+        // to INSPECT an already-set high override "gets told the same honest
+        // truth a fresh save would have told them, not just silence". No
+        // renderer read the field, so silence is exactly what they got. The
+        // server owns the wording verbatim; this page never fabricates it,
+        // and renders nothing at all when the server omits it.
+        state.k9ProfileSpeedCeilingNote = (typeof profile.speedOverrideCeilingNote === 'string' && profile.speedOverrideCeilingNote.length > 0)
+            ? profile.speedOverrideCeilingNote : null;
     }
 
     function clearK9ProfileSelection() {
@@ -10923,6 +10944,7 @@
         state.k9ProfileFieldError = null;
         state.k9ProfileActionError = null;
         state.k9ProfileStaminaWarning = null;
+        state.k9ProfileSpeedCeilingNote = null;
         render();
     }
 
@@ -11384,6 +11406,9 @@
 
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_not_yet_live_hint') }));
 
+        if (state.k9ProfileSpeedCeilingNote) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.k9ProfileSpeedCeilingNote }));
+        }
         if (state.k9ProfileStaminaWarning) {
             wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.k9ProfileStaminaWarning }));
         }
@@ -13464,6 +13489,17 @@
             case 'busy': return S('cert_tier_error_busy');
             case 'too_many_tiers': return S('cert_tier_error_too_many_tiers');
             case 'unknown_tier': return S('cert_tier_error_unknown_tier');
+            // PARTIAL-FAILURE CASES (added 2026-08-31). server/certtiers.lua
+            // returns these with `failedKeys` / `failedCapabilities` naming
+            // exactly what did not persist, plus a `warning`. Neither had a
+            // case here, so both fell to `default:` and rendered the bare
+            // "action failed" line -- the worst possible copy for a PARTIAL
+            // write, where the admin's real question is "what actually got
+            // saved?" and the honest answer is "reopen and look".
+            case 'ordinal_write_failed': return formatTemplate(S('cert_tier_error_ordinal_write_failed'), {
+                keys: Array.isArray(result.failedKeys) ? result.failedKeys.join(', ') : '?',
+            });
+            case 'capability_write_failed': return S('cert_tier_error_capability_write_failed');
             // 'protected_tier'/'tier_in_use'/'tier_in_use_by_shop_items' are
             // REFUSALS ("cannot, and here is why"), not generic failures --
             // per this task's own instruction, given their own explanatory
