@@ -227,9 +227,10 @@
     before touching that resource's export/event surface at all --
     defense-in-depth, not a substitute for core.lua's own check, matching
     this codebase's established "never trust a single layer" posture
-    (server/tracking.lua's IsOxInventoryHookCapable keeps an identical
+    (the now-deleted IsOxInventoryHookCapable in server/tracking.lua kept an identical
     belt-and-suspenders GetResourceState check even though its own caller
-    is ALSO gated elsewhere). Every export access AND call below goes
+    was ALSO gated elsewhere; shared/compat/target.lua's IsExportCapable
+    carries that posture forward today). Every export access AND call below goes
     through its own `pcall`, matching server/tracking.lua:772-810's
     two-step shape exactly: `GetResourceState` first (unconditional
     "unavailable" if not `'started'`), then a `pcall`'d INDEX of the export

@@ -323,7 +323,7 @@
        uptime, at ox_inventory's OWN onResourceStart too (see
        `RegisterK9InventoryItemFilterHook`/the `AddEventHandler` dispatching
        to it below), gated on Config.Features.K9Inventory AND a non-nil
-       Config.K9Inventory.allowedItems AND IsOxInventoryHookCapable()
+       Config.K9Inventory.allowedItems AND a successful hook registration
        (mirrors server/tracking.lua's identical ScentTracking gating
        shape/reasoning for the same export — see this file's header
        "RUNTIME CAPABILITY GUARD" section). Enforces
@@ -377,9 +377,13 @@
       multiple hooks per event, confirmed against `modules/hooks/server.lua`'s
       `eventHooks[event]` being an ARRAY, not a single slot) — this file
       does not call, depend on, or need to know about server/tracking.lua's
-      registration, and does not touch that file to add one either; a
-      small local duplicate of `IsOxInventoryHookCapable` lives in THIS file
-      instead (see header RUNTIME CAPABILITY GUARD section for why).
+      registration, and does not touch that file to add one either; this
+      file runs its own independent capability check instead (see header
+      RUNTIME CAPABILITY GUARD section for why). That check was once a small
+      local duplicate of a `IsOxInventoryHookCapable` helper in
+      server/tracking.lua; both were deleted in the compat-layer migration
+      and both are now the boolean
+      `K9Compat.Get('inventory').RegisterHook` returns.
     ======================================================================
 ]]
 
@@ -539,7 +543,7 @@ end
 --- identical export: if Config.Features.K9Inventory is false, OR
 --- Config.K9Inventory.allowedItems is nil (no whitelist configured —
 --- nothing to enforce), the hook is never registered at all. If a
---- whitelist IS configured but IsOxInventoryHookCapable() fails, this
+--- whitelist IS configured but the hook registration fails, this
 --- prints ONE warning and leaves the whitelist genuinely unenforced (the K9
 --- stash itself keeps working, unfiltered) rather than pretending — same
 --- honest-soft-disable posture server/tracking.lua's ScentTracking block

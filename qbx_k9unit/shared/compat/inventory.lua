@@ -267,8 +267,9 @@
     ======================================================================
     NEVER LET A THIRD-PARTY EXPORT THROW. Every export ACCESS and every
     export CALL below goes through the same two/three-step shape this
-    codebase already established (server/tracking.lua's
-    IsOxInventoryHookCapable / server/inventory.lua's identical local copy):
+    codebase already established (the now-deleted IsOxInventoryHookCapable in server/tracking.lua,
+    and server/inventory.lua's identical local copy -- both since deleted,
+    their job now done by this layer's own IsExportCapable):
     `GetResourceState(name) == 'started'` checked FIRST and unconditionally
     (accessing `exports.<name>` at all on a non-started resource can itself
     throw), THEN a pcall'd export INDEX (proves the name resolves to a

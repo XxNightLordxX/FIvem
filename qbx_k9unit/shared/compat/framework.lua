@@ -54,8 +54,10 @@
     NEVER LET A THIRD-PARTY EXPORT THROW INTO THIS RESOURCE. Every export
     access AND call below goes through the same two-step
     ResourceStarted -> IsExportCapable -> SafeCall shape used in
-    shared/compat/target.lua (itself mirroring server/tracking.lua's
-    IsOxInventoryHookCapable) -- duplicated here as file-local helpers
+    shared/compat/target.lua (a shape that originated as a local
+    IsOxInventoryHookCapable helper in server/tracking.lua, since deleted in
+    the compat-layer migration -- IsExportCapable below is where it lives
+    now) -- duplicated here as file-local helpers
     rather than shared across files, since STRICT OWNERSHIP for this task
     permits creating only these two compat files plus one test spec, not a
     shared third helper module.
@@ -78,8 +80,7 @@ local function ResourceStarted(resourceName)
 end
 
 --- Capability probe only -- see shared/compat/target.lua's IsExportCapable
---- for the full rationale (mirrors server/tracking.lua's
---- IsOxInventoryHookCapable).
+--- for the full rationale.
 --- @param resourceName string
 --- @param methodName string
 --- @return boolean

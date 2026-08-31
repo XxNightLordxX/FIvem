@@ -98,12 +98,15 @@
     mutex tables and are NOT touched here. They're a different shape
     entirely — an append-only ARRAY of `{coords, loggedAt}` entries pruned
     by age and separately scanned-by-distance at query time, not a
-    `key -> lastTouchedAtMs` map at all. DEVELOPER_REFERENCE.md's own
-    inventory table (and its item-1 tally of exactly 11 tables) does not
-    count TrackableLog among them, and separately flags the "array of aged
-    log entries, nearest-match scan" shape as medium-term item 5
-    (`FindNearestEntity`), explicitly deferred as "worth a light look, not
-    urgent" rather than folded in here. Forcing it onto NewCooldown/
+    `key -> lastTouchedAtMs` map at all -- which is visible directly in
+    server/tracking.lua and needs no external authority to confirm.
+    (Corrected 2026-08-31: this paragraph used to rest the point on
+    "DEVELOPER_REFERENCE.md's own inventory table and its item-1 tally of
+    exactly 11 tables". No such table is in that document -- it was most
+    likely in one of the fifteen files folded in on 2026-08-25 and cut as
+    superseded decision history. The argument stands on its own without it,
+    so the dead prop is removed rather than replaced with another number
+    that would rot the same way.) Forcing it onto NewCooldown/
     NewNestedCooldown here would be exactly the kind of over-generalized
     function this extraction is meant to avoid.
 

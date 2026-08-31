@@ -412,8 +412,9 @@ end
 --- "unknown" -- only "started" counts as usable, and accessing an export on
 --- a resource that is not started can throw rather than return nil, which
 --- is exactly why this check runs BEFORE the factory is ever called, same
---- convention as server/tracking.lua's/server/inventory.lua's own
---- IsOxInventoryHookCapable), calls `factory(REALM)` inside pcall, and
+--- convention as the now-deleted IsOxInventoryHookCapable in server/tracking.lua
+--- and its server/inventory.lua twin, both since deleted), calls
+--- `factory(REALM)` inside pcall, and
 --- verifies the returned table exposes every required method. NEVER
 --- throws -- every path that could error from third-party or sibling code
 --- (the factory call itself) is pcall-guarded.

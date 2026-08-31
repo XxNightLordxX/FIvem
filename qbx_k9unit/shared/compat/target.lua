@@ -66,7 +66,7 @@
 
     NEVER LET A THIRD-PARTY EXPORT THROW INTO THIS RESOURCE. Every export
     access AND call below goes through the two-step shape already
-    established in server/tracking.lua's IsOxInventoryHookCapable
+    established by the now-deleted IsOxInventoryHookCapable in server/tracking.lua
     (GetResourceState checked first and unconditionally, THEN a pcall'd
     export index to confirm the method actually exists, kept separate from
     a second, later pcall around the real invocation so a capability probe
@@ -93,7 +93,7 @@ end
 
 --- Capability probe ONLY -- indexes the export without calling it, so
 --- checking for a capability never itself performs a side effect. Mirrors
---- server/tracking.lua's IsOxInventoryHookCapable exactly, generalised to
+--- the now-deleted IsOxInventoryHookCapable in server/tracking.lua exactly, generalised to
 --- an arbitrary resource/method pair. Per that function's own disclosed
 --- limitation (restated here rather than re-derived): indexing an export is
 --- understood, not independently re-verified this session, to always

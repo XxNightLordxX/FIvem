@@ -252,15 +252,19 @@
     DEVELOPER_REFERENCE.md#scent-source-resolution):
     5. 'swapItems' [THIS FILE]
        ADDENDUM (coordinator decision, 2026-08-24): registration is now
-       GATED on a runtime capability check (`IsOxInventoryHookCapable()`,
-       this file, checked from an `onResourceStart` handler further down) in
-       addition to Config.Features.ScentTracking — fxmanifest.lua's
+       GATED on a runtime capability check in addition to
+       Config.Features.ScentTracking — fxmanifest.lua's
        `dependencies` block has no version-constraint syntax at all, so it
        cannot guarantee `registerHook` actually exists on whatever
        `ox_inventory` ends up running. If the check fails, this hook is
        never registered at all (not registered-then-early-returning) and
-       one warning is printed; see `IsOxInventoryHookCapable()`'s own
-       call-site comment for the full reasoning. LIFECYCLE FIX (this pass):
+       one warning is printed; see `RegisterScentInventoryHook()` below for
+       the full reasoning. (That check WAS a local `IsOxInventoryHookCapable()`
+       in this file. It was deleted in the compat-layer migration and its job
+       is now done by the boolean `K9Compat.Get('inventory').RegisterHook`
+       returns — same guarantee, one less hand-rolled probe. Corrected
+       2026-08-31: three comments in this file still described the deleted
+       function in the present tense.) LIFECYCLE FIX (this pass):
        registration is re-run (via `RegisterScentInventoryHook()`) not only
        on THIS resource's own start but also on ox_inventory's OWN start —
        see the `AddEventHandler('onResourceStart', ...)` call site's own
@@ -324,8 +328,8 @@
       `dependencies` block only guarantees ORDERING (ox_inventory starts
       before this resource) — it has no version-constraint syntax at all, so
       it cannot guarantee `registerHook` actually exists on whatever
-      `ox_inventory` build ends up running. `IsOxInventoryHookCapable()`
-      (declared just above the `registerHook` call site below) is a runtime
+      `ox_inventory` build ends up running. The boolean that
+      `K9Compat.Get('inventory').RegisterHook` returns is the runtime
       substitute for the version pin fxmanifest.lua cannot express, checked
       once from an `onResourceStart` handler before this hook is ever
       registered.
@@ -1212,7 +1216,7 @@ end)
 --- starting anyway, so nothing is missed by not registering at bare
 --- file-load time instead.
 ---
---- ON FAILURE (ScentTracking enabled but IsOxInventoryHookCapable() false):
+--- ON FAILURE (ScentTracking enabled but RegisterHook returns false):
 --- prints ONE warning naming ox_inventory, the missing `registerHook`
 --- capability, and the exact consequence ("scent tracking disabled"), then
 --- leaves the feature genuinely inert — TrackableLog.scent simply never
