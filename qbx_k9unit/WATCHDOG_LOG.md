@@ -24,6 +24,7 @@ pass itself.
 | 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (FEATURE_STRUCTURE_SPEC.md, OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
 | 2026-08-31 | Clean on all five checks; 13 backlogged firings (Aug 28-31) covered by this one pass. 8 commits reviewed, all authored and gated this session. The rank-visibility finding left open by an earlier pass is now CLOSED BY CODE, not by editing the comment. Dependency status re-verified upstream and answered properly for the first time: all three alive, none archived. |
 | 2026-08-31 (2nd) | NOT a watchdog pass -- a directed work session, logged here because it changed a SHIPPED DEFAULT the next pass must know about: `Config.Database.enabled` now ships **false** (drag-and-drop, no SQL import). Memory-only is now the ordinary path, not a fault. Also corrected a false doc claim in four places (memory mode DOES keep a capped audit trail) and closed the KNOWN_ISSUES command-drift item. |
+| 2026-08-31 (3rd) | **THIS ROUTINE'S OWN PROMPT WAS REWRITTEN.** It referenced a `SPEC.md` that has not existed for many passes (twice), asked about a bark-audio gap closed long ago, and did not know the database now ships OFF -- so it would have read a healthy server as broken. Checklist also rebalanced toward doc-vs-code drift, which is where every real finding has come from lately. |
 
 ## 2026-08-26 — detail
 
@@ -516,3 +517,47 @@ pattern using `%w` (which excludes `_`) that matched 17 of 28 table names.
 Both were caught only by re-reading the output rather than trusting the
 edit, and both are now guarded by sanity assertions on the scan size. Any
 future scan-based guard in this repo should carry one.
+
+## 2026-08-31 (3rd) — the routine's own prompt
+
+Not a pass. Recording a change to the trigger itself, since nothing inside
+the repo would otherwise show it.
+
+**What was wrong with it.** It told each pass to check `SPEC.md` — twice,
+once for the bark-audio gap and once for stale "Done" claims. There is no
+SPEC.md and has not been for a long time; it was split into
+DEVELOPER_REFERENCE.md and the various *_SPEC.md files. So one whole
+checklist item pointed at nothing, and a conscientious pass would either
+waste time hunting for the file or quietly skip the check.
+
+It also predated two facts that would now actively mislead:
+
+  * `Config.Database.enabled` ships `false`. A pass that assumed the
+    database was on would read a perfectly healthy server as broken. The
+    prompt now leads with this, and with the distinction between
+    `memory-only BY CONFIG` (correct) and `memory-only UNEXPECTEDLY` (a
+    real fault).
+  * The bark-audio placeholder gap is closed. The prompt asked every six
+    hours whether it had been resolved yet; it now says it is resolved and
+    to confirm it has not regressed.
+
+**What was added.** The atom-feed method for the dependency check, with
+the current dates to compare against — an earlier pass had to record that
+check as "not verified" because the GitHub REST API 403s through the
+session proxy, and the next one would have hit the same wall cold. And an
+explicit warning on the regression spot-checks to verify against real code
+rather than a comment mentioning it, since four of the five matched only
+doc-comment prose on a first grep during the 2026-08-31 pass.
+
+**What was rebalanced, and why.** The fixed five-item checklist has come
+back clean on every pass since 2026-08-26, while every finding of real
+value in that time came from doc-vs-code drift — a spec asserting a
+limitation that had since been fixed, a command-drift guard blind to new
+files, a changelog missing a breaking change. Item 4 is now that hunt
+explicitly, with the DISCIPLINE_SPEC/HasSpecialization case named as the
+shape to look for. The known-rotted `file.lua:123` citations are called out
+as already-handled so a future pass does not re-report them.
+
+The instruction not to manufacture findings is kept and strengthened: a
+clean pass honestly reported is the correct outcome, and has been the usual
+one.
