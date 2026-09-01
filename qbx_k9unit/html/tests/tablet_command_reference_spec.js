@@ -112,6 +112,64 @@ async function settle(times) {
     for (let i = 0; i < (times || 3); i++) await new Promise((r) => setImmediate(r));
 }
 
+// ======================================================================
+// "EVERY GATED FEATURE IS ON" -- DERIVED FROM tablet.js, NOT HAND-TYPED.
+//
+// From 2026-09-01 this screen HIDES a command whose gated feature is off
+// server-wide (owner: "if something is turned off in the config nothing on
+// the tablet shows up" -- see commandReferenceIsVisible()). A missing key
+// in myFeatures[] resolves to 'global_off', so the `myFeatures: []` these
+// fixtures used to pass now hides almost the entire catalog, and the tests
+// that simply want the reference rendered would be asserting against 17
+// rows instead of 64.
+//
+// So the default fixture now says every gated feature is on. Built by
+// reading the REAL gate.featureKey values out of html/tablet.js -- the same
+// raw-source technique countRealCommandReferenceEntries() above already
+// uses -- so a gate added or renamed later is covered with no edit here,
+// which is the whole reason that convention exists in this file.
+//
+// Tests that care about a feature being OFF still pass their own explicit
+// myFeatures and are unaffected.
+// ======================================================================
+function everyGatedFeatureAvailable() {
+    const startPos = tabletJsSourceForCommandCount.indexOf('var COMMAND_REFERENCE = [');
+    if (startPos === -1) throw new Error('tablet_command_reference_spec: var COMMAND_REFERENCE = [ not found in html/tablet.js');
+    const endPos = tabletJsSourceForCommandCount.indexOf('\n    ];', startPos);
+    const body = tabletJsSourceForCommandCount.slice(startPos, endPos);
+
+    const keys = new Set();
+    for (const m of body.matchAll(/featureKey:\s*'([^']+)'/g)) keys.add(m[1]);
+    if (keys.size === 0) throw new Error('tablet_command_reference_spec: matched zero gate featureKeys -- extraction pattern is stale');
+
+    return Array.from(keys).map((key) => ({ key, category: null, actionable: true, state: 'available' }));
+}
+const ALL_FEATURES_ON = everyGatedFeatureAvailable();
+
+/**
+ * ALL_FEATURES_ON with named keys changed or removed.
+ *
+ * A test about ONE feature being off should not accidentally be a test
+ * about forty others being off too -- which is what passing a one-element
+ * myFeatures now means, since an absent key resolves to 'global_off' and a
+ * globally-off command is hidden entirely.
+ *
+ * @param {Object<string, ?string>} overrides key -> new state, or key ->
+ *        null to drop the entry completely (the "removed from
+ *        Config.Features" shape, e.g. real production ScentTrailHunt)
+ * @returns {Array<object>}
+ */
+function featuresOn(overrides) {
+    const dropped = new Set();
+    const restated = new Map();
+    for (const [key, value] of Object.entries(overrides || {})) {
+        if (value === null) dropped.add(key); else restated.set(key, value);
+    }
+    return ALL_FEATURES_ON
+        .filter((f) => !dropped.has(f.key))
+        .map((f) => (restated.has(f.key) ? Object.assign({}, f, { state: restated.get(f.key) }) : f));
+}
+
 function myRecordHandler(viewer, myFeatures) {
     return () => ({
         ok: true,
@@ -155,7 +213,7 @@ function statusBadgeFor(h, commandText) {
 t.test('screen rendering: every catalog entry renders, one status badge each, under category headings', async () => {
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, []),
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, ALL_FEATURES_ON),
         }),
     });
     await openCommandsScreen(h);
@@ -170,7 +228,7 @@ t.test('screen rendering: every catalog entry renders, one status badge each, un
 t.test('filtering: typing in the search box narrows to matching rows and hides an emptied category heading; a non-matching query shows the empty-state message', async () => {
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, []),
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, ALL_FEATURES_ON),
         }),
     });
     await openCommandsScreen(h);
@@ -206,7 +264,7 @@ t.test('the command filter is labelled as optional, and reports what it is hidin
     // here to find things"; this list is meant to be browsed by section.
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, []),
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, ALL_FEATURES_ON),
         }),
     });
     await openCommandsScreen(h);
@@ -264,7 +322,7 @@ t.test('a HANDLER (certified, no special capability) sees a restricted admin-tie
 t.test('an UNCERTIFIED viewer (no k9.access at all) sees a handler-tier command marked "Not certified", while an open-tier command with no personal gate stays Available', async () => {
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(UNCERTIFIED_VIEWER, []),
+            'tablet:requestMyRecord': myRecordHandler(UNCERTIFIED_VIEWER, ALL_FEATURES_ON),
         }),
     });
     await openCommandsScreen(h);
@@ -290,9 +348,7 @@ t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge
             // synthetic myFeatures lists must reflect what a real config
             // actually produces, not merely omit whatever the assertion
             // doesn't otherwise require.
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, [
-                { key: 'AdminAuditCommands', label: null, category: null, actionable: false, state: 'available' },
-            ]),
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, featuresOn({ AdminAuditCommands: 'available' })),
         }),
     });
     await openCommandsScreen(h);
@@ -319,18 +375,33 @@ t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge
     t.equals(certifyBadge._textContent, 'Available');
 });
 
-t.test('a server-wide-disabled feature overrides an otherwise-qualifying high-command capability (checked BEFORE the capability check, not instead of it)', async () => {
+t.test('a server-wide-disabled feature is HIDDEN outright, even from a high-command viewer who otherwise qualifies by capability', async () => {
+    // BEHAVIOUR CHANGED 2026-09-01 (owner: "if something is turned off in
+    // the config nothing on the tablet shows up"). This used to assert the
+    // row rendered with a 'Disabled server-wide' badge. The underlying
+    // resolution is unchanged and still what matters -- global_off is
+    // checked BEFORE the capability check, so it wins over high command
+    // rather than being skipped for them -- but the row is now removed from
+    // the screen instead of listed as unusable. See
+    // commandReferenceIsVisible() in html/tablet.js.
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, [
-                { key: 'AdminAuditCommands', label: null, category: null, actionable: false, state: 'global_off' },
-            ]),
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, featuresOn({ AdminAuditCommands: 'global_off' })),
         }),
     });
     await openCommandsScreen(h);
 
-    const auditBadge = statusBadgeFor(h, '/k9auditcert <citizenid> [limit]');
-    t.equals(auditBadge._textContent, 'Disabled server-wide', 'a global_off feature state wins even for a high-command viewer who otherwise qualifies by capability');
+    t.equals(
+        findByText(h.getRoot(), '/k9auditcert <citizenid> [limit]').length, 0,
+        'the globally-off command is gone from the reference entirely'
+    );
+    // The control that keeps this honest: a DIFFERENT admin command, whose
+    // own feature is still on, must still be listed. Without this, hiding
+    // the whole screen would pass.
+    t.isTrue(
+        findByText(h.getRoot(), '/k9certify <server id>  |  /k9certify <citizenid> <job>').length > 0,
+        'commands whose features are still on are unaffected'
+    );
 });
 
 t.test('a per-person block overrides an otherwise-qualifying high-command capability', async () => {
@@ -378,19 +449,22 @@ t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFe
     // own 'access' branch already returns 'not_certified' before ever
     // consulting a featureKey when the viewer lacks access, so an
     // uncertified viewer could never have exposed this fallthrough.
+    // Everything on EXCEPT the two keys under test, which are dropped from
+    // the array entirely -- the precise shape described above. Using
+    // featuresOn() rather than a one-element array keeps this a test about
+    // two absent keys, instead of accidentally also being a test about
+    // every other feature being off.
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, [
+            'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, featuresOn({
+                ScentTrailHunt: null,
+                ApprehensionAnnouncement: null,
                 // CONTROL 1 -- a featureKey that IS present and true. Proves
                 // this test's own harness can still show 'Available' for a
-                // real on switch, so a fix that reported "unavailable" for
-                // EVERY command (not just an absent key) would fail this
-                // control and be caught here.
-                { key: 'DeployableKennel', label: null, category: null, actionable: false, state: 'available' },
-                // 'ScentTrailHunt' and 'ApprehensionAnnouncement' are
-                // DELIBERATELY ABSENT from this array -- see this test's own
-                // header comment above.
-            ]),
+                // real on switch, so a change that hid or disabled EVERY
+                // command (not just an absent-key one) fails here.
+                DeployableKennel: 'available',
+            })),
         }),
     });
     await openCommandsScreen(h);
@@ -407,31 +481,44 @@ t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFe
     const kennelBadge = statusBadgeFor(h, '/k9deploykennel');
     t.equals(kennelBadge._textContent, 'Available', 'CONTROL: a featureKey present and available in myFeatures still reports Available');
 
-    // THE BUG ITSELF -- both real, live COMMAND_REFERENCE entries whose
-    // gate.featureKey names a Config.Features key that genuinely does not
-    // exist in config.lua today (ScentTrailHunt was removed; Apprehension
-    // Announcement was never added). Before this fix, myFeatureState(key)
-    // returned null for a key not found in myFeatures[], and both the
-    // 'access' and 'capability'/'highCommandOnly' branches of
-    // commandReferenceStatus treated that null as "no gate matched" and
-    // fell through to 'available' -- reporting the tablet's own trusted
-    // Command Reference as usable for two commands that are permanently,
-    // unconditionally off. Both must now show the SAME 'Disabled
-    // server-wide' reading a `state: 'global_off'` entry produces.
-    const nosehuntBadge = statusBadgeFor(h, '/k9nosehunt [stop]');
-    t.equals(nosehuntBadge._textContent, 'Disabled server-wide', 'THE BUG: /k9nosehunt\'s gate.featureKey (ScentTrailHunt) is absent from Config.Features entirely -- this must read as off, not Available');
-    t.isTrue(nosehuntBadge.classList.contains('k9tablet-feature-state--global_off'), 'reuses the existing global_off CSS bucket -- no new CSS class needed for "absent from config"');
-
-    const announceBadge = statusBadgeFor(h, '/k9announce');
-    t.equals(announceBadge._textContent, 'Disabled server-wide', 'THE BUG: /k9announce\'s gate.featureKey (ApprehensionAnnouncement) has never existed in config.lua -- this must read as off, not Available');
-    t.isTrue(announceBadge.classList.contains('k9tablet-feature-state--global_off'), 'reuses the existing global_off CSS bucket -- no new CSS class needed for "absent from config"');
+    // THE BUG ITSELF. Before the original fix, myFeatureState(key) returned
+    // null for a key not found in myFeatures[], and both the 'access' and
+    // 'capability'/'highCommandOnly' branches of commandReferenceStatus
+    // treated that null as "no gate matched" and fell through to
+    // 'available' -- the tablet's own trusted Command Reference reporting
+    // two permanently, unconditionally off commands as usable.
+    //
+    // WHAT CHANGED 2026-09-01: an absent key still resolves to 'global_off'
+    // exactly as before -- that resolution is the fix and it is untouched --
+    // but a globally-off command is now HIDDEN rather than listed with a
+    // 'Disabled server-wide' badge (owner: "if something is turned off in
+    // the config nothing on the tablet shows up"). Absent from the screen
+    // is strictly further from the bug than 'Disabled server-wide' was:
+    // the failure being guarded against is these two reading as AVAILABLE,
+    // and a row that does not exist cannot claim anything.
+    //
+    // NOTE ON THE FIXTURE, since the prose above used to say
+    // ApprehensionAnnouncement "has never existed in config.lua": as of
+    // 2026-09-01 it does exist, and is enabled. That does not weaken this
+    // test -- absence is simulated by dropping the key from myFeatures,
+    // which is the exact wire shape a genuinely-missing Config.Features key
+    // produces, whatever config.lua happens to say today. ScentTrailHunt is
+    // still genuinely absent from config.lua.
+    t.equals(
+        findByText(h.getRoot(), '/k9nosehunt [stop]').length, 0,
+        'THE BUG: /k9nosehunt\'s gate.featureKey (ScentTrailHunt) is absent from Config.Features -- it must never read as Available; it is now hidden outright'
+    );
+    t.equals(
+        findByText(h.getRoot(), '/k9announce').length, 0,
+        'THE BUG: a gate.featureKey absent from myFeatures must never read as Available; it is now hidden outright'
+    );
 });
 
 t.test('a hostile string arriving via data.strings for a Command Reference key reaches the DOM only via textContent, never innerHTML', async () => {
     const malicious = '<img src=x onerror="window.__xss_pwned=true">';
     const h = createHarness({
         fetchImpl: routeFetch({
-            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, []),
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, ALL_FEATURES_ON),
         }),
     });
     h.postMessage('tablet:open', { strings: { cmdref_k9auditcert_does: malicious, cmdref_heading: malicious } });
@@ -522,17 +609,42 @@ t.test('...and the screen explains WHY, with something to press -- not a silent 
     );
 });
 
-t.test('a record that genuinely reports an EMPTY feature list still reads as off -- absent and empty stay different', async () => {
-    // The other side of the distinction. An empty array is the server
-    // actually saying "there are none", and "off" is then the correct
-    // answer -- this fix must not turn every real all-off server into a
-    // permanent "unknown".
+t.test('a record that genuinely reports an EMPTY feature list reads as off -- absent and empty stay different', async () => {
+    // The other side of the distinction, and it is still a real one -- it
+    // just shows up differently since 2026-09-01. An empty array is the
+    // server actually saying "there are none", so every gated command
+    // resolves to 'global_off', and a globally-off command is now HIDDEN
+    // rather than badged. An ABSENT field resolves to 'unknown' instead,
+    // and unknown is never hidden (see commandReferenceIsVisible) -- so the
+    // two cases are still told apart, and told apart more visibly than
+    // before: one empties the gated rows, the other shows them all as
+    // still-loading.
     const h = await openCommandsWith([]);
+
     const badges = statusBadges(h).map((n) => n._textContent);
-    t.isTrue(badges.length > 0, 'sanity: rows rendered');
+    t.isTrue(badges.length > 0, 'sanity: the UNGATED commands still render -- an empty list must not blank the whole screen');
+    t.equals(
+        badges.filter((b) => b === 'Still loading…').length, 0,
+        'an explicitly empty list is an ANSWER, not a missing one -- nothing may read as still loading'
+    );
+
+    // The gated commands are gone, which is what "off" now looks like.
+    t.equals(
+        findByText(h.getRoot(), '/k9nosehunt [stop]').length, 0,
+        'a gated command resolves to off against an empty list, and an off command is hidden'
+    );
+
+    // And the contrast with the absent case, asserted in the same test so
+    // the two can never quietly converge.
+    const absent = await openCommandsWith(undefined);
+    const absentBadges = statusBadges(absent).map((n) => n._textContent);
     t.isTrue(
-        badges.indexOf('Disabled server-wide') !== -1,
-        'an explicitly empty list still resolves gated commands to off, exactly as before'
+        absentBadges.indexOf('Still loading…') !== -1,
+        'an ABSENT list still reads as unknown, never as off -- so it hides nothing'
+    );
+    t.isTrue(
+        statusBadges(absent).length > badges.length,
+        'and therefore still lists the gated commands the empty-list case hid'
     );
 });
 

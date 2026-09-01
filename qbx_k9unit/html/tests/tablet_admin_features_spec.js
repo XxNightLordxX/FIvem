@@ -93,7 +93,7 @@ t.test('ticking a capability checkbox fires tablet:grantPermission with the righ
     t.equals(summaryCalls, 2, 'person summary refreshed after granting');
 });
 
-t.test('a globally-disabled feature renders NO controls, only a status note -- never a button that would silently do nothing', async () => {
+t.test('a globally-disabled feature is not listed at all -- the strongest possible form of "no control that would silently do nothing"', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({
             'tablet:requestPersonFeatures': () => ({
@@ -107,17 +107,46 @@ t.test('a globally-disabled feature renders NO controls, only a status note -- n
     });
     await openPersonScreen(h);
 
-    t.isTrue(findByText(h.getRoot(), 'Camera Feed PiP').length >= 1);
-    t.isTrue(findByText(h.getRoot(), 'Disabled server-wide').length >= 1, 'status note shown');
+    // BEHAVIOUR CHANGED 2026-09-01 (owner: "if something is turned off in
+    // the config nothing on the tablet shows up"). This used to assert the
+    // row rendered with a 'Disabled server-wide' note and an empty actions
+    // cell. The property it was really protecting -- never offer a control
+    // that would silently do nothing -- is now satisfied outright: a
+    // feature switched off server-wide is not grantable, blockable or
+    // earnable, so it is dropped from this list entirely. See
+    // withoutGloballyDisabled() in html/tablet.js. Runtime Control remains
+    // the one screen that still shows off features, which is where they are
+    // switched back on.
+    t.equals(findByText(h.getRoot(), 'Camera Feed PiP').length, 0, 'the globally-off feature is not listed');
+    t.equals(findByText(h.getRoot(), 'Disabled server-wide').length, 0, 'and there is no badge for it either -- the row is simply gone');
 
-    // Scoped to the feature matrix's own actions cell -- the page ALSO
+    // Scoped to the feature matrix's own actions cells -- the page ALSO
     // renders a Capabilities section with its own Grant buttons for the
     // three un-held admin capabilities, which is unrelated and must not be
     // confused with this feature row's (lack of) controls.
     const featureActionsCells = findAll(h.getRoot(), (n) => n.tagName === 'td' && n.classList && n.classList.contains('k9tablet-feature-actions'));
-    t.equals(featureActionsCells.length, 1);
-    t.equals(findByText(featureActionsCells[0], 'Block').length, 0, 'no Block control for a globally-off feature');
-    t.equals(findByText(featureActionsCells[0], 'Grant').length, 0, 'no Grant control either');
+    t.equals(featureActionsCells.length, 0, 'no feature row, therefore no actions cell, therefore no control that could do nothing');
+});
+
+t.test('CONTROL: an ENABLED feature in the same position is still listed with its controls -- hiding is scoped to off, not to everything', async () => {
+    // Without this, the test above would pass just as well against a change
+    // that broke the abilities table entirely.
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestPersonFeatures': () => ({
+                ok: true,
+                target: { citizenid: 'TARGET1', name: 'K9 Rex' },
+                features: [
+                    { key: 'CameraFeedPiP', label: 'Camera Feed PiP', category: null, globallyEnabled: true, requiresGrant: false, granted: false, blocked: false, state: 'available' },
+                ],
+            }),
+        })),
+    });
+    await openPersonScreen(h);
+
+    t.isTrue(findByText(h.getRoot(), 'Camera Feed PiP').length >= 1, 'an on feature is listed');
+    const featureActionsCells = findAll(h.getRoot(), (n) => n.tagName === 'td' && n.classList && n.classList.contains('k9tablet-feature-actions'));
+    t.equals(featureActionsCells.length, 1, 'with its actions cell');
 });
 
 t.test('Block and Grant/Revoke are two INDEPENDENT controls on the same feature row -- Block is offered even when the feature is allowed by default (no grant needed)', async () => {

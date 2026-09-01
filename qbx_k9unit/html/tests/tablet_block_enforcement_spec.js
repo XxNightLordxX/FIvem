@@ -198,7 +198,7 @@ t.test('a feature that already has a stored block row (feature.blocked=true) but
     t.equals(findByText(h.getRoot(), 'Blocked').length, 1);
 });
 
-t.test('a globally-disabled feature still renders exactly one blank Block Effect cell (column count stays consistent) and no block badge at all', async () => {
+t.test('a globally-disabled feature renders no row at all, so no Block Effect cell and no block badge', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({
             'tablet:requestPersonFeatures': () => ({
@@ -212,8 +212,35 @@ t.test('a globally-disabled feature still renders exactly one blank Block Effect
     });
     await openPersonScreen(h);
 
-    t.equals(findByClass(h.getRoot(), 'k9tablet-block-effect').length, 1, 'one Block Effect cell rendered for the one row');
-    t.equals(findByClass(h.getRoot(), 'k9tablet-block-badge').length, 0, 'no badge rendered -- moot when the feature is off entirely');
+    // BEHAVIOUR CHANGED 2026-09-01 (owner: "if something is turned off in
+    // the config nothing on the tablet shows up"). This used to assert one
+    // blank Block Effect cell, to prove the column count stayed consistent
+    // for a globally-off row. There is no such row any more --
+    // withoutGloballyDisabled() drops it before the table is built -- so
+    // column consistency is moot here and is covered by every other row in
+    // this file. What still matters, and is asserted, is that nothing about
+    // a switched-off feature leaks onto this screen.
+    t.equals(findByClass(h.getRoot(), 'k9tablet-block-effect').length, 0, 'no Block Effect cell -- there is no row');
+    t.equals(findByClass(h.getRoot(), 'k9tablet-block-badge').length, 0, 'and no badge either');
+    t.equals(findByText(h.getRoot(), 'Camera Feed PiP').length, 0, 'the feature is not named anywhere on the screen');
+});
+
+t.test('CONTROL: the same feature ENABLED does render its Block Effect cell -- the row machinery is intact, only off features are dropped', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestPersonFeatures': () => ({
+                ok: true,
+                target: { citizenid: 'TARGET1', name: 'K9 Rex' },
+                features: [
+                    { key: 'CameraFeedPiP', label: 'Camera Feed PiP', category: null, globallyEnabled: true, requiresGrant: false, granted: false, blocked: false, state: 'available', blockEnforcement: 'not_enforceable' },
+                ],
+            }),
+        })),
+    });
+    await openPersonScreen(h);
+
+    t.equals(findByClass(h.getRoot(), 'k9tablet-block-effect').length, 1, 'one Block Effect cell for the one on feature');
+    t.isTrue(findByText(h.getRoot(), 'Camera Feed PiP').length >= 1, 'and the feature is listed');
 });
 
 t.run();

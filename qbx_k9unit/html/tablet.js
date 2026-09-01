@@ -5223,8 +5223,16 @@
         // bare input could not say what it was hiding, which on a list this
         // long is the difference between "there is no such command" and
         // "my filter is still on from a minute ago".
+        // Server-disabled commands are excluded from BOTH the count and the
+        // rows below -- see commandReferenceIsVisible(). `visibleTotal` is
+        // what the filter readout reports as its denominator, so "Showing 3
+        // of 28" counts what this server actually has, never a total that
+        // includes commands nobody here can ever run.
+        var visibleTotal = 0;
         var shownCount = 0;
         for (var pre = 0; pre < COMMAND_REFERENCE.length; pre++) {
+            if (!commandReferenceIsVisible(COMMAND_REFERENCE[pre])) continue;
+            visibleTotal++;
             if (commandReferenceMatchesQuery(COMMAND_REFERENCE[pre], query)) shownCount++;
         }
 
@@ -5233,7 +5241,7 @@
             labelText: S('cmdref_filter_label'),
             placeholder: S('cmdref_search_placeholder'),
             value: state.commandReferenceQuery,
-            total: COMMAND_REFERENCE.length,
+            total: visibleTotal,
             shown: shownCount,
             onChange: function (v) {
                 state.commandReferenceQuery = v;
@@ -5251,9 +5259,10 @@
             for (var i = 0; i < COMMAND_REFERENCE.length; i++) {
                 var entry = COMMAND_REFERENCE[i];
                 if (entry.category !== category.key) continue;
-                // The SAME predicate the count above uses -- deliberately
-                // not a second copy of the haystack expression, which is
-                // how a readout and the rows it describes drift apart.
+                // The SAME two predicates the counts above use --
+                // deliberately not a second copy of either, which is how a
+                // readout and the rows it describes drift apart.
+                if (!commandReferenceIsVisible(entry)) continue;
                 if (!commandReferenceMatchesQuery(entry, query)) continue;
                 rows.push(entry);
             }
@@ -5310,6 +5319,49 @@
      */
     function commandReferenceMatchesQuery(entry, query) {
         if (!query || query.length === 0) return true;
+        return commandReferenceHaystack(entry).indexOf(query) !== -1;
+    }
+
+    /**
+     * Should this command appear on the reference at all? (2026-09-01,
+     * owner: "make it where if something is turned off in the config
+     * nothing on the tablet shows up".)
+     *
+     * A command whose gated feature is switched off server-wide cannot be
+     * run by anyone, in any circumstance, until an admin turns the feature
+     * back on. Listing it with a "Disabled server-wide" badge described a
+     * capability nobody on this server has -- see withoutGloballyDisabled()
+     * for the same reasoning applied to the two ability lists.
+     *
+     * ONLY 'global_off' hides a row. Every other status stays listed, and
+     * that is the point of this screen: 'not_certified' and
+     * 'insufficient_authorization' are exactly what a handler browsing the
+     * list should see, because they say what there is to go and earn. This
+     * screen's own header calls that out -- "never hidden for a viewer who
+     * cannot use it... that is more useful than hiding it, because it tells
+     * them what to go earn". A globally-off feature is the one case where
+     * there is nothing to earn.
+     *
+     * 'unknown' also stays listed, deliberately. While the viewer's record
+     * is still resolving every gate answers 'unknown', and treating that as
+     * "off" would empty the entire screen for a moment on every open -- the
+     * same "not loaded is not turned off" confusion this file has already
+     * been bitten by once.
+     * @param {{gate:object}} entry
+     * @returns {boolean}
+     */
+    function commandReferenceIsVisible(entry) {
+        return commandReferenceStatus(entry.gate) !== 'global_off';
+    }
+
+    /**
+     * The searchable text for one entry -- split out of
+     * commandReferenceMatchesQuery() so the filter and any future reader
+     * share one definition rather than each building their own.
+     * @param {{command:string, category:string, usageKey:string, doesKey:string, needsKey:string}} entry
+     * @returns {string} lower-cased
+     */
+    function commandReferenceHaystack(entry) {
         var categoryLabel = '';
         for (var c = 0; c < COMMAND_REFERENCE_CATEGORIES.length; c++) {
             if (COMMAND_REFERENCE_CATEGORIES[c].key === entry.category) {
@@ -5317,11 +5369,10 @@
                 break;
             }
         }
-        var haystack = (
+        return (
             entry.command + ' ' + S(entry.usageKey) + ' ' + S(entry.doesKey) + ' ' +
             S(entry.needsKey) + ' ' + categoryLabel
         ).toLowerCase();
-        return haystack.indexOf(query) !== -1;
     }
 
     /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object, defaultKeybind?:string, defaultKeybindConfigurable?:boolean}} entry */
@@ -6387,9 +6438,57 @@
         return buckets;
     }
 
+    /**
+     * HIDE WHAT THE SERVER HAS SWITCHED OFF (2026-09-01, owner's own words:
+     * "make it where if something is turned off in the config nothing on
+     * the tablet shows up").
+     *
+     * A feature whose Config.Features key is false is not a thing you can
+     * be granted, earn, or be blocked from -- it does not exist on this
+     * server. Listing it with a "Disabled server-wide" badge told every
+     * reader about a capability they can never have, on every screen,
+     * forever. On a server that switches a few families off, that is a
+     * large fraction of every list being noise.
+     *
+     * THE ONE PLACE THIS MUST NOT APPLY is Runtime Control. That screen is
+     * where high command turns features on and off, so hiding the off ones
+     * there would make them unreachable -- you could switch a feature off
+     * and then have no way to ever switch it back on. It reads its own
+     * separate tablet:runtimeListFeatures payload and never calls this, so
+     * that screen keeps showing everything, which is exactly right: it is
+     * the inventory, these are the in-use lists.
+     *
+     * Deliberately keyed on 'global_off' ONLY. 'blocked',
+     * 'not_certified' and 'requires_grant_missing' all stay visible --
+     * those describe a real feature this person could have, and hiding
+     * them would answer "why can't I do X" with silence instead of a
+     * reason. 'unknown' also stays: a record that has not resolved yet must
+     * never be mistaken for a server that has switched everything off (see
+     * commandReferenceStatus()'s own note on exactly that bug).
+     * @param {Array<object>} features
+     * @returns {Array<object>} the same rows, minus the ones this server has off
+     */
+    function withoutGloballyDisabled(features) {
+        var out = [];
+        for (var i = 0; i < features.length; i++) {
+            var f = features[i];
+            if (!f) continue;
+            // Two independent ways a row can say "off server-wide", because
+            // the two payloads differ: myFeatures carries only `state`,
+            // while the richer person-features rows also carry an explicit
+            // `globallyEnabled` boolean. Checking both means one helper
+            // serves both lists without either caller having to know which
+            // shape it holds.
+            if (f.state === 'global_off') continue;
+            if (f.globallyEnabled === false) continue;
+            out.push(f);
+        }
+        return out;
+    }
+
     function buildMyFeaturesList() {
         var wrap = mk('div', { class: 'k9tablet-feature-list' });
-        var features = (state.myRecord && state.myRecord.myFeatures) || [];
+        var features = withoutGloballyDisabled((state.myRecord && state.myRecord.myFeatures) || []);
         if (features.length === 0) {
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('no_abilities') }));
             return wrap;
@@ -8158,7 +8257,12 @@
             return wrap;
         }
 
-        var all = state.personFeatures.features || [];
+        // Server-disabled features are dropped before anything else here --
+        // see withoutGloballyDisabled(). They are not grantable, blockable
+        // or earnable, so on an admin screen whose whole purpose is those
+        // three actions they are rows that can never be acted on. Runtime
+        // Control remains the one screen that shows them.
+        var all = withoutGloballyDisabled(state.personFeatures.features || []);
 
         // The person genuinely has nothing to show. Say that, and do not
         // render a filter for an empty list -- there is nothing to narrow.
