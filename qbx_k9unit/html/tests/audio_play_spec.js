@@ -53,8 +53,15 @@ t.test('audio:play against a missing file (the live 404 path) degrades to silenc
     const h = createHarness();
     h.postMessage('audio:play', { id: 2, sound: MISSING_SOUND_KEY, gain: 1, loop: false });
 
-    // Let the real (async) fetch/404 round-trip fully settle.
-    await new Promise((r) => setTimeout(r, 200));
+    // Wait for the real (async) fetch/404 round-trip to ACTUALLY settle,
+    // rather than sleeping a fixed 200ms and hoping that covered it. This
+    // assertion is about something never happening, so there is no state
+    // change to poll for with waitFor -- the only sound basis for "no
+    // source was created" is "all the async work is finished". The default
+    // fetchImpl is a real fs.readFile, so its duration depends on disk and
+    // machine load; a fixed sleep here is a test that can fail without the
+    // code being broken.
+    await h.settleFetches();
 
     const ctx = h.getAudioContextInstance();
     t.isDefined(ctx, 'AudioContext IS still constructed (ensureAudioContext runs before the fetch resolves)');
@@ -70,7 +77,16 @@ t.test('every real sound key now decodes and plays -- the shipped asset set is c
     for (const sound of ['bark', 'bark_alert', 'bark_aggressive', 'bark_calm', 'growl_ambient']) {
         const h = createHarness();
         h.postMessage('audio:play', { id: 100, sound, gain: 1, loop: false });
-        await new Promise((r) => setTimeout(r, 200));
+        // Poll for the source to start instead of sleeping a fixed 200ms.
+        // This is a positive assertion, so waitFor is the right tool: it
+        // returns the instant the load lands (usually far under 200ms) and
+        // still fails with a clear message if it genuinely never does,
+        // instead of silently depending on real fs.readFile I/O beating an
+        // arbitrary deadline on a loaded machine.
+        await waitFor(() => {
+            const c = h.getAudioContextInstance();
+            return !!(c && c._lastCreatedSource && c._lastCreatedSource._started);
+        }, { timeoutMs: 3000, label: `${sound}.ogg to load, decode and start playing` });
         const ctx = h.getAudioContextInstance();
         t.isDefined(ctx._lastCreatedSource, `${sound}.ogg must reach a playing source`);
         t.isTrue(ctx._lastCreatedSource._started, `${sound}.ogg's source must actually be started`);

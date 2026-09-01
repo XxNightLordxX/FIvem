@@ -216,7 +216,13 @@ t.test('LEAK FIX: an audio:stop that arrives AFTER its id\'s own audio:play alre
     // simulated seconds after its own async load finished), not the
     // legitimate in-flight race already covered by audio_play_spec.js's
     // own 'RACE:' test.
-    await new Promise((r) => setTimeout(r, 300));
+    //
+    // Awaiting the real fetch promises, not a fixed 300ms sleep: these are
+    // N real fs.readFile round-trips, so how long they take is a property
+    // of the machine, not of the code under test. If the sleep ever came up
+    // short the stops would land DURING the loads -- quietly turning this
+    // into the in-flight race case it explicitly says it is not testing.
+    await h.settleFetches();
 
     for (let id = 1; id <= N; id++) {
         h.postMessage('audio:stop', { id });
@@ -248,7 +254,9 @@ t.test('LEAK FIX: the SAME check holds for the very first and very last id of a 
     for (let id = 1; id <= N; id++) {
         h.postMessage('audio:play', { id, sound: MISSING_SOUND_KEY, gain: 1, loop: true });
     }
-    await new Promise((r) => setTimeout(r, 300));
+    // Real fetch completion, not a fixed sleep -- see the sibling test above
+    // for why this must be the "already resolved" case and not a race.
+    await h.settleFetches();
     for (let id = 1; id <= N; id++) {
         h.postMessage('audio:stop', { id });
     }

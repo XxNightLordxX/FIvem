@@ -260,7 +260,49 @@ function createHarness(options) {
     function fetchStub(url, init) {
         const call = { url, init };
         fetchCalls.push(call);
-        return Promise.resolve().then(() => fetchImpl(url, init));
+        const p = Promise.resolve().then(() => fetchImpl(url, init));
+        // Retain the in-flight promise so settleFetches() below can await
+        // the REAL completion of this call instead of a spec guessing at a
+        // sleep long enough to cover it. Swallow the rejection here only so
+        // an expected failure path (a 404'd sound, an unconfigured url) does
+        // not surface as an unhandled rejection just because we kept a
+        // second reference to the promise; the original `p` returned to the
+        // caller keeps its rejection intact for app.js to handle.
+        call.settled = p.then(() => undefined, () => undefined);
+        return p;
+    }
+
+    /**
+     * Resolves once every fetch this harness has handed out has actually
+     * settled, plus a drain for the promise chain app.js hangs off it.
+     *
+     * WHY THIS EXISTS: the default fetchImpl is backed by a real
+     * fs.readFile (see realSoundsFetch), so how long a sound takes to load
+     * depends on actual disk I/O and on how loaded the machine is. Specs
+     * used to cover that with a fixed `setTimeout(r, 200)` -- a guess, and
+     * on a busy box an occasionally wrong one, which is a test that fails
+     * without the code being broken. Awaiting the real promises is exact:
+     * everything downstream of the fetch (arrayBuffer, decodeAudioData) is
+     * a resolved promise in this harness, so once the fetches are done a
+     * short microtask drain settles the rest.
+     *
+     * Note this is deliberately NOT a substitute for waitFor() when a spec
+     * is asserting that something eventually becomes true -- use waitFor
+     * for that. This is for the harder case: asserting that something never
+     * happens, where there is no state change to poll for and the only
+     * sound basis for "it didn't happen" is "all the async work finished".
+     * @returns {Promise<void>}
+     */
+    async function settleFetches() {
+        // A settling fetch can start another (app.js chaining a second
+        // load), so loop until the set stops growing rather than awaiting
+        // one snapshot of it.
+        let seen = -1;
+        while (fetchCalls.length !== seen) {
+            seen = fetchCalls.length;
+            await Promise.all(fetchCalls.map((c) => c.settled));
+            for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r));
+        }
     }
 
     const AudioContextCtor = Object.prototype.hasOwnProperty.call(options, 'AudioContextCtor')
@@ -416,6 +458,7 @@ function createHarness(options) {
         getOnboardingHint,
         getAudioContextInstance,
         fetchCalls,
+        settleFetches,
         AudioContextCtor,
     };
 }
