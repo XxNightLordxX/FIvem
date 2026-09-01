@@ -431,6 +431,99 @@ body {
     font-size: 13px;
 }
 
+/*
+    THE ABILITY FILTER AND ITS SECTION HEADINGS (2026-09-01, owner: "better
+    section management ... everything is diffrentied better", and earlier
+    "there is still search boxes in the ui please change it where its boxes
+    i check").
+
+    See html/tablet.js's buildPersonFeaturesSection() for the full reasoning.
+    In short: the checkboxes were always there, but a bare input floating
+    above 57 undifferentiated rows read as "type here to find things"
+    rather than "scroll and tick what you want". These rules give the
+    filter a visible label and a state readout, and give the table real
+    section bands so scanning replaces searching.
+*/
+.k9tablet-feature-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.k9tablet-feature-filter-label {
+    /* Takes the whole first line so the label reads as a caption for the
+       control below it, not as a word sitting beside it. */
+    flex: 1 0 100%;
+    font-size: 12px;
+    color: #9aa1ad;
+}
+
+.k9tablet-feature-filter-input {
+    /* Deliberately NOT full width. A filter that spans the panel looks
+       like the primary input for the screen; one that is visibly a
+       secondary control does not. */
+    flex: 0 1 320px;
+}
+
+.k9tablet-feature-filter-count {
+    font-size: 12px;
+    color: var(--k9tablet-accent, #f59e0b);
+    font-variant-numeric: tabular-nums;
+}
+
+.k9tablet-btn--small {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+/*
+    A section band INSIDE the abilities table -- a full-width th spanning
+    every column, so the columns below it stay aligned with the ones above
+    (the reason this screen is a table at all, where My Record's own list
+    is not).
+*/
+.k9tablet-feature-group-row-cell {
+    text-align: left;
+    padding: 12px 10px 6px 10px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    /* The accent stripe is what separates one band from the next at a
+       glance, without adding a second border colour to the table. */
+    border-left: 3px solid var(--k9tablet-primary, #2563eb);
+}
+
+.k9tablet-feature-group-row-label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--k9tablet-text, #f2f2f2);
+}
+
+.k9tablet-feature-group-row-count {
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #9aa1ad;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+/*
+    Scent keeps the same colour-forward accent it already has on My Record
+    (.k9tablet-feature-group--scent), so the two screens agree about which
+    domain looks special. Every other domain has no rule here and simply
+    uses the default band above -- adding one later is a rule, never a new
+    branch in the JS.
+*/
+.k9tablet-feature-group-row-cell--scent {
+    border-left-color: var(--k9tablet-accent, #f59e0b);
+}
+
 .k9tablet-btn {
     background: var(--k9tablet-primary, #2a3f56);
     border: 1px solid rgba(255, 255, 255, 0.12);

@@ -928,6 +928,9 @@ local TABLET_STRING_KEYS = {
     -- full mechanism these five keys support.
     'feature_group_scent_heading', 'feature_group_scent_hint', 'feature_group_vehicle_heading',
     'feature_group_other_heading', 'feature_vehicle_sentence_template',
+    'feature_filter_label', 'feature_filter_showing_template',
+    'feature_filter_clear_label', 'feature_filter_no_matches',
+    'feature_group_row_count_template',
     -- FULL DOMAIN GROUPING (owner-directed, 2026-08-26: "same with
     -- features and sub features") -- one heading per remaining
     -- server/tablet.lua FEATURE_DOMAINS group; see html/tablet.js's own

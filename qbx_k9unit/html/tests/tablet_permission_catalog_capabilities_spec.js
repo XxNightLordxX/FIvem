@@ -290,6 +290,20 @@ t.test('SHARED RATE LIMIT: after one checkbox mutation fires, every capability c
             'tablet:requestPersonSummary': () => ({ ok: true, target: { citizenid: 'TARGET1', name: 'K9 Rex' }, certifications: [], xp: 500, tierLabel: 'Trained K9', permissions: ['k9.access'] }),
             'tablet:permKeysList': () => ({ ok: true, keys: FOUR_SHIPPED_KEYS_CATALOG }),
             'tablet:grantPermission': () => ({ ok: true }),
+            // This one test needs the person to have at least one ability.
+            // Everywhere else in this file `features: []` is right -- the
+            // subject is capabilities, not abilities -- but the ability
+            // FILTER is this test's render lever (see below), and as of
+            // 2026-09-01 that filter is deliberately not rendered for an
+            // empty list: there is nothing to narrow, so offering a control
+            // to narrow it is exactly the kind of pointless input the
+            // owner asked to be rid of. A person with no abilities at all
+            // is also not the realistic case for this screen.
+            'tablet:requestPersonFeatures': () => ({
+                ok: true,
+                target: { citizenid: 'TARGET1', name: 'K9 Rex' },
+                features: [{ key: 'k9_bark', label: 'Bark', category: 'combat', state: 'available', globallyEnabled: true }],
+            }),
         })),
     });
     await openPersonScreen(h);
@@ -321,7 +335,7 @@ t.test('SHARED RATE LIMIT: after one checkbox mutation fires, every capability c
     // coincidence" -- the exact thing this test exists to prove.
     await new Promise((r) => setTimeout(r, 1700)); // past PERMISSION_ACTION_MIN_INTERVAL_MS (1600ms)
     const featureSearch = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('placeholder') === 'Search abilities...')[0];
-    t.isDefined(featureSearch, 'sanity: the unrelated feature search box is present to force a render');
+    t.isDefined(featureSearch, 'sanity: the unrelated ability filter is present to force a render (this test gives the person one ability so that it is -- see the handler override above)');
     featureSearch.typeValue('x');
     featureSearch.typeValue('');
 

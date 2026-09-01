@@ -828,6 +828,15 @@
         feature_group_scent_hint: 'These abilities help your K9 follow a scent trail, and pick up on blood or gunpowder.',
         feature_group_vehicle_heading: 'Vehicles',
         feature_group_other_heading: 'Other Abilities',
+        // THE ABILITY FILTER (2026-09-01) -- see buildPersonFeaturesSection()
+        // for why this stopped being one bare input with only a placeholder
+        // to explain it. Every string here exists to say, on screen, what
+        // that placeholder alone was leaving the operator to infer.
+        feature_filter_label: 'Filter this list (optional -- you can also just scroll and tick)',
+        feature_filter_showing_template: 'Showing {count} of {total}',
+        feature_filter_clear_label: 'Clear filter',
+        feature_filter_no_matches: 'No abilities match that filter. Clear it to see the full list again -- this person\'s abilities are still all there.',
+        feature_group_row_count_template: '{count}',
         feature_vehicle_sentence_template: '{feature} is currently: {state}.',
         // FULL DOMAIN GROUPING (owner-directed, 2026-08-26: "same with
         // features and sub features") -- one heading per
@@ -7925,16 +7934,45 @@
         return row;
     }
 
+    /**
+     * SECTIONED, NOT A WALL (2026-09-01, owner's own words: "update
+     * everything where its easier to understand better section management
+     * etc and i want it where everything is super easy to understand and
+     * everything is diffrentied better", and earlier "there is still
+     * search boxes in the ui please change it where its boxes i check").
+     *
+     * This section already rendered a CHECKBOX per ability -- the boxes the
+     * owner wanted were there. What made it read as "a search box" was the
+     * shape around them: one flat, unbroken table of every Config.Features
+     * key (57 rows on a default server) with a bare text input sitting on
+     * top of it and nothing else. A bare input above a long list looks like
+     * the thing you are supposed to use; the fact that it was only an
+     * OPTIONAL filter over a list you could equally just scroll and tick
+     * was never stated anywhere on screen.
+     *
+     * Two changes, no behaviour change to any grant/revoke path:
+     *
+     * 1. The rows are grouped into the SAME twelve domain sections, in the
+     *    SAME declared order, that the My Record screen has always used
+     *    (FEATURE_DOMAIN_ORDER / groupFeaturesByDomain / the
+     *    feature_group_*_heading strings). Those two screens list the same
+     *    abilities, so showing them in two different shapes -- sectioned
+     *    there, one flat wall here -- was itself a thing to have to learn.
+     *    Now scanning to the right section replaces having to search, which
+     *    is what makes the checkboxes the obvious interaction.
+     *
+     * 2. The filter is labelled as a filter, is explicitly marked optional,
+     *    and reports what it is currently doing ("Showing 6 of 57") with a
+     *    Clear button beside it whenever it is narrowing anything.
+     *
+     * One real bug fixed on the way: filtering down to zero matches printed
+     * `no_abilities` -- "This person has no abilities" -- which is a
+     * statement about the PERSON, not about the filter, and is false
+     * whenever the unfiltered list is non-empty. A filter that finds
+     * nothing now says so, and offers the way back.
+     */
     function buildPersonFeaturesSection() {
         var wrap = mk('div', { class: 'k9tablet-feature-section' });
-
-        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_features_placeholder') } });
-        search.value = state.personFeatureQuery;
-        search.addEventListener('input', function (e) {
-            state.personFeatureQuery = e.target.value;
-            render();
-        });
-        wrap.appendChild(search);
 
         if (state.personFeaturesLoading && !state.personFeatures) {
             wrap.appendChild(mk('p', { text: S('loading') }));
@@ -7951,33 +7989,132 @@
         }
 
         var all = state.personFeatures.features || [];
+
+        // The person genuinely has nothing to show. Say that, and do not
+        // render a filter for an empty list -- there is nothing to narrow.
+        if (all.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('no_abilities') }));
+            return wrap;
+        }
+
         var q = (state.personFeatureQuery || '').toLowerCase();
         var filtered = q.length === 0 ? all : all.filter(function (f) {
             var haystack = (featureLabel(f) + ' ' + (f.key || '') + ' ' + (f.category || '')).toLowerCase();
             return haystack.indexOf(q) !== -1;
         });
 
+        wrap.appendChild(buildPersonFeatureFilter(all.length, filtered.length));
+
+        // Filter matched nothing. This is about the FILTER, never about the
+        // person -- see this function's own header.
         if (filtered.length === 0) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('no_abilities') }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('feature_filter_no_matches') }));
+            wrap.appendChild(mkButton(S('feature_filter_clear_label'), 'k9tablet-btn', function () {
+                state.personFeatureQuery = '';
+                render();
+            }));
             return wrap;
         }
 
         var table = mk('table', { class: 'k9tablet-table k9tablet-feature-table' });
         var thead = mk('thead');
         var headRow = mk('tr');
-        [S('feature_column'), S('status_column'), S('column_block_effect'), S('column_actions')].forEach(function (h) {
+        var columns = [S('feature_column'), S('status_column'), S('column_block_effect'), S('column_actions')];
+        columns.forEach(function (h) {
             headRow.appendChild(mk('th', { text: h }));
         });
         thead.appendChild(headRow);
         table.appendChild(thead);
 
         var tbody = mk('tbody');
-        for (var i = 0; i < filtered.length; i++) {
-            tbody.appendChild(buildPersonFeatureRow(filtered[i]));
-        }
+        var grouped = groupFeaturesByDomain(filtered);
+
+        // ONE PASS OVER THE SAME STABLE, DECLARED ORDER buildMyFeaturesList()
+        // walks, with 'other' last. A domain with no matching rows renders
+        // no heading at all, so filtering collapses the sections down to
+        // only the ones that still have something in them rather than
+        // leaving a column of empty labels.
+        var domains = FEATURE_DOMAIN_ORDER.concat(['other']);
+        domains.forEach(function (domain) {
+            var rows = grouped[domain];
+            if (!rows || rows.length === 0) return;
+
+            // A header ROW inside the one table, not a separate table per
+            // section: the columns stay aligned all the way down, which is
+            // the whole reason this screen is a table and My Record's own
+            // list is not.
+            var headingTr = mk('tr', { class: 'k9tablet-feature-group-row' });
+            var headingTh = mk('th', {
+                class: 'k9tablet-feature-group-row-cell k9tablet-feature-group-row-cell--' + domain,
+                attrs: { colspan: String(columns.length), scope: 'colgroup' },
+            });
+            headingTh.appendChild(mk('span', {
+                class: 'k9tablet-feature-group-row-label',
+                text: domain === 'other' ? S('feature_group_other_heading') : S(featureGroupHeadingKey(domain)),
+            }));
+            // The per-section count is what makes "did my filter hide
+            // something in here" answerable without counting rows by eye.
+            headingTh.appendChild(mk('span', {
+                class: 'k9tablet-feature-group-row-count',
+                text: formatTemplate(S('feature_group_row_count_template'), { count: rows.length }),
+            }));
+            headingTr.appendChild(headingTh);
+            tbody.appendChild(headingTr);
+
+            for (var i = 0; i < rows.length; i++) {
+                tbody.appendChild(buildPersonFeatureRow(rows[i]));
+            }
+        });
+
         table.appendChild(tbody);
         wrap.appendChild(table);
         return wrap;
+    }
+
+    /**
+     * The filter control for buildPersonFeaturesSection() -- a labelled,
+     * explicitly optional narrowing tool, not the primary interaction.
+     * See that function's own header for why this stopped being a bare
+     * input with a placeholder.
+     * @param {number} totalCount every ability on this person's record
+     * @param {number} shownCount how many survive the current filter
+     * @returns {HTMLElement}
+     */
+    function buildPersonFeatureFilter(totalCount, shownCount) {
+        var bar = mk('div', { class: 'k9tablet-feature-filter' });
+
+        var inputId = 'k9tablet-person-feature-filter';
+        bar.appendChild(mk('label', {
+            class: 'k9tablet-feature-filter-label',
+            text: S('feature_filter_label'),
+            attrs: { for: inputId },
+        }));
+
+        var search = mk('input', {
+            class: 'k9tablet-search k9tablet-feature-filter-input',
+            attrs: { type: 'text', id: inputId, placeholder: S('search_features_placeholder') },
+        });
+        search.value = state.personFeatureQuery;
+        search.addEventListener('input', function (e) {
+            state.personFeatureQuery = e.target.value;
+            render();
+        });
+        bar.appendChild(search);
+
+        // Only ever says something when the filter is actually narrowing.
+        // An unfiltered list showing all 57 of 57 does not need telling.
+        if (shownCount !== totalCount) {
+            bar.appendChild(mk('span', {
+                class: 'k9tablet-feature-filter-count',
+                text: formatTemplate(S('feature_filter_showing_template'), { count: shownCount, total: totalCount }),
+            }));
+            bar.appendChild(mkButton(S('feature_filter_clear_label'), 'k9tablet-btn k9tablet-btn--small', function () {
+                state.personFeatureQuery = '';
+                render();
+            }));
+        }
+
+        return bar;
     }
 
     /** @param {{category?:string}} feature @returns {string?} name-cell
