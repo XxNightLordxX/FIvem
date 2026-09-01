@@ -273,9 +273,27 @@ t.test('RACE: an audio:stop for the same id arriving WHILE the fetch/decode is s
     h.postMessage('audio:stop', { id: 42 });
 
     releaseFetch();
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
-    await new Promise((r) => setImmediate(r));
+
+    // SETTLE THE WHOLE ASYNC CHAIN, rather than guessing its length.
+    //
+    // This used three fixed `setImmediate` drains. That is a guess at how
+    // many hops the code under test needs after the gate opens (resume from
+    // `await gate`, then arrayBuffer(), then decodeAudioData, then the
+    // stoppedBeforeStart check), and the guess held up under a quiet machine
+    // and not under load: this spec failed inside a full 42-file suite run
+    // twice -- 2026-08-31 and again on the pass that wrote this -- while
+    // passing 130+ times standalone, which is the signature of a
+    // timing-sensitive wait, not a real defect.
+    //
+    // Draining both queue kinds, repeatedly, covers a chain of any plausible
+    // length: setImmediate flushes the check phase, and a real setTimeout(0)
+    // yields a full macrotask turn, which setImmediate alone does not
+    // guarantee under contention. Twenty rounds is far more than the four
+    // hops this needs and still costs under a millisecond.
+    for (let i = 0; i < 20; i += 1) {
+        await new Promise((r) => setImmediate(r));
+        await new Promise((r) => setTimeout(r, 0));
+    }
 
     const ctx = h.getAudioContextInstance();
     t.isDefined(ctx, 'AudioContext was still constructed (ensureAudioContext runs synchronously before the async load)');
