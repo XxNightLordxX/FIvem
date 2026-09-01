@@ -148,6 +148,139 @@ t.test('DYNAMIC LIST: features rendered come entirely from tablet:runtimeListFea
     t.equals(names[1], 'ZzyzxInventedFeature');
 });
 
+// ======================================================================
+// TIER BANDS (2026-09-01) -- owner: "better section management ...
+// everything is diffrentied better", "super easy to understand".
+//
+// This table used to be one flat alphabetical list of every
+// Config.Features key -- 57 rows on a default server -- with a full copy
+// of its tier's explanation sentence repeated on every single row. The one
+// question the screen exists to answer, "which of these can I actually
+// change right now", could only be answered by reading all of them.
+//
+// It is now grouped into tier sections in SAFETY order, with the
+// explanation stated once per section on a sticky band. These tests pin
+// the grouping, the order, the once-not-57-times rule, and the fact that a
+// tier string this client has never heard of is still shown rather than
+// dropped.
+// ======================================================================
+
+/** Every tier band label on screen, in render order. */
+function tierBandLabels(h) {
+    return findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-feature-group-row-label'))
+        .map((n) => n.textContent);
+}
+
+const MIXED_TIER_FEATURES = [
+    // Deliberately NOT in tier order, and alphabetically interleaved, so
+    // neither the grouping nor the within-group sort can pass by accident.
+    { name: 'AaaProtectedThing', currentValue: true, tier: 'protected', overridden: false, protected: true },
+    { name: 'BbbLiveThing', currentValue: true, tier: 'live', overridden: false, protected: false },
+    { name: 'CccRestartThing', currentValue: false, tier: 'onstart', overridden: false, protected: false },
+    { name: 'DddLiveThing', currentValue: false, tier: 'live', overridden: false, protected: false },
+    { name: 'EeeFromTheFuture', currentValue: true, tier: 'a_tier_this_client_has_never_heard_of', overridden: false, protected: false },
+];
+
+function mixedTierHarness() {
+    return createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: MIXED_TIER_FEATURES }),
+            'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+        })),
+    });
+}
+
+t.test('TIER BANDS: the features table is sectioned by tier instead of one flat alphabetical wall', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const labels = tierBandLabels(h);
+    t.isTrue(labels.length >= 2, 'more than one band rendered -- one band would be the flat wall again');
+    t.isTrue(labels.indexOf('Live') !== -1, 'the live features got their own band');
+    t.isTrue(labels.indexOf('Protected') !== -1, 'so did the untouchable ones');
+});
+
+t.test('TIER BANDS: sections run in SAFETY order -- what you can change now first, what you can never change here last', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const labels = tierBandLabels(h);
+    // The fixture sends protected FIRST and live second; safety order must
+    // override whatever order the server happened to use.
+    t.equals(labels[0], 'Live', 'Live is first, whatever order the server sent');
+    t.equals(labels[labels.length - 1], 'Protected', 'Protected is last -- nothing here can be acted on');
+    t.isTrue(labels.indexOf('Restart Required') > labels.indexOf('Live'), 'restart-required sits after live');
+});
+
+t.test('TIER BANDS: each tier explanation is stated ONCE, not repeated on every row of that tier', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    // Two 'live' features in the fixture. Before this change that sentence
+    // rendered twice here -- and 24+ times on a real server.
+    const liveSentence = 'Takes effect immediately for every player, and can be switched back at any time.';
+    t.equals(findByText(h.getRoot(), liveSentence).length, 1, 'exactly one copy of the live tier explanation, for two live rows');
+});
+
+t.test('TIER BANDS: the explanation is still on screen without a hover -- the honesty requirement is met by the band, not dropped', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    // The rule for this screen (see buildRuntimeFeatureRow) is that the
+    // tier explanation must be readable BEFORE a toggle is pressed and
+    // never hidden behind a hover or a title attribute. Moving it to the
+    // band must not have quietly turned it into a tooltip.
+    const desc = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-runtime-tier-band-desc'))[0];
+    t.isDefined(desc, 'the explanation is a real, rendered element');
+    t.isTrue(desc.textContent.length > 0, 'with real text in it');
+    t.isNull(desc.getAttribute('title'), 'and it is not a tooltip');
+});
+
+t.test('TIER BANDS: a tier string this client has never heard of is grouped and shown, never silently dropped', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    // The real risk of bucketing by a declared order: an unrecognised tier
+    // matches no bucket and its rows vanish, so an operator has no idea the
+    // feature exists at all.
+    t.isTrue(findByText(h.getRoot(), 'EeeFromTheFuture').length >= 1, 'the unknown-tier feature is on screen');
+    t.isTrue(tierBandLabels(h).indexOf('Not Yet Classified') !== -1, 'under the same band an unclassified feature gets');
+});
+
+t.test('TIER BANDS: every feature reaches the table exactly once -- banding groups, it never filters', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    for (const f of MIXED_TIER_FEATURES) {
+        t.equals(findByText(h.getRoot(), f.name).length, 1, f.name + ' appears exactly once');
+    }
+});
+
+t.test('TIER BANDS: rows stay alphabetical WITHIN a band -- grouping is a display change, not a re-sort', async () => {
+    const h = mixedTierHarness();
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const names = findAll(h.getRoot(), (n) => n.tagName === 'td')
+        .map((n) => n.textContent)
+        .filter((tx) => tx === 'BbbLiveThing' || tx === 'DddLiveThing');
+    t.equals(names[0], 'BbbLiveThing');
+    t.equals(names[1], 'DddLiveThing');
+});
+
 t.test('empty features/tunables lists show their own empty-state notes, not a crash', async () => {
     const h = createHarness({
         fetchImpl: routeFetch(baseHandlers({

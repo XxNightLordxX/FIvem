@@ -520,6 +520,60 @@ body {
     uses the default band above -- adding one later is a rule, never a new
     branch in the JS.
 */
+/*
+    RUNTIME CONTROL TIER BANDS (2026-09-01) -- see
+    html/tablet.js's buildRuntimeFeaturesTable() for the full reasoning.
+
+    STICKY IS LOAD-BEARING HERE, not decoration. That table used to repeat
+    each tier's full explanation sentence on every one of its ~57 rows,
+    because the rule for that screen is that the explanation must be
+    visible BEFORE a toggle is pressed and never behind a hover. Stating it
+    once per section is only an improvement if it stays on screen while you
+    are inside that section -- which is what `position: sticky` buys. The
+    scroll container it sticks within is .k9tablet-screen (see its own
+    min-height:0 note above, without which nothing here scrolls at all).
+*/
+.k9tablet-runtime-tier-band-cell {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* Sticky over scrolling rows needs an OPAQUE background -- a
+       translucent one lets the rows underneath show through as they pass
+       behind it, which is worse than not sticking at all. */
+    background: #1c1f26;
+    border-left-width: 4px;
+}
+
+.k9tablet-runtime-tier-band-desc {
+    margin: 4px 0 0 0;
+    /* Normal case, not the uppercase treatment the band's own label gets:
+       this is a sentence to read, not a label to recognise. */
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
+}
+
+/*
+    The one distinction this screen is really about: can I change this now,
+    or not. Green for the tier that takes effect immediately, amber for the
+    ones that are saved but conditional, red for the two that cannot be
+    toggled from here at all.
+*/
+.k9tablet-runtime-tier-band-cell--live {
+    border-left-color: #7fd17f;
+}
+
+.k9tablet-runtime-tier-band-cell--onstart,
+.k9tablet-runtime-tier-band-cell--rawtoplevel,
+.k9tablet-runtime-tier-band-cell--clientonly {
+    border-left-color: var(--k9tablet-accent, #f59e0b);
+}
+
+.k9tablet-runtime-tier-band-cell--protected,
+.k9tablet-runtime-tier-band-cell--unaudited {
+    border-left-color: #e05c5c;
+}
+
 .k9tablet-feature-group-row-cell--scent {
     border-left-color: var(--k9tablet-accent, #f59e0b);
 }

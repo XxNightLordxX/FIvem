@@ -9774,6 +9774,52 @@
         return wrap;
     }
 
+    /**
+     * The order the tier sections are rendered in -- SAFETY ORDER, not
+     * alphabetical: what you can freely change first, what cannot be
+     * changed from here at all last, with the increasingly conditional
+     * middle in between. An operator reading top-down therefore meets the
+     * settings that will actually do something before the ones that will
+     * quietly do nothing until a restart, or nothing ever.
+     *
+     * A tier string not listed here (a newer server than this client, or
+     * an unclassified feature) falls into the SAME 'unaudited' bucket
+     * runtimeTierLabel()'s own `default:` branch already maps it to --
+     * grouped, labelled and refused, never silently dropped from the table.
+     */
+    var RUNTIME_TIER_ORDER = ['live', 'onstart', 'rawtoplevel', 'clientonly', 'unaudited', 'protected'];
+
+    /**
+     * SECTIONS BY TIER (2026-09-01, owner: "better section management ...
+     * everything is diffrentied better", "super easy to understand").
+     *
+     * This table was one flat alphabetical list of every Config.Features
+     * key -- 57 rows on a default server -- and every single row carried a
+     * full copy of its tier's explanation sentence. That is 57 long
+     * paragraphs, most of them identical to the one above them, in a panel
+     * 640px tall. The one question this screen exists to answer -- "which
+     * of these can I actually change right now?" -- could only be answered
+     * by reading every row.
+     *
+     * Grouped by tier, the sentence is stated ONCE per section instead of
+     * once per row, and the answer is the shape of the screen itself.
+     *
+     * THE HONESTY REQUIREMENT IS PRESERVED, NOT TRADED AWAY. See
+     * buildRuntimeFeatureRow()'s own note: the tier explanation must be
+     * visible BEFORE a toggle is pressed, and never hidden behind a hover
+     * or tooltip. Moving it to a section heading alone would have weakened
+     * that -- a 24-row section scrolls its own heading off screen. So the
+     * heading is sticky within the scroll container (see
+     * .k9tablet-runtime-tier-band in html/tablet.css), which keeps the
+     * sentence on screen for whichever section is being looked at: strictly
+     * more visible than before, not less. Each row also keeps its own tier
+     * badge, so a row is still self-describing when read in isolation.
+     * (I could not render this to confirm the sticky behaviour from here;
+     * if it ever fails to stick, the result is one heading above the
+     * section, which is still no worse than the per-row repetition it
+     * replaced -- it is not a case where the requirement silently breaks.)
+     * @returns {HTMLElement}
+     */
     function buildRuntimeFeaturesTable() {
         var list = sortedRuntimeFeatures();
         if (list.length === 0) {
@@ -9783,14 +9829,49 @@
         var table = mk('table', { class: 'k9tablet-table' });
         var thead = mk('thead');
         var headRow = mk('tr');
-        [S('column_name'), S('column_tier'), S('column_current_value'), S('column_actions')].forEach(function (h) {
+        var columns = [S('column_name'), S('column_tier'), S('column_current_value'), S('column_actions')];
+        columns.forEach(function (h) {
             headRow.appendChild(mk('th', { text: h }));
         });
         thead.appendChild(headRow);
         table.appendChild(thead);
 
+        // Bucket by tier, preserving sortedRuntimeFeatures()'s own stable
+        // alphabetical order WITHIN each bucket -- this is a display
+        // grouping, never a re-sort of the rows themselves.
+        var buckets = {};
+        for (var i = 0; i < list.length; i++) {
+            var tier = list[i].tier;
+            var bucket = RUNTIME_TIER_ORDER.indexOf(tier) !== -1 ? tier : 'unaudited';
+            if (!buckets[bucket]) buckets[bucket] = [];
+            buckets[bucket].push(list[i]);
+        }
+
         var tbody = mk('tbody');
-        for (var i = 0; i < list.length; i++) tbody.appendChild(buildRuntimeFeatureRow(list[i]));
+        RUNTIME_TIER_ORDER.forEach(function (tier) {
+            var rows = buckets[tier];
+            if (!rows || rows.length === 0) return;
+
+            var bandTr = mk('tr', { class: 'k9tablet-runtime-tier-band' });
+            var bandTh = mk('th', {
+                class: 'k9tablet-feature-group-row-cell k9tablet-runtime-tier-band-cell k9tablet-runtime-tier-band-cell--' + tier,
+                attrs: { colspan: String(columns.length), scope: 'colgroup' },
+            });
+            bandTh.appendChild(mk('span', { class: 'k9tablet-feature-group-row-label', text: runtimeTierLabel(tier) }));
+            bandTh.appendChild(mk('span', {
+                class: 'k9tablet-feature-group-row-count',
+                text: formatTemplate(S('feature_group_row_count_template'), { count: rows.length }),
+            }));
+            // The tier's own explanation -- once, here, instead of on every
+            // row below it. Same locale-driven sentence as before, same
+            // runtimeTierDescription() source.
+            bandTh.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint k9tablet-runtime-tier-band-desc', text: runtimeTierDescription(tier) }));
+            bandTr.appendChild(bandTh);
+            tbody.appendChild(bandTr);
+
+            for (var r = 0; r < rows.length; r++) tbody.appendChild(buildRuntimeFeatureRow(rows[r]));
+        });
+
         table.appendChild(tbody);
         return table;
     }
@@ -9818,11 +9899,12 @@
 
         var tierTd = mk('td');
         tierTd.appendChild(mk('span', { class: 'k9tablet-runtime-tier k9tablet-runtime-tier--' + feature.tier, text: runtimeTierLabel(feature.tier) }));
-        // THE HONESTY REQUIREMENT, satisfied BEFORE any click: this
-        // sentence is always visible on the row, never hidden behind a
-        // hover/tooltip -- see this screen's own header note and
-        // buildRuntimeControlScreen()'s doc comment.
-        tierTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: runtimeTierDescription(feature.tier) }));
+        // THE HONESTY REQUIREMENT still holds, and is still met without a
+        // hover or a tooltip -- but the sentence now lives on this
+        // section's own sticky band rather than being repeated on all 57
+        // rows. See buildRuntimeFeaturesTable()'s doc comment for why that
+        // is more visible rather than less. The badge above stays on the
+        // row, so the row remains self-describing on its own.
         // A per-feature caveat (e.g. ScentTracking's drop-hook gap) is
         // server-authored, dynamic supplementary text -- rendered as a
         // passthrough, same posture as errorText()'s own `message` field,
