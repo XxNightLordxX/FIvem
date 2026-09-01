@@ -1283,6 +1283,7 @@ local TABLET_STRING_KEYS = {
     -- is what actually caught the gap.)
     'tab_commands', 'cmdref_heading', 'cmdref_intro', 'cmdref_search_placeholder', 'cmdref_status_unknown',
     'cmdref_filter_label', 'cmdref_filter_no_matches',
+    'cmdref_status_unavailable_loading', 'cmdref_status_unavailable_error',
     'roster_search_label', 'online_players_search_label',
     'cmdref_empty', 'cmdref_column_command', 'cmdref_column_does', 'cmdref_column_needs',
     'cmdref_admin_badge', 'cmdref_status_insufficient_authorization',

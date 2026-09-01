@@ -966,6 +966,8 @@
         "cmdref_heading": "Command Reference",
         "cmdref_intro": "Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.",
         "cmdref_search_placeholder": "Search commands...",
+        "cmdref_status_unavailable_loading": "Still loading your record -- the Status column will fill in once it arrives.",
+        "cmdref_status_unavailable_error": "Your record could not be loaded, so the Status column cannot say what you personally can and cannot use right now. Everything else on this screen is still accurate, and the commands themselves are unaffected -- this is only the status readout.",
         "cmdref_filter_label": "Filter these commands (optional -- the full list is grouped below)",
         "cmdref_filter_no_matches": "No commands match that filter. Clear it to see the full list again.",
         "cmdref_status_unknown": "Still loading…",

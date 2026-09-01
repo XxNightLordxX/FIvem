@@ -446,4 +446,110 @@ t.test('a hostile string arriving via data.strings for a Command Reference key r
     t.equals(innerHTMLWrites, 0, 'innerHTML must never be written anywhere on this page for a malicious Command Reference string');
 });
 
+// ======================================================================
+// THE STATUS COLUMN WHEN THE SERVER SENDS NO FEATURE LIST (2026-09-01) --
+// the remaining half of the owner's "everything in the command console in
+// the status says disabled" report.
+//
+// Every badge resolves out of state.myRecord.myFeatures, and a key not
+// found in that array reads as 'global_off' -- correct, because a key
+// absent from Config.Features really is off server-side.
+//
+// But loadMyRecord() used to normalise the field as `result.myFeatures ||
+// []`, which collapsed "the server did not send a list" into "the server
+// sent an empty list". Every key was then "not found", and the whole screen
+// reported "Disabled server-wide" on a completely healthy server -- which
+// to anyone reading it is indistinguishable from the resource being off.
+//
+// It now keeps null for absent, [] for genuinely-empty, and the badges
+// answer 'unknown' for the first. These tests pin that, plus the banner
+// that explains it -- because 'unknown' on every row, with no reason given
+// and nothing to press, is only marginally better than the wrong answer.
+//
+// NOTE ON REACHABILITY: state.viewer and state.myRecord are assigned
+// together from one response, and the whole panel renders a viewer gate
+// while state.viewer is null. So "no record at all" never reaches this
+// screen -- the case that does is a record that arrived WITHOUT a usable
+// feature list, which is what these fixtures produce.
+// ======================================================================
+
+/** A viewer that resolves normally, with a myFeatures field we control. */
+function recordWithFeatures(myFeatures) {
+    return () => {
+        const payload = { ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null };
+        if (myFeatures !== undefined) payload.myFeatures = myFeatures;
+        return payload;
+    };
+}
+
+async function openCommandsWith(myFeatures) {
+    const h = createHarness({ fetchImpl: routeFetch({ 'tablet:requestMyRecord': recordWithFeatures(myFeatures) }) });
+    await openCommandsScreen(h);
+    return h;
+}
+
+function allText(h) {
+    return findAll(h.getRoot(), () => true)
+        .map((n) => (typeof n.textContent === 'string' ? n.textContent : ''))
+        .join(' \n ');
+}
+
+t.test('THE BUG: a record that arrives with NO myFeatures field must not report every command "Disabled server-wide"', async () => {
+    const h = await openCommandsWith(undefined);
+
+    const badges = statusBadges(h).map((n) => n._textContent);
+    t.isTrue(badges.length > 0, 'sanity: the command rows rendered');
+    t.equals(
+        badges.filter((b) => b === 'Disabled server-wide').length, 0,
+        'not one badge claims the feature is switched off server-wide -- the server never said that, it said nothing'
+    );
+});
+
+t.test('...it says the status is not known yet instead, which is the only honest answer', async () => {
+    const h = await openCommandsWith(undefined);
+    const badges = statusBadges(h).map((n) => n._textContent);
+    t.isTrue(badges.indexOf('Still loading…') !== -1, 'the badges read as unresolved rather than as a verdict');
+});
+
+t.test('...and the screen explains WHY, with something to press -- not a silent wall of identical badges', async () => {
+    const h = await openCommandsWith(undefined);
+    const texts = allText(h);
+    // Without this the fix only swaps one uniform wall of badges for
+    // another: still no reason given, still nothing to do about it.
+    t.isTrue(
+        /Still loading your record|Your record could not be loaded/.test(texts),
+        'the screen states why the Status column is not answering'
+    );
+});
+
+t.test('a record that genuinely reports an EMPTY feature list still reads as off -- absent and empty stay different', async () => {
+    // The other side of the distinction. An empty array is the server
+    // actually saying "there are none", and "off" is then the correct
+    // answer -- this fix must not turn every real all-off server into a
+    // permanent "unknown".
+    const h = await openCommandsWith([]);
+    const badges = statusBadges(h).map((n) => n._textContent);
+    t.isTrue(badges.length > 0, 'sanity: rows rendered');
+    t.isTrue(
+        badges.indexOf('Disabled server-wide') !== -1,
+        'an explicitly empty list still resolves gated commands to off, exactly as before'
+    );
+});
+
+t.test('a normal record with real features resolves real statuses -- the guard never fires on a healthy server', async () => {
+    // The control that matters most: none of the above may cost a working
+    // server its real status column.
+    const h = await openCommandsWith([
+        { key: 'BiteAndHold', category: 'combat', state: 'available' },
+        { key: 'DeployableKennel', category: 'gear', state: 'available' },
+    ]);
+    const badges = statusBadges(h).map((n) => n._textContent);
+    t.isTrue(badges.indexOf('Available') !== -1, 'real statuses still resolve');
+    t.equals(badges.filter((b) => b === 'Still loading…').length, 0, 'nothing is stuck on unknown');
+    t.equals(
+        allText(h).indexOf('Still loading your record'), -1,
+        'and no banner is shown on a healthy load'
+    );
+});
+
 t.run();

@@ -1511,6 +1511,8 @@
         cmdref_heading: 'Command Reference',
         cmdref_intro: 'Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.',
         cmdref_search_placeholder: 'Search commands...',
+        cmdref_status_unavailable_loading: 'Still loading your record -- the Status column will fill in once it arrives.',
+        cmdref_status_unavailable_error: 'Your record could not be loaded, so the Status column cannot say what you personally can and cannot use right now. Everything else on this screen is still accurate, and the commands themselves are unaffected -- this is only the status readout.',
         cmdref_filter_label: 'Filter these commands (optional -- the full list is grouped below)',
         cmdref_filter_no_matches: 'No commands match that filter. Clear it to see the full list again.',
         cmdref_status_unknown: 'Still loading\u2026',
@@ -5167,6 +5169,52 @@
         // then sees a later config change to its listed default would
         // reasonably (and wrongly) expect their own binding to have moved.
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_keybind_caveat') }));
+
+        // WHY THE STATUS COLUMN MIGHT SAY NOTHING USEFUL (2026-09-01) --
+        // the second half of the owner's "everything in the command console
+        // in the status says disabled" report.
+        //
+        // Every badge in that column comes from commandReferenceStatus(),
+        // which resolves entirely out of state.myRecord.myFeatures. When
+        // that record has not arrived, that function answers 'unknown' for
+        // every row -- honest, and a large improvement on the "Disabled
+        // server-wide" it used to claim, but on its own it just replaces
+        // one wall of identical badges with another and still never says
+        // WHY, or offers anything to do about it.
+        //
+        // Home, My Record and Progression have always rendered an explicit
+        // loading/error state for exactly this fetch. This screen was the
+        // one that did not, so a failed record load left it looking
+        // permanently mid-load with no error and no retry anywhere. This
+        // banner is that missing state.
+        //
+        // Deliberately a BANNER, not an early return: the reference itself
+        // -- every command, its usage, what it does, what it needs -- is
+        // static and just as useful with an unresolved status column. A
+        // viewer who came here to look up a command's arguments should not
+        // be shown an error page instead because a separate fetch failed.
+        // The condition here is deliberately the SAME one
+        // commandReferenceStatus() uses to answer 'unknown', not a plain
+        // `!state.myRecord`. state.viewer and state.myRecord are assigned
+        // together from one response, and buildBackdrop() renders the
+        // viewer gate instead of any screen while state.viewer is null --
+        // so by the time this screen exists at all, state.myRecord is
+        // always set, and a `!state.myRecord` check here would be dead
+        // code that never fired. What CAN be true here is a record that
+        // arrived without a usable feature list, which is exactly when
+        // every badge below reads 'unknown' and the operator is owed an
+        // explanation.
+        if (!state.myRecord || !Array.isArray(state.myRecord.myFeatures)) {
+            if (state.myRecordError) {
+                var errBox = mk('div', { class: 'k9tablet-warning-note' });
+                errBox.appendChild(mk('p', { class: 'k9tablet-cmdref-status-note', text: S('cmdref_status_unavailable_error') }));
+                errBox.appendChild(mk('p', { class: 'k9tablet-cmdref-status-note k9tablet-muted', text: errorText(state.myRecordError) }));
+                errBox.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', function () { loadMyRecord(); }));
+                wrap.appendChild(errBox);
+            } else {
+                wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_status_unavailable_loading') }));
+            }
+        }
 
         var query = (state.commandReferenceQuery || '').toLowerCase();
 
@@ -13127,7 +13175,34 @@
                 handlerTierLabel: typeof result.handlerTierLabel === 'string' ? result.handlerTierLabel : null,
                 xpLadder: Array.isArray(result.xpLadder) ? result.xpLadder : [],
                 handlerXpLadder: Array.isArray(result.handlerXpLadder) ? result.handlerXpLadder : [],
-                myFeatures: result.myFeatures || [],
+                // ABSENT AND EMPTY ARE NOT THE SAME THING (2026-09-01) --
+                // this line used to read `result.myFeatures || []`, which
+                // collapsed them, and that collapse is the remaining half
+                // of the owner's "everything in the command console in the
+                // status says disabled" report.
+                //
+                // commandReferenceStatus() resolves every command's badge
+                // out of this array, and treats a key it cannot find as
+                // 'global_off' -- correct, and deliberate: server-side, a
+                // key absent from Config.Features really is off (see that
+                // function's own comment). But that reasoning only holds
+                // if the array genuinely IS the server's feature list. If
+                // the field never arrived -- an older server that does not
+                // send it, a partially-composed response -- `|| []`
+                // manufactured an empty list, every single key was then
+                // "not found", and the whole screen reported "Disabled
+                // server-wide" on a completely healthy server. That is
+                // indistinguishable from a real shutdown to anyone reading
+                // it.
+                //
+                // Keeping it null preserves the one distinction that
+                // matters: null means "the server did not tell us", where
+                // the honest answer is "unknown"; [] means "the server told
+                // us there are none", where "off" really is correct. Every
+                // reader of this field already guards with
+                // `(state.myRecord && state.myRecord.myFeatures) || []`, so
+                // null is safe for all of them.
+                myFeatures: Array.isArray(result.myFeatures) ? result.myFeatures : null,
             };
             // CLIENT-LOCAL role signal -- client/tablet.lua's own
             // ResolveLocalRoleFlags() enriches this exact response with
