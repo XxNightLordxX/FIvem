@@ -1498,6 +1498,7 @@
         cmdref_heading: 'Command Reference',
         cmdref_intro: 'Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.',
         cmdref_search_placeholder: 'Search commands...',
+        cmdref_status_unknown: 'Still loading\u2026',
         cmdref_empty: 'No commands match your search.',
         cmdref_column_command: 'Command',
         cmdref_column_does: 'What It Does',
@@ -2664,6 +2665,25 @@
      * @returns {string} one of 'available'|'blocked'|'global_off'|'not_certified'|'requires_grant_missing'|'insufficient_authorization'
      */
     function commandReferenceStatus(gate) {
+        // "NOT LOADED YET" IS NOT "TURNED OFF" (fixed 2026-08-31, from live
+        // testing on a real server). Every gate resolution below ultimately
+        // reads state.myRecord.myFeatures, and myFeatureState() deliberately
+        // treats a key MISSING from that array as 'global_off' -- correct for
+        // a record that really arrived, and the fix its own comment
+        // describes. But when the record has not arrived at all the array is
+        // empty, so every single key took that path and the whole Command
+        // Console rendered "Disabled server-wide" against every feature on a
+        // completely healthy server. An owner reads that as "my resource is
+        // switched off", and it is indistinguishable from a real shutdown.
+        //
+        // Answering 'unknown' here is the only honest option. It must NOT be
+        // done by returning null from myFeatureState() -- the callers below
+        // treat null as "no gate matched, therefore available", which would
+        // swap a false "everything is off" for a false "everything works",
+        // and that is the worse of the two. One early return, before any gate
+        // logic runs, is the whole fix.
+        if (!state.myRecord || !Array.isArray(state.myRecord.myFeatures)) return 'unknown';
+
         var viewer = state.viewer || {};
         var effectivePermissions = Array.isArray(viewer.effectivePermissions) ? viewer.effectivePermissions : [];
         var hasAccess = effectivePermissions.indexOf('k9.access') !== -1;
@@ -2752,6 +2772,7 @@
      * distinct rather than reusing 'state_not_certified', which would be
      * simply WRONG for e.g. /k9auditcert). */
     function commandReferenceStatusLabel(status) {
+        if (status === 'unknown') return S('cmdref_status_unknown');
         if (status === 'insufficient_authorization') return S('cmdref_status_insufficient_authorization');
         return featureStateLabel(status);
     }
@@ -2764,6 +2785,11 @@
      * 'requires_grant_missing' -- visually identical concern, distinguished
      * only by its own, more precise label text above. */
     function commandReferenceStatusClass(status) {
+        // Amber, same bucket as the other "cannot say this is available"
+        // states -- deliberately NOT the green 'available' palette, and
+        // deliberately not the red 'blocked' one either. Nothing is wrong;
+        // we simply do not know yet.
+        if (status === 'unknown') return 'requires_grant_missing';
         if (status === 'insufficient_authorization') return 'requires_grant_missing';
         return status;
     }

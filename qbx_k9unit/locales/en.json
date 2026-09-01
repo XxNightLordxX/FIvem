@@ -957,6 +957,7 @@
         "cmdref_heading": "Command Reference",
         "cmdref_intro": "Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.",
         "cmdref_search_placeholder": "Search commands...",
+        "cmdref_status_unknown": "Still loading…",
         "cmdref_empty": "No commands match your search.",
         "cmdref_column_command": "Command",
         "cmdref_column_does": "What It Does",

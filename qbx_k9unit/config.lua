@@ -1510,6 +1510,21 @@ Config.Departments = {
         nonComplianceAlertGrade = 0, -- see police.nonComplianceAlertGrade above
         autoAccessGrade = nil,
     },
+
+    -- ADDED 2026-08-31 at the owner's request: this server runs a `fib`
+    -- job alongside police and bcso. Without an entry here, EVERY K9 gate
+    -- refuses that job -- IsEligibleCertifier, High Command, and the
+    -- tablet all test `Config.Departments[job.name]` first -- so a fib
+    -- officer sees a resource that appears completely dead. Grades are
+    -- copied from bcso; change them to match your real fib rank ladder.
+    ['fib'] = {
+        label           = 'Federal Investigation Bureau',
+        certifierGrade  = 3,
+        auditGrade      = 3,
+        highCommandGrade = 4, -- see police.highCommandGrade above -- and check this number exists on YOUR ladder
+        nonComplianceAlertGrade = 0, -- see police.nonComplianceAlertGrade above
+        autoAccessGrade = nil,
+    },
 }
 
 -- ======================================================================
