@@ -699,11 +699,23 @@ Config.Features = {
     -- would have scared an operator off a safe change. Only NEW grants and
     -- explicit renewals ever get an expiry.
     --
-    -- It is off by default because starting a recertification cadence at
-    -- all is a policy decision you should make on purpose, not inherit.
-    -- Handlers get warned ahead of expiry; nobody should find out by an
-    -- ability silently refusing to work.
-    CertificationExpiry  = false,
+    -- Starting a recertification cadence at all is a policy decision, not
+    -- a safety default -- so this shipped off and was left for the owner to
+    -- make on purpose. TURNED ON 2026-09-01 at the owner's explicit
+    -- instruction ("turn on everything in the config that does not need the
+    -- database"). Handlers get warned ahead of expiry; nobody finds out by
+    -- an ability silently refusing to work.
+    --
+    -- READ THIS IF YOU ARE STILL RUNNING WITH Config.Database.enabled =
+    -- false: this feature does not REQUIRE the database, and nothing about
+    -- it errors without one -- but it cannot do anything visible either.
+    -- Certifications live in memory only while the database is off, so they
+    -- are wiped by every restart, and Config.CertificationExpiryDays is 90.
+    -- Nothing can survive long enough to expire. Switching the database on
+    -- is what makes this setting start to matter, and at that point the
+    -- 90-day clock becomes real for every NEW grant (never retroactively
+    -- for one that already exists).
+    CertificationExpiry  = true,
 
     -- server/runtimecontrol.lua. Lets high command switch features on and
     -- off SERVER-WIDE from the tablet, and tune numbers live, without
@@ -735,12 +747,23 @@ Config.Features = {
     -- distance bands their partner is in -- never an exact location, never
     -- anything about a third party. Anyone standing close enough to the K9
     -- also just hears it bark, same as they would in real life.
-    -- OFF BY DEFAULT, deliberately -- this is a brand-new mechanic and this
-    -- resource's own convention is that a new mechanic stays off until it
-    -- has been through its own security/balance review, same as
-    -- HandlerPartnership did before it shipped on. Turn it on once that
-    -- review has happened.
-    DangerWarn           = false,
+    -- Shipped off, deliberately: this resource's convention is that a brand-
+    -- new mechanic stays off until it has been through its own security and
+    -- balance review, exactly as HandlerPartnership did before it shipped
+    -- on. TURNED ON 2026-09-01 at the owner's explicit instruction ("turn on
+    -- everything in the config that does not need the database").
+    --
+    -- BE HONEST ABOUT WHAT THAT MEANS: the convention's review has not been
+    -- signed off by anyone -- the owner chose to enable it regardless, which
+    -- is his call to make on his own server. What is already true of the
+    -- mechanic, and is why enabling it is a defensible thing to do: it
+    -- leaks nothing precise (8 rough directions, 4 rough distance bands,
+    -- only about the K9's OWN player, only to their partnered handler,
+    -- never about a third party), it requires an active partnership, and it
+    -- needs no database. If it ever proves noisy or abusable in play, this
+    -- one line back to `false` (plus its FeatureGroups.Combat twin) is the
+    -- whole revert.
+    DangerWarn           = true,
 
     -- APPREHENSION ANNOUNCEMENT -- the "warn them before you release the
     -- dog" use-of-force step (server/announce.lua, client/announce.lua).
@@ -762,17 +785,27 @@ Config.Features = {
     -- instruction with nothing behind it. The bug was never that it ships
     -- off; it is that you were never given the choice.
     --
-    -- IT SHIPS `false` DELIBERATELY, and that is not the leftover of the
+    -- IT SHIPPED `false` DELIBERATELY, and that was not the leftover of the
     -- bug. Requiring a warning before every bite is a roleplay policy
     -- decision about how your server wants use-of-force to work, not a
-    -- safety default -- so it is genuinely yours to make. Set this to
-    -- `true` to turn it on. Config.FeatureGroups.Combat below carries the
-    -- same key and must agree with this one: group resolution runs AFTER
-    -- this table and silently overrides it, so setting only one of the two
-    -- changes nothing at all, with no error anywhere.
+    -- safety default. TURNED ON 2026-09-01 at the owner's explicit
+    -- instruction ("turn on everything in the config that does not need the
+    -- database"). Config.FeatureGroups.Combat below carries the same key and
+    -- is set to match: group resolution runs AFTER this table and silently
+    -- overrides it, so setting only one of the two would change nothing at
+    -- all, with no error anywhere.
+    --
+    -- THIS ONE CHANGES HOW THE GAME PLAYS, unlike the others enabled in the
+    -- same pass. From now on a K9 must announce (default key M, or
+    -- /k9announce) within about 8 metres of a suspect, which opens roughly
+    -- a 20-second window in which a bite or takedown against THAT suspect is
+    -- permitted; outside a window the bite is refused. It never makes
+    -- apprehension easier, only harder -- that is the point of it -- so
+    -- handlers who are used to biting on sight will find bites failing until
+    -- they learn the step. Tell them before a shift rather than after.
     --
     -- Tuning is optional -- see Config.Combat.ApprehensionAnnouncement.
-    ApprehensionAnnouncement = false,
+    ApprehensionAnnouncement = true,
 }
 
 -- ======================================================================
@@ -860,13 +893,15 @@ Config.FeatureGroups = {
         PropDragging       = true,
         PursuitSprint      = true,
         HandlerDownDefense = true,
-        DangerWarn         = false, -- ships off -- see Config.Features.DangerWarn's own comment above before ever flipping this to true
+        DangerWarn         = true, -- turned on 2026-09-01 with its Config.Features twin -- see that key's own comment for what was and was not reviewed
         -- MUST AGREE WITH Config.Features.ApprehensionAnnouncement ABOVE.
         -- This table is resolved AFTER Config.Features and silently wins,
         -- so setting only one of the two changes nothing whatsoever and
         -- reports no error. Turning the feature on means setting BOTH to
-        -- true; turning it off means setting BOTH to false.
-        ApprehensionAnnouncement = false,
+        -- true; turning it off means setting BOTH to false. Both set true
+        -- 2026-09-01 -- see that key's own comment for what it changes for
+        -- handlers in play.
+        ApprehensionAnnouncement = true,
     },
     Movement = {
         enabled            = true, -- was the standalone LeashMechanics switch
@@ -912,7 +947,10 @@ Config.FeatureGroups = {
         -- Config.Features.HandlerXPProgression's own header above for the
         -- go-live reasoning and the one-line revert.
         HandlerXP           = true,
-        CertificationExpiry = false,
+        -- MUST AGREE WITH Config.Features.CertificationExpiry above -- this
+        -- table resolves AFTER it and silently wins. Both set true
+        -- 2026-09-01; see that key's own comment for the database caveat.
+        CertificationExpiry = true,
         Leaderboard         = true, -- K9Leaderboard
     },
     Partnership = {

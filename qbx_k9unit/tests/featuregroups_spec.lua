@@ -92,11 +92,97 @@ t.test('NO-OP ON DEFAULTS: every single real Config.Features key resolves, under
     t.equals(#mismatches, 0, 'mismatches: ' .. table.concat(mismatches, '; '))
 end)
 
-t.test('NEVER SILENTLY RE-ENABLE: the three keys that ship false stay false after resolution -- DiscordWebhook, CertificationExpiry, DangerWarn (NOT BoneSweepDevTool, which this suite confirms below actually ships true; NOT HandlerXPProgression, which now deliberately ships true -- see the test immediately below)', function()
+t.test('NEVER SILENTLY RE-ENABLE: every key that ships false is still false after group resolution', function()
+    -- DERIVED FROM THE REAL SNAPSHOT, NOT A HAND-TYPED NAME LIST (rewritten
+    -- 2026-09-01). This used to name DiscordWebhook, CertificationExpiry and
+    -- DangerWarn literally, which meant it was pinning two different things
+    -- at once: the PROPERTY (resolution must never flip a false to true) and
+    -- an INCIDENTAL FACT (which keys happen to ship false today). The owner
+    -- deliberately enabled CertificationExpiry and DangerWarn, and this test
+    -- failed -- not because the property broke, but because the fact moved.
+    --
+    -- A guard that fails when the owner legitimately edits his own config is
+    -- a guard people learn to edit past, which is exactly how the real thing
+    -- it protects gets waved through. So it now reads the ships-false set out
+    -- of Config.FeaturesBeforeGrouping (the pristine pre-resolution snapshot
+    -- the resolver captures on its own first call) and checks the property
+    -- against whatever that set actually contains. The owner can turn any
+    -- feature on or off without touching this file, and the property stays
+    -- pinned for every key that is off.
     local env = loadRealConfig()
-    t.isFalse(env.Config.Features.DiscordWebhook)
-    t.isFalse(env.Config.Features.CertificationExpiry)
-    t.isFalse(env.Config.Features.DangerWarn)
+
+    local shipsFalse = {}
+    for key, value in pairs(env.Config.FeaturesBeforeGrouping) do
+        if value == false then shipsFalse[#shipsFalse + 1] = key end
+    end
+    table.sort(shipsFalse)
+
+    -- Non-vacuity: if every feature is on, this test proves nothing by
+    -- passing, and must say so rather than going quietly green.
+    t.isTrue(#shipsFalse > 0,
+        'no Config.Features key ships false, so this test cannot demonstrate anything -- if that is genuinely intended, '
+        .. 'the synthetic test below is what still proves the resolver cannot re-enable a false key')
+
+    for _, key in ipairs(shipsFalse) do
+        t.isFalse(env.Config.Features[key],
+            key .. ' ships false but resolution turned it true -- this is the silent re-enable this test exists to catch')
+    end
+end)
+
+t.test('SYNTHETIC: resolution really is what would be caught -- a false child under an enabled parent is not re-enabled', function()
+    -- The companion to the derived test above. That one can only check keys
+    -- that happen to be off right now; this one manufactures the condition,
+    -- so the mechanism stays proven no matter what the owner's config says.
+    local env = loadRealConfig()
+
+    -- TWO THINGS THIS SELECTION HAS TO GET RIGHT, both learned the hard way
+    -- when the first draft of this test was flaky (2026-09-01):
+    --
+    -- 1. A GROUP CHILD KEY IS NOT ALWAYS A Config.Features KEY. Several are
+    --    deliberate aliases -- Progression.HandlerXP is
+    --    Config.Features.HandlerXPProgression, Detection.Blood is
+    --    BloodTracking, Partnership.TenureBonus is PartnershipTenureBonus,
+    --    Audio.ProximityAudio is ProximityAudioFX. Indexing Config.Features
+    --    by the group-local name gives nil for those, so the child must be
+    --    one whose name really does exist in the pristine snapshot.
+    -- 2. SELECTION MUST BE DETERMINISTIC. `pairs` order is undefined in Lua,
+    --    so an unsorted scan picked a different child on every run and this
+    --    test passed or failed depending on which one it happened to land
+    --    on -- a genuinely flaky test, which is worse than no test.
+    --
+    -- Sorting both levels makes the choice stable, and the snapshot check
+    -- makes it valid. Aliased children are simply not exercised here; that
+    -- is a real limit of this test, stated rather than papered over.
+    local familyNames = {}
+    for familyName in pairs(env.Config.FeatureGroups) do familyNames[#familyNames + 1] = familyName end
+    table.sort(familyNames)
+
+    local family, child = nil, nil
+    for _, familyName in ipairs(familyNames) do
+        local group = env.Config.FeatureGroups[familyName]
+        if type(group) == 'table' and group.enabled ~= false then
+            local childNames = {}
+            for childName, value in pairs(group) do
+                if childName ~= 'enabled' and type(value) == 'boolean'
+                    and env.Config.FeaturesBeforeGrouping[childName] ~= nil then
+                    childNames[#childNames + 1] = childName
+                end
+            end
+            table.sort(childNames)
+            if #childNames > 0 then
+                family, child = familyName, childNames[1]
+                break
+            end
+        end
+    end
+    t.isNotNil(child, 'found a non-aliased child under an enabled parent to test with')
+
+    env.Config.FeaturesBeforeGrouping[child] = false
+    env.Config.FeatureGroups[family][child] = false
+    env.ResolveFeatureGroups()
+
+    t.isFalse(env.Config.Features[child],
+        child .. ' was false before resolution and its parent is on -- resolution must leave it false')
 end)
 
 -- ============================================================================
@@ -238,12 +324,68 @@ t.test('PARENT OFF FORCES CHILDREN OFF prints exactly which children it forced, 
         if line:find('Config.FeatureGroups.Combat.enabled is false', 1, true) then found = line end
     end
     t.isNotNil(found, 'expected a forced-off warning naming Combat')
-    t.contains(found, 'BiteAndHold')
-    t.contains(found, 'NonLethalTakedown')
-    t.contains(found, 'PropDragging')
-    t.contains(found, 'PursuitSprint')
-    t.contains(found, 'HandlerDownDefense')
-    t.notContains(found, 'DangerWarn', 'DangerWarn was already false by default -- it was never FORCED off, so it must not be named as if it were')
+
+    -- DERIVED, NOT HAND-LISTED (rewritten 2026-09-01, same reasoning as the
+    -- NEVER SILENTLY RE-ENABLE test above). The warning must name exactly
+    -- the children it actually FORCED off -- the ones that were true before
+    -- the parent went off -- and must NOT name one that was already false,
+    -- because telling an operator you forced off something that was never on
+    -- sends them looking for a change that did not happen.
+    --
+    -- This used to spell out five true children and use DangerWarn as its
+    -- already-false example. DangerWarn is now on at the owner's request, so
+    -- the example moved; the property did not.
+    local named, notNamed = 0, 0
+    for childName, pristine in pairs(env.Config.FeaturesBeforeGrouping) do
+        if env.Config.FeatureGroups.Combat[childName] ~= nil then
+            if pristine == true then
+                t.contains(found, childName)
+                named = named + 1
+            else
+                t.notContains(found, childName,
+                    childName .. ' was already false -- it was never FORCED off, so it must not be named as if it were')
+                notNamed = notNamed + 1
+            end
+        end
+    end
+    t.isTrue(named > 0, 'at least one Combat child was actually forced off, so this assertion is not vacuous')
+    -- notNamed is allowed to be 0: with every Combat child currently on
+    -- there is simply no already-false one to check here. The SYNTHETIC test
+    -- below covers that half unconditionally, which is why this one does not
+    -- need to fail when the owner turns everything on.
+end)
+
+t.test('SYNTHETIC: an ALREADY-false child is never named in the forced-off warning, whatever the shipped config says', function()
+    -- Unconditional cover for the half the derived test above can only check
+    -- when something happens to be off. Manufactures an already-false Combat
+    -- child, then turns the parent off.
+    local env, printLog = loadRealConfig()
+
+    -- Deterministic and non-aliased, for the same two reasons the test above
+    -- spells out -- an unsorted pairs() scan here would make this flaky too.
+    local childNames = {}
+    for childName in pairs(env.Config.FeatureGroups.Combat) do
+        if childName ~= 'enabled' and env.Config.FeaturesBeforeGrouping[childName] ~= nil then
+            childNames[#childNames + 1] = childName
+        end
+    end
+    table.sort(childNames)
+    local victim = childNames[1]
+    t.isNotNil(victim, 'found a non-aliased Combat child to force false')
+
+    env.Config.FeaturesBeforeGrouping[victim] = false
+    env.Config.FeatureGroups.Combat[victim] = false
+    for key in pairs(printLog) do printLog[key] = nil end
+    env.Config.FeatureGroups.Combat.enabled = false
+    env.ResolveFeatureGroups()
+
+    local found = nil
+    for _, line in ipairs(printLog) do
+        if line:find('Config.FeatureGroups.Combat.enabled is false', 1, true) then found = line end
+    end
+    t.isNotNil(found, 'the forced-off warning still printed')
+    t.notContains(found, victim,
+        victim .. ' was already false before the parent went off -- naming it would send an operator looking for a change that never happened')
 end)
 
 t.test('PARENT ON, NO FORCED-OFF PRINT: flipping Combat.enabled back to true (its own default) after having been false prints nothing new and fully recovers every child\'s TRUE original default -- the idempotency guarantee this resolver\'s own doc comment makes', function()
@@ -257,10 +399,28 @@ t.test('PARENT ON, NO FORCED-OFF PRINT: flipping Combat.enabled back to true (it
     env.ResolveFeatureGroups()
 
     t.equals(#printLog, 0, 'flipping back to the default must be silent: ' .. table.concat(printLog, ' | '))
-    t.isTrue(env.Config.Features.BiteAndHold, 'must recover the TRUE original default -- reading Config.Features\' own already-narrowed value here instead of the pristine snapshot would have left this stuck false forever')
-    t.isTrue(env.Config.Features.NonLethalTakedown)
-    t.isTrue(env.Config.Features.PropDragging)
-    t.isFalse(env.Config.Features.DangerWarn, 'DangerWarn\'s own real default is false -- recovering the ORIGINAL default must not be confused with recovering "true"')
+    -- EVERY Combat child must come back to its OWN pristine value -- not to
+    -- `true`. Those are different guarantees, and conflating them is the bug
+    -- this asserts against: a resolver that "recovers" by writing true would
+    -- silently switch on a feature the owner had deliberately switched off.
+    --
+    -- Checked against the pristine snapshot rather than a hand-typed list
+    -- (rewritten 2026-09-01): this used BiteAndHold/NonLethalTakedown/
+    -- PropDragging as its true examples and DangerWarn as its false one, and
+    -- DangerWarn is now on at the owner's request. Reading the snapshot
+    -- covers both directions for every child, whatever they are set to.
+    local checked = 0
+    for childName, pristine in pairs(env.Config.FeaturesBeforeGrouping) do
+        if env.Config.FeatureGroups.Combat[childName] ~= nil then
+            t.equals(env.Config.Features[childName], pristine,
+                childName .. ' must recover its own ORIGINAL value (' .. tostring(pristine)
+                .. '), never simply "true" -- reading Config.Features\' already-narrowed value instead of the '
+                .. 'pristine snapshot would leave a true child stuck false, and writing true unconditionally would '
+                .. 'switch on a child the owner had deliberately switched off')
+            checked = checked + 1
+        end
+    end
+    t.isTrue(checked > 0, 'at least one Combat child was actually checked')
 end)
 
 t.test('IDEMPOTENCY, THE CASE THAT ACTUALLY EXERCISES THE FALLBACK PATH: an operator who OMITS a child from Config.FeatureGroups entirely (never sets Combat.BiteAndHold at all, unlike the shipped default template which spells out every child explicitly) still recovers its TRUE original shipped value after a disable-then-reenable cycle -- this is the one shape that would have caught this resolver reading its own already-narrowed Config.Features value as if it were the pristine default, since the shipped defaults alone (every child spelled out explicitly) never exercise the omitted-child fallback branch at all', function()
