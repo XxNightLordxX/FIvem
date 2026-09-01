@@ -113,6 +113,25 @@
       copy exactly).
 ]]
 
+
+-- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
+-- Every lib.callback.await in this file previously passed `false` here.
+-- Each call is wrapped in a pcall written on the stated assumption that
+-- await "THROWS on a timeout" -- but `false` is the timeout argument, and
+-- passing it is what disables the timeout. So nothing ever threw: a server
+-- callback that does not answer left the caller waiting indefinitely rather
+-- than failing cleanly. On the tablet that means a fetch promise that never
+-- resolves, which is exactly the "I have to keep clicking Retry on almost
+-- everything" the owner reported.
+--
+-- An explicit number is correct whichever way ox_lib treats `false` (I could
+-- not reach its source from this environment to confirm): if false disabled
+-- the timeout, this restores it; if false was already ignored, this only
+-- makes the value explicit. Ten seconds is far longer than any call here
+-- needs -- with Config.Database.enabled false everything is in-memory -- and
+-- still bounded, so a wedged callback surfaces as a clear error instead of a
+-- hang.
+local K9_CALLBACK_TIMEOUT_MS = 10000
 -- Local mirror of the server's last-pushed snapshot. Safe defaults (fully
 -- healthy/calm) so that, before the first real push ever arrives, nothing
 -- below throttles or notifies anything — matches every other "disabled/
@@ -500,7 +519,7 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
                 -- client's session. pcall it; `type(snapshot) == 'table'`
                 -- below already treats a nil snapshot as "nothing to
                 -- apply."
-                local ok, snapshot = pcall(lib.callback.await, 'qbx_k9unit:server:getWellbeingSnapshot', false)
+                local ok, snapshot = pcall(lib.callback.await, 'qbx_k9unit:server:getWellbeingSnapshot', K9_CALLBACK_TIMEOUT_MS)
                 if not ok then snapshot = nil end
                 if type(snapshot) == 'table' then
                     ApplyWellbeingSnapshot(snapshot)
@@ -907,7 +926,7 @@ do
         -- `if not result then return end`), so a thrown failure degrades to
         -- that exact same, already-established path instead of aborting
         -- whichever onSelect/resolution handler called this uncaught.
-        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:petK9', false, targetServerId)
+        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:petK9', K9_CALLBACK_TIMEOUT_MS, targetServerId)
         if not ok then result = nil end
         return result
     end
@@ -917,7 +936,7 @@ do
     --- @param targetServerId number
     --- @return table? result
     local function AttemptFeedK9(targetServerId)
-        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:feedK9', false, targetServerId)
+        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:feedK9', K9_CALLBACK_TIMEOUT_MS, targetServerId)
         if not ok then result = nil end
         return result
     end
@@ -1142,7 +1161,7 @@ do
         -- `if not result then return end` already treats a nil result as
         -- a silent no-op, so a thrown failure now degrades to that exact
         -- same path instead of aborting this command handler uncaught.
-        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:applyK9Distraction', false, itemType)
+        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:applyK9Distraction', K9_CALLBACK_TIMEOUT_MS, itemType)
         if not ok then result = nil end
         if not result then return end
 

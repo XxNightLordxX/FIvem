@@ -220,6 +220,25 @@
     see RegisterK9RadialMenu()'s own comment for the full verification).
 ]]
 
+
+-- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
+-- Every lib.callback.await in this file previously passed `false` here.
+-- Each call is wrapped in a pcall written on the stated assumption that
+-- await "THROWS on a timeout" -- but `false` is the timeout argument, and
+-- passing it is what disables the timeout. So nothing ever threw: a server
+-- callback that does not answer left the caller waiting indefinitely rather
+-- than failing cleanly. On the tablet that means a fetch promise that never
+-- resolves, which is exactly the "I have to keep clicking Retry on almost
+-- everything" the owner reported.
+--
+-- An explicit number is correct whichever way ox_lib treats `false` (I could
+-- not reach its source from this environment to confirm): if false disabled
+-- the timeout, this restores it; if false was already ignored, this only
+-- makes the value explicit. Ten seconds is far longer than any call here
+-- needs -- with Config.Database.enabled false everything is in-memory -- and
+-- still bounded, so a wedged callback surfaces as a clear error instead of a
+-- hang.
+local K9_CALLBACK_TIMEOUT_MS = 10000
 -- OPEN STRUCTURAL QUESTION resolution: option (b) was chosen — the "K9
 -- Unit" submenu and its sub-items are registered ONCE, unconditionally
 -- (subject to each item's own Config.Features flag at registration time,
@@ -2398,7 +2417,7 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
-                local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestJoinableSarCall', false)
+                local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestJoinableSarCall', K9_CALLBACK_TIMEOUT_MS)
                 if not ok or not result or not result.targetServerId then
                     lib.notify({ title = locale('common.notify_title'), description = locale('sar.join_no_nearby_call'), type = 'error' })
                     return

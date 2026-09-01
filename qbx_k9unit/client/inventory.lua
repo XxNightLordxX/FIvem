@@ -87,6 +87,25 @@
     resource.
 ]]
 
+
+-- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
+-- Every lib.callback.await in this file previously passed `false` here.
+-- Each call is wrapped in a pcall written on the stated assumption that
+-- await "THROWS on a timeout" -- but `false` is the timeout argument, and
+-- passing it is what disables the timeout. So nothing ever threw: a server
+-- callback that does not answer left the caller waiting indefinitely rather
+-- than failing cleanly. On the tablet that means a fetch promise that never
+-- resolves, which is exactly the "I have to keep clicking Retry on almost
+-- everything" the owner reported.
+--
+-- An explicit number is correct whichever way ox_lib treats `false` (I could
+-- not reach its source from this environment to confirm): if false disabled
+-- the timeout, this restores it; if false was already ignored, this only
+-- makes the value explicit. Ten seconds is far longer than any call here
+-- needs -- with Config.Database.enabled false everything is in-memory -- and
+-- still bounded, so a wedged callback surfaces as a clear error instead of a
+-- hang.
+local K9_CALLBACK_TIMEOUT_MS = 10000
 --- Human-readable rejection messages for the openK9Inventory callback's
 --- `reason` value. Mirrors server/main.lua's LEASH_REJECT_MESSAGES /
 --- server/search.lua's reason-handling shape exactly.
@@ -151,7 +170,7 @@ local function OpenK9InventoryForNetId(netId)
     -- below already covers a pcall-caught nil `result` byte-for-byte the
     -- same as any other falsy response (reason stays nil, so this degrades
     -- to the existing silent-return path rather than aborting uncaught).
-    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:openK9Inventory', false, netId)
+    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:openK9Inventory', K9_CALLBACK_TIMEOUT_MS, netId)
     if not ok then result = nil end
 
     if not result or not result.ok then

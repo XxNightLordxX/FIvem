@@ -103,6 +103,25 @@
     confirmed for a given server's own asset set.
 ]]
 
+
+-- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
+-- Every lib.callback.await in this file previously passed `false` here.
+-- Each call is wrapped in a pcall written on the stated assumption that
+-- await "THROWS on a timeout" -- but `false` is the timeout argument, and
+-- passing it is what disables the timeout. So nothing ever threw: a server
+-- callback that does not answer left the caller waiting indefinitely rather
+-- than failing cleanly. On the tablet that means a fetch promise that never
+-- resolves, which is exactly the "I have to keep clicking Retry on almost
+-- everything" the owner reported.
+--
+-- An explicit number is correct whichever way ox_lib treats `false` (I could
+-- not reach its source from this environment to confirm): if false disabled
+-- the timeout, this restores it; if false was already ignored, this only
+-- makes the value explicit. Ten seconds is far longer than any call here
+-- needs -- with Config.Database.enabled false everything is in-memory -- and
+-- still bounded, so a wedged callback surfaces as a clear error instead of a
+-- hang.
+local K9_CALLBACK_TIMEOUT_MS = 10000
 -- FEATURE GATE, mirroring server/training.lua's own first executable line.
 -- Without this, all three commands registered below -- and the permanent
 -- banner-draw thread -- came up even with the feature off, and
@@ -298,7 +317,7 @@ local function RunTrainingDrill(eventName, progressLabel, onSuccess)
     end
 
     local ok = pcall(function()
-        local result = lib.callback.await(eventName, false)
+        local result = lib.callback.await(eventName, K9_CALLBACK_TIMEOUT_MS)
 
         if not result or not result.ok then
             local reason = result and result.reason

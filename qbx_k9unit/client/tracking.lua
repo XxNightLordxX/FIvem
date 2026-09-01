@@ -144,6 +144,25 @@
     ======================================================================
 ]]
 
+
+-- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
+-- Every lib.callback.await in this file previously passed `false` here.
+-- Each call is wrapped in a pcall written on the stated assumption that
+-- await "THROWS on a timeout" -- but `false` is the timeout argument, and
+-- passing it is what disables the timeout. So nothing ever threw: a server
+-- callback that does not answer left the caller waiting indefinitely rather
+-- than failing cleanly. On the tablet that means a fetch promise that never
+-- resolves, which is exactly the "I have to keep clicking Retry on almost
+-- everything" the owner reported.
+--
+-- An explicit number is correct whichever way ox_lib treats `false` (I could
+-- not reach its source from this environment to confirm): if false disabled
+-- the timeout, this restores it; if false was already ignored, this only
+-- makes the value explicit. Ten seconds is far longer than any call here
+-- needs -- with Config.Database.enabled false everything is in-memory -- and
+-- still bounded, so a wedged callback surfaces as a clear error instead of a
+-- hang.
+local K9_CALLBACK_TIMEOUT_MS = 10000
 --- Local-only view of the CURRENT tracking session, if any. Set by a
 --- successful Start*Track() call below, cleared by StopTracking() or by
 --- the state/compute thread's own water-break/own-death bookkeeping below.
@@ -331,9 +350,9 @@ local function StartTrack(trackType)
     -- callback exactly as every existing Start*Track() global already did.
     local ok, result
     if trackType then
-        ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findTrackableSource', false, trackType)
+        ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findTrackableSource', K9_CALLBACK_TIMEOUT_MS, trackType)
     else
-        ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestTrackableSource', false)
+        ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestTrackableSource', K9_CALLBACK_TIMEOUT_MS)
     end
     if not ok then result = nil end
 
@@ -1449,7 +1468,7 @@ local function EnsureScentVisionPollThreadRunning()
             -- whole CreateThread body, silently killing the poll loop with
             -- `scentVisionActive` still stuck true and no further updates
             -- ever arriving.
-            local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:getScentVisionPoints', false)
+            local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:getScentVisionPoints', K9_CALLBACK_TIMEOUT_MS)
             if not ok then result = nil end
 
             -- Staleness check — a ToggleScentVision() off-then-on cycle

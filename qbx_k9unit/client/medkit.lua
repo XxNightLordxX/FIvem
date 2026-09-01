@@ -72,6 +72,25 @@
       treat-request code path.
 ]]
 
+
+-- SERVER-CALLBACK TIMEOUT (added 2026-08-31, from live testing).
+-- Every lib.callback.await in this file previously passed `false` here.
+-- Each call is wrapped in a pcall written on the stated assumption that
+-- await "THROWS on a timeout" -- but `false` is the timeout argument, and
+-- passing it is what disables the timeout. So nothing ever threw: a server
+-- callback that does not answer left the caller waiting indefinitely rather
+-- than failing cleanly. On the tablet that means a fetch promise that never
+-- resolves, which is exactly the "I have to keep clicking Retry on almost
+-- everything" the owner reported.
+--
+-- An explicit number is correct whichever way ox_lib treats `false` (I could
+-- not reach its source from this environment to confirm): if false disabled
+-- the timeout, this restores it; if false was already ignored, this only
+-- makes the value explicit. Ten seconds is far longer than any call here
+-- needs -- with Config.Database.enabled false everything is in-memory -- and
+-- still bounded, so a wedged callback surfaces as a clear error instead of a
+-- hang.
+local K9_CALLBACK_TIMEOUT_MS = 10000
 --- Shared "ask the server to treat this specific K9" implementation —
 --- called by both the ox_target `onSelect` below (targetServerId already
 --- resolved from the interacted ped) and RequestTreatNearestK9() further
@@ -88,7 +107,7 @@ local function RequestTreatK9(targetServerId)
     -- return end` already treats a nil result as a silent no-op, so a
     -- thrown failure now degrades to that exact same path instead of
     -- aborting this onSelect handler uncaught.
-    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:useK9Medkit', false, targetServerId)
+    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:useK9Medkit', K9_CALLBACK_TIMEOUT_MS, targetServerId)
     if not ok then result = nil end
     if not result then return end
 
