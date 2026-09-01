@@ -763,6 +763,7 @@
         high_command_required_notice: 'You don\'t have High Command access, so here is your own record instead.',
         retry_label: 'Retry',
         search_placeholder: 'Search by name, citizen ID, or department...',
+        roster_search_label: 'Search people who already hold a certification',
         refresh_label: 'Refresh',
         empty_roster: 'No results. This list only ever shows people who already hold a certification -- it will never include someone who has never been certified before (for example, a brand-new handler). If they are online right now, pick them from the Online Players list above instead; otherwise use "Open by exact citizen ID".',
         column_name: 'Name',
@@ -781,6 +782,7 @@
         // full contract.
         online_players_heading: 'Online Players',
         online_players_search_placeholder: 'Search online players by name, server ID, or job...',
+        online_players_search_label: 'Search everyone currently connected -- certified or not',
         online_players_empty: 'Nobody matching that search is online right now.',
         online_players_opening_label: 'Opening...',
         column_server_id: 'Server ID',
@@ -1507,6 +1509,8 @@
         cmdref_heading: 'Command Reference',
         cmdref_intro: 'Every command this resource registers, grouped by what you are trying to do. A command you cannot currently use is marked, with the reason why -- the server still decides what actually works; this list only tells you the truth about it.',
         cmdref_search_placeholder: 'Search commands...',
+        cmdref_filter_label: 'Filter these commands (optional -- the full list is grouped below)',
+        cmdref_filter_no_matches: 'No commands match that filter. Clear it to see the full list again.',
         cmdref_status_unknown: 'Still loading\u2026',
         cmdref_empty: 'No commands match your search.',
         cmdref_column_command: 'Command',
@@ -5162,15 +5166,31 @@
         // reasonably (and wrongly) expect their own binding to have moved.
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('cmdref_keybind_caveat') }));
 
-        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('cmdref_search_placeholder') } });
-        search.value = state.commandReferenceQuery;
-        search.addEventListener('input', function (e) {
-            state.commandReferenceQuery = e.target.value;
-            render();
-        });
-        wrap.appendChild(search);
-
         var query = (state.commandReferenceQuery || '').toLowerCase();
+
+        // Counted up front, before anything renders, so the shared filter
+        // bar can state both numbers -- see buildListFilterBar(). The old
+        // bare input could not say what it was hiding, which on a list this
+        // long is the difference between "there is no such command" and
+        // "my filter is still on from a minute ago".
+        var shownCount = 0;
+        for (var pre = 0; pre < COMMAND_REFERENCE.length; pre++) {
+            if (commandReferenceMatchesQuery(COMMAND_REFERENCE[pre], query)) shownCount++;
+        }
+
+        wrap.appendChild(buildListFilterBar({
+            id: 'k9tablet-cmdref-filter',
+            labelText: S('cmdref_filter_label'),
+            placeholder: S('cmdref_search_placeholder'),
+            value: state.commandReferenceQuery,
+            total: COMMAND_REFERENCE.length,
+            shown: shownCount,
+            onChange: function (v) {
+                state.commandReferenceQuery = v;
+                render();
+            },
+        }));
+
         var anyRendered = false;
 
         for (var c = 0; c < COMMAND_REFERENCE_CATEGORIES.length; c++) {
@@ -5181,13 +5201,10 @@
             for (var i = 0; i < COMMAND_REFERENCE.length; i++) {
                 var entry = COMMAND_REFERENCE[i];
                 if (entry.category !== category.key) continue;
-                if (query.length > 0) {
-                    var haystack = (
-                        entry.command + ' ' + S(entry.usageKey) + ' ' + S(entry.doesKey) + ' ' +
-                        S(entry.needsKey) + ' ' + categoryLabel
-                    ).toLowerCase();
-                    if (haystack.indexOf(query) === -1) continue;
-                }
+                // The SAME predicate the count above uses -- deliberately
+                // not a second copy of the haystack expression, which is
+                // how a readout and the rows it describes drift apart.
+                if (!commandReferenceMatchesQuery(entry, query)) continue;
                 rows.push(entry);
             }
             if (rows.length === 0) continue;
@@ -5213,10 +5230,48 @@
         }
 
         if (!anyRendered) {
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('cmdref_empty') }));
+            // Same distinction buildPersonFeaturesSection() draws: with a
+            // filter on, nothing matching is a fact about the FILTER, and
+            // `cmdref_empty` ("no commands") would be simply untrue -- this
+            // list is a fixed, non-empty constant in this very file.
+            if (query.length > 0) {
+                // No Clear button here: buildListFilterBar() above is
+                // already showing one (it renders whenever the filter is
+                // narrowing anything, and narrowing to zero is still
+                // narrowing). Two identical buttons a few lines apart is
+                // its own small confusion, and the owner asked for less of
+                // that, not more.
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('cmdref_filter_no_matches') }));
+            } else {
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('cmdref_empty') }));
+            }
         }
 
         return wrap;
+    }
+
+    /**
+     * Does one Command Reference entry match the active filter text?
+     * Single source of truth for buildCommandReferenceScreen()'s count and
+     * for the rows it actually renders.
+     * @param {{command:string, category:string, usageKey:string, doesKey:string, needsKey:string}} entry
+     * @param {string} query already lower-cased; '' matches everything
+     * @returns {boolean}
+     */
+    function commandReferenceMatchesQuery(entry, query) {
+        if (!query || query.length === 0) return true;
+        var categoryLabel = '';
+        for (var c = 0; c < COMMAND_REFERENCE_CATEGORIES.length; c++) {
+            if (COMMAND_REFERENCE_CATEGORIES[c].key === entry.category) {
+                categoryLabel = S(COMMAND_REFERENCE_CATEGORIES[c].labelKey);
+                break;
+            }
+        }
+        var haystack = (
+            entry.command + ' ' + S(entry.usageKey) + ' ' + S(entry.doesKey) + ' ' +
+            S(entry.needsKey) + ' ' + categoryLabel
+        ).toLowerCase();
+        return haystack.indexOf(query) !== -1;
     }
 
     /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object, defaultKeybind?:string, defaultKeybindConfigurable?:boolean}} entry */
@@ -6422,7 +6477,20 @@
 
         if (fullAccess) {
             var toolbar = mk('div', { class: 'k9tablet-toolbar' });
-            var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
+            // A LABEL, not just a placeholder (2026-09-01). This one stays a
+            // plain search rather than moving to buildListFilterBar(): every
+            // keystroke re-queries the SERVER, so there is no local total to
+            // report a fraction of -- see that function's own note. What it
+            // was missing was any on-screen statement of what it searches
+            // and, more importantly, of what it does NOT: this list is
+            // certified people only, which a placeholder reading "Search by
+            // name, citizen ID, or department..." actively hides.
+            toolbar.appendChild(mk('label', {
+                class: 'k9tablet-feature-filter-label',
+                text: S('roster_search_label'),
+                attrs: { for: 'k9tablet-roster-search' },
+            }));
+            var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', id: 'k9tablet-roster-search', placeholder: S('search_placeholder') } });
             search.value = state.rosterQuery;
             search.addEventListener('input', function (e) {
                 var q = e.target.value;
@@ -6592,7 +6660,17 @@
         wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('online_players_heading') }));
 
         var toolbar = mk('div', { class: 'k9tablet-toolbar' });
-        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('online_players_search_placeholder') } });
+        // See the roster search's own note -- a server-side search, so a
+        // label rather than the shared filter bar. The label is what makes
+        // the difference between these two boxes legible: this one reaches
+        // ANYONE currently connected, the roster below reaches only people
+        // who already hold a certification.
+        toolbar.appendChild(mk('label', {
+            class: 'k9tablet-feature-filter-label',
+            text: S('online_players_search_label'),
+            attrs: { for: 'k9tablet-online-players-search' },
+        }));
+        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', id: 'k9tablet-online-players-search', placeholder: S('online_players_search_placeholder') } });
         search.value = state.onlinePlayersQuery;
         search.addEventListener('input', function (e) {
             var q = e.target.value;
@@ -8008,11 +8086,10 @@
         // Filter matched nothing. This is about the FILTER, never about the
         // person -- see this function's own header.
         if (filtered.length === 0) {
+            // The filter bar rendered just above is already showing its own
+            // Clear button (0 shown of N is still "narrowing"), so this
+            // state needs the explanation, not a second identical control.
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('feature_filter_no_matches') }));
-            wrap.appendChild(mkButton(S('feature_filter_clear_label'), 'k9tablet-btn', function () {
-                state.personFeatureQuery = '';
-                render();
-            }));
             return wrap;
         }
 
@@ -8072,49 +8149,84 @@
     }
 
     /**
-     * The filter control for buildPersonFeaturesSection() -- a labelled,
-     * explicitly optional narrowing tool, not the primary interaction.
-     * See that function's own header for why this stopped being a bare
-     * input with a placeholder.
-     * @param {number} totalCount every ability on this person's record
-     * @param {number} shownCount how many survive the current filter
+     * ONE FILTER BAR FOR EVERY CLIENT-SIDE FILTERED LIST on this page --
+     * a labelled, explicitly optional narrowing tool, never the primary
+     * interaction. See buildPersonFeaturesSection()'s own header for the
+     * reasoning; this is the shared implementation so the abilities list
+     * and the Command Reference cannot drift into looking like two
+     * different ideas.
+     *
+     * DELIBERATELY NOT USED for the roster or the online-players box.
+     * Those are SERVER-SIDE searches -- each keystroke re-queries and the
+     * server decides what comes back -- so there is no local "total" to
+     * be showing a fraction of, and a "Showing 4 of 9" there would be
+     * inventing a denominator this page does not have. They keep their
+     * plain search input (see their own call sites), and only ever gain
+     * the visible label.
+     *
+     * @param {object} opts
+     * @param {string} opts.id DOM id, so the <label> can point at the input
+     * @param {string} opts.labelText already-localized caption
+     * @param {string} opts.placeholder already-localized placeholder
+     * @param {string} opts.value current query
+     * @param {number} opts.total every row before filtering
+     * @param {number} opts.shown how many survive the current filter
+     * @param {function(string):void} opts.onChange
      * @returns {HTMLElement}
      */
-    function buildPersonFeatureFilter(totalCount, shownCount) {
+    function buildListFilterBar(opts) {
         var bar = mk('div', { class: 'k9tablet-feature-filter' });
 
-        var inputId = 'k9tablet-person-feature-filter';
         bar.appendChild(mk('label', {
             class: 'k9tablet-feature-filter-label',
-            text: S('feature_filter_label'),
-            attrs: { for: inputId },
+            text: opts.labelText,
+            attrs: { for: opts.id },
         }));
 
         var search = mk('input', {
             class: 'k9tablet-search k9tablet-feature-filter-input',
-            attrs: { type: 'text', id: inputId, placeholder: S('search_features_placeholder') },
+            attrs: { type: 'text', id: opts.id, placeholder: opts.placeholder },
         });
-        search.value = state.personFeatureQuery;
+        search.value = opts.value || '';
         search.addEventListener('input', function (e) {
-            state.personFeatureQuery = e.target.value;
-            render();
+            opts.onChange(e.target.value);
         });
         bar.appendChild(search);
 
         // Only ever says something when the filter is actually narrowing.
         // An unfiltered list showing all 57 of 57 does not need telling.
-        if (shownCount !== totalCount) {
+        if (opts.shown !== opts.total) {
             bar.appendChild(mk('span', {
                 class: 'k9tablet-feature-filter-count',
-                text: formatTemplate(S('feature_filter_showing_template'), { count: shownCount, total: totalCount }),
+                text: formatTemplate(S('feature_filter_showing_template'), { count: opts.shown, total: opts.total }),
             }));
             bar.appendChild(mkButton(S('feature_filter_clear_label'), 'k9tablet-btn k9tablet-btn--small', function () {
-                state.personFeatureQuery = '';
-                render();
+                opts.onChange('');
             }));
         }
 
         return bar;
+    }
+
+    /**
+     * buildPersonFeaturesSection()'s own filter, on the shared bar above.
+     * @param {number} totalCount every ability on this person's record
+     * @param {number} shownCount how many survive the current filter
+     * @returns {HTMLElement}
+     */
+    function buildPersonFeatureFilter(totalCount, shownCount) {
+        return buildListFilterBar({
+            id: 'k9tablet-person-feature-filter',
+            labelText: S('feature_filter_label'),
+            placeholder: S('search_features_placeholder'),
+            value: state.personFeatureQuery,
+            total: totalCount,
+            shown: shownCount,
+            onChange: function (v) {
+                state.personFeatureQuery = v;
+                render();
+            },
+        });
     }
 
     /** @param {{category?:string}} feature @returns {string?} name-cell

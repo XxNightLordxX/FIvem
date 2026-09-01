@@ -187,7 +187,46 @@ t.test('filtering: typing in the search box narrows to matching rows and hides a
     search.typeValue('this-matches-absolutely-nothing-xyz');
     await settle();
     t.equals(statusBadges(h).length, 0, 'no rows remain');
-    t.equals(findByText(h.getRoot(), 'No commands match your search.').length, 1, 'the empty-state message renders instead');
+    // The message is about the FILTER, not about the command list. That
+    // list is a fixed, non-empty constant in html/tablet.js, so "there are
+    // no commands" could never be true here -- and an operator who had left
+    // a filter on from a minute ago needs to be told which of the two they
+    // are looking at. Changed 2026-09-01 alongside the same fix on the
+    // abilities list; the old text was `cmdref_empty`.
+    t.equals(
+        findByText(h.getRoot(), 'No commands match that filter. Clear it to see the full list again.').length, 1,
+        'the empty state names the filter as the reason'
+    );
+    t.equals(findByText(h.getRoot(), 'Clear filter').length, 1, 'and puts the way out of the dead end on screen');
+});
+
+t.test('the command filter is labelled as optional, and reports what it is hiding only while it hides something', async () => {
+    // Companion to the test above -- see buildListFilterBar() in
+    // html/tablet.js. A bare input above a long grouped list reads as "type
+    // here to find things"; this list is meant to be browsed by section.
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, []),
+        }),
+    });
+    await openCommandsScreen(h);
+
+    const label = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-feature-filter-label'))[0];
+    t.isDefined(label, 'the filter has a real <label>, not only a placeholder');
+    t.contains(label.textContent.toLowerCase(), 'optional', 'and it says so out loud');
+
+    t.equals(
+        findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-feature-filter-count')).length, 0,
+        'unfiltered, it claims nothing -- showing all of them needs no readout'
+    );
+
+    const search = findByTag(h.getRoot(), 'input')[0];
+    search.typeValue('bonetool');
+    await settle();
+
+    const count = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-feature-filter-count'))[0];
+    t.isDefined(count, 'filtered, the readout appears');
+    t.isTrue(/^Showing 1 of \d+$/.test(count.textContent), 'and states both numbers: ' + count.textContent);
 });
 
 t.test('a HANDLER (certified, no special capability) sees a restricted admin-tier command marked unavailable, distinctly from a plain "not certified" reading', async () => {
