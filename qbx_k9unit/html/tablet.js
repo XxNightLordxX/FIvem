@@ -892,6 +892,8 @@
         // decertified/never-certified citizenid.
         open_by_id_placeholder: 'Open by exact citizen ID...',
         open_by_id_label: 'Open',
+        open_my_own_record_label: 'Open my own record',
+        open_my_own_record_hint: 'Opens your own record, without needing to know your citizen ID. This is how you certify yourself, set your own tier, or grant yourself an ability -- if the server config permits it, which it re-checks every time.',
         open_by_id_empty: 'Enter a citizen ID first.',
         // Workflow audit finding #2, 2026-08-26 -- this box previously had
         // no text of its own explaining what makes it different from the
@@ -6544,7 +6546,49 @@
             // here just means "unknown so far", never a guess.
             openPerson(id, null);
         }));
+        // "OPEN MY OWN RECORD" (2026-09-01, owner's live testing: "as high
+        // command i cant certify myself").
+        //
+        // Self-certification is a real, config-permitted flow --
+        // Config.AllowSelfCertification, re-checked server-side on every
+        // call, and refreshPersonAndSelf() below was written specifically
+        // to keep Home/My Record in step after one. But the ONLY way to
+        // reach it from this page was to type your own citizen ID into the
+        // box above, and NOTHING anywhere in this tablet ever shows a
+        // viewer what their own citizen ID is. So the capability existed
+        // server-side with no reachable path to it in the UI, which is
+        // exactly what "I cannot certify myself" looks like from the
+        // outside: not a refusal, just no door.
+        //
+        // This is a pure convenience -- it fills in a citizenid this page
+        // already holds in state.viewer and opens the same Person screen
+        // the box above opens. THE SECURITY RULE is untouched: the server
+        // re-authorizes the certify itself from the caller's own live
+        // job/grants, and refuses a self-certify outright when
+        // Config.AllowSelfCertification is false, exactly as it would if
+        // the id had been typed by hand.
         wrap.appendChild(idBar);
+
+        // ITS OWN ROW, NOT INSIDE idBar -- and that is load-bearing, not
+        // layout taste. findEnterSubmitTarget() gives a text field an
+        // Enter-to-submit target only while its nearest container holds
+        // EXACTLY ONE candidate button, and deliberately refuses the
+        // moment there are two (ambiguity must never auto-fire something).
+        // Dropping this second button into idBar therefore silently broke
+        // Enter in the citizen ID box above -- caught by
+        // tablet_keyboard_operability_spec.js. Keeping it in a sibling
+        // container leaves idBar with its single "Open" button, so Enter
+        // keeps working exactly as it did, and the heuristic keeps its
+        // safety rule intact rather than having an exception carved into
+        // it for this one screen.
+        if (state.viewer && state.viewer.citizenid) {
+            var selfBar = mk('div', { class: 'k9tablet-toolbar k9tablet-self-record-toolbar' });
+            selfBar.appendChild(mk('p', { class: 'k9tablet-hint k9tablet-open-by-id-hint', text: S('open_my_own_record_hint') }));
+            selfBar.appendChild(mkButton(S('open_my_own_record_label'), 'k9tablet-btn', function () {
+                openPerson(state.viewer.citizenid, state.viewer.name || null);
+            }));
+            wrap.appendChild(selfBar);
+        }
 
         if (!fullAccess) {
             // No roster to load/show for this viewer at all -- see the

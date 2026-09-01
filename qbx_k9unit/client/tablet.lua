@@ -957,7 +957,7 @@ local TABLET_STRING_KEYS = {
     'person_handler_xp_heading', 'person_handler_xp_untracked',
     'use_label', 'not_available_short', 'opening_person',
     'person_no_record_found',
-    'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',
+    'open_by_id_placeholder', 'open_by_id_label', 'open_my_own_record_label', 'open_my_own_record_hint', 'open_by_id_empty',
     -- Workflow audit finding #1/#2, 2026-08-26 (html/tablet.js's
     -- canOpenPersonRecord()/buildConsoleScreen() narrowed rendering, and
     -- the "open by exact citizen ID" box's own new explanatory hint --

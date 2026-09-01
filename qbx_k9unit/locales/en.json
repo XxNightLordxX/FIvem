@@ -537,6 +537,8 @@
         "person_no_record_found": "No record found for this citizen ID. Double-check the ID -- it may be a typo, or belong to a deleted character.",
         "open_by_id_placeholder": "Open by exact citizen ID...",
         "open_by_id_label": "Open",
+        "open_my_own_record_label": "Open my own record",
+        "open_my_own_record_hint": "Opens your own record, without needing to know your citizen ID. This is how you certify yourself, set your own tier, or grant yourself an ability -- if the server config permits it, which it re-checks every time.",
         "open_by_id_empty": "Enter a citizen ID first.",
         "open_by_id_hint": "Works for any citizen ID, even someone who has never held a certification -- for example, a brand-new person you are about to set up. If they are online right now, it is easier to pick them from the Online Players list above instead.",
         "console_person_only_notice": "You can open a specific handler or K9's record below if you already know their exact citizen ID. Browsing or searching the full roster needs the Audit capability or High Command.",
