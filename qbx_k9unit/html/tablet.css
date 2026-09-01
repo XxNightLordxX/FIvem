@@ -103,6 +103,13 @@ body {
 
 .k9tablet-header {
     display: flex;
+    /*
+        Paired with .k9tablet-screen's `min-height: 0` above: now that the
+        screen CAN shrink, the flex algorithm would happily shrink these
+        fixed chrome rows too. They are not scrollable and have nothing to
+        give, so squeezing them just crops the title or the tab labels.
+    */
+    flex-shrink: 0;
     align-items: center;
     justify-content: space-between;
     padding: 14px 18px;
@@ -251,6 +258,11 @@ body {
 
 .k9tablet-notice {
     margin: 0;
+    /* A direct .k9tablet-panel flex child, like the header and tab bar --
+       see .k9tablet-header's own note. An action notice is usually the
+       most important thing on screen at the moment it appears, so it is
+       the last thing that should be squeezed to nothing. */
+    flex-shrink: 0;
     padding: 8px 18px;
     font-size: 13px;
 }
@@ -267,6 +279,8 @@ body {
 
 .k9tablet-tabs {
     display: flex;
+    /* See .k9tablet-header's own note -- fixed chrome, never squeezed. */
+    flex-shrink: 0;
     flex-wrap: wrap;
     gap: 4px;
     padding: 10px 18px 0 18px;
@@ -331,6 +345,30 @@ body {
 
 .k9tablet-screen {
     flex: 1 1 auto;
+    /*
+        THE SCROLL CONTAINER MUST BE ALLOWED TO SHRINK (2026-09-01, from
+        the owner's live testing: "guided flows is cut off on the ui").
+
+        A flex item's default `min-height` is `auto`, which for a scroll
+        container resolves to the height of its own content. So this item,
+        despite `flex: 1 1 auto` and `overflow-y: auto`, REFUSED to shrink
+        below whatever it contained: on any screen taller than the panel,
+        it grew past the bottom edge instead of scrolling, and
+        `.k9tablet-panel`'s own `overflow: hidden` then simply clipped the
+        overflowing part away. The scrollbar never appeared, so there was
+        no visible way to reach the clipped content -- it was just gone.
+
+        `min-height: 0` is the standard fix: it lets the item shrink to the
+        space the panel actually has, at which point `overflow-y: auto`
+        engages and the content scrolls as intended.
+
+        This was reported against Guided Flows (the tallest screen: four
+        stacked job cards plus their hint text), but it was never specific
+        to that screen -- every long roster, every long feature list and
+        every long help page was losing its bottom the same way, and only
+        by exactly as much as it happened to overflow.
+    */
+    min-height: 0;
     overflow-y: auto;
     /* Explicit, not relied on as a side effect of overflow-y alone (the
        CSS spec DOES compute overflow-x to `auto` here even without this
