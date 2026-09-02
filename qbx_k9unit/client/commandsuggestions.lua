@@ -342,7 +342,6 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9certify', keySuffix = 'k9certify' },
     { command = 'k9decertify', keySuffix = 'k9decertify' },
     { command = 'k9settier', keySuffix = 'k9settier' },
-    { command = 'k9recertify', keySuffix = 'k9recertify' },
     { command = 'k9specialize', keySuffix = 'k9specialize' },
     { command = 'k9unspecialize', keySuffix = 'k9unspecialize' },
     -- server/admin.lua -- COMMAND_CONSOLIDATION_SPEC.md #1: k9auditcert/

@@ -146,10 +146,12 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9revokepermission = true,
     -- family #8: online/offline certification pairs (10 -> 5) --
     -- server/certifications.lua. k9certify/k9decertify/k9settier/
-    -- k9recertify/k9unspecialize stay their own canonical names (unchanged)
+    -- k9unspecialize stays its own canonical name (unchanged); k9recertify
+    -- joined this table on 2026-09-02 when it merged into /k9certify
     -- and are NOT in this table -- only their *offline counterparts fold
     -- away. k9specialize has no offline counterpart at all and is
     -- untouched.
+    k9recertify = true, -- merged into /k9certify 2026-09-02 (see the registry spec)
     k9certifyoffline = true,
     k9decertifyoffline = true,
     k9settieroffline = true,

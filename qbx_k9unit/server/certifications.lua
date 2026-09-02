@@ -5425,6 +5425,78 @@ end)
 -- COMMAND_REFERENCE -- see both files' HIDDEN_ALIAS_COMMANDS allowlists.
 -- ======================================================================
 
+--- Should `/k9certify` route this target to RENEW rather than GRANT?
+---
+--- ROUTING ONLY, NEVER AN AUTHORIZATION DECISION. This answers one narrow
+--- question -- "is there an existing certification here to extend?" -- and
+--- nothing else. Both branches it routes between (RenewCertification /
+--- GrantCertification) re-run the FULL eligibility, cooldown, self-certify,
+--- proximity and department checks from the caller's own live state, exactly
+--- as they did when they were two separate commands. Nothing here can grant
+--- anyone anything, and a wrong answer costs at most a less helpful refusal
+--- message, never a permission.
+---
+--- TWO CONDITIONS, BOTH REQUIRED:
+---   1. The target genuinely holds an ACTIVE certification in the department
+---      they are currently in -- read from the same `Certifications` cache,
+---      with the same active/job comparison, that RenewCertification itself
+---      uses to decide whether there is anything to renew.
+---   2. Certification expiry is actually switched on. If it is off,
+---      RenewCertification refuses outright with `renew_feature_disabled`,
+---      which would be a WORSE answer for the caller than the honest
+---      "they are already certified" hint GrantCertification gives -- so an
+---      already-certified target on a server with expiry off deliberately
+---      still falls through to the grant path.
+--- @param targetServerId number
+--- @return boolean
+local function ShouldRenewOnlineTarget(targetServerId)
+    if not ResolveConfiguredExpiryDays() then return false end
+
+    local ok, targetPlayer = pcall(function() return exports.qbx_core:GetPlayer(targetServerId) end)
+    if not ok or not targetPlayer or not targetPlayer.PlayerData then return false end
+
+    local targetCitizenid = targetPlayer.PlayerData.citizenid
+    local jobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
+    if type(targetCitizenid) ~= 'string' or type(jobName) ~= 'string' then return false end
+
+    local cached = Certifications[targetCitizenid]
+    return (cached and cached.active and cached.job == jobName) == true
+end
+
+--- The offline half of ShouldRenewOnlineTarget -- same contract, same
+--- "routing only" guarantee, reading the stored record the way
+--- RenewCertificationOffline itself does rather than the in-memory cache
+--- (an offline citizenid may have no cache entry at all).
+--- @param citizenid string
+--- @param jobName string
+--- @return boolean
+local function ShouldRenewOfflineTarget(citizenid, jobName)
+    if not ResolveConfiguredExpiryDays() then return false end
+    if type(citizenid) ~= 'string' or citizenid == '' then return false end
+    if type(jobName) ~= 'string' or jobName == '' then return false end
+    if not Config.Departments[jobName] then return false end
+
+    local ok, record = pcall(QueryCertificationRecord, citizenid, jobName)
+    return (ok and record ~= nil) == true
+end
+
+-- MERGED COMMAND (2026-09-02, owner's request: "Merge /k9certify
+-- /k9recertify all together").
+--
+-- One command now covers both jobs, because from a certifier's point of
+-- view they were never really two: you walk up to someone and make their
+-- certification current. Whether that means creating it or extending it is
+-- a fact about the target's record, not a decision the certifier should
+-- have to make before they can type anything -- and getting it wrong used
+-- to mean a refusal ("they are already certified" / "they are not certified
+-- yet") and a second command.
+--
+-- `/k9recertify` still works, as an undocumented alias -- same convention
+-- the audit and dog-record merges used, so nobody's muscle memory or
+-- keybind breaks.
+--
+-- EVERY GATE IS UNCHANGED. This routes; it does not authorize. See
+-- ShouldRenewOnlineTarget's own header.
 RegisterCommand('k9certify', function(source, args)
     -- DISCOVERABILITY (§4): a totally bare `/k9certify` has no target of
     -- EITHER shape to resolve -- show the combined usage string (both
@@ -5438,9 +5510,17 @@ RegisterCommand('k9certify', function(source, args)
     end
     local targetServerId = tonumber(args[1])
     if targetServerId then
-        GrantCertification(source, targetServerId)
+        if ShouldRenewOnlineTarget(targetServerId) then
+            RenewCertification(source, targetServerId)
+        else
+            GrantCertification(source, targetServerId)
+        end
     else
-        GrantCertificationOffline(source, args[1], args[2])
+        if ShouldRenewOfflineTarget(args[1], args[2]) then
+            RenewCertificationOffline(source, args[1], args[2])
+        else
+            GrantCertificationOffline(source, args[1], args[2])
+        end
     end
 end, false)
 
@@ -5553,6 +5633,11 @@ end, false)
 
 -- COMMAND CONSOLIDATION (§2/§5 item 8) -- same dispatcher shape as
 -- k9certify above.
+-- HIDDEN ALIAS (2026-09-02) -- merged into /k9certify, which now routes to
+-- renew or grant on its own. Body deliberately UNCHANGED from before the
+-- merge: this still goes straight to the renew path, so anyone who
+-- explicitly means "renew, and tell me plainly if there is nothing to
+-- renew" keeps exactly the behaviour and the error messages they had.
 RegisterCommand('k9recertify', function(source, args)
     if args[1] == nil or args[1] == '' then
         local usage = locale('certifications.usage_recertify')

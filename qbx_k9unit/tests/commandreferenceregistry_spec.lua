@@ -218,6 +218,11 @@ local HIDDEN_ALIAS_COMMANDS = {
     -- not deferred" shape as permissions above -- see
     -- COMMANDS_TAB_CLEANUP_COMPLETE.cert_pairs below.
     k9certifyoffline = 'cert_pairs',
+    -- family: certify (2 -> 1, 'k9certify') -- merged 2026-09-02 at the
+    -- owner's request. /k9certify now decides between granting and renewing
+    -- on its own, so /k9recertify no longer needs its own documented entry;
+    -- it keeps working undocumented so no keybind or muscle memory breaks.
+    k9recertify = 'certify_merge',
     k9decertifyoffline = 'cert_pairs',
     k9settieroffline = 'cert_pairs',
     k9recertifyoffline = 'cert_pairs',

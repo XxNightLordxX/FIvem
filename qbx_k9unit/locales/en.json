@@ -1111,7 +1111,7 @@
         "cmdref_k9stats_does": "Shows the server's K9 XP leaderboard.",
         "cmdref_k9stats_needs": "An active K9 certification. This feature must be turned on for your server.",
         "cmdref_k9certify_usage": "/k9certify <server id>  |  /k9certify <citizenid> <job>",
-        "cmdref_k9certify_does": "Certifies a player as a K9 handler for their current department -- works whether they are online (first form) or offline (second form).",
+        "cmdref_k9certify_does": "Makes a handler's certification current for their department -- certifies them if they are new, renews their expiry if they already hold one. Works whether they are online (first form) or offline (second form).",
         "cmdref_k9certify_needs": "High Command, the certify permission, or your department's certifier rank. An ONLINE target must be in a configured department and within certifying distance (unless you are certifying yourself and self-certification is allowed). An OFFLINE target is refused if your server requires an on-model check, since that can only happen while they are online -- use the online form once they log in instead.",
         "cmdref_k9certifyoffline_usage": "/k9certifyoffline <citizenid> <job>",
         "cmdref_k9certifyoffline_does": "Old, still-working name for /k9certify's offline form (a numeric first argument means online, anything else means offline -- see /k9certify).",

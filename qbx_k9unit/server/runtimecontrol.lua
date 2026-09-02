@@ -618,39 +618,6 @@ local FEATURE_TIERS = {
     K9DownDispatch         = { tier = 'rawtoplevel', note = 'server/integrations.lua opens with "if not Config.Features.K9DownDispatch then return end" -- the poll thread, the NewCooldown construction, and the playerDropped handler are never even reached when the flag is off at load time.' },
     K9Leaderboard          = { tier = 'rawtoplevel', note = 'server/leaderboard.lua opens with "if not (Config.Features and Config.Features.K9Leaderboard == true) then return end" before its own RegisterCommand(\'k9stats\', ...) -- the command is never registered at all when the flag is off at load time.' },
     PursuitSprint          = { tier = 'rawtoplevel', note = 'server/pursuitsprint.lua opens with "if not Config.Features.PursuitSprint then return end" before its own config asserts and RegisterNetEvent(\'qbx_k9unit:server:requestPursuitSprint\', ...) -- the net event is never registered at all when the flag is off at load time.' },
-    -- ADDED 2026-08-26 (coder-backend, DangerWarn handover items 1-4):
-    -- confirmed by direct read of the removed danger-warn server file's own first
-    -- executable line, same verification standard as the six-entry batch
-    -- immediately above -- same shape as HandlerDownDefense above it,
-    -- carrying its own note (unlike that entry, which predates this
-    -- file's "quote the exact opening line" convention) so a future reader
-    -- does not have to go re-read the removed danger-warn server file to confirm this
-    -- classification themselves.
-    -- ADDED 2026-08-27, alongside the Config.Features key itself, which had
-    -- never existed (see that key's own comment in config.lua for why a
-    -- fully-built, keybound, tested feature shipped with no switch anywhere).
-    -- CLASSIFIED 'live' BY READING BOTH FILES, not by trusting
-    -- the removed apprehension-announcement server file's own header claim: neither the removed apprehension-announcement server file nor
-    -- the removed apprehension-announcement client file has any file-level early return on the flag, and
-    -- RegisterCommand('k9announce'), RegisterKeyMapping('k9announce', ... 'M')
-    -- and both net events register UNCONDITIONALLY. Every read of the flag
-    -- sits inside a handler body -- the removed apprehension-warned check and the
-    -- announceApprehensionWarning handler's own opening line -- so a tablet
-    -- flip takes effect on the very next bite/takedown validation in either
-    -- direction, no restart, exactly like BiteAndHold/NonLethalTakedown whose
-    -- call site this gate rides on top of.
-    -- LOCKOUT-RISK (see "LOCKOUT-RISK FEATURES" below this table): turning
-    -- this off, then actually following through with the config.lua edit +
-    -- restart this tier already requires, removes the ONLY in-game surface
-    -- (command/item) that opens the tablet at all, for EVERYONE including
-    -- high command -- there would be no screen left to turn it back on.
-    -- `lockoutRisk = true` gates SetFeature/ResetFeature behind an explicit
-    -- confirm, same mechanism as HighCommand/PermissionGrants below.
-    -- NOT `sessionOnly`: unlike HighCommand/PermissionGrants, a persisted
-    -- override for a `rawtoplevel` feature can never itself brick anything
-    -- -- it already cannot take effect without a deliberate config.lua edit
-    -- (configEditRequired, below), which is the same conscious, disclosed
-    -- step that already protects every other rawtoplevel entry above.
     CommandTablet          = { tier = 'rawtoplevel', lockoutRisk = true,
         note = 'Multiple files register their own CommandTablet-gated tablet callbacks this same way (server/permissions.lua confirmed by direct read; others may exist). Turning this off here does not close an already-registered tablet callback anywhere in this resource.',
         lockoutWarningKey = 'commandtablet',

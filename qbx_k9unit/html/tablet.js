@@ -1688,7 +1688,7 @@
         cmdref_k9stats_needs: 'An active K9 certification. This feature must be turned on for your server.',
 
         cmdref_k9certify_usage: '/k9certify <server id>  |  /k9certify <citizenid> <job>',
-        cmdref_k9certify_does: 'Certifies a player as a K9 handler for their current department -- works whether they are online (first form) or offline (second form).',
+        cmdref_k9certify_does: 'Makes a handler\'s certification current for their department -- certifies them if they are new, renews their expiry if they already hold one. Works whether they are online (first form) or offline (second form).',
         cmdref_k9certify_needs: 'High Command, the certify permission, or your department\'s certifier rank. An ONLINE target must be in a configured department and within certifying distance (unless you are certifying yourself and self-certification is allowed). An OFFLINE target is refused if your server requires an on-model check, since that can only happen while they are online -- use the online form once they log in instead.',
         cmdref_k9certifyoffline_usage: '/k9certifyoffline <citizenid> <job>',
         cmdref_k9certifyoffline_does: 'Old, still-working name for /k9certify\'s offline form (a numeric first argument means online, anything else means offline -- see /k9certify).',
@@ -2478,7 +2478,6 @@
         { command: 'k9certify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9certify_usage', doesKey: 'cmdref_k9certify_does', needsKey: 'cmdref_k9certify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9decertify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9decertify_usage', doesKey: 'cmdref_k9decertify_does', needsKey: 'cmdref_k9decertify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9settier', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9settier_usage', doesKey: 'cmdref_k9settier_does', needsKey: 'cmdref_k9settier_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
-        { command: 'k9recertify', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9recertify_usage', doesKey: 'cmdref_k9recertify_does', needsKey: 'cmdref_k9recertify_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9specialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9specialize_usage', doesKey: 'cmdref_k9specialize_does', needsKey: 'cmdref_k9specialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9unspecialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9unspecialize_usage', doesKey: 'cmdref_k9unspecialize_does', needsKey: 'cmdref_k9unspecialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         // k9dog -- COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point

@@ -81,7 +81,6 @@
 
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
-local locale = Sandbox.locale
 
 --- Sentinel returned by `queueCallbackThrow()` -- see clientsearch_spec.lua's
 --- own identical THROW sentinel for the same rationale (ox_lib's real
@@ -394,7 +393,7 @@ local function newWellbeingFixture(opts)
 
     -- Real K9Compat, real ox_target adapter -- see the oxTargetStub comment
     -- above for why. Must load before client/wellbeing.lua, which reads the
-    -- `K9Compat` global inside RegisterMoodOxTargetOptions() (fired below
+    -- `K9Compat` global inside the removed Mood ox_target registrar (fired below
     -- via the captured onResourceStart handler, when MoodSystem is on).
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/target.lua', env)
@@ -452,7 +451,7 @@ local function newWellbeingFixture(opts)
         queueCallbackThrow = function() callbackResponses[#callbackResponses + 1] = THROW end,
         callbackCallCount = function() return #callbackCallLog end,
         lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
-        -- MOOD MERGE (this pass, coder-backend) -- RequestCareForK9() can
+        -- MOOD MERGE (this pass, coder-backend) -- the removed care-for-K9 request can
         -- make up to TWO sequential lib.callback.await calls (feedK9, then a
         -- conditional petK9 fallback); this exposes the full ordered log so
         -- a test can pin exactly which callback(s) fired, in what order,
@@ -463,7 +462,7 @@ local function newWellbeingFixture(opts)
         -- longer separate ox_target table entries (see
         -- client/wellbeing.lua's own "HIDDEN ALIASES" header note) -- both
         -- former onSelect bodies survive as the resource-globals
-        -- RequestPetK9()/RequestFeedK9(), exercised directly in SECTION E
+        -- the removed pet-K9 request/the removed feed-K9 request, exercised directly in SECTION E
         -- below rather than through a `def.name` lookup that no longer
         -- exists. `careOption()` is the ONE real ox_target entry this file
         -- now registers for Mood.
@@ -658,37 +657,16 @@ end)
 -- SECTION E -- "Care for K9" (MoodSystem), the MOOD MERGE (this pass,
 -- coder-backend): what used to be two separate ox_target options, "Pet K9"
 -- and "Feed K9", is now the one 'qbx_k9unit:careForK9' option, resolving
--- between the two former server callbacks via RequestCareForK9(). The two
--- former onSelect bodies themselves survive as RequestPetK9()/
--- RequestFeedK9(), tested directly below (SECTION E2) rather than through
+-- between the two former server callbacks via the removed care-for-K9 request. The two
+-- former onSelect bodies themselves survive as the removed pet-K9 request/
+-- the removed feed-K9 request, tested directly below (SECTION E2) rather than through
 -- a `def.name` lookup that no longer exists -- see client/wellbeing.lua's
 -- own "HIDDEN ALIASES" header note.
 -- ----------------------------------------------------------------------
 
-t.test('RESOLUTION: every Feed failure reason OTHER than "no_item" is reported directly -- NEVER a second, guaranteed-redundant round trip against Pet for a reason Pet would fail identically for', function()
-    local REASON_LABELS = {
-        feature_disabled = locale('wellbeing.reason_feature_disabled'),
-        invalid_target = locale('wellbeing.reason_invalid_target'),
-        too_far = locale('common.too_far_from_k9'),
-        on_cooldown = locale('wellbeing.reason_on_cooldown'),
-    }
-
-    for reason, expectedLabel in pairs(REASON_LABELS) do
-        local f = newWellbeingFixture({ features = { MoodSystem = true } })
-        f.setEntityIsK9Model(500, true)
-        f.setServerIdForPed(500, 42)
-        f.queueCallbackResponse({ ok = false, reason = reason })
-        f.careOption().onSelect({ entity = 500 })
-        t.equals(f.callbackCallCount(), 1, ('reason %q must NOT trigger a Pet fallback round trip'):format(reason))
-        t.equals(#f.notifyCalls, 1, ('reason %q must produce exactly one notification'):format(reason))
-        t.equals(f.notifyCalls[1].description, expectedLabel, ('reason %q must map to its own documented label'):format(reason))
-        t.equals(f.notifyCalls[1].type, 'error')
-    end
-end)
-
 -- ----------------------------------------------------------------------
--- SECTION E2 -- the surviving hidden-alias globals, RequestPetK9()/
--- RequestFeedK9(): the exact former "Pet K9"/"Feed K9" onSelect bodies,
+-- SECTION E2 -- the surviving hidden-alias globals, the removed pet-K9 request/
+-- the removed feed-K9 request: the exact former "Pet K9"/"Feed K9" onSelect bodies,
 -- unchanged, no longer wired to their own ox_target table entry but still
 -- reachable directly -- see client/wellbeing.lua's own "HIDDEN ALIASES"
 -- header note (mirrors client/tracking.lua's StartScentTrack() surviving

@@ -2918,6 +2918,138 @@ t.test('/k9certify command: a totally bare command (no args at all) shows the CO
     t.isFalse(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certifyoffline'), 'error'), 'must not show the narrower offline-only usage for a bare command')
 end)
 
+-- ======================================================================
+-- THE CERTIFY MERGE (2026-09-02, owner: "Merge /k9certify /k9recertify all
+-- together").
+--
+-- /k9certify now decides for itself whether the target needs certifying or
+-- renewing, because from a certifier's point of view those were never two
+-- jobs: you make someone's certification current. Getting the choice wrong
+-- used to cost a refusal and a second command.
+--
+-- The routing is NOT an authorization decision -- both destinations re-run
+-- every eligibility, cooldown, self-certify, proximity and department check
+-- exactly as before. These tests pin the routing itself, and pin the two
+-- cases where it deliberately does NOT route to renew.
+-- ======================================================================
+
+--- Puts `citizenid` into the state the merged /k9certify treats as
+--- "already certified", through server/certifications.lua's OWN
+--- RefreshCertificationCache rather than by writing the cache table
+--- directly -- so this fixture agrees with production about what that state
+--- means, instead of asserting against a shape the real code never builds.
+--- @param f table @param citizenid string @param jobName string
+local function seedActiveCertification(f, citizenid, jobName)
+    local previousScalar = f.mysql.scalar.await
+    f.mysql.scalar.await = function() return 55 end -- an active row exists
+    f.env.RefreshCertificationCache(citizenid, jobName)
+    f.mysql.scalar.await = previousScalar
+end
+
+t.test('MERGE: an already-certified ONLINE target is RENEWED, not refused with "already certified"', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    seedActiveCertification(f, 'T1', 'police')
+
+    local renewCalled = false
+    f.mysql.update.await = function() renewCalled = true; return 1 end
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.commands['k9certify'].fn(1, { '20' })
+
+    t.isTrue(renewCalled, '/k9certify on an already-certified target must RENEW')
+    t.isFalse(insertCalled, 'and must not attempt a second INSERT')
+end)
+
+t.test('MERGE: a NOT-yet-certified target still goes to the grant path, completely unchanged', function()
+    -- The control. Without it, a change that routed everything to renew
+    -- would pass the test above.
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.commands['k9certify'].fn(1, { '20' })
+
+    t.isTrue(insertCalled, 'a brand-new target is INSERTed, exactly as before the merge')
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.grant_success_target'), 'success'))
+end)
+
+t.test('MERGE: with expiry switched OFF, an already-certified target falls through to GRANT and gets the honest "already certified" hint -- never the useless "renew is disabled" one', function()
+    -- The second deliberate non-routing case, and the reason the router
+    -- checks the expiry feature at all: RenewCertification refuses outright
+    -- when expiry is off, which would be a strictly worse answer for the
+    -- caller than the grant path's own accurate hint.
+    local f = newFixture() -- Config.Features absent -- expiry off
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    seedActiveCertification(f, 'T1', 'police')
+    f.mysql.scalar.await = function() return 55 end -- the grant path's own pre-check sees it too
+    f.commands['k9certify'].fn(1, { '20' })
+
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.target_already_certified_hint'), 'inform'),
+        'the grant path\'s own accurate hint')
+    t.isFalse(anyNotify(f, 1, Sandbox.locale('certifications.renew_feature_disabled'), 'error'),
+        'never the renew path\'s "this feature is off" refusal, which tells the caller nothing useful')
+end)
+
+t.test('MERGE: routing is NOT authorization -- an ineligible caller is still refused on an already-certified target', function()
+    -- The routing helper runs before either destination, so it must not
+    -- become a way to reach the renew path without passing its gates.
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    -- Seed the RENEW state specifically, so this test genuinely exercises the
+    -- renew branch. Without it the empty cache would route to GRANT, which
+    -- refuses an ineligible caller identically -- and this test would pass
+    -- while proving nothing about the branch it names.
+    seedActiveCertification(f, 'T1', 'police')
+
+    -- Now strip the caller's authority.
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 0 } })
+    local renewCalled = false
+    f.mysql.update.await = function() renewCalled = true; return 1 end
+
+    f.commands['k9certify'].fn(1, { '20' })
+
+    t.isFalse(renewCalled, 'an ineligible caller must not reach the renew write')
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.not_authorized_to_certify_hint'), 'error'))
+end)
+
+t.test('HIDDEN ALIAS: /k9recertify still works and still goes STRAIGHT to renew, so an explicit "renew or tell me why not" keeps its exact old messages', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    -- Deliberately NOT certified -- the alias must still report the renew
+    -- path's own "there is nothing to renew" message rather than silently
+    -- certifying them the way the merged /k9certify now would. That
+    -- difference IS the reason the alias keeps its own body.
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.commands['k9recertify'].fn(1, { '20' })
+
+    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.target_not_actively_certified_needs_cert'), 'error'))
+    t.isFalse(insertCalled, 'the alias must never fall through to granting -- that is the merged command\'s job, not this one\'s')
+end)
+
 t.test('HIDDEN ALIAS: /k9certifyoffline still works standalone, byte-identical body, for the digits-only-citizenid escape hatch (§2\'s own disclosed ambiguity)', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
