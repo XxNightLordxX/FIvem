@@ -621,7 +621,7 @@ end)
 -- ======================================================================
 
 t.test('B2: an enabled feature whose configured item name does not exist in ox_inventory is a FINDING', function()
-    -- REPOINTED 2026-09-02: this used HungerThirstSystem's two item names
+    -- REPOINTED 2026-09-02: this used a removed subsystem's two item names
     -- until that feature was removed. K9Medkit is now the only feature whose
     -- configured item name debugdump validates, so it is what B2 has to be
     -- tested against -- the CHECK is unchanged, only the feature it runs on.

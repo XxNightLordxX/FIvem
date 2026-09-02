@@ -813,9 +813,6 @@ t.test('CONSTRAINT: no scenery ped this resource spawns may use a K9 model', fun
         { path = 'Config.K9EquipmentShop.pedModel',
           value = shippedCfg.K9EquipmentShop and shippedCfg.K9EquipmentShop.pedModel,
           what  = 'the equipment-shop attendant (client/equipmentshop.lua)' },
-        { path = 'Config.SARCalls.missingPersonPedModel',
-          value = shippedCfg.SARCalls and shippedCfg.SARCalls.missingPersonPedModel,
-          what  = 'the SAR missing-person victim (the removed SAR-calls client file)' },
     }
 
     local offenders = {}

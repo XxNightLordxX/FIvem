@@ -8,10 +8,9 @@
     bodies -- never a reimplementation of any `local` this spec has no other
     way to reach.
 
-    IT USED TO COVER FIVE SUBSYSTEMS. Mood, fear/stress, distraction and
-    injury were all handled by the same file, and this spec had sections for
-    each. All four were removed on 2026-09-02 at the owner's request, and
-    their tests went with them.
+    IT USED TO COVER FIVE SUBSYSTEMS handled by the same file, and had a
+    section for each. All but fatigue were removed on 2026-09-02 at the
+    owner's request, and their tests went with them.
 
     LOAD-TIME GATING -- IMPORTANT FOR THIS FIXTURE, and the reason several
     tests below look the way they do. This file once gated its threads,
@@ -210,7 +209,7 @@ local function newWellbeingFixture(opts)
     -- client/movement.lua resource-globals this file writes to/calls but
     -- never defines -- see this file's own header on why a plain table
     -- plus a call counter is sufficient here.
-    local k9MoveRateModifiers = { fatigue = 42, injury = 42, mood = 42 } -- sentinel 42s: any test that must prove a slot was NEVER touched checks for exactly this value surviving
+    local k9MoveRateModifiers = { fatigue = 42 } -- sentinel 42: any test that must prove a slot was NEVER touched checks for exactly this value surviving
     local recomputeCallCount = 0
     local function RecomputeK9MoveRate() recomputeCallCount = recomputeCallCount + 1 end
 
@@ -231,12 +230,11 @@ local function newWellbeingFixture(opts)
     -- the no-op stub -- the exports this file never actually exercises are
     -- still stubbed as harmless no-ops so verification passes.
     local addGlobalPlayerCalls = {}
-    local addModelCalls = {} -- { models = {...}, defs = {...} } -- HUNGER/THIRST "Drink from Bowl" (this pass, coder-backend)
     local oxTargetStub = {}
     function oxTargetStub.addGlobalPlayer(_, defs) addGlobalPlayerCalls[#addGlobalPlayerCalls + 1] = defs end
     function oxTargetStub.addGlobalVehicle() end
     function oxTargetStub.addGlobalObject() end
-    function oxTargetStub.addModel(_, models, defs) addModelCalls[#addModelCalls + 1] = { models = models, defs = defs } end
+    function oxTargetStub.addModel() end
     function oxTargetStub.addSphereZone() end
     function oxTargetStub.removeGlobalPlayer() end
     function oxTargetStub.removeGlobalVehicle() end
@@ -369,9 +367,7 @@ local function newWellbeingFixture(opts)
     end
 
     -- Real K9Compat, real ox_target adapter -- see the oxTargetStub comment
-    -- above for why. Must load before client/wellbeing.lua, which reads the
-    -- `K9Compat` global inside the removed Mood ox_target registrar (fired below
-    -- via the captured onResourceStart handler).
+    -- above for why. Must load before client/wellbeing.lua.
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/target.lua', env)
 
@@ -411,9 +407,9 @@ local function newWellbeingFixture(opts)
         -- or role`, so "my own model is a K9" and "the player ped is a K9
         -- model" are not two independent knobs -- the first implies the
         -- second. They were separate here only because nothing read the
-        -- entity form for the local ped until the injury block moved to
-        -- IsEntityModelK9(PlayerPedId()) (owner's decision: a role-holder on
-        -- a human body keeps sprint and jump). Keeping them in step here is
+        -- entity form for the local ped until a since-removed block moved
+        -- to IsEntityModelK9(PlayerPedId()) (owner's decision: a role-holder
+        -- on a human body keeps sprint and jump). Keeping them in step here is
         -- what stops a test asserting a state a real client cannot be in.
         setIsOwnModelK9 = function(v)
             isOwnModelK9 = v
@@ -428,39 +424,6 @@ local function newWellbeingFixture(opts)
         queueCallbackThrow = function() callbackResponses[#callbackResponses + 1] = THROW end,
         callbackCallCount = function() return #callbackCallLog end,
         lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
-        -- MOOD MERGE (this pass, coder-backend) -- the removed care-for-K9 request can
-        -- make up to TWO sequential lib.callback.await calls (feedK9, then a
-        -- conditional petK9 fallback); this exposes the full ordered log so
-        -- a test can pin exactly which callback(s) fired, in what order,
-        -- not merely the last one.
-        callbackCallAt = function(n) return callbackCallLog[n] and callbackCallLog[n].event end,
-
-        -- MOOD MERGE (this pass, coder-backend) -- "Pet K9"/"Feed K9" are no
-        -- longer separate ox_target table entries (see
-        -- client/wellbeing.lua's own "HIDDEN ALIASES" header note) -- both
-        -- former onSelect bodies survive as the resource-globals
-        -- the removed pet-K9 request/the removed feed-K9 request, exercised directly in SECTION E
-        -- below rather than through a `def.name` lookup that no longer
-        -- exists. `careOption()` is the ONE real ox_target entry this file
-        -- now registers for Mood.
-        careOption = function()
-            for _, defs in ipairs(addGlobalPlayerCalls) do
-                for _, def in ipairs(defs) do
-                    if def.name == 'qbx_k9unit:careForK9' then return def end
-                end
-            end
-        end,
-        addGlobalPlayerCallCount = function() return #addGlobalPlayerCalls end,
-
-        -- HUNGER/THIRST (this pass, coder-backend) -- "Drink from Bowl".
-        bowlOption = function()
-            for _, call in ipairs(addModelCalls) do
-                for _, def in ipairs(call.defs) do
-                    if def.name == 'qbx_k9unit:drinkFromBowl' then return def, call.models end
-                end
-            end
-        end,
-        addModelCallCount = function() return #addModelCalls end,
         setEntityExists = function(entity, v) existingEntities[entity] = v end,
         setEntityNetId = function(entity, netId) netIdByEntity[entity] = netId end,
 
@@ -498,8 +461,7 @@ end
 -- ----------------------------------------------------------------------
 
 -- ----------------------------------------------------------------------
--- SECTION B -- THE INJURYLIMPING OWN-DEATH GUARD, THIS TASK'S TOP
--- PRIORITY. Thread order at file-load time (and
+-- SECTION B -- THREAD ORDER at file-load time (and
 -- every other flag false): the on-demand snapshot thread is created FIRST
 -- the control-block
 -- thread SECOND, and the (always-registering) native sprint stamina assist
@@ -529,20 +491,14 @@ t.test('every wellbeing flag off: extreme stat values touch NOTHING -- K9MoveRat
     -- ApplyMoveRateModifiers now explicitly resets a disabled stat's own
     -- slot to 1.0 on every call, so the sentinel can never survive past the
     -- very first applied snapshot regardless of which flags are on.
-    local f = newWellbeingFixture() -- all five flags false
-    f.triggerWellbeingUpdate(65535, {
-        fatigue = 0, mood = 0, injury = 0, fearStress = 100,
-        distractedUntil = 999999, hesitatingUntil = 999999,
-    })
-    -- NARROWED 2026-09-02: MoodSystem and InjuryLimping were removed, so this
-    -- file no longer owns a `mood` or `injury` modifier slot -- nothing
-    -- writes them, and asserting they get reset would be asserting against
-    -- code that no longer exists. `fatigue` is the one slot still owned
-    -- here, and the unbounded-trap guarantee this test exists for applies
-    -- to it exactly as before.
+    local f = newWellbeingFixture() -- the flag false
+    f.triggerWellbeingUpdate(65535, { fatigue = 0 })
+    -- NARROWED 2026-09-02: `fatigue` is the one slot this file still owns,
+    -- and the unbounded-trap guarantee this test exists for applies to it
+    -- exactly as before.
     t.equals(f.k9MoveRateModifiers.fatigue, 1.0, 'a disabled stat\'s modifier slot must be explicitly RESET to neutral, never left at whatever the sentinel/previous value was')
     t.equals(f.recomputeCallCount(), 1, 'RecomputeK9MoveRate is called unconditionally on every applied snapshot, regardless of which (if any) flags are on')
-    t.equals(#f.notifyCalls, 0, 'no distraction/hesitation notify may fire while both owning flags are off, however extreme the pushed values are')
+    t.equals(#f.notifyCalls, 0, 'no notify may fire while the owning flag is off, however extreme the pushed values are')
 end)
 
 t.test('RUNTIME TOGGLE OFF closes the unbounded trap: a K9 already carrying a real fatigue penalty has it REMOVED (not merely stopped from reapplying) the moment a live featureFlags push reports the flag off', function()

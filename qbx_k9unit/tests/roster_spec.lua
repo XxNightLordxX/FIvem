@@ -119,7 +119,7 @@ local function newFixture(opts)
     -- must supply a real AddEventHandler or loading server/roster.lua
     -- itself throws "attempt to call a nil value" before any test below
     -- ever runs. Captures every handler by event name, exactly mirroring
-    -- the removed SAR-calls spec's own `eventHandlers`/`firePlayerDropped`
+    -- this suite's own `eventHandlers`/`firePlayerDropped`
     -- shape, so `f.firePlayerDropped(source)` below can fire them the same
     -- way FXServer would: by setting the ambient `source` global the
     -- captured closure itself reads (server/cooldowns.lua's

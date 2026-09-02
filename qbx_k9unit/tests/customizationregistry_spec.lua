@@ -480,7 +480,7 @@ end)
 --- Every literal `HasPermission(<anything-without-a-comma>, 'block.<Name>')`
 --- call site across every file in SERVER_LUA_FILES -- deliberately anchored
 --- to the `HasPermission(` call shape (not a bare `block%.` text search) so
---- a PROSE MENTION of `block.Recall` in a comment (the removed recall server file's own
+--- a PROSE MENTION of a `block.<Name>` key in a comment (that file's own
 --- header explains at length why that exact permission key is deliberately
 --- never read) is never mistaken for a real enforcement call. Confirmed
 --- against every real call site in this codebase before writing this pattern
@@ -506,7 +506,7 @@ end
 -- (2026-08-26), not assumed from the file's own general purpose:
 --   server/wellbeing.lua's IsWellbeingFeaturePermittedForCitizenId(citizenid,
 --     featureName) is called with exactly these six literal arguments --
---     HungerThirstSystem added this pass (coder-backend, config-landing
+--     A since-removed key added this pass (coder-backend, config-landing
 --     pass): TickWellbeing's own Hunger/Thirst passive-decay branch already
 --     called this checker with the literal 'HungerThirstSystem' argument
 --     BEFORE Config.Features.HungerThirstSystem/Config.Wellbeing.Hunger/

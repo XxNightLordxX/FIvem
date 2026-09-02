@@ -721,12 +721,12 @@ end)
 -- above loads ONLY server/cooldowns.lua + server/runtimecontrol.lua, per
 -- this file's own header) -- every test below injects a stand-in directly
 -- onto `f.env`, the SAME "runtime-existence-guarded soft dependency"
--- pattern the removed recall spec/tests/certifications_spec.lua already use
+-- pattern tests/certifications_spec.lua already uses
 -- for `f.env.EndActiveEffectForHolder`.
 -- ============================================================================
 
 --- @param extraFeatures table? -- merged over the four active-usage
---- features (all on by default) plus TrainingMode (also on, for the
+--- features (all on by default) plus one more (also on, for the
 --- exclusion test below) -- e.g. { BiteAndHold = false } to start one off.
 local function bootWithActiveUsageFeatures(extraFeatures)
     local features = {
@@ -1602,8 +1602,8 @@ t.test('LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY path resolves against t
     -- runtimefeaturetiers_spec.lua's own ">= 56" sanity floor for the
     -- identical reason (a loadfile typo silently producing a near-empty
     -- table would otherwise make the loop above pass vacuously).
-    -- FLOOR LOWERED 105 -> 85 on 2026-09-02: the 21 Wellbeing.Mood /
-    -- FearStress / Distraction / Injury / Hunger / Thirst tunables were
+    -- FLOOR LOWERED 105 -> 85 on 2026-09-02: the 21 removed-subsystem
+    -- Wellbeing tunables were
     -- deleted with the subsystems that owned them. The floor still exists
     -- for its original reason -- a loadfile typo producing a near-empty
     -- registry would make the loop above pass vacuously -- so it stays high

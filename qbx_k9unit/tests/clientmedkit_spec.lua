@@ -3,8 +3,8 @@
 
     Direct, black-box tests of client/medkit.lua against the REAL,
     unmodified production file -- the client half of "Treat K9" (server/
-    medkit.lua's own contract). Follows clientscenttrail_spec.lua's/
-    clientsarcalls_spec.lua's worked example: a real file loaded into a
+    medkit.lua's own contract). Follows this suite's worked example: a
+    real file loaded into a
     fresh sandbox per test, driven only through its captured
     'qbx_k9unit:client:applyMedkitHeal' RegisterNetEvent handler.
 
@@ -60,7 +60,7 @@
     exercised path touches (PlayerPedId, IsEntityDead, GetEntityHealth,
     GetEntityMaxHealth, SetEntityHealth, RegisterNetEvent, source) is a
     small, cheap recording/controllable stand-in, same shape as
-    clientscenttrail_spec.lua's/clientsarcalls_spec.lua's own fixtures.
+    every other client spec's own fixtures.
     RegisterMedkitOxTargetOption()'s own onResourceStart/K9Compat wiring
     (the REQUEST side, a UX-only affordance per this file's own header, not
     this spec's concern) is stubbed only enough that the file loads without
@@ -191,7 +191,7 @@ local function newMedkitFixture(opts)
         hasHealEvent = function() return netEventHandlers['qbx_k9unit:client:applyMedkitHeal'] ~= nil end,
         --- Fires the real, captured handler. `forged` (default false) models
         --- a local self-TriggerEvent (any source other than 65535) -- same
-        --- convention as clientscenttrail_spec.lua's/clientsarcalls_spec.lua's
+        --- convention as every other client spec's
         --- own fireFoundEvent/fireHintTier helpers.
         fireHealEvent = function(forged, newHealth)
             env.source = forged and 999 or 65535

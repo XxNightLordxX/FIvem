@@ -181,10 +181,10 @@ class FakeDocument {
 }
 
 /** One (row, fill, value) triple for a bar-stat row, matching
- * index.html's own markup for health/stamina/hunger/thirst/fatigue/mood/
- * fearStress/injury exactly (same three data-* hooks, same starting
- * `k9hud-row--hidden` class on the four wellbeing-extension rows, per
- * index.html's own comment on why they start pre-hidden). */
+ * index.html's own markup for health/stamina/hunger/thirst/fatigue
+ * exactly (same three data-* hooks, same starting `k9hud-row--hidden`
+ * class on the wellbeing-extension row, per index.html's own comment on
+ * why it starts pre-hidden). */
 function addBarRow(doc, stat, startHidden) {
     const row = doc.createElement('div', { 'data-stat-row': stat, class: startHidden ? 'k9hud-row k9hud-row--hidden' : 'k9hud-row' });
     doc._register(row);
@@ -262,10 +262,7 @@ function buildK9HudDocument() {
     for (const stat of ['health', 'stamina', 'hunger', 'thirst']) {
         addBarRow(doc, stat, false);
     }
-    for (const stat of ['fatigue', 'mood', 'fearStress', 'injury']) {
-        addBarRow(doc, stat, true);
-    }
-    addStatusRow(doc, 'distraction');
+    addBarRow(doc, 'fatigue', true);
     addStatusRow(doc, 'xpTier');
     addPartnerBadge(doc);
     addOnboardingHint(doc);

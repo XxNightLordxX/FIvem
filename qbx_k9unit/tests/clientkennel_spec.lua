@@ -159,7 +159,7 @@ local function newKennelFixture(opts)
 
     -- CLOSEABLE KENNEL (this pass) -- `getOwnKennelDoorState` callback
     -- stand-in, same "queue of canned responses, defaulting to a sane
-    -- value" shape as the removed training client spec's own callbackAwait.
+    -- value" shape as every other callbackAwait fixture in this suite.
     -- Defaults to `{ ok = true, closed = false, occupied = false }` (an
     -- open, empty kennel) so every PRE-EXISTING "ENTERS" test written
     -- before this callback existed keeps exercising the enter path without

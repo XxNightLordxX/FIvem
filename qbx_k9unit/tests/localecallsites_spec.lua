@@ -75,7 +75,7 @@
                         or the "no new unreviewed dynamic call sites" test
                         fails and names it. A check that fails on a dynamic
                         call site it cannot resolve is worse than none (see
-                        the removed training client file's own header comment on this
+                        that file's own header comment on this
                         exact hazard) -- so dynamic sites are disclosed, not
                         forced into a wrong answer.
 

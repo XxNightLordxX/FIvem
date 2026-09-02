@@ -820,7 +820,7 @@ local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
     { flag = 'K9Inventory', itemId = 'k9_open_inventory', menu = 'k9unit_utility' },
     { flag = 'K9Medkit', itemId = 'k9_treat_nearest', menu = 'k9unit_utility' },
     -- RESOLVED this pass: closed the exact disclosed gap
-    -- the removed SAR-calls client file's own header used to name ("not wired into
+    -- a removed file's own header used to name ("not wired into
     -- client/radial.lua by this pass") -- same generic mechanism, nothing
     -- special-cased.
     -- RADIAL JOIN ENTRY POINT (this pass) -- same flag gates BOTH the

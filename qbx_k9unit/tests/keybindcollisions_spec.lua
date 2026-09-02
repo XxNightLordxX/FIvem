@@ -14,7 +14,7 @@
     files sailed straight past it.
 
     And one did. `client/pursuitsprint.lua` hardcodes 'N' for pursuit
-    sprint, which ships ON, while `Config.DangerWarn.keybind` also shipped
+    sprint, which ships ON, while a since-removed feature's keybind also shipped
     'N'. The two never met, because Danger Warn ships OFF and its whole
     file is gated behind that switch -- so a stock install was fine, every
     test passed, and the fault was invisible.

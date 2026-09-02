@@ -336,7 +336,7 @@ local function newTrackingFixture(opts)
     end
 
     -- CLAMP-AND-WARN CAPTURE -- same convention as
-    -- the removed scent-trail spec's/the removed SAR-calls spec's own printLog
+    -- this suite's own printLog
     -- captures for this exact class of guard (proves a bad config value
     -- actually warns, not just "doesn't crash").
     local printLog = {}
@@ -893,7 +893,7 @@ end)
 
 -- ----------------------------------------------------------------------
 -- SECTION E -- OWN-DEATH EXIT PATH (compute thread). Distinct file, but
--- the SAME class of fix as client/wellbeing.lua's InjuryLimping own-death
+-- the SAME class of fix as a since-removed own-death
 -- guard: a dead K9 must not keep recomputing/rendering a trail from a
 -- stale position, and must not silently resume on respawn.
 -- ----------------------------------------------------------------------

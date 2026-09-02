@@ -38,7 +38,7 @@
     client/movement.lua's `qbx_k9unit:toggleCamera`,
     client/vision.lua's `qbx_k9unit:toggleCameraFeed`/
     `qbx_k9unit:toggleThermalVision`/`qbx_k9unit:toggleNightVision`, and
-    the removed handler-down-defense client file's `qbx_k9unit:confirmHandlerDownDefense`) onto this
+    a since-removed keybind command) onto this
     resource's own `qbx_k9unit:` namespace prefix instead -- a `:` character,
     and for four of the seven, camelCase letters too, BOTH outside the old
     character class. The old pattern silently skipped every one of them on
@@ -112,7 +112,7 @@ end
 --- time rather than kept as a hand-maintained snapshot.
 ---
 --- WHY THIS CHANGED. Two literal lists used to live here, and they drifted
---- exactly as you would expect: `dangerwarn.lua`, `announce.lua` and
+--- exactly as you would expect: the removed feature files and
 --- several others were each found missing later, after the fact, every one
 --- of them a file that registers a real command. KNOWN_ISSUES.md carried
 --- the gap as an open item -- "a new file that registers a command and
@@ -196,7 +196,7 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9throwfetchball = 'fetch',
     k9dropfetchball = 'fetch',
     k9recallfetchball = 'fetch',
-    -- family #4: training (3 -> 1, 'k9train') -- the removed training client file.
+    -- family #4: a since-removed command family (3 -> 1).
     -- Same interim shape as fetch's three -- real COMMAND_REFERENCE
     -- entries exist today (confirmed by reading html/tablet.js), not yet
     -- removed.
