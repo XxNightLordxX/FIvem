@@ -399,8 +399,8 @@ local AwardXPCooldown = NewNestedCooldown(500)
 -- config.lua and were re-verified, not taken on the old comment's word:
 -- Config.XP.awards alone now sums to 250 (the 240 above predates
 -- coopSearchBonus (10), added to Config.XP.awards after this section was
--- first written; a sarCallCompleted award of 30 also lived here between
--- that recount and 2026-09-02, when SAR calls were removed entirely), and
+-- first written; a second award of 30 also lived here between that
+-- recount and 2026-09-02, when the feature behind it was removed), and
 -- the
 -- starter-token sum this file's own code below has computed since the
 -- "EXTENDED (HANDLER XP pass...)" addition ALSO adds every
@@ -444,8 +444,8 @@ local AwardXPCooldown = NewNestedCooldown(500)
 --   Elite   (9,000 XP): reached at 2.375h   (2h 22.5m -- clears the floor)
 --
 -- THOSE THREE FIGURES WERE SIMULATED AT A 505-TOKEN STARTER, and the real
--- starter is 475 as of 2026-09-02 (the sarCallCompleted award of 30 left
--- Config.XP.awards when SAR calls were removed). They are NOT re-simulated
+-- starter is 475 as of 2026-09-02 (an award of 30 left Config.XP.awards
+-- when the feature behind it was removed). They are NOT re-simulated
 -- here, and they do not need to be: a SMALLER starter balance can only
 -- move every one of those times LATER, never earlier, because the starter
 -- is a head start on a budget that refills at a fixed rate. So 2.375h is
@@ -1283,7 +1283,7 @@ end
 --
 --   ENFORCED, NOT JUST DOCUMENTED: tests/medkit_spec.lua and
 --   tests/kennel_spec.lua each carry a SOURCE AUDIT test (mirroring
---   the removed recall spec's own "SOURCE AUDIT" precedent) that fails the
+--   an earlier spec's own "SOURCE AUDIT" precedent) that fails the
 --   moment AwardHandlerXP('handlerTreatK9'/'handlerKennelDeploy') actually
 --   appears in server/medkit.lua/server/kennel.lua UNLESS that same file
 --   also names a dedicated *_XP_MINT_COOLDOWN tracker (the
@@ -1698,7 +1698,7 @@ end
 --     cosmetic or economy concern, and handing one to whoever ground the
 --     longest is exactly the "harmful in the hands of a farmer" case this
 --     task named explicitly.
---   * A raised wellbeing stat MAX (Fatigue/Mood/FearStress/Injury) via
+--   * A raised wellbeing stat MAX (Fatigue) via
 --     tier -- the doc's own suggested example. Investigated this pass:
 --     every single Clamp(...) call site in server/wellbeing.lua's tick loop
 --     reads Config.Wellbeing.<Stat>.max directly, as one GLOBAL constant --

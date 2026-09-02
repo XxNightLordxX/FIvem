@@ -7,7 +7,7 @@
     across server/main.lua, server/certifications/, server/kennel.lua,
     server/medkit.lua, server/wellbeing.lua, server/combat.lua,
     server/partnership.lua, server/tenure.lua, server/admin.lua,
-    the removed recall server file, server/propattachment.lua, and server/bonetool.lua.
+    server/propattachment.lua, and server/bonetool.lua.
     All 12 are now deleted (or, for the two files that deliberately vary the
     notification title -- see "TWO CALL SITES DELIBERATELY KEPT AS LOCAL
     WRAPPERS" below -- reduced to a one-line delegation to this file's
@@ -57,7 +57,7 @@
       DEFAULT VALUE: all 9 of the 12 original hand-rolled copies
       (server/main.lua, server/certifications/, server/kennel.lua,
       server/medkit.lua, server/wellbeing.lua, server/combat.lua,
-      server/partnership.lua, the removed recall server file, server/propattachment.lua)
+      server/partnership.lua, server/propattachment.lua)
       hard-coded their own default as the literal string `'inform'`.
       `'inform'` is WRONG: verified directly against ox_lib's real upstream
       source (resource/interface/client/notify.lua, `overextended/ox_lib`

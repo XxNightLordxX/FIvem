@@ -1572,7 +1572,7 @@ end
 -- migration; sql/install.sql carries the identical CREATE TABLE for a
 -- fresh install.
 -- ======================================================================
-local WellbeingRows = {} -- citizenid -> { fatigue, mood, fear_stress, injury, hunger, thirst, updated_at_unix }
+local WellbeingRows = {} -- citizenid -> { fatigue, updated_at_unix }
 
 --- Mirrors MySQL.single.await exactly -- nil for no row, same raw-mirror
 --- contract as Cert_GetActiveMeta above (throws on a genuine DB-mode
@@ -1581,14 +1581,11 @@ local WellbeingRows = {} -- citizenid -> { fatigue, mood, fear_stress, injury, h
 --- EXACTLY the same fresh-default construction it already uses for a nil
 --- return, per that file's header "FAIL DIRECTION, STATED EXPLICITLY" --
 --- wrapping it a second time here would only hide a real error from that
---- caller's own diagnostic print). `fear_stress` is aliased to
---- `fearStress` in the real SELECT so the returned row's keys match
---- server/wellbeing.lua's own camelCase reads with no remapping needed at
---- the call site -- same convention this file already uses for
---- `UNIX_TIMESTAMP(expires_at) AS expires_at_unix` in Cert_GetActiveMeta
---- above.
+--- caller's own diagnostic print). The SELECT names its columns
+--- explicitly so the returned row's keys match server/wellbeing.lua's own
+--- reads with no remapping needed at the call site.
 --- @param citizenid string
---- @return table? row -- { fatigue, mood, fearStress, injury, hunger, thirst }, or nil if this citizenid has no row yet
+--- @return table? row -- { fatigue }, or nil if this citizenid has no row yet
 function K9Store.Wellbeing_Get(citizenid)
     if DatabaseEnabled('k9_wellbeing') then
         -- Reads FATIGUE ONLY. The mood, fear_stress, injury, hunger and
@@ -1619,7 +1616,7 @@ end
 --- retries the same row), so never throwing here costs that caller
 --- nothing while sparing every call site its own pcall wrapper.
 --- @param citizenid string
---- @param row table -- exactly six numeric fields, already clamped to each stat's own range by the caller: fatigue, mood, fearStress, injury, hunger, thirst
+--- @param row table -- the persisted numeric fields, already clamped to each stat's own range by the caller: fatigue
 --- @return boolean ok
 function K9Store.Wellbeing_Upsert(citizenid, row)
     if DatabaseEnabled('k9_wellbeing') then

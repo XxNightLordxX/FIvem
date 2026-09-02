@@ -624,7 +624,7 @@ function EnterNearestK9Vehicle()
     -- either effect a window to start in between.
     --
     -- Soft dependency, `type(...) == 'function'` runtime existence guard —
-    -- this resource's established convention (see the removed handler-down-defense client file's
+    -- this resource's established convention (see every other client file's
     -- identical guard on this exact function) — because IsBiteHoldEngaged/
     -- IsDragEngaged only exist at all once client/combat.lua's own top-level
     -- gate (`Config.Features.BiteAndHold/NonLethalTakedown/PropDragging`)

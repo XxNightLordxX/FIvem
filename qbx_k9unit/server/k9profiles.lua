@@ -83,7 +83,7 @@
     considered was rejected on a SPECIFIC, disclosed basis, not silently
     dropped:
 
-      * WELLBEING STAT MAXIMA (Fatigue/Mood/FearStress/Injury caps) --
+      * WELLBEING STAT MAXIMA (the Fatigue cap) --
         server/wellbeing.lua's own Clamp(...) call sites read
         Config.Wellbeing.<Stat>.max as ONE GLOBAL CONSTANT with no
         per-citizenid composer to hook at all -- server/progression.lua's

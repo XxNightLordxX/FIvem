@@ -165,8 +165,8 @@
     `false` (command never registered at all, matching server/admin.lua's
     own AdminAuditCommands registration-time gate convention) -- every
     OTHER field below degrades to a safe, loudly-logged built-in default
-    rather than erroring (same softer, the removed recall server file-style posture
-    the removed training server file's own header already argues for and for the
+    rather than erroring (the same softer posture this resource's own
+    conventions already argue for and for the
     identical reason: a broken config here has no security/economy
     consequence, only a wrong default row count/cooldown, so this does not
     need admin.lua's harder assert-at-startup posture):

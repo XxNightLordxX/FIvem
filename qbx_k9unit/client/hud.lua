@@ -522,8 +522,8 @@ if ONBOARD_CFG.enabled ~= false then
     -- a "back/cancel/close" control the base game itself only actively
     -- uses inside its own menus, not during ordinary on-foot/vehicle play,
     -- and one none of this resource's own RegisterKeyMapping defaults
-    -- (H/J/K/I and friends -- client/vision.lua, client/keybinds.lua,
-    -- the removed apprehension-announcement client file, the removed recall client file) ever claim. Change
+    -- (H/J/K/I and friends -- client/vision.lua, client/keybinds.lua)
+    -- ever claim. Change
     -- Config.K9Onboarding.dismissControl (and its matching
     -- dismissControlLabel, shown in the hint text itself) if this ever
     -- turns out to collide with something else on your own server.
@@ -881,7 +881,7 @@ end
 --- here is what ultimately makes that field's KEY ABSENT from the
 --- SendNUIMessage payload (see PushVitals below) — the mechanism behind
 --- this file's "must be absent, not blank or zeroed" requirement.
---- @return number|nil fatigue, number|nil mood, number|nil fearStress, number|nil injury, boolean|nil distracted
+--- @return number|nil fatigue
 local function ReadWellbeingForDisplay()
     local fatigue = nil
 
@@ -936,10 +936,6 @@ end
 --- @param hunger number
 --- @param thirst number
 --- @param fatigue number|nil
---- @param mood number|nil
---- @param fearStress number|nil
---- @param injury number|nil
---- @param distracted boolean|nil
 --- @param xpTierLabel string|nil
 --- @param xpTierBadge string|nil
 local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)

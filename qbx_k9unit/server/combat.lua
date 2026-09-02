@@ -615,8 +615,8 @@ local K9PositionHistory = {}
 -- top-level load time -- which does not just disable that one cooldown, it
 -- aborts this entire file's execution from that line onward, silently
 -- un-defining EndActiveEffectForHolder (near the bottom of this file, this
--- codebase's own termination primitive the removed recall server file and
--- the removed training server file both depend on) along with every
+-- codebase's own termination primitive several other files depend on)
+-- along with every
 -- BiteAndHold/NonLethalTakedown/PropDragging RegisterNetEvent below it.
 -- ResolveConfiguredThresholdMs (server/cooldowns.lua, see that file's header
 -- ADDENDUM for the full incident) resolves each value to something always
@@ -1119,7 +1119,7 @@ local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
     -- server/medkit.lua, server/inventory.lua, etc. all call it bare; a
     -- couple of call sites add a defensive `type(K9Compat) == 'table'`
     -- belt-and-suspenders check on top for other reasons -- see server/
-    -- integrations.lua's/the removed scent-lineup server file's own comments on THAT --
+    -- integrations.lua's own comment on THAT --
     -- but none of them add a pcall around the call itself, because none
     -- need one). This function's own boolean contract (no third "unknown"
     -- state) is exactly why `true`/`false` short-circuit here but `nil`
@@ -1544,9 +1544,8 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     --
     -- 'tier_capability_denied' is a NEW, deliberately DISTINCT reason --
     -- not collapsed into 'permission_denied' (or 'no_access') above, even
-    -- though this file's own sarcalls.lua/scenttrail.lua siblings establish
-    -- a real "don't invent a distinction the server doesn't give data for"
-    -- precedent elsewhere. That precedent does not apply here: it covers
+    -- though this resource establishes a real "don't invent a distinction
+    -- the server doesn't give data for" precedent elsewhere. That precedent does not apply here: it covers
     -- cases where two failure causes are genuinely INDISTINGUISHABLE in
     -- their consequence for the player (server/combat.lua's OWN
     -- 'permission_denied' above is exactly such a case -- "blocked" and
@@ -2029,14 +2028,14 @@ end
 --- Resource-global (no `local`) accessor exposed for OTHER files that need
 --- to unconditionally end whatever engagement (bite/takedown/drag) a K9 is
 --- CURRENTLY the HOLDER of, regardless of who is asking or that K9's own
---- current certification/access state. the removed recall server file's Recall actor
---- (DEVELOPER_REFERENCE.md §12.5.1, §12.0 item 7's "Recall actor" consumer) is this
---- function's one intended caller today -- resolved through the SAME
---- `type(...) == 'function'` runtime-existence-guard convention this file
---- already uses for IsHesitating/IsDistracted/AwardXP (see FILE-TO-FILE
---- CONTRACT above), never a load-order assumption, since the removed recall server file's
---- own position in fxmanifest.lua's server_scripts relative to THIS file is
---- not, and should not need to be, load-bearing.
+--- current certification/access state. Its callers today are the
+--- decertification and permission-revocation cleanup paths
+--- (server/certifications/core.lua, server/permissions.lua) -- each
+--- resolved through the SAME `type(...) == 'function'`
+--- runtime-existence-guard convention this file already uses for AwardXP
+--- (see FILE-TO-FILE CONTRACT above), never a load-order assumption, since
+--- a caller's own position in fxmanifest.lua's server_scripts relative to
+--- THIS file is not, and should not need to be, load-bearing.
 ---
 --- DELIBERATELY NEVER CHECKS HasK9Access/Config.Features.* ITSELF -- this is
 --- a TERMINATION path, and DEVELOPER_REFERENCE.md's own "no unbounded trap"
@@ -2044,9 +2043,8 @@ end
 --- requires that a K9 whose certification is revoked, or whose feature flag
 --- is toggled off, mid-engagement can still be called off; gating this
 --- function on either would reintroduce exactly the trap that guarantee
---- forbids. The caller (the removed recall server file) is responsible for its OWN
---- authorization (verifying the requester is genuinely `holderSrc`'s
---- established partner, per server/partnership.lua) -- this function's own
+--- forbids. Each caller is responsible for its OWN authorization --
+--- this function's own
 --- contract is narrower and unconditional: "does this holder have an active
 --- engagement, and if so, end it," nothing more.
 ---
@@ -2723,7 +2721,7 @@ end)
 -- creation itself (rather than looping forever just to no-op every tick)
 -- costs nothing.
 --
--- POLL-INTERVAL VALIDATION (audit follow-up, same shape the removed handler-down-defense server file's
+-- POLL-INTERVAL VALIDATION (audit follow-up, same shape another file's
 -- own pollIntervalMs fix just addressed there, see that file's own comment
 -- and server/cooldowns.lua's header ADDENDUM): positionSampleWindowMs feeds
 -- a bare `Wait()` directly, never NewCooldown/ResolveConfiguredThresholdMs,

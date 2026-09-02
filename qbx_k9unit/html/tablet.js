@@ -280,7 +280,7 @@
                 //                         administrative/infrastructure switch -- e.g.
                 //                         HighCommand, CommandTablet), or the feature's
                 //                         own owning file documents a DELIBERATE decision
-                //                         never to honour one (e.g. the removed recall server file's
+                //                         never to honour one (e.g. a
                 //                         block.Recall -- a termination/escape-hatch path
                 //                         that must never be gated, by this resource's
                 //                         own "no unbounded trap" rule). NOTE: an EARLIER
@@ -6675,7 +6675,7 @@
         // PersonFeaturesResult doc comment above for the two ways that
         // happens (no per-citizenid ability here to gate in the first
         // place, e.g. an administrative switch like CommandTablet; or a
-        // deliberate design decision, e.g. the removed recall server file's
+        // deliberate design decision, e.g. a termination path's
         // escape-hatch path). Offering a button that can never do
         // anything is exactly the dishonest control this task exists to
         // remove -- HIDDEN, not merely labeled, for this one case. A

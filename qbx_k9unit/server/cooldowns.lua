@@ -206,7 +206,7 @@
     at its shipped value): server/combat.lua throws at its own
     `BiteHoldCooldown = NewCooldown(...)` line and takes
     EndActiveEffectForHolder down with it — the termination primitive
-    the removed recall server file and the removed training server file both depend on, and this
+    several other files depend on, and this
     codebase's own documented "never let this become unreachable" guarantee
     — along with every BiteAndHold/NonLethalTakedown/PropDragging net event
     in that file. A single mis-set Config number must never be able to
@@ -221,7 +221,6 @@
     NewNestedCooldown as the constructor default. Applied at the following
     re-derived 11 call sites: server/combat.lua (x4: BiteHoldCooldown,
     TakedownCooldown, TakedownTargetCooldown, BiteHoldTargetCooldown),
-    the removed handler-down-defense server file (x2: AttackerReportCooldown, DefenseTriggerCooldown),
     server/fetch.lua (x2: ThrowCooldown, PickupCooldown — the latter's old
     `Config.FetchMechanic.pickupCooldownMs or 500` idiom is REPLACED here,
     not layered under, since `0 or 500` evaluates to `0` in Lua and never

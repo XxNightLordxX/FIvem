@@ -995,7 +995,7 @@
         // ---- Integration-sweep fix (this pass): seven REAL, working
         // keybind commands (RegisterCommand + RegisterKeyMapping, both
         // confirmed in client/agility.lua, client/pursuitsprint.lua,
-        // client/movement.lua, client/vision.lua, the removed handler-down-defense client file) that
+        // client/movement.lua, client/vision.lua) that
         // had ZERO COMMAND_REFERENCE entry -- see
         // tests/commandreferenceregistry_spec.lua's own header "WIDENED,
         // THIS PASS" for why the drift guard never caught this. Named

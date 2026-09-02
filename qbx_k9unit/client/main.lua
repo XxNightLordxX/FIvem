@@ -356,7 +356,7 @@ end
 --- Any other/omitted value falls back to `common.no_k9_access_unknown`, an
 --- upgraded generic default that — unlike the original bare
 --- `common.no_k9_access` (kept verbatim; server/vehicle.lua,
---- the removed scent-lineup server file, and this file's own tablet help text quote it
+--- and this file's own tablet help text quote it
 --- unrelated to this function and must not drift) — still names a concrete
 --- next step for a genuinely unclassified refusal.
 --- @param reasonLocaleKey string? -- an already-valid locale() key for a caller that knows the specific reason; omit to use the improved generic fallback

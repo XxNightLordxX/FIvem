@@ -252,9 +252,8 @@ Config.Features = {
     -- REMOVED (owner-approved, "Overhaul all the features if they are
     -- redundant... remove it" -- see docs/history/FEATURE_STRUCTURE_SPEC.md §2.2.1 and
     -- docs/history/OVERHAUL_PLAN.md's "Stage 7" for the full reasoning and the
-    -- dependency check that cleared it). Was `ScentTrailHunt`, gating
-    -- the removed scent-trail client file + the removed scent-trail server file ("follow your nose" --
-    -- PROJECT_HISTORY.md §2): the K9 sets off after a hidden, made-up spot,
+    -- dependency check that cleared it). Was `ScentTrailHunt` ("follow
+    -- your nose" -- PROJECT_HISTORY.md §2): the K9 sets off after a hidden, made-up spot,
     -- guided only by a growl that pulses faster as they get warmer.
     -- Judged genuinely redundant, not merely thin: it duplicates
     -- Detection's own "walk toward a fading signal" interaction shape
@@ -262,12 +261,8 @@ Config.Features = {
     -- destination instead of a real one, feeds no other system (no XP, no
     -- search/contraband/rescue tie-in), and owns no database table (this
     -- was a live, in-memory session only -- nothing was left behind to
-    -- preserve). Neither the removed scent-trail client file nor the removed scent-trail server file
-    -- was touched or deleted -- both files are untouched, inert, and fully
-    -- intact; they already no-op correctly the instant this key reads
-    -- `nil` (their own top-level `if not Config.Features.ScentTrailHunt
-    -- then return end`), exactly the same way any other feature here goes
-    -- inert when its flag is off.
+    -- preserve). The files that owned it went away with it, so this key is
+    -- absent rather than merely false.
     --
     -- HOW TO BRING THIS BACK, exactly, either flavour:
     --   1. AS-IS: add the line `ScentTrailHunt = true,` back here (or set
@@ -1593,13 +1588,10 @@ Config.K9Specializations = {
 -- TrackableLog.scent, fed by the ox_inventory swapItems hook) -- is
 -- DELIBERATELY ABSENT from this table and can NEVER be listed here. It is
 -- the BASE capability every K9-access handler already has today, not a
--- narcotics-detection mechanic, and it is what the removed SAR-calls client file's
--- Search & Rescue calls and the removed scent-trail client file's Scent Trail Hunt
--- narratively share the word "scent" with (though, confirmed by reading
--- both files directly, neither one actually calls into this file's
--- findTrackableSource/TrackableLog.scent at all -- they are fully separate
--- minigames with their own the removed SAR-calls server file and the removed scent-trail server file
--- session state). Listing 'scent' under any specialization here would gate
+-- narcotics-detection mechanic. Two removed minigames narratively shared
+-- the word "scent" with it and neither ever called into this file's
+-- findTrackableSource/TrackableLog.scent at all. Listing 'scent' under any
+-- specialization here would gate
 -- a base capability behind a narrow one for no reason connected to what
 -- 'scent' actually is -- do not "fix" this by adding it back.
 --

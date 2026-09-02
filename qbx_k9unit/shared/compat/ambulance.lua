@@ -30,8 +30,8 @@
     ("not down" by default) would let a K9 bite/drag/take down someone this
     adapter genuinely could not vouch for either way, which is exactly
     backwards from this resource's own fail-closed convention for every
-    other ambiguous safety signal (see server/combat.lua's/
-    the removed handler-down-defense server file's own `IsPlayerDownedOverride` handling: an override
+    other ambiguous safety signal (see server/combat.lua's own
+    `IsPlayerDownedOverride` handling: an override
     that ERRORS is treated as "NOT down" specifically because THAT
     function's own contract is a plain boolean with no room for "unknown" --
     this file's contract is deliberately richer, and a caller consuming it
@@ -45,26 +45,22 @@
     PRECEDENCE -- `Config.Combat.PropDragging.IsPlayerDownedOverride` KEEPS
     WINNING, UNCONDITIONALLY. THIS FILE DOES NOT TOUCH THAT.
 
-    server/combat.lua's `IsTargetDowned` and the removed handler-down-defense server file's
-    `IsHandlerDown` were on a DO-NOT-EDIT list at the time THIS file was
-    first written -- and even without that restriction, this file would not
-    have touched them directly: `Config.Compat`'s own comment (config.lua,
+    server/combat.lua's `IsTargetDowned` was on a DO-NOT-EDIT list at the
+    time THIS file was first written -- and even without that restriction,
+    this file would not have touched it directly: `Config.Compat`'s own comment (config.lua,
     directly above the `ambulance` candidates block) makes an explicit
     promise to an operator who already wrote an `IsPlayerDownedOverride`:
     "That hook was the original answer to this problem and is not being
     retired -- if you already wrote one, it keeps working exactly as
     before."
 
-    CORRECTED (2026-08-26): this section used to say "neither `server/
-    combat.lua` nor `the removed handler-down-defense server file` calls anything in `K9Compat`
-    today, at all" and described the resolution order below as a
-    FOLLOW-UP THIS FILE ENABLES BUT DOES NOT PERFORM. That changed once
-    both callers were actually wired up -- confirmed by reading both files
-    directly, not assumed from a prior note: server/combat.lua's
-    `IsTargetDowned` (its own doc comment, "COMPAT-LAYER (this pass)") and
-    the removed handler-down-defense server file's `IsHandlerDown` (its own doc comment, "COMPAT-
-    LAYER (this pass): when no override is configured...") each now call
-    `K9Compat.Get('ambulance').IsDowned(src)` as a FALLBACK -- never a
+    CORRECTED (2026-08-26): this section used to say `server/combat.lua`
+    calls nothing in `K9Compat` today, at all, and described the resolution
+    order below as a FOLLOW-UP THIS FILE ENABLES BUT DOES NOT PERFORM. That
+    changed once the caller was actually wired up -- confirmed by reading
+    the file directly, not assumed from a prior note: server/combat.lua's
+    `IsTargetDowned` (its own doc comment, "COMPAT-LAYER (this pass)") now
+    calls `K9Compat.Get('ambulance').IsDowned(src)` as a FALLBACK -- never a
     replacement -- for their own pre-existing best-effort
     `metadata.isdead`/`metadata.inlaststand` default (the one their own
     header comments already disclosed as "a CLIENT-self-reported flag ...
@@ -158,8 +154,8 @@
       Tracing the state bag's origin (client/dead.lua's own
       `SetDeathState` call, client-owned `LocalPlayer.state`) confirms this
       is the SAME "client-self-reported flag, not a server-verified state
-      machine" caveat server/combat.lua's/the removed handler-down-defense server file's own header
-      comments already disclose for their existing best-effort default --
+      machine" caveat server/combat.lua's own header comment already
+      discloses for its existing best-effort default --
       this adapter reads the identical two metadata fields, at the
       identical trust level, and its only real improvement over that
       existing default is CONFIRMING qbx_medical is actually the resource
@@ -243,9 +239,9 @@
     A NOTE ON `exports.qbx_core` ITSELF, SPECIFICALLY: unlike
     `ps-dispatch`/`qbx_medical`/etc. (genuinely optional soft dependencies
     this file gates on `GetResourceState`), `qbx_core` is this resource's
-    OWN hard `fxmanifest.lua` dependency -- server/combat.lua's/
-    the removed handler-down-defense server file's own existing `exports.qbx_core:GetPlayer(...)`
-    calls carry no runtime existence guard at all, for that exact reason
+    OWN hard `fxmanifest.lua` dependency -- server/combat.lua's own
+    existing `exports.qbx_core:GetPlayer(...)` calls carry no runtime
+    existence guard at all, for that exact reason
     (see server/integrations.lua's header for the identical "always
     present, loaded well before this file" reasoning applied to a
     different same-resource dependency). This file follows that same

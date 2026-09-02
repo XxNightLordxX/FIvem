@@ -640,7 +640,7 @@ end
 --- exactly the boolean check DEVELOPER_REFERENCE.md §12.0 item 7 specifies for
 --- See "HOW TO CONSUME THIS REGISTRY" in this file's
 --- header for the originally-intended caller. STILL not called that way:
---- the removed recall server file (confirmed by direct read) never takes an
+--- every other caller (confirmed by direct read) never takes an
 --- "alleged partner" from anywhere to validate against this function --
 --- it derives the K9 to recall directly from `GetActivePartnerCitizenId(callerCitizenid)`
 --- instead, which is strictly narrower (a caller can only ever recall their
