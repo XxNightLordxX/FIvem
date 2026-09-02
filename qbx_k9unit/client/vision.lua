@@ -623,7 +623,7 @@ end
 -- this: "CameraFeedPiP... own entry point, requires an active partnership,
 -- deliberately not folded into the night/thermal cycle" — this reflects
 -- that pre-existing, config-documented decision, not a new one invented
--- here. Two independent reasons, matching FEATURE_STRUCTURE_SPEC.md
+-- here. Two independent reasons, matching docs/history/FEATURE_STRUCTURE_SPEC.md
 -- §2.1/§5's Sensory row:
 --   - CameraFeedPiP needs AN ACTIVE, IN-RANGE PARTNER to mean anything at
 --     all. Folding it into a flag-gated cycle would mean the cycle could
@@ -641,7 +641,7 @@ end
 --     Config.Tracking.ScentVision.mode) and its own per-tick cost profile
 --     — a materially different resource/perf shape than a toggle-and-forget
 --     native post-effect. It keeps its own keybind (`k9scentvision`,
---     client/keybinds.lua) exactly as FEATURE_STRUCTURE_SPEC.md §2.1 says
+--     client/keybinds.lua) exactly as docs/history/FEATURE_STRUCTURE_SPEC.md §2.1 says
 --     it should.
 --
 -- GATE-THE-STOP RULE, APPLIED TO THE CYCLE ITSELF: stepping to a mode

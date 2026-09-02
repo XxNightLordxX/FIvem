@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/roster.lua
 
-    K9 COMMAND TABLET ROSTERS -- data layer + server logic (ROSTER_SPEC.md,
+    K9 COMMAND TABLET ROSTERS -- data layer + server logic (docs/history/ROSTER_SPEC.md,
     PHASE A). Owner's own words for the request this answers: "make it in
     the tablet where there is a roster where we can assign callsigns see
     list of hired k9s and full menu to fire promote etc", "Also a separate
@@ -10,7 +10,7 @@
     "Also in the roster be able to reorder them by rank."
 
     WHAT THIS FILE OWNS: two roster LISTS (K9, Handler) plus an explicit
-    "Unassigned" bucket (ROSTER_SPEC.md §3/§5/§8), each row backed by the
+    "Unassigned" bucket (docs/history/ROSTER_SPEC.md §3/§5/§8), each row backed by the
     new `k9_personnel` table (migration 0020) layered over the existing
     `k9_certifications` data server/certifications.lua/server/tablet.lua
     already own -- and the mutations that change a row's roster
@@ -22,7 +22,7 @@
     PLAINLY): it does not change `GrantCertificationForTablet`'s signature,
     and it does not wire a Hire/Fire/Promote/Demote button anywhere --
     server/certifications.lua is being edited concurrently by another pass
-    and is out of scope here. ROSTER_SPEC.md §3 says
+    and is out of scope here. docs/history/ROSTER_SPEC.md §3 says
     `GrantCertificationForTablet` should gain a required `personnelRole`
     parameter at hire time; this file does not make that change. Instead
     it exposes `RosterAssignPersonnelRole` (below) as a GLOBAL, reusable
@@ -41,7 +41,7 @@
     identical "never gate a termination path" contract applied to the
     opposite, hiring, direction).
 
-    Similarly, `RevokeCertificationForTablet` (ROSTER_SPEC.md §1/§6's
+    Similarly, `RevokeCertificationForTablet` (docs/history/ROSTER_SPEC.md §1/§6's
     "closes the dead Decertify button gap") -- LANDED (verified by reading
     server/certifications.lua directly): the wrapper this comment used to
     say was not yet written now exists there, and it does call
@@ -51,7 +51,7 @@
     AUTHORIZATION -- THE SECURITY RULE, unchanged: every mutation this file
     exposes as a `lib.callback` re-verifies `IsHighCommand(source)` itself,
     live, on every call -- never a cached/client-claimed value
-    (ROSTER_SPEC.md §6's own table: "Who: High command" for every row).
+    (docs/history/ROSTER_SPEC.md §6's own table: "Who: High command" for every row).
     The CORE logic functions this file also exposes as globals
     (`RosterAssignPersonnelRole`, `RosterSetCallsign`,
     `ClearPersonnelRowForCitizenJob`) deliberately do NOT check
@@ -136,7 +136,7 @@ end
 
 --- The target's LIVE department right now, resolved fresh (online
 --- preferred, offline fallback), never a value captured earlier when a
---- roster/person screen was opened -- ROSTER_SPEC.md §7's "resolve online
+--- roster/person screen was opened -- docs/history/ROSTER_SPEC.md §7's "resolve online
 --- state fresh, from the citizenid, at call time" requirement, applied to
 --- every mutation in this file exactly like `GrantCertificationForTablet`
 --- already applies it to Hire.
@@ -192,7 +192,7 @@ local function ResolvePartnerSummary(citizenid)
 end
 
 --- Looks up a certification tier key's label/ordinal from
---- `Config.CertificationTiers` -- the SAME sort key ROSTER_SPEC.md §9
+--- `Config.CertificationTiers` -- the SAME sort key docs/history/ROSTER_SPEC.md §9
 --- names as the roster's default sort ("certification tier ordinal,
 --- descending... the one 'rank' concept both rosters already share
 --- identically").
@@ -229,9 +229,9 @@ local function IsValidPersonnelRole(value)
     return value == 'k9' or value == 'handler'
 end
 
--- Callsign format (ROSTER_SPEC.md §4): plain text, clamped 1-12
+-- Callsign format (docs/history/ROSTER_SPEC.md §4): plain text, clamped 1-12
 -- characters, restricted to letters, digits, spaces and hyphens SERVER
--- SIDE. Hardcoded literals, not read from Config -- ROSTER_SPEC.md §4
+-- SIDE. Hardcoded literals, not read from Config -- docs/history/ROSTER_SPEC.md §4
 -- explicitly says "clamp-and-warn IF Config ever exposes this as
 -- configurable -- not asserted" -- it does not today, so there is nothing
 -- to clamp-and-warn against yet; if a future pass adds a Config knob for
@@ -241,7 +241,7 @@ end
 local CALLSIGN_MIN_LENGTH = 1
 local CALLSIGN_MAX_LENGTH = 12
 
---- An explicit ALLOWLIST, not a blocklist -- ROSTER_SPEC.md §4 calls for a
+--- An explicit ALLOWLIST, not a blocklist -- docs/history/ROSTER_SPEC.md §4 calls for a
 --- narrow, predictable character set for a dispatch-style callsign, not
 --- merely "nothing dangerous". This is a UX/sanity bound layered ON TOP OF
 --- this codebase's existing `.textContent`-only rendering discipline
@@ -289,7 +289,7 @@ RosterMutateCooldown.RegisterPlayerDropped()
 -- than a caller-influenced value.
 local ROSTER_FETCH_CAP = 500
 
---- One roster row's full payload -- ROSTER_SPEC.md §5's "K9 roster row" /
+--- One roster row's full payload -- docs/history/ROSTER_SPEC.md §5's "K9 roster row" /
 --- "Handler roster row" (identical shape) / "Unassigned" row shapes,
 --- unioned into one superset object (the Unassigned rows simply carry
 --- `personnelRole = nil`/`callsign = nil` and are otherwise identical) so
@@ -323,7 +323,7 @@ local function BuildRosterRow(citizenid, jobKey, deptLabel, personnelRole, calls
     local partner = ResolvePartnerSummary(citizenid)
     local grade = ResolveJobGradeSummary(citizenid)
 
-    -- Informational, non-authoritative only (ROSTER_SPEC.md §1/§3) --
+    -- Informational, non-authoritative only (docs/history/ROSTER_SPEC.md §1/§3) --
     -- never the thing that decided which bucket this row is in.
     local pinnedDogModel = nil
     if type(IsPinnedDogCharacter) == 'function' then
@@ -354,7 +354,7 @@ local function BuildRosterRow(citizenid, jobKey, deptLabel, personnelRole, calls
     }
 end
 
---- Default sort (ROSTER_SPEC.md §9): certification tier ordinal,
+--- Default sort (docs/history/ROSTER_SPEC.md §9): certification tier ordinal,
 --- descending, ties broken by name. Alternate sorts (grade, XP) are pure
 --- client-side re-sorts of this already-fetched row list -- no additional
 --- server round trip, per acceptance criterion #13; this function is only
@@ -376,7 +376,7 @@ end
 
 --- Assigns a currently-Unassigned, actively-certified citizenid to a
 --- roster role, OR changes an already-assigned citizenid's role
---- (clearing their callsign in the same action -- ROSTER_SPEC.md §4: a K9
+--- (clearing their callsign in the same action -- docs/history/ROSTER_SPEC.md §4: a K9
 --- callsign and a handler callsign mean different things, so the old one
 --- is never silently relabelled as the new kind).
 ---
@@ -390,7 +390,7 @@ end
 --- permission, OR High Command, any one of which is enough to Hire) --
 --- deliberately a WIDER circle of callers than a standalone roster
 --- mutation gets (this file's own `lib.callback` handler below narrows
---- that back down to High Command only, per ROSTER_SPEC.md §6's table).
+--- that back down to High Command only, per docs/history/ROSTER_SPEC.md §6's table).
 --- Guard any future cross-file call site with
 --- `type(RosterAssignPersonnelRole) == 'function'`, this resource's
 --- standard soft-dependency convention.
@@ -414,7 +414,7 @@ function RosterAssignPersonnelRole(citizenid, job, personnelRole, actorCitizenid
         return false, 'invalid_personnel_role'
     end
 
-    -- ROSTER_SPEC.md §7: refuse a stale-department write server-side,
+    -- docs/history/ROSTER_SPEC.md §7: refuse a stale-department write server-side,
     -- exactly like GrantCertificationForTablet/SetCertificationTierForTablet
     -- already do -- never silently substitute the operator's clicked
     -- department for the target's real, live one.
@@ -456,7 +456,7 @@ end
 --- comment.
 ---
 --- Uniqueness is checked COMBINED-NAMESPACE, per department, case
---- insensitively (ROSTER_SPEC.md §4) -- a K9's callsign and a handler's
+--- insensitively (docs/history/ROSTER_SPEC.md §4) -- a K9's callsign and a handler's
 --- callsign in the SAME department share one namespace. Checked twice, on
 --- purpose: once here (an accurate, immediate, specific
 --- `'callsign_taken'` outcome for the ordinary case) and once more at the
@@ -517,13 +517,13 @@ function RosterSetCallsign(citizenid, job, callsign)
 end
 
 --- Best-effort `k9_personnel` row cleanup for a citizenid whose
---- certification was JUST revoked (Fire -- ROSTER_SPEC.md §6/§7). PUBLIC,
+--- certification was JUST revoked (Fire -- docs/history/ROSTER_SPEC.md §6/§7). PUBLIC,
 --- GLOBAL, callable from a future `server/certifications.lua`
 --- `RevokeCertificationForTablet` wrapper -- guard with
 --- `type(ClearPersonnelRowForCitizenJob) == 'function'` at that call site.
 ---
 --- NEVER CALL THIS BEFORE THE REVOKE ITSELF HAS ALREADY SUCCEEDED
---- (ROSTER_SPEC.md §7: "Never gate a termination path"). This function
+--- (docs/history/ROSTER_SPEC.md §7: "Never gate a termination path"). This function
 --- does not, and must not, re-check certification/authorization itself --
 --- by the time it is called the certification is already gone, and the
 --- citizenid has already stopped appearing on either roster regardless of
@@ -561,7 +561,7 @@ end
 
 --- CALLBACK -- qbx_k9unit:server:rosterList
 --- High-command-only read. Returns every currently-hired K9, every
---- currently-hired Handler, and the "Unassigned" bucket (ROSTER_SPEC.md
+--- currently-hired Handler, and the "Unassigned" bucket (docs/history/ROSTER_SPEC.md
 --- §3/§5/§8), across every configured department, each row already
 --- default-sorted (certification tier ordinal descending, ties by name --
 --- §9). Alternate sorts (grade, XP) are pure client-side re-sorts of this
@@ -592,7 +592,7 @@ lib.callback.register('qbx_k9unit:server:rosterList', function(source)
             local dept = Config.Departments[jobKey]
             local deptLabel = (type(dept) == 'table' and type(dept.label) == 'string') and dept.label or jobKey
 
-            -- ROSTER_SPEC.md §7: "both roster queries must filter on
+            -- docs/history/ROSTER_SPEC.md §7: "both roster queries must filter on
             -- active certification AND (personnel row, if any, also
             -- active)" -- the certification list below IS that filter;
             -- a citizenid never appears in any bucket without an active

@@ -78,7 +78,7 @@ function countRealCommandReferenceEntries() {
 }
 const REAL_COMMAND_REFERENCE_COUNT = countRealCommandReferenceEntries();
 
-// DERIVED, NOT HARDCODED (COMMAND_CONSOLIDATION_SPEC.md merges keep moving
+// DERIVED, NOT HARDCODED (docs/history/COMMAND_CONSOLIDATION_SPEC.md merges keep moving
 // this number -- a hardcoded count here has already gone stale once this
 // same session, which is exactly the trap REAL_COMMAND_REFERENCE_COUNT
 // above exists to avoid; this is the identical fix applied to the
@@ -356,7 +356,7 @@ t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge
     const adminBadges = findAll(h.getRoot(), (n) => n._textContent === ' (Admin)');
     // COUNT DERIVED FROM html/tablet.js ITSELF, not restated here (see
     // ADMIN_TIER_COMMAND_REFERENCE_COUNT's own header comment) -- as of
-    // COMMAND_CONSOLIDATION_SPEC.md §5 items 7/8 (permissions 2->1,
+    // docs/history/COMMAND_CONSOLIDATION_SPEC.md §5 items 7/8 (permissions 2->1,
     // certification online/offline pairs 10->5), the five offline
     // certification aliases and one of the two permission commands no
     // longer have their own COMMAND_REFERENCE row at all (folded into

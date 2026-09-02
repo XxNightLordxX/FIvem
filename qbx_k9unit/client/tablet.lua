@@ -46,7 +46,7 @@
       - tablet:decertify used to call `ExecuteCommand` directly (a small
         "SECTION 3" command-bridge helper, `SubmitAllowlistedCommand`), the
         SAME mechanism the chat box itself uses to submit a typed command --
-        REMOVED THIS PASS (COMMAND_CONSOLIDATION_SPEC.md §6 bugfix): that
+        REMOVED THIS PASS (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6 bugfix): that
         bridge always submitted the OFFLINE-ONLY '/k9decertifyoffline
         <citizenid> <job>' command regardless of the target's real online
         state, and that command's own server-side guard explicitly refuses
@@ -187,11 +187,11 @@
       tablet:openOnlinePlayer {source,nonce}                      -> cb({ok,citizenid?,name?,error?,message?}) [console audience -- resolves ONE online-players row to a citizenid, freshly, at click time; see server/tablet.lua's tabletResolveOnlinePlayer for the recycled-source-id guard]
       tablet:requestPersonSummary {targetCitizenId}               -> cb(PersonSummaryResult)    [console audience]
       tablet:requestPersonFeatures {targetCitizenId}               -> cb(PersonFeaturesResult)   [high command only]
-      tablet:rosterList {}                                        -> cb({ok,k9?,handlers?,unassigned?,error?})  [high command only -- server/roster.lua's qbx_k9unit:server:rosterList, ROSTER_SPEC.md Phase B; forwarded VERBATIM, no ReasonToJsResult]
+      tablet:rosterList {}                                        -> cb({ok,k9?,handlers?,unassigned?,error?})  [high command only -- server/roster.lua's qbx_k9unit:server:rosterList, docs/history/ROSTER_SPEC.md Phase B; forwarded VERBATIM, no ReasonToJsResult]
       tablet:rosterSetPersonnelRole {citizenid,job,personnelRole}  -> cb({ok,outcome?,error?})    [high command only -- server/roster.lua's qbx_k9unit:server:rosterSetPersonnelRole]
       tablet:rosterSetCallsign {citizenid,job,callsign?}           -> cb({ok,outcome?,error?})    [high command only -- server/roster.lua's qbx_k9unit:server:rosterSetCallsign; callsign omitted or '' clears it]
         These three are a THIRD entry point into the SAME buildPersonScreen()
-        Console/Online-Players already open (ROSTER_SPEC.md §0) -- not a
+        Console/Online-Players already open (docs/history/ROSTER_SPEC.md §0) -- not a
         second roster/person mechanism. rosterList's rows are the shared
         payload BOTH the two new roster tabs AND the Person screen's own
         embedded Roster Role/Callsign section read; sorting by tier/grade/XP
@@ -1305,7 +1305,7 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9dragtoggle_usage', 'cmdref_k9dragtoggle_does', 'cmdref_k9dragtoggle_needs',
     'cmdref_k9deploykennel_usage', 'cmdref_k9deploykennel_does', 'cmdref_k9deploykennel_needs',
     'cmdref_k9exitkennel_usage', 'cmdref_k9exitkennel_does', 'cmdref_k9exitkennel_needs',
-    -- k9kennel -- COMMAND_CONSOLIDATION_SPEC.md #5's merged, ADDITIVE entry
+    -- k9kennel -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #5's merged, ADDITIVE entry
     -- point. Landed here in the SAME change as html/tablet.js's own
     -- DEFAULT_STRINGS entry and locales/en.json's `tablet` group entry --
     -- all three sides of this contract, or none: the enforcing test only
@@ -1338,7 +1338,7 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9throwfetchball_usage', 'cmdref_k9throwfetchball_does', 'cmdref_k9throwfetchball_needs',
     'cmdref_k9dropfetchball_usage', 'cmdref_k9dropfetchball_does', 'cmdref_k9dropfetchball_needs',
     'cmdref_k9recallfetchball_usage', 'cmdref_k9recallfetchball_does', 'cmdref_k9recallfetchball_needs',
-    -- k9fetch -- COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
+    -- k9fetch -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
     'cmdref_k9fetch_usage', 'cmdref_k9fetch_does', 'cmdref_k9fetch_needs',
     'cmdref_k9eat_usage', 'cmdref_k9eat_does', 'cmdref_k9eat_needs',
     'cmdref_k9drink_usage', 'cmdref_k9drink_does', 'cmdref_k9drink_needs',
@@ -1525,10 +1525,10 @@ local TABLET_STRING_KEYS = {
     'partnerships_tier_label', 'partnerships_tier_none', 'partnerships_tier_value_template', 'partnerships_next_tier_countdown_template',
     'partnerships_admin_heading', 'partnerships_admin_hint', 'partnerships_admin_none', 'partnerships_force_end_label',
 
-    -- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- owner's own
+    -- K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) -- owner's own
     -- words, this file's own NUI CONTRACT note on tablet:rosterList/
     -- rosterSetPersonnelRole/rosterSetCallsign above. The 24 keys
-    -- ROSTER_SPEC.md §10 names, plus a small number html/tablet.js's own
+    -- docs/history/ROSTER_SPEC.md §10 names, plus a small number html/tablet.js's own
     -- DEFAULT_STRINGS comment at this exact same point names individually
     -- (outcome codes server/roster.lua can return that no existing generic
     -- mutation-error key already covered) -- added here, to locales/en.json's
@@ -2396,7 +2396,7 @@ RegisterNUICallback('tablet:requestPersonFeatures', function(data, cb)
 end)
 
 -- ----------------------------------------------------------------------
--- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- owner, three
+-- K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) -- owner, three
 -- messages, verbatim: "make it in the tablet where there is a roster where
 -- we can assign callsigns see list of hired k9s and full menu to fire
 -- promote etc" / "Also a separate roster for handlers same thing" / "Also
@@ -2530,7 +2530,7 @@ RegisterNUICallback('tablet:certify', function(data, cb)
 end)
 
 RegisterNUICallback('tablet:decertify', function(data, cb)
-    -- BUGFIX (this pass, COMMAND_CONSOLIDATION_SPEC.md §6): this callback
+    -- BUGFIX (this pass, docs/history/COMMAND_CONSOLIDATION_SPEC.md §6): this callback
     -- used to shell out to the OFFLINE-ONLY '/k9decertifyoffline <citizenid>
     -- <job>' command via a SubmitAllowlistedCommand/ExecuteCommand bridge,
     -- for EVERY target regardless of online state. That command's own

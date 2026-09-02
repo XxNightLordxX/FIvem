@@ -1,8 +1,22 @@
+> **HISTORICAL RECORD — NOT CURRENT GUIDANCE.**
+>
+> This document is the staged plan for the resource-wide overhaul. The work it describes has been
+> built, and in places has since been changed or removed. It is kept because
+> it explains WHY things are shaped the way they are, which the code alone
+> cannot say — but it does not describe how the resource works today, and it
+> is not a specification anyone should implement from.
+>
+> For how the resource actually works now, see `README.md` (setup and
+> features), `DEVELOPER_REFERENCE.md` (the code), and `DIAGNOSTIC_CHECKS.md`
+> (the `/k9debug` report). Archived 2026-09-02.
+
+---
+
 # K9 Unit Overhaul Plan — Cutting the Redundancy
 
 Written for you, not for the other agents. No code, no jargon you didn't
 already use yourself. If you want the engineering version, it's
-`FEATURE_STRUCTURE_SPEC.md`; you shouldn't need it.
+`docs/history/FEATURE_STRUCTURE_SPEC.md`; you shouldn't need it.
 
 ## You already found the real problem
 

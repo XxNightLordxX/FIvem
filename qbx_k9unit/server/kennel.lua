@@ -356,7 +356,7 @@
     ======================================================================
 
     ======================================================================
-    CLOSEABLE KENNEL (owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+    CLOSEABLE KENNEL (owner-directed, docs/history/COMMAND_CONSOLIDATION_SPEC.md #5
     extension, this pass). Owner's own words: "Allow the kennel to close" —
     a real K9 transport kennel is a cage that can be shut, which this
     feature previously had no concept of at all (confirmed by reading both
@@ -1097,7 +1097,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         netId = netId,
         ownerSrc = src,
         createdAt = GetGameTimer(),
-        -- CLOSEABLE KENNEL (COMMAND_CONSOLIDATION_SPEC.md #5 extension,
+        -- CLOSEABLE KENNEL (docs/history/COMMAND_CONSOLIDATION_SPEC.md #5 extension,
         -- owner-directed) -- see this file's own "CLOSEABLE KENNEL" header
         -- section for the full design. Defaults to false (open) so a
         -- freshly-deployed kennel behaves exactly as it always has on a

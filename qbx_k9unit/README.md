@@ -874,10 +874,10 @@ needed to get this resource running:
 - **`PROJECT_HISTORY.md`** — what shipped and when.
 - **`CHANGELOG.md`** — what changed between versions, written for you.
   Read this one before taking an update.
-- **`WATCHDOG_LOG.md`** and **`TABLET_REWORK_SPEC.md`** — internal
+- **`WATCHDOG_LOG.md`** and **`docs/history/TABLET_REWORK_SPEC.md`** — internal
   working notes from building this. Neither is written for you, neither
   is kept current, and nothing in them is needed to run the resource.
   They are listed here only so that finding them in the folder does not
-  send you off reading the wrong thing — `TABLET_REWORK_SPEC.md` in
+  send you off reading the wrong thing — `docs/history/TABLET_REWORK_SPEC.md` in
   particular is named after a feature you *will* use, and is not its
   documentation. The tablet documents itself, in its own Help tab.

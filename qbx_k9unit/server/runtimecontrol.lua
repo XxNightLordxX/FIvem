@@ -2456,7 +2456,7 @@ AddEventHandler('onResourceStart', function(resourceName)
             -- config fix is a real bricking bug, not a hypothetical one.
             local tier = GetFeatureTier(name)
             local sessionOnly = GetFeatureSessionOnly(name)
-            -- PARENT-OFF SKIP (FEATURE_STRUCTURE_SPEC.md §11) -- a stored
+            -- PARENT-OFF SKIP (docs/history/FEATURE_STRUCTURE_SPEC.md §11) -- a stored
             -- override trying to turn a child ON while config.lua's own
             -- Config.FeatureGroups now has its parent `enabled = false`
             -- must NOT be silently re-applied here: ApplyFeatureOverride
@@ -2716,7 +2716,7 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
         return { ok = false, reason = 'unaudited_feature' }
     end
 
-    -- PARENT-OFF REFUSES CHILD-ON (owner-directed, FEATURE_STRUCTURE_SPEC.md
+    -- PARENT-OFF REFUSES CHILD-ON (owner-directed, docs/history/FEATURE_STRUCTURE_SPEC.md
     -- §11) -- config.lua's Config.FeatureGroups tree (see that file's own
     -- header) can force a whole family of Config.Features keys off via one
     -- `enabled = false`. Accepting an override that turns ONE of those keys

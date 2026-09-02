@@ -2337,7 +2337,7 @@ local REVOKE_COMMAND_OUTCOME_KEYS = {
 -- two commands are not registered in THAT harness" rather than a hard
 -- load-time crash the moment this section was added.
 -- ======================================================================
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §5 item 7, §1
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md §5 item 7, §1
 -- "permissions" family) -- k9grantpermission/k9revokepermission merge into
 -- ONE canonical `/k9permission <grant|revoke> <citizenid> <permission>`.
 -- Both handler BODIES below are UNCHANGED from before this pass -- only
@@ -2452,7 +2452,7 @@ if type(RegisterCommand) == 'function' then
         end
     end, false)
 
-    -- HIDDEN ALIASES (COMMAND_CONSOLIDATION_SPEC.md §3) -- kept registered
+    -- HIDDEN ALIASES (docs/history/COMMAND_CONSOLIDATION_SPEC.md §3) -- kept registered
     -- forever, byte-identical bodies to before this merge, for existing
     -- keybinds/macros/cheat-sheets. Not chat-suggested and not listed in
     -- html/tablet.js's COMMAND_REFERENCE anymore (see

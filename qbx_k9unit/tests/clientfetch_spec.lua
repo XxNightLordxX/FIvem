@@ -408,7 +408,7 @@ t.test('feature on: exposes all four globals, registers 4 commands (3 hidden ali
     t.isNotNil(f.env.ReleaseFetchBall)
     t.isNotNil(f.env.RequestRecallFetchBall)
     t.isNotNil(f.env.IsFetchCarryEngaged)
-    t.equals(#f.commands, 4, 'k9throwfetchball, k9dropfetchball, k9recallfetchball (hidden aliases) + k9fetch (COMMAND_CONSOLIDATION_SPEC.md #3)')
+    t.equals(#f.commands, 4, 'k9throwfetchball, k9dropfetchball, k9recallfetchball (hidden aliases) + k9fetch (docs/history/COMMAND_CONSOLIDATION_SPEC.md #3)')
     t.equals(f.netEventCount(), 4)
     t.isNotNil(f.netEventNames['qbx_k9unit:client:throwFetchBallAt'])
     t.isNotNil(f.netEventNames['qbx_k9unit:client:carryFetchBall'])
@@ -454,7 +454,7 @@ t.test('commands: k9throwfetchball/k9dropfetchball/k9recallfetchball are wired t
 end)
 
 -- ========================================================================
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #3) -- the merged
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md #3) -- the merged
 -- '/k9fetch' entry point. Reference implementation for contextual dispatch
 -- across the five families (project-owner-directed mid-pass redirect) --
 -- see this file's own new comment block above RegisterCommand('k9fetch', ...)

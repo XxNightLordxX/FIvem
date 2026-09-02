@@ -21,7 +21,7 @@ pass itself.
 | 2026-08-27 | Watchdog's own checks all clean. The real findings this pass came from a separate 12-agent production-readiness audit running alongside it -- including two live bugs the watchdog's fixed checklist would never have caught. |
 | 2026-08-27 (4th) | Clean on all five checklist items. 19 commits reviewed. The findings this pass again came from elsewhere -- fifteen audit agents run alongside -- including a wellbeing data-loss bug on restart and a vehicle/body-claim seam bug no single-file review could see. Dependency upstream status NOT re-verified: GitHub API 403 through this session's proxy. |
 | 2026-08-27 (2nd) | Clean. 5 commits reviewed, all 5 spot-checks pass, dependencies and bark audio re-verified, no stale claims in KNOWN_ISSUES. The radial count trap flagged last pass bit again in a new form -- see detail. |
-| 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (FEATURE_STRUCTURE_SPEC.md, OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
+| 2026-08-27 (3rd, comment-truth pass) | Dedicated doc-vs-code sweep after commit `2f21165`. Found and fixed three real drifts: KNOWN_ISSUES.md/CHANGELOG.md still said SAR calls were solo-only and Master Handler was unreachable, both now false; two older planning docs (docs/history/FEATURE_STRUCTURE_SPEC.md, docs/history/OVERHAUL_PLAN.md) still presented the vision-cycle merge as current/pending when it shipped and was then reversed. See detail for the full list, including one item added from an unverified third-party claim that checked out. |
 | 2026-08-31 | Clean on all five checks; 13 backlogged firings (Aug 28-31) covered by this one pass. 8 commits reviewed, all authored and gated this session. The rank-visibility finding left open by an earlier pass is now CLOSED BY CODE, not by editing the comment. Dependency status re-verified upstream and answered properly for the first time: all three alive, none archived. |
 | 2026-08-31 (2nd) | NOT a watchdog pass -- a directed work session, logged here because it changed a SHIPPED DEFAULT the next pass must know about: `Config.Database.enabled` now ships **false** (drag-and-drop, no SQL import). Memory-only is now the ordinary path, not a fault. Also corrected a false doc claim in four places (memory mode DOES keep a capped audit trail) and closed the KNOWN_ISSUES command-drift item. |
 | 2026-08-31 (3rd) | **THIS ROUTINE'S OWN PROMPT WAS REWRITTEN.** It referenced a `SPEC.md` that has not existed for many passes (twice), asked about a bark-audio gap closed long ago, and did not know the database now ships OFF -- so it would have read a healthy server as broken. Checklist also rebalanced toward doc-vs-code drift, which is where every real finding has come from lately. |
@@ -246,7 +246,7 @@ file named, not by trusting another comment or a prior doc.
   bullets; added accurate `Fixed`/`Added`/`Changed` entries in their place
   so the change is still on record, just no longer misfiled as an open
   limitation.
-- `FEATURE_STRUCTURE_SPEC.md` and `OVERHAUL_PLAN.md` (both Phase-1/
+- `docs/history/FEATURE_STRUCTURE_SPEC.md` and `docs/history/OVERHAUL_PLAN.md` (both Phase-1/
   planning docs, never updated after their own recommendations were acted
   on) still presented "merge night/thermal vision into one cycle" as a
   live proposal, and "remove Scent Trail Hunt" as still awaiting the
@@ -258,7 +258,7 @@ file named, not by trusting another comment or a prior doc.
   position has the full record). Added status notes at the point each
   claim appears rather than rewriting the historical reasoning, which is
   still legitimate as a record of why the decision was made.
-- `OVERHAUL_PLAN.md`'s headline counts (60 switches / 55 commands / 42
+- `docs/history/OVERHAUL_PLAN.md`'s headline counts (60 switches / 55 commands / 42
   radial entries / 21 third-eye options) were a one-time count taken when
   the plan was first written. Not re-verified digit-for-digit here — a
   full recount would mean opening every `RegisterCommand`/radial/

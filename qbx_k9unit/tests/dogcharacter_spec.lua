@@ -632,12 +632,12 @@ t.test('a non-high-command caller running /k9setdog is denied with no DB write',
 end)
 
 -- ======================================================================
--- 8. COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #2) -- the merged
+-- 8. COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md #2) -- the merged
 --    '/k9dog <set|remove|target>' dispatcher. k9setdog/k9removedog stay
 --    registered forever as HIDDEN ALIASES (proven above, unchanged) --
 --    these tests are about the NEW 'k9dog' entry point specifically:
 --    per-subcommand gating survives the merge, the bare/no-arg forms behave
---    per COMMAND_CONSOLIDATION_SPEC.md §4, and set/remove stay EXPLICIT
+--    per docs/history/COMMAND_CONSOLIDATION_SPEC.md §4, and set/remove stay EXPLICIT
 --    words (never auto-inferred from pin state -- this is the family the
 --    project-owner's own "fluid" redirect explicitly named as a
 --    destructive-action carve-out: removing a record must never be

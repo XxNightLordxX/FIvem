@@ -152,7 +152,7 @@ end
 local SERVER_LUA_FILES = LuaFilesIn('../server')
 local CLIENT_LUA_FILES = LuaFilesIn('../client')
 
--- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3) -- SAME
+-- HIDDEN_ALIAS_COMMANDS (docs/history/COMMAND_CONSOLIDATION_SPEC.md §3) -- SAME
 -- MEMBERSHIP as tests/commandsuggestions_spec.lua's own table of the same
 -- name (kept as an independent, duplicated literal, same disclosed
 -- tradeoff as this file's own SERVER_LUA_FILES/CLIENT_LUA_FILES snapshot,

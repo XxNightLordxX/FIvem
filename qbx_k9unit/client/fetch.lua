@@ -500,7 +500,7 @@ RegisterCommand('k9recallfetchball', function()
 end, false)
 
 -- ======================================================================
--- '/k9fetch' -- COMMAND_CONSOLIDATION_SPEC.md #3, the merged entry point.
+-- '/k9fetch' -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3, the merged entry point.
 -- k9throwfetchball/k9dropfetchball/k9recallfetchball above stay registered
 -- forever as HIDDEN ALIASES (unchanged bodies -- see
 -- client/commandsuggestions.lua's HIDDEN_ALIAS_COMMANDS).
@@ -564,7 +564,7 @@ RegisterCommand('k9fetch', function(_source, args)
 
     if args[1] then
         -- An argument was given but it's not throw/drop/recall --
-        -- COMMAND_CONSOLIDATION_SPEC.md §4's no-argument/bad-subcommand
+        -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §4's no-argument/bad-subcommand
         -- discoverability convention, reused for "recognized command,
         -- unrecognized word" too.
         lib.notify({ title = locale('common.notify_title'), description = locale('fetch.usage_k9fetch'), type = 'error' })

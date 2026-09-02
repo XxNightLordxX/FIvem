@@ -1,3 +1,17 @@
+> **HISTORICAL RECORD — NOT CURRENT GUIDANCE.**
+>
+> This document is the engineering discipline rules this resource was built under. The work it describes has been
+> built, and in places has since been changed or removed. It is kept because
+> it explains WHY things are shaped the way they are, which the code alone
+> cannot say — but it does not describe how the resource works today, and it
+> is not a specification anyone should implement from.
+>
+> For how the resource actually works now, see `README.md` (setup and
+> features), `DEVELOPER_REFERENCE.md` (the code), and `DIAGNOSTIC_CHECKS.md`
+> (the `/k9debug` report). Archived 2026-09-02.
+
+---
+
 # K9 Discipline Gating — Spec
 
 > **A NOTE ON THE `file.lua:123` REFERENCES BELOW — READ BEFORE FOLLOWING ONE.**

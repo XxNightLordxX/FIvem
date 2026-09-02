@@ -48,7 +48,7 @@
     allowlist, and for the same reason.
 
     WHAT IS DELIBERATELY NOT CHECKED. `file.lua:123` line numbers. They are
-    known-rotten and admitted as such at the top of DISCIPLINE_SPEC.md and
+    known-rotten and admitted as such at the top of docs/history/DISCIPLINE_SPEC.md and
     DIAGNOSTIC_CHECKS.md; renumbering them buys nothing because the next
     edit invalidates them all again. The NAME in each citation is the stable
     part, and the name is what this file checks.

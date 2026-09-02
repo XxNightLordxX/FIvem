@@ -227,8 +227,8 @@ Config.Features = {
     FindAlerts           = true,
 
     -- REMOVED (owner-approved, "Overhaul all the features if they are
-    -- redundant... remove it" -- see FEATURE_STRUCTURE_SPEC.md §2.2.1 and
-    -- OVERHAUL_PLAN.md's "Stage 7" for the full reasoning and the
+    -- redundant... remove it" -- see docs/history/FEATURE_STRUCTURE_SPEC.md §2.2.1 and
+    -- docs/history/OVERHAUL_PLAN.md's "Stage 7" for the full reasoning and the
     -- dependency check that cleared it). Was `ScentTrailHunt`, gating
     -- the removed scent-trail client file + the removed scent-trail server file ("follow your nose" --
     -- PROJECT_HISTORY.md §2): the K9 sets off after a hidden, made-up spot,
@@ -250,7 +250,7 @@ Config.Features = {
     --   1. AS-IS: add the line `ScentTrailHunt = true,` back here (or set
     --      it under a Config.FeatureGroups family below, see that table's
     --      own header for how to wire a new key into it).
-    --   2. AS A TRAINING DRILL INSTEAD (the alternative OVERHAUL_PLAN.md
+    --   2. AS A TRAINING DRILL INSTEAD (the alternative docs/history/OVERHAUL_PLAN.md
     --      offered and the owner may still take -- a nose-following
     --      practice exercise, since TrainingMode's own dummy drills below
     --      cover bite-and-hold and searching but nothing for tracking):
@@ -662,7 +662,7 @@ Config.Features = {
 -- day to day. Full design rationale (family boundaries; the four-bucket
 -- classification -- real feature / sub-feature / behaviour / removed --
 -- of every flag above; why six flags sit outside every parent; the
--- lineup/recall/admin-split reasoning) lives in FEATURE_STRUCTURE_SPEC.md
+-- lineup/recall/admin-split reasoning) lives in docs/history/FEATURE_STRUCTURE_SPEC.md
 -- -- this comment is the short version, not a duplicate of it.
 --
 -- HOW THIS WORKS: each capability below has an `enabled` switch. Turning
@@ -691,7 +691,7 @@ Config.Features = {
 -- as always, THEN add it to exactly one of FEATURE_GROUP_MEMBERS or
 -- STANDALONE_FEATURE_KEYS just below this table (whichever family it
 -- belongs to, or the standalone list if it genuinely has no parent -- see
--- FEATURE_STRUCTURE_SPEC.md §3 for how that call was made for the
+-- docs/history/FEATURE_STRUCTURE_SPEC.md §3 for how that call was made for the
 -- existing six). tests/featuregroups_spec.lua fails loudly, naming the
 -- key, if this step is skipped -- this is deliberate: a feature landing
 -- mid-session with no home in this tree is exactly the kind of silent gap

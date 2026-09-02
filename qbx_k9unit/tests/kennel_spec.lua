@@ -2571,7 +2571,7 @@ t.test('playerDropped: also frees the DeployCooldown slot for the disconnecting 
 end)
 
 -- ----------------------------------------------------------------------
--- CLOSEABLE KENNEL -- owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+-- CLOSEABLE KENNEL -- owner-directed, docs/history/COMMAND_CONSOLIDATION_SPEC.md #5
 -- extension, this pass. See this file's own header "CLOSEABLE KENNEL"
 -- section for the full design writeup. THE FOUR THINGS THAT MATTER MORE
 -- THAN THE FEATURE (owner's own framing) are each pinned by their own

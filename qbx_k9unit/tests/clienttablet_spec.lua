@@ -1088,7 +1088,7 @@ t.test('tablet:requestPersonFeatures: same shape guard as requestPersonSummary',
 end)
 
 -- ----------------------------------------------------------------------
--- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- three thin
+-- K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) -- three thin
 -- forwards straight onto server/roster.lua's own `qbx_k9unit:server:roster*`
 -- lib.callback registrations (Phase A). This file adds no authorization of
 -- its own -- IsHighCommand is re-verified server-side on every call (THE
@@ -1193,7 +1193,7 @@ t.test('tablet:givexp: amount must be a number', function()
 end)
 
 -- ----------------------------------------------------------------------
--- tablet:decertify -- BUGFIX (COMMAND_CONSOLIDATION_SPEC.md §6). Used to
+-- tablet:decertify -- BUGFIX (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6). Used to
 -- shell out to the OFFLINE-ONLY 'k9decertifyoffline' command via
 -- SubmitAllowlistedCommand/ExecuteCommand for EVERY target, online or
 -- offline -- and server/certifications.lua's RevokeCertificationOffline
@@ -1669,7 +1669,7 @@ end)
 -- never part of client/tablet.lua's own documented NUI CONTRACT -- a
 -- registered capability nothing could reach.
 --
--- REMOVED ENTIRELY THIS PASS (COMMAND_CONSOLIDATION_SPEC.md §6 bugfix):
+-- REMOVED ENTIRELY THIS PASS (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6 bugfix):
 -- tablet:decertify was the LAST remaining caller of
 -- SubmitAllowlistedCommand/ALLOWLISTED_TABLET_COMMANDS/
 -- IsSafeCommandArgToken -- now that it calls a real server callback

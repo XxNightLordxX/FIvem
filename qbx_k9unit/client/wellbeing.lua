@@ -10,8 +10,8 @@
     sprint/jump input blocks for low Injury (a disclosed, bounded, self-
     applied limitation — see server/wellbeing.lua's header and DEVELOPER_REFERENCE.md
     §13.0 Decision 3, not a security boundary), and owns the merged "Care
-    for K9" ox_target interaction (COMMAND_CONSOLIDATION_SPEC.md §7 /
-    FEATURE_STRUCTURE_SPEC.md §5 — see the MOOD section further down for the
+    for K9" ox_target interaction (docs/history/COMMAND_CONSOLIDATION_SPEC.md §7 /
+    docs/history/FEATURE_STRUCTURE_SPEC.md §5 — see the MOOD section further down for the
     full consolidation writeup) plus the meat-bait/whistle/calm-down
     self-actions.
 

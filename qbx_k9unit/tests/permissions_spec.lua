@@ -2304,7 +2304,7 @@ t.test('CONSOLE/CHAT COMMANDS: k9grantpermission and k9revokepermission are regi
 end)
 
 -- ============================================================================
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §5 item 7) --
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md §5 item 7) --
 -- k9grantpermission/k9revokepermission merge into ONE canonical
 -- '/k9permission <grant|revoke> <citizenid> <permission>'. Both old names
 -- stay registered forever as HIDDEN ALIASES with byte-identical bodies

@@ -1598,11 +1598,11 @@ t.test('Memory: every new catalog-audit *_GetRecent accessor never throws on a n
 end)
 
 -- ----------------------------------------------------------------------
--- PART 5 -- k9_personnel (migration 0020, ROSTER_SPEC.md §3/§4). The
+-- PART 5 -- k9_personnel (migration 0020, docs/history/ROSTER_SPEC.md §3/§4). The
 -- K9/Handler roster assignment + callsign table -- one active row per
 -- (citizenid, job), plus a SECOND invariant this table alone has: at most
 -- one active callsign per department, case-insensitive, shared across
--- BOTH roles (ROSTER_SPEC.md §4's combined-namespace decision).
+-- BOTH roles (docs/history/ROSTER_SPEC.md §4's combined-namespace decision).
 -- ----------------------------------------------------------------------
 
 t.test('MySQL branch: Personnel_GetActiveRow forwards citizenid/job and passes the row through', function()
@@ -1655,7 +1655,7 @@ t.test('MySQL branch: Personnel_Insert forwards citizenid/job/role/grantedBy in 
     t.equals(err.errno, 1062, 'the real oxmysql-shaped duplicate error must reach the caller exactly as thrown')
 end)
 
-t.test('MySQL branch: Personnel_UpdateRole clears the callsign in the SAME statement (ROSTER_SPEC.md §4)', function()
+t.test('MySQL branch: Personnel_UpdateRole clears the callsign in the SAME statement (docs/history/ROSTER_SPEC.md §4)', function()
     resetCapture()
     canned = 1
     MysqlStore.Personnel_UpdateRole('CITP4', 'police', 'handler')
@@ -1702,7 +1702,7 @@ t.test('Memory: Personnel_Insert/GetActiveRow round-trip; a fresh row always sta
     local row = MemStore.Personnel_GetActiveRow('CITQ1', 'police')
     t.equals(row.id, id)
     t.equals(row.role, 'k9')
-    t.isNil(row.callsign, 'ROSTER_SPEC.md §4: a fresh assignment never starts with a callsign')
+    t.isNil(row.callsign, 'docs/history/ROSTER_SPEC.md §4: a fresh assignment never starts with a callsign')
     t.equals(row.granted_by, 'HC1')
 end)
 

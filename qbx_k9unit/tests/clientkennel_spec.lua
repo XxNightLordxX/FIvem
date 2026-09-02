@@ -518,7 +518,7 @@ end
 -- internally no-op.
 -- ========================================================================
 
-t.test('FIXED: feature off registers no GATED net events, onResourceStart/onResourceStop handlers, or threads -- ONLY k9kennel and the forced-exit event survive, unconditionally, both exit-path-critical (COMMAND_CONSOLIDATION_SPEC.md #5)', function()
+t.test('FIXED: feature off registers no GATED net events, onResourceStart/onResourceStop handlers, or threads -- ONLY k9kennel and the forced-exit event survive, unconditionally, both exit-path-critical (docs/history/COMMAND_CONSOLIDATION_SPEC.md #5)', function()
     local f = newKennelFixture({ deployableKennel = false })
     t.equals(#f.commands, 1, 'k9deploykennel is not registered with the feature off, but k9kennel IS -- its own exit branch must survive a toggled-off feature, same reasoning as k9exitkennel')
     t.equals(f.commands[1].name, 'k9kennel')
@@ -1713,7 +1713,7 @@ t.test('RequestDeployKennel: a call AFTER a real kennel is already confirmed is 
 end)
 
 -- ========================================================================
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE) -- the
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE) -- the
 -- new 'k9kennel' entry point + RequestKennelContextual(). k9deploykennel
 -- above is UNCHANGED (proven by every test above it) -- these tests are
 -- about the NEW additive layer specifically.
@@ -1833,7 +1833,7 @@ t.test('EXPLICIT OVERRIDE: /k9kennel deploy|enter|exit force that exact action',
 end)
 
 -- ========================================================================
--- CLOSEABLE KENNEL (owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+-- CLOSEABLE KENNEL (owner-directed, docs/history/COMMAND_CONSOLIDATION_SPEC.md #5
 -- extension, this pass). See server/kennel.lua's own "CLOSEABLE KENNEL"
 -- header section for the full design writeup.
 -- ========================================================================

@@ -2,7 +2,7 @@
     tests/roster_spec.lua
 
     Tests server/roster.lua -- the K9 Command Tablet roster data layer +
-    server logic (ROSTER_SPEC.md, PHASE A) -- against the REAL, unmodified
+    server logic (docs/history/ROSTER_SPEC.md, PHASE A) -- against the REAL, unmodified
     production file, loaded alongside the REAL, unmodified
     server/cooldowns.lua and server/datastore.lua (memory-mode: this file's
     own logic, not the SQL-forwarding shape, is what this spec covers --
@@ -394,7 +394,7 @@ t.test('RosterAssignPersonnelRole: calling with the SAME role again is a harmles
     t.equals(f.K9Store.Personnel_GetActiveRow('SAME-ROLE', 'police').id, firstId, 'must still be the SAME row, not a new one')
 end)
 
-t.test('RosterAssignPersonnelRole: a role CHANGE clears the callsign in the same action (ROSTER_SPEC.md §4)', function()
+t.test('RosterAssignPersonnelRole: a role CHANGE clears the callsign in the same action (docs/history/ROSTER_SPEC.md §4)', function()
     local f = newFixture({ playersByCitizenId = { ['ROLE-CHANGE'] = makePlayer('ROLE-CHANGE', 'police') } })
     f.K9Store.Cert_Insert('ROLE-CHANGE', 'police', 'ACTOR', nil)
     f.env.RosterAssignPersonnelRole('ROLE-CHANGE', 'police', 'k9', 'ACTOR')
@@ -528,7 +528,7 @@ t.test('RosterSetCallsign: department_mismatch resolved fresh, same as RosterAss
 end)
 
 -- ----------------------------------------------------------------------
--- rosterList -- bucketing, sort, and THE FILTER DISCIPLINE (ROSTER_SPEC.md
+-- rosterList -- bucketing, sort, and THE FILTER DISCIPLINE (docs/history/ROSTER_SPEC.md
 -- §7): a citizenid must stop appearing as hired on EITHER roster the
 -- moment their certification's own active flag flips, EVEN IF the
 -- k9_personnel cleanup itself never ran (the exact "never gate a
@@ -579,7 +579,7 @@ t.test('rosterList: a FIRED citizenid disappears from every bucket immediately, 
     for _, row in ipairs(result.unassigned) do t.isTrue(row.citizenid ~= 'GONE') end
 end)
 
-t.test('rosterList: default sort is certification tier ordinal DESCENDING, ties broken by name (ROSTER_SPEC.md §9)', function()
+t.test('rosterList: default sort is certification tier ordinal DESCENDING, ties broken by name (docs/history/ROSTER_SPEC.md §9)', function()
     local tierByCitizen = { ALPHA = 'trainee', BRAVO = 'senior', CHARLIE = 'certified', DELTA = 'senior' }
     local f = newFixture({
         playersByCitizenId = {

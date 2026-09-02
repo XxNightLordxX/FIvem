@@ -283,7 +283,7 @@ claim this history exists to correct rather than repeat. STALE AS OF
 2026-08-26 FOR ITEM 2 SPECIFICALLY: `Config.Features.ScentTrailHunt` was
 later removed (owner-approved, judged redundant with Detection's own
 "walk toward a fading signal" interaction shape — see
-`FEATURE_STRUCTURE_SPEC.md` §2.2.1/§9 and `config.lua`'s own
+`docs/history/FEATURE_STRUCTURE_SPEC.md` §2.2.1/§9 and `config.lua`'s own
 `Config.Features` comment for the full reasoning and how to bring it back).
 `the removed scent-trail client file`/`the removed scent-trail server file` are untouched and still
 correctly go inert the instant that flag reads `nil` — the other four items

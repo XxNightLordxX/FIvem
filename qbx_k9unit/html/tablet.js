@@ -310,7 +310,7 @@
         ONLINE or OFFLINE target (server/certifications.lua's
         GrantCertificationForTablet/RevokeCertificationForTablet resolve
         this themselves) -- this page never needs to know or ask which.
-        BUGFIX (COMMAND_CONSOLIDATION_SPEC.md §6): tablet:decertify used to
+        BUGFIX (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6): tablet:decertify used to
         be wired to an offline-only command bridge that always refused an
         online target, contradicting this exact contract -- fixed by giving
         it a real RevokeCertificationForTablet-backed server callback,
@@ -1593,7 +1593,7 @@
         cmdref_k9exitkennel_usage: '/k9exitkennel',
         cmdref_k9exitkennel_does: 'Gets you out of a kennel you are resting in.',
         cmdref_k9exitkennel_needs: 'Nothing -- always available while resting in a kennel, so you can never get stuck inside one.',
-        // k9kennel -- COMMAND_CONSOLIDATION_SPEC.md #5's merged entry point.
+        // k9kennel -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #5's merged entry point.
         // does/usage text from client/commandsuggestions.lua's own
         // PENDING_LOCALE_KEYS (the exact interim text already shipped
         // client-side for this command); needs mirrors k9deploykennel's own
@@ -1622,7 +1622,7 @@
         cmdref_k9recallfetchball_usage: '/k9recallfetchball',
         cmdref_k9recallfetchball_does: 'Cancels your own fetch throw in progress.',
         cmdref_k9recallfetchball_needs: 'Nothing -- always available, so a throw can always be called off.',
-        // k9fetch -- COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
+        // k9fetch -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
         // does/usage from client/commandsuggestions.lua's own
         // PENDING_LOCALE_KEYS; needs mirrors k9throwfetchball's own above.
         cmdref_k9fetch_usage: '/k9fetch',
@@ -1674,7 +1674,7 @@
         cmdref_k9trainbite_usage: '/k9trainbite',
         cmdref_k9trainbite_does: 'Runs a practice bite-hold drill.',
         cmdref_k9trainbite_needs: 'Training Mode must already be switched on for you (see /k9training).',
-        // k9train -- COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point.
+        // k9train -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point.
         // does/usage from client/commandsuggestions.lua's own
         // PENDING_LOCALE_KEYS; needs mirrors k9training's own above (the
         // START half this command's gate documents -- turning off, unlike
@@ -1702,7 +1702,7 @@
         cmdref_k9unspecialize_usage: '/k9unspecialize <server id> <specialization>  |  /k9unspecialize <citizenid> <job> <specialization>',
         cmdref_k9unspecialize_does: 'Revokes a handler\'s specialization -- works whether they are online (first form) or offline (second form).',
         cmdref_k9unspecialize_needs: 'Same as /k9certify.',
-        // k9dog -- COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point.
+        // k9dog -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point.
         // does/usage from client/commandsuggestions.lua's own
         // PENDING_LOCALE_KEYS; needs is new (this pass) -- gated on
         // IsHighCommand(source) alone, no Config.Features flag exists for
@@ -2137,7 +2137,7 @@
         partnerships_force_end_label: 'End Partnership',
         help_tab_partnerships_desc: "Shows who you are currently partnered with, or that you have no partner right now. If you are High Command, this same tab also lets you look up anyone else's partnership. Open it to check a pairing -- partnering up and breaking up both happen out in the world (interact menu or K9 Unit radial menu), not on this screen.",
 
-        // ---- K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) ----
+        // ---- K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) ----
         // owner, verbatim: "make it in the tablet where there is a roster
         // where we can assign callsigns see list of hired k9s and full
         // menu to fire promote etc" / "Also a separate roster for
@@ -2145,7 +2145,7 @@
         // we can also assign roles sub features features permissions
         // etc" / "Like click there profile and it opens a menu" / "Also
         // in the roster be able to reorder them by rank." The 24 keys
-        // ROSTER_SPEC.md §10 names, plus a small number this pass found it
+        // docs/history/ROSTER_SPEC.md §10 names, plus a small number this pass found it
         // genuinely needed beyond that list (each commented individually
         // below) -- every key here is also in client/tablet.lua's
         // TABLET_STRING_KEYS and locales/en.json's `tablet` group, per this
@@ -2174,7 +2174,7 @@
         roster_sort_by_grade: 'Department Grade',
         roster_sort_by_xp: 'XP',
         roster_dogcharacter_pin_note: '(cosmetically pinned as a dog)',
-        // ---- Beyond ROSTER_SPEC.md §10's own list -- needed once this
+        // ---- Beyond docs/history/ROSTER_SPEC.md §10's own list -- needed once this
         // pass actually built the screens: every outcome code
         // qbx_k9unit:server:rosterSetPersonnelRole/rosterSetCallsign can
         // return needs a REAL message (this file's own task brief), and
@@ -2374,7 +2374,7 @@
         // optional convenience alongside the two explicit toggles above --
         // owner's own steer ("keep it as an extra... someone may prefer
         // it"), same additive shape as 'k9kennel' alongside
-        // k9deploykennel/k9exitkennel (COMMAND_CONSOLIDATION_SPEC.md #5).
+        // k9deploykennel/k9exitkennel (docs/history/COMMAND_CONSOLIDATION_SPEC.md #5).
         { command: 'k9vision', category: 'vision', adminOnly: false, usageKey: 'cmdref_k9vision_usage', doesKey: 'cmdref_k9vision_does', needsKey: 'cmdref_k9vision_needs', gate: { kind: 'open' }, defaultKeybind: 'I' },
 
         // ---- Field Gear & Equipment ----
@@ -2408,7 +2408,7 @@
         // certification -- this is a confining-mechanic escape hatch, never
         // gated on the way out.
         { command: 'k9exitkennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9exitkennel_usage', doesKey: 'cmdref_k9exitkennel_does', needsKey: 'cmdref_k9exitkennel_needs', gate: { kind: 'open' }, defaultKeybind: 'O' },
-        // k9kennel -- COMMAND_CONSOLIDATION_SPEC.md #5's merged, ADDITIVE
+        // k9kennel -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #5's merged, ADDITIVE
         // entry point (client/kennel.lua) -- reported as
         // PENDING_NEW_CANONICAL_COMMANDS while html/tablet.js was a hot
         // file; added here now that it is not. Contextual dispatch over
@@ -2428,7 +2428,7 @@
         { command: 'k9throwfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9throwfetchball_usage', doesKey: 'cmdref_k9throwfetchball_does', needsKey: 'cmdref_k9throwfetchball_needs', gate: { kind: 'access', featureKey: 'FetchMechanic' } },
         { command: 'k9dropfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9dropfetchball_usage', doesKey: 'cmdref_k9dropfetchball_does', needsKey: 'cmdref_k9dropfetchball_needs', gate: { kind: 'open' } },
         { command: 'k9recallfetchball', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9recallfetchball_usage', doesKey: 'cmdref_k9recallfetchball_does', needsKey: 'cmdref_k9recallfetchball_needs', gate: { kind: 'open' } },
-        // k9fetch -- COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point
+        // k9fetch -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point
         // (client/fetch.lua) -- reported as PENDING_NEW_CANONICAL_COMMANDS
         // in tests/commandreferenceregistry_spec.lua while html/tablet.js
         // was a hot file; added here now that it is not. Contextual
@@ -2447,7 +2447,7 @@
         { command: 'k9settier', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9settier_usage', doesKey: 'cmdref_k9settier_does', needsKey: 'cmdref_k9settier_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9specialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9specialize_usage', doesKey: 'cmdref_k9specialize_does', needsKey: 'cmdref_k9specialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
         { command: 'k9unspecialize', category: 'certification', adminOnly: true, usageKey: 'cmdref_k9unspecialize_usage', doesKey: 'cmdref_k9unspecialize_does', needsKey: 'cmdref_k9unspecialize_needs', gate: { kind: 'capability', capability: 'k9.certify' } },
-        // k9dog -- COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point
+        // k9dog -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #2's merged entry point
         // (server/dogcharacter.lua) -- reported as
         // PENDING_NEW_CANONICAL_COMMANDS while html/tablet.js was a hot
         // file; added here now that it is not. Its two folded-away
@@ -2810,7 +2810,7 @@
         // no third argument to openPerson(), so this defaults to 'console'
         // for every one of them, preserving their existing Back behaviour
         // byte-for-byte) | 'roster_k9' | 'roster_handlers' (this pass,
-        // ROSTER_SPEC.md §0 -- the roster rows are a THIRD entry point into
+        // docs/history/ROSTER_SPEC.md §0 -- the roster rows are a THIRD entry point into
         // this SAME buildPersonScreen(), never a second person-detail
         // screen; this one field is the entire "mode flag" that entry
         // point needs -- it only ever changes where the Back button
@@ -2819,7 +2819,7 @@
         // Back button.
         personOpenedFrom: 'console',
 
-        // K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- owner,
+        // K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) -- owner,
         // verbatim: "make it in the tablet where there is a roster where we
         // can assign callsigns see list of hired k9s and full menu to fire
         // promote etc" / "Also a separate roster for handlers same thing" /
@@ -2834,7 +2834,7 @@
         personnelRosterError: null, // { error, message? }
         personnelRoster: null, // { k9: RosterRow[], handlers: RosterRow[], unassigned: RosterRow[] } -- null until the first successful load
         // 'tier' (default, matches server/roster.lua's own default sort) |
-        // 'grade' | 'xp' -- ROSTER_SPEC.md §9: a PURE, client-only re-sort
+        // 'grade' | 'xp' -- docs/history/ROSTER_SPEC.md §9: a PURE, client-only re-sort
         // of the already-fetched arrays above, never a second round trip
         // (acceptance criterion #13) and NEVER persisted across a reopen
         // (§9's own explicit scope cut) -- reset to 'tier' in handleOpen(),
@@ -4434,7 +4434,7 @@
             });
             appendAdminTab(permissionKeysTab);
 
-            // K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) --
+            // K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) --
             // owner's own words, this file's header. HIGH COMMAND ONLY,
             // matching qbx_k9unit:server:rosterList's own re-verified
             // IsHighCommand gate exactly (a UX convenience only -- the
@@ -5453,7 +5453,7 @@
         { tabLabelKey: 'tab_theme', descKey: 'help_tab_theme_desc', visible: canManageTabletTheme },
         { tabLabelKey: 'tab_cert_tiers', descKey: 'help_tab_cert_tiers_desc', visible: helpHighCommandOnly },
         { tabLabelKey: 'tab_permission_keys', descKey: 'help_tab_permission_keys_desc', visible: helpHighCommandOnly },
-        // K9/Handler Personnel Rosters (ROSTER_SPEC.md, Phase B) -- SAME
+        // K9/Handler Personnel Rosters (docs/history/ROSTER_SPEC.md, Phase B) -- SAME
         // high-command-only gate buildTabs() itself uses for these two
         // tabs (they sit in the same admin tab group as Cert Tiers/
         // Permission Keys immediately above).
@@ -6019,7 +6019,7 @@
      * @param {object} entry
      * @param {((kind:string, departmentKey:string, extra?:string) => void)|null} onAction
      * @param {{showRosterControls?:boolean}} [opts] -- showRosterControls
-     *   is set ONLY by buildPersonScreen()'s own call site (ROSTER_SPEC.md,
+     *   is set ONLY by buildPersonScreen()'s own call site (docs/history/ROSTER_SPEC.md,
      *   Phase B) -- My Record's read-only call and the guided flows' own
      *   calls never set it, so this stays exactly what it already rendered
      *   for them, byte for byte.
@@ -6052,7 +6052,7 @@
             row.appendChild(buildCertificationDetail(entry, onAction));
         }
 
-        // PERSONNEL ROSTER ROLE + CALLSIGN (ROSTER_SPEC.md, Phase B) --
+        // PERSONNEL ROSTER ROLE + CALLSIGN (docs/history/ROSTER_SPEC.md, Phase B) --
         // high-command-only (matches qbx_k9unit:server:rosterSetPersonnelRole/
         // rosterSetCallsign's own re-verified IsHighCommand gate exactly),
         // and only for an ACTIVE certification (RosterAssignPersonnelRole's
@@ -6067,7 +6067,7 @@
                 // FIRE, in the owner's own vocabulary (this pass) -- SAME
                 // Decertify button/action immediately below, never a second
                 // control: this is a VISIBLE warning shown directly above
-                // it, not a new mutation path. ROSTER_SPEC.md §6/§7:
+                // it, not a new mutation path. docs/history/ROSTER_SPEC.md §6/§7:
                 // "Firing yourself by accident... the roster UI must not
                 // hide that this is the same rule" as a self-typed
                 // /k9decertify -- shown ONLY here (opts.showRosterControls),
@@ -6866,13 +6866,13 @@
     }
 
     // ------------------------------------------------------------------
-    // K9/HANDLER PERSONNEL ROSTERS (ROSTER_SPEC.md, Phase B) -- owner, three
+    // K9/HANDLER PERSONNEL ROSTERS (docs/history/ROSTER_SPEC.md, Phase B) -- owner, three
     // messages, verbatim: "make it in the tablet where there is a roster
     // where we can assign callsigns see list of hired k9s and full menu to
     // fire promote etc" / "Also a separate roster for handlers same
     // thing" / "Also in the roster be able to reorder them by rank."
     //
-    // ROSTER_SPEC.md §0's structural decision, applied here: the "menu" in
+    // docs/history/ROSTER_SPEC.md §0's structural decision, applied here: the "menu" in
     // the owner's second message is NOT a new screen -- it is
     // buildPersonScreen() (below), already reached from the Console tab
     // and the Online Players picker. The two screens in THIS section
@@ -6881,7 +6881,7 @@
     // that SAME person screen, never a second person-detail screen (see
     // openPerson()'s own third `fromScreen` argument). Every actual
     // mutation (assign role, set/clear callsign, hire/fire/promote/demote)
-    // lives there, never duplicated onto a row here (ROSTER_SPEC.md §5:
+    // lives there, never duplicated onto a row here (docs/history/ROSTER_SPEC.md §5:
     // "Enough to make a personnel decision at a glance; everything else is
     // one click away on the person screen, not duplicated onto the row").
     //
@@ -6925,7 +6925,7 @@
      * Roster Role/Callsign section to show the CURRENT state for whichever
      * department row is being edited. Returns null when no active
      * personnel row exists yet (an active certification with none --
-     * ROSTER_SPEC.md §3's "Unassigned", not an error) OR when
+     * docs/history/ROSTER_SPEC.md §3's "Unassigned", not an error) OR when
      * state.personnelRoster itself has not loaded/is denied -- callers
      * must check state.personnelRoster's own loading/error state
      * separately before treating a null return as "definitely
@@ -6949,7 +6949,7 @@
     }
 
     /**
-     * Roster-specific mutation error text -- ROSTER_SPEC.md's own explicit
+     * Roster-specific mutation error text -- docs/history/ROSTER_SPEC.md's own explicit
      * instruction: "Render a callsign_taken outcome as a specific, useful
      * message naming the problem -- never a generic failure", and "Every
      * outcome code above needs a real message." Tries every outcome code
@@ -7008,7 +7008,7 @@
 
     /**
      * Pure client-side re-sort of an ALREADY-FETCHED roster row array --
-     * ROSTER_SPEC.md §9 / acceptance criterion #13: sorting by tier, grade,
+     * docs/history/ROSTER_SPEC.md §9 / acceptance criterion #13: sorting by tier, grade,
      * or XP re-orders the list this render already has in memory and NEVER
      * triggers a second qbx_k9unit:server:rosterList call. Returns a NEW
      * array (never mutates the one state.personnelRoster itself holds), all
@@ -7095,7 +7095,7 @@
             wrap.appendChild(buildPersonnelRosterTable(sortedRosterRows(rows), fromScreen, bucketKey));
         }
 
-        // UNASSIGNED (ROSTER_SPEC.md §3/§5/§8) -- ALWAYS rendered, on BOTH
+        // UNASSIGNED (docs/history/ROSTER_SPEC.md §3/§5/§8) -- ALWAYS rendered, on BOTH
         // roster screens, even when it (or the bucket above) is empty --
         // acceptance criterion #3: "never silently omitted from both."
         // NOT an error state -- on the day this ships, EVERY certified
@@ -7132,7 +7132,7 @@
     }
 
     /**
-     * ONE roster row -- read-only, per ROSTER_SPEC.md §5 ("everything else
+     * ONE roster row -- read-only, per docs/history/ROSTER_SPEC.md §5 ("everything else
      * is one click away on the person screen, not duplicated onto the
      * row"). `row` is captured directly from THIS render's own
      * state.personnelRoster arrays -- the Manage button's own closure over
@@ -7152,7 +7152,7 @@
 
         var nameCell = mk('td');
         nameCell.appendChild(mk('span', { text: row.name }));
-        // ROSTER_SPEC.md §3 -- informational, NON-AUTHORITATIVE only, K9
+        // docs/history/ROSTER_SPEC.md §3 -- informational, NON-AUTHORITATIVE only, K9
         // roster rows only (a handler cosmetically pinned as a dog still
         // functions as a handler in every other respect -- never the thing
         // that decides which roster a citizenid appears on, which this
@@ -7179,21 +7179,21 @@
     }
 
     /**
-     * PERSONNEL ROSTER ROLE + CALLSIGN (ROSTER_SPEC.md, Phase B) -- owner:
+     * PERSONNEL ROSTER ROLE + CALLSIGN (docs/history/ROSTER_SPEC.md, Phase B) -- owner:
      * "assign roles"/"assign callsigns"/"click their profile and it opens
      * a menu". Lives ONLY on buildPersonScreen() (opts.showRosterControls
      * at buildCertificationRow()'s own call site), never on My Record or a
-     * guided flow's own read of the same certification list -- ROSTER_SPEC.md
+     * guided flow's own read of the same certification list -- docs/history/ROSTER_SPEC.md
      * §0: extend the ONE person screen, never fork a second one. Reads
      * state.personnelRoster (loaded opportunistically by openPerson() for
      * every high-command viewer -- the SAME payload the two roster tabs
      * render, no second read mechanism) via findPersonnelRosterRow() to
      * find THIS citizenid+department's current role/callsign, defaulting
      * to "Unassigned" when no row is found (an active certification with
-     * no k9_personnel row -- ROSTER_SPEC.md §3, NOT an error).
+     * no k9_personnel row -- docs/history/ROSTER_SPEC.md §3, NOT an error).
      *
      * HIRE, IN THE OWNER'S OWN VOCABULARY -- disclosed limitation, not
-     * silently glossed over: ROSTER_SPEC.md §3 calls for
+     * silently glossed over: docs/history/ROSTER_SPEC.md §3 calls for
      * GrantCertificationForTablet to gain a REQUIRED personnelRole
      * parameter so Hire cannot be submitted without picking K9 or Handler
      * IN THE SAME ACTION. server/roster.lua's own Phase A header
@@ -7211,7 +7211,7 @@
      * very next, one-click, high-command-only step for a citizenid who
      * just got certified (or was certified all along) and is still
      * sitting in "Unassigned" -- visible, obvious, never silently missed
-     * (ROSTER_SPEC.md §3/§8's own "Unassigned" bucket is exactly this same
+     * (docs/history/ROSTER_SPEC.md §3/§8's own "Unassigned" bucket is exactly this same
      * citizenid, listed).
      * @param {{departmentKey:string}} entry
      */
@@ -7250,7 +7250,7 @@
             hireNotice.appendChild(mk('p', { class: 'k9tablet-hint', text: S('roster_hire_role_prompt') }));
             wrap.appendChild(hireNotice);
         } else {
-            // ROSTER_SPEC.md §6/acceptance criterion #6: the confirmation
+            // docs/history/ROSTER_SPEC.md §6/acceptance criterion #6: the confirmation
             // copy must say the callsign is being cleared, BEFORE the
             // operator confirms -- visible text, not merely a button
             // title/tooltip.
@@ -7270,7 +7270,7 @@
             };
             if (currentRole == null) {
                 // Assigning from Unassigned -- low-weight, plain button
-                // (ROSTER_SPEC.md §6: "Plain button, but the confirmation
+                // (docs/history/ROSTER_SPEC.md §6: "Plain button, but the confirmation
                 // copy must say..." applies to a CHANGE, not this first
                 // assignment, which clears nothing).
                 wrap.appendChild(mkButton(label, 'k9tablet-btn', doChange, { disabled: state.pendingAction }));
@@ -7338,7 +7338,7 @@
         // reloads via this same helper; Back must not be the one path that
         // diverges from it.
         wrap.appendChild(mkButton(S('back_label'), 'k9tablet-link-btn', function () {
-            // ROSTER_SPEC.md §0 -- the ONE piece of "mode" this pass adds:
+            // docs/history/ROSTER_SPEC.md §0 -- the ONE piece of "mode" this pass adds:
             // Back returns to whichever roster tab actually opened this
             // screen when that's how it was reached, otherwise falls
             // through to the EXACT SAME goToConsoleScreen() every other
@@ -7378,7 +7378,7 @@
             var canGiveXp = state.viewer.effectivePermissions.indexOf('k9.givexp') !== -1;
 
             wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_certifications_heading') }));
-            // { showRosterControls: true } -- ROSTER_SPEC.md, Phase B --
+            // { showRosterControls: true } -- docs/history/ROSTER_SPEC.md, Phase B --
             // the ONLY call site of buildCertificationList() that passes
             // this; My Record (read-only) and the guided flows' own calls
             // are UNCHANGED, so this section only ever appears here, on
@@ -13425,7 +13425,7 @@
 
     function openPerson(citizenid, name, fromScreen) {
         state.screen = 'person';
-        // ROSTER_SPEC.md §0's "mode flag", the only one this pass needs --
+        // docs/history/ROSTER_SPEC.md §0's "mode flag", the only one this pass needs --
         // see state.personOpenedFrom's own declaration comment. Every
         // EXISTING call site (Console tab, "open by exact citizen ID",
         // Online Players picker) passes no third argument at all, so this
@@ -13461,7 +13461,7 @@
             loadK9Profile(citizenid);
             // Opportunistic, best-effort: populates state.personnelRoster
             // for this screen's OWN Roster Role/Callsign section
-            // (buildRosterRoleSection(), ROSTER_SPEC.md Phase B) --
+            // (buildRosterRoleSection(), docs/history/ROSTER_SPEC.md Phase B) --
             // the EXACT SAME qbx_k9unit:server:rosterList payload the two
             // roster tabs render, never a second read mechanism. A
             // failed/denied fetch leaves that section showing its own
@@ -14240,7 +14240,7 @@
      * ok/fail) so callers can refresh whatever data the mutation might have
      * changed -- this page NEVER optimistically mutates its own local copy
      * of server state; every action re-pulls the authoritative version.
-     * HISTORICAL NOTE (COMMAND_CONSOLIDATION_SPEC.md §6 bugfix, this pass):
+     * HISTORICAL NOTE (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6 bugfix, this pass):
      * a successful `result.submitted === true` used to render a distinct
      * "submitted, refreshing to confirm" notice for tablet:decertify's own
      * former fire-and-forget command bridge (`ok:true` there meant only

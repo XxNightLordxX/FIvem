@@ -1,7 +1,7 @@
 /*
     html/tests/tablet_roster_spec.js
 
-    Covers the K9/Handler Personnel Rosters (ROSTER_SPEC.md, Phase B) --
+    Covers the K9/Handler Personnel Rosters (docs/history/ROSTER_SPEC.md, Phase B) --
     owner, three messages, verbatim: "make it in the tablet where there is
     a roster where we can assign callsigns see list of hired k9s and full
     menu to fire promote etc" / "Also a separate roster for handlers same
@@ -10,7 +10,7 @@
     profile and it opens a menu" / "Also in the roster be able to reorder
     them by rank."
 
-    ROSTER_SPEC.md §0's structural decision: the roster tabs are pure,
+    docs/history/ROSTER_SPEC.md §0's structural decision: the roster tabs are pure,
     read-only lists; every mutation (assign role, set/clear callsign, hire/
     fire/promote/demote) lives on buildPersonScreen(), the SAME screen the
     Console tab and Online Players picker already open -- these tests
@@ -460,7 +460,7 @@ t.test('a malicious name/callsign/department label reaches the roster table AND 
     t.equals(everyElementInnerHTMLWriteCount(h), 0, 'innerHTML must never be written anywhere on this page for the roster table');
 
     // Now open that same citizenid's profile (the person screen's own
-    // Roster Role/Callsign section, ROSTER_SPEC.md Phase B) and prove the
+    // Roster Role/Callsign section, docs/history/ROSTER_SPEC.md Phase B) and prove the
     // SAME discipline holds there too.
     findByText(h.getRoot(), 'Manage')[0].click();
     await settle(h, 4);

@@ -1,3 +1,17 @@
+> **HISTORICAL RECORD — NOT CURRENT GUIDANCE.**
+>
+> This document is the design for the capability-family structure above Config.Features. The work it describes has been
+> built, and in places has since been changed or removed. It is kept because
+> it explains WHY things are shaped the way they are, which the code alone
+> cannot say — but it does not describe how the resource works today, and it
+> is not a specification anyone should implement from.
+>
+> For how the resource actually works now, see `README.md` (setup and
+> features), `DEVELOPER_REFERENCE.md` (the code), and `DIAGNOSTIC_CHECKS.md`
+> (the `/k9debug` report). Archived 2026-09-02.
+
+---
+
 # Feature Structure Spec
 
 Phase 1 (design only). Nothing outside this file has been touched. This
@@ -16,7 +30,7 @@ written, in order:
    become plain behaviour inside a bigger capability.
 4. "Remove it if redundant or not much applicable" — deletion is now
    explicitly authorised, as a fourth bucket, with its own much stricter
-   rules (§2.2). A companion document, `OVERHAUL_PLAN.md`, restates all of
+   rules (§2.2). A companion document, `docs/history/OVERHAUL_PLAN.md`, restates all of
    this for the owner directly, in plain language, as a set of
    independently-approvable stages. This document stays the engineering
    reference; that one is the thing to hand him.
@@ -37,7 +51,7 @@ we ship this without breaking or silently changing anyone's live server".
 
 Command-name mechanics (exact merged command, argument shape, hidden-alias
 allowlist, per-subcommand gate wording) are **owned by
-`COMMAND_CONSOLIDATION_SPEC.md`, not this document** — referenced, not
+`docs/history/COMMAND_CONSOLIDATION_SPEC.md`, not this document** — referenced, not
 re-derived, everywhere the two overlap. This document owns: which of the 60
 flags are real, which are sub-features, which retire; which capability
 family each belongs to (corrected against `server/tablet.lua`'s
@@ -63,7 +77,7 @@ rule.
   is covered by its own, much stricter rule in §2.2 — **nothing in this
   bucket is a decision this document makes**; every (d) item below is a
   named recommendation awaiting the owner's explicit, per-item sign-off in
-  `OVERHAUL_PLAN.md`. None are implemented, or should be treated as
+  `docs/history/OVERHAUL_PLAN.md`. None are implemented, or should be treated as
   implied-approved, by anything in this file.
 
 **The hard constraint on (c):** this task's file scope is `config.lua`,
@@ -333,14 +347,14 @@ ways. Keeping them separate is not thin-slicing, it's three real dials.
 |---|---|---|
 | `K9Inventory` | a, collapses into `enabled` | Own entry point (`openK9Inventory`). |
 | `K9EquipmentShop` | b | A shop existing at all is meaningless without `K9Inventory`; naturally nests under it. |
-| `DeployableKennel` | a | Own entry point — see `COMMAND_CONSOLIDATION_SPEC.md`'s own kennel section for why its command merge is *additive*, not a replace (keybind pinning). Deferring to that document for the command row; this doc places it as a child of Gear for config purposes only. |
+| `DeployableKennel` | a | Own entry point — see `docs/history/COMMAND_CONSOLIDATION_SPEC.md`'s own kennel section for why its command merge is *additive*, not a replace (keybind pinning). Deferring to that document for the command row; this doc places it as a child of Gear for config purposes only. |
 | `PropAttachments` | a | Own entry point, substantial R&D history (the bone-sweep tool exists specifically to support it). |
 
 ### Training (unchanged domain minus the 2 keys moved to Detection)
 
 | Key | Bucket | Why |
 |---|---|---|
-| `TrainingMode` | a, collapses into `enabled` | Own entry point, per `COMMAND_CONSOLIDATION_SPEC.md`'s training family. |
+| `TrainingMode` | a, collapses into `enabled` | Own entry point, per `docs/history/COMMAND_CONSOLIDATION_SPEC.md`'s training family. |
 | `FetchMechanic` | a | Own entry point, per that spec's fetch family. |
 
 Only two keys left here once the scent-flavoured training minigames move
@@ -367,7 +381,7 @@ to Detection (§3.1) — a small family is an honest outcome, not a problem.
 |---|---|---|
 | `Recall` | a | The universal termination path for THREE Combat sub-features (bite/takedown/drag) — see §3.2 for why nesting it under `Movement` (its display domain) would be a real stranding bug. |
 | `HighCommand` | a | Proven independent in the code and already carries its own `lockoutRisk`/`sessionOnly` protection in `server/runtimecontrol.lua` — the single highest-blast-radius flag in the resource; must never share fate with anything else. |
-| `PermissionGrants` | a | Proven independent — `server/permissions.lua`'s grant/revoke command path is gated on `IsHighCommand`, not `CommandTablet` (confirmed by direct read and by `COMMAND_CONSOLIDATION_SPEC.md`'s own permissions family table). |
+| `PermissionGrants` | a | Proven independent — `server/permissions.lua`'s grant/revoke command path is gated on `IsHighCommand`, not `CommandTablet` (confirmed by direct read and by `docs/history/COMMAND_CONSOLIDATION_SPEC.md`'s own permissions family table). |
 | `AdminAuditCommands` | a | **Explicitly, deliberately independent of `CommandTablet`** — `server/admin.lua`'s own comment: *"an operator can ship `CommandTablet = false` with `AdminAuditCommands = true`, a real, plausible config, not a contrived one."* This is the single strongest piece of evidence in the whole codebase that a shared "admin" parent would be actively wrong. |
 | `BoneSweepDevTool` | b | Dev-only, must never share fate with `CommandTablet` or anything else; already double-gated by its own convar + ACE check, independent of every other flag. |
 | `RadialMenu` | a | It is the delivery mechanism for most *other* families' entry points, not a member of any one capability — grouping it with `DiscordWebhook`/`ResourceAutoDetect` under "integration" (its current display domain) was a display-only convenience; as a parent it would be actively strange (turning off "integration" for Discord reasons would also kill the bark/leash/vehicle/track radial for everyone). |
@@ -394,7 +408,7 @@ make the plan look more thorough than the evidence supports. The
 redundancy the owner is actually feeling is concentrated in the
 **entry-point layer** (§6), where the count really is dramatic (118 → far
 fewer) — that is where nearly all of the "less clutter" win comes from,
-and where `OVERHAUL_PLAN.md` puts most of its weight.
+and where `docs/history/OVERHAUL_PLAN.md` puts most of its weight.
 
 ---
 
@@ -538,21 +552,21 @@ holding 1–8 children instead of an undifferentiated flat list of up to 60.
 
 `—` means unchanged from today (no merge recommended, reason given above
 in §2). Families whose command row is already fully specified in
-`COMMAND_CONSOLIDATION_SPEC.md` say so instead of repeating it.
+`docs/history/COMMAND_CONSOLIDATION_SPEC.md` say so instead of repeating it.
 
 | Family | Command | Radial | Target | Resolution rule |
 |---|---|---|---|---|
 | **Detection** | in-flight `k9track` (another agent, live now) | `k9_track_certified` (landed) | none today | **Already built, reference implementation.** Server resolves scent/blood/gunpowder from certification + what's logged nearby; re-checks each candidate type's own flat flag before offering it (`server/tracking.lua`'s `findNearestTrackableSource`, confirmed by direct read — `Config.Features[TRACK_TYPE_FEATURE_FLAGS[trackType]]` is checked per candidate, exactly the "gate is re-checked against the resolved action's own gate" rule). `ScentLineup`'s *start* could plausibly become a further resolved outcome of this same entry point later (e.g. offered when several people stand in a line and nothing is logged nearby) — not attempted this pass. `ScentVision` keeps its own keybind (§2.1). |
-| **Search** | `COMMAND_CONSOLIDATION_SPEC.md` doesn't cover search commands — none identified needing a merge | 1 today, no change | `searchPerson`/`searchVehicle` — different target *types* (person vs. vehicle), keep separate | n/a — reactions (`ContrabandAlerts`/`FindAlerts`/`ContrabandScreenFX`) are automatic, not separately invoked. |
+| **Search** | `docs/history/COMMAND_CONSOLIDATION_SPEC.md` doesn't cover search commands — none identified needing a merge | 1 today, no change | `searchPerson`/`searchVehicle` — different target *types* (person vs. vehicle), keep separate | n/a — reactions (`ContrabandAlerts`/`FindAlerts`/`ContrabandScreenFX`) are automatic, not separately invoked. |
 | **Sensory** | none today | 1 new "K9 Vision" cycle item replacing separate night/thermal toggles if any exist today (need to confirm current entry shape before implementing) — **SUPERSEDED, see the status note at the top of §2: this shipped, then the owner asked for separate toggles back. Thermal/Night are their own commands, keys, and radial entries again; the cycle survives only as an additional, optional item, not a replacement.** | none | **Not certification-based** — a plain "next enabled mode" cycle (off→night→thermal→off, skipping any mode whose own flag is off). Flagging explicitly that this is a *different resolution shape* from Detection's, not forcing it into the same mold. `CameraFeedPiP` keeps its own separate keybind/command (different mechanic, requires partnership). |
 | **Combat** | — (see §7.1, deliberately not merged) | — | — | n/a |
 | **Movement** | — | Leash: — (1 item today) | `attachLeashAsHandler`/`attachLeashAsK9` → **recommend one registered option**, `canInteract` already resolves which role is looking via `IsOwnModelK9()` (confirmed, `client/movement.lua:847,881`) so each player only ever sees one of the two today anyway. Correction to the coordinator's framing: this is not currently confusing the *player* — it is two `RegisterTargetOption` blocks in the code for what is, from any one viewer's side, always exactly one option. Collapsing to one registration is a code-duplication win, not a player-confusion fix. Additive/reversible either way. | Pick the label/icon from `IsOwnModelK9()`, same predicate already in use. |
-| **Wellbeing** | `k9eat`/`k9drink` — flagged but deferred in `COMMAND_CONSOLIDATION_SPEC.md` §7 (file hot); revisit together once `wellbeing.lua` is quiet | 1 today, no change | `feedK9`/`petK9`/`treatK9`/`drinkFromBowl` → candidate to merge into one "Care for K9" option | Additive and reversible (feeding/petting/treating a K9 is never destructive) — safe for full contextual resolution (nearest bowl → drink; item in hand matches a feed/treat item → that action; else → pet). **Exact current semantics of each of the four target options need a confirm-read of `client/wellbeing.lua` before Phase 2 implements this** — shape given here, not fabricated in detail. |
+| **Wellbeing** | `k9eat`/`k9drink` — flagged but deferred in `docs/history/COMMAND_CONSOLIDATION_SPEC.md` §7 (file hot); revisit together once `wellbeing.lua` is quiet | 1 today, no change | `feedK9`/`petK9`/`treatK9`/`drinkFromBowl` → candidate to merge into one "Care for K9" option | Additive and reversible (feeding/petting/treating a K9 is never destructive) — safe for full contextual resolution (nearest bowl → drink; item in hand matches a feed/treat item → that action; else → pet). **Exact current semantics of each of the four target options need a confirm-read of `client/wellbeing.lua` before Phase 2 implements this** — shape given here, not fabricated in detail. |
 | **Progression / Partnership** | `/k9stats` unchanged; Partner Up unchanged | unchanged | `partnerUp`/`revokeHandler` — different actions (start vs. end a partnership with a *specific* other person), not the same fact twice, no merge recommended | n/a |
-| **Gear** | Kennel: additive per `COMMAND_CONSOLIDATION_SPEC.md` §1 (keybind-pinned, not a true merge) | Kennel: 2 today → recommend 1 (no `RegisterKeyMapping` constraint applies to a radial item, unlike the commands) | `enterKennel`/`exitKennel`/`pickupKennel` → recommend 1, resolved by whether a kennel is already deployed at this spot | Additive/reversible (deploying, entering, exiting, picking up a kennel is never destructive to another player) — safe for contextual resolution. `openK9Inventory` unchanged (different action, opening inventory vs. managing the kennel object). |
-| **Training** | `COMMAND_CONSOLIDATION_SPEC.md` training family (3→1) | unchanged | none | n/a, that spec is authoritative |
+| **Gear** | Kennel: additive per `docs/history/COMMAND_CONSOLIDATION_SPEC.md` §1 (keybind-pinned, not a true merge) | Kennel: 2 today → recommend 1 (no `RegisterKeyMapping` constraint applies to a radial item, unlike the commands) | `enterKennel`/`exitKennel`/`pickupKennel` → recommend 1, resolved by whether a kennel is already deployed at this spot | Additive/reversible (deploying, entering, exiting, picking up a kennel is never destructive to another player) — safe for contextual resolution. `openK9Inventory` unchanged (different action, opening inventory vs. managing the kennel object). |
+| **Training** | `docs/history/COMMAND_CONSOLIDATION_SPEC.md` training family (3→1) | unchanged | none | n/a, that spec is authoritative |
 | **Tablet** | — | — | none | n/a — opening the tablet is already one action |
-| **Integrations / standalone** | `AdminAuditCommands`: `COMMAND_CONSOLIDATION_SPEC.md` audit family — **explicitly proven non-mergeable further** (5 variants share one gate but each needs a different mandatory target — no context to infer from). `PermissionGrants`: that spec's permissions family (2→1). `HighCommand`: no command family identified. | n/a | n/a | n/a |
+| **Integrations / standalone** | `AdminAuditCommands`: `docs/history/COMMAND_CONSOLIDATION_SPEC.md` audit family — **explicitly proven non-mergeable further** (5 variants share one gate but each needs a different mandatory target — no context to infer from). `PermissionGrants`: that spec's permissions family (2→1). `HighCommand`: no command family identified. | n/a | n/a | n/a |
 
 ---
 
@@ -560,7 +574,7 @@ in §2). Families whose command row is already fully specified in
 
 Using the coordinator's own counted baselines:
 
-| Capability | Today | After (command layer, per `COMMAND_CONSOLIDATION_SPEC.md`) | After (+ this doc's target/radial layer) |
+| Capability | Today | After (command layer, per `docs/history/COMMAND_CONSOLIDATION_SPEC.md`) | After (+ this doc's target/radial layer) |
 |---|---|---|---|
 | Kennel | 7 (3 target + 2 radial + 2 cmd) | 3 commands (additive — 2 kept for keybind reasons + 1 new wrapper, **not a reduction at the command layer, by that spec's own explicit design**) | 3 cmd + 1 radial + 1 target = **5** |
 | Fetch | 7 (2 target + 2 radial + 3 cmd) | 1 command | Target/radial merge plausible but not yet confirmed against `client/fetch.lua`'s exact semantics — directional estimate **~3–4**, not asserted precisely |
@@ -592,7 +606,7 @@ it's the one family where the redundancy is the safety feature.
 
 ### 7.2 Lineup — start folds in, pick/cancel cannot
 
-`COMMAND_CONSOLIDATION_SPEC.md` §1 already worked this out at the command
+`docs/history/COMMAND_CONSOLIDATION_SPEC.md` §1 already worked this out at the command
 layer and it applies identically here: starting a lineup needs K9 access
 plus a permission grant; picking and cancelling are participant actions
 with **no rank gate at all**, because the person being asked to point
@@ -605,14 +619,14 @@ forever; there is no version of "merge everything" that is safe for them.
 
 ### 7.3 Audit — proven non-mergeable, deferring entirely
 
-`COMMAND_CONSOLIDATION_SPEC.md`'s own audit-family analysis: all five
+`docs/history/COMMAND_CONSOLIDATION_SPEC.md`'s own audit-family analysis: all five
 variants share one gate but each needs a different *mandatory* target —
 there is no context to resolve from. Restating that finding here rather
 than re-deriving it; this document adds nothing to it.
 
 ### 7.4 Kennel — keybind-pinned, additive not replace
 
-Also fully specified in `COMMAND_CONSOLIDATION_SPEC.md` §1: `k9exitkennel`
+Also fully specified in `docs/history/COMMAND_CONSOLIDATION_SPEC.md` §1: `k9exitkennel`
 is bound by a live `RegisterKeyMapping`, so it cannot stop being a real,
 independently registered command without silently breaking anyone who
 rebound that key. This document's only addition is the target/radial layer
@@ -642,7 +656,7 @@ literal, before anything else reads it.
 Read every one of the 60 keys exactly as today. No family-enabled logic
 runs at all — there is nothing to run it against. Print once at startup:
 `[qbx_k9unit] Config.Features is in the classic flat format — loaded
-unchanged. See FEATURE_STRUCTURE_SPEC.md if you want the new grouped
+unchanged. See docs/history/FEATURE_STRUCTURE_SPEC.md if you want the new grouped
 format.` This is a no-op by construction, not by testing after the fact:
 the OLD-shape branch does not share code paths with the NEW-shape branch.
 
@@ -702,7 +716,7 @@ must never silently change what a server does today.
   hidden, undocumented-in-the-clean-template override key is still
   accepted** — `Detection.TrailHunt = false` — read if present, silently
   defaulting to mirror `Detection.enabled` if absent. Same discipline as
-  `COMMAND_CONSOLIDATION_SPEC.md` §3's hidden command aliases, applied to a
+  `docs/history/COMMAND_CONSOLIDATION_SPEC.md` §3's hidden command aliases, applied to a
   config key instead of a command name: the surface is retired (not
   advertised, not in the clean example), the capability to express a
   non-default value is not. A migration guide printed once when NEW shape
@@ -794,7 +808,7 @@ things needed independent attention beyond "don't make it live":
 
 Everything else audited (fetch/training/kennel's unconditional stop paths)
 is already correctly designed and documented in
-`COMMAND_CONSOLIDATION_SPEC.md` — restating it here would be duplicating,
+`docs/history/COMMAND_CONSOLIDATION_SPEC.md` — restating it here would be duplicating,
 not adding.
 
 ---
@@ -856,7 +870,7 @@ New/updated in `tests/` (Phase 2):
    acceptable, given the alternative is a `server/tablet.lua`/
    `html/tablet.js` change this task cannot make.
 5. **`ScentTrailHunt`'s removal (bucket d) is not approved by anything in
-   this document.** It is a named recommendation. See `OVERHAUL_PLAN.md`
+   this document.** It is a named recommendation. See `docs/history/OVERHAUL_PLAN.md`
    for the plain-language version of this same item, which is where the
    owner's actual sign-off belongs.
 

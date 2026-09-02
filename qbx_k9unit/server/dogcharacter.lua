@@ -588,7 +588,7 @@ end
 -- Config key needed for this gate.
 -- ======================================================================
 if Config.Features and Config.Features.HighCommand == true then
-    --- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #2) -- same
+    --- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md #2) -- same
     --- refactor shape as server/admin.lua's audit family (#1): each body
     --- below is now a named LOCAL function, called from the original
     --- single-purpose command (kept registered forever as a HIDDEN ALIAS --
@@ -693,7 +693,7 @@ if Config.Features and Config.Features.HighCommand == true then
     end, false)
 
     -- ==================================================================
-    -- '/k9dog <set|remove> ...' -- COMMAND_CONSOLIDATION_SPEC.md #2, the
+    -- '/k9dog <set|remove> ...' -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #2, the
     -- merged entry point. 'set'/'remove' stay EXPLICIT WORDS, never
     -- auto-inferred from current pin state -- see the header comment on
     -- HandleSetDog/HandleRemoveDog above for why this specific family
@@ -735,7 +735,7 @@ if Config.Features and Config.Features.HighCommand == true then
         -- treat this as the read-only status form ('/k9dog <target>'),
         -- gated identically to every other path here. Anything else
         -- (nothing at all, or an unresolvable target) falls through to the
-        -- usage/help print -- COMMAND_CONSOLIDATION_SPEC.md §4's own
+        -- usage/help print -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §4's own
         -- established no-argument-discoverability convention, reused
         -- verbatim.
         if not (type(IsHighCommand) == 'function' and IsHighCommand(source)) then

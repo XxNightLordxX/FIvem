@@ -1485,7 +1485,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- 25 matches config.lua's own shipped default for this key too.
     ResolveMaxResultsKey('CatalogAudit', 25)
 
-    --- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #1) -- the five
+    --- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md #1) -- the five
     --- bodies below are named LOCAL functions, reached through the single
     --- '/k9audit <cert|partner|search|xp|dept> ...' dispatcher further
     --- below, which parses the subcommand keyword FIRST and then forwards
@@ -1495,7 +1495,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- OWN body rather than relying on a single shared gate at the
     --- dispatcher's top -- so the gate cannot be widened by a future edit
     --- to the dispatcher. All five share an IDENTICAL gate/cooldown (see
-    --- COMMAND_CONSOLIDATION_SPEC.md §1's own audit table).
+    --- docs/history/COMMAND_CONSOLIDATION_SPEC.md §1's own audit table).
     ---
     --- The five original single-purpose names ('k9auditcert' and friends)
     --- were registered as hidden aliases through 2026-09-02 and are now
@@ -1735,7 +1735,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
 
     -- ==================================================================
-    -- '/k9audit <cert|partner|search|xp|dept> ...' -- COMMAND_CONSOLIDATION_SPEC.md
+    -- '/k9audit <cert|partner|search|xp|dept> ...' -- docs/history/COMMAND_CONSOLIDATION_SPEC.md
     -- #1, the merged entry point. NOT contextual dispatch (project-owner's
     -- own "fluid, do the obviously-right-thing" redirect was evaluated
     -- against this family's REAL code and does not fit it, unlike
@@ -1749,7 +1749,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- context" this dispatcher could infer any of them from -- there is no
     -- state to guess FROM. An explicit subcommand keyword stays required;
     -- the no-argument path below still just prints the subcommand list
-    -- (COMMAND_CONSOLIDATION_SPEC.md §4's own established convention,
+    -- (docs/history/COMMAND_CONSOLIDATION_SPEC.md §4's own established convention,
     -- reused verbatim from '/k9auditsearch' with no bad-subcommand args at
     -- all).
     --
@@ -1790,7 +1790,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         if not handler then
             -- NO-ARGUMENT / UNRECOGNIZED-SUBCOMMAND DISCOVERABILITY
-            -- (COMMAND_CONSOLIDATION_SPEC.md §4) -- the exact convention
+            -- (docs/history/COMMAND_CONSOLIDATION_SPEC.md §4) -- the exact convention
             -- '/k9auditsearch' already established, reused verbatim. Never
             -- an error for a bare invocation -- this IS the "what are my
             -- options" answer for a non-technical owner.

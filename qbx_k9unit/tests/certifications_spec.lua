@@ -554,7 +554,7 @@ local function newFixture(opts)
     -- unmodified server/roster.lua loaded into the SAME env/K9Store so an
     -- integration test can exercise RevokeCertificationForTablet's new
     -- ClearPersonnelRowForCitizenJob call site against roster.lua's own
-    -- genuine re-hire semantics (ROSTER_SPEC.md §4), not a stub. Requires
+    -- genuine re-hire semantics (docs/history/ROSTER_SPEC.md §4), not a stub. Requires
     -- `Config.Database = { enabled = false }` (memory mode, opts.database
     -- above) -- roster.lua's own file-level gate
     -- (`Config.Features.CommandTablet == true`) also requires
@@ -2872,7 +2872,7 @@ end)
 -- ======================================================================
 
 -- ======================================================================
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8) --
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8) --
 -- /k9certify and /k9decertify are now DISPATCHERS: `tonumber(args[1])`
 -- succeeds -> online branch (unchanged); fails -> offline branch
 -- (GrantCertificationOffline/RevokeCertificationOffline, unchanged). A
@@ -3069,7 +3069,7 @@ t.test('HIDDEN ALIAS: /k9decertifyoffline still works standalone, byte-identical
     t.equals(updateParams[4], 'police')
 end)
 
-t.test('RECYCLED SERVER ID SAFETY (COMMAND_CONSOLIDATION_SPEC.md §2): the merged /k9decertify command resolves a numeric arg via a fresh GetPlayer() lookup on EVERY invocation, never a cached mapping -- a server id that is reassigned between two calls resolves to whoever holds it NOW, exactly like the pre-merge /k9decertify already did', function()
+t.test('RECYCLED SERVER ID SAFETY (docs/history/COMMAND_CONSOLIDATION_SPEC.md §2): the merged /k9decertify command resolves a numeric arg via a fresh GetPlayer() lookup on EVERY invocation, never a cached mapping -- a server id that is reassigned between two calls resolves to whoever holds it NOW, exactly like the pre-merge /k9decertify already did', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.registerPlayer(20, 'FIRST_OCCUPANT', { name = 'police', grade = { level = 1 } })
@@ -3728,7 +3728,7 @@ t.test('SetCertificationTier: REGRESSION -- a throwing UPDATE that ACTUALLY comm
     t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.tier_change_success_target', 'senior'), 'success'))
 end)
 
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8):
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8):
 -- /k9settier is now a dispatcher, same shape as /k9certify/k9decertify above.
 t.test('/k9settier command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to SetCertificationTierOffline unchanged, args shifted by one for the tier', function()
     local f = newFixture()
@@ -4316,7 +4316,7 @@ t.test('RevokeSpecializationOffline: a typo\'d/unconfigured department is reject
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not-a-real-department', 'police, sheriff'), 'error'))
 end)
 
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8):
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8):
 -- /k9unspecialize is now a dispatcher, same shape as the others above.
 -- /k9specialize (grant) has NO offline counterpart at all and is
 -- deliberately left untouched -- see this file's own new comment above its
@@ -5035,7 +5035,7 @@ t.test('tabletSetCertificationTier: an unconfigured department key is invalid_de
 end)
 
 -- ======================================================================
--- THE BUGFIX (COMMAND_CONSOLIDATION_SPEC.md §6) -- tabletDecertify /
+-- THE BUGFIX (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6) -- tabletDecertify /
 -- RevokeCertificationForTablet. Before this pass, client/tablet.lua's
 -- tablet:decertify NUI callback shelled out to the OFFLINE-ONLY
 -- '/k9decertifyoffline' command for EVERY target, online or offline --
@@ -5210,7 +5210,7 @@ end)
 -- survived the revoke -- invisible today (both roster reads already filter
 -- on an active certification) but resurrecting on re-certification,
 -- landing them back on a roster with their OLD callsign instead of
--- Unassigned (ROSTER_SPEC.md §4). This is a genuine, end-to-end
+-- Unassigned (docs/history/ROSTER_SPEC.md §4). This is a genuine, end-to-end
 -- INTEGRATION test -- REAL server/roster.lua loaded alongside this file,
 -- REAL K9Store (memory mode), no stubbing of ClearPersonnelRowForCitizenJob
 -- at all -- proving the actual production call site, not a mocked stand-in.
@@ -5256,7 +5256,7 @@ t.test('INTEGRATION: certify -> assign roster role + callsign -> revoke via tabl
         'ClearPersonnelRowForCitizenJob must have run -- a fired handler\'s roster row must not survive their own revoke')
 
     -- RE-CERTIFY (still online, same server id) -- the exact re-hire
-    -- scenario ROSTER_SPEC.md §4 requires to land in Unassigned.
+    -- scenario docs/history/ROSTER_SPEC.md §4 requires to land in Unassigned.
     f.advanceTime(COOLDOWN_MS + 100)
     f.commands['k9certify'].fn(10, { '20' })
     t.isTrue(f.env.HasK9Access(20), 'sanity: TARGET is certified again')

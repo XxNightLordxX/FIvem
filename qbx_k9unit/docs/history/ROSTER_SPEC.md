@@ -1,3 +1,17 @@
+> **HISTORICAL RECORD — NOT CURRENT GUIDANCE.**
+>
+> This document is the design for the K9 and handler rosters. The work it describes has been
+> built, and in places has since been changed or removed. It is kept because
+> it explains WHY things are shaped the way they are, which the code alone
+> cannot say — but it does not describe how the resource works today, and it
+> is not a specification anyone should implement from.
+>
+> For how the resource actually works now, see `README.md` (setup and
+> features), `DEVELOPER_REFERENCE.md` (the code), and `DIAGNOSTIC_CHECKS.md`
+> (the `/k9debug` report). Archived 2026-09-02.
+
+---
+
 # K9 Command Tablet — Rosters Spec
 
 Author: product (spec pass) · Date: 2026-08-26
@@ -172,7 +186,7 @@ Verified directly, file/line:
   decides which roster a citizenid appears on.
 - **The three-way locale contract, the XSS discipline, and THE SECURITY
   RULE (server re-verifies everything, always) all apply unchanged — see
-  `TABLET_REWORK_SPEC.md` §6 for the full, already-written list of tests
+  `docs/history/TABLET_REWORK_SPEC.md` §6 for the full, already-written list of tests
   this feature must not regress** (`tests/tabletlocalization_spec.lua`,
   `html/tests/tablet_xss_spec.js`, `tests/tabletserver_spec.lua`, etc.). Not
   repeated here; that section is the standing contract for every tablet
@@ -532,7 +546,7 @@ line).
         `RevokeCertificationForTablet`/`qbx_k9unit:server:tabletDecertify`
         wrapper, built the same way every other `*ForTablet` wrapper is.
 12. [ ] `tests/tabletlocalization_spec.lua`, `html/tests/tablet_xss_spec.js`,
-        and every test named in `TABLET_REWORK_SPEC.md` §6 continue to pass
+        and every test named in `docs/history/TABLET_REWORK_SPEC.md` §6 continue to pass
         unmodified in intent.
 13. [ ] Sorting the roster by tier, grade, or XP re-orders the already-
         fetched row list client-side with no additional server round trip.

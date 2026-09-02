@@ -411,12 +411,12 @@ server_scripts {
     -- IsHighCommand/HasPermission/HasK9Access it consults (21 call sites,
     -- all at runtime, so this is convention rather than a hard requirement).
     'server/tablet.lua',
-    -- K9 COMMAND TABLET ROSTERS, server half (ROSTER_SPEC.md, Phase A --
+    -- K9 COMMAND TABLET ROSTERS, server half (docs/history/ROSTER_SPEC.md, Phase A --
     -- data layer + server logic only; the UI/entry-point work is a
     -- separate, later pass). Two roster LISTS (K9s, Handlers) plus an
     -- explicit "Unassigned" bucket, layered over the certification data
     -- server/tablet.lua/server/certifications.lua already own -- NOT a
-    -- second person-detail screen (ROSTER_SPEC.md §1's "extend
+    -- second person-detail screen (docs/history/ROSTER_SPEC.md §1's "extend
     -- buildPersonScreen(), do not fork it" decision belongs to that later
     -- UI pass; this file only supplies the data/mutations it will consume).
     -- Owns its OWN lib.callback registrations (`qbx_k9unit:server:roster*`)

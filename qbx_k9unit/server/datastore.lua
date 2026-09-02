@@ -3372,7 +3372,7 @@ function K9Store.ShopItemAudit_GetRecent(limit)
 end
 
 -- ======================================================================
--- k9_personnel (migration 0020, ROSTER_SPEC.md §3/§4) -- db-schema pass,
+-- k9_personnel (migration 0020, docs/history/ROSTER_SPEC.md §3/§4) -- db-schema pass,
 -- 2026-08-26.
 --
 -- Owner's own words for the request this answers: "make it in the tablet
@@ -3392,7 +3392,7 @@ end
 --
 -- SECOND invariant unique to this table (k9_certifications has no
 -- equivalent): COMBINED-NAMESPACE callsign uniqueness, case-insensitive,
--- per department (ROSTER_SPEC.md §4) -- a K9's callsign and a handler's
+-- per department (docs/history/ROSTER_SPEC.md §4) -- a K9's callsign and a handler's
 -- callsign in the SAME job share one namespace. `Personnel_SetCallsign`
 -- below throws the identical `{ errno = 1062 }`-shaped duplicate error
 -- (via `ThrowDuplicateCallsign`, a sibling of `ThrowDuplicateActiveRow`
@@ -3416,7 +3416,7 @@ local function PersonnelFindActiveRow(citizenid, job)
 end
 
 --- Case-insensitive callsign lookup, scoped to one department, across
---- BOTH roles combined (ROSTER_SPEC.md §4's "one namespace" decision) --
+--- BOTH roles combined (docs/history/ROSTER_SPEC.md §4's "one namespace" decision) --
 --- excludes `excludeCitizenid`'s own row so re-saving a citizenid's own
 --- unchanged callsign is never reported as a collision against itself.
 --- @param job string
@@ -3448,7 +3448,7 @@ local function ThrowDuplicateCallsign(context)
 end
 
 --- Mirrors MySQL.single.await. The current roster assignment (if any) for
---- one (citizenid, job) pair -- nil means "Unassigned" (ROSTER_SPEC.md
+--- one (citizenid, job) pair -- nil means "Unassigned" (docs/history/ROSTER_SPEC.md
 --- §3/§5), not an error.
 --- @param citizenid string
 --- @param job string
@@ -3493,7 +3493,7 @@ end
 --- Mirrors MySQL.insert.await -- returns the new row's id, or THROWS (a
 --- duplicate-active-row error in memory mode, a real thrown oxmysql error
 --- in DB mode, both `{ errno = 1062 }`-shaped) exactly like
---- `Cert_Insert` above. Always starts with a NULL callsign (ROSTER_SPEC.md
+--- `Cert_Insert` above. Always starts with a NULL callsign (docs/history/ROSTER_SPEC.md
 --- §4: a fresh assignment/re-hire never resurrects an old callsign).
 --- @param citizenid string
 --- @param job string
@@ -3515,7 +3515,7 @@ function K9Store.Personnel_Insert(citizenid, job, role, grantedBy)
 end
 
 --- Mirrors MySQL.update.await. Changes the active row's role AND clears
---- its callsign in the SAME statement (ROSTER_SPEC.md §4/§6: a role
+--- its callsign in the SAME statement (docs/history/ROSTER_SPEC.md §4/§6: a role
 --- change is not a new hire cycle -- it stays the same history row -- but
 --- a K9 callsign and a handler callsign mean different things, so the old
 --- one is never silently relabelled as the new kind).
@@ -3559,7 +3559,7 @@ function K9Store.Personnel_SetCallsign(citizenid, job, callsign)
 end
 
 --- Mirrors MySQL.update.await. Best-effort personnel-row cleanup for a
---- Fire action (ROSTER_SPEC.md §6/§7) -- called AFTER the certification
+--- Fire action (docs/history/ROSTER_SPEC.md §6/§7) -- called AFTER the certification
 --- revoke it accompanies has already succeeded, never before (see
 --- server/roster.lua's own `ClearPersonnelRowForCitizenJob` doc comment).
 --- `clearedBy` may hold a non-citizenid 'system:...' sentinel, mirroring
@@ -3779,7 +3779,7 @@ local EXPECTED_TABLE_COLUMNS = {
     -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entry for
     -- this table exactly -- keep both in sync if either changes.
     k9_dog_characters                  = { 'citizenid', 'model', 'active', 'set_by', 'set_at', 'unset_at' },
-    -- ROSTER_SPEC.md §3/§4 (migration 0020, db-schema pass, 2026-08-26).
+    -- docs/history/ROSTER_SPEC.md §3/§4 (migration 0020, db-schema pass, 2026-08-26).
     -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entry for
     -- this table exactly -- keep both in sync if either changes.
     k9_personnel                       = { 'citizenid', 'job', 'role', 'callsign', 'granted_by', 'granted_at', 'cleared_by', 'cleared_at', 'active' },
@@ -3835,7 +3835,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
     k9_permission_keys                 = 'the permission-key catalog',
     k9_permission_key_audit            = 'the permission-key audit log',
     k9_dog_characters                  = 'admin-pinned "this citizenid is permanently a dog" records (/k9setdog, /k9removedog -- mana_policedogs feature parity) -- NOTE: while this table is missing, every currently-pinned dog character falls back to memory only for the rest of this session (nobody\'s actual K9 role/certification is affected either way -- this table has never decided whether a citizenid may act as a K9, only whether their dog form is pinned in place; see server/dogcharacter.lua\'s own header)',
-    k9_personnel                       = 'the K9/Handler roster assignments and callsigns -- NOTE: while this table is missing, every currently-assigned K9/handler falls back to the "Unassigned" bucket on the roster screens the moment this resource restarts (nobody\'s actual certification/permission/feature access is affected either way -- see ROSTER_SPEC.md §8)',
+    k9_personnel                       = 'the K9/Handler roster assignments and callsigns -- NOTE: while this table is missing, every currently-assigned K9/handler falls back to the "Unassigned" bucket on the roster screens the moment this resource restarts (nobody\'s actual certification/permission/feature access is affected either way -- see docs/history/ROSTER_SPEC.md §8)',
     k9_wellbeing                       = 'K9 fatigue/mood/fear-stress/injury/hunger/thirst -- NOTE: while this table is missing, every online K9\'s condition resets to fresh-and-uninjured on the next restart (nobody\'s actual certification/permission/feature access is affected either way -- see server/wellbeing.lua\'s own header "DATABASE PERSISTENCE")',
 }
 

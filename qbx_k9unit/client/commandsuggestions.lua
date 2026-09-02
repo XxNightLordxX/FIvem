@@ -247,7 +247,7 @@ local COMMAND_SUGGESTIONS = {
     -- the removed scent-trail client file
     -- client/pursuitsprint.lua (qbx_k9unit: namespace -- RegisterKeyMapping global-uniqueness requirement)
     { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' , featureFlag = 'PursuitSprint' },
-    -- client/kennel.lua -- COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
+    -- client/kennel.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
     -- k9deploykennel keeps its own registration forever (RegisterKeyMapping/
     -- radial.lua both call it directly by this literal name -- see that
     -- file's own comment), but is no longer chat-suggested under its own
@@ -269,7 +269,7 @@ local COMMAND_SUGGESTIONS = {
     -- only the chat suggestion is gone.
     -- client/agility.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:vault', keySuffix = 'vault' },
-    -- the removed training client file -- COMMAND_CONSOLIDATION_SPEC.md #4:
+    -- the removed training client file -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #4:
     -- k9training/k9trainsearch/k9trainbite are now HIDDEN ALIASES of
     -- 'k9train' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.
@@ -287,7 +287,7 @@ local COMMAND_SUGGESTIONS = {
     -- 'k9vision' (Off -> Night -> Thermal -> Off cycle) is KEPT as an extra,
     -- optional convenience alongside the two explicit toggles above -- see
     -- client/vision.lua's own "MERGED ENTRY POINT" header for the reasoning
-    -- (same additive shape COMMAND_CONSOLIDATION_SPEC.md #5 already
+    -- (same additive shape docs/history/COMMAND_CONSOLIDATION_SPEC.md #5 already
     -- established for k9kennel: an additional entry point calling the same
     -- underlying functions, not a replacement for the explicit ones).
     { command = 'k9vision', keySuffix = 'k9vision' },
@@ -319,7 +319,7 @@ local COMMAND_SUGGESTIONS = {
     -- the removed danger-warn client file (qbx_k9unit: namespace) -- Alert already had a
     -- command/keybind; Threat is the menu-parity pass addition (its sibling
     -- Alert's own asymmetry) sharing the same the removed danger-warn request function.
-    -- client/fetch.lua -- COMMAND_CONSOLIDATION_SPEC.md #3:
+    -- client/fetch.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3:
     -- k9throwfetchball/k9dropfetchball/k9recallfetchball are now HIDDEN
     -- ALIASES of 'k9fetch' (still real, working RegisterCommand calls --
     -- see that file's own comment), never chat-suggested under their own
@@ -331,7 +331,7 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9propattach', keySuffix = 'k9propattach' },
     -- server/highcommand.lua
     { command = 'k9givexp', keySuffix = 'k9givexp' },
-    -- server/certifications.lua -- COMMAND_CONSOLIDATION_SPEC.md §2/§5 item
+    -- server/certifications.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item
     -- 8: k9certifyoffline/k9decertifyoffline/k9settieroffline/
     -- k9recertifyoffline/k9unspecializeoffline are now HIDDEN ALIASES (still
     -- real, working RegisterCommand calls -- see that file's own comment),
@@ -344,7 +344,7 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9settier', keySuffix = 'k9settier' },
     { command = 'k9specialize', keySuffix = 'k9specialize' },
     { command = 'k9unspecialize', keySuffix = 'k9unspecialize' },
-    -- server/admin.lua -- COMMAND_CONSOLIDATION_SPEC.md #1: k9auditcert/
+    -- server/admin.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #1: k9auditcert/
     -- k9auditpartner/k9auditsearch/k9auditxp/k9auditdept are now HIDDEN
     -- ALIASES of 'k9audit' (still real, working RegisterCommand calls in
     -- server/admin.lua -- see that file's own comment -- just no longer
@@ -352,7 +352,7 @@ local COMMAND_SUGGESTIONS = {
     -- tests/commandsuggestions_spec.lua for the drift-guard allowlist that
     -- makes removing their entries here intentional, not a silent gap.
     { command = 'k9audit', keySuffix = 'k9audit' },
-    -- server/dogcharacter.lua -- COMMAND_CONSOLIDATION_SPEC.md #2:
+    -- server/dogcharacter.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #2:
     -- k9setdog/k9removedog are now HIDDEN ALIASES of 'k9dog' (still real,
     -- working RegisterCommand calls in server/dogcharacter.lua -- see that
     -- file's own comment), never chat-suggested under their own names.
@@ -361,7 +361,7 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9stats', keySuffix = 'k9stats' },
     -- server/bonetool.lua
     { command = 'k9bonetool', keySuffix = 'k9bonetool' },
-    -- server/permissions.lua -- COMMAND_CONSOLIDATION_SPEC.md §5 item 7:
+    -- server/permissions.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §5 item 7:
     -- k9grantpermission/k9revokepermission are now HIDDEN ALIASES of
     -- 'k9permission' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.

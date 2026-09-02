@@ -90,7 +90,7 @@ end
 local SERVER_LUA_FILES = LuaFilesIn('../server')
 local CLIENT_LUA_FILES = LuaFilesIn('../client')
 
--- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3) -- old,
+-- HIDDEN_ALIAS_COMMANDS (docs/history/COMMAND_CONSOLIDATION_SPEC.md §3) -- old,
 -- single-purpose command names that a command-family merge (§5) folded
 -- into one new canonical command. Each one is STILL a real, live
 -- RegisterCommand(...) call (macros/keybinds/cheat-sheets keep working
@@ -247,7 +247,7 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
 
     local unsuggested = {}
     for name in pairs(real) do
-        -- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3): a real,
+        -- HIDDEN_ALIAS_COMMANDS (docs/history/COMMAND_CONSOLIDATION_SPEC.md §3): a real,
         -- live command that a family merge deliberately stopped
         -- chat-suggesting is not "undocumented", it's hidden on purpose --
         -- see the allowlist's own header comment and the "every allowlisted
@@ -442,7 +442,7 @@ t.test('onResourceStart(qbx_k9unit): registers a chat:addSuggestion for every CO
     t.equals(sit.description, Sandbox.locale('tablet.cmdref_k9sit_does'), 'k9sit description must match the tablet\'s own Commands tab text verbatim')
     t.equals(#sit.params, 0, 'k9sit takes no arguments -- params must be empty')
 
-    -- Single required param -- COMMAND_CONSOLIDATION_SPEC.md §2/§4: /k9certify's
+    -- Single required param -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§4: /k9certify's
     -- usage string now shows BOTH shapes ("/k9certify <server id>  |
     -- /k9certify <citizenid> <job>"), so ParseUsageParams' own disclosed
     -- "flattens every bracket token across both shapes, in order" behavior
@@ -472,7 +472,7 @@ t.test('onResourceStart(qbx_k9unit): registers a chat:addSuggestion for every CO
     t.equals(decertify.params[5].name, 'reason')
     t.equals(decertify.params[5].help, 'Optional.')
 
-    -- COMMAND_CONSOLIDATION_SPEC.md §3 -- HIDDEN ALIASES never appear in
+    -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §3 -- HIDDEN ALIASES never appear in
     -- autocomplete at all, even though every one of them is still a real,
     -- working RegisterCommand call (confirmed elsewhere in this file).
     t.isNil(f.findSuggestion('k9certifyoffline'), 'k9certifyoffline is a hidden alias -- it must never get its own chat:addSuggestion')

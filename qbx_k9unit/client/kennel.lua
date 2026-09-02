@@ -608,7 +608,7 @@ function RequestDeployKennel()
     TriggerServerEvent('qbx_k9unit:server:requestDeployKennel')
 end
 
---- Explicit-only entry point (COMMAND_CONSOLIDATION_SPEC.md #5's own
+--- Explicit-only entry point (docs/history/COMMAND_CONSOLIDATION_SPEC.md #5's own
 --- additive design -- there was previously NO standalone command for this
 --- at all, only the "Rest in Kennel" ox_target option on the specific
 --- kennel prop). Attempts to enter THIS client's OWN deployed kennel
@@ -658,7 +658,7 @@ function RequestEnterOwnKennel()
 end
 
 -- ======================================================================
--- CLOSEABLE KENNEL (owner-directed, COMMAND_CONSOLIDATION_SPEC.md #5
+-- CLOSEABLE KENNEL (owner-directed, docs/history/COMMAND_CONSOLIDATION_SPEC.md #5
 -- extension, this pass) -- see server/kennel.lua's own "CLOSEABLE KENNEL"
 -- header section for the full design writeup (what closed does and does
 -- NOT gate, who may toggle it, why pickup/exit are untouched). This file's
@@ -750,7 +750,7 @@ local function RequestOwnKennelDoorOrEnter()
 end
 
 -- ======================================================================
--- '/k9kennel' -- COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE (not a
+-- '/k9kennel' -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE (not a
 -- replacement -- see this file's header for why): k9deploykennel above and
 -- k9exitkennel (client/keybinds.lua) are UNCHANGED, keep their own literal
 -- names, and keep working for their existing RegisterKeyMapping bindings

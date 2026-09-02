@@ -3382,7 +3382,7 @@ end
 
 --- ======================================================================
 --- TABLET DECERTIFY -- THE FIX (this pass, coordinator-directed follow-up
---- confirming COMMAND_CONSOLIDATION_SPEC.md §6). RevokeCertification and
+--- confirming docs/history/COMMAND_CONSOLIDATION_SPEC.md §6). RevokeCertification and
 --- RevokeCertificationOffline above ALREADY BOTH EXIST and each already
 --- enforces its own correct rules -- the bug is not in either of them. The
 --- bug was in client/tablet.lua's tablet:decertify NUI callback: it shelled
@@ -3471,7 +3471,7 @@ local function RevokeCertificationForTablet(granterSrc, citizenid, departmentKey
     -- filter on an active certification, per that function's own doc
     -- comment) but resurrecting on re-certification, landing them back on
     -- a roster with their old callsign instead of Unassigned
-    -- (ROSTER_SPEC.md §4). `clearedBy` is resolved fresh here (never
+    -- (docs/history/ROSTER_SPEC.md §4). `clearedBy` is resolved fresh here (never
     -- reusing RevokeCertification(Offline)'s own already-notified
     -- ResolveGranterCitizenId call, which would risk a second, spurious
     -- notify to `granterSrc` after the revoke already succeeded) --
@@ -5319,7 +5319,7 @@ if Config.Features and Config.Features.CommandTablet == true then
         return { ok = false, error = outcome }
     end)
 
-    -- BUGFIX (this pass, COMMAND_CONSOLIDATION_SPEC.md §6) -- symmetric with
+    -- BUGFIX (this pass, docs/history/COMMAND_CONSOLIDATION_SPEC.md §6) -- symmetric with
     -- tabletCertify immediately above. Was previously reached via
     -- client/tablet.lua's SubmitAllowlistedCommand -> '/k9decertifyoffline'
     -- bridge, which structurally could not succeed against a currently
@@ -5388,7 +5388,7 @@ RegisterNetEvent('qbx_k9unit:server:revokeHandler', function(targetServerId, rea
 end)
 
 -- ======================================================================
--- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8) --
+-- COMMAND CONSOLIDATION (docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8) --
 -- k9certify/k9certifyoffline, k9decertify/k9decertifyoffline,
 -- k9settier/k9settieroffline, k9recertify/k9recertifyoffline,
 -- k9unspecialize/k9unspecializeoffline: 10 commands -> 5. RESOLUTION RULE,
@@ -5400,7 +5400,7 @@ end)
 -- of the 10 underlying functions already does its own shape validation
 -- (and its own usage notify) internally, so the dispatcher only ever
 -- decides WHICH already-gated, already-validating function to call, then
--- forwards the rest of `args` unchanged. Confirmed (COMMAND_CONSOLIDATION_SPEC.md
+-- forwards the rest of `args` unchanged. Confirmed (docs/history/COMMAND_CONSOLIDATION_SPEC.md
 -- §1): all 11 grant/revoke/tier/renew/specialization functions in this
 -- file share the exact same IsEligibleCertifier gate and
 -- IsCertifyActionOnCooldown budget -- merging on the online/offline axis
