@@ -3043,6 +3043,124 @@ change a value, change the reasoning here too.
 
 ---
 
+### `Config.ScentVision` -- which edits need a restart, and which do not
+
+Server-side, every field here is read fresh at the point of use rather than
+captured once at load, so an edit takes effect on the very next capture pass
+or query with no restart. Non-positive millisecond and metre values are never
+read as "forever" or "unlimited" -- they are clamped to a safe built-in
+default with a loud one-time warning naming the bad field, the same discipline
+applied everywhere a threshold is read from an operator-editable field.
+
+**The client-side exception, disclosed.** `pollIntervalMs`,
+`fadeStartFraction`, `fadeEnabled` and the 45,000 ms dot-lifetime fallback are
+resolved ONCE at the client file's load time, into locals. That does not
+contradict the "live, no restart" claim in practice today, because this
+codebase has no mechanism anywhere to push a live config value to an
+already-connected client -- every client loads its own copy of the shared
+script once, at its own resource start. So a client-side value already
+requires a reconnect or a resource restart for any edit to reach it,
+identically to every other client-only field (see `server/runtimecontrol.lua`'s
+`tier = 'clientonly'` classification).
+
+It is written down here so it stops being an implicit assumption the moment
+someone adds live client-config push.
+
+**`mode` is the same shape for STARTING, and the one exception for STOPPING.**
+Flipping `'keybind'` to `'always'` does not retroactively start rendering for
+a player already connected. But `getScentVisionPoints` echoes the server's
+live-resolved `mode` (and an outright feature-off) on every poll response
+already in flight, and the client treats either as an immediate,
+unconditional stop -- never gated behind its own copy of `mode`. So a
+currently-rendering player's screen always clears the moment the server says
+to, restart or not. The asymmetry is deliberate: failing to start is a
+cosmetic delay, failing to stop is a feature that will not switch off.
+
+### `Config.XPTiers` -- the K9 ladder's thresholds and its scent-range bonus
+
+**A bonus that was numerically dead from the day it shipped.**
+`scentRangeMultiplier` replaced an absolute `scentRange` field, and the unit
+had to change with it. The old values (5.0/6.5/8.0/10.0) were applied as a
+`math.max` FLOOR against each track type's own `maxRange` -- and every
+`maxRange` defaults to 40.0. Even the Elite tier's 10.0 could never exceed
+40.0, so the floor could never raise anything, for any tier. "Scent range
+grows with XP" did nothing at all, silently, for as long as it existed. It is
+now a multiplier over each type's own `maxRange`, so it scales with whatever
+that type is tuned to instead of fighting an absolute ceiling. Base tier is
+1.00, so a base-tier K9 is byte-identical to the old behaviour.
+
+**Thresholds retuned 2026-08-25**, from 500/1500/3500, on measured extraction
+rates rather than feel. The old top tier was reachable in about 49 minutes of
+nonstop optimal play once the combat awards shipped, and roughly 2.3 hours
+using only what was closest to shippable -- an evening, not the weeks of duty
+the progression is meant to represent. The new numbers keep the old
+proportions (14% / 44% / 100% of top); at a realistic ~500 XP/hr, Elite is
+about 18 hours total, or 2 to 2.5 weeks at an hour a day.
+
+**The worst-case farm ceiling, and how it was got wrong the first time.** The
+figure that used to sit in the config was 4,320 XP/hr, and it was wrong
+because it reasoned about the combat awards in isolation. Each of the four XP
+mechanics had its own independent mint cooldown and nobody had ever summed
+them:
+
+| mechanic | cooldown / award | per hour |
+|---|---|---|
+| bite-hold | 60s / 20 XP | 1,200 |
+| takedown | 60s / 30 XP | 1,800 |
+| contraband | 60s / 25 XP | 1,500 |
+| track resolved | 30s / 10 XP | 1,200 |
+
+Round-robining all four came to 5,700 XP/hr, putting Elite at about 1h35m --
+under the "over 2 hours" floor these tiers were retuned to guarantee. Worse,
+none of it required real police work: an ambient, non-wanted pedestrian
+qualified for both combat awards.
+
+Closed by a shared cross-mechanic mint budget in `AwardXP` -- a per-citizenid
+token bucket of 3,600 XP per rolling hour -- plus
+`Config.XP.mintXpForNpcCombatTargets` defaulting off. The four per-mechanic
+cooldowns still decide WHICH mechanic may mint; the budget caps the TOTAL.
+Real ceiling is 3,600 XP/hr: Trained ~18m, Veteran ~1h04m, Elite ~2h27m,
+clearing the floor with about 27 minutes to spare.
+
+Deliberately NOT the order-of-magnitude raise floated earlier. That figure
+was anchored to a ~9,000 XP/hr contraband farm that is now closed; reapplying
+it against the corrected ceiling would overshoot.
+
+### `Config.Permissions.allowHighCommandSelfGrant`
+
+Whether a high-command officer may grant a permission to themselves. Ships
+`true`, on the owner's decision -- his own words: "High command can grant
+anything they want to themselves -- xp promotions permissions etc."
+
+**Why it exists at all.** It started as a fix for a genuine day-one deadlock
+on the most common topology there is: a server with exactly ONE high-command
+officer, on day one, before anyone else is promoted. With self-grant blocked,
+nobody could ever grant that officer `feature.AdminAuditCommands` or any
+other RequireGrant entry -- permanently locking the tablet's entire Audit
+tab, with no way out that did not involve promoting a second officer first.
+
+**What changed.** The original fix covered `feature.<Name>` only. The four
+named capabilities and `block.<Name>` were deliberately left out, on the
+reasoning that a high-command officer already bypasses those checks through
+`IsHighCommand` regardless of any grant, so self-granting them fixed no
+deadlock. That reasoning still holds -- it is simply no longer the deciding
+factor, because the owner asked for self-service across the board as a matter
+of what his server should allow rather than as a bug fix. The flag now governs
+every namespace `server/permissions.lua` validates, and
+`Config.HighCommand.allowSelfGrant` was flipped to match, for the same reason:
+the decision applies uniformly, not per-mechanism.
+
+**What it cannot do.** It only ever changes what an ALREADY-VERIFIED
+high-command officer may do to their own citizenid -- never who counts as
+high command. `GrantPermission` re-verifies `IsHighCommand` server-side on
+every call, from the caller's own live job, never from a client claim.
+
+Every self-grant is audited and distinguishable from an ordinary one:
+`LogAuditInvocation` prints an explicit `self=true/false` field on every
+grant line, naming the same citizenid as both granter and recipient whenever
+it fires. Self-service was the owner's decision; invisible self-service is not
+something this resource ships quietly.
+
 ### `Config.Combat` -- why bite/takedown/dragging shipped when they did
 
 All three combat mechanics were built before they were switched on, and the

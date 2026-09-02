@@ -1272,61 +1272,23 @@ Config.FeatureControl = {
         PursuitSprint     = true,
     },
 
-    -- OWNER DECISION (this pass -- server/permissions.lua's own
-    -- "SELF-GRANT" header section documents the full reasoning this
-    -- implements; read that before changing this). The project owner's own
-    -- words: "High command can grant anything they want to themselves --
-    -- xp promotions permissions etc." This flag now governs self-grant for
-    -- EVERY permission namespace server/permissions.lua validates: a
-    -- high-command officer granting THEMSELVES a 'feature.<Name>'/
-    -- RequireGrant entry from THIS table, a 'block.<Name>' entry, OR one of
-    -- the four named capabilities (k9.access/k9.certify/k9.audit/
-    -- k9.givexp) from Config.Permissions above -- all four are the SAME
-    -- decision to the owner, and are now WIDENED (this pass) from a
-    -- previous version that exempted 'feature.<Name>' alone. Every grant
-    -- issued through this flag still requires the officer to independently
-    -- already BE high command (server/permissions.lua's GrantPermission
-    -- re-verifies IsHighCommand server-side on every call, from the
-    -- caller's own live job, never a client claim) -- this flag only ever
-    -- changes what an ALREADY-VERIFIED high-command officer may do to
-    -- their own citizenid, never who counts as high command.
+    -- Whether high command can grant permissions to THEMSELVES. Ships on,
+    -- at the owner's request.
     --
-    -- HISTORY, FOR CONTEXT: this flag was originally added to close a
-    -- genuine day-one deadlock on the single most common topology there
-    -- is -- a server with exactly ONE high-command officer (the owner, on
-    -- day one, before any second officer is promoted): with self-grant of
-    -- 'feature.<Name>' blocked outright, nobody could ever grant that
-    -- officer 'feature.AdminAuditCommands' (or any other RequireGrant
-    -- entry above), permanently locking the tablet's entire Audit tab. The
-    -- four named capabilities and 'block.<Name>' were deliberately left out
-    -- of that earlier fix, since a high-command officer already bypasses
-    -- those checks directly via IsHighCommand regardless of any grant, so
-    -- self-granting them fixed no deadlock. That reasoning still holds --
-    -- it is simply no longer the deciding factor now that the owner has
-    -- asked for self-service across the board as a matter of what his
-    -- server should allow, not as a bug fix.
+    -- This only changes what someone who is ALREADY high command may do to
+    -- their own record -- it can never make anyone high command, and every
+    -- self-grant is written to the audit log marked `self=true`, naming the
+    -- same person as both granter and recipient.
     --
-    -- DEFAULT TRUE, matching Config.HighCommand.allowSelfGrant above (this
-    -- pass flipped that flag's own default to match, for the identical
-    -- reason: the owner's decision applies uniformly, not per-mechanism).
-    -- Every self-grant issued under this default is still audited and
-    -- distinguishable from an ordinary grant -- server/permissions.lua's
-    -- LogAuditInvocation prints an explicit `self=true/false` field on
-    -- every GrantPermission audit line, naming the SAME citizenid as both
-    -- granter and recipient whenever it fires. Self-service is the owner's
-    -- decision; invisible self-service is not something this resource
-    -- ships quietly.
+    -- SET IT TO false for stricter behaviour: a second high-command officer
+    -- must action every grant. Know the cost first -- a server with exactly
+    -- ONE high-command officer then has no way to grant that officer any
+    -- permission at all, the tablet's Audit tab included, until a second one
+    -- is promoted. That deadlock is why this flag exists; see
+    -- DEVELOPER_REFERENCE.md §22.
     --
-    -- Set this to false if your server wants the STRICTER, pre-owner-
-    -- decision behaviour back instead -- a second high-command officer's
-    -- own action required on every grant, even to another high-command
-    -- officer, even for a capability IsHighCommand already grants them
-    -- directly -- and accepts that a server with exactly one high-command
-    -- officer then has NO way to grant that officer any RequireGrant-listed
-    -- feature (Audit tab included), any named capability, or any block
-    -- entry, until a second high-command officer is promoted. Read as
-    -- `~= false` wherever this is consulted, never `x or default`, so an
-    -- explicit `false` is never misread as "not set".
+    -- Read as `~= false` wherever it is consulted, never `x or default`, so
+    -- an explicit `false` is never misread as "not set".
     allowHighCommandSelfGrant = true,
 
     -- Whether a handler/K9 may open the tablet and see what they hold.
@@ -2123,54 +2085,20 @@ Config.MaxStaminaDrainPerTick = 20.0
 -- for a far more dramatic ladder -- but read the speed warning above before
 -- pushing speedMultiplier much past 1.20.
 Config.XPTiers = {
-    -- scentRangeMultiplier REPLACED the old absolute `scentRange` field, and
-    -- the unit changed, which is why the name had to change with it. The old
-    -- values (5.0/6.5/8.0/10.0) were applied as a math.max FLOOR against each
-    -- track type's own maxRange -- and every maxRange defaults to 40.0. Even
-    -- the Elite tier's 10.0 could never exceed 40.0, so the floor could never
-    -- raise anything, for any tier. "Scent range grows with XP" was numerically
-    -- dead from the day it shipped.
-    -- Now a multiplier over each track type's own maxRange, so it scales with
-    -- whatever that type is tuned to instead of fighting an absolute ceiling.
-    -- Base tier is 1.00 = no bonus, so a base-tier K9's range is byte-identical
-    -- to today's behaviour. Only a value > 1.0 does anything.
-    -- Pure balance placeholders -- tune freely.
-    -- RETUNED 2026-08-25 from 500/1500/3500, on measured extraction rates
-    -- rather than feel. The old top tier was reachable in about 49 minutes
-    -- of nonstop optimal play once the combat awards ship, and in roughly
-    -- 2.3 hours using only what is closest to shippable today -- an
-    -- evening, not the weeks of K9 duty the progression is meant to
-    -- represent.
+    -- The four K9 ranks. Each row is a threshold plus the bonuses that rank
+    -- unlocks; the first MUST be xp = 0.
     --
-    -- New thresholds keep the old proportions (14% / 44% / 100% of top).
-    -- At a realistic legitimate rate of ~500 XP/hr, Elite takes about 18
-    -- hours total, or roughly 2 to 2.5 weeks at an hour or so a day.
+    -- speedMultiplier and scentRangeMultiplier are multipliers over the base
+    -- value, so 1.00 means no bonus and only a number above 1.0 does
+    -- anything.
     --
-    -- WORST-CASE FARMABLE CEILING, recomputed 2026-08-25. The figure that
-    -- used to sit here (4320 XP/hr) was wrong, because it reasoned about
-    -- the combat awards in isolation. Each of the four XP mechanics had its
-    -- own independent mint cooldown, and nobody had ever summed them:
-    --     bite-hold      60s / 20 XP  -> 1,200/hr
-    --     takedown       60s / 30 XP  -> 1,800/hr
-    --     contraband     60s / 25 XP  -> 1,500/hr
-    --     track resolved 30s / 10 XP  -> 1,200/hr
-    -- Round-robining all four came to 5,700 XP/hr, putting Elite at about
-    -- 1h35m -- under the "over 2 hours" floor these tiers were retuned to
-    -- guarantee. Worse, none of it required real police work: an ambient,
-    -- non-wanted pedestrian qualified for both combat awards.
-    --
-    -- Closed by a shared cross-mechanic mint budget in server/progression's
-    -- AwardXP (a per-citizenid token bucket, 3600 XP per rolling hour) plus
-    -- Config.XP.mintXpForNpcCombatTargets defaulting off. The four
-    -- per-mechanic cooldowns still decide WHICH mechanic may mint; the
-    -- budget caps the TOTAL. Real ceiling is now 3,600 XP/hr:
-    --     Trained (1,250)  ~18m
-    --     Veteran (4,000)  ~1h 04m
-    --     Elite   (9,000)  ~2h 27m   -- clears the floor with ~27m to spare
-    --
-    -- Deliberately NOT the order-of-magnitude raise floated earlier. That
-    -- figure was anchored to the ~9000 XP/hr contraband farm, which is now
-    -- closed; reapplying it against the corrected ceiling would overshoot.
+    -- PACING, so the thresholds mean something: at a realistic ~500 XP/hr
+    -- Elite is about 18 hours of duty -- two to two and a half weeks at an
+    -- hour a day. The absolute fastest anyone can reach it, farming
+    -- flat out against the shared 3,600 XP/hr budget, is about 2h27m. That
+    -- floor is deliberate; raising these numbers without re-checking it just
+    -- moves the wall. Full derivation, and the farm that forced the retune:
+    -- DEVELOPER_REFERENCE.md §22.
     { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
     { xp = 1250, label = 'Trained K9', speedMultiplier = 1.06, scentRangeMultiplier = 1.15 },
     -- Veteran unlocks a shorter K9 medkit cooldown. A multiplier, not an
@@ -2642,48 +2570,20 @@ Config.Tracking = {
     },
 
     -- ==================================================================
-    -- ScentVision (Config.Features.ScentVision). See that flag's own
-    -- comment above for the feature summary. SERVER-SIDE (server/tracking.lua),
-    -- every one of these is read fresh at the point of use (never captured
-    -- once at load) -- a config edit there takes effect on the very next
-    -- capture pass/query, no restart needed, matching this resource's
-    -- DEVELOPER_REFERENCE.md §3 convention. Non-positive *Ms/*Meters values are never
-    -- read as "forever"/"unlimited" -- they are clamped to a safe built-in
-    -- default with a loud one-time warning naming the bad field, the same
-    -- ResolveConfiguredThresholdMs discipline server/cooldowns.lua
-    -- documents and this resource applies everywhere a millisecond
-    -- threshold is read out of an operator-editable Config field.
+    -- ScentVision -- the coloured dots a handler follows.
     --
-    -- CLIENT-SIDE EXCEPTION, DISCLOSED (qa-tester finding): `pollIntervalMs`
-    -- and `fadeStartFraction` are resolved ONCE, at client/tracking.lua's own
-    -- file-load time, into a local constant -- NOT re-read on every poll or
-    -- every frame. This does not contradict the "live, no restart" claim
-    -- above in practice TODAY: this codebase has no mechanism anywhere to
-    -- push a live config value to an ALREADY-CONNECTED client at all (every
-    -- client loads its own independent copy of this shared_script once, at
-    -- its own resource start) -- so a client-side value already requires
-    -- that client to reconnect/the resource to restart for ANY edit to reach
-    -- it, identically to every other client-only Config field in this
-    -- resource (see server/runtimecontrol.lua's own `tier = 'clientonly'`
-    -- classification for the general shape of this same gap). Flagged
-    -- explicitly so this stops being an implicit assumption the moment a
-    -- future pass ever adds live client-config push: `fadeEnabled` and the
-    -- 45000ms dot-lifetime CLIENT-SIDE FALLBACK default (used only until the
-    -- first server response arrives, which always echoes back the lifetime
-    -- it actually enforced) share this same "resolved once, client-only"
-    -- shape, for the identical reason. `mode` (below) is the SAME shape for
-    -- STARTING/becoming eligible for 'always' -- an admin flipping
-    -- 'keybind' to 'always' on config.lua does not retroactively start
-    -- rendering for a player already connected before the next restart --
-    -- but is the ONE EXCEPTION for STOPPING: server/tracking.lua's own
-    -- getScentVisionPoints echoes the server's live-resolved `mode` (and an
-    -- outright Config.Features.ScentVision = false) on every poll response
-    -- already in flight, and client/tracking.lua treats either as an
-    -- immediate, unconditional stop -- never gated behind this file's own
-    -- client-side `mode` copy -- so a currently-rendering player's screen
-    -- always clears the moment the server says to, restart or not. See
-    -- `mode`'s own comment below for why that asymmetry (start needs a
-    -- restart, stop never does) is deliberate, not an oversight.
+    -- Editing a SERVER-side value below takes effect on the next capture,
+    -- no restart. Editing a CLIENT-side one (pollIntervalMs, the fade
+    -- settings) needs the player to reconnect or the resource to restart --
+    -- that is true of every client-side setting in this resource, not just
+    -- these. Turning the feature OFF is the one thing that always takes
+    -- effect immediately, even mid-render.
+    --
+    -- Setting any *Ms or *Meters field to 0 or a negative number does NOT
+    -- mean "forever" -- it is refused, clamped to a safe default, and warned
+    -- about by name in the server console.
+    --
+    -- Why the start/stop asymmetry is deliberate: DEVELOPER_REFERENCE.md §22.
     -- ==================================================================
     ScentVision = {
         -- CAPTURE (server/tracking.lua's position-sampling thread):
