@@ -133,7 +133,6 @@ Config = {}
 --   Config.FindAlerts ............... the dog sitting and barking on a find
 --   Config.Combat ................... bite and hold, takedowns, dragging
 --   Config.PursuitSprint ............ the short burst of real speed
---   Config.Recall ................... calling the dog off
 --   Config.Partnership .............. handler and K9 pairing
 --   Config.DoorInteraction .......... scratching at doors
 --   Config.Vision ................... thermal and night vision
@@ -296,14 +295,12 @@ Config.Features = {
 
     -- DEVELOPER_REFERENCE.md §12.0 item 7 (Revision 5, coder-architect) /
     -- server/partnership.lua (coder-backend, this pass). Gates the
-    -- mutually-consented "Partner Up" registry ONLY -- HandlerDownDefense
-    -- and BiteAndHold's Recall actor (the two features this registry
-    -- unblocks) are each independently gated by their OWN flags above.
-    -- At the time this paragraph was written both of those remained
-    -- unimplemented regardless of this flag's value; that is no longer
-    -- true -- HandlerDownDefense (the removed handler-down-defense server file) and Recall
-    -- (the removed recall server file) are both implemented, and both flags ship `true`
-    -- above, same as this one.
+    -- mutually-consented "Partner Up" registry ONLY. The two features this
+    -- registry was originally built to unblock -- handler-down defense and
+    -- the recall actor -- were both REMOVED on 2026-09-02 at the owner's
+    -- request, so neither exists to gate any more. The registry itself is
+    -- still load-bearing: server/tenure.lua reads it for the tenure bonus,
+    -- and the tablet reads it to show who is partnered with whom.
     -- DEFAULT ONCE DIVERGED FROM DEVELOPER_REFERENCE.md §12.0 item 7 point 5's
     -- OWN "recommended default true" text -- that was deliberate at the
     -- time, not an oversight: that recommendation predated any real code
@@ -762,11 +759,6 @@ Config.FeatureGroups = {
         AgilityAdvanced    = true,
         VehicleEntryExit   = true,
         DoorInteraction    = true,
-        -- Recall is deliberately NOT a member of this family (or any
-        -- family) -- see the standalone list below and
-        -- FEATURE_STRUCTURE_SPEC.md §3.2: it is the shared way to call off
-        -- a bite, a takedown, OR a drag, so it must never be forced off by
-        -- a switch belonging to any ONE of Combat/Movement alone.
     },
     Wellbeing = {
         enabled        = true, -- was the standalone FatigueSystem switch
@@ -4064,15 +4056,14 @@ Config.Combat = {
 -- Config.Combat above) rather than a single everything-table.
 --
 -- This registry started as a FOUNDATION ONLY, with no combat consequence
--- wired to it. That is no longer true, and this note is kept only so the
--- progression is legible: both mechanics DEVELOPER_REFERENCE.md 12.0 item 7 named as
--- blocked on this registry existing are now built and consuming it --
--- HandlerDownDefense's trigger (the removed handler-down-defense server file) and the Recall actor
--- (the removed recall server file, Config.Recall below). Both call
--- `GetActivePartnerCitizenId`/`IsActivePartnerOf` directly rather than
+-- wired to it. The two combat mechanics DEVELOPER_REFERENCE.md 12.0 item 7
+-- named as blocked on it -- the handler-down defense trigger and the recall
+-- actor -- were built, then REMOVED on 2026-09-02 at the owner's request.
+-- The registry outlived them: server/tenure.lua reads it for the tenure
+-- bonus, and the tablet reads it to show who is partnered with whom. Both
+-- call `GetActivePartnerCitizenId`/`IsActivePartnerOf` directly rather than
 -- re-deriving their own partner lookup, per this registry's accessor
--- contract (see server/partnership.lua's header). A third consumer,
--- server/tenure.lua, reads the same registry for the tenure bonus.
+-- contract (see server/partnership.lua's header).
 -- ======================================================================
 Config.Partnership = {
     -- DEVELOPER_REFERENCE.md §12.0 item 7 point 1 explicitly leaves "reuse
