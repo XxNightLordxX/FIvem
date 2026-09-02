@@ -2513,10 +2513,6 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
         Features = {
             K9Medkit          = opts.k9Medkit ~= false,
             FatigueSystem     = false,
-            MoodSystem        = false,
-            FearStressSystem  = false,
-            DistractionSystem = false,
-            InjuryLimping     = false,
         },
         Departments = baselineDepartments(),
         K9Medkit = opts.k9MedkitCfg or baselineK9MedkitConfig(),

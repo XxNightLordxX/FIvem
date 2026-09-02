@@ -337,7 +337,6 @@ local function newCombatFixture(opts)
             BiteAndHold = opts.biteAndHold ~= false,
             NonLethalTakedown = opts.nonLethalTakedown ~= false,
             PropDragging = opts.propDragging == true,
-            HandlerDownDefense = false,
         },
         Combat = {
             RequireWantedStatus = opts.requireWantedStatus ~= false,

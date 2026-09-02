@@ -1,21 +1,19 @@
 --[[
     qbx_k9unit/client/wellbeing.lua
 
-    Client-side half of Config.Features.FatigueSystem / MoodSystem /
-    FearStressSystem / DistractionSystem / InjuryLimping
-    (DEVELOPER_REFERENCE.md §13.0 Decision 1, §13.3, §13.4.3). Receives the server's
-    pushed wellbeing snapshots, sets the shared `K9MoveRateModifiers` entries
-    for Fatigue/Injury/Mood (DEVELOPER_REFERENCE.md §13.0 Decision 2) and calls
-    `RecomputeK9MoveRate()` (client/movement.lua), enforces the client-local
-    sprint/jump input blocks for low Injury (a disclosed, bounded, self-
-    applied limitation — see server/wellbeing.lua's header and DEVELOPER_REFERENCE.md
-    §13.0 Decision 3, not a security boundary), and owns the merged "Care
-    for K9" ox_target interaction (docs/history/COMMAND_CONSOLIDATION_SPEC.md §7 /
-    docs/history/FEATURE_STRUCTURE_SPEC.md §5 — see the MOOD section further down for the
-    full consolidation writeup) plus the meat-bait/whistle/calm-down
-    self-actions.
+    Client-side half of Config.Features.FatigueSystem. Receives the server's
+    pushed wellbeing snapshots, sets the shared `K9MoveRateModifiers.fatigue`
+    entry and calls `RecomputeK9MoveRate()` (client/movement.lua).
 
-    Every one of the five wellbeing flags is checked at the point of use
+    IT USED TO CARRY FOUR MORE. Mood, fear/stress, distraction and injury
+    were all handled here too -- the injury sprint/jump input block, the
+    meat-bait/whistle/calm-down self-actions, and the merged "Care for K9"
+    ox_target interaction. All were removed on 2026-09-02 at the owner's
+    request. Prose further down that still counts "five flags" is describing
+    what was true when it was written; read it as a dated account rather
+    than an inventory of this file today.
+
+    The fatigue flag is checked at the point of use
     below, not just declared: see "LIVE FEATURE FLAGS" below. Every check
     reads `LiveFeatureFlags.<Name>` — the server's CURRENT flag state, kept
     fresh by every `wellbeingUpdate` push/`getWellbeingSnapshot` fetch —

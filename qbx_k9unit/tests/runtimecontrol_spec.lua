@@ -186,7 +186,6 @@ local function boot(opts)
             BasicBarkSounds = true,
             DoorInteraction = true,
             FetchMechanic = false,
-            HandlerDownDefense = false,
             AdminAuditCommands = false,
             HighCommand = true,
             PermissionGrants = true,
@@ -733,7 +732,6 @@ local function bootWithActiveUsageFeatures(extraFeatures)
     local features = {
         RuntimeFeatureControl = true, TabletTheming = true,
         BiteAndHold = true, NonLethalTakedown = true, PropDragging = true, DeployableKennel = true,
-        TrainingMode = true,
     }
     for k, v in pairs(extraFeatures or {}) do features[k] = v end
     return boot({ config = { Features = features, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })

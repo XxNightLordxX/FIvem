@@ -337,16 +337,11 @@ local function newWellbeingFixture(opts)
     -- config.lua's own shipped value (currently true for all 40 flags) --
     -- each test opts in exactly what it needs.
     env.Config.Features.FatigueSystem = false
-    env.Config.Features.MoodSystem = false
-    env.Config.Features.FearStressSystem = false
-    env.Config.Features.DistractionSystem = false
-    env.Config.Features.InjuryLimping = false
     -- HUNGER/THIRST (this pass, coder-backend) -- same "explicit false,
     -- regardless of config.lua's shipped default" discipline as the five
     -- siblings above. real config.lua does not have this key at all yet
     -- (this file does not own config.lua) -- defaulting it here either way
     -- means this fixture behaves identically once it does.
-    env.Config.Features.HungerThirstSystem = false
     for key, value in pairs(opts.features or {}) do
         env.Config.Features[key] = value
     end

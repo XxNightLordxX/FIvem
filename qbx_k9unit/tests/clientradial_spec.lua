@@ -564,7 +564,7 @@ local function newRadialFixture(opts)
         RadialMenu = true, LeashMechanics = true, VehicleEntryExit = true, BasicBarkSounds = true,
         AdvancedBarkRadial = false, ScentTracking = false, BloodTracking = false, GunpowderSniffing = false,
         BiteAndHold = false, NonLethalTakedown = false, PropDragging = false, HandlerPartnership = false,
-        Recall = false, HandlerDownDefense = false, FetchMechanic = false, PropAttachments = false,
+        FetchMechanic = false, PropAttachments = false,
         DeployableKennel = false, K9Inventory = false, K9Medkit = false,
         -- SARCalls/TrainingMode -- ADDED THIS PASS, closing the exact gap
         -- this baseline's own header comment already worries about: both
@@ -575,7 +575,6 @@ local function newRadialFixture(opts)
         -- live file instead of a stable, spec-owned value, exactly the
         -- "flap for a reason that has nothing to do with client/radial.lua"
         -- failure mode this baseline exists to prevent.
-        SARCalls = false, TrainingMode = false,
         -- NightVision/ThermalVision -- ADDED THIS PASS (vision merge,
         -- coder-architect), same reasoning as SARCalls/TrainingMode above:
         -- both ship `true` in the real, live config.lua, and the new
@@ -804,12 +803,7 @@ t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order grou
             NonLethalTakedown = true,
             PropDragging = true,
             HandlerPartnership = true,
-            Recall = true,
-            HandlerDownDefense = true,
-            DangerWarn = true,
             FetchMechanic = true,
-            SARCalls = true,
-            TrainingMode = true,
         },
     })
     local items = f.findMenu('k9unit')
@@ -1289,10 +1283,8 @@ t.test('RadialMenu=false: the k9unit submenu and its root opener never get regis
         LeashMechanics = true, VehicleEntryExit = true, BasicBarkSounds = true,
         AdvancedBarkRadial = true, ScentTracking = true, BloodTracking = true,
         GunpowderSniffing = true, BiteAndHold = true, NonLethalTakedown = true,
-        PropDragging = true, HandlerPartnership = true, Recall = true,
-        HandlerDownDefense = true, FetchMechanic = true, PropAttachments = true,
+        PropDragging = true, HandlerPartnership = true, FetchMechanic = true, PropAttachments = true,
         DeployableKennel = true, K9Inventory = true, K9Medkit = true,
-        SARCalls = true, TrainingMode = true,
     } })
 
     t.isNil(f.findMenu('k9unit'), 'the k9unit submenu itself must never be registered when RadialMenu is false')
@@ -1327,10 +1319,9 @@ t.test('no two registered items (across every submenu and the root wheel) share 
         BasicBarkSounds = true, AdvancedBarkRadial = true, ScentTracking = true,
         BloodTracking = true, GunpowderSniffing = true, BiteAndHold = true,
         NonLethalTakedown = true, PropDragging = true, HandlerPartnership = true,
-        Recall = true, HandlerDownDefense = true, FetchMechanic = true,
+        FetchMechanic = true,
         PropAttachments = true, DeployableKennel = true, K9Inventory = true,
-        K9Medkit = true, SARCalls = true, TrainingMode = true,
-    } })
+        K9Medkit = true, } })
 
     local ids = f.allIds()
     t.isTrue(#ids > 20, 'sanity: this fixture should have produced a large number of items, or this test is not exercising what it claims to')

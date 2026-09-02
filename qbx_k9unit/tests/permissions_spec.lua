@@ -3032,7 +3032,7 @@ end)
 t.test('STARTUP WARNING: FIRES when Config.Features.CommandTablet is off and RequireGrant is non-empty -- names the EXACT features, sorted, and points at the new commands', function()
     local f = newFixture({
         commandTablet = false,
-        featureControl = { RequireGrant = { ScentLineup = true, BiteAndHold = true, PursuitSprint = true, NotRequired = false } },
+        featureControl = { RequireGrant = { ScentVision = true, BiteAndHold = true, PursuitSprint = true, NotRequired = false } },
     })
     f.fireOnResourceStart()
 
@@ -3044,7 +3044,7 @@ t.test('STARTUP WARNING: FIRES when Config.Features.CommandTablet is off and Req
     t.isTrue(warningLine:find('WARNING', 1, true) ~= nil)
     t.isTrue(warningLine:find('CommandTablet is off', 1, true) ~= nil, 'must name the actual reason')
     -- Sorted alphabetically, and NEVER includes the `false` entry.
-    t.isTrue(warningLine:find('BiteAndHold, PursuitSprint, ScentLineup', 1, true) ~= nil, 'must name the exact features, sorted, with no NotRequired leaking in')
+    t.isTrue(warningLine:find('BiteAndHold, PursuitSprint, ScentVision', 1, true) ~= nil, 'must name the exact features, sorted, with no NotRequired leaking in')
     t.isFalse(warningLine:find('NotRequired', 1, true) ~= nil)
     -- Never claims a dead end -- must point at the working alternative.
     t.isTrue(warningLine:find('/k9grantpermission', 1, true) ~= nil)

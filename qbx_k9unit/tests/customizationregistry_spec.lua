@@ -535,9 +535,7 @@ end
 -- literal argument added to one of these four checkers' call sites must be
 -- added here in the same change.
 local DYNAMIC_BLOCK_COVERAGE = {
-    MoodSystem = true, InjuryLimping = true, DistractionSystem = true,
-    FearStressSystem = true, FatigueSystem = true, HungerThirstSystem = true,
-    SearchZones = true, ContrabandAlerts = true,
+    FatigueSystem = true, SearchZones = true, ContrabandAlerts = true,
     BiteAndHold = true, NonLethalTakedown = true, PropDragging = true,
     ScentTracking = true, BloodTracking = true, GunpowderSniffing = true,
     ScentVision = true,
@@ -579,8 +577,6 @@ local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
     -- it"), that is a REQUIREMENT being added to one person, not a feature
     -- being taken away -- a new key with its own name and its own argument,
     -- never this one quietly gaining a block path that reads backwards.
-    ApprehensionAnnouncement = true,
-
     -- the removed recall server file's own header (its "PER-PERSON FEATURE CONTROL ...
     -- DELIBERATELY NOT IMPLEMENTED HERE" section, ~lines 51-70): Recall is
     -- this resource's one termination/escape-hatch path. IsValidPermissionKey
@@ -590,8 +586,6 @@ local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
     -- call their K9 off would reopen the exact "handler's K9 partner's
     -- certification revoked mid-bite, dog never called off" bug this whole
     -- file exists to keep closed. NEVER "fix" this by wiring the check in.
-    Recall = true,
-
     -- server/webhook.lua posts this resource's own events into a Discord
     -- channel that staff read. It is a SERVER-WIDE LOGGING POLICY, not
     -- something one player does: there is no per-person request handler to

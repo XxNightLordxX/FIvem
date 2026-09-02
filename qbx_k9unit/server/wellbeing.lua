@@ -1,29 +1,29 @@
 --[[
     qbx_k9unit/server/wellbeing.lua
 
-    Phase 4 implementation. Owns Config.Features.FatigueSystem / MoodSystem /
-    FearStressSystem / DistractionSystem / InjuryLimping / HungerThirstSystem
-    (DEVELOPER_REFERENCE.md §13.0 Decision 1, §13.2, §13.4.3 — HungerThirstSystem
-    added this pass, coder-backend, as a SIXTH sibling stat pair; see this
-    header's own "HUNGER/THIRST" section further down for its full design)
-    — ONE shared per-citizenid stat store, ONE shared
-    Config.Wellbeing.tickIntervalMs decay/regen tick, each of the six
-    Config.Features flags independently gating only its OWN stat's tick
-    logic / gameplay-facing effects, exactly mirroring server/tracking.lua's
-    existing Scent/Blood/Gunpowder precedent (three independently-toggleable
-    flags, one shared file pair, one shared prune loop) rather than six
-    near-duplicate files. Every "five flags" reference further down this
-    header predates HungerThirstSystem and describes THOSE five accurately
-    for what was true when written; not exhaustively rewritten to "six"
-    throughout, since most of that prose narrates a specific historical
-    fix (a security finding, a regression, a softlock) whose own five-flag
-    scope was, and remains, exactly correct as stated.
+    Owns Config.Features.FatigueSystem -- the K9's tiredness stat, its decay
+    and regen tick, and the movement-speed penalty a tired dog carries.
+
+    THIS FILE USED TO OWN SIX STATS. Mood, fear/stress, distraction, injury
+    and hunger/thirst all lived here alongside fatigue, sharing ONE
+    per-citizenid store and ONE tick, each gated independently by its own
+    feature flag -- the same "several independently-toggleable flags, one
+    shared file pair, one shared loop" shape server/tracking.lua uses for
+    scent/blood/gunpowder, rather than six near-duplicate files. All five
+    were removed on 2026-09-02 at the owner's request.
+
+    That the fifth survived the other five going away is the shared design
+    working as intended, and it is why prose further down this header still
+    describes a specific fix in terms of "five flags" or "six": each of
+    those narrates a real historical incident whose scope was exactly what
+    it says at the time. Read them as dated accounts, not as an inventory
+    of what this file owns today.
 
     "READ AT THE POINT OF ACTIVATION" DISCIPLINE (DEVELOPER_REFERENCE.md §3): every branch
-    below is gated on its OWN Config.Features flag, not just declared —
-    disabling e.g. FatigueSystem while MoodSystem stays on means fatigue is
-    never ticked, never read, and never pushed to a meaningful value; it
-    simply idles at its default. RESOLVED (see
+    below is gated on its OWN Config.Features flag, not just declared --
+    disabling FatigueSystem means fatigue is never ticked, never read, and
+    never pushed to a meaningful value; it simply idles at its default.
+    RESOLVED (see
     the CreateThread call near the bottom, and its own resolution comment,
     for the full writeup): the shared tick thread now ALWAYS starts at this
     file's own load time regardless of whether any of the five flags is on
