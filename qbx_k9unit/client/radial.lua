@@ -28,12 +28,6 @@
         itself, since there's no separate "bark module" file to delegate
         to — server/main.lua's relayBark handler is the other end).
       - client/partnership.lua's BreakPartnership(), RequestPartnerUp(targetServerId).
-      - the removed recall client file's RequestRecall().
-      - the removed handler-down-defense client file's ConfirmHandlerDownDefense(actionType).
-      - the removed danger-warn client file's RequestDangerWarn(warnType) -- 'k9unit_dangerwarn'
-        submenu, same shape as the removed handler-down-defense client file's 'k9unit_defense' immediately
-        above (see that submenu's own definition, right after
-        'k9unit_defense', for the full contract this follows).
       - client/fetch.lua's RequestThrowFetchBall(), ReleaseFetchBall(),
         RequestRecallFetchBall(), IsFetchCarryEngaged().
       - client/propattachment.lua's RequestToggleK9PropAttachment().
@@ -45,17 +39,10 @@
       - client/inventory.lua's RequestOpenOwnK9Inventory().
       - client/medkit.lua's RequestTreatNearestK9().
       - client/main.lua's HasK9Access() directly (not just via CanShowK9UI())
-        for two items — Fetch's Throw branch and Training's Start/Stop
-        toggle's Start direction — whose own source files document that
-        each is deliberately gated on HasK9Access() alone, not the full
-        CanShowK9UI() combinator (see each item's own comment for why,
-        quoting client/fetch.lua's RequestThrowFetchBall()/
-        the removed training client file's RequestSetTrainingMode() verbatim).
-      - the removed SAR-calls client file's RequestStartSarCall(), RequestAbandonSarCall(),
-        IsSarCallActive().
-      - the removed training client file's IsTrainingModeActive(),
-        RequestSetTrainingMode(desiredOn), RequestTrainingSearchDrill(),
-        RequestTrainingBiteDrill().
+        for Fetch's Throw branch, whose own source file documents that it
+        is deliberately gated on HasK9Access() alone, not the full
+        CanShowK9UI() combinator (see that item's own comment for why, it
+        quotes client/fetch.lua's RequestThrowFetchBall() verbatim).
       - client/vision.lua's ToggleThermalVision()/ToggleNightVision() --
         REVERTED, SEPARATE AGAIN, this pass (owner reversal: "I want the
         thermal and night vision separate") -- their own
@@ -199,7 +186,7 @@
     ever prompting a re-add. The entire "K9 Unit" radial menu -- submenu,
     every nested submenu, and the root opener -- would silently vanish the
     moment ox_lib restarts, no error, no log line; and if the (now
-    unregistered) 'k9unit'/'k9unit_bark'/'k9unit_defense'/'k9unit_fetch' ids
+    unregistered) 'k9unit'/'k9unit_bark'/'k9unit_fetch' ids
     were ever still referenced via a stale `menu` field somewhere,
     ox_lib's `showRadial` does `return error('No radial menu with such id
     found.')` -- an UNCAUGHT hard Lua error, not a no-op.
@@ -360,7 +347,7 @@ end
 --- registries this file's own state lives inside, not ox_target's.
 ---
 --- ORDERING PRESERVED: this function still registers every submenu
---- ('k9unit_bark', 'k9unit_defense', 'k9unit_fetch') strictly BEFORE the
+--- ('k9unit_bark', 'k9unit_fetch', 'k9unit_utility') strictly BEFORE the
 --- 'k9unit' registration that follows it and BEFORE the root opener
 --- `lib.addRadialItem` call at the very end -- i.e. before anything that
 --- references one of those submenu ids via an item's `menu` field. This
@@ -416,7 +403,7 @@ end
 --- independent block check to EVERY item's own already-carefully-tuned
 --- initiation-vs-termination gate) would have meant re-auditing every one
 --- of Detach Leash/Release Bite & Hold/Release Drag/Break Partnership/
---- Recall/Fetch's Release+Recall/every Stop Tracking branch by hand to
+--- Fetch's Release+Recall/every Stop Tracking branch by hand to
 --- make sure a NEW check could never land on one of them by mistake -- a
 --- real risk on a file this size, for no honesty benefit over the simpler
 --- alternative below (this file's header "DUPLICATE-VS-REPLACE" note
@@ -611,15 +598,15 @@ local function RegisterK9RadialMenu()
     -- below) — none of these carry their own `menu` field, UNLESS noted
     -- otherwise (an opener that navigates into a nested sub-menu, same
     -- `menu`-field mechanic this file's header already documents for
-    -- 'k9unit_bark'/'k9unit_defense'/'k9unit_dangerwarn'/'k9unit_fetch'/
-    -- 'k9unit_training'). Every other item here is a terminal action with
+    -- 'k9unit_bark'/'k9unit_fetch'/'k9unit_utility'). Every other item
+    -- here is a terminal action with
     -- its own onSelect, so `menu` must stay unset on all of those.
     local k9SubmenuItems = {}
 
     -- ======================================================================
     -- REGROUPING PASS (ease-of-use audit finding, Job 3): the "K9 Unit"
     -- submenu used to hold ~17-18 items at ONE flat level, with only five
-    -- (Bark/Defense/DangerWarn/Fetch/Training) pushed into their own
+    -- (Bark/Fetch) pushed into their own
     -- sub-menus — ox_lib pages the rest automatically, so finding an item
     -- near the end of that flat list meant paging through the wheel.
     --
@@ -756,8 +743,8 @@ local function RegisterK9RadialMenu()
     --- own header). A handler whose ONLY access comes from that bypass
     --- therefore had a bark the server would gladly relay, silently withheld
     --- by this file alone. Matches the identical, already-shipped precedent
-    --- this file's Fetch "Throw" item and Training's Start branch both use
-    --- (see each item's own comment below) -- not a new idiom.
+    --- this file's Fetch "Throw" item already uses (see that item's own
+    --- comment below) -- not a new idiom.
     if Config.Features.BasicBarkSounds then
         -- Per-person block on the ADVANCED VARIANT SUBMENU specifically --
         -- see this function's own "K9 UNIT RADIAL -- PER-PERSON BLOCK"
@@ -1368,11 +1355,9 @@ local function RegisterK9RadialMenu()
                 -- admits is "not necessarily the intended one". Take down
                 -- the wrong person in a crowd and they stayed force-
                 -- ragdolled and damage-immune for the full configured
-                -- duration with no undo. The only other early end is
-                -- /k9recall -- a HANDLER-side action needing an active
-                -- partnership -- so a solo K9, which this resource
-                -- documents as a supported way to play, had no route at
-                -- all.
+                -- duration with no undo, and no route at all for a solo
+                -- K9, which this resource documents as a supported way to
+                -- play.
                 --
                 -- RELEASE BRANCH FIRST AND UNGATED, exactly as Bite &
                 -- Hold's own branch above documents for itself: this is
@@ -2075,8 +2060,8 @@ local function RegisterK9RadialMenu()
     -- touches no gate, no onSelect closure, no id, no Config.Features check,
     -- and changes which items exist for nobody -- only the sequence ox_lib's
     -- own wheel paginates them in. Every nested submenu (`k9unit_bark`/
-    -- `k9unit_defense`/`k9unit_dangerwarn`/`k9unit_fetch`/`k9unit_training`/
-    -- `k9unit_utility`) was already registered, in full, by the code above --
+    -- `k9unit_fetch`/`k9unit_utility`) was already registered, in full,
+    -- by the code above --
     -- this pass only ever reshuffles the flat list of OPENER/terminal items
     -- that live directly inside 'k9unit' itself; it never reaches inside a
     -- nested submenu's own item list.
@@ -2117,21 +2102,14 @@ local function RegisterK9RadialMenu()
     --      catch-all convenience it has always been. Camera Feed is the one
     --      HANDLER-side perception item among them, grouped here by what it
     --      does (see through the dog) rather than by who presses it.
-    --   14-19. Bite & Hold, Non-Lethal Takedown, Drag, Handler-Down
-    --      Response, Danger Warn, Recall -- the combat/emergency family,
-    --      immediately following Perception (search, then engage), ending on
-    --      Recall -- the universal "call it off" action that can end any of
-    --      the three engagement types immediately before it, and the natural
-    --      hinge point back to lighter, non-combat items after it.
-    --   20-21. Fetch, then Kennel -- recreational/logistics items, kept
-    --      together and placed after the serious combat/emergency cluster.
-    --   22-23. Search & Rescue Call, then Join Nearest Search & Rescue Call
-    --      -- unchanged relative order (already adjacent and already
-    --      correctly sequenced: start the toggle before its own
-    --      no-argument join convenience).
-    --   24. Training -- last: a practice/administrative feature, never a
-    --      live-duty action, matching how every other "not actually urgent"
-    --      item in this list already trends toward the back.
+    --   14-16. Bite & Hold, Non-Lethal Takedown, Drag -- the combat family,
+    --      immediately following Perception (search, then engage), ordered
+    --      by escalation and with each engagement's own release living on
+    --      the same item as the engagement that opened it.
+    --   17-18. Fetch, then Kennel -- recreational/logistics items, kept
+    --      together and placed last, after the serious combat cluster,
+    --      matching how every other "not actually urgent" item in this list
+    --      already trends toward the back.
     --
     -- FAIL-SAFE FOR A FUTURE ITEM: K9_SUBMENU_DISPLAY_ORDER is consulted by
     -- ID. Any id NOT listed here (a future item added above without a

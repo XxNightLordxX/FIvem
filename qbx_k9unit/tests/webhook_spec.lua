@@ -341,29 +341,18 @@ t.test('xpTierReached reads .label off the two tier-table copies, never the raw 
     t.equals(embed.fields[2].value, 'Veteran -> Elite')
 end)
 
-t.test('scentLineupResolved reflects the boolean outcome, and carries no citizenid (matches the documented payload, which has none)', function()
-    local f = newWebhookFixture({ events = { scentLineupResolved = true } })
-    f.fire('scentLineupResolved', 42, true)
-    advanceAndFlush(f, 1000)
-    t.equals(f.httpRequests[1].body.embeds[1].fields[1].value, 'Correct pick')
-
-    f.fire('scentLineupResolved', 43, false)
-    advanceAndFlush(f, 1000)
-    t.equals(f.httpRequests[2].body.embeds[1].fields[1].value, 'Incorrect pick')
-end)
-
 -- ----------------------------------------------------------------------
--- 4. PER-EVENT DEFAULTS (requirement 6) -- pinned for all 14 documented
+-- 4. PER-EVENT DEFAULTS (requirement 6) -- pinned for all 11 documented
 --    event names, plus explicit overrides in both directions
 -- ----------------------------------------------------------------------
 
 local DEFAULT_ON_EVENTS = {
     'certificationGranted', 'certificationRevoked', 'certificationTierChanged', 'certificationRenewed',
-    'specializationGranted', 'specializationRevoked', 'k9Down', 'sarCallCompleted',
+    'specializationGranted', 'specializationRevoked', 'k9Down',
 }
 local DEFAULT_OFF_EVENTS = {
-    'searchCompleted', 'sarCallStarted', 'partnershipEstablished', 'partnershipEnded',
-    'xpTierReached', 'scentLineupResolved',
+    'searchCompleted', 'partnershipEstablished', 'partnershipEnded',
+    'xpTierReached',
 }
 
 -- Minimal, well-formed argument lists for every event name -- exactly the
@@ -379,13 +368,10 @@ local SAMPLE_ARGS = {
     specializationGranted    = { 'CIT', 'police', 'narcotics', 'GRANTER' },
     specializationRevoked    = { 'CIT', 'police', 'narcotics', 'manual' },
     k9Down                   = { 1, 'CIT', 'police', { x = 0, y = 0, z = 0 }, 10 },
-    sarCallStarted           = { 1, 'CIT', 'police', 'person' },
-    sarCallCompleted         = { 1, 'CIT', 'police', 'person', 60000 },
     searchCompleted          = { 'CIT', 'police', 'vehicle', 'clean' },
     partnershipEstablished   = { 'K9CIT', 'HANDLERCIT' },
     partnershipEnded         = { 'K9CIT', 'HANDLERCIT', 'manual' },
     xpTierReached            = { 'CIT', { label = 'B' }, { label = 'A' } },
-    scentLineupResolved      = { 1, true },
 }
 
 for _, eventName in ipairs(DEFAULT_ON_EVENTS) do

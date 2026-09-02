@@ -218,9 +218,8 @@
     tablet UI... render the roster from whatever Config.FeatureControl.RequireGrant
     and Config.Features actually contain at runtime, so a feature added
     after you finish appears without a UI change"). Feature files
-    (findalert/scenttrail/sarcalls/scentlineup/pursuitsprint) plus training
-    mode/equipment shop/a leaderboard can each add
-    their own Config.Features entry and, where relevant,
+    (findalert/pursuitsprint) plus an equipment shop or a leaderboard can
+    each add their own Config.Features entry and, where relevant,
     its own Config.FeatureControl.RequireGrant entry at any time -- a list this file
     captured once at load/write time would already be stale the moment a
     new one lands. ListMyFeaturesKeys below therefore iterates
@@ -1450,28 +1449,10 @@ local FEATURE_DOMAINS = {
     NonLethalTakedown  = 'combat',
     PursuitSprint      = 'combat',
     PropDragging       = 'combat',
-    -- PRE-WIRED, DELIBERATELY ORPHANED (same tolerated shape
-    -- ScentTrailHunt's own entry below 'training' demonstrates in the
-    -- opposite direction -- see tests/runtimefeaturetiers_spec.lua's own
-    -- documented "an orphaned entry has zero behavioural consequence"
-    -- guarantee, and tests/tabletfeaturedomains_spec.lua's own header,
-    -- which only ever asserts the FORWARD direction: every REAL
-    -- Config.Features key must resolve to a domain, never the reverse).
-    -- Config.Features.ApprehensionAnnouncement (the removed apprehension-announcement server file +
-    -- the removed apprehension-announcement client file, gated on it and on Config.Combat.
-    -- ApprehensionAnnouncement) has never existed in config.lua at all --
-    -- see README.md's own "Known limitations" entry and html/tablet.js's
-    -- cmdref_k9announce_needs string for the full disclosure. This entry
-    -- costs nothing while that key is absent (ResolveFeatureDomain is only
-    -- ever consulted for a key BuildMyFeaturesArray/BuildPersonFeaturesArray
-    -- already found in the real, live Config.Features -- see
-    -- ListFeatureKeys' own doc comment), and saves the operator who
-    -- eventually adds the flag one less piece of governance-stack wiring to
-    -- remember.
 
     -- 'movement' -- core K9 control and mobility: the basic actions of
-    -- having and directing a dog (leash, recall, barking, agility,
-    -- getting in/out of vehicles and through doors).
+    -- having and directing a dog (leash, barking, agility, getting in/out
+    -- of vehicles and through doors).
     LeashMechanics     = 'movement',
     BasicBarkSounds    = 'movement',
     AdvancedBarkRadial = 'movement',
@@ -1502,10 +1483,9 @@ local FEATURE_DOMAINS = {
     DeployableKennel   = 'gear',
     PropAttachments    = 'gear',
 
-    -- 'training' -- the playful/practice mechanics (a lineup drill, a
-    -- hide-and-seek hunt, fetch, and the training-mode switch that wraps
-    -- all of them) -- distinct from 'scent'/'search' above, which are the
-    -- real operational abilities these mechanics practice for.
+    -- 'training' -- the playful/practice mechanics -- distinct from
+    -- 'scent'/'search' above, which are the real operational abilities
+    -- these mechanics practice for.
     FetchMechanic      = 'training',
 
     -- 'admin' -- administrative/infrastructure switches with no

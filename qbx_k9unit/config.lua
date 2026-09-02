@@ -273,10 +273,9 @@ Config.Features = {
     --   1. AS-IS: add the line `ScentTrailHunt = true,` back here (or set
     --      it under a Config.FeatureGroups family below, see that table's
     --      own header for how to wire a new key into it).
-    --   2. AS A TRAINING DRILL INSTEAD (the alternative docs/history/OVERHAUL_PLAN.md
-    --      offered and the owner may still take -- a nose-following
-    --      practice exercise, since TrainingMode's own dummy drills below
-    --      cover bite-and-hold and searching but nothing for tracking):
+    --   2. AS A PRACTICE DRILL INSTEAD (the alternative
+    --      docs/history/OVERHAUL_PLAN.md offered and the owner may still
+    --      take -- a nose-following practice exercise):
     --      same step 1, but add it to STANDALONE_FEATURE_KEYS
     --      instead of Config.FeatureGroups.Detection, and update
     --      server/tablet.lua's FEATURE_DOMAINS entry from 'training' (it
@@ -602,7 +601,7 @@ Config.Features = {
 -- key, if this step is skipped -- this is deliberate: a feature landing
 -- mid-session with no home in this tree is exactly the kind of silent gap
 -- this table exists to prevent (this happened for real, once, while this
--- table was being designed -- HungerThirstSystem below is that key).
+-- table was being designed).
 -- ======================================================================
 Config.FeatureGroups = {
     -- ONE MASTER SWITCH PER CAPABILITY FAMILY. That is all this table holds.
@@ -707,9 +706,8 @@ local STANDALONE_FEATURE_KEYS = {
     -- family holding exactly one feature is just a second switch that does
     -- the same job as the first -- so the family is gone and fetch is
     -- turned on or off in Config.Features like any other standalone
-    -- feature. (Training's other members, TrainingMode and the scent games,
-    -- were removed earlier at the owner's request; that is what left it
-    -- with one.)
+    -- feature. (The family's other members were removed earlier at the
+    -- owner's request; that is what left it with one.)
     'FetchMechanic',
 }
 
@@ -1621,9 +1619,8 @@ Config.K9Specializations = {
 --   track gunpowder residue if it holds 'explosives' -- exactly the "if
 --   certed for X it does X" behavior that was asked for. If you have NOT
 --   granted ANY specializations on your server yet (the shipped default),
---   your K9s can still track generic scent (search-and-rescue, scent
---   vision, the scent lineup, everything unrelated to this table are all
---   completely unaffected), but NONE of them can Track Blood or Track
+--   your K9s can still track generic scent (scent vision and everything
+--   unrelated to this table are completely unaffected), but NONE of them can Track Blood or Track
 --   Gunpowder until you grant 'patrol'/'explosives' to them via the
 --   certification tablet. server/diagnostics.lua prints a one-line boot
 --   warning naming this exact situation so it is never a silent surprise
@@ -1701,13 +1698,10 @@ Config.DiscordWebhook = {
         specializationGranted    = true,
         specializationRevoked    = true,
         k9Down                   = true,
-        sarCallCompleted         = true,
         searchCompleted          = false,
-        sarCallStarted           = false,
         partnershipEstablished   = false,
         partnershipEnded         = false,
         xpTierReached            = false,
-        scentLineupResolved      = false,
     },
 }
 
@@ -2279,14 +2273,6 @@ Config.XP = {
         -- §12.5.2) -- same stale-note correction as biteHoldSuccess above;
         -- this one is wired too.
         takedownSuccess       = 30,
-        -- the removed SAR-calls server file, on a genuine find only -- never on a timeout
-        -- or an abandon. THE ARITHMETIC: the 10-minute per-person cooldown
-        -- on REQUESTING a call caps this at six completions an hour, so
-        -- 6 x 30 = 180 XP/hr is the most this feature can add, well under
-        -- the shared 3,600 XP/hr budget it still draws from. The 40-metre
-        -- minimum placement distance is the other half of the defence:
-        -- it guarantees real travel no matter how fast calls are repeated.
-        sarCallCompleted      = 30,
         -- server/search.lua, awarded to a partnered handler/K9 who was
         -- ONLINE and physically within 15m of the search TARGET's own
         -- coordinates (not the searcher's) when a contraband find landed,
@@ -3695,16 +3681,15 @@ Config.K9Medkit = {
 }
 
 -- ======================================================================
--- K9 WELLBEING (Config.Features.FatigueSystem / MoodSystem /
--- FearStressSystem / DistractionSystem / InjuryLimping). DEVELOPER_REFERENCE.md
+-- K9 WELLBEING (Config.Features.FatigueSystem). DEVELOPER_REFERENCE.md
 -- §13.0 Decision 1 / §13.2 / §13.4.3: ONE shared config table, ONE shared
 -- server/wellbeing.lua + client/wellbeing.lua pair, ONE shared per-citizenid
--- stat store and tick loop backing all five independently-gated stats --
--- mirrors Config.Tracking's existing Scent/Blood/Gunpowder precedent (three
--- independently-toggleable flags, one shared file pair). All five owning
--- flags shipped `false` by default when this section was written, pending
--- their own go-live/balance review; that review has since happened and all
--- five now ship `true` above. NUMERIC VALUES BELOW WERE UNREVIEWED
+-- stat store and tick loop. This section once backed five independently
+-- gated stats; the other four were removed on 2026-09-02 at the owner's
+-- request and fatigue is all that remains. Its owning flag shipped `false`
+-- by default when this section was written, pending its own go-live/balance
+-- review; that review has since happened and it now ships `true` above.
+-- NUMERIC VALUES BELOW WERE UNREVIEWED
 -- PLACEHOLDERS at that time, pending a config-validator/economy-balance-agent
 -- pass (DEVELOPER_REFERENCE.md §9 item 4's scope, widened by
 -- DEVELOPER_REFERENCE.md §13.5) -- individual fields below that have since
@@ -3790,11 +3775,11 @@ Config.Wellbeing = {
     -- ==================================================================
     -- PERSISTENCE (this pass, coder-backend) -- see server/wellbeing.lua's
     -- own header "DATABASE PERSISTENCE" section for the full design. Fixes
-    -- a real, confirmed gap: every one of the six stats above used to live
-    -- ONLY in that file's own in-memory table, with no database write of
-    -- any kind ever existing for it -- a routine restart silently reset
-    -- every K9's fatigue/mood/fearStress/injury/hunger/thirst to fresh,
-    -- every time, no matter what happened in-game before it. Routed
+    -- a real, confirmed gap: the stat above used to live ONLY in that
+    -- file's own in-memory table, with no database write of any kind ever
+    -- existing for it -- a routine restart silently reset every K9's
+    -- fatigue to fresh, every time, no matter what happened in-game
+    -- before it. Routed
     -- through the SAME K9Store/Config.Database.enabled machinery every
     -- other persisted table in this resource already uses -- `enabled =
     -- false` here (or resource-wide) degrades to exactly the OLD

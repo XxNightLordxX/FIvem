@@ -434,33 +434,32 @@ t.test('a blocked handler-tier feature shows Blocked for a certified handler who
     t.equals(badge._textContent, 'Blocked');
 });
 
-t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFeatures[] -- the real shape of a Config.Features key that was removed or never added, e.g. real production ScentTrailHunt/ApprehensionAnnouncement -- must report unavailable, never fall through to Available', async () => {
+t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFeatures[] -- the real shape of a Config.Features key that was removed or never added, e.g. real production ScentTrailHunt -- must report unavailable, never fall through to Available', async () => {
     // THE SHAPE THAT MATTERS, per this bug's own root cause: server/tablet.lua's
     // BuildMyFeaturesArray enumerates `pairs(Config.Features)` fresh every
     // call, so a key that does not exist in Config.Features AT ALL (not
     // even set to `false`) never gets an array entry -- it is not sent as
     // some other falsy value, it is simply ABSENT from the array. That is
-    // reproduced here by omitting 'ScentTrailHunt'/'ApprehensionAnnouncement'
-    // from myFeatures entirely -- NOT by adding an entry with `state: false`
+    // reproduced here by omitting 'ScentTrailHunt' from myFeatures
+    // entirely -- NOT by adding an entry with `state: false`
     // or `state: 'global_off'` (a synthetic Config table with the key
-    // manually set, which is exactly the shape every prior test for these
-    // two commands used, and exactly why none of them ever caught this).
+    // manually set, which is exactly the shape every prior test for this
+    // command used, and exactly why none of them ever caught this).
     //
     // A HANDLER_VIEWER (real K9 access) is used deliberately: the bug only
     // ever manifested when `hasAccess` is true -- commandReferenceStatus's
     // own 'access' branch already returns 'not_certified' before ever
     // consulting a featureKey when the viewer lacks access, so an
     // uncertified viewer could never have exposed this fallthrough.
-    // Everything on EXCEPT the two keys under test, which are dropped from
+    // Everything on EXCEPT the key under test, which is dropped from
     // the array entirely -- the precise shape described above. Using
     // featuresOn() rather than a one-element array keeps this a test about
-    // two absent keys, instead of accidentally also being a test about
+    // one absent key, instead of accidentally also being a test about
     // every other feature being off.
     const h = createHarness({
         fetchImpl: routeFetch({
             'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, featuresOn({
                 ScentTrailHunt: null,
-                ApprehensionAnnouncement: null,
                 // CONTROL 1 -- a featureKey that IS present and true. Proves
                 // this test's own harness can still show 'Available' for a
                 // real on switch, so a change that hid or disabled EVERY
@@ -488,7 +487,7 @@ t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFe
     // 'capability'/'highCommandOnly' branches of commandReferenceStatus
     // treated that null as "no gate matched" and fell through to
     // 'available' -- the tablet's own trusted Command Reference reporting
-    // two permanently, unconditionally off commands as usable.
+    // a permanently, unconditionally off command as usable.
     //
     // WHAT CHANGED 2026-09-01: an absent key still resolves to 'global_off'
     // exactly as before -- that resolution is the fix and it is untouched --
@@ -496,23 +495,16 @@ t.test('THE ABSENT-KEY BUG (regression): a featureKey entirely MISSING from myFe
     // 'Disabled server-wide' badge (owner: "if something is turned off in
     // the config nothing on the tablet shows up"). Absent from the screen
     // is strictly further from the bug than 'Disabled server-wide' was:
-    // the failure being guarded against is these two reading as AVAILABLE,
+    // the failure being guarded against is this row reading as AVAILABLE,
     // and a row that does not exist cannot claim anything.
     //
-    // NOTE ON THE FIXTURE, since the prose above used to say
-    // ApprehensionAnnouncement "has never existed in config.lua": as of
-    // 2026-09-01 it does exist, and is enabled. That does not weaken this
-    // test -- absence is simulated by dropping the key from myFeatures,
+    // The fixture simulates absence by dropping the key from myFeatures,
     // which is the exact wire shape a genuinely-missing Config.Features key
     // produces, whatever config.lua happens to say today. ScentTrailHunt is
-    // still genuinely absent from config.lua.
+    // genuinely absent from config.lua.
     t.equals(
         findByText(h.getRoot(), '/k9nosehunt [stop]').length, 0,
         'THE BUG: /k9nosehunt\'s gate.featureKey (ScentTrailHunt) is absent from Config.Features -- it must never read as Available; it is now hidden outright'
-    );
-    t.equals(
-        findByText(h.getRoot(), '/k9announce').length, 0,
-        'THE BUG: a gate.featureKey absent from myFeatures must never read as Available; it is now hidden outright'
     );
 });
 

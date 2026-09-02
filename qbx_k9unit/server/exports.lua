@@ -123,12 +123,8 @@
     resource's own clients).
 
     Fired from server/certifications/, server/partnership.lua,
-    server/progression.lua, server/search.lua, the removed SAR-calls server file,
-    the removed scent-lineup server file, and server/integrations.lua (CORRECTED this
-    pass, coder-backend: the removed scent-lineup server file's own scentLineupResolved
-    firing was missing from this list -- confirmed by grepping every real
-    `FireOutboundEvent(` call site before writing this correction), each at
-    the exact success points described below, through one shared
+    server/progression.lua, server/search.lua and server/integrations.lua,
+    each at the exact success points described below, through one shared
     resource-global `FireOutboundEvent` helper defined in server/events.lua
     (see that file's header) — this file only documents the contract and
     does not fire anything directly; firing
@@ -140,10 +136,9 @@
       certificationGranted      certificationRenewed
       certificationRevoked      certificationTierChanged
       k9Down                    partnershipEnded
-      partnershipEstablished    sarCallCompleted
-      sarCallStarted            scentLineupResolved
-      searchCompleted           specializationGranted
-      specializationRevoked     xpTierReached
+      partnershipEstablished    searchCompleted
+      specializationGranted     specializationRevoked
+      xpTierReached
 
     This is a PUBLIC contract other resources are written against: do not
     state a count here unless you have just measured it, and do not simply
@@ -283,60 +278,6 @@
         change, so it fires once per specialization key still active at that
         moment, not once per call). RevokeSpecializationForTablet wraps the
         first of these and has no separate fire site of its own.
-
-    12. 'qbx_k9unit:events:sarCallStarted'
-        (source: number, citizenid: string, jobName: string,
-         callType: 'person'|'property')
-        Fire from: the removed SAR-calls server file's own /k9startsarcall callback, right
-        after a new ActiveSarCalls[callId] session is recorded — `source` is
-        the live, currently-connected server id at the moment of firing, the
-        same "hint, not a guarantee" caveat #7's `source` field documents.
-
-        CORRECTED 2026-08-27: this said `ActiveSarCalls[source]` until the
-        cooperative-SAR pass re-keyed that table from the owner's server id to
-        a callId, so a call could hold MULTIPLE members. The event itself is
-        unchanged — it still fires once, for the officer who STARTED the call,
-        carrying their source/citizenid/jobName — but the indexing scheme it
-        described no longer exists. Joining an existing call fires no event of
-        its own today; a consumer that needs to know about joiners would need
-        a new event, not a change to this one.
-
-    13. 'qbx_k9unit:events:sarCallCompleted'
-        (source: number, citizenid: string, jobName: string,
-         callType: 'person'|'property', durationMs: number)
-        Fire from: the removed SAR-calls server file's EndSarCall, ONLY on
-        reason == 'found' (a timeout or an abandoned call fires neither this
-        event nor any other — see that file's own header EVENT/CALLBACK
-        CONTRACT note). `durationMs` is `GetGameTimer() - call.startedAt`,
-        measured at the moment this fires, not a stored value.
-
-        `source` AND `citizenid` CAN NOW BE TWO DIFFERENT PEOPLE. READ THIS
-        BEFORE CONSUMING EITHER. `source` is `finderSrc` — whoever physically
-        reached the target — while `citizenid` is `call.citizenid`, whoever
-        STARTED the call. Until cooperative SAR shipped, a call had exactly one
-        officer, so these always described the same person and a consumer could
-        safely treat them as interchangeable. They no longer are: a second
-        officer can join a call and be the one who finds it, in which case this
-        event names the joiner in `source` and the starter in `citizenid`.
-
-        WHICH ONE YOU WANT: `citizenid` is the durable, correct key for
-        anything that credits, logs or pays for the call — it matches who is
-        actually awarded XP (only the starter ever is, deliberately, so joining
-        cannot become a two-account loop). `source` is a live connection id and
-        carries the same "hint, not a guarantee" caveat #7 documents; use it
-        only to address the finder's own client right now. A logger that prints
-        `source`'s player name next to `citizenid`'s record will attribute the
-        find to the wrong officer whenever a joiner found it.
-
-    14. 'qbx_k9unit:events:scentLineupResolved'
-        (src: number, correct: boolean)
-        Fire from: the removed scent-lineup server file's pick-resolution handler, right
-        before that session's own CleanupSession call. `src` is the
-        conductor's own connection id, not a citizenid — deliberately, per
-        that call site's own comment, matching every other still-online-only
-        outbound payload in this contract. No XP is ever tied to this event;
-        the outcome is random by design (see README.md's "Scent Lineup"
-        entry).
 
     Every payload above uses ONLY values the owning file already computes
     for its own internal purposes (a DB column just written, an existing

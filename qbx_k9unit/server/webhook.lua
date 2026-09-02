@@ -220,14 +220,14 @@
     override of an explicit `false`. Defaults were chosen on SIGNAL-VS-VOLUME,
     not "everything on":
       DEFAULT ON  -- certificationGranted/Revoked/TierChanged/Renewed,
-        specializationGranted/Revoked, k9Down, sarCallCompleted. Every one
+        specializationGranted/Revoked, k9Down. Every one
         of these is a discrete ADMIN ACTION or a rare safety event -- an
         operator with a real department only sees a handful of these per
         session even on a busy server, and each one is exactly the kind of
         thing an operator staring at Discord, not the in-game audit command,
         wants to know about immediately.
-      DEFAULT OFF -- searchCompleted, sarCallStarted, partnershipEstablished,
-        partnershipEnded, xpTierReached, scentLineupResolved. The task named
+      DEFAULT OFF -- searchCompleted, partnershipEstablished,
+        partnershipEnded, xpTierReached. The task named
         "barks, searches, and combat" as the busy-server volume risk by name
         -- `searchCompleted` fires on every single completed search
         (contraband or clean) and is the one event in this whole contract
@@ -235,8 +235,8 @@
         defaults OFF even though some operators will genuinely want every
         search logged (the task's own "some want every search, some only
         want use-of-force" -- this file makes that a one-line config flip,
-        never an all-or-nothing choice). sarCallStarted/partnership*/
-        xpTierReached/scentLineupResolved are lower-signal for day-to-day
+        never an all-or-nothing choice). partnership*/
+        xpTierReached are lower-signal for day-to-day
         Discord-based operations (player-facing flavor/progression, not an
         admin action or a safety event) and default off for that reason,
         not a volume concern on their own.
@@ -356,13 +356,10 @@ local DEFAULT_EVENTS = {
     specializationGranted    = true,
     specializationRevoked    = true,
     k9Down                   = true,
-    sarCallCompleted         = true,
     searchCompleted          = false,
-    sarCallStarted           = false,
     partnershipEstablished   = false,
     partnershipEnded         = false,
     xpTierReached            = false,
-    scentLineupResolved      = false,
 }
 
 local eventsConfig = type(settings.events) == 'table' and settings.events or {}
@@ -628,32 +625,6 @@ FORMATTERS.k9Down = function(_source, citizenid, jobName, coords, health)
     })
 end
 
-FORMATTERS.sarCallStarted = function(_source, citizenid, jobName, callType)
-    return Finalize({
-        title = 'SAR Call Started',
-        color = COLOR_INFO,
-        fields = {
-            { name = 'Citizen ID', value = tostring(citizenid), inline = true },
-            { name = 'Department', value = tostring(jobName), inline = true },
-            { name = 'Call Type', value = tostring(callType), inline = true },
-        },
-    })
-end
-
-FORMATTERS.sarCallCompleted = function(_source, citizenid, jobName, callType, durationMs)
-    local durationText = type(durationMs) == 'number' and ('%.0fs'):format(durationMs / 1000) or 'unknown'
-    return Finalize({
-        title = 'SAR Call Completed',
-        color = COLOR_GRANT,
-        fields = {
-            { name = 'Citizen ID', value = tostring(citizenid), inline = true },
-            { name = 'Department', value = tostring(jobName), inline = true },
-            { name = 'Call Type', value = tostring(callType), inline = true },
-            { name = 'Duration', value = durationText, inline = true },
-        },
-    })
-end
-
 FORMATTERS.searchCompleted = function(searcherCitizenid, searcherJob, targetType, result, totalWeight, alertTier)
     local fields = {
         { name = 'Citizen ID', value = tostring(searcherCitizenid), inline = true },
@@ -706,16 +677,6 @@ FORMATTERS.xpTierReached = function(citizenid, newTier, oldTier)
         fields = {
             { name = 'Citizen ID', value = tostring(citizenid), inline = true },
             { name = 'Tier Change', value = ('%s -> %s'):format(oldLabel, newLabel), inline = true },
-        },
-    })
-end
-
-FORMATTERS.scentLineupResolved = function(_src, correct)
-    return Finalize({
-        title = 'Scent Lineup Resolved',
-        color = correct and COLOR_GRANT or COLOR_INFO,
-        fields = {
-            { name = 'Outcome', value = correct and 'Correct pick' or 'Incorrect pick', inline = true },
         },
     })
 end

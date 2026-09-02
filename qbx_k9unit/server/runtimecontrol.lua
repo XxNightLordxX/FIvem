@@ -1717,7 +1717,6 @@ local TUNABLE_REGISTRY = {
     ['XP.awards.trackSourceResolved']    = { path = { 'XP', 'awards', 'trackSourceResolved' },    min = 0, max = 3600, integer = true },
     ['XP.awards.biteHoldSuccess']        = { path = { 'XP', 'awards', 'biteHoldSuccess' },        min = 0, max = 3600, integer = true },
     ['XP.awards.takedownSuccess']        = { path = { 'XP', 'awards', 'takedownSuccess' },        min = 0, max = 3600, integer = true },
-    ['XP.awards.sarCallCompleted']       = { path = { 'XP', 'awards', 'sarCallCompleted' },       min = 0, max = 3600, integer = true },
     ['XP.awards.coopSearchBonus']        = { path = { 'XP', 'awards', 'coopSearchBonus' },        min = 0, max = 3600, integer = true },
     ['XP.awards.partnershipTenure1Day']  = { path = { 'XP', 'awards', 'partnershipTenure1Day' },  min = 0, max = 3600, integer = true },
     ['XP.awards.partnershipTenure7Day']  = { path = { 'XP', 'awards', 'partnershipTenure7Day' },  min = 0, max = 3600, integer = true },

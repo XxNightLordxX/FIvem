@@ -868,9 +868,8 @@
             // fall through to "no opinion" -- that fallthrough (returning
             // null, which every caller below then treats as "no gate
             // matched, must be open") is THE bug this closes: it is what let
-            // a permanently-removed/never-configured feature (ScentTrailHunt
-            // removed from config.lua; ApprehensionAnnouncement never added
-            // to it) report 'available' on this screen while being
+            // a permanently-removed feature (ScentTrailHunt, removed from
+            // config.lua) report 'available' on this screen while being
             // unconditionally OFF for real.
             //
             // This does NOT blur the THREE separate states this file's own

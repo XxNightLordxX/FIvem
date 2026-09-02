@@ -62,10 +62,7 @@
     DESCRIPTIONS -- REUSED, NOT DUPLICATED: html/tablet.js's own
     COMMAND_REFERENCE (the Commands tab) already carries a
     `tablet.cmdref_<name>_does` / `tablet.cmdref_<name>_usage` locale-key
-    pair for every one of the 54 literally-named commands below (52 as of
-    this file's own original landing, +2 this pass: k9eat/k9drink,
-    Config.Features.HungerThirstSystem, client/wellbeing.lua -- see that
-    file's own tablet.cmdref_k9eat_*/tablet.cmdref_k9drink_* keys). Reused
+    pair for every literally-named command below. Reused
     here VERBATIM via `locale('tablet.cmdref_' .. keySuffix .. '_does')` /
     `..._usage` rather than minting a second, parallel copy of the same
     player-facing sentence under a new key -- duplicating already-landed
@@ -95,9 +92,9 @@
     doesn't already agree exists, and a future usage-string edit updates
     both surfaces from the one place it was made. This is a generic bracket
     parser, not a per-command special case: it makes no attempt to
-    represent a variadic tail (`k9lineup <server id> <server id> ...`
-    surfaces as two identically-named `server id` parameter hints, the
-    "..." itself is not represented) or an enumerated-choice token as
+    represent a variadic tail (`<server id> <server id> ...` would surface
+    as two identically-named `server id` parameter hints, the "..." itself
+    is not represented) or an enumerated-choice token as
     anything other than one literal parameter name
     (`<officer|plate|person|recent>` surfaces as one parameter named
     exactly that) -- both are disclosed, accepted simplifications: FiveM's
@@ -173,11 +170,11 @@
 --   commandsuggestions.k9hqtablet_does = "Opens the K9 Command Tablet directly to the High Command view."
 --   commandsuggestions.k9compat_does   = "Reprints this resource's compatibility detection summary (which framework, inventory, target and other integrations it detected) to your own client console."
 -- ----------------------------------------------------------------------
--- CLOSED, AND THE ENTRIES REMOVED: this block used to carry eight
--- `tablet.cmdref_k9dog|k9fetch|k9train|k9kennel_does/_usage` fallbacks,
+-- CLOSED, AND THE ENTRIES REMOVED: this block used to carry several
+-- `tablet.cmdref_k9dog|k9fetch|k9kennel_does/_usage` fallbacks,
 -- added because html/tablet.js was a hot file at the time (another agent
 -- was live in it) and their real entries could not be landed alongside.
--- All four families now have genuine entries on ALL THREE sides of the
+-- Those families now have genuine entries on ALL THREE sides of the
 -- tablet-string contract -- html/tablet.js's DEFAULT_STRINGS and
 -- COMMAND_REFERENCE, client/tablet.lua's TABLET_STRING_KEYS, and
 -- locales/en.json's `tablet` group -- so locale() resolves them for real
@@ -244,7 +241,6 @@ end
 -- command with no chat suggestion, exactly as intended.
 -- ----------------------------------------------------------------------
 local COMMAND_SUGGESTIONS = {
-    -- the removed scent-trail client file
     -- client/pursuitsprint.lua (qbx_k9unit: namespace -- RegisterKeyMapping global-uniqueness requirement)
     { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' , featureFlag = 'PursuitSprint' },
     -- client/kennel.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
@@ -269,10 +265,6 @@ local COMMAND_SUGGESTIONS = {
     -- only the chat suggestion is gone.
     -- client/agility.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:vault', keySuffix = 'vault' },
-    -- the removed training client file -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #4:
-    -- k9training/k9trainsearch/k9trainbite are now HIDDEN ALIASES of
-    -- 'k9train' (still real, working RegisterCommand calls -- see that
-    -- file's own comment), never chat-suggested under their own names.
     -- client/vision.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCameraFeed', keySuffix = 'toggle_camera_feed' },
     -- client/vision.lua -- OWNER REVERSAL (coder-architect, this pass):
@@ -291,7 +283,6 @@ local COMMAND_SUGGESTIONS = {
     -- established for k9kennel: an additional entry point calling the same
     -- underlying functions, not a replacement for the explicit ones).
     { command = 'k9vision', keySuffix = 'k9vision' },
-    -- the removed recall client file
     -- client/movement.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCamera', keySuffix = 'toggle_camera' },
     -- client/movement.lua -- menu-parity pass ("chat commands, 3rd eye, and
@@ -314,19 +305,12 @@ local COMMAND_SUGGESTIONS = {
     -- previously had an ox_target option and a client/radial.lua Utility
     -- item, but no chat command.
     { command = 'k9treat', keySuffix = 'k9treat' },
-    -- the removed SAR-calls client file
-    -- the removed handler-down-defense client file (qbx_k9unit: namespace)
-    -- the removed danger-warn client file (qbx_k9unit: namespace) -- Alert already had a
-    -- command/keybind; Threat is the menu-parity pass addition (its sibling
-    -- Alert's own asymmetry) sharing the same the removed danger-warn request function.
     -- client/fetch.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3:
     -- k9throwfetchball/k9dropfetchball/k9recallfetchball are now HIDDEN
     -- ALIASES of 'k9fetch' (still real, working RegisterCommand calls --
     -- see that file's own comment), never chat-suggested under their own
     -- names.
     { command = 'k9fetch', keySuffix = 'k9fetch' , featureFlag = 'FetchMechanic' },
-    -- client/wellbeing.lua
-    -- client/wellbeing.lua (HungerThirstSystem, this pass, coder-backend)
     -- client/propattachment.lua
     { command = 'k9propattach', keySuffix = 'k9propattach' },
     -- server/highcommand.lua
@@ -366,7 +350,6 @@ local COMMAND_SUGGESTIONS = {
     -- 'k9permission' (still real, working RegisterCommand calls -- see that
     -- file's own comment), never chat-suggested under their own names.
     { command = 'k9permission', keySuffix = 'k9permission' },
-    -- the removed scent-lineup server file
 }
 
 --- Registers one `chat:addSuggestion` for a resolved command name, reading
@@ -403,8 +386,9 @@ local function RegisterAllCommandSuggestions()
         --
         -- THE BUG THIS CLOSES, live on the shipped default config:
         -- Config.Features.ScentTrailHunt was deliberately removed from
-        -- config.lua, so it reads nil, so the removed scent-trail client file returns at
-        -- its top and /k9nosehunt is never registered on any client, ever.
+        -- config.lua, so it reads nil, so the scent-trail client file that
+        -- used to own it returned at its top and /k9nosehunt was never
+        -- registered on any client, ever.
         -- This table went on advertising it in chat autocomplete anyway,
         -- with a description promising a working feature. The tablet's own
         -- Command Reference already disclosed the truth for that command
@@ -413,8 +397,8 @@ local function RegisterAllCommandSuggestions()
         --
         -- Written as a live Config read rather than a hardcoded skip-list
         -- so the same protection covers every other entry here the moment
-        -- an operator turns ITS feature off -- /k9lineup, /k9fetch,
-        -- /k9train and the rest are all the same shape and were all one
+        -- an operator turns ITS feature off -- /k9fetch, /k9vehicle,
+        -- /k9partner and the rest are all the same shape and were all one
         -- config edit away from the identical defect.
         --
         -- `== false` is not the test; `~= true` is. A removed key reads nil,

@@ -137,7 +137,6 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9throwfetchball = true,
     k9dropfetchball = true,
     k9recallfetchball = true,
-    -- family #4: training (3 -> 1, 'k9train') -- the removed training client file
     -- family #5: kennel (ADDITIVE, 'k9kennel') -- client/kennel.lua +
     -- client/keybinds.lua. Unlike every other entry in this table,
     -- k9deploykennel/k9exitkennel are NOT being folded away -- both keep
@@ -587,7 +586,7 @@ end)
 -- never executes and the command is not registered at all. Advertising it
 -- in chat autocomplete then promises something typing it cannot deliver.
 -- ========================================================================
-t.test('DEAD COMMAND, LIVE ON THE SHIPPED CONFIG: /k9nosehunt is no longer advertised -- Config.Features.ScentTrailHunt was deliberately removed from config.lua, so the removed scent-trail client file returns at its top and never registers the command on any client', function()
+t.test('DEAD COMMAND, LIVE ON THE SHIPPED CONFIG: /k9nosehunt is no longer advertised -- Config.Features.ScentTrailHunt was deliberately removed from config.lua, so the client file that used to own it returned at its top and never registered the command on any client', function()
     local f = newFixture()
     f.fireResourceStart('qbx_k9unit')
 
@@ -596,21 +595,24 @@ t.test('DEAD COMMAND, LIVE ON THE SHIPPED CONFIG: /k9nosehunt is no longer adver
 end)
 
 t.test('A REMOVED KEY (nil) SKIPS, not just an explicit false -- nil is the actual shipped ScentTrailHunt case, and `== false` would have missed it entirely', function()
-    local f = newFixture({ configFields = { Features = { ScentLineup = nil } } })
-    -- ScentLineup ships true, so prove the nil path directly by clearing it.
-    f.Config.Features.ScentLineup = nil
+    local f = newFixture()
+    -- FetchMechanic ships true, so prove the nil path directly by clearing
+    -- it: the gate reads `Config.Features[flag] == true`, which is false for
+    -- nil exactly as it is for an explicit false. A `~= false` test would
+    -- have passed here and still shipped the bug.
+    f.Config.Features.FetchMechanic = nil
     f.fireResourceStart('qbx_k9unit')
-    t.isNil(f.findSuggestion('k9lineup'))
+    t.isNil(f.findSuggestion('k9fetch'))
 end)
 
 t.test('THE SAME PROTECTION COVERS EVERY OTHER GATED FAMILY, not just the one that was broken -- turning a feature off stops advertising all of its commands', function()
-    local f = newFixture({ configFields = { Features = { FetchMechanic = false, TrainingMode = false } } })
+    local f = newFixture({ configFields = { Features = { FetchMechanic = false, VehicleEntryExit = false, HandlerPartnership = false } } })
     f.fireResourceStart('qbx_k9unit')
 
     t.isNil(f.findSuggestion('k9fetch'))
     t.isNil(f.findSuggestion('k9throwfetchball'))
-    t.isNil(f.findSuggestion('k9train'))
-    t.isNil(f.findSuggestion('k9training'))
+    t.isNil(f.findSuggestion('k9vehicle'))
+    t.isNil(f.findSuggestion('k9partner'))
 end)
 
 t.test('CONTROL: an UNGATED command is still advertised while other features are off -- proves the skip is per-entry and did not simply silence the whole table', function()

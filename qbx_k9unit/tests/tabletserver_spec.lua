@@ -909,10 +909,9 @@ t.test('myFeatures: a Config.Features key entirely ABSENT from Config.Features (
             -- above, which was already handled correctly before this pass).
             -- This is the real shape a removed/never-added feature key takes
             -- in production config.lua: this resource's own real
-            -- ScentTrailHunt (removed entirely) and ApprehensionAnnouncement
-            -- (never added at all) are both genuinely absent keys, not
-            -- `= false` ones -- see config.lua's own Config.Features comment
-            -- and the removed apprehension-announcement server file's header for both.
+            -- ScentTrailHunt (removed entirely) is a genuinely absent key,
+            -- not a `= false` one -- see config.lua's own Config.Features
+            -- comment.
             Features = { CommandTablet = true, LeashMechanics = true },
             Departments = {}, Permissions = {},
             FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },

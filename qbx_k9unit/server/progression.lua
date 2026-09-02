@@ -397,15 +397,17 @@ local AwardXPCooldown = NewNestedCooldown(500)
 -- tenure 15+40+100 = 240 starter tokens" and "2.45 hours (2h 27m)" to
 -- Elite. Both had gone stale relative to the REAL, currently-shipped
 -- config.lua and were re-verified, not taken on the old comment's word:
--- Config.XP.awards alone now sums to 280 (the 240 above predates
--- sarCallCompleted (30) and coopSearchBonus (10), both added to
--- Config.XP.awards after this section was first written), and the
+-- Config.XP.awards alone now sums to 250 (the 240 above predates
+-- coopSearchBonus (10), added to Config.XP.awards after this section was
+-- first written; a sarCallCompleted award of 30 also lived here between
+-- that recount and 2026-09-02, when SAR calls were removed entirely), and
+-- the
 -- starter-token sum this file's own code below has computed since the
 -- "EXTENDED (HANDLER XP pass...)" addition ALSO adds every
 -- Config.HandlerXP.awards value (225: handlerCertifyK9 50 + handlerTreatK9
 -- 12 + handlerKennelDeploy 8 + handlerPartnershipTenure1Day 15 +
 -- handlerPartnershipTenure7Day 40 + handlerPartnershipTenure30Day 100) --
--- 280 + 225 = 505 real starter tokens today, not 240. The CODE was never
+-- 250 + 225 = 475 real starter tokens today, not 240. The CODE was never
 -- wrong (the summing loops below always drew from the live Config tables,
 -- which is exactly why nothing crashed or silently mis-behaved) -- only
 -- THIS COMMENT'S cited numbers were, because they were never revisited
@@ -432,14 +434,25 @@ local AwardXPCooldown = NewNestedCooldown(500)
 -- Needed: comfortably below 4,500 XP/hr (9000 / 4500 = exactly 2.0 hours --
 -- the retuned floor requires MORE than 2 hours, so the cap must clear that
 -- with real margin, not sit on the boundary), which it does even with the
--- REAL 505-XP starter offset above (2.375h > 2.0h). Recomputed tier times
--- at this REAL post-fix ceiling, with the REAL 505-token starter (simulated
+-- REAL starter offset above (2.375h > 2.0h). Recomputed tier times
+-- at this REAL post-fix ceiling, with a 505-token starter (simulated
 -- AND test-verified, not a pure-continuous approximation), reported to
 -- whoever owns config.lua for that file's own Config.XPTiers economy
 -- comment (not edited by this pass):
 --   Trained (1,250 XP): reached at 0.233h   (14m)
 --   Veteran (4,000 XP): reached at 0.983h   (~59m)
 --   Elite   (9,000 XP): reached at 2.375h   (2h 22.5m -- clears the floor)
+--
+-- THOSE THREE FIGURES WERE SIMULATED AT A 505-TOKEN STARTER, and the real
+-- starter is 475 as of 2026-09-02 (the sarCallCompleted award of 30 left
+-- Config.XP.awards when SAR calls were removed). They are NOT re-simulated
+-- here, and they do not need to be: a SMALLER starter balance can only
+-- move every one of those times LATER, never earlier, because the starter
+-- is a head start on a budget that refills at a fixed rate. So 2.375h is
+-- now a lower bound on the real time to Elite rather than the exact
+-- figure, and the 2-hour floor clears by MORE margin than it did, not
+-- less. Anything that GROWS the starter sum is the direction that needs
+-- the simulation re-run -- that is what the ceiling below exists for.
 --
 -- FILE-LOCAL CONSTANTS, NOT CONFIG KEYS -- same reasoning as every one of
 -- the four per-mechanic mint cooldowns' own "FILE-LOCAL CONSTANTS, NOT
@@ -457,7 +470,7 @@ local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a buck
 -- 2026-08-26 -- the same audit that caught the stale 240/2.45h numbers
 -- corrected above). Previously the sum of Config.XP.awards +
 -- Config.HandlerXP.awards was clamped only to XP_MINT_BUDGET_CAP_XP itself
--- (3,600) -- true today (505 is nowhere near 3,600) but that clamp does
+-- (3,600) -- true today (475 is nowhere near 3,600) but that clamp does
 -- nothing to stop the sum CREEPING toward the cap as more awards are added
 -- over time, and this section's own "STARTING BALANCE" writeup above
 -- already proved what happens as the starter balance approaches the full
@@ -469,7 +482,7 @@ local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a buck
 -- 240 -> 505 drift already cost ~4.5 minutes of margin (2.45h -> 2.375h)
 -- from two awards nobody re-checked this arithmetic for. This ceiling is
 -- the backstop: a fixed 25% of XP_MINT_BUDGET_CAP_XP, chosen so the sum can
--- keep growing with future features (505 today has room to nearly
+-- keep growing with future features (475 today has room to nearly
 -- double before hitting it) while GUARANTEEING -- independent of how large
 -- Config.XP.awards/Config.HandlerXP.awards ever grow -- that continuous
 -- max-rate round-robin farming still cannot reach Elite before 2.2667h
