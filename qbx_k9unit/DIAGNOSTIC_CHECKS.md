@@ -63,10 +63,10 @@ already written and tested.
   `Config.Features.HandlerXP` to `true` did nothing, because
   `Config.FeatureGroups` is resolved *after* `Config.Features` and
   silently overrides it — "the value went true and came back out false
-  with no error anywhere." Same shape independently hit the apprehension
-  announcement switch (commit `c874cc1`: "All three places that have to
-  agree for a setting to take effect now carry it, because two of them
-  silently override the first and one alone does nothing").
+  with no error anywhere." Commit `c874cc1` independently hit the same
+  shape on another switch: "All three places that have to agree for a
+  setting to take effect now carry it, because two of them silently
+  override the first and one alone does nothing".
 - **How to detect it, concretely:** `config.lua` already keeps the
   pre-override snapshot on a real global: `Config.FeaturesBeforeGrouping`
   (set once, in `ResolveFeatureGroups()`, `config.lua:1118` onward — see
@@ -219,38 +219,6 @@ already written and tested.
   own unbuilt proposal suggests ("warns only once it has NEVER once seen a
   match" — i.e., accumulate, don't sample once).
 
-### B2. Item names that don't exist in the inventory [TOP 10]
-- **What it detects, in plain English:** "A dog can supposedly be fed or
-  given water with an item called `k9_food` / `k9_water` — but if those
-  items don't actually exist in your inventory system, giving them does
-  nothing and nobody is told why."
-- **The real bug it comes from:** `config.lua:521-528`,
-  `Config.Features.HungerThirstSystem`'s own comment: these are
-  "PLACEHOLDER item name[s]... Must exist in your ox_inventory item list
-  or watering silently fails" (also `config.lua:4840-4843`). Same
-  disclosed-guess shape as B1, same section of the file, same owner-facing
-  risk.
-- **How to detect it, concretely:** at diagnostic-run time, query the
-  live inventory backend for whether `Config.Wellbeing.Hunger.feedItemName`
-  and `Config.Wellbeing.Thirst.drinkItemName` actually resolve to real,
-  registered items (ox_inventory exposes an item list; qb-inventory
-  equivalent via the compat layer this resource already has in
-  `shared/compat/inventory.lua` — path corrected 2026-08-31; this line
-  previously named a `server/` file that has never existed (the dead name
-  is not reproduced, since `tests/citationintegrity_spec.lua` sweeps every
-  path written anywhere in this repo). The layer itself is real: it resolves
-  ox_inventory and qb-inventory as CONFIRMED backends and names six
-  further candidates it treats as unconfirmed. `server/inventory.lua` is
-  not part of it — that file is the `K9Inventory` feature and talks to
-  ox_inventory directly). Report a plain
-  "item `k9_food` was not found in your inventory system" if not.
-- **Tier:** FINDING. Either the item exists in the inventory system's own
-  item table or it doesn't — no judgment call.
-- **False-positive risk:** low, provided the compat-layer lookup used
-  matches whatever inventory system this server actually runs (there are
-  multiple; this resource's own compat layer already resolves which one
-  is active — reuse that, don't hardcode ox_inventory).
-
 ### B3. `Config.Features.X = true` with no config anywhere else agreeing it should run [WORTH CHECKING]
 - **What it detects, in plain English:** "A feature switch is on, but a
   second switch it depends on is off, silently blocking it" — the same
@@ -285,21 +253,20 @@ already written and tested.
   on (like 'warn a suspect before releasing the dog') might be fully
   built and completely inert — nothing in the game actually enforces it,
   even though the switch says on."
-- **The real bug it comes from:** commit `2727293` ("Make the announcement
-  rule actually stop a bite") — the apprehension announcement had "a
-  function deciding whether a warning had been given, and nothing
-  anywhere called it... Every reference to it in the whole resource was a
-  comment or a test... an owner who turns it on believing their server now
-  requires a warning before force gets enforcement that does not exist."
-  This is about as bad as this class of bug gets: the feature looked
-  completely real (switch, key, command, tests) and did nothing.
+- **The real bug it comes from:** commit `2727293` — a since-removed
+  safety feature had "a function deciding whether a warning had been
+  given, and nothing anywhere called it... Every reference to it in the
+  whole resource was a comment or a test... an owner who turns it on
+  believing their server now requires a warning before force gets
+  enforcement that does not exist." This is about as bad as this class of
+  bug gets: the feature looked completely real (switch, key, command,
+  tests) and did nothing.
 - **How to detect it, concretely:** this is hard to generalize safely
   (see false-positive risk below), so scope it narrowly to features that
   match this project's own past pattern: a boolean in `Config.Features`
   whose corresponding gate-function (named in the feature's own file
-  header, e.g. `AnnouncementRequiredFor` in `the removed apprehension-announcement server file`) is
-  never referenced from `server/combat.lua`'s bite/takedown *opening*
-  functions. This needs a maintained, hand-built list of
+  header) is never referenced from `server/combat.lua`'s bite/takedown
+  *opening* functions. This needs a maintained, hand-built list of
   {feature flag -> function name -> expected caller file(s)} rather than
   a generic "is this function called anywhere" scan, because Lua
   functions are frequently called only via `RegisterNetEvent`/exports,
@@ -410,7 +377,7 @@ already written and tested.
 - **The real bug it comes from:** this is this project's own
   most-frequently-invoked named rule, appearing in `server/wellbeing.lua`,
   `server/tracking.lua`, `server/certifications/`,
-  `server/runtimecontrol.lua`, `the removed scent-trail server file`, `client/vehicle.lua`,
+  `server/runtimecontrol.lua`, `client/vehicle.lua`,
   `client/tracking.lua`, `client/vision.lua`, `client/radial.lua`, and
   documented as violated and fixed in commits `3a1aafe` (vest could not be
   removed after decertification), `ee4c8c0`/`9f4b225` (vision stuck on),
@@ -535,33 +502,6 @@ already written and tested.
   the handful of ticks during attach/detach itself, so this should only
   fire if the asymmetry persists across two consecutive diagnostic runs a
   few seconds apart, not on a single snapshot.
-
-### F2. A pending SAR join request older than its own expiry, still sitting in the table [WORTH CHECKING]
-- **What it detects, in plain English:** "Someone asked to join a
-  search-and-rescue call, the request timed out, but the leftover request
-  is still sitting around instead of being cleared — which might mean the
-  cleanup that's supposed to happen isn't running."
-- **The real bug it comes from:** the entire join-request design in
-  `the removed SAR-calls server file:1112,1801-1882` is built around a hard
-  `expiresAt = GetGameTimer() + tuning.joinRequestTTLMs` and the
-  KNOWN_ISSUES/CHANGELOG record several related SAR bugs around exactly
-  this lifecycle (join requests surviving a call being stopped and
-  restarted, commit `532b45a`; join requests not being answered leaving
-  the officer "watching a screen that never changed," commit `eb4bfb3`).
-- **How to detect it, concretely:** if a pending-request table is
-  reachable (module-local in `the removed SAR-calls server file`), report any entry
-  where `GetGameTimer() > pending.expiresAt` by a large margin (say, more
-  than a few times the TTL) — that specifically indicates the lazy expiry
-  check isn't being hit rather than the request simply having expired a
-  moment ago, which is normal and expected.
-- **Tier:** STATE if within a reasonable window of its own TTL (normal,
-  lazily-expired, no action needed) escalating to WORTH CHECKING if
-  significantly stale, since the lazy-expiry design here means a slightly
-  stale entry is completely normal by design, not a bug.
-- **False-positive risk:** high if the "significantly stale" threshold
-  isn't set generously — this table is deliberately lazy-expired by
-  design (per its own comments), so a stale-looking entry is the *normal*
-  state until the next relevant call, not a bug on its own.
 
 ### F3. An active Bite & Hold / Takedown / Drag whose hard expiry has already passed [WORTH CHECKING]
 - **What it detects, in plain English:** "A dog is supposedly still

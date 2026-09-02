@@ -279,32 +279,34 @@ deliberately isn't. **All five of its top recommendations were built and,
 for a time, all shipped on by default** — worth stating plainly, because the
 backlog document itself was never updated to say so, and describing
 shipped, working features as unbuilt ideas is exactly the kind of stale
-claim this history exists to correct rather than repeat. STALE AS OF
-2026-08-26 FOR ITEM 2 SPECIFICALLY: `Config.Features.ScentTrailHunt` was
-later removed (owner-approved, judged redundant with Detection's own
-"walk toward a fading signal" interaction shape — see
-`docs/history/FEATURE_STRUCTURE_SPEC.md` §2.2.1/§9 and `config.lua`'s own
-`Config.Features` comment for the full reasoning and how to bring it back).
-`the removed scent-trail client file`/`the removed scent-trail server file` are untouched and still
-correctly go inert the instant that flag reads `nil` — the other four items
-below are unaffected and still ship on by default.
+claim this history exists to correct rather than repeat.
+
+THREE OF THE FIVE HAVE SINCE BEEN REMOVED, and the entries below are
+kept as a record of what was built rather than a description of what
+runs today. Item 2 went first, on 2026-08-26 (owner-approved, judged
+redundant with Detection's own "walk toward a fading signal" interaction
+shape — see `docs/history/FEATURE_STRUCTURE_SPEC.md` §2.2.1/§9 and
+`config.lua`'s own `Config.Features` comment for the full reasoning and
+how to bring it back). Items 3 and 4 followed on 2026-09-02, at the
+owner's request, along with their files, config, events and tests. Items
+1 and 5 are unaffected and still ship on by default.
 
 1. **Real alerts instead of a pop-up** → shipped as **find alerts**
    (`Config.Features.FindAlerts`). The dog sits and barks on its own the
    moment a search or trail resolves, reacting differently depending on
    what was found, reusing sounds and actions this resource already had.
-2. **"Follow your nose"** → shipped as **scent trail hunts**
+2. REMOVED 2026-08-26. **"Follow your nose"** → shipped as **scent trail hunts**
    (`Config.Features.ScentTrailHunt`). A handler marks a search area; the
    hidden coordinates never leave the server, and the K9 player is only
    ever told how far away they are, which paces a growl that gets louder
    or quieter as they search — there is nothing in the player's own game
    to read the answer out of.
-3. **Missing-person / search-and-rescue calls** → shipped as **search and
-   rescue calls** (`Config.Features.SARCalls`). Same hidden-target,
+3. REMOVED 2026-09-02. **Missing-person / search-and-rescue calls** →
+   shipped as **search and rescue calls** (`Config.Features.SARCalls`). Same hidden-target,
    growl-paced hunt as above, resolving as a rescue rather than an arrest.
    The target is always an NPC that only appears once the call is already
    solved — never a real player who didn't agree to be found.
-4. **Scent lineup** → shipped as **scent lineups**
+4. REMOVED 2026-09-02. **Scent lineup** → shipped as **scent lineups**
    (`Config.Features.ScentLineup`). A K9 invites several players to stand
    in a line; every one of them has to explicitly accept. The server
    secretly picks one at random and tells nobody — not even the K9 running

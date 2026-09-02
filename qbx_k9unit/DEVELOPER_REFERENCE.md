@@ -830,10 +830,10 @@ list.
 ## 12.0 — Cross-cutting design forks: resolved and open
 
 Item numbers below are fixed and cited directly by number throughout
-`client/combat.lua`, `server/combat.lua`, `the removed handler-down-defense client file`,
-`the removed handler-down-defense server file`, `server/partnership.lua`, `client/partnership.lua`,
+`client/combat.lua`, `server/combat.lua`, the handler-down-defense file
+pair (since removed), `server/partnership.lua`, `client/partnership.lua`,
 `client/radial.lua`, `client/agility.lua`, `client/movement.lua`,
-`server/fetch.lua`, `the removed recall server file`, and `config.lua`.
+`server/fetch.lua`, the recall server file (since removed), and `config.lua`.
 
 #### 1. PvP vs. PvE target scope — DECIDED: player-vs-player K9 combat is IN SCOPE
 
@@ -1167,8 +1167,8 @@ Config.Combat = {
 |---|---|---|
 | `client/combat.lua` | New | BiteAndHold/NonLethalTakedown self-initiated triggers, PropDragging's client trigger. Registers, **unconditionally for every client** (see item 8's trust-boundary note), the target-side handlers `applyBiteHold`/`forceRagdoll`/`applyDragSpeedLimit`. |
 | `server/combat.lua` | New | Server authority for BiteAndHold/NonLethalTakedown: access/range/target-scope validation, `IsPedAPlayer` resolution (never client-claimed), item 5's gate, the server-side speed gate, health-floor + damage-bracket application (direct for NPCs, relayed for players per item 8), the ephemeral hold/drag state, and item 8's `NonComplianceDetection` sampling. |
-| `the removed handler-down-defense client file` | New | HandlerDownDefense's client-side presentation **only** — per item 2, never applies state to or takes control of the K9's own ped; streamlines target selection into `client/combat.lua`'s existing action paths. |
-| `the removed handler-down-defense server file` | New | Hooks Phase 2's damage-event log; on a partnered handler's health crossing threshold, looks up `server/partnership.lua`'s registry (item 7) and notifies the partner K9 if online, silent no-op otherwise. |
+| the handler-down-defense client file (since removed) | New | HandlerDownDefense's client-side presentation **only** — per item 2, never applies state to or takes control of the K9's own ped; streamlines target selection into `client/combat.lua`'s existing action paths. |
+| the handler-down-defense server file (since removed) | New | Hooks Phase 2's damage-event log; on a partnered handler's health crossing threshold, looks up `server/partnership.lua`'s registry (item 7) and notifies the partner K9 if online, silent no-op otherwise. |
 | `server/partnership.lua` | New (item 7) | The `k9_partnerships` registry: DB table, in-memory cache, "Partner Up" handshake, teardown wired alongside every `ForceDetachLeashForSource`/`ForceDetachOfficerLeashForSource` call site, `PlayerLoaded`/`onResourceStart` backfill. Own flag, `Config.Features.HandlerPartnership`. |
 | `client/movement.lua` | Extends | `AgilityAdvanced`'s vault trigger and capsule-sweep detection (item 3). |
 | `config.lua` / `fxmanifest.lua` | Extend | Add §12.2's table; add the new files to their script lists. |
@@ -1245,7 +1245,7 @@ log attributes as the source of the handler's most recent damage within
 **not** exempt it from item 5's `RequireWantedStatus` gate at the
 downstream validation step; an ineligible auto-selected target simply fails
 the same way a manual attempt would, and the K9 player falls back to the
-normal radial flow. **Partnership-gated (item 7):** `the removed handler-down-defense server file`
+normal radial flow. **Partnership-gated (item 7):** its server file
 looks up the handler's active partnership; if none exists (never partnered,
 or broken), this is a **silent no-op** — state this prerequisite explicitly
 in any player-facing doc, since mere certification is no longer sufficient
@@ -1412,6 +1412,10 @@ value, independent of the client's local honesty.
 ---
 
 ## 13.1 Sub-phase ordering (dependency graph)
+
+> **Rows naming a wellbeing flag other than `FatigueSystem` describe an
+> ordering for features removed on 2026-09-02.** Kept as the record of how
+> the sub-phase graph was reasoned about, not as work still to be done.
 
 | Sub-phase | Feature(s) | Why this order |
 |---|---|---|
@@ -2638,6 +2642,13 @@ enabled by default, leaning on this exact, unverified check.
 
 ### D13 — Is a limited, repeatable griefing exploit against `FearStressSystem` acceptable on your server?
 
+> **MOOT since 2026-09-02.** `FearStressSystem` was removed at the owner's
+> request, along with the gunfire relay this exploit rode on and the
+> combat gate it fed. Kept as the record of a decision that was genuinely
+> open at the time, and because the SHAPE of it — a forgeable,
+> payload-less client report feeding a hard server-side reject — is worth
+> recognising if anything like it is ever built again.
+
 Any player standing near a K9 — no relationship to it or its handler
 required — can repeatedly send a "there's gunfire nearby" signal and force
 that K9 to refuse `BiteAndHold`/`NonLethalTakedown` for about a minute at a
@@ -2727,7 +2738,7 @@ since their reasoning is still what a citation is pointing at.
    expensive to retrofit after.
 6. **Training-mode/practice sandbox** distinct from live duty, so a search
    or bite-hold's first live use isn't also a rookie's first attempt at the
-   mechanic. **Partially shipped** — see `the removed training server file`.
+   mechanic. **Partially shipped**, then removed on 2026-09-02.
 7. **K9-down dispatch integration hook** — an event fired when a certified,
    on-duty K9's health crosses a threshold, mirroring `HandlerDownDefense`'s
    health-monitoring logic in the opposite direction. **Shipped** — see

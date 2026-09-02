@@ -235,12 +235,6 @@ designed but have an edge worth knowing about before you rely on them.
   to support them. Confirming any of the five would need a live install to
   test against, not more reading.
 
-- **Search-and-rescue "found" reveal is visible only to the officer who
-  actually found the person or item**, not to anyone else — including a
-  fellow officer working the very same call with them. Deliberate — it
-  avoids a class of ghost-entity bug — but worth knowing if you expect a
-  whole team to see the same marker.
-
 - **The tenure check does a small lookup every five minutes for
   every fully-tenured partnership**, rather than skipping it entirely.
   This is deliberate and tested — the alternative (a cache that could go
@@ -294,29 +288,6 @@ designed but have an edge worth knowing about before you rely on them.
   off. If you've never heard of that convar, this tool isn't running on
   your server.
 
-- **Hunger/Thirst's "Drink from Bowl" world-prop models are real, but the
-  base map doesn't scatter them anywhere — you have to place one yourself
-  for the option to ever appear.** This used to say the shipped model name
-  (`'water_bowl'`) was an unverified guess that might not resolve to
-  anything in your world. That's since been settled: `'water_bowl'` was
-  confirmed fake against a full 21,631-entry game object-list extraction
-  and has been replaced in `Config.Wellbeing.Thirst.bowlSources` (and in
-  `Config.Wellbeing.Fatigue.restSources`, which carried the same guess)
-  with three confirmed-real dog-bowl props (`m25_1_prop_m51_dog_bowl_full`,
-  `m25_1_prop_m51_dog_bowl_empty`, `m25_2_int_01_dog_bowl`). The remaining
-  limitation is different from the original one: these are DLC interior
-  props, not open-world street furniture, so the base game does not
-  scatter them around the city the way it does benches. Place one of them
-  wherever you want a K9 to be able to drink (a kennel, the station yard,
-  a training area) using your own mapping resource, and the ox_target
-  "Drink from Bowl" entry appears there. This does **not** affect the rest
-  of Thirst: `giveK9Water` (the carried-item path, `/k9drink`) works fully
-  regardless, with no model dependency at all. Also see
-  `Config.Features.HungerThirstSystem`'s own comment in `config.lua` for
-  the other placeholder this feature ships with (`k9_food`/`k9_water`
-  item names, still genuinely unverified against any specific server's
-  own ox_inventory item list).
-
 ---
 
 ## 3. Fixed — worth remembering
@@ -327,8 +298,8 @@ designed but have an edge worth knowing about before you rely on them.
   filenames* rather than the real folders, so a new file registering a
   command was invisible to them: the command would work in-game, never show
   up on the tablet, and nothing would warn you. The lists had already
-  drifted repeatedly (`dangerwarn.lua`, `announce.lua`, `vehicle.lua` and
-  others were each found missing after the fact). Both specs now enumerate
+  drifted repeatedly -- several files were each found missing after the
+  fact. Both specs now enumerate
   `server/*.lua` and `client/*.lua` from disk, so a new file is covered the
   moment it exists. Verified by dropping a throwaway file that registers an
   undocumented command into each folder and watching both guards name it.
@@ -350,24 +321,6 @@ designed but have an edge worth knowing about before you rely on them.
 Kept short on purpose. These aren't a changelog entry each — they're here
 because each one taught a rule worth not re-learning.
 
-- **A search-and-rescue call used to belong entirely to whoever started
-  it — a second officer had no way to help.** Starting your own call while
-  a colleague already had one running just gave you an unrelated hidden
-  target somewhere else; two officers who thought they were searching
-  together were in fact running two separate searches. Fixed: a second
-  officer can now ask to join an active call, and the officer running it
-  gets an accept-or-decline prompt (the same request-and-accept handshake
-  already used for the leash and for partnering up). Once accepted, the
-  joining officer genuinely searches — their own position counts, they get
-  their own warmer/colder hints, and they can be the one who actually finds
-  the person. If whoever started the call disconnects, the call does not
-  end — it passes to whichever remaining officer joined earliest, and only
-  ends for good once the last person on it leaves. One thing that stays
-  true on purpose: XP for finishing the call still only ever goes to
-  whoever started it, never to someone who joined later, even if the
-  joiner is the one who actually finds the person. That is not a leftover
-  limitation — it deliberately closes off two players trading "you start,
-  I'll join" to split extra reward for the same amount of real searching.
 - **The top handler rank (Master Handler) used to be effectively out of
   reach for anyone who never personally certified a new handler.** Two of
   the six actions that were supposed to pay handler XP — treating your own

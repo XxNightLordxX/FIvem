@@ -229,8 +229,8 @@ file named, not by trusting another comment or a prior doc.
 **Found stale, and fixed:**
 
 - `KNOWN_ISSUES.md` still said a search-and-rescue call could not be
-  worked jointly at all. Read `the removed SAR-calls server file` and
-  `the removed SAR-calls client file` in full — confirmed the join handshake, ownership
+  worked jointly at all. Read both halves of that (since-removed) feature
+  in full — confirmed the join handshake, ownership
   transfer on disconnect, and the deliberate starter-only XP rule all
   exist and work as described. Moved to "Fixed — worth remembering" with
   an accurate account; the adjacent "found reveal is officer-only" item
@@ -656,11 +656,11 @@ drifts fall out. Six did:
    it up showed it was just a stale path.
 6. **`server/equipmentshop.lua` cited `server/sar.lua`** in its list of
    sibling files with the same three-way refusal shape. That file has never
-   existed; the SAR file is `the removed SAR-calls server file`. Checking the CLAIM and
+   existed; the real file had a different name. Checking the CLAIM and
    not only the spelling turned up a second, smaller inaccuracy in the same
    sentence: the reason set is two or three wide depending on the file, not
-   uniformly three, because `pursuitsprint`/`sarcalls`/`scentlineup`
-   top-level `return` when their flag is off. Both corrected.
+   uniformly three, because several of those files top-level `return` when
+   their flag is off. Both corrected.
 
 A seventh, cosmetic: `tests/equipmentshopitems_spec.lua` wrote
 `server/certtiers_spec.lua` where it meant `tests/certtiers_spec.lua`.
