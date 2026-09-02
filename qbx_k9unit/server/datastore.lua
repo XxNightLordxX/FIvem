@@ -1591,20 +1591,20 @@ local WellbeingRows = {} -- citizenid -> { fatigue, mood, fear_stress, injury, h
 --- @return table? row -- { fatigue, mood, fearStress, injury, hunger, thirst }, or nil if this citizenid has no row yet
 function K9Store.Wellbeing_Get(citizenid)
     if DatabaseEnabled('k9_wellbeing') then
+        -- Reads FATIGUE ONLY. The mood, fear_stress, injury, hunger and
+        -- thirst columns still exist on k9_wellbeing but their systems were
+        -- removed on 2026-09-02, so nothing writes or reads them any more.
+        -- They are left in place deliberately: dropping a column from a
+        -- table that may already hold a server's data is destructive and
+        -- irreversible, so that is the owner's call to make with a
+        -- migration, not something this resource does on their behalf.
         return MySQL.single.await(
-            'SELECT fatigue, mood, fear_stress AS fearStress, injury, hunger, thirst FROM k9_wellbeing WHERE citizenid = ? LIMIT 1',
+            'SELECT fatigue FROM k9_wellbeing WHERE citizenid = ? LIMIT 1',
             { citizenid })
     end
     local row = WellbeingRows[citizenid]
     if not row then return nil end
-    return {
-        fatigue = row.fatigue,
-        mood = row.mood,
-        fearStress = row.fear_stress,
-        injury = row.injury,
-        hunger = row.hunger,
-        thirst = row.thirst,
-    }
+    return { fatigue = row.fatigue }
 end
 
 --- Mirrors the SafeWrite contract (boolean, never throws) -- same shape as
@@ -1623,10 +1623,12 @@ end
 --- @return boolean ok
 function K9Store.Wellbeing_Upsert(citizenid, row)
     if DatabaseEnabled('k9_wellbeing') then
+        -- Writes FATIGUE ONLY -- see Wellbeing_Get above for why the other
+        -- five columns are left alone rather than dropped.
         local ok, err = pcall(MySQL.query.await,
-            'INSERT INTO k9_wellbeing (citizenid, fatigue, mood, fear_stress, injury, hunger, thirst) VALUES (?, ?, ?, ?, ?, ?, ?) ' ..
-            'ON DUPLICATE KEY UPDATE fatigue = VALUES(fatigue), mood = VALUES(mood), fear_stress = VALUES(fear_stress), injury = VALUES(injury), hunger = VALUES(hunger), thirst = VALUES(thirst), updated_at = CURRENT_TIMESTAMP',
-            { citizenid, row.fatigue, row.mood, row.fearStress, row.injury, row.hunger, row.thirst })
+            'INSERT INTO k9_wellbeing (citizenid, fatigue) VALUES (?, ?) ' ..
+            'ON DUPLICATE KEY UPDATE fatigue = VALUES(fatigue), updated_at = CURRENT_TIMESTAMP',
+            { citizenid, row.fatigue })
         if not ok then
             print(('[qbx_k9unit] datastore: Wellbeing_Upsert write failed for %s: %s'):format(citizenid, tostring(err)))
             return false
@@ -1635,11 +1637,6 @@ function K9Store.Wellbeing_Upsert(citizenid, row)
     end
     WellbeingRows[citizenid] = {
         fatigue = row.fatigue,
-        mood = row.mood,
-        fear_stress = row.fearStress,
-        injury = row.injury,
-        hunger = row.hunger,
-        thirst = row.thirst,
         updated_at_unix = NowUnix(),
     }
     return true

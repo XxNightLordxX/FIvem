@@ -112,17 +112,17 @@
 
     UPDATED 2026-08-26: eleven Config.Features keys shipped after this
     audit was first written (CameraFeedPiP, FindAlerts, K9DownDispatch,
-    K9EquipmentShop, K9Leaderboard, PursuitSprint, ResourceAutoDetect,
-    SARCalls, ScentLineup, ScentTrailHunt, TrainingMode) had no FEATURE_TIERS
+    K9EquipmentShop, K9Leaderboard, PursuitSprint, ResourceAutoDetect, and
+    four features since removed) had no FEATURE_TIERS
     entry at all -- GetFeatureTier silently resolved every one of them to
     'unaudited', and runtimeSetFeature did NOT actually refuse an
     'unaudited' tier despite this header's own "fails closed" claim in
     "FEATURE REGISTRY" below -- a real doc/implementation mismatch, now
     fixed on both sides (see that section for the fix). All eleven were
     read file-by-file this pass exactly like the original 45 and now carry
-    a real tier: live (FindAlerts, ScentTrailHunt), onstart
+    a real tier: live (FindAlerts), onstart
     (K9EquipmentShop, ResourceAutoDetect), rawtoplevel (K9DownDispatch,
-    K9Leaderboard, PursuitSprint, SARCalls, ScentLineup, TrainingMode),
+    K9Leaderboard, PursuitSprint),
     clientonly (CameraFeedPiP -- a genuine special case; see its own
     FEATURE_TIERS note below, it has NO implementing code anywhere in this
     resource at all, server or client). The full file-by-file evidence for
@@ -526,7 +526,7 @@ local FEATURE_TIERS = {
     -- partial-liveness gap -- server/combat.lua's own expiry maintenance
     -- thread and its K9-position-history sampling thread each used to only
     -- start if one of BiteAndHold/NonLethalTakedown/PropDragging/
-    -- HandlerDownDefense was ALREADY true when that file loaded, so
+    -- the feature was ALREADY true when that file loaded, so
     -- flipping one on live (all four off at boot) produced holds/takedowns/
     -- drags with no automatic release path until a restart. Both threads
     -- now start unconditionally and re-check their governing flag(s) fresh
@@ -881,32 +881,24 @@ end
 --     entry per citizenid whose K9 is genuinely resting inside a deployed
 --     kennel right now. Read via CountKennelOccupants(), same soft-
 --     dependency shape as above.
---   TrainingMode -- DELIBERATELY EXCLUDED, despite being the third example
---     this task's own brief named ("a training drill running"). Checked
---     against the real code before deciding, not taken from the brief:
---     TrainingMode is `tier = 'rawtoplevel'` (see FEATURE_TIERS' own entry
---     above) -- the removed training server file's ENTIRE file is gated by a single
---     `if not Config.Features.TrainingMode then return end` at its own
---     top level, executed once, when that file itself loads. If it was
---     true at boot (the ordinary case), every one of that file's handlers
---     is already registered and NEVER re-checks the flag again for the
---     rest of this session -- so a live tablet toggle of TrainingMode
---     already has ZERO effect on anyone's current session (SetFeature's
---     own `rawtoplevel` response branch already says so plainly:
---     `restartRequired = true, configEditRequired = true`). Adding a "N
---     players are training right now" active-usage warning to a toggle
---     that provably changes nothing live this session would be exactly
---     the overclaiming this file's own header rejects elsewhere (see "A
---     NOTE ON Recall" above for the same discipline applied to a
---     different feature) -- a confirmation dialog for a switch that
---     already tells the truth about doing nothing live is not needed, and
---     a dishonest one would be worse than none.
+--   A `rawtoplevel` FEATURE -- DELIBERATELY EXCLUDED from active-usage
+--     warnings as a class. Such a feature's whole file is gated by a single
+--     `if not Config.Features.X then return end` at its own top level,
+--     executed once when that file loads. If it was true at boot (the
+--     ordinary case), every handler is already registered and never
+--     re-checks the flag for the rest of the session -- so a live tablet
+--     toggle provably changes nothing for anyone currently connected, and
+--     SetFeature already says so (`restartRequired = true,
+--     configEditRequired = true`). Adding a "N players are using this right
+--     now" warning to a toggle that changes nothing live would be exactly
+--     the overclaiming this file rejects elsewhere. (The training mode this
+--     note was written about was removed on 2026-09-02; the rule applies to
+--     every rawtoplevel feature.)
 --   Every OTHER `tier = 'live'` feature (XPProgression,
 --     HandlerXPProgression, HandlerPartnership, ScentTracking/
 --     BloodTracking/GunpowderSniffing, ContrabandAlerts/SearchZones,
 --     K9Inventory, K9Medkit, LeashMechanics, BasicBarkSounds/
---     DoorInteraction, CertificationExpiry, FatigueSystem/MoodSystem/
---     FearStressSystem/DistractionSystem/InjuryLimping,
+--     DoorInteraction, CertificationExpiry, FatigueSystem,
 --     PartnershipTenureBonus) has no equivalent "one player is inside a
 --     continuous session of this right now" state to count in the first
 --     place -- each of those is a momentary check-then-act (a single XP
@@ -953,7 +945,7 @@ end
 
 --- name -> { countFn = function(): integer?, activity = string } -- see
 --- "ACTIVE-USAGE CONFIRMATION FEATURES" above for which four features are
---- here and why, and why TrainingMode is deliberately not.
+--- here and why, and why a rawtoplevel feature deliberately is not.
 local ACTIVE_USAGE_FEATURES = {
     -- `activity` is deliberately WITHOUT its own leading article -- see
     -- GetActiveUsageWarning below, which supplies "a"/"currently" in two
@@ -1136,7 +1128,7 @@ local TUNABLE_REGISTRY = {
 
     -- The four ScentTrailHunt.* tunables that used to live here were
     -- removed alongside the feature's own FEATURE_TIERS entry above and
-    -- Config.Features.ScentTrailHunt itself (config.lua's own comment
+    -- the feature flag itself (config.lua's own comment
     -- there has the full writeup) -- the removed scent-trail server file's own top-level
     -- flag check returned before its tuning values were ever read, so a
     -- live tuning slider for them would have controlled
@@ -1407,8 +1399,7 @@ local TUNABLE_REGISTRY = {
     -- from (and in addition to) the client's own independent load timeout.
     ['K9Appearance.modelLoadTimeoutMs']         = { path = { 'K9Appearance', 'modelLoadTimeoutMs' },             min = 2000,  max = 60000,     integer = true },
 
-    -- server/wellbeing.lua (Config.Features.MoodSystem / FearStressSystem /
-    -- InjuryLimping / DistractionSystem, all `live`). Every value below is
+    -- server/wellbeing.lua (Config.Features.FatigueSystem, `live`). Every value below is
     -- read directly off Config.Wellbeing.* inline inside the callback or
     -- tick-loop body that consumes it, confirmed by direct read.
     -- tickIntervalMs is EXCLUDED -- captured once into TICK_INTERVAL_MS,
@@ -1465,8 +1456,8 @@ local TUNABLE_REGISTRY = {
     -- reads with no per-effect state of their own to leak) -- a live edit to
     -- any of these seven can only ever change WHICH threshold/multiplier the
     -- existing, already-reviewed removal machinery uses, never bypass it.
-    -- Fatigue.max/Mood.max/FearStress.max/Injury.max are ALSO EXCLUDED even
-    -- though several are read live server-side -- each stat's `max` is ALSO
+    -- Fatigue.max is ALSO EXCLUDED even
+    -- though it is read live server-side -- a stat's `max` is ALSO
     -- read independently by the client for its own HUD gauge scaling, and a
     -- server-only change here would desync the server's clamp ceiling from
     -- the client's displayed one with no mechanism to keep them in sync.
@@ -1507,8 +1498,7 @@ local TUNABLE_REGISTRY = {
     -- TICK decrements by, full stop, no restart, no second wire-up.
     --
     -- MIN = 0, DELIBERATELY DIFFERENT FROM EVERY SIBLING PER-TICK FIELD
-    -- BELOW (Mood.passiveRegenPerTick / FearStress.passiveDecayPerTick /
-    -- Injury.passiveRegenPerTick all floor at 0.1, never 0): those three are
+    -- BELOW (every sibling recovery rate floors at 0.1, never 0): those are
     -- RECOVERY rates, where 0 would mean "this stat can never recover" --
     -- never something an operator tuning recovery would want. This field is
     -- the opposite direction, HARM, where 0 has a genuine, intended meaning
@@ -1582,8 +1572,8 @@ local TUNABLE_REGISTRY = {
     -- POLICY exclusions being deliberately overridden by the owner's own
     -- instruction, NOT technical "cannot be read live" exclusions -- every
     -- OTHER exclusion further above this point in this table
-    -- (SearchZones.alertBroadcastRadius, the FearStress forgery-adjacent
-    -- values, etc.) is UNCHANGED and remains correctly excluded; opening a
+    -- (SearchZones.alertBroadcastRadius and the other forgery-adjacent
+    -- values) is UNCHANGED and remains correctly excluded; opening a
     -- POLICY restriction is not licence to also open a CORRECTNESS/SECURITY
     -- one that happens to sit near it. (K9Medkit.cooldownMs used to be
     -- named here too, as a technical exclusion -- it no longer is one,

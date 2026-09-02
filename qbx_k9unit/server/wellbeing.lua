@@ -893,14 +893,7 @@ end)
 --- @param stats table
 --- @return table row
 local function PersistableRowOf(stats)
-    return {
-        fatigue = stats.fatigue,
-        mood = stats.mood,
-        fearStress = stats.fearStress,
-        injury = stats.injury,
-        hunger = stats.hunger,
-        thirst = stats.thirst,
-    }
+    return { fatigue = stats.fatigue }
 end
 
 --- One flush pass: UPSERTs every currently-dirty citizenid's row and
@@ -1005,8 +998,6 @@ local function EnsureStats(citizenid)
     -- CONFIG-DEFENSIVE, the same reasoning applied to every optional
     -- sub-table read in this file: it does not own config.lua, so a
     -- sub-table may not exist on a given server at all.
-    local hungerMax = (type(Config.Wellbeing.Hunger) == 'table' and tonumber(Config.Wellbeing.Hunger.max)) or 100
-    local thirstMax = (type(Config.Wellbeing.Thirst) == 'table' and tonumber(Config.Wellbeing.Thirst.max)) or 100
 
     -- PERSISTENCE LOAD (this pass) -- see this file's header "DATABASE
     -- PERSISTENCE" point 3. A throw here (an unexpected K9Store/DB error)
@@ -1095,16 +1086,7 @@ local function EnsureStats(citizenid)
         -- this file's header point 2 explains in full.
         stats = {
             fatigue = Clamp(tonumber(loadedRow.fatigue) or Config.Wellbeing.Fatigue.max, 0, Config.Wellbeing.Fatigue.max),
-            mood = Clamp(tonumber(loadedRow.mood) or Config.Wellbeing.Mood.max, 0, Config.Wellbeing.Mood.max),
-            fearStress = Clamp(tonumber(loadedRow.fearStress) or 0, 0, Config.Wellbeing.FearStress.max),
-            injury = Clamp(tonumber(loadedRow.injury) or Config.Wellbeing.Injury.max, 0, Config.Wellbeing.Injury.max),
-            hunger = Clamp(tonumber(loadedRow.hunger) or hungerMax, 0, hungerMax),
-            thirst = Clamp(tonumber(loadedRow.thirst) or thirstMax, 0, thirstMax),
-            distractedUntil = 0,
-            hesitatingUntil = 0,
-            hesitationEpisodeStartedAt = 0,
             lastCoords = nil,
-            injuryDeathEpisodeStartedAt = 0,
             dirty = false, -- matches what is on disk right now -- nothing to flush yet
         }
     else
@@ -1113,16 +1095,7 @@ local function EnsureStats(citizenid)
         -- must never visibly differ from "no database at all."
         stats = {
             fatigue = Config.Wellbeing.Fatigue.max,
-            mood = Config.Wellbeing.Mood.max,
-            fearStress = 0,
-            injury = Config.Wellbeing.Injury.max,
-            distractedUntil = 0,
-            hesitatingUntil = 0,
-            hesitationEpisodeStartedAt = 0,
             lastCoords = nil,
-            injuryDeathEpisodeStartedAt = 0,
-            hunger = hungerMax,
-            thirst = thirstMax,
             dirty = false,
         }
     end
@@ -1209,29 +1182,12 @@ end
 local function SnapshotOf(stats)
     return {
         fatigue = stats.fatigue,
-        mood = stats.mood,
-        fearStress = stats.fearStress,
-        injury = stats.injury,
-        -- HUNGER/THIRST (this pass, coder-backend) -- plain persisted
-        -- numbers, already resolved by EnsureStats/TickWellbeing; nothing
-        -- here reads raw Config, so no config-defensiveness guard is needed
-        -- on these two lines specifically (see the wellbeingTunables entries
-        -- further down for the ones that DO read raw Config).
-        hunger = stats.hunger,
-        thirst = stats.thirst,
-        distractedUntil = stats.distractedUntil,
-        hesitatingUntil = stats.hesitatingUntil,
         featureFlags = {
             FatigueSystem = Config.Features.FatigueSystem == true,
         },
         wellbeingTunables = {
-            fatigueSpeedPenaltyThreshold     = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
-            fatigueSpeedPenaltyMultiplier    = Config.Wellbeing.Fatigue.speedPenaltyMultiplier,
-            moodPerformancePenaltyThreshold  = Config.Wellbeing.Mood.performancePenaltyThreshold,
-            moodPerformancePenaltyMultiplier = Config.Wellbeing.Mood.performancePenaltyMultiplier,
-            injurySprintBlockThreshold       = Config.Wellbeing.Injury.sprintBlockThreshold,
-            injuryJumpBlockThreshold         = Config.Wellbeing.Injury.jumpBlockThreshold,
-            injurySpeedPenaltyMultiplier     = Config.Wellbeing.Injury.speedPenaltyMultiplier,
+            fatigueSpeedPenaltyThreshold  = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
+            fatigueSpeedPenaltyMultiplier = Config.Wellbeing.Fatigue.speedPenaltyMultiplier,
             -- NATIVE SPRINT STAMINA ASSIST -- see server/runtimecontrol.lua's
             -- TUNABLE_REGISTRY entry of the same config path for the full
             -- "why this is separate from sprintDecayPerTick" writeup.
@@ -1241,23 +1197,6 @@ local function SnapshotOf(stats)
             -- DOES, since client/wellbeing.lua is the one that actually
             -- calls RestorePlayerStamina.
             fatigueNativeStaminaRestorePercent = Config.Wellbeing.Fatigue.nativeStaminaRestorePercent,
-            -- CONFIG-DEFENSIVE, unlike every other line in this table: the
-            -- sub-table read here may not exist on a server whose config.lua
-            -- has not landed it (this file's header explains why) --
-            -- SnapshotOf is built every tick for ANY of the six flags being
-            -- on, not just HungerThirstSystem, so an unguarded read here
-            -- would crash a snapshot push for e.g. a MoodSystem-only server.
-            -- Deliberately a light inline guard, NOT a
-            -- GetResolvedHungerThirstConfig() call -- that function's own
-            -- CLAMP-AND-WARN belongs strictly behind the
-            -- Config.Features.HungerThirstSystem gate ("read at the point of
-            -- activation"); this fallback is silent on purpose so a fully
-            -- disabled/unconfigured HungerThirstSystem never prints a
-            -- warning about a feature nobody has turned on.
-            hungerSpeedPenaltyThreshold  = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.lowThreshold or 30,
-            hungerSpeedPenaltyMultiplier = type(Config.Wellbeing.Hunger) == 'table' and Config.Wellbeing.Hunger.speedPenaltyMultiplier or 0.95,
-            thirstSpeedPenaltyThreshold  = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.lowThreshold or 30,
-            thirstSpeedPenaltyMultiplier = type(Config.Wellbeing.Thirst) == 'table' and Config.Wellbeing.Thirst.speedPenaltyMultiplier or 0.95,
         },
     }
 end
