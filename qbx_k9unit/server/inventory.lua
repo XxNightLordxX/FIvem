@@ -347,7 +347,7 @@
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)` and `IsConfiguredK9Model(modelHash)`,
-      resource-globals from server/certifications.lua — reused, never
+      resource-globals from server/certifications/ — reused, never
       re-derived, same rule server/search.lua and server/main.lua already
       follow.
     - THIS FILE exposes NO resource-global functions.
@@ -412,7 +412,7 @@ K9InventoryOpenMutex.RegisterPlayerDropped()
 -- Ephemeral, session-only set of citizenids whose K9 stash has already been
 -- RegisterStash'd this server session — avoids re-registering (and
 -- re-deriving owner/groups) on every single open request. Deliberately
--- never evicted: unlike server/certifications.lua's Certifications table
+-- never evicted: unlike server/certifications/'s Certifications table
 -- (which held security-relevant, potentially-stale state), a stale entry
 -- here can never cause an incorrect access decision — it only ever skips a
 -- redundant RegisterStash call for a citizenid this session has already
@@ -850,7 +850,7 @@ end
 ---      interaction, not a generic player-inventory bridge.
 ---   5. Confirm the target currently HasK9Access — a decertified K9 has lost
 ---      the underlying K9 capability set, same posture certification revoke
----      already takes for leash pairings (server/certifications.lua's
+---      already takes for leash pairings (server/certifications/'s
 ---      ForceDetachLeashForSource).
 ---   6. MANDATORY, FIRST-CLASS live proximity check, run BEFORE any
 ---      mutation (stash registration/access grant) — same "never trust a

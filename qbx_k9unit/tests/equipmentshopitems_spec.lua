@@ -280,7 +280,7 @@ local function newFixture(opts)
     local function WaitStub(...) return equipmentShopThreadRunner.Wait(...) end
 
     -- Soft-dependency certification globals -- stubbed directly (never the
-    -- real, heavier server/certtiers.lua/server/certifications.lua) since
+    -- real, heavier server/certtiers.lua/server/certifications/) since
     -- server/equipmentshop.lua only ever calls these through a
     -- `type(X) == 'function'` guard, exactly like every other soft
     -- cross-file dependency in this resource -- this is the same "stub the

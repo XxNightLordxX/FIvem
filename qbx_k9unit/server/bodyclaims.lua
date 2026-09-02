@@ -431,7 +431,7 @@ end)
 -- ======================================================================
 -- FORCED RELEASE -- "this citizenid just lost K9 access, let go of them"
 --
--- WHY THIS EXISTS. server/certifications.lua's EndK9AccessForCitizenId
+-- WHY THIS EXISTS. server/certifications/'s EndK9AccessForCitizenId
 -- tears down every session consequence of holding K9 access. Two
 -- consequences were missing from that teardown: a K9 resting inside a
 -- deployable kennel, and a K9 holding a vehicle seat claim. Both are
@@ -507,7 +507,7 @@ end
 --- Releases whatever exclusive body claim `citizenid` currently holds,
 --- tearing down the owning mechanic's own state and telling that player's
 --- client to physically let go. Called from
---- server/certifications.lua's EndK9AccessForCitizenId.
+--- server/certifications/'s EndK9AccessForCitizenId.
 ---
 --- 'combat_target' IS DELIBERATELY NOT RELEASED HERE, and this is the one
 --- exclusion worth reading twice. That claim is not held BY the citizenid;

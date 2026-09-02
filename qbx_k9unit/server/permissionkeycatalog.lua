@@ -304,7 +304,7 @@
     disjoint key space (permission-key strings vs. tier-key strings). No
     function anywhere in this resource acquires both mutexes nested inside
     one another -- server/permissions.lua's GrantPermission acquires ONLY
-    PermissionKeyEditMutex, server/certifications.lua's SetCertificationTier
+    PermissionKeyEditMutex, server/certifications/'s SetCertificationTier
     acquires ONLY TierEditMutex, and neither calls into the other's file at
     all. Two independent, never-nested locks cannot deadlock against each
     other by construction, not merely by discipline.

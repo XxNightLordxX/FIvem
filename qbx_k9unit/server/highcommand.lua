@@ -40,10 +40,10 @@
     grepping every `job.isboss` / `job.grade.level` / `IsPlayerAceAllowed`
     call site in server/*.lua and independently re-reading each one before
     relying on it):
-      - server/certifications.lua's IsEligibleCertifier (certifierGrade).
+      - server/certifications/'s IsEligibleCertifier (certifierGrade).
         High command can certify/revoke/decertify-offline for any
         configured department, same as a boss.
-      - server/certifications.lua's HasK9Access (the certification
+      - server/certifications/'s HasK9Access (the certification
         requirement itself). High command gets K9 feature access (bark
         relay, leash, search, tracking, medkit, inventory, combat, fetch,
         kennel, propattachment -- every one of those files gates on THIS
@@ -73,7 +73,7 @@
         closed.
       - Every `RegisterCommand` in this resource was independently
         enumerated (server/admin.lua x5, server/bonetool.lua x1,
-        server/certifications.lua x3) and cross-checked against the four
+        server/certifications/ x3) and cross-checked against the four
         gates above -- all nine already route through one of them, so "high
         command can run any command [registered by this resource]" needs no
         further per-command edit once those four gates carry the bypass.
@@ -215,7 +215,7 @@
 
     COOLDOWN -- Config.HighCommand.grantCooldownMs, via server/cooldowns.lua's
     NewCooldown, keyed by the GRANTER's own source (mirrors
-    server/admin.lua's AuditCooldown / server/certifications.lua's
+    server/admin.lua's AuditCooldown / server/certifications/'s
     CertifyActionCooldown shape: one shared instance, per-call threshold
     read fresh from Config, not a constructor default). READ
     server/cooldowns.lua's own header FIRST: IsOnCooldown/Consume treat a
@@ -252,7 +252,7 @@
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes ONE resource-global (no `local`) function:
         IsHighCommand(source) -> boolean
-      Consulted by server/certifications.lua, server/admin.lua,
+      Consulted by server/certifications/, server/admin.lua,
       server/bonetool.lua, and now also server/combat.lua (see the
       once-known, now-closed gap noted above), each behind a
       `type(IsHighCommand) == 'function'` guard -- this resource's
@@ -277,7 +277,7 @@
       every server_scripts file has already finished loading regardless of
       manifest order, per this resource's own established reasoning for
       every other soft cross-file dependency).
-    - THIS FILE is consulted BY server/certifications.lua, server/admin.lua,
+    - THIS FILE is consulted BY server/certifications/, server/admin.lua,
       and server/bonetool.lua (see above) -- this file does NOT call INTO
       any of those three itself, so there is no load-order cycle: those
       three each independently guard their own call to IsHighCommand, so
@@ -314,7 +314,7 @@
     requirement, for NewCooldown at this file's own file-load time) and
     after server/notify.lua (a soft-but-tidy placement, so this file's own
     NotifyPlayer calls need no existence guard either), and before every
-    one of its consumers (server/certifications.lua, server/admin.lua,
+    one of its consumers (server/certifications/, server/admin.lua,
     server/bonetool.lua) -- though per the FILE-TO-FILE CONTRACT above,
     none of those three actually depend on that ordering, since each guards
     its own call with `type(IsHighCommand) == 'function'`.
@@ -397,7 +397,7 @@ function IsHighCommand(source)
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold -- same rule, same reasoning, as every other rank gate in
     -- this resource (server/admin.lua's IsAuthorizedAdmin,
-    -- server/certifications.lua's IsEligibleCertifier).
+    -- server/certifications/'s IsEligibleCertifier).
     if job.isboss then return true end
 
     local dept = Config.Departments[job.name]
@@ -424,7 +424,7 @@ end
 
 -- Shared constructor, not a hand-rolled table. One instance, keyed by the
 -- GRANTER's own source, mirroring server/admin.lua's AuditCooldown /
--- server/certifications.lua's CertifyActionCooldown shape (no constructor
+-- server/certifications/'s CertifyActionCooldown shape (no constructor
 -- default -- the threshold is supplied explicitly at every .Consume() call
 -- from Config.HighCommand.grantCooldownMs, per that constructor's own
 -- "several call sites read a Config value that could differ per
@@ -656,12 +656,12 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- was simply never applied up here.
     --
     -- Per-department field reset (never drops the whole department, unlike
-    -- server/certifications.lua's certifierGrade guard): nil is ALREADY the
+    -- server/certifications/'s certifierGrade guard): nil is ALREADY the
     -- documented safe value for this field ("no High Command tier in this
     -- department" -- see this file's header and IsHighCommand's own doc
     -- comment above), so a malformed highCommandGrade is corrected by
     -- forcing it to that same safe nil, exactly like
-    -- server/certifications.lua's gentler autoAccessGrade treatment --
+    -- server/certifications/'s gentler autoAccessGrade treatment --
     -- certifierGrade/auditGrade/label and every other field on this
     -- department are left completely untouched. IsHighCommand itself
     -- (line ~408) already fails closed on a non-number highCommandGrade at
@@ -828,7 +828,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- the command): AwardXPDirect itself has no live-session requirement,
     -- so there is no equivalent of the certification grant's "cannot
     -- verify a live ped model for an offline target" asymmetry here (see
-    -- server/certifications.lua's GrantCertificationForTablet doc comment
+    -- server/certifications/'s GrantCertificationForTablet doc comment
     -- for that DIFFERENT case, where the answer came out the other way).
     -- Gated on Config.Features.CommandTablet, mirroring
     -- server/permissions.lua's identical "TABLET CALLBACKS" gate --

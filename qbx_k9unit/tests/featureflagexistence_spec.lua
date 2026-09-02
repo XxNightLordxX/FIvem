@@ -622,7 +622,7 @@ local COMMENT_CONFIG_ALLOWLIST = {
     lua                    = 'the string "Config.lua" -- the filename with a capital C at the start of a sentence, not a table path',
     Diagnostics            = 'named in server/diagnostics.lua only to say the block is NOT called this, as the example of a rename that would silently disable the feature',
     FeaturesBeforeGrouping = 'real, but created at runtime by ResolveFeatureGroups rather than authored in config.lua, so it never appears as a `Config.X =` assignment',
-    K9DespawnGraceSeconds  = 'explicitly described as an earlier draft that was superseded -- config.lua and server/certifications.lua both say so in the same sentence',
+    K9DespawnGraceSeconds  = 'explicitly described as an earlier draft that was superseded -- config.lua and server/certifications/ both say so in the same sentence',
     K9BoneIndices          = 'explicitly described as an earlier, more elaborate sketch that was superseded -- client/fetch.lua and server/fetch.lua both say so in the same sentence',
 }
 

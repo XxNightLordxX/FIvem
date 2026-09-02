@@ -284,7 +284,7 @@ end
 -- FORCED EXIT ON ACCESS LOSS -- this file's half of
 -- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher.
 --
--- Registered at file load so that when server/certifications.lua's
+-- Registered at file load so that when server/certifications/'s
 -- EndK9AccessForCitizenId revokes someone's K9 access while they are
 -- holding a seat claim, this file -- the only one that owns
 -- VehicleSeatClaims -- performs its own teardown. See

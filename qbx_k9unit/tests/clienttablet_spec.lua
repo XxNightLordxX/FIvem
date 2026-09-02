@@ -1196,7 +1196,7 @@ end)
 -- tablet:decertify -- BUGFIX (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6). Used to
 -- shell out to the OFFLINE-ONLY 'k9decertifyoffline' command via
 -- SubmitAllowlistedCommand/ExecuteCommand for EVERY target, online or
--- offline -- and server/certifications.lua's RevokeCertificationOffline
+-- offline -- and server/certifications/'s RevokeCertificationOffline
 -- explicitly refuses when the target is actually online, so the button
 -- silently did nothing against anyone currently connected. Now calls a
 -- real server callback (qbx_k9unit:server:tabletDecertify, backed by

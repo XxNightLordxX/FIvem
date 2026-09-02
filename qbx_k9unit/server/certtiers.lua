@@ -6,7 +6,7 @@
     command to edit the tiers trainee certified senior etc add more roles
     edit permissions for those roles etc."
 
-    server/certifications.lua's own header ("TIER (§5)") argues, at
+    server/certifications/'s own header ("TIER (§5)") argues, at
     length, for the OPPOSITE of what this file builds:
 
         "TIER (§5): a fixed, HARDCODED 3-step ordinal — trainee <
@@ -22,7 +22,7 @@
     DATA STRUCTURE — the original `TIER_RANK = { trainee = 1,
     certified = 2, senior = 3 }` table is kept, unchanged, as the LAST-
     RESORT FALLBACK this file's own accessors degrade to if THIS file is
-    ever unavailable (see server/certifications.lua's own
+    ever unavailable (see server/certifications/'s own
     `IsKnownTierKeyOrLegacyFallback`/`GetTierOrdinalOrLegacyFallback`,
     added alongside this file). The reasoning was sound for the world it
     described — a small, permanently-fixed vocabulary nobody would ever
@@ -53,13 +53,13 @@
     entirely at runtime. See RefreshCertificationTierCatalog below for
     the exact merge algorithm.
 
-    THE ACCESSORS THIS PASS EXTENDS server/certifications.lua's SEAM WITH
+    THE ACCESSORS THIS PASS EXTENDS server/certifications/'s SEAM WITH
     (per this task's own explicit instruction to extend, not replace,
     GetCertificationTier/MeetsTierRequirement/HasSpecialization/
     QueryCertificationRecord/QueryActiveSpecializations): this file adds
     IsKnownCertificationTierKey/GetCertificationTierOrdinal/
     ListCertificationTiers/GetCertificationTierCapabilities/
-    TierHasCapability. server/certifications.lua's own five accessors are
+    TierHasCapability. server/certifications/'s own five accessors are
     UNCHANGED in name and signature; only their internal ordinal/
     known-key lookups now defer to this file's live catalog instead of a
     hardcoded table, behind a soft-dependency existence guard exactly
@@ -94,7 +94,7 @@
     capability sets for all three. Empty is not a placeholder oversight —
     it is load-bearing: nothing anywhere in this resource, before or
     after this pass, gates any mechanic on a tier CAPABILITY (tier
-    remains, exactly as server/certifications.lua's own header already
+    remains, exactly as server/certifications/'s own header already
     stated, "an ordinal a future search.lua/combat.lua/defense.lua gate
     may opt into" — this pass does not add that gate). Shipping a
     non-empty default capability set here would be inventing new default
@@ -150,7 +150,7 @@
     all, ever — see PROTECTED_TIER_KEYS below. This is NOT the same
     protection as the reference-count check: 'certified' is the literal
     string baked into migration 0006's `DEFAULT 'certified'` clause AND
-    into server/certifications.lua's own GrantCertification INSERT
+    into server/certifications/'s own GrantCertification INSERT
     (which relies on that same DB default and is deliberately never
     edited to accept a tier argument — see that file's own header
     "TIER"). Even a 'certified' tier with ZERO current references could
@@ -219,7 +219,7 @@
     through the real qbx_core player object for THAT connection, which an
     attacker does not control — this is the same "the client only offers
     a convenience, the server is the only authority" posture this
-    resource enforces everywhere else (see server/certifications.lua's
+    resource enforces everywhere else (see server/certifications/'s
     own DEVELOPER_REFERENCE.md §4.3 quote).
 
     DEFENSE AGAINST THE FIRST ADVERSARY (the actual privilege-escalation
@@ -262,7 +262,7 @@
     guard, then a single AND-condition) — the missing piece was never "how
     would a gate check this", it was "there was no gate to check it FROM",
     since the three real candidate call sites this pass identified
-    (server/certifications.lua's GrantSpecialization,
+    (server/certifications/'s GrantSpecialization,
     server/combat.lua's ValidateCombatRequest, and
     server/equipmentshop.lua's shop registration) are not files this pass
     owns or may edit. The exact, reviewed diff for the first two has been
@@ -305,7 +305,7 @@
     THE DELETE-VS-ASSIGN RACE (found and closed this pass, not merely
     disclosed): a naive "check reference count, then tombstone" DeleteTier
     and a naive "check known-key, then UPDATE" SetCertificationTier (in
-    server/certifications.lua) can interleave across their own
+    server/certifications/) can interleave across their own
     MySQL.await yield points — DeleteTier's reference-count read could
     observe zero references an instant before a concurrent
     SetCertificationTier commits a BRAND NEW reference to that exact key,
@@ -313,7 +313,7 @@
     producing exactly the "row referencing a tier that no longer exists"
     outcome this feature must never produce. Closed with `TierEditMutex`
     (NewMutex(), keyed by tier_key, exposed as a bare global specifically
-    so server/certifications.lua's SetCertificationTier can acquire the
+    so server/certifications/'s SetCertificationTier can acquire the
     SAME lock before its own UPDATE — see that function's own updated
     comment) — DeleteTier and SetCertificationTier now serialize on the
     same tier_key, so whichever acquires first completes its ENTIRE
@@ -321,7 +321,7 @@
     UpsertTier/ReorderTiers acquire the same per-key mutex around their
     own writes for the identical reason (a concurrent rename/capability
     edit or reorder-write racing a delete/restore for the same key).
-    Guarded everywhere it is CONSUMED (server/certifications.lua) with a
+    Guarded everywhere it is CONSUMED (server/certifications/) with a
     `type(TierEditMutex) == 'table'` runtime existence check, this
     resource's established soft-dependency convention — SetCertificationTier
     still functions, accepting only the narrow, now-explicitly-disclosed
@@ -402,7 +402,7 @@
     citizenid with NO certification-assigned tier AT ALL for this job —
     no active k9_certifications row ever existed, or it was manually
     revoked (GetCertificationTier(citizenid, jobName, true) returns nil —
-    see that accessor's own doc comment, server/certifications.lua) — is
+    see that accessor's own doc comment, server/certifications/) — is
     ALSO allowed, never denied: their K9 access, if any, necessarily comes
     through the 'k9.access' permission grant / high-command bypass /
     autoAccessGrade job-grade path, none of which HasK9Access treats as
@@ -446,12 +446,12 @@
     that wrote this paragraph. This originally described both as NOT YET
     WIRED, both files off-limits to that pass, with only a proposed diff on
     file; that is no longer true. Both are live now — see
-    server/certifications.lua's GrantSpecialization (~line 4347) and
+    server/certifications/'s GrantSpecialization (~line 4347) and
     server/combat.lua's ValidateCombatRequest (~line 1650) for the actual
     call sites, and the CAPABILITY_CATALOG labels above, which already say
     ENFORCED for both. The original per-consumer writeup is kept below,
     updated from proposed to landed, for the design reasoning:
-      - server/certifications.lua's GrantSpecialization — previously
+      - server/certifications/'s GrantSpecialization — previously
         checked only IsEligibleCertifier(granter) and the TARGET's active
         base certification, never whether the target's OWN tier is even
         eligible to hold a specialization at all. Landed: one added check,
@@ -495,7 +495,7 @@
     ======================================================================
 
     Nothing in this file gates, and nothing in this pass's edit to
-    server/certifications.lua's SetCertificationTier gates, any
+    server/certifications/'s SetCertificationTier gates, any
     termination/cleanup path (EndActiveEffectForHolder, leash detach,
     Recall, partnership break, etc.) — this file introduces no new gate
     on any of those at all. As of THIS pass this is no longer solely an
@@ -509,7 +509,7 @@
     granted outside a test), with zero consumer call sites outside this
     file's own tests, so there was doubly no trap to build — held at the
     time this paragraph was written. It no longer does:
-    server/certifications.lua (~line 4347) and server/combat.lua (~line
+    server/certifications/ (~line 4347) and server/combat.lua (~line
     1650) both now call TierCapabilityPermits for real, gating
     specializations_eligible and bite_hold_and_takedown respectively. The
     invariant this section states still holds regardless, because it no
@@ -519,7 +519,7 @@
     SetCertificationTier's pre-existing behavior (confirmed unchanged by
     this pass, re-read before writing this file) never force-detaches
     anything even on an ordinary tier CHANGE, let alone a tier DELETION —
-    server/certifications.lua's own EXPIRY design note already establishes
+    server/certifications/'s own EXPIRY design note already establishes
     the precedent this follows: "an already-formed leash/partnership/
     in-progress action is untouched" by a passive/administrative tier
     change. Deleting or downgrading the tier out from under someone
@@ -552,7 +552,7 @@
 ]]
 
 -- ======================================================================
--- LEGACY FALLBACK — the ORIGINAL server/certifications.lua TIER_RANK
+-- LEGACY FALLBACK — the ORIGINAL server/certifications/ TIER_RANK
 -- table, preserved here (not merely in a comment) as LEGACY_TIER_DEFAULTS,
 -- the built-in floor BuildCatalogFromConfigDefaults falls back to if
 -- Config.CertificationTiers is ever missing/malformed. See header
@@ -576,7 +576,7 @@ local LEGACY_TIER_DEFAULTS = {
 -- sites of the two that are now ENFORCED.
 -- ======================================================================
 -- LABELS. specializations_eligible and bite_hold_and_takedown are wired
--- to a real consumer each (server/certifications.lua's GrantSpecialization
+-- to a real consumer each (server/certifications/'s GrantSpecialization
 -- and server/combat.lua's ValidateCombatRequest respectively -- see
 -- HAZARD 5 above) and their own labels below say ENFORCED. The other
 -- three remain inert, for the reasons the previous version of this
@@ -619,7 +619,7 @@ local MAX_TIERS = 40
 -- RefreshCertificationTierCatalog below, never partially mutated in
 -- place. Declared here (before every function that closes over them) so
 -- every reference below is a proper upvalue, not an accidental global --
--- same discipline server/certifications.lua's own `local Certifications`/
+-- same discipline server/certifications/'s own `local Certifications`/
 -- `local Specializations` tables already establish.
 -- Not initialized to `{}` here -- both are populated for real a few
 -- lines down (the "Initial SYNCHRONOUS population" block) before
@@ -747,7 +747,7 @@ end
 -- file's own load time -- config.lua is a shared_script, loaded in full
 -- before any server_scripts file (this one included) starts executing,
 -- so Config already holds its real, final values by the time this line
--- runs (same reasoning server/certifications.lua's own K9ModelHashes
+-- runs (same reasoning server/certifications/'s own K9ModelHashes
 -- precomputation gives for the identical structural point). This makes
 -- every accessor below safe to call even before onResourceStart fires
 -- for this resource, at the cost of not yet reflecting any DB override --
@@ -764,7 +764,7 @@ end
 
 -- ======================================================================
 -- PUBLIC READ ACCESSORS -- exposed globally (no `local`), extending the
--- SAME seam server/certifications.lua's own GetCertificationTier/
+-- SAME seam server/certifications/'s own GetCertificationTier/
 -- MeetsTierRequirement/HasSpecialization/QueryCertificationRecord/
 -- QueryActiveSpecializations already established, per this task's own
 -- explicit "extend, not replace" instruction. Every one of these is a
@@ -871,7 +871,7 @@ end
 ---     (HAZARD 1's empty default capability sets), and every capability
 ---     no operator has ever touched from the tablet.
 ---   - GetCertificationTier is unavailable (soft dependency,
----     server/certifications.lua absent) or citizenid/jobName are not
+---     server/certifications/ absent) or citizenid/jobName are not
 ---     both strings.
 ---   - GetCertificationTier(citizenid, jobName, true) returns nil -- NO
 ---     active, job-matching certification ROW exists for this citizenid at
@@ -939,7 +939,7 @@ function TierCapabilityPermits(citizenid, jobName, capabilityKey)
     -- comment for why this is safe (never a source of over-grant).
     -- NEVER GATES A NEW CALL SITE: this function's only real, request-time
     -- consumers (server/combat.lua's ValidateCombatRequest,
-    -- server/certifications.lua's GrantSpecialization) are UNCHANGED by
+    -- server/certifications/'s GrantSpecialization) are UNCHANGED by
     -- this edit -- it only widens what THIS function itself returns for an
     -- already-existing call, never adds a new one, and neither consumer is
     -- reachable from a termination/cleanup path (see this file's own header
@@ -1036,7 +1036,7 @@ end
 -- reasoning server/cooldowns.lua's own header gives for MedkitMutex/
 -- PartnershipEstablishMutex, both keyed by something other than a player
 -- source). Exposed as a bare global (no `local`) specifically so
--- server/certifications.lua's SetCertificationTier can acquire the SAME
+-- server/certifications/'s SetCertificationTier can acquire the SAME
 -- lock before writing a tier assignment -- see header "HAZARD 4", "THE
 -- DELETE-VS-ASSIGN RACE" for exactly which race this closes.
 TierEditMutex = NewMutex()

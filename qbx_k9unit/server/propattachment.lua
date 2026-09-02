@@ -157,7 +157,7 @@
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)` and `IsConfiguredK9Model(modelHash)`,
-      both exposed by server/certifications.lua — do not re-derive either
+      both exposed by server/certifications/ — do not re-derive either
       check here.
     - THIS FILE calls `NewCooldown()` (server/cooldowns.lua) at file-load
       time — must load after that file, same requirement every other
@@ -860,7 +860,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- `fallback` is always one of config.lua's own shipped defaults for
     --- this field, matching this codebase's established clamp-and-warn
     --- convention (server/cooldowns.lua's ResolveConfiguredThresholdMs,
-    --- server/certifications.lua's autoAccessGrade guard, etc.) rather than
+    --- server/certifications/'s autoAccessGrade guard, etc.) rather than
     --- guessing a "safer" number.
     --- @param key string
     --- @param predicate fun(value: any): boolean

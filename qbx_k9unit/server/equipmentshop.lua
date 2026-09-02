@@ -105,7 +105,7 @@
     EXACTLY, duplicated here as this file's OWN small, self-contained copy
     rather than a shared cross-file call -- same "each file keeps its own
     tiny copy of a genuinely small, self-contained check" convention this
-    resource already applies elsewhere (server/certifications.lua's/
+    resource already applies elsewhere (server/certifications/'s/
     server/partnership.lua's own independent `IsDuplicateKeyError`/
     `FireOutboundEvent` copies). A WARNING ONLY, never an assert, never a
     resource-start failure -- an operator's own item table is THEIR

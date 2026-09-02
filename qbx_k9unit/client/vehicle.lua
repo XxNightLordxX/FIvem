@@ -1010,7 +1010,7 @@ end
 
 --- Server-initiated forced exit -- the client half of
 --- server/vehicle.lua's RegisterBodyClaimReleaser('vehicle_seat', ...),
---- which fires when server/certifications.lua's EndK9AccessForCitizenId
+--- which fires when server/certifications/'s EndK9AccessForCitizenId
 --- revokes this player's K9 access while they still hold a seat claim.
 ---
 --- WHY THE SERVER CANNOT JUST FORGET THEM. Clearing the seat row without

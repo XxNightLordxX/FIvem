@@ -368,7 +368,7 @@ end
 ---     already-connected officer) does.
 ---   server/permissionkeycatalog.lua
 ---   server/main.lua                -- the certification-cache backfill
----     loop (RefreshCertificationCache, server/certifications.lua's own
+---     loop (RefreshCertificationCache, server/certifications/'s own
 ---     export) -- lives here, not in certifications.lua itself, because
 ---     that is where fxmanifest.lua's own load order put the backfill.
 ---   server/certtiers.lua
@@ -557,7 +557,7 @@ end
 -- ======================================================================
 -- k9_certifications
 --
--- Real queries mirrored below, copied from server/certifications.lua
+-- Real queries mirrored below, copied from server/certifications/
 -- (RefreshCertificationCache, IsCertRowConfirmedActive, GrantCertification/
 -- doGrantInsert, RevokeCertification/RevokeCertificationOffline/
 -- QBCore:Server:OnJobUpdate, SetCertificationTier, RenewCertification,
@@ -580,7 +580,7 @@ local function CertFindActive(citizenid, job)
     return nil
 end
 
---- Mirrors MySQL.scalar.await. Replaces server/certifications.lua's
+--- Mirrors MySQL.scalar.await. Replaces server/certifications/'s
 --- RefreshCertificationCache/IsCertRowConfirmedActive/GrantCertification
 --- existence-check queries.
 function K9Store.Cert_GetActiveId(citizenid, job)
@@ -846,7 +846,7 @@ end
 -- ======================================================================
 -- k9_certification_specializations
 --
--- Mirrored from server/certifications.lua (RefreshSpecializationCache,
+-- Mirrored from server/certifications/ (RefreshSpecializationCache,
 -- RevokeAllSpecializationsForCitizenJob, GrantSpecialization/
 -- doGrantInsert, RevokeSpecialization/RevokeSpecializationOffline,
 -- QueryActiveSpecializations).
@@ -3847,7 +3847,7 @@ local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
 --- today:
 ---
 --- `k9_certifications` -> `k9_certification_specializations`: HasSpecialization
---- (server/certifications.lua) only ever consults a citizenid's
+--- (server/certifications/) only ever consults a citizenid's
 --- specializations AFTER first confirming their CURRENT certification
 --- cache entry is active -- so if `k9_certifications` is missing (memory
 --- mode, reset on every restart, nobody pre-certified) while

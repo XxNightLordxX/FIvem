@@ -4,7 +4,7 @@
     Decouples the K9 ROLE from the K9 PED MODEL, per the project owner's
     three requirements:
       1. High command, from the tablet, can either certify a handler (the
-         existing server/certifications.lua flow) OR directly "apply K9" to
+         existing server/certifications/ flow) OR directly "apply K9" to
          any citizenid, and either path PERMANENTLY changes that player's
          own character to a configured ped.
       2. Any Config.Peds entry works, including a custom/non-dog model —
@@ -22,7 +22,7 @@
     "HOLDS THE K9 ROLE" now means, precisely: an active
     `k9_certifications` row for the citizenid's CURRENT job (the traditional
     credential this resource already calls "K9 certification" — see
-    server/certifications.lua's own OnJobUpdate comment: "the cert is
+    server/certifications/'s own OnJobUpdate comment: "the cert is
     specifically the 'I am a working K9' credential, not 'I am allowed near
     one'" — that sentence is the whole finding this file is built on), OR an
     active `k9.access` grant in server/permissions.lua's k9_permissions
@@ -38,7 +38,7 @@
     `k9_ped_assignments` (citizenid -> currently-applied model name, plus
     the ORIGINAL model hash captured before the very first swap so a revoke
     can put it back). Config.K9Appearance.requireK9ModelForRole (default
-    false) controls ONLY whether server/certifications.lua's grant-time
+    false) controls ONLY whether server/certifications/'s grant-time
     model check still runs — it never touches HasK9Role() above, which was
     already model-independent by construction before this file existed.
 
@@ -67,13 +67,13 @@
             The AUTOMATIC side effect Config.K9Appearance's own header
             documents ("certifying someone (or granting them k9.access)
             actually turns their character into the ped") — called ONLY
-            from server/certifications.lua's GrantCertification and
+            from server/certifications/'s GrantCertification and
             server/permissions.lua's GrantPermission, each already gated on
             Config.K9Appearance.applyPedModelOnCertify at the call site.
             modelName defaults to Config.Peds[1].model when omitted, since
             neither caller carries a model choice of its own.
         MaybeRevertK9Appearance(citizenid)
-            Called from every path in server/certifications.lua and
+            Called from every path in server/certifications/ and
             server/permissions.lua that just confirmed a K9 credential is
             GONE (RevokeCertification, RevokeCertificationOffline,
             OnJobUpdate's auto-revoke, and RevokePermission's
@@ -82,7 +82,7 @@
       Each is guarded at its call site with the established
       `type(...) == 'function'` soft-dependency convention (this file loads
       after server/permissions.lua/server/highcommand.lua/server/cooldowns.lua
-      and before server/certifications.lua in fxmanifest.lua).
+      and before server/certifications/ in fxmanifest.lua).
     - THIS FILE calls `HasPermission`/`GrantPermission`/`RevokePermission`
       (server/permissions.lua), `IsHighCommand` (server/highcommand.lua) and
       `NewCooldown` (server/cooldowns.lua, at THIS file's own load time — a
@@ -90,7 +90,7 @@
       `NotifyPlayer` (server/notify.lua). All guarded except NewCooldown,
       which every consumer in this resource calls unconditionally at load
       time.
-    - THIS FILE does NOT call into server/certifications.lua's `local`
+    - THIS FILE does NOT call into server/certifications/'s `local`
       Certifications cache directly (it is private to that file) —
       IsCertifiedK9ForCurrentJob below reads `k9_certifications` itself,
       the same table certifications.lua reads, rather than requiring a new
@@ -137,7 +137,7 @@
 -- (ApplyK9PedRole, ApplyK9AppearanceOnGrant, MaybeRevertK9Appearance, and
 -- everything else below) down with it, for the rest of that server's
 -- uptime, over one operator typo in a custom Config.Peds entry added to
--- try a new breed. Other server_scripts files (server/certifications.lua,
+-- try a new breed. Other server_scripts files (server/certifications/,
 -- the tablet, permission grants) call into this file's functions
 -- unconditionally and would see them simply not exist, with nothing but
 -- one script-error line at boot to explain why.
@@ -222,7 +222,7 @@ local function IsValidPedModelName(name)
 end
 
 -- Anti-fat-finger cooldown, same shape/threshold as
--- server/certifications.lua's CertifyActionCooldown and
+-- server/certifications/'s CertifyActionCooldown and
 -- server/permissions.lua's PermissionActionCooldown (1500ms, a plain
 -- literal, not a Config field -- this file cannot edit config.lua either).
 -- Keyed by the GRANTER's own source, mirroring both of those exactly.
@@ -277,7 +277,7 @@ end
 --- LogAuditInvocation "%s ran %s(%s) -> %s" format EXACTLY. `whoLabel` is
 --- pre-resolved by the caller so this works uniformly whether the actor is
 --- a live source (tablet action) or a system-triggered path (auto-revert
---- on decertify/job-change), matching server/certifications.lua's own
+--- on decertify/job-change), matching server/certifications/'s own
 --- 'system:job_change' sentinel precedent for the latter.
 --- @param whoLabel string
 --- @param action string
@@ -289,7 +289,7 @@ end
 
 --- Server-authoritative: does `citizenid` hold an active k9_certifications
 --- row for THEIR CURRENT job? Deliberately re-derives this from the DB
---- directly rather than reaching into server/certifications.lua's private
+--- directly rather than reaching into server/certifications/'s private
 --- `Certifications` cache (not exposed, and this file's header explains why
 --- it stays that way) -- this call is never on a hot path (role
 --- reconciliation on revoke, and the HasK9Role callback, itself cached
@@ -434,7 +434,7 @@ end
 --- Read-only convenience accessor (no known caller in this resource today,
 --- exposed for a future consumer / the tablet's own display needs, same
 --- "expose the accessor, let a later file decide it wants it" reasoning
---- server/certifications.lua's IsConfiguredK9Model already documents).
+--- server/certifications/'s IsConfiguredK9Model already documents).
 --- @param citizenid string
 --- @return string? model -- nil if no active assignment
 function GetAssignedK9Model(citizenid)
@@ -728,7 +728,7 @@ end
 --- permission grant, per Config.K9Appearance's own header — called ONLY
 --- when the caller has already checked
 --- Config.K9Appearance.applyPedModelOnCertify itself. Neither caller
---- (server/certifications.lua's GrantCertification, server/permissions.lua's
+--- (server/certifications/'s GrantCertification, server/permissions.lua's
 --- GrantPermission) carries a model choice, so this defaults to
 --- Config.Peds[1].model when `modelName` is omitted or invalid.
 --- @param targetCitizenid string
@@ -760,7 +760,7 @@ end
 --- IsCertifiedK9ForAnyJob's own doc comment for why this fails OPEN on a
 --- read error, unlike every access check elsewhere in this resource).
 --- Safe to call unconditionally from every revoke path in
---- server/certifications.lua / server/permissions.lua — a citizenid with no
+--- server/certifications/ / server/permissions.lua — a citizenid with no
 --- active k9_ped_assignments row is a cheap no-op (mirrors
 --- ForceDetachLeashIfOnline/ForceBreakPartnershipForCitizenId's own
 --- "harmless no-op for the common case" convention).
@@ -829,7 +829,7 @@ local function PerformRevert(citizenid, granterLabel)
 end
 
 --- Automatic reconciliation -- called from every path in
---- server/certifications.lua and server/permissions.lua that just
+--- server/certifications/ and server/permissions.lua that just
 --- confirmed a K9 credential is GONE. Reverts ONLY when the citizenid no
 --- longer qualifies via ANY path -- see its own credential checks below.
 --- For the DELIBERATE, high-command-initiated "remove K9 ped" action that

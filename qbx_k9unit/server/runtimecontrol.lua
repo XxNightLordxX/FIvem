@@ -155,7 +155,7 @@
                     CheckLeashEligibility), BasicBarkSounds /
                     DoorInteraction (server/main.lua's relayBark /
                     relayDoorScratch handlers), CertificationExpiry
-                    (server/certifications.lua's GrantCertification checks
+                    (server/certifications/'s GrantCertification checks
                     it live for the primary "does a new grant get an
                     expiry" effect; the courtesy-warning SWEEP THREAD is
                     only started if the flag was already true when
@@ -303,7 +303,7 @@
          §3 verbatim; server/admin.lua's Config.AdminAudit.CommandCooldownMs
          and Config.AdminAudit.MaxResults.* are both read fresh inside each
          command's own handler on every invocation, never captured as a
-         NewCooldown constructor default; server/certifications.lua's
+         NewCooldown constructor default; server/certifications/'s
          Config.CertificationExpiryCheckIntervalMs is re-read at the top of
          every sweep-thread loop iteration, confirmed by direct read of
          that exact loop). A tunable this file could not confirm this way
@@ -376,7 +376,7 @@
       - It does not attempt a synchronous database read at this file's own
         raw top-level (before any AddEventHandler/CreateThread). Every
         existing DB-dependent startup path in this resource
-        (server/admin.lua, server/highcommand.lua, server/certifications.lua's
+        (server/admin.lua, server/highcommand.lua, server/certifications/'s
         backfill, server/permissions.lua's backfill) defers its first real
         query into `AddEventHandler('onResourceStart', ...)` -- none of
         them do it at bare file scope. This file follows that same,
@@ -562,7 +562,7 @@ local FEATURE_TIERS = {
     LeashMechanics         = { tier = 'live' },
     BasicBarkSounds        = { tier = 'live' },
     DoorInteraction        = { tier = 'live' },
-    CertificationExpiry    = { tier = 'live', note = 'New/renewed grants getting an expiry date works immediately either way. The courtesy expiry-warning sweep thread only starts if this was already true when server/certifications.lua loaded -- turning it on mid-session does not start a sweep that never began; a restart is needed for the warning sweep specifically (grants themselves are unaffected).' },
+    CertificationExpiry    = { tier = 'live', note = 'New/renewed grants getting an expiry date works immediately either way. The courtesy expiry-warning sweep thread only starts if this was already true when server/certifications/ loaded -- turning it on mid-session does not start a sweep that never began; a restart is needed for the warning sweep specifically (grants themselves are unaffected).' },
     FatigueSystem          = { tier = 'live' },
     PartnershipTenureBonus = { tier = 'live', note = 'The milestone check itself re-verifies HandlerPartnership/XPProgression/PartnershipTenureBonus fresh every tick. The tick thread only starts if all three were already true when server/tenure.lua loaded -- if it was off at boot, turning it on mid-session has nothing polling to notice a milestone until this resource restarts.' },
     -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
@@ -1747,7 +1747,7 @@ local TUNABLE_REGISTRY = {
     ['XP.trackArrivalTTLMs']             = { path = { 'XP', 'trackArrivalTTLMs' },                min = 5000,  max = 600000,   integer = true },
 
     -- Config.CertificationExpiryDays / Config.CertificationExpiryWarningDays
-    -- (server/certifications.lua, NOT edited by this pass -- read-only
+    -- (server/certifications/, NOT edited by this pass -- read-only
     -- audit). This file's own header (PART 1B, exclusion rule 2)
     -- previously excluded these on a POLICY ground ("an instant policy
     -- change to how long every future grant's clock runs is a real

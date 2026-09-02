@@ -70,7 +70,7 @@
 
     ANY PED: this file's only role/authorization check is HasK9Access(src)
     -- a certification/permission check with NO ped-model component at all
-    (server/certifications.lua's own header: "ROLE/MODEL DECOUPLING" --
+    (server/certifications/'s own header: "ROLE/MODEL DECOUPLING" --
     HasK9Access never reads GetEntityModel). This file never calls
     GetEntityModel, IsEntityModelK9, or IsOwnModelK9 anywhere -- confirmed
     by re-reading this file before shipping it. A custom streamed ped, an

@@ -42,7 +42,7 @@ Confirmed by direct read of the current tree (2026-08-26):
   `narcotics`, `explosives`, `patrol`, each `{ label = '...' }`. A certifier
   grants them via the tablet; they persist in `k9_certification_specializations`
   (`sql/install.sql:271`, `sql/migrations/0006_add_k9_certification_lifecycle.sql:345`);
-  `HasSpecialization(citizenid, jobName, key)` (`server/certifications.lua:4325`)
+  `HasSpecialization(citizenid, jobName, key)` (`server/certifications/:4325`)
   is the one real server-side read.
 - The **only** production consumer of `HasSpecialization` outside
   plumbing (certtiers.lua/certifications.lua/datastore.lua) is
@@ -424,7 +424,7 @@ only the moment) the owner populates `Config.ContrabandDisciplines`.
 
 **On resource start**, print one console line (matching this codebase's
 existing `print('[qbx_k9unit] ...')` convention for operator diagnostics,
-e.g. `server/certifications.lua`'s own `QueryCertificationRecord` failure
+e.g. `server/certifications/`'s own `QueryCertificationRecord` failure
 print) — **not** a chat message or tablet toast, since this is boot-time
 operator information, not a player-facing event:
 
@@ -620,6 +620,6 @@ Numbered so a reviewer can check each independently. Negative
   next to each specialization, computed from whether
   `Config.ContrabandDisciplines` references that key (§7).
 - `locales/en.json` — new `"disciplines"` namespace (§7).
-- No changes required to `server/certifications.lua`, `server/certtiers.lua`,
+- No changes required to `server/certifications/`, `server/certtiers.lua`,
   `server/equipmentshop.lua`, `server/combat.lua`, or any `sql/` file
   (pending the open question in §9 item 1).

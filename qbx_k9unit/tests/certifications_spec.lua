@@ -1,7 +1,7 @@
 --[[
     tests/certifications_spec.lua
 
-    Direct + indirect tests of server/certifications.lua -- the authorization
+    Direct + indirect tests of server/certifications/ -- the authorization
     root of this entire resource (HasK9Access gates nearly every feature) --
     against the REAL, unmodified production file. Before this spec, this
     file had ZERO direct coverage despite being the single most
@@ -61,7 +61,7 @@
     for `assert(...)` calls at file-load time (the shape server/
     propattachment.lua, server/bonetool.lua, server/progression.lua,
     server/admin.lua, and server/search.lua all use to fail loudly at
-    resource start on a malformed Config table). server/certifications.lua
+    resource start on a malformed Config table). server/certifications/
     has ZERO such asserts -- a malformed Config.Departments entry (e.g. a
     missing/non-numeric certifierGrade, or Config.Peds containing a
     non-string `model` field) is never validated at load time here; it would
@@ -536,7 +536,7 @@ local function newFixture(opts)
 
     -- server/datastore.lua -- REAL, unmodified, loaded first (fxmanifest.lua's
     -- own load order: the only file allowed to call MySQL.* directly).
-    -- server/certifications.lua's own k9_certifications/
+    -- server/certifications/'s own k9_certifications/
     -- k9_certification_specializations reads and writes now go through
     -- K9Store.* rather than a local MySQL.*.await call -- Config.Database
     -- is deliberately absent from this fixture's Config table above, so
@@ -548,7 +548,14 @@ local function newFixture(opts)
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
-    Sandbox.loadInto('../server/certifications.lua', env)
+    -- SPLIT 2026-09-02: one 6,012-line file became four, loaded in the same
+    -- order fxmanifest.lua loads them. The order is load-bearing -- each
+    -- file re-binds names the earlier ones published onto K9Cert, so a
+    -- file loaded out of order would re-bind nil.
+    Sandbox.loadInto('../server/certifications/core.lua', env)
+    Sandbox.loadInto('../server/certifications/depth.lua', env)
+    Sandbox.loadInto('../server/certifications/accessors.lua', env)
+    Sandbox.loadInto('../server/certifications/commands.lua', env)
 
     -- ROSTER FIX (coordinator-flagged gap, this pass) -- opt-in, REAL,
     -- unmodified server/roster.lua loaded into the SAME env/K9Store so an
@@ -1138,7 +1145,7 @@ end)
 -- ======================================================================
 -- ECONOMY FIX: self-cert/decertify farm loop (CertifyXpMintCooldown).
 --
--- See server/certifications.lua's own CertifyXpMintCooldown declaration
+-- See server/certifications/'s own CertifyXpMintCooldown declaration
 -- comment (search that file for "ECONOMY FIX", right after
 -- CERTIFY_ACTION_COOLDOWN_MS/CertifyActionCooldown) for the full writeup
 -- this section proves out end to end, against the REAL production file,
@@ -1163,7 +1170,7 @@ end)
 -- be exercising the real exploit shape at all.
 -- ======================================================================
 
--- Mirrors server/certifications.lua's own CERTIFY_XP_MINT_COOLDOWN_MS
+-- Mirrors server/certifications/'s own CERTIFY_XP_MINT_COOLDOWN_MS
 -- literal exactly (a hardcoded file-local constant there, not a Config
 -- value -- see that file's own declaration comment for why) so a future
 -- change to the production constant is impossible to silently drift out of
@@ -1281,7 +1288,7 @@ end)
 -- ======================================================================
 -- FARM FIX: distinct-target certify farm (Config.CertifyMaxNewGranteesPerDay).
 --
--- See server/certifications.lua's own header comment right after
+-- See server/certifications/'s own header comment right after
 -- CertifyXpMintKey's declaration (search for "FARM FIX (audit finding,
 -- this pass") for the full writeup this section proves out end to end,
 -- against the REAL production file: CertifyXpMintCooldown above (per
@@ -2348,7 +2355,7 @@ end)
 -- (ForceBreakPartnershipForCitizenId) -- EndActiveEffectForHolder was the
 -- one call in that same "must not outlive certification" family missing
 -- from this call site. All three now go through this file's own shared
--- EndK9AccessForCitizenId helper (server/certifications.lua) -- see that
+-- EndK9AccessForCitizenId helper (server/certifications/) -- see that
 -- function's own doc comment for the full writeup.
 -- ======================================================================
 
@@ -2421,7 +2428,7 @@ end)
 -- anything for them via a DB write -- but that also meant NOTHING tore
 -- down their leash/partnership/hold when a same-department demotion below
 -- autoAccessGrade genuinely took their K9 access away. See OnJobUpdate's
--- own new doc comment (server/certifications.lua) for the full writeup.
+-- own new doc comment (server/certifications/) for the full writeup.
 -- ======================================================================
 
 t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade, for a citizenid with NO cached cert (autoAccessGrade was their ONLY route), force-detaches the leash, ends any held effect, and breaks the partnership', function()
@@ -2630,7 +2637,7 @@ t.test('OnJobUpdate: WORKFLOW CLARITY -- leaving the department entirely notifie
 end)
 
 t.test('OnJobUpdate: a K9-role player who ALSO loses department membership entirely triggers BOTH the officer-role leash detach AND the cert-revoke leash detach -- pinned as observed, not assumed exclusive', function()
-    -- FINDING (behavior pin, not a bug report): server/certifications.lua's
+    -- FINDING (behavior pin, not a bug report): server/certifications/'s
     -- header states an officer/handler-role party "never holds a K9
     -- certification of their own" as the reason the department-loss branch
     -- and the cert-revoke branch are independent. That's a gameplay
@@ -2733,7 +2740,7 @@ end)
 -- this citizenid at all (it is gated on `cached.active`, and this
 -- citizenid never had a certification row to cache in the first place).
 -- See EndK9AccessForCitizenId's own doc comment and the department-loss
--- branch's own comment (both server/certifications.lua) for the full
+-- branch's own comment (both server/certifications/) for the full
 -- writeup of why this is now closed via that shared helper.
 -- ======================================================================
 
@@ -2938,7 +2945,7 @@ end)
 -- ======================================================================
 
 --- Puts `citizenid` into the state the merged /k9certify treats as
---- "already certified", through server/certifications.lua's OWN
+--- "already certified", through server/certifications/'s OWN
 --- RefreshCertificationCache rather than by writing the cache table
 --- directly -- so this fixture agrees with production about what that state
 --- means, instead of asserting against a shape the real code never builds.
@@ -3132,7 +3139,7 @@ end)
 -- is now WRONG and has been REPLACED (not merely renamed) below: a
 -- previously-CONFIRMED certification must SURVIVE a transient read
 -- failure. See RefreshCertificationCache's own doc comment in
--- server/certifications.lua for the full contract this section proves.
+-- server/certifications/ for the full contract this section proves.
 
 t.test('RefreshCertificationCache: COULD-NOT-DETERMINE -- a throwing MySQL.scalar.await for an ALREADY-CERTIFIED citizenid KEEPS the previous confirmed state, never resets to uncertified', function()
     local f = newFixture()
@@ -4595,7 +4602,7 @@ end)
 -- resource -- now delegated to that same function instead.
 --
 -- SHARED-THREADRUNNER NOTE: with Config.Features.CertificationExpiry on
--- (every test below), server/certifications.lua's file scope registers
+-- (every test below), server/certifications/'s file scope registers
 -- FOUR separate CreateThread loops onto this ONE fixture-wide
 -- threadRunner, in this exact registration order: (1) CertifyXpMintCooldown's
 -- 24h StartSweep cleanup (unconditional, registered first, near this

@@ -67,7 +67,7 @@ Verified directly, file/line:
   clicking a result opens `buildPersonScreen()`.
 - **Hire/fire/promote/demote already exist as certification primitives**,
   but are not evenly wired to the tablet:
-  - Hire = `GrantCertificationForTablet` (`server/certifications.lua:2510`)
+  - Hire = `GrantCertificationForTablet` (`server/certifications/:2510`)
     → `tablet:certify` → **fully wired**, works online and offline.
   - Promote/demote = `SetCertificationTierForTablet` (`:3376`) →
     `tablet:setCertificationTier` → **fully wired**, works online and
@@ -332,7 +332,7 @@ row would recreate the "wall of text" the row is supposed to avoid.
 All of the below are re-verified server-side on every call
 (`IsHighCommand(source)`, live, never a cached/client-claimed value) — no
 new authorization mechanism, reusing exactly what `server/tablet.lua`/
-`server/certifications.lua`/`server/permissions.lua` already enforce.
+`server/certifications/`/`server/permissions.lua` already enforce.
 
 | Action | Backend | Who | Confirm? | Audit |
 |---|---|---|---|---|

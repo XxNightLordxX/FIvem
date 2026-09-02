@@ -137,7 +137,7 @@
 
     FILE-TO-FILE CONTRACT:
     - Loads after server/cooldowns.lua (NewCooldown), server/entities.lua
-      (ResolveNetworkEntity), and server/certifications.lua (HasK9Access,
+      (ResolveNetworkEntity), and server/certifications/ (HasK9Access,
       IsConfiguredK9Model) — all called at file-load and/or runtime.
     - Exposes no resource-global functions of its own; nothing else in this
       codebase needs to reach into FetchMechanic's own state.

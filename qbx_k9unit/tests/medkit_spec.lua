@@ -30,7 +30,7 @@
     per its own header's callback-contract note on why it deliberately never
     needs netId/entity-handle resolution at all). IsConfiguredK9Model and
     NotifyPlayer are stubbed directly, not loaded -- both are genuinely
-    OTHER files' own logic (server/certifications.lua, server/notify.lua),
+    OTHER files' own logic (server/certifications/, server/notify.lua),
     already covered by their own specs, same convention every other spec in
     this suite already establishes (kennel_spec.lua/combat_spec.lua/
     wellbeing_spec.lua's own headers). RestoreInjury is the documented
@@ -1463,7 +1463,7 @@ end)
 -- is NOW wired -- server/medkit.lua's RunUseK9MedkitMutation calls
 -- AwardHandlerXP(usingCitizenid, 'handlerTreatK9') for a genuine heal, gated
 -- by HandlerTreatXpMintCooldown, a dedicated per-ACTOR MINT cooldown
--- (mirroring server/certifications.lua's CertifyXpMintCooldown fix for
+-- (mirroring server/certifications/'s CertifyXpMintCooldown fix for
 -- handlerCertifyK9) -- never a per-target one (MedkitCooldown's own shape,
 -- which a multi-target actor could otherwise bypass entirely) -- sized well
 -- below the rank-reduced 18000ms floor (30 real minutes -- 100x that floor,
@@ -1494,7 +1494,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 w
     -- still report PASS.
     -- It now requires a real DECLARATION -- a cooldown tracker actually
     -- constructed via NewCooldown() whose name follows the
-    -- CertifyXpMintCooldown precedent in server/certifications.lua. Prose
+    -- CertifyXpMintCooldown precedent in server/certifications/. Prose
     -- cannot satisfy that. The test directly below proves this pattern
     -- rejects a comment and accepts a real declaration, so a future edit
     -- cannot quietly defeat it again.
@@ -1502,7 +1502,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/medkit.lua must not award handlerTreatK9 w
         'handlerTreatK9 is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-ACTOR mint cooldown (a second, separate tracker, never MedkitCooldown itself, which is ' ..
         'target-keyed and now handler-rank-shortened to an 18000ms combined worst-case floor) named with the ' ..
-        'XP_MINT_COOLDOWN convention (server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown ' ..
+        'XP_MINT_COOLDOWN convention (server/certifications/\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown ' ..
         'precedent) so this test can find it, then update this test\'s own expectations to match. See ' ..
         'server/progression.lua\'s GetHandlerXPTierMedkitCooldownMs header for the full writeup.')
 end)
@@ -1871,7 +1871,7 @@ t.test('REAL SHARED BUDGET: handlerTreatK9 is refused once the shared XP mint bu
     -- SAME K9 can be treated again), HandlerTreatXpMintCooldown (this
     -- pass's own 30-minute per-actor mint cooldown -- consumed on the FIRST
     -- attempt above regardless of the shared budget outcome, exactly like
-    -- server/certifications.lua's own CertifyXpMintCooldown precedent: the
+    -- server/certifications/'s own CertifyXpMintCooldown precedent: the
     -- mint cooldown gates the ATTEMPT, not a confirmed successful mint), and
     -- the shared budget's own refill (3600 XP / 3,600,000ms -- comfortably
     -- refills the remaining 10 tokens past 12 well before 30 minutes are
@@ -2771,7 +2771,7 @@ t.test('TRIPWIRE SELF-CHECK: the mint-cooldown pattern rejects prose and accepts
         local TreatXpMintCooldown = NewCooldown()
     ]]
     t.isNotNil(realDeclaration:find(pattern),
-        'a genuine per-actor tracker built with NewCooldown(), following server/certifications.lua CertifyXpMintCooldown precedent, MUST satisfy the tripwire -- otherwise the guard blocks legitimate work')
+        'a genuine per-actor tracker built with NewCooldown(), following server/certifications/ CertifyXpMintCooldown precedent, MUST satisfy the tripwire -- otherwise the guard blocks legitimate work')
 end)
 
 os.exit(t.summary())

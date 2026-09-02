@@ -48,7 +48,7 @@
     caller of GetJob/GetCitizenId/GetPlayerData is expected to treat the
     result as informational (what does the framework currently say?),
     never as the authorization decision itself -- this resource's existing
-    server-side gates (server/certifications.lua, server/permissions.lua,
+    server-side gates (server/certifications/, server/permissions.lua,
     etc.) are the actual authority and this file changes none of that.
 
     NEVER LET A THIRD-PARTY EXPORT THROW INTO THIS RESOURCE. Every export

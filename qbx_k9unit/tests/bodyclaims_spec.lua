@@ -256,7 +256,7 @@ end)
 -- FORCED RELEASE -- ForceReleaseBodyClaimForCitizenId + the
 -- RegisterBodyClaimReleaser dispatcher it routes through.
 --
--- THE DEFECT THIS CLOSES: server/certifications.lua's
+-- THE DEFECT THIS CLOSES: server/certifications/'s
 -- EndK9AccessForCitizenId tore down every session consequence of holding K9
 -- access EXCEPT a kennel-rest occupancy and a vehicle-seat claim, leaving a
 -- decertified player still attached to a kennel prop, or seated, with the

@@ -8,7 +8,7 @@
     GetXPTier/ApplyK9PedRole/ForceRevertK9Appearance are TEST-CONTROLLED
     stubs (plain functions the test swaps in), matching this codebase's
     `type(fn) == 'function'` soft-dependency contract -- a real deployment
-    satisfies it via the real server/permissions.lua, server/certifications.lua,
+    satisfies it via the real server/permissions.lua, server/certifications/,
     server/highcommand.lua, server/progression.lua and server/appearance.lua;
     this fixture satisfies it via doubles, so server/tablet.lua's OWN logic
     (state resolution, authorization re-verification, roster bounding) is
@@ -23,7 +23,7 @@
 
     tabletCertify and tabletGiveXp are NOT tested here -- per server/tablet.lua's
     own header "ARCHITECTURE DECISION", those two callbacks are registered
-    inside server/certifications.lua (GrantCertificationForTablet) and
+    inside server/certifications/ (GrantCertificationForTablet) and
     server/highcommand.lua (GrantHighCommandXp/IsAuthorizedForXpGrant)
     respectively, not in this file at all; certifications_spec.lua and
     highcommand_spec.lua are the right place for coverage of those two (see
@@ -41,7 +41,7 @@
     OWN QueryActivePermissionSet/ResolveFeatureState later reads back
     correctly, not merely that each half independently believes it works.
     IsHighCommand/HasK9Access remain test-controlled stubs here too (this is
-    still not a full production-topology test -- server/certifications.lua/
+    still not a full production-topology test -- server/certifications//
     server/highcommand.lua are not loaded), matching this file's own
     established UNIT-level convention for everything this round trip does
     not need a real implementation of.
@@ -275,7 +275,7 @@ local function newFixture(opts)
         -- own `assignedK9Model = nil` degrade path; only the new tests
         -- below pass opts.getAssignedK9Model.
         GetAssignedK9Model = opts.getAssignedK9Model,
-        -- CERTIFICATION DEPTH READ-SIDE (this pass) -- server/certifications.lua's
+        -- CERTIFICATION DEPTH READ-SIDE (this pass) -- server/certifications/'s
         -- own DB-authoritative, already-exposed accessor. Deliberately nil by
         -- default (like HasPermission above): BuildCertificationsArray's own
         -- `type(QueryCertificationRecord) == 'function'` guard must tolerate
@@ -650,7 +650,7 @@ end)
 -- ============================================================================
 -- CERTIFICATION DEPTH READ-SIDE (this pass) -- BuildCertificationsArray now
 -- carries tier/expiresAtUnix/expired/specializations per department, sourced
--- from server/certifications.lua's DB-authoritative QueryCertificationRecord.
+-- from server/certifications/'s DB-authoritative QueryCertificationRecord.
 -- See that helper's own doc comment in server/tablet.lua for the full
 -- reasoning (offline-safe, bounded per configured department, guarded soft
 -- dependency).

@@ -12,7 +12,7 @@
     WHAT THIS FILE OWNS: two roster LISTS (K9, Handler) plus an explicit
     "Unassigned" bucket (docs/history/ROSTER_SPEC.md §3/§5/§8), each row backed by the
     new `k9_personnel` table (migration 0020) layered over the existing
-    `k9_certifications` data server/certifications.lua/server/tablet.lua
+    `k9_certifications` data server/certifications//server/tablet.lua
     already own -- and the mutations that change a row's roster
     role/callsign. This file registers its OWN `qbx_k9unit:server:roster*`
     lib.callback endpoints -- it does NOT add anything to
@@ -21,7 +21,7 @@
     WHAT THIS FILE DELIBERATELY DOES NOT DO (PHASE A SCOPE CUT, STATED
     PLAINLY): it does not change `GrantCertificationForTablet`'s signature,
     and it does not wire a Hire/Fire/Promote/Demote button anywhere --
-    server/certifications.lua is being edited concurrently by another pass
+    server/certifications/ is being edited concurrently by another pass
     and is out of scope here. docs/history/ROSTER_SPEC.md §3 says
     `GrantCertificationForTablet` should gain a required `personnelRole`
     parameter at hire time; this file does not make that change. Instead
@@ -43,7 +43,7 @@
 
     Similarly, `RevokeCertificationForTablet` (docs/history/ROSTER_SPEC.md §1/§6's
     "closes the dead Decertify button gap") -- LANDED (verified by reading
-    server/certifications.lua directly): the wrapper this comment used to
+    server/certifications/ directly): the wrapper this comment used to
     say was not yet written now exists there, and it does call
     `ClearPersonnelRowForCitizenJob` (below) immediately AFTER its own
     revoke succeeds, never before -- see that function's own doc comment.
@@ -81,7 +81,7 @@ if not (Config.Features and Config.Features.CommandTablet == true) then return e
 -- ======================================================================
 -- SMALL LOCAL HELPERS -- each one a deliberate, small, per-file copy of a
 -- pattern this resource already establishes elsewhere (server/tablet.lua's
--- own ResolveDisplayName/SafeStoreCall, server/certifications.lua's own
+-- own ResolveDisplayName/SafeStoreCall, server/certifications/'s own
 -- IsDuplicateKeyError) -- see server/permissions.lua's own doc comment on
 -- "each file keeps its own tiny copy" for why this resource does not share
 -- these across files that otherwise have no load-order relationship.
@@ -211,7 +211,7 @@ local function ResolveTierMeta(tierKey)
     return nil
 end
 
---- Sibling of server/certifications.lua's own IsDuplicateKeyError -- same
+--- Sibling of server/certifications/'s own IsDuplicateKeyError -- same
 --- "each file keeps its own tiny copy" convention that file's own doc
 --- comment already documents, checking `err.errno == 1062` first, before
 --- ever inspecting a message string, so it recognizes BOTH a real MySQL
@@ -518,7 +518,7 @@ end
 
 --- Best-effort `k9_personnel` row cleanup for a citizenid whose
 --- certification was JUST revoked (Fire -- docs/history/ROSTER_SPEC.md §6/§7). PUBLIC,
---- GLOBAL, callable from a future `server/certifications.lua`
+--- GLOBAL, callable from a future `server/certifications/`
 --- `RevokeCertificationForTablet` wrapper -- guard with
 --- `type(ClearPersonnelRowForCitizenJob) == 'function'` at that call site.
 ---

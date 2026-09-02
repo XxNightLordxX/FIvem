@@ -14,7 +14,7 @@
     STRICT SESSION OWNERSHIP: this file, client/findalert.lua and
     tests/findalert_spec.lua were the ONLY three new files this pass was
     authorized to create. server/search.lua, server/tracking.lua,
-    server/certifications.lua and server/cooldowns.lua are all owned by
+    server/certifications/ and server/cooldowns.lua are all owned by
     other agents this session and are only READ (globals/events they
     already expose), never edited, to build this.
 
@@ -274,7 +274,7 @@ local function DispatchFindAlertReaction(targetSrc, alertTier)
     local reaction = Config.FindAlerts and Config.FindAlerts.reactionsByAlertTier and Config.FindAlerts.reactionsByAlertTier[alertTier]
     if not reaction then return end
 
-    if not HasK9Access(targetSrc) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here -- mirrors server/main.lua's relayBark
+    if not HasK9Access(targetSrc) then return end -- reuse the global from server/certifications/, do not re-derive the job/cert check here -- mirrors server/main.lua's relayBark
 
     -- PER-PERSON FEATURE CONTROL -- see IsFindAlertsPermittedForCitizenId
     -- above. Resolved via a DIRECT exports.qbx_core:GetPlayer(targetSrc)

@@ -14,7 +14,7 @@
 
     NOT COVERED HERE (disclosed, not silently skipped): the cross-file
     TierEditMutex race this pass closes between server/certtiers.lua's own
-    DeleteTier and server/certifications.lua's SetCertificationTier is not
+    DeleteTier and server/certifications/'s SetCertificationTier is not
     exercised by either this spec or tests/certifications_spec.lua -- doing
     so would need a real concurrent-coroutine harness interleaving two
     MySQL.await yield points across TWO loaded production files sharing one
@@ -179,12 +179,12 @@ local function boot(opts)
         Config                 = config,
     }
     -- TierCapabilityPermits' own soft dependency on
-    -- server/certifications.lua's GetCertificationTier -- OMITTED from
+    -- server/certifications/'s GetCertificationTier -- OMITTED from
     -- envOverrides entirely (not merely nil) unless a test explicitly
     -- supplies one via opts.getCertificationTier, so
     -- `type(GetCertificationTier) == 'function'` inside the production
     -- file genuinely sees it as absent, exactly like a real server
-    -- running this file without server/certifications.lua loaded.
+    -- running this file without server/certifications/ loaded.
     -- TIER-BYPASS-ON-EXPIRY FIX: TierCapabilityPermits now calls
     -- GetCertificationTier(citizenid, jobName, true) (the 3-argument form)
     -- rather than adding a second global -- opts.getCertificationTier's own
@@ -698,7 +698,7 @@ end)
 -- ============================================================================
 -- SECTION 8 -- HAZARD 4: the mutex primitive this pass introduces exists
 -- and behaves as a real mutex (the cross-file race it closes is exercised
--- indirectly via server/certifications.lua's own SetCertificationTier
+-- indirectly via server/certifications/'s own SetCertificationTier
 -- soft-dependency guard, covered in tests/certifications_spec.lua, which
 -- passes with TierEditMutex entirely ABSENT from that spec's sandbox --
 -- proving the soft-dependency fallback works when this file is not
@@ -725,7 +725,7 @@ end)
 -- see that function's own doc comment), so this spec verifies it only
 -- through the one real public contract a consumer would actually call,
 -- never by reaching around it. `opts.getCertificationTier` (this file's
--- own extension to boot(), above) stands in for server/certifications.lua's
+-- own extension to boot(), above) stands in for server/certifications/'s
 -- real GetCertificationTier -- production code never runs with that file
 -- absent in a shipped install, but this spec exercises this file's OWN
 -- soft-dependency fallback deliberately, the same discipline
@@ -805,7 +805,7 @@ t.test('COMPOSITION: allows when the acting citizenid\'s tier cannot be resolved
     t.isTrue(f.env.TierCapabilityPermits('NO_CERT_CIT', 'police', 'bite_hold_and_takedown'))
 end)
 
-t.test('COMPOSITION: allows when GetCertificationTier is entirely absent (soft dependency, server/certifications.lua not loaded)', function()
+t.test('COMPOSITION: allows when GetCertificationTier is entirely absent (soft dependency, server/certifications/ not loaded)', function()
     local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end }) -- no getCertificationTier supplied
     f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
     t.isNil(f.env.GetCertificationTier, 'this test\'s own sandbox genuinely has no GetCertificationTier defined')
@@ -931,7 +931,7 @@ end)
 -- true), which distinguishes "a real, active, job-matching row exists but
 -- is stale" from "no such row exists at all" using the underlying cache's
 -- own independent `active`/`expired` flags (see that accessor's own doc
--- comment, server/certifications.lua). These tests drive
+-- comment, server/certifications/). These tests drive
 -- TierCapabilityPermits with a SINGLE getCertificationTier stub that
 -- itself branches on the 3rd argument, exactly mirroring what the real
 -- production accessor does for an expired-but-still-K9-accessible handler.
@@ -1249,7 +1249,7 @@ end)
 t.test('SELF-TIER CAPABILITY EDIT: never flagged when the acting officer\'s own tier cannot be resolved (soft dependency, no GetCertificationTier loaded)', function()
     local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
     -- No getCertificationTier stub supplied at all -- production code must
-    -- degrade exactly like server/certifications.lua not being loaded,
+    -- degrade exactly like server/certifications/ not being loaded,
     -- never error, matching this file's own established soft-dependency
     -- convention (SECTION 9's own "allows when GetCertificationTier is
     -- entirely absent" case).

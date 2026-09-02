@@ -12,19 +12,19 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 1 (full copy; see
-    server/certifications.lua for the most detailed version of this same
+    server/certifications/ for the most detailed version of this same
     block):
 
     Callbacks (ox_lib lib.callback):
-    1. 'qbx_k9unit:server:hasK9Access' () -> boolean [server/certifications.lua]
+    1. 'qbx_k9unit:server:hasK9Access' () -> boolean [server/certifications/]
        job.name ∈ Config.Departments AND active cert for that job (or
        autoAccessGrade bypass). Does NOT check ped model (§4.1/§4.5) —
        model is a grant-time-only check server-side, and a display-only
        self-check client-side (see IsOwnModelK9() below).
 
     Server events (RegisterNetEvent, client->server):
-    2. 'qbx_k9unit:server:certifyHandler' (targetServerId: number) [server/certifications.lua]
-    3. 'qbx_k9unit:server:revokeHandler' (targetServerId: number) [server/certifications.lua]
+    2. 'qbx_k9unit:server:certifyHandler' (targetServerId: number) [server/certifications/]
+    3. 'qbx_k9unit:server:revokeHandler' (targetServerId: number) [server/certifications/]
     4. 'qbx_k9unit:server:relayBark' (barkType: string) [server/main.lua]
        Triggered from client/radial.lua's Bark item — no netId argument,
        the server resolves the sender's own ped.
@@ -32,7 +32,7 @@
     Client events (RegisterNetEvent, server->client):
     5. 'qbx_k9unit:client:playBark' (netId: number, barkType: string) [THIS FILE]
 
-    Commands: both live in server/certifications.lua.
+    Commands: both live in server/certifications/.
 
     REMOVED from the original (pre-correction) scaffold — do not
     resurrect: ped-selection context menu, SpawnK9/DespawnK9,
@@ -83,7 +83,7 @@
             their gating decisions — don't call the other two directly
             from other files, so the "how do we combine these" policy
             lives in exactly one place.
-      NOTE: server/certifications.lua also exposes a function named
+      NOTE: server/certifications/ also exposes a function named
       `HasK9Access(source)`, on the SERVER side. These are different Lua
       VMs (client vs. server) so there's no actual name collision — the
       shared name is intentional, for readability (same concept, mirrored
@@ -124,7 +124,7 @@
 -- hang.
 local K9_CALLBACK_TIMEOUT_MS = 10000
 --- Precomputed set of Config.Peds model hashes, built once at file load.
---- Mirrors server/certifications.lua's K9ModelHashes approach so both
+--- Mirrors server/certifications/'s K9ModelHashes approach so both
 --- sides stay generic over the config (DEVELOPER_REFERENCE.md §3 acceptance bullet 3) —
 --- no hardcoded model name anywhere, including custom streamed entries.
 local K9ModelHashes = {}
@@ -135,7 +135,7 @@ end
 --- Is `entity`'s current model one of Config.Peds' recognized K9 models?
 --- Client-side, display/targeting-plausibility only — NEVER a security
 --- boundary; every server-side handler that cares about a target's real
---- model re-derives it itself (IsConfiguredK9Model, server/certifications.lua).
+--- model re-derives it itself (IsConfiguredK9Model, server/certifications/).
 ---
 --- DEVELOPER_REFERENCE.md item 3. Promoted from client/movement.lua's local
 --- `IsEntityModelK9`/`k9ModelHashesForTargeting` pair (which already had
@@ -156,7 +156,7 @@ end
 --- copies of this check remain anywhere in `client/` as of this comment;
 --- if a new one appears, update this count rather than letting it go
 --- unrecorded again.
---- server/certifications.lua's server-side `K9ModelHashes` is correctly
+--- server/certifications/'s server-side `K9ModelHashes` is correctly
 --- left alone per the roadmap's own note — a resource-global here can't
 --- cross the client/server realm boundary.
 --- @param entity number

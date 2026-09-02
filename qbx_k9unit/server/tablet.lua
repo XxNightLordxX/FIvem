@@ -42,7 +42,7 @@
     precedent (that file's "TABLET CALLBACKS" section registers
     tabletGrantPermission/tabletRevokePermission directly alongside
     GrantPermission/RevokePermission, rather than here):
-      qbx_k9unit:server:tabletCertify  -- server/certifications.lua,
+      qbx_k9unit:server:tabletCertify  -- server/certifications/,
         GrantCertificationForTablet (see that function's own doc comment
         for the full "offline-grant asymmetry" writeup -- summarized
         below).
@@ -63,7 +63,7 @@
 
     ======================================================================
     THE OFFLINE-GRANT ASYMMETRY -- see
-    server/certifications.lua's GrantCertificationForTablet for the full
+    server/certifications/'s GrantCertificationForTablet for the full
     writeup; summarized here since it shaped this file's own design too.
     RevokeCertificationOffline already lets an officer revoke a
     disconnected citizenid's certification (DEVELOPER_REFERENCE.md §4.3 requires it).
@@ -310,7 +310,7 @@
     live bug (client/movement.lua:822's certify
     predicate demanding a K9 model client-side while the server-side
     GrantCertification does not) lives entirely in a different
-    file and is NOT reproduced here: tabletCertify (server/certifications.lua)
+    file and is NOT reproduced here: tabletCertify (server/certifications/)
     and tabletAssignK9Role/tabletRevertK9Ped below all gate purely on
     CALLER authorization (IsHighCommand / IsEligibleCertifier) and
     TARGET identity (citizenid, online-resolution where needed) -- never on
@@ -581,7 +581,7 @@ local function BlockNamespaceUnreliable(readOk)
 end
 
 --- Real, current Unix time in whole seconds, or nil if unavailable --
---- mirrors server/certifications.lua's own NowUnix "fails toward
+--- mirrors server/certifications/'s own NowUnix "fails toward
 --- availability" posture (see that file's IsExpiredUnix doc comment): an
 --- unreadable `os.time` must make `expired` resolve to false, never crash
 --- this read entirely, since a broken clock says nothing about whether a
@@ -615,7 +615,7 @@ end
 --- up. For each department this citizenid ACTUALLY holds (active == true
 --- only -- a department they've never held has no tier/expiry/specializations
 --- to report, matching this row's own existing active=false/grantedBy=nil
---- shape for that case), this now calls server/certifications.lua's
+--- shape for that case), this now calls server/certifications/'s
 --- DB-authoritative, already-exposed QueryCertificationRecord(citizenid,
 --- jobKey) -- the SAME accessor that file's own header names as built "for
 --- tablet/roster/admin reads" and already used by an OFFLINE-safe caller
@@ -628,13 +628,13 @@ end
 --- bounded by (2-4 in every shipped config), not by roster size: this
 --- function runs once per tabletRequestMyRecord/tabletRequestPersonSummary
 --- call, never once per roster row. `expired` is computed HERE, in Lua,
---- rather than by calling into server/certifications.lua's own (local,
+--- rather than by calling into server/certifications/'s own (local,
 --- unexported) IsExpiredUnix -- see NowUnixOrNil above for why that is a
 --- small, deliberate, same-logic local duplicate rather than a new
 --- cross-file call. Guarded with `type(QueryCertificationRecord) ==
 --- 'function'`, this resource's established soft-dependency convention --
 --- degrades to no tier/expiry/specializations data (never a crash) if
---- server/certifications.lua is ever unavailable, exactly like every other
+--- server/certifications/ is ever unavailable, exactly like every other
 --- guarded cross-file read in this file.
 --- @param citizenid string
 --- @return table -- array of { departmentKey, departmentLabel, active, grantedBy, tier, expiresAtUnix, expired, specializations }
@@ -819,7 +819,7 @@ end
 
 -- ======================================================================
 -- AUTHORIZATION-SHAPED HELPERS -- each mirrors an existing rank-gate SHAPE
--- already established elsewhere in this resource (server/certifications.lua's
+-- already established elsewhere in this resource (server/certifications/'s
 -- IsEligibleCertifier, server/admin.lua's IsAuthorizedAdmin,
 -- server/permissions.lua's own MeetsDepartmentGradeOrHighCommand), rather
 -- than exporting any of those `local` functions as new resource-globals
@@ -1680,7 +1680,7 @@ end
 --- "the roster panel should show everything about a person" pass. Reads
 --- the EXACT SAME PlayerData.job shape every rank gate in this resource
 --- already trusts (server/permissions.lua's MeetsDepartmentGradeOrHighCommand,
---- server/certifications.lua's IsEligibleCertifier, etc.) -- never a new
+--- server/certifications/'s IsEligibleCertifier, etc.) -- never a new
 --- source of truth, and never a write path: this resource has no
 --- SetJobGrade-equivalent anywhere today, so the tablet only ever DISPLAYS
 --- this, matching THE SECURITY RULE'S "never render a control the server

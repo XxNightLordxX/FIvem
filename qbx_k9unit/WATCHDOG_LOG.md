@@ -287,7 +287,7 @@ budget trackers) is in-memory only and resets on a resource or server
 restart. Verified directly rather than taken on trust: `server/
 cooldowns.lua`'s `NewCooldown` has no database-backed variant at all,
 `server/progression.lua`'s `XPMintBudget` is a bare table, and
-`server/certifications.lua` already calls this exact gap out by name
+`server/certifications/` already calls this exact gap out by name
 ("ACCEPTED, DOCUMENTED CAVEAT", line 1805) for its own certify cooldown.
 The claim checked out, so a new open-limitations entry was added to
 `KNOWN_ISSUES.md` in this pass's own words, not the wording it arrived
@@ -327,7 +327,7 @@ after every edit above — see this pass's own report for exact output.
    - The role-aware leash structure is intact
      (`server/main.lua:1369`, `LeashPairs[officerSrc] = { partner = ...,
      isK9 = false }`) — not the old bare `LeashPairs[a] = b`.
-   - `RevokeCertificationOffline` (`server/certifications.lua:3131`) still
+   - `RevokeCertificationOffline` (`server/certifications/:3131`) still
      calls `RefreshCertificationCache(citizenid, job)` for real.
    - Both `client/vehicle.lua` and `server/vehicle.lua` still carry
      `onResourceStop` cleanup.
@@ -424,7 +424,7 @@ confirm the actual construct still exists.
     `{ partner = b, isK9 = <bool> }` shape rather than the old bare
     `LeashPairs[a] = b`.
   * `RevokeCertificationOffline` → `RefreshCertificationCache` — intact. The
-    function spans 3154-3326 in `server/certifications.lua` and the call is
+    function spans 3154-3326 in `server/certifications/` and the call is
     at 3262, inside it.
   * Vehicle `onResourceStop` — present on BOTH sides,
     `client/vehicle.lua:1115` and `server/vehicle.lua:638`.

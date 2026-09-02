@@ -260,7 +260,7 @@ designed but have an edge worth knowing about before you rely on them.
   Handler awards described above), behind personally certifying someone,
   behind the co-op search bonus, and the shared hourly XP budget every
   mechanic in this resource draws from — all of them are plain in-memory
-  trackers with no database backing, and `server/certifications.lua`'s own
+  trackers with no database backing, and `server/certifications/`'s own
   comment on its certification cooldown already calls this out by name as
   an accepted, deliberate gap. **This is not something a player can
   trigger** — it takes an admin actually restarting the resource or the

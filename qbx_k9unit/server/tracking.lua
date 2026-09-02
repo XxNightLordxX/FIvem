@@ -5,7 +5,7 @@
     blood-trail and gunpowder-sniff (damage-event / weapon-fire coordinate
     capture, read server-side from the REPORTING CLIENT'S OWN live ped
     position, never a client-supplied coordinate — same "never trust client
-    claims" standard server/certifications.lua's header established for
+    claims" standard server/certifications/'s header established for
     §4.3), a server-side ox_inventory 'swapItems' hook backing scent-trail
     coordinate capture (added this pass — see AUTHORITATIVE SOURCES item 9
     below), a periodic prune pass dropping entries older than
@@ -193,7 +193,7 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2, per DEVELOPER_REFERENCE.md §11.4 items 1, 3, 4.
-    Identical in shape to server/certifications.lua's contract block so
+    Identical in shape to server/certifications/'s contract block so
     coder-backend/coder-frontend can work in parallel without live
     coordination, per that file's own stated rationale for this format.
 
@@ -295,18 +295,18 @@
     trigger) and, as of this pass, the 'swapItems' ox_inventory hook above
     (externally triggered by ox_inventory's own item-move handling, not by
     anything this resource's own client ever calls directly) — otherwise,
-    unlike server/certifications.lua's QBCore:Server:OnJobUpdate hook,
+    unlike server/certifications/'s QBCore:Server:OnJobUpdate hook,
     nothing in this file runs outside a direct response to an explicit
     client-initiated event/callback above.
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)`, resource-global from
-      server/certifications.lua — reused, never re-derived, per that
+      server/certifications/ — reused, never re-derived, per that
       file's own "SINGLE source of truth" rule.
     - THIS FILE does NOT call `IsConfiguredK9Model` — unlike leash
       role-assignment (server/main.lua) or certification grants
-      (server/certifications.lua), tracking access is gated purely on
+      (server/certifications/), tracking access is gated purely on
       HasK9Access (job + certification), never on the caller's CURRENT
       ped model. This mirrors HasK9Access's own documented Phase 1
       tradeoff (a certified handler who later isn't K9-modeled still
@@ -335,7 +335,7 @@
       registered.
     - THIS FILE owns `TrackableLog` (scent/blood/gunpowder event log) and
       the cooldown tables below as file-local state. STRUCTURAL NOTE,
-      UPDATED THIS PASS (mirrors server/certifications.lua's own
+      UPDATED THIS PASS (mirrors server/certifications/'s own
       "STRUCTURAL NOTE" pattern for `Certifications`): 'scent' now HAS an
       entry in `TrackableLog`, fed by the 'swapItems' ox_inventory hook
       documented in the EVENT/CALLBACK CONTRACT block above, structurally
@@ -693,7 +693,7 @@ end
 --- own header and Config.SpecializationTracking's config.lua comment for why
 --- it can never be gated. Every OTHER track type is enabled if AND ONLY IF
 --- `citizenid` currently holds a specialization Config.SpecializationTracking
---- maps to it (HasSpecialization, server/certifications.lua -- carries that
+--- maps to it (HasSpecialization, server/certifications/ -- carries that
 --- function's own High Command bypass, so a high-command officer with no
 --- personally-granted specialization still gets every track type).
 ---
@@ -713,7 +713,7 @@ local function ResolveEnabledTrackTypesForCitizenId(citizenid, jobName)
 
     -- Soft dependency, this resource's established `type(...) == 'function'`
     -- convention (server/equipmentshop.lua's own HasSpecialization call
-    -- site) -- if server/certifications.lua is ever unavailable, this
+    -- site) -- if server/certifications/ is ever unavailable, this
     -- simply resolves to "no specializations held," i.e. the same
     -- `{ scent = true }` baseline, never an error.
     if type(HasSpecialization) == 'function' and type(citizenid) == 'string' then
@@ -833,7 +833,7 @@ local MAX_LOGGED_ENTRIES_CEILING = 50000
 --- count/distance floor, not a threshold), reimplemented locally with
 --- wording specific to THIS field rather than reused, for the same
 --- "cooldown-specific/ScentVision-specific wording would be misleading
---- here" reason server/certifications.lua's own
+--- here" reason server/certifications/'s own
 --- ResolveConfiguredPositiveNumber doc comment already gives for not
 --- calling a differently-worded sibling function directly.
 ---
@@ -1225,7 +1225,7 @@ end)
 --- `{ found = false }` further down, exactly as if no scent source had ever
 --- existed. Deliberately NOT an `assert`: this resource reserves hard
 --- asserts for actively-dangerous states. (An earlier revision of this
---- sentence cited "server/certifications.lua's two, both access-control
+--- sentence cited "server/certifications/'s two, both access-control
 --- invariants". That file contains ZERO asserts -- the claim appears to have
 --- conflated it with certifications.lua's two REVOKE PATHS, a different
 --- "two" entirely. The real inventory is 25 assert sites across 8 files,
@@ -1663,7 +1663,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     end
 
     if not HasK9Access(source) then
-        return { found = false } -- reuse the global from server/certifications.lua, do not re-derive
+        return { found = false } -- reuse the global from server/certifications/, do not re-derive
     end
 
     -- PER-PERSON FEATURE CONTROL -- see IsTrackingFeaturePermittedForCitizenId
@@ -1810,7 +1810,7 @@ local MERGED_TRACK_QUERY_KEY = '__merged__'
 --- state the three per-type keys happen to be in.
 lib.callback.register('qbx_k9unit:server:findNearestTrackableSource', function(source)
     if not HasK9Access(source) then
-        return { found = false } -- reuse the global from server/certifications.lua, do not re-derive
+        return { found = false } -- reuse the global from server/certifications/, do not re-derive
     end
 
     local trackerPlayer = exports.qbx_core:GetPlayer(source)
@@ -1916,7 +1916,7 @@ RegisterNetEvent('qbx_k9unit:server:reportTrackSourceArrival', function()
     local src = source
 
     if not Config.Features.XPProgression then return end -- real server-side no-op regardless of client UI state, per §3
-    if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive
+    if not HasK9Access(src) then return end -- reuse the global from server/certifications/, do not re-derive
 
     local now = GetGameTimer()
 
@@ -1971,7 +1971,7 @@ end)
 -- Cleans up this file's per-source ephemeral state on disconnect, same
 -- rationale as server/main.lua's playerDropped handler (drop
 -- cooldown-table entries so they don't leak one per session) and
--- server/certifications.lua's own "regression-test fix" for unbounded
+-- server/certifications/'s own "regression-test fix" for unbounded
 -- per-citizenid cache growth. `TrackableLog` itself needs NO per-source
 -- cleanup here — its entries are keyed by coordinate/timestamp, not by
 -- the reporting source, and are already pruned on their own

@@ -13,7 +13,7 @@
     primitive, not a reimplementation of either). HasK9Access and
     NotifyPlayer are stubbed directly -- both are genuinely OTHER files'
     own logic, already covered by their own specs
-    (server/certifications.lua, server/notify.lua/notify_spec.lua) -- this
+    (server/certifications/, server/notify.lua/notify_spec.lua) -- this
     file's job is server/kennel.lua's own handshake/lifecycle logic, not a
     second copy of those.
 
@@ -294,7 +294,7 @@ local function newKennelFixture(opts)
     -- K9-CAN-RIDE-ALONG PASS -- IsConfiguredK9Model stubbed against the one
     -- fixed K9_PED_HASH declared at this file's own top, mirroring
     -- tests/propattachment_spec.lua's/tests/fetch_spec.lua's own identical
-    -- stub shape for the same real dependency (server/certifications.lua).
+    -- stub shape for the same real dependency (server/certifications/).
     -- HasK9Role is deliberately left UNDEFINED in this fixture's env --
     -- ResolveK9PedForKennelRest's own `type(HasK9Role) == 'function'` soft
     -- dependency guard means every test in this file exercises the
@@ -727,7 +727,7 @@ end)
 -- confirmKennelPlaced calls AwardHandlerXP(citizenid, 'handlerKennelDeploy')
 -- at a CONFIRMED new placement, gated by
 -- HandlerKennelDeployXpMintCooldown, a dedicated per-actor MINT cooldown
--- (mirroring server/certifications.lua's CertifyXpMintCooldown fix for
+-- (mirroring server/certifications/'s CertifyXpMintCooldown fix for
 -- handlerCertifyK9), sized well below the RANK-REDUCED 2250ms floor
 -- (60 real minutes -- 1600x that floor, so the rebalance's deeper
 -- multiplier does not move the mint rate at all), never derived from
@@ -758,7 +758,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDep
     -- still report PASS.
     -- It now requires a real DECLARATION -- a cooldown tracker actually
     -- constructed via NewCooldown() whose name follows the
-    -- CertifyXpMintCooldown precedent in server/certifications.lua. Prose
+    -- CertifyXpMintCooldown precedent in server/certifications/. Prose
     -- cannot satisfy that. The test directly below proves this pattern
     -- rejects a comment and accepts a real declaration, so a future edit
     -- cannot quietly defeat it again.
@@ -766,7 +766,7 @@ t.test('SOURCE AUDIT TRIPWIRE: server/kennel.lua must not award handlerKennelDep
         'handlerKennelDeploy is now awarded from this file, but no *_XP_MINT_COOLDOWN tracker was found -- add a ' ..
         'DEDICATED per-actor mint cooldown (a second, separate tracker, never DeployCooldown itself, now ' ..
         'handler-rank-shortened to a 2250ms worst-case floor) named with the XP_MINT_COOLDOWN convention ' ..
-        '(server/certifications.lua\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown precedent) so this test ' ..
+        '(server/certifications/\'s CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown precedent) so this test ' ..
         'can find it, sized against that rank-reduced floor rather than the unreduced 5000ms config default, then ' ..
         'update this test\'s own expectations to match. See server/progression.lua\'s ' ..
         'GetHandlerXPTierKennelDeployCooldownMs header for the full writeup.')
@@ -2144,7 +2144,7 @@ end)
 
 t.test('FORCED RELEASE IS UNGATED: it still frees a resting K9 whose access has ALREADY been revoked -- the exact state it exists for', function()
     -- GATE THE STOP, NEVER THE START. This is the whole point: the caller
-    -- is server/certifications.lua's EndK9AccessForCitizenId, which has
+    -- is server/certifications/'s EndK9AccessForCitizenId, which has
     -- already taken this citizenid's access away. Any HasK9Access check in
     -- the release path would be guaranteed false here and would seal a
     -- decertified player inside their own kennel permanently.
@@ -3216,7 +3216,7 @@ t.test('TRIPWIRE SELF-CHECK: the mint-cooldown pattern rejects prose and accepts
         local TreatXpMintCooldown = NewCooldown()
     ]]
     t.isNotNil(realDeclaration:find(pattern),
-        'a genuine per-actor tracker built with NewCooldown(), following server/certifications.lua CertifyXpMintCooldown precedent, MUST satisfy the tripwire -- otherwise the guard blocks legitimate work')
+        'a genuine per-actor tracker built with NewCooldown(), following server/certifications/ CertifyXpMintCooldown precedent, MUST satisfy the tripwire -- otherwise the guard blocks legitimate work')
 end)
 
 os.exit(t.summary())

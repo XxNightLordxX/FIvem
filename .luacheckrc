@@ -1166,6 +1166,16 @@ globals = {
     -- any future consumer. Same "global helper, per-file private state"
     -- convention as Config/IsHighCommand/NotifyPlayer above.
     "K9Compat",
+    -- server/certifications/*.lua -- the TRANSPORT between the four files
+    -- that 2026-09-02 split server/certifications.lua into. Lua locals do
+    -- not cross files, so core.lua publishes what depth/accessors/commands
+    -- need onto this table and each of those re-binds the same names as
+    -- locals at its top -- which is what let the split move 6,012 lines
+    -- without rewriting a single call site. NOT a public API: nothing
+    -- outside server/certifications/ should read it, and the genuinely
+    -- public surface (HasK9Access, GetCertificationTier and friends) stays
+    -- global exactly as before.
+    "K9Cert",
     "HasK9Role", "GetAssignedK9Model", "ApplyK9PedRole",
     "ApplyK9AppearanceOnGrant", "MaybeRevertK9Appearance",
     -- ForceRevertK9Appearance -- LANDED (verified by reading

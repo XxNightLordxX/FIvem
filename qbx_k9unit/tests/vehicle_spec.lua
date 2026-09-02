@@ -9,7 +9,7 @@
     ResolveNetworkEntity call is the real resolve+existence-guard primitive,
     not a reimplementation). HasK9Access and NotifyPlayer are stubbed
     directly -- both are genuinely OTHER files' own logic, already covered
-    by their own specs (server/certifications.lua, server/notify.lua/
+    by their own specs (server/certifications/, server/notify.lua/
     notify_spec.lua) -- this file's job is server/vehicle.lua's own
     handshake/lifecycle logic, not a second copy of those. Same overall
     fixture shape as tests/kennel_spec.lua's own newKennelFixture() -- read

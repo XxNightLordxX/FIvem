@@ -36,7 +36,7 @@
       2. The real, binding authorization gate for this feature is
          server-side anyway (server/pursuitsprint.lua's own
          HasK9Access(src) -- itself a pure role/certification check with
-         no model component at all, per server/certifications.lua's own
+         no model component at all, per server/certifications/'s own
          "ROLE/MODEL DECOUPLING" header). This file's own local checks
          below (vehicle tuck, "is there a nearby candidate") are
          DISPLAY/UX-only, exactly like client/combat.lua's own

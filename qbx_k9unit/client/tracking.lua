@@ -266,7 +266,7 @@ local function StartTrack(trackType)
     -- HasK9Access (job + certification), never on the caller's CURRENT ped
     -- model" and deliberately does not call IsConfiguredK9Model, flagging
     -- that a future edit must not "helpfully" add one. A K9-role holder
-    -- whose access comes from server/certifications.lua's HasK9Access()
+    -- whose access comes from server/certifications/'s HasK9Access()
     -- High Command/autoAccessGrade bypass — which IsK9Role() deliberately
     -- EXCLUDES per server/appearance.lua's own header — therefore failed
     -- BOTH halves of the old CanShowK9UI() gate on a non-K9 body

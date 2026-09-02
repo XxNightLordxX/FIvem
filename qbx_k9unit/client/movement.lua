@@ -42,7 +42,7 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — certification events are documented in full
-    in server/certifications.lua / client/main.lua (kept in sync manually,
+    in server/certifications/ / client/main.lua (kept in sync manually,
     not re-duplicated here). THIS FILE owns the client side of the leash
     subsystem, documented in full in server/main.lua's header — read that
     file together with this one for the complete picture. Summary of what
@@ -155,7 +155,7 @@
       §4.3's flow table, §8 step 3 — the previously-missing entry point;
       the events themselves were always reachable via /k9certify /
       /k9decertify). These directly TriggerServerEvent the two events
-      documented in full in server/certifications.lua's header
+      documented in full in server/certifications/'s header
       ('qbx_k9unit:server:certifyHandler' / '...:revokeHandler', both
       (targetServerId: number)) — no new client-side contract of THIS
       FILE's own is introduced, just another entry point into that
@@ -953,14 +953,14 @@ end
 -- Register the "Certify K9 Handler" / "Revoke K9 Certification" ox_target
 -- options on nearby player peds (DEVELOPER_REFERENCE.md §4.3's flow table, §8 step 3 —
 -- this is the gap integration-verifier flagged: the server-side grant/
--- revoke system in server/certifications.lua was fully implemented and
+-- revoke system in server/certifications/ was fully implemented and
 -- correct, but was only reachable via /k9certify [id] / /k9decertify [id],
 -- never through any in-world interaction). Mirrors the "Attach Leash"
 -- option's structure immediately above: DISPLAY-ONLY plausibility gates
 -- here, the server independently re-validates granter eligibility
 -- (IsEligibleCertifier), proximity (Config.CertifyProximityMeters), and
 -- (grant-only) the target's live model in GrantCertification /
--- RevokeCertification — see server/certifications.lua's header for the
+-- RevokeCertification — see server/certifications/'s header for the
 -- full contract and its quoted DEVELOPER_REFERENCE.md §4.3 security note. Deliberately
 -- does NOT attempt to check "is the local player an eligible certifier"
 -- client-side: IsEligibleCertifier is a server-only check with no cheap
@@ -985,9 +985,9 @@ end
 -- config-validator finding: both options below used to have a bare 2.5
 -- `distance` with no relationship to any Config value, even though the
 -- REAL server-side proximity check for both grant and revoke is
--- Config.CertifyProximityMeters (server/certifications.lua's
+-- Config.CertifyProximityMeters (server/certifications/'s
 -- GrantCertification and RevokeCertification, both of which reject past
--- that value — see the header comment above and server/certifications.lua
+-- that value — see the header comment above and server/certifications/
 -- itself for the exact call sites). Deriving from it here means an
 -- installer who edits Config.CertifyProximityMeters now sees these
 -- options' visible range move with it, instead of it silently staying
@@ -1333,7 +1333,7 @@ end
 ---       EXACT mode as the one it is trying not to depend on, yet ended up
 ---       depending on transitively through this function); and
 ---   (b) even at the false DEFAULT, for a K9-access holder whose access
----       comes from server/certifications.lua's HasK9Access() High Command
+---       comes from server/certifications/'s HasK9Access() High Command
 ---       or autoAccessGrade bypass rather than an actual certification --
 ---       server/appearance.lua's own header states HasK9Role()/IsK9Role()
 ---       "Deliberately EXCLUDES the autoAccessGrade/high-command BYPASSES
@@ -1348,7 +1348,7 @@ end
 --- for the second half of that OR, for two reasons: (1) it is the EXACT
 --- same server-side check server/pursuitsprint.lua's grant already uses
 --- (HasK9Access(src), a pure role/certification check, per
---- server/certifications.lua's own "ROLE/MODEL DECOUPLING" header), so this
+--- server/certifications/'s own "ROLE/MODEL DECOUPLING" header), so this
 --- client-side mirror cannot under- or over-cover what the server actually
 --- grants; IsK9Role() would silently exclude the autoAccessGrade/High
 --- Command case by the same documented design decision that creates gap
@@ -1494,7 +1494,7 @@ K9MoveRateModifiers = {
 -- bare `ipairs(Config.Peds)`): this loop runs at THIS FILE's own load time,
 -- same as client/main.lua's K9ModelHashes loop -- a missing/malformed
 -- Config.Peds would otherwise throw here and take the whole client resource
--- down before a single line of gameplay code ever ran. server/certifications.lua
+-- down before a single line of gameplay code ever ran. server/certifications/
 -- already asserts Config.Peds is a real, non-empty array at SERVER resource
 -- start, but that assert cannot protect a CLIENT file's own independent
 -- load, and does not run at all inside this suite's sandbox (tests/fixtures/
@@ -1707,7 +1707,7 @@ end)
 -- those three) skips its ENTIRE per-player body, including the broadcast
 -- itself, the instant `ResolveK9Ped(source)` answers `isK9 = false` (that
 -- file's own gate, `(looksLikeK9 or holdsK9Role) and HasK9Access(source)`).
--- Certification revocation (server/certifications.lua's RevokeCertification)
+-- Certification revocation (server/certifications/'s RevokeCertification)
 -- sends the revoked player a plain ox_lib notify (NotifyPlayer) and NOTHING
 -- else -- no event this file, client/wellbeing.lua, or client/progression.lua
 -- listens for. Before the ANY-PED widening this was harmless: an off-model

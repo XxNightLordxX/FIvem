@@ -143,7 +143,7 @@
     commands.
 
     FILE-TO-FILE CONTRACT:
-    - Calls `HasK9Access(source)` (server/certifications.lua) via a
+    - Calls `HasK9Access(source)` (server/certifications/) via a
       `type(...) == 'function'` runtime existence guard -- this resource's
       established soft-dependency convention, not a load-order assumption.
       Missing/false is a hard deny (fail closed).

@@ -53,7 +53,7 @@
         an actually-online target -- so the button silently did nothing
         against anyone currently connected. tablet:decertify now calls a
         real `qbx_k9unit:server:tabletDecertify` server callback, exactly
-        like tablet:certify already did (server/certifications.lua's new
+        like tablet:certify already did (server/certifications/'s new
         RevokeCertificationForTablet resolves online-vs-offline itself and
         delegates to the correct, UNCHANGED underlying function either way).
         (A prior, broader 'tablet:runCommand' generic command-bridge --
@@ -201,9 +201,9 @@
       tablet:requestPartnershipsForTarget {targetCitizenId}       -> cb(PartnershipsResult)      [Partnerships tab admin lookup, high command only]
       tablet:forceEndPartnership {targetCitizenId}                -> cb({ok,error?})             [Partnerships tab admin control, high command only -- server/partnership.lua's existing ForceBreakPartnershipForCitizenId]
       tablet:triggerFeature {feature}                             -> cb({ok,error?})            [SECTION 2]
-      tablet:certify {targetCitizenId, departmentKey}             -> cb({ok,error?,message?})   [server/certifications.lua's tabletCertify -- online OR offline, see GrantCertificationForTablet's own header]
-      tablet:decertify {targetCitizenId, departmentKey}           -> cb({ok,error?,message?})   [server/certifications.lua's tabletDecertify -- online OR offline, see RevokeCertificationForTablet's own header]
-      tablet:setCertificationTier {targetCitizenId, departmentKey, tier}     -> cb({ok,error?})  [server/certifications.lua's tabletSetCertificationTier -- online OR offline]
+      tablet:certify {targetCitizenId, departmentKey}             -> cb({ok,error?,message?})   [server/certifications/'s tabletCertify -- online OR offline, see GrantCertificationForTablet's own header]
+      tablet:decertify {targetCitizenId, departmentKey}           -> cb({ok,error?,message?})   [server/certifications/'s tabletDecertify -- online OR offline, see RevokeCertificationForTablet's own header]
+      tablet:setCertificationTier {targetCitizenId, departmentKey, tier}     -> cb({ok,error?})  [server/certifications/'s tabletSetCertificationTier -- online OR offline]
       tablet:renewCertification {targetCitizenId, departmentKey}            -> cb({ok,error?})  [tabletRenewCertification -- online OR offline]
       tablet:grantSpecialization {targetCitizenId, departmentKey, specialization}  -> cb({ok,error?})  [tabletGrantSpecialization -- ONLINE ONLY, see that function's own header for why]
       tablet:revokeSpecialization {targetCitizenId, departmentKey, specialization} -> cb({ok,error?})  [tabletRevokeSpecialization -- online OR offline]
@@ -498,7 +498,7 @@
           -- html/tablet.js reads them via its normal S() helper.
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
-          specializations = Config.K9Specializations, -- shared config, no round trip -- display list only for the person screen's specialization grant picker (buildCertificationRow); server/certifications.lua's GrantSpecialization re-checks this SAME table server-side, the real gate
+          specializations = Config.K9Specializations, -- shared config, no round trip -- display list only for the person screen's specialization grant picker (buildCertificationRow); server/certifications/'s GrantSpecialization re-checks this SAME table server-side, the real gate
           themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
           shopLocationsEnabled = Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled just above -- shows a disabled-server-wide note on the Shop Locations screen rather than one that would always come back 'feature_disabled'; tablet:equipmentShopGetLocations/Add/Move/RemoveLocation all re-check this live, server-side, regardless of what this flag says
           runtimeControlEnabled = Config.Features.RuntimeFeatureControl == true, -- UX hint only, SAME shape as themingEnabled/shopLocationsEnabled -- runtimeListFeatures/ListTunables have NO such gate server-side (open to any high-command caller regardless), only the four mutating runtimeSet*/Reset* calls actually refuse with `reason='feature_disabled'` when this is off; this page still shows the disabled note and the (read-only) current values regardless
@@ -557,7 +557,7 @@
         command mid-session), because no server-side push for that exists
         yet. See this pass's own report for the proposed contract
         (piggybacking on the existing, extensively-consumed
-        QBCore:Server:OnJobUpdate handler server/certifications.lua
+        QBCore:Server:OnJobUpdate handler server/certifications/
         already owns) rather than this file inventing one unilaterally.
 
     LOCALIZATION: `strings` ships the FULL, real, locale()-resolved set --
@@ -1752,7 +1752,7 @@ function OpenTablet(requestedView)
             auditEnabled = Config.Features and Config.Features.AdminAuditCommands == true,
             -- CERTIFICATION SPECIALIZATIONS -- shared config, no round trip,
             -- SAME "no hardcoded list" posture as `peds` above:
-            -- Config.K9Specializations (server/certifications.lua's
+            -- Config.K9Specializations (server/certifications/'s
             -- GrantSpecialization is the real, server-side gate on this
             -- exact same table) is the resource's ONE real specialization
             -- catalog -- html/tablet.js's specialization picker populates
@@ -2512,7 +2512,7 @@ RegisterNUICallback('tablet:certify', function(data, cb)
     -- UPDATED THIS PASS (coordinator-directed follow-up): this comment
     -- used to say certify has "no offline-capable equivalent to reuse,
     -- unlike decertify below" -- that was true when it was written, but
-    -- server/certifications.lua's own GrantCertificationForTablet now
+    -- server/certifications/'s own GrantCertificationForTablet now
     -- resolves an offline `targetCitizenId` to GrantCertificationOffline
     -- internally (see that function's own header for the full "why this
     -- is now safe on the shipped Config.K9Appearance.requireK9ModelForRole
@@ -2534,14 +2534,14 @@ RegisterNUICallback('tablet:decertify', function(data, cb)
     -- used to shell out to the OFFLINE-ONLY '/k9decertifyoffline <citizenid>
     -- <job>' command via a SubmitAllowlistedCommand/ExecuteCommand bridge,
     -- for EVERY target regardless of online state. That command's own
-    -- RevokeCertificationOffline (server/certifications.lua) explicitly
+    -- RevokeCertificationOffline (server/certifications/) explicitly
     -- REFUSES when the citizenid resolves to a currently connected player
     -- (its own proximity-check-integrity guard) -- so clicking Decertify
     -- against an ONLINE person always hit that refusal and did nothing,
     -- contradicting this button's own documented "works for an ONLINE or
     -- OFFLINE target" contract (see tablet:certify immediately above, which
     -- always worked this way). Now calls the SAME kind of real server
-    -- callback tablet:certify already uses -- server/certifications.lua's
+    -- callback tablet:certify already uses -- server/certifications/'s
     -- new RevokeCertificationForTablet (via qbx_k9unit:server:tabletDecertify)
     -- resolves online-vs-offline itself and runs the online path's REAL,
     -- UNCHANGED proximity/self-cert/eligibility rules when the target is
@@ -2562,10 +2562,10 @@ end)
 -- ----------------------------------------------------------------------
 -- CERTIFICATION TIER / RENEWAL / SPECIALIZATION -- closing this file's own
 -- biggest remaining "reachable only via net event/command, no tablet path
--- at all" gap (server/certifications.lua's SetCertificationTier/
+-- at all" gap (server/certifications/'s SetCertificationTier/
 -- RenewCertification/GrantSpecialization/RevokeSpecialization). Forwarded
 -- VERBATIM, mirroring tablet:certify/tablet:grantPermission's own shape
--- EXACTLY: each server callback (server/certifications.lua's
+-- EXACTLY: each server callback (server/certifications/'s
 -- tabletSetCertificationTier/tabletRenewCertification/
 -- tabletGrantSpecialization/tabletRevokeSpecialization) already returns
 -- this contract's `{ok, error?}` shape directly (no `reason` field to

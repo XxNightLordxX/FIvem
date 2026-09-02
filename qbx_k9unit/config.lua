@@ -372,7 +372,7 @@ Config.Features = {
     -- anti-farm gap on two specific award keys is not). Of the six award
     -- keys in Config.HandlerXP.awards below, FOUR are wired this pass and
     -- each rides a real per-actor throttle of its own:
-    -- `handlerCertifyK9` (server/certifications.lua's GrantCertification
+    -- `handlerCertifyK9` (server/certifications/'s GrantCertification
     -- AND GrantCertificationOffline) is gated by that file's own
     -- CertifyXpMintCooldown -- a DEDICATED per-(granter, target) MINT
     -- cooldown (24 real hours) on the AWARD itself, added by the same
@@ -389,7 +389,7 @@ Config.Features = {
     -- `/k9decertify <self>` on repeat, 3 seconds per cycle, 60,000 XP/hr
     -- gross -- worse than either of the two awards this comment already
     -- refused to wire below for exactly this class of gap. Corrected here
-    -- and at server/certifications.lua's own CertifyXpMintCooldown
+    -- and at server/certifications/'s own CertifyXpMintCooldown
     -- declaration comment (search that file for "FALSIFIED CLAIM"), not
     -- just patched around. handlerCertifyK9 is genuinely safe to wire NOW,
     -- for the same reason this comment always intended: a first
@@ -629,7 +629,7 @@ Config.Features = {
     -- anything referencing it.
     CameraFeedPiP        = true,
 
-    -- server/certifications.lua. Opt-in periodic recertification: new
+    -- server/certifications/. Opt-in periodic recertification: new
     -- grants get an expiry date and lapse unless renewed. OFF by default,
     -- and deliberately so -- but NOT because turning it on is destructive.
     -- It is not: every certification that already exists keeps no expiry
@@ -1783,7 +1783,7 @@ Config.K9Specializations = {
 --   certification tablet. server/diagnostics.lua prints a one-line boot
 --   warning naming this exact situation so it is never a silent surprise
 --   discovered mid-shift. HIGH COMMAND OFFICERS ARE UNAFFECTED --
---   HasSpecialization's own High Command bypass (server/certifications.lua)
+--   HasSpecialization's own High Command bypass (server/certifications/)
 --   already grants every specialization automatically, so a high-command
 --   officer keeps both Track Blood and Track Gunpowder with nothing to
 --   grant.
@@ -1897,7 +1897,7 @@ Config.AllowSelfCertification = true   -- see §4.1
 Config.CertifyProximityMeters = 5.0    -- server-enforced max distance for grant/revoke (§4.2 item 4)
 
 -- FARM FIX (audit finding, this pass) -- Config.CertifyProximityMeters and
--- CertifyXpMintCooldown (server/certifications.lua, 24h, per person you
+-- CertifyXpMintCooldown (server/certifications/, 24h, per person you
 -- certify) stop someone from farming XP off the SAME person over and over.
 -- Neither one stops a certifier from farming XP by certifying a large
 -- number of DIFFERENT people instead -- real alt characters made and
@@ -2432,7 +2432,7 @@ Config.XPTiers = {
 -- Config.Features.HandlerXPProgression's own header, "STILL DEFAULT
 -- FALSE" section, for exactly which and why):
 --   handlerCertifyK9              50 XP -- gated by
---     server/certifications.lua's CertifyXpMintCooldown, a MINT cooldown
+--     server/certifications/'s CertifyXpMintCooldown, a MINT cooldown
 --     per (granter, target) PAIR, 24 REAL HOURS. This is NOT an
 --     hours-of-play rate the way the K9 ladder's own mechanics are -- it
 --     can only be earned once per unique NEW person you personally
@@ -2773,7 +2773,7 @@ Config.XP = {
 -- WHAT COUNTS AS A HANDLER ACTION, and why each one is safe to pay for --
 -- chosen from what this codebase can actually observe server-side today,
 -- never an invented event:
---   * handlerCertifyK9 -- server/certifications.lua's GrantCertification (and
+--   * handlerCertifyK9 -- server/certifications/'s GrantCertification (and
 --     GrantCertificationOffline), at the point a NEW (not renewed/
 --     already-active) certification is granted. NOT, on its own, "rare and
 --     deliberate by nature" the way this bullet used to claim: a genuine
@@ -2785,7 +2785,7 @@ Config.XP = {
 --     found live by an economy audit (2026-08-26) as this table's single
 --     worst farm loop, well past what handlerKennelDeploy/handlerTreatK9
 --     below were already rejected for. What actually makes this safe to pay
---     is CertifyXpMintCooldown (server/certifications.lua) -- a dedicated
+--     is CertifyXpMintCooldown (server/certifications/) -- a dedicated
 --     per-(granter, target) MINT cooldown, 24 real hours, gating the AWARD
 --     itself (never the grant/revoke action, which always succeeds
 --     regardless) -- added by that same audit. It is still the highest
@@ -3392,7 +3392,7 @@ Config.WaterTrackingDecay = {
 --      today, with nothing to grant.
 --   2. `itemName = 'specializationKey'`, e.g. `coke_brick = 'narcotics'`
 --      -- CATEGORISED. Found only by a K9 whose citizenid currently holds
---      that Config.K9Specializations key (server/certifications.lua's
+--      that Config.K9Specializations key (server/certifications/'s
 --      HasSpecialization, which carries its own High Command bypass --
 --      see server/search.lua's own resolution comment). A dog with NO
 --      matching specialization simply never finds this one specific item;

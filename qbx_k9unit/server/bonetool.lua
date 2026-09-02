@@ -288,7 +288,7 @@
                                           -- permanently on cooldown after one
                                           use -- rather than meaning "no
                                           cooldown")
-      Config.Departments                     : table -- shared with server/admin.lua/server/certifications.lua; IsAuthorizedBoneSweepDevTool below reads Config.Departments[job.name] to decide whether the caller's job is a configured K9 department at all (job.isboss is still additionally required — see LAYER 2 above).
+      Config.Departments                     : table -- shared with server/admin.lua/server/certifications/; IsAuthorizedBoneSweepDevTool below reads Config.Departments[job.name] to decide whether the caller's job is a configured K9 department at all (job.isboss is still additionally required — see LAYER 2 above).
       Config.BoneSweepTool.AcePermission is NO LONGER READ by this file
       (see the ACE -> job-rank conversion in LAYER 2 above) -- it is DEAD
       CONFIG, same as Config.AdminAudit.AcePermission. It should be removed

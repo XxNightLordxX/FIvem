@@ -13,7 +13,7 @@
     instruction -- harmless, since entities.lua defines its functions
     unconditionally at load time with no natives required until CALL time).
 
-    server/certifications.lua is DELIBERATELY NEVER loaded here.
+    server/certifications/ is DELIBERATELY NEVER loaded here.
     server/partnership.lua consumes HasK9Access and IsConfiguredK9Model as
     plain resource-globals (no runtime-existence guard on THOSE two --
     unlike GetActivePartnerCitizenId/EndActiveEffectForHolder in
@@ -21,7 +21,7 @@
     load-order-guaranteed dependency, not an optional one), so this spec
     controls both as test-supplied stubs -- exactly the same "this file's
     job is server/partnership.lua's OWN eligibility/consent/mutex logic,
-    not a second copy of server/certifications.lua's already-covered
+    not a second copy of server/certifications/'s already-covered
     HasK9Access/IsConfiguredK9Model" discipline kennel_spec.lua/
     combat_spec.lua already established for the identical shape.
 
@@ -1115,7 +1115,7 @@ t.test('playerDropped: only the disconnecting citizenid\'s in-memory CACHE entry
     -- exports.qbx_core:GetPlayer(src) itself, expecting it to still resolve
     -- at the moment the event fires -- exactly the same assumption every
     -- other playerDropped-citizenid-resolving handler in this resource
-    -- (server/certifications.lua's own included) already relies on.
+    -- (server/certifications/'s own included) already relies on.
     -- disconnectPlayer() below (AFTER firing the event) is what represents
     -- "now genuinely gone", for the later RefreshPartnershipCache call.
     f.firePlayerDropped(20)
@@ -1587,7 +1587,7 @@ end)
 
 -- ========================================================================
 -- ForceBreakPartnershipForCitizenId -- citizenid-keyed, OFFLINE-CAPABLE by
--- design (server/certifications.lua's own call sites depend on this).
+-- design (server/certifications/'s own call sites depend on this).
 -- ========================================================================
 
 t.test('ForceBreakPartnershipForCitizenId: works for a GENUINELY OFFLINE citizenid -- the DB row is torn down even with no live client to notify', function()
@@ -1863,7 +1863,7 @@ t.test('ANTI-FARM (DB off): reforming the SAME K9 with a DIFFERENT handler does 
     t.equals(tenureRow.tenure_bonus_tier_granted, 0, 'a genuinely different pair starts completely fresh -- the seed is keyed on the EXACT (k9, handler) pair, never carried to an unrelated new partner')
 end)
 
-t.test('ANTI-FARM (DB off): a FORCED break (ForceBreakPartnershipForCitizenId -- the same entry point server/certifications.lua calls on decertification AND job/department changes) captures the seed exactly like a self-initiated break', function()
+t.test('ANTI-FARM (DB off): a FORCED break (ForceBreakPartnershipForCitizenId -- the same entry point server/certifications/ calls on decertification AND job/department changes) captures the seed exactly like a self-initiated break', function()
     local f = newFixture()
     f.config.Database = { enabled = false }
     f.config.Features.XPProgression = true

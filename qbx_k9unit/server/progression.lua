@@ -4,7 +4,7 @@
     Phase 4 (coder-backend). Owns `Config.Features.XPProgression` end to
     end: server-authoritative XP accumulation, the `k9_progression`
     persistence table (sql/install.sql), the `K9XP[citizenid]` in-memory
-    cache mirroring `server/certifications.lua`'s `Certifications` cache
+    cache mirroring `server/certifications/`'s `Certifications` cache
     pattern exactly (per DEVELOPER_REFERENCE.md#xp-schema §5's own
     recommendation), and the tier-lookup helper walking `Config.XPTiers` the
     same way `server/search.lua` walks `Config.ContrabandAlertTiers`.
@@ -32,7 +32,7 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 4. Identical in format to
-    server/certifications.lua's contract block.
+    server/certifications/'s contract block.
 
     Callbacks: none. There is no "what's my current XP/tier" callback —
     every tier-relevant push is the server-initiated event below; a future
@@ -200,7 +200,7 @@
     not defense-in-depth, since AwardXP is not itself a network-facing
     surface (no RegisterNetEvent/lib.callback reaches it directly).
     THIS FILE owns `K9XP` (citizenid -> number) as file-local state,
-    structurally identical to server/certifications.lua's `Certifications`
+    structurally identical to server/certifications/'s `Certifications`
     cache (refreshed on PlayerLoaded/resource-start backfill, evicted on
     playerDropped to bound memory growth, per that file's own "regression-
     test fix" precedent).
@@ -209,7 +209,7 @@
 
 -- K9XP[citizenid] = number (accumulated total). Local: nothing outside this
 -- file should read/write it directly — always go through AwardXP/GetXPTier/
--- GetXP. Mirrors server/certifications.lua's `Certifications` cache shape
+-- GetXP. Mirrors server/certifications/'s `Certifications` cache shape
 -- and its own "nothing outside this file should read it directly" rule.
 local K9XP = {}
 
@@ -1200,7 +1200,7 @@ end
 --   5,760 XP/hr uncapped gross at the default 5000ms deployCooldownMs,
 --   enough to exhaust the entire shared 3,600 XP/hr mint budget in under
 --   40 minutes solo). Both awards are therefore left UNWIRED, exactly like
---   the pre-fix state server/certifications.lua's own CertifyXpMintCooldown
+--   the pre-fix state server/certifications/'s own CertifyXpMintCooldown
 --   comment describes for handlerCertifyK9's old self-cert/decertify loop.
 --   With neither award ever actually paid, shortening the ACTION cooldown
 --   these two functions unlock cannot shorten any XP-MINTING cadence,
@@ -1254,7 +1254,7 @@ end
 --   NEXT: gate that award through a DEDICATED per-actor MINT cooldown,
 --   entirely separate from MedkitCooldown/DeployCooldown, sized against
 --   the RANK-REDUCED floors above (18000ms / 2250ms), not the unreduced
---   config defaults (60000ms / 5000ms) -- mirroring server/certifications.lua's
+--   config defaults (60000ms / 5000ms) -- mirroring server/certifications/'s
 --   own CertifyXpMintCooldown fix for handlerCertifyK9 (keyed by the actor,
 --   its own TTL, independent of the action-throttling cooldown). Never
 --   derive mint eligibility from MedkitCooldown.IsOnCooldown/
@@ -1275,7 +1275,7 @@ end
 --   appears in server/medkit.lua/server/kennel.lua UNLESS that same file
 --   also names a dedicated *_XP_MINT_COOLDOWN tracker (the
 --   CERTIFY_XP_MINT_COOLDOWN_MS/CertifyXpMintCooldown naming convention
---   server/certifications.lua already established) -- a red test, not a
+--   server/certifications/ already established) -- a red test, not a
 --   comment someone can wire past without reading.
 --
 --   CLOSED (WIRING PASS, coder-backend -- the "top handler rank cannot be
@@ -1825,7 +1825,7 @@ function GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
 end
 
 -- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) -- mirrors
--- server/certifications.lua's RefreshCertificationCache fix of the
+-- server/certifications/'s RefreshCertificationCache fix of the
 -- identical class of bug (a transient query failure recorded as a
 -- confirmed answer instead of "we don't know"), applied here to K9XP. See
 -- LoadXPForCitizenid's own doc comment below for the full contract.
@@ -1854,7 +1854,7 @@ local XPLoadUnresolved = {}
 
 --- Runs `fn()` up to `attempts` times, waiting `backoffMs * attemptNumber`
 --- between tries -- identical shape and reasoning to
---- server/certifications.lua's own PcallWithBoundedRetry, duplicated here
+--- server/certifications/'s own PcallWithBoundedRetry, duplicated here
 --- rather than shared, matching this resource's own established "each file
 --- keeps its own tiny copy of a genuinely small, self-contained helper"
 --- convention (see e.g. that file's own IsDuplicateKeyError precedent,
@@ -1866,7 +1866,7 @@ local XPLoadUnresolved = {}
 --- @return boolean ok
 --- @return any resultOrErr
 ---
---- `coroutine.isyieldable()` GUARD -- see server/certifications.lua's own
+--- `coroutine.isyieldable()` GUARD -- see server/certifications/'s own
 --- identical guard on its own PcallWithBoundedRetry for the full "why":
 --- every real call site here runs inside an FXServer-managed coroutine
 --- (event handler, this file's own resync sweep), where `Wait()` is always
@@ -1888,7 +1888,7 @@ local function PcallWithBoundedRetry(fn, attempts, backoffMs)
 end
 
 --- Loads a citizenid's real XP total from k9_progression into the K9XP
---- cache. Bounded-retry-wrapped mirroring server/certifications.lua's
+--- cache. Bounded-retry-wrapped mirroring server/certifications/'s
 --- RefreshCertificationCache precedent — an uncaught error here must not
 --- abort the caller's own loop (PlayerLoaded fires per-player, but the
 --- resource-start backfill loop below iterates every connected player in
@@ -2413,7 +2413,7 @@ function AwardXP(citizenid, actionKey)
         -- integration signal for OTHER resources, not a client HUD push, so
         -- there is no reason to suppress it just because this K9's own
         -- client happens not to be connected right now (mirrors
-        -- server/certifications.lua's certificationRevoked event, which
+        -- server/certifications/'s certificationRevoked event, which
         -- likewise fires for both online and offline targets).
         FireOutboundEvent('qbx_k9unit:events:xpTierReached', citizenid, CopyTier(newTier), CopyTier(oldTier))
 
@@ -2422,7 +2422,7 @@ function AwardXP(citizenid, actionKey)
         -- ever awards XP to the player who just performed the action
         -- (always online at call time), but this stays generic
         -- (GetPlayerByCitizenId, not an assumed `source`) rather than
-        -- asserting that invariant, mirroring server/certifications.lua's
+        -- asserting that invariant, mirroring server/certifications/'s
         -- ForceDetachLeashIfOnline's own "resolve by citizenid, no-op if
         -- not currently online" shape.
         local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
@@ -2974,7 +2974,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 end)
 
 -- Regression-test-class fix, applied proactively (mirrors
--- server/certifications.lua's own documented fix for the identical shape of
+-- server/certifications/'s own documented fix for the identical shape of
 -- bug on its `Certifications` cache): K9XP is keyed by citizenid and would
 -- otherwise accumulate one entry per distinct citizenid ever loaded this
 -- session with nothing ever evicting an entry — not a correctness bug (a
@@ -2983,7 +2983,7 @@ end)
 -- a long-running server. Resolve the citizenid for the disconnecting source
 -- via qbx_core (still resolvable here — playerDropped fires before the
 -- framework fully tears down the player object, same timing
--- server/certifications.lua's own playerDropped handler already relies on)
+-- server/certifications/'s own playerDropped handler already relies on)
 -- and drop its cache entry.
 AddEventHandler('playerDropped', function(_reason)
     local src = source
@@ -3024,7 +3024,7 @@ end)
 
 -- ======================================================================
 -- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass) --
--- mirrors server/certifications.lua's own resync sweep for
+-- mirrors server/certifications/'s own resync sweep for
 -- CertificationCheckUnresolved, applied here to XPLoadUnresolved. See
 -- LoadXPForCitizenid's own doc comment for the full contract this closes
 -- the loop on. Lower stakes than the certification case (see that
@@ -3038,7 +3038,7 @@ end)
 -- regardless of which optional features are on. Matches this resource's
 -- own established "a thread governed by something that can change at
 -- runtime starts unconditionally and re-checks that thing fresh inside the
--- loop" convention -- see server/certifications.lua's own resync sweep and
+-- loop" convention -- see server/certifications/'s own resync sweep and
 -- server/runtimecontrol.lua's FEATURE_TIERS entry on server/combat.lua's
 -- maintenance threads for the precedent. Cheap on an idle server either
 -- way: the overwhelmingly common case is an EMPTY XPLoadUnresolved table.

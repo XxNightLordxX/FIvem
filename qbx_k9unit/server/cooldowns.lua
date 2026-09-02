@@ -7,7 +7,7 @@
     cooldown/mutex tables in this resource is migrated onto the constructors
     below with its exact existing threshold, keying, and cleanup timing
     preserved — see each call site's own comment (server/main.lua,
-    server/certifications.lua, server/tracking.lua, server/search.lua) for
+    server/certifications/, server/tracking.lua, server/search.lua) for
     the "migrated from X, behavior unchanged" note.
 
     Loaded FIRST in fxmanifest.lua's server_scripts (before main.lua,
@@ -16,10 +16,10 @@
     call at their own file-load time to build their own private tracker
     instances — same "global helper, private per-file state" shape
     HasK9Access/IsConfiguredK9Model already established in
-    server/certifications.lua, just for the cooldown/mutex pattern instead
+    server/certifications/, just for the cooldown/mutex pattern instead
     of the access-check pattern.
 
-    WHY A NEW FILE, NOT FOLDED INTO server/certifications.lua OR
+    WHY A NEW FILE, NOT FOLDED INTO server/certifications/ OR
     server/main.lua: this resource's existing convention (per both of
     those files' own headers) is that a shared file should be scoped to ONE
     responsibility so it doesn't balloon into an everything-file as later
@@ -240,7 +240,7 @@
     real shape in this resource: a hardcoded LOCAL CONSTANT handed to
     NewCooldown (e.g. `NewCooldown(CERTIFY_ACTION_COOLDOWN_MS)`, itself a
     `local X = <literal>` a few lines above in the same file, per
-    server/certifications.lua/server/main.lua/server/admin.lua and every
+    server/certifications//server/main.lua/server/admin.lua and every
     other call site NOT listed above). A bad value there is a PROGRAMMER
     typo in a literal no operator config.lua edit can ever reach — there is
     no config-typo pathway to be proportionate about, and crashing loudly

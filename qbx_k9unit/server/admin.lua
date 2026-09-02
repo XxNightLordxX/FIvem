@@ -6,7 +6,7 @@
     by hand (README.md's own documented "admin listing" queries;
     DEVELOPER_REFERENCE.md Part B top-3 item 2 / §9 -- formerly COMPLEMENTARY_FEATURES.md,
     merged 2026-08-25): `k9_certifications`
-    (server/certifications.lua), `k9_partnerships` (server/partnership.lua),
+    (server/certifications/), `k9_partnerships` (server/partnership.lua),
     `k9_search_log` (server/search.lua), `k9_progression`
     (server/progression.lua). THIS FILE COMPUTES NOTHING NEW — it is a
     read-only, server-authoritative wrapper over query shapes sql/install.sql
@@ -89,7 +89,7 @@
     CheckPartnershipEligibility) already uses a job/grade threshold for
     exactly this kind of authority question; this file now does too.
 
-    GATED ON POLICE JOB RANK, mirroring server/certifications.lua's
+    GATED ON POLICE JOB RANK, mirroring server/certifications/'s
     IsEligibleCertifier EXACTLY — read that function before touching
     IsAuthorizedAdmin below — including both of its hardening properties,
     carried over here from day one rather than waiting to rediscover them:
@@ -104,7 +104,7 @@
         non-number `level`) must FAIL CLOSED (deny) here, never throw an
         uncaught "attempt to compare number with <type>" error on this
         authorization path — the exact class of bug coder-security already
-        found and fixed twice in server/certifications.lua
+        found and fixed twice in server/certifications/
         (IsEligibleCertifier's own certifierGrade comparison, and
         HasK9Access's autoAccessGrade branch).
     Threshold: `Config.Departments[job.name].auditGrade` — a NEW per-
@@ -292,7 +292,7 @@
        certified handlers in department X").
 
        ARGUMENT SHAPE: a department name, validated against
-       `Config.Departments` the same way server/certifications.lua's
+       `Config.Departments` the same way server/certifications/'s
        `/k9decertifyoffline` validates its own `job` argument
        (`if not Config.Departments[job] then ... end`, that file's own
        `RevokeCertificationOffline`) — reusing an existing, already-vetted
@@ -394,7 +394,7 @@
     RATE LIMITING: one shared NewCooldown() instance (server/cooldowns.lua
     — per this task's explicit "use the shared constructors" convention)
     across all five commands, keyed by the CALLER's own source, mirroring
-    server/certifications.lua's CertifyActionCooldown shape (one cooldown
+    server/certifications/'s CertifyActionCooldown shape (one cooldown
     covering several related actions, not one per command). This is a
     DB-load/spam guard, not an authorization boundary — nothing here
     mutates state or costs an ox_inventory round trip the way certify/
@@ -420,7 +420,7 @@
       states.
     - THIS FILE does NOT call HasK9Access / IsConfiguredK9Model /
       GetActivePartnerCitizenId / IsActivePartnerOf or any other
-      resource-global from server/certifications.lua or
+      resource-global from server/certifications/ or
       server/partnership.lua — deliberately: this surface's authorization
       is pure ACE, unrelated to K9 certification or department membership
       (see ACCESS MODEL above). No load-order dependency on either file.
@@ -458,7 +458,7 @@
                                             required to run any command in this file,
                                             job.isboss always qualifies too, same
                                             shape as Config.Departments[job].certifierGrade
-                                            in server/certifications.lua). Recommended
+                                            in server/certifications/). Recommended
                                             defaults matching this pass's report to the
                                             config owner: police=4, sheriff=3, bcso=3
                                             (identical to each department's own
@@ -615,7 +615,7 @@ end
 --- live.
 ---
 --- JOB-RANK CHECK (this pass, project-owner-directed): mirrors
---- server/certifications.lua's IsEligibleCertifier exactly — same
+--- server/certifications/'s IsEligibleCertifier exactly — same
 --- Config.Departments[job.name] membership requirement, same job.isboss
 --- short-circuit, same explicit `type(job.grade.level) == 'number'` guard
 --- before ever comparing it, applied against a NEW, separate threshold
@@ -684,7 +684,7 @@ local function IsAuthorizedAdmin(source)
 
     -- EXPLICIT PER-PERSON CAPABILITY BLOCK (security-audit pass, this pass
     -- -- see server/permissions.lua's own ADMIN_CAPABILITY_BLOCKABLE_KEYS
-    -- doc comment for the full "why", and server/certifications.lua's
+    -- doc comment for the full "why", and server/certifications/'s
     -- HasK9Access/IsEligibleCertifier for the identical addition applied
     -- there). Checked BEFORE job.isboss, deliberately -- this is the ONE
     -- bypass in this function 'block.k9.audit' must beat too, matching the
@@ -709,7 +709,7 @@ local function IsAuthorizedAdmin(source)
 
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold -- same rule, same reasoning, as
-    -- server/certifications.lua's IsEligibleCertifier. PER-PERSON FEATURE
+    -- server/certifications/'s IsEligibleCertifier. PER-PERSON FEATURE
     -- CONTROL (this pass) is layered on AFTER this qualifies, never
     -- instead of it -- see IsAdminFeaturePermittedForCitizenId's own doc
     -- comment above for why a block/missing-grant can narrow even a boss's
@@ -867,7 +867,7 @@ end
 --- @param value string?
 --- @return boolean
 local function IsValidDepartment(value)
-    -- Same validation shape server/certifications.lua's
+    -- Same validation shape server/certifications/'s
     -- RevokeCertificationOffline already applies to its own `job` argument
     -- (`if not Config.Departments[job] then ... end`) — reused here rather
     -- than invented fresh, per this file's header "COMMAND SURFACE" item 5
@@ -1583,7 +1583,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- checked BEFORE the `mode` argument is even inspected — an
     --- unauthorized caller learns nothing about argument validity, not
     --- even whether their chosen mode string was recognized. This is a
-    --- deliberate divergence from server/certifications.lua's own
+    --- deliberate divergence from server/certifications/'s own
     --- GrantCertification ordering (which validates argument shape BEFORE
     --- eligibility) — justified here because this surface is explicitly a
     --- privacy-sensitive audit tool (this task's own framing), not a

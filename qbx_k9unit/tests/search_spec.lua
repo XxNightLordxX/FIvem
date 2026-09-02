@@ -295,7 +295,7 @@ env.MySQL = { insert = { await = function(_sql, _params) mysqlInsertCount = mysq
 env.AwardXP = function(citizenid, actionKey) awardCalls[#awardCalls + 1] = { citizenid = citizenid, actionKey = actionKey } end
 
 -- SPECIALIZATION CATEGORIES (owner-directed decluttering pass, 2026-08-26)
--- -- controllable stand-in for server/certifications.lua's real
+-- -- controllable stand-in for server/certifications/'s real
 -- HasSpecialization, same "plain mutable state + setter" shape as this
 -- section's own `requesterInVehicle` above. Defaults to NOTHING held for
 -- any citizenid -- every pre-existing test in this section keeps exercising

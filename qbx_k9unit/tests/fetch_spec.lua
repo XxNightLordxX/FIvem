@@ -13,7 +13,7 @@
     trackers, every ResolveNetworkEntity call is the real resolve+existence-
     guard primitive). HasK9Access, IsConfiguredK9Model, and NotifyPlayer are
     stubbed directly -- all three are genuinely OTHER files' own logic
-    (server/certifications.lua, server/notify.lua), already covered by their
+    (server/certifications/, server/notify.lua), already covered by their
     own specs -- this file's job is server/fetch.lua's own handshake/
     lifecycle/entity-theft-boundary logic, not a second copy of those.
 

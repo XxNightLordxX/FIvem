@@ -7,7 +7,7 @@
     DEVELOPER_REFERENCE.md#contraband-search's own framing ("designing
     early because the trust boundary doesn't move even if config field
     names do"). This implementation requires an explicit security review
-    before it ships, the same standard server/certifications.lua's header
+    before it ships, the same standard server/certifications/'s header
     already sets for §4's grant/revoke flow.
 
     Owns (DEVELOPER_REFERENCE.md §11.3's `server/search.lua` row): the
@@ -20,7 +20,7 @@
     splitting client/search.lua from client/tracking.lua by TRUST MODEL,
     not feature name: this file reads a target's REAL, live ox_inventory
     contents — the same category of real capability grant as
-    server/certifications.lua's grant/revoke — whereas server/tracking.lua
+    server/certifications/'s grant/revoke — whereas server/tracking.lua
     (this file's sibling) only ever reveals a client-cosmetic marker trail
     (DEVELOPER_REFERENCE.md §11.6, no real capability granted).
 
@@ -71,7 +71,7 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2. Identical in format to
-    server/certifications.lua's contract block.
+    server/certifications/'s contract block.
 
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:searchTarget' (targetType: 'vehicle'|'person', targetNetId: number)
@@ -101,7 +101,7 @@
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)`, resource-global from
-      server/certifications.lua — reused, never re-derived. Does NOT call
+      server/certifications/ — reused, never re-derived. Does NOT call
       `IsConfiguredK9Model` — a search requester's eligibility is pure
       job+certification (HasK9Access), same posture as
       server/tracking.lua's own FILE-TO-FILE CONTRACT note for the same
@@ -547,7 +547,7 @@ do
 end
 
 --- Resolves the set of Config.K9Specializations categories `citizenid`
---- currently holds (HasSpecialization, server/certifications.lua -- carries
+--- currently holds (HasSpecialization, server/certifications/ -- carries
 --- that function's own High Command bypass). Used to scope
 --- SumContrabandWeight below to only the CATEGORISED items this specific
 --- searcher is entitled to, on top of the UNCATEGORISED baseline every K9
@@ -1393,7 +1393,7 @@ end
 ---      an uncached vehicle trunk. Reject with the distinct `access_revoked`
 ---      reason (logged as `search_failed` in k9_search_log, since a real
 ---      inventory-read attempt did happen) if access was revoked mid-flight
----      — same posture server/certifications.lua's revoke paths already
+---      — same posture server/certifications/'s revoke paths already
 ---      take for an in-progress leash via
 ---      ForceDetachLeashForSource/ForceDetachOfficerLeashForSource, since
 ---      this file's own header claims that file's level of scrutiny for
@@ -1696,7 +1696,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- not theoretical: GetInventoryItems above can yield on a genuine
     -- ox_inventory lazy DB load for an uncached vehicle trunk (see the
     -- pcall's own doc comment above), during which a supervisor can revoke
-    -- this exact officer's certification via server/certifications.lua.
+    -- this exact officer's certification via server/certifications/.
     -- Without this re-check, a decertified officer would still receive the
     -- full result AND still trigger BroadcastContrabandAlert to bystanders
     -- below if the tier isn't 'clean' — after already losing access.
@@ -1704,7 +1704,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- This file's own header (top of this file) claims explicit
     -- certifications.lua-level scrutiny BECAUSE reading a target's real
     -- live inventory is "the same category of real capability grant as
-    -- server/certifications.lua's grant/revoke" — and certifications.lua
+    -- server/certifications/'s grant/revoke" — and certifications.lua
     -- itself refuses to leave an equivalent window open for the leash
     -- capability: its revoke paths call
     -- ForceDetachLeashForSource/ForceDetachOfficerLeashForSource to tear
@@ -1945,7 +1945,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     end
 
     if not HasK9Access(source) then
-        return { ok = false, reason = 'no_access' } -- reuse the global from server/certifications.lua, do not re-derive
+        return { ok = false, reason = 'no_access' } -- reuse the global from server/certifications/, do not re-derive
     end
 
     -- PER-PERSON FEATURE CONTROL -- see IsSearchFeaturePermittedForCitizenId

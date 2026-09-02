@@ -76,11 +76,22 @@ end
 --- @param dir string
 --- @return string[]
 local function LuaFilesIn(dir)
-    local handle = assert(io.popen('ls ' .. dir .. '/*.lua 2>/dev/null'))
+    -- RECURSIVE, deliberately (`find`, not `ls dir/*.lua`). Commands do not
+    -- only live one level down any more: server/certifications/ was split
+    -- on 2026-09-02 into server/certifications/{core,depth,accessors,
+    -- commands}.lua, and a non-recursive listing silently stopped seeing
+    -- five real commands -- /k9certify, /k9decertify, /k9settier,
+    -- /k9specialize and /k9unspecialize. That is the exact "real but
+    -- undiscovered" direction this file's own header warns about: the
+    -- commands kept working in-game while this guard reported their tablet
+    -- entries as naming commands that do not exist. Returns paths RELATIVE
+    -- to `dir`, so a nested file reads back correctly.
+    local handle = assert(io.popen('find ' .. dir .. ' -name "*.lua" 2>/dev/null'))
     local names = {}
+    local prefix = dir .. '/'
     for line in handle:lines() do
-        local base = line:match('([^/]+%.lua)$')
-        if base then names[#names + 1] = base end
+        local rel = line:sub(1, #prefix) == prefix and line:sub(#prefix + 1) or line:match('([^/]+%.lua)$')
+        if rel then names[#names + 1] = rel end
     end
     handle:close()
     table.sort(names)
@@ -140,7 +151,7 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9grantpermission = true,
     k9revokepermission = true,
     -- family #8: online/offline certification pairs (10 -> 5) --
-    -- server/certifications.lua. k9certify/k9decertify/k9settier/
+    -- server/certifications/. k9certify/k9decertify/k9settier/
     -- k9unspecialize stays its own canonical name (unchanged); k9recertify
     -- was DELETED in the 2026-09-02 merge, not aliased --
     -- joined this table on 2026-09-02 when it merged into /k9certify

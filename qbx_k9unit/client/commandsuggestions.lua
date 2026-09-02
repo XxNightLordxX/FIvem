@@ -331,7 +331,7 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9propattach', keySuffix = 'k9propattach' },
     -- server/highcommand.lua
     { command = 'k9givexp', keySuffix = 'k9givexp' },
-    -- server/certifications.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item
+    -- server/certifications/ -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §2/§5 item
     -- 8: k9certifyoffline/k9decertifyoffline/k9settieroffline/
     -- k9recertifyoffline/k9unspecializeoffline are now HIDDEN ALIASES (still
     -- real, working RegisterCommand calls -- see that file's own comment),

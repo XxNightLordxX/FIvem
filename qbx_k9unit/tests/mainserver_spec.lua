@@ -19,7 +19,7 @@
     existence+type-guard primitive) -- never a reimplementation of either.
     HasK9Access, IsConfiguredK9Model, and NotifyPlayer are stubbed directly,
     same convention kennel_spec.lua/combat_spec.lua already established:
-    all three are genuinely OTHER files' own logic (server/certifications.lua,
+    all three are genuinely OTHER files' own logic (server/certifications/,
     server/notify.lua), already covered by their own specs -- this file's
     job is server/main.lua's own handshake/relay/cleanup logic, not a
     second copy of those.
@@ -75,7 +75,7 @@
 
     Resource-globals (no `local`) exposed by this file: ForceDetachLeashForSource,
     ForceDetachOfficerLeashForSource (both role-aware detach hooks for
-    server/certifications.lua; Section 9).
+    server/certifications/; Section 9).
 
     CreateThread(...): ONE, added this pass (DEATH-DETECTION FIX,
     coder-frontend) -- the leash death-detection poll, gated behind
@@ -89,7 +89,7 @@
       - RefreshCertificationCache's OWN internal DB-query/tier/expiry logic
         (Section 12 below stubs it, same convention as HasK9Access/
         IsConfiguredK9Model elsewhere in this file) -- that is genuinely
-        server/certifications.lua's own logic, already covered by its own
+        server/certifications/'s own logic, already covered by its own
         spec. Section 12 only pins server/main.lua's OWN responsibility:
         that the backfill loop calls it, with the right arguments, for the
         right set of already-connected players, and wires its return value
@@ -136,7 +136,7 @@ local ORIGIN = vec3(0, 0, 0)
 
 -- Fixed, test-controlled "model hash" constants. GetEntityModel and
 -- IsConfiguredK9Model are BOTH stubbed by this spec (IsConfiguredK9Model is
--- genuinely server/certifications.lua's own logic, already covered by
+-- genuinely server/certifications/'s own logic, already covered by
 -- certifications_spec.lua), so these can be any two distinct numbers this
 -- file agrees with itself on -- never the real GetHashKey algorithm, which
 -- CheckLeashEligibility never calls directly anyway (it only ever calls
@@ -317,7 +317,7 @@ local function newMainFixture(opts)
     local onlinePlayerIds = {} -- array of STRINGS (GetPlayers' real, documented return shape -- source ids as strings, tonumber'd by the backfill loop itself) -- Section 12
     local function GetPlayers() return onlinePlayerIds end
 
-    -- Section 12 (resource-start cache backfill): server/certifications.lua
+    -- Section 12 (resource-start cache backfill): server/certifications/
     -- is NOT loaded into this sandbox (this file's job is main.lua's own
     -- backfill LOOP, not RefreshCertificationCache's own DB/tier logic,
     -- which is that file's own spec's job) -- same soft-dependency stub
@@ -328,7 +328,7 @@ local function newMainFixture(opts)
     local refreshCalls = {} -- array of { citizenid=, jobName= }, call order preserved
     local refreshResultByKey = {} -- "citizenid|jobName" -> boolean, default false (matches HasK9Access's own "no access" default posture)
     -- SECOND RETURN VALUE, `stateKnown` (concurrent contract change, this
-    -- pass -- the real server/certifications.lua's RefreshCertificationCache
+    -- pass -- the real server/certifications/'s RefreshCertificationCache
     -- now returns `isActive, stateKnown`, and this file's own onResourceStart
     -- backfill call site was updated to match -- see that handler's own
     -- "COULD-NOT-DETERMINE GUARD" comment): this stub models a plain
@@ -2168,7 +2168,7 @@ end)
 -- section exists so that fact is pinned by a real test, not just a
 -- corrected comment -- until now, NOTHING fired either of this file's two
 -- onResourceStart handlers anywhere in this test suite (this file's own
--- prior header disclosed skipping them; server/certifications.lua's own
+-- prior header disclosed skipping them; server/certifications/'s own
 -- spec, tests/certifications_spec.lua, never loads server/main.lua at all
 -- and stubs its own unrelated GetPlayers() for a different purpose) -- so
 -- the backfill loop's actual behavior was previously unverified by any

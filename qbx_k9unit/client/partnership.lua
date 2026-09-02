@@ -221,14 +221,14 @@
     originally written, was the second, and both were only caught by
     someone verifying the claim against the actual code rather than
     trusting the header): this section previously stated that
-    server/partnership.lua's header claim -- "server/certifications.lua
+    server/partnership.lua's header claim -- "server/certifications/
     calls `ForceBreakPartnershipForCitizenId` from three places
     (RevokeCertification's online branch, RevokeCertificationOffline, and
     the QBCore:Server:OnJobUpdate handler's TWO branches)" -- was false,
-    because a grep of server/certifications.lua at the time this file was
+    because a grep of server/certifications/ at the time this file was
     first written found ZERO call sites. That was accurate when written.
     It is NOT accurate anymore: commit 94fbc4e added four real call sites
-    in server/certifications.lua (RevokeCertification's online branch;
+    in server/certifications/ (RevokeCertification's online branch;
     RevokeCertificationOffline; and the QBCore:Server:OnJobUpdate handler's
     two branches, department-loss and cert-revoke-due-to-job-change) --
     re-verified directly against that file's current contents, not assumed
@@ -241,7 +241,7 @@
     manual, self-initiated one alongside four automatic ones. A future
     reader should not conclude from any stale copy of this paragraph that
     BreakPartnership() is still the only teardown path -- verify against
-    server/certifications.lua directly, as this correction did, rather than
+    server/certifications/ directly, as this correction did, rather than
     trusting either this file's or that file's header claim on its own.
     ======================================================================
 ]]
@@ -540,7 +540,7 @@ end)
 
 --- The partnership has ended -- self-initiated break by either side, or a
 --- server-triggered teardown (e.g. certification revoke, department
---- change -- server/certifications.lua calls ForceBreakPartnershipForCitizenId
+--- change -- server/certifications/ calls ForceBreakPartnershipForCitizenId
 --- from four call sites as of commit 94fbc4e; see this file's header
 --- "PREVIOUSLY-DISCLOSED FINDING, NOW CORRECTED" for the verified detail).
 --- Sent to whichever client(s) are still online -- server/partnership.lua's
@@ -555,7 +555,7 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     -- 'Partnership ended (%s).', so a real player saw literal internal
     -- text like "Partnership ended (certification_revoked)." or
     -- "Partnership ended (admin_forced_from_tablet)." -- the exact
-    -- machine-readable tag server/certifications.lua/server/permissions.lua/
+    -- machine-readable tag server/certifications//server/permissions.lua/
     -- server/tablet.lua pass to ForceBreakPartnershipForCitizenId, never
     -- translated. This is sent to BOTH parties with the SAME string (see
     -- server/partnership.lua's TellCitizenIdPartnershipEnded), so each

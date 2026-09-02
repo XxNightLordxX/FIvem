@@ -187,7 +187,7 @@
     CLEANUP -- "NEVER GATE A TERMINATION PATH", applied to every path this
     task named:
       - Manual detach              -- 'qbx_k9unit:client:leashDetached' handler below, instant.
-      - Certification lapsing      -- server/certifications.lua's ForceDetachLeashForSource
+      - Certification lapsing      -- server/certifications/'s ForceDetachLeashForSource
                                        funnels through the SAME doDetachLeash ->
                                        leashDetached broadcast as manual detach, so it is
                                        covered by the exact same handler, no special case.

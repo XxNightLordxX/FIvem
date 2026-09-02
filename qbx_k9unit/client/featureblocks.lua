@@ -155,7 +155,7 @@
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes two resource-global (no `local`) functions, per
       this resource's established "global helper, private per-file state"
-      convention (server/cooldowns.lua/server/certifications.lua's own
+      convention (server/cooldowns.lua/server/certifications/'s own
       header cites this as the pattern; client/main.lua's IsOwnModelK9/
       CanShowK9UI/DenyK9UIAccess are the closest client-side precedent):
         IsK9FeatureBlocked(featureName) -> boolean

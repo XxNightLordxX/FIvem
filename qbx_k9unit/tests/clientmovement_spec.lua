@@ -1355,7 +1355,7 @@ end)
 -- entire per-player body -- broadcast included -- the instant a player's
 -- role/access is lost (confirmed by reading server/wellbeing.lua's
 -- ResolveK9Ped and its one call site in TickWellbeing). Certification
--- revocation (server/certifications.lua) sends only a plain notify, nothing
+-- revocation (server/certifications/) sends only a plain notify, nothing
 -- this file or any of its callers listens for. Before the ANY-PED fix this
 -- was harmless (an off-model player's OLD gate, `not IsOwnModelK9()` alone,
 -- was always true for them); after it, losing role/access while staying
@@ -1399,7 +1399,7 @@ t.test('WATCHDOG CLOSES THE GAP: OWNER-VERIFIED SCENARIO -- an off-model role-ho
     f.env.RecomputeK9MoveRate()
     t.equals(f.setMoveRateCalls[#f.setMoveRateCalls].rate, 0.85, 'sanity: the real effect is genuinely applied off-model, exactly as PRIORITY #3\'s ANY-PED FIX tests already prove')
 
-    -- THE REVOCATION: role/access lost. Simulates server/certifications.lua's
+    -- THE REVOCATION: role/access lost. Simulates server/certifications/'s
     -- RevokeCertification -- no event fires client-side that this file (or
     -- client/wellbeing.lua/client/progression.lua) listens for; the ONLY
     -- thing that changes is what HasK9Access() will now answer the next

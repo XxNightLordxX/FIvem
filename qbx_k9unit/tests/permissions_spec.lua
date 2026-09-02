@@ -12,13 +12,13 @@
       newFixture(opts)             -- UNIT level: loads only server/cooldowns.lua
         + server/permissions.lua. `IsHighCommand`/`HasK9Access` are
         TEST-CONTROLLED stubs (plain functions the test swaps in), not the
-        real server/highcommand.lua/server/certifications.lua -- this is a
+        real server/highcommand.lua/server/certifications/ -- this is a
         deliberate substitution for isolating server/permissions.lua's own
         logic, exactly matching this codebase's `type(fn) == 'function'`
         soft-dependency contract (a real deployment satisfies it via those
         two real files; this fixture satisfies it via a double).
       newIntegrationFixture(opts)  -- loads the REAL server/highcommand.lua,
-        server/certifications.lua and server/admin.lua alongside
+        server/certifications/ and server/admin.lua alongside
         server/permissions.lua in ONE shared env, to prove the actual
         4-step resolution order end-to-end through real production code on
         every step, not a re-implementation of it. Used for the
@@ -476,7 +476,7 @@ end
 
 -- ----------------------------------------------------------------------
 -- Fixture 2: INTEGRATION level. Real server/highcommand.lua +
--- server/certifications.lua + server/admin.lua + server/permissions.lua,
+-- server/certifications/ + server/admin.lua + server/permissions.lua,
 -- all in ONE env, to prove the real 4-step resolution order end to end.
 -- ----------------------------------------------------------------------
 
@@ -608,7 +608,7 @@ local function newIntegrationFixture()
     -- every OTHER FiveM native stub in this fixture already guards against.
     local function TriggerClientEventStub(_eventName, _target, ...) end
 
-    -- lib.callback.register is only actually reached by server/certifications.lua's
+    -- lib.callback.register is only actually reached by server/certifications/'s
     -- hasK9Access callback here (permissions.lua's OWN tabletGrant/Revoke
     -- registrations are gated behind Config.Features.CommandTablet, false in
     -- this fixture) -- nothing in this suite needs to invoke it, so this is a
@@ -649,7 +649,7 @@ local function newIntegrationFixture()
     }
 
     -- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass): both
-    -- server/certifications.lua and server/permissions.lua now call
+    -- server/certifications/ and server/permissions.lua now call
     -- CreateThread(...) UNCONDITIONALLY at file-load time (their own
     -- respective resync sweeps) -- see newFixture's own identical comment
     -- above for the full "why". ONE shared threadRunner captures threads
@@ -679,7 +679,14 @@ local function newIntegrationFixture()
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)       -- real K9Store -- server/admin.lua's own query functions read through this now (the datastore migration), never their own SafeQuery+raw-SQL pair; DatabaseEnabled() fails safe to true (real-DB mode) since this fixture's Config has no Config.Database, so K9Store routes through this fixture's own `mysql` stub below exactly like the pre-migration code did
     Sandbox.loadInto('../server/highcommand.lua', env)   -- real IsHighCommand
-    Sandbox.loadInto('../server/certifications.lua', env) -- real HasK9Access / IsEligibleCertifier
+    -- SPLIT 2026-09-02: one 6,012-line file became four, loaded in the same
+    -- order fxmanifest.lua loads them. The order is load-bearing -- each
+    -- file re-binds names the earlier ones published onto K9Cert, so a
+    -- file loaded out of order would re-bind nil.
+    Sandbox.loadInto('../server/certifications/core.lua', env)
+    Sandbox.loadInto('../server/certifications/depth.lua', env)
+    Sandbox.loadInto('../server/certifications/accessors.lua', env)
+    Sandbox.loadInto('../server/certifications/commands.lua', env) -- real HasK9Access / IsEligibleCertifier
     Sandbox.loadInto('../server/admin.lua', env)           -- real IsAuthorizedAdmin
     Sandbox.loadInto('../server/permissions.lua', env)     -- real HasPermission / GrantPermission / RevokePermission
 
@@ -2018,7 +2025,7 @@ end
 -- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) --
 -- RefreshPermissionCache used to write `PermissionCache[citizenid] = {}` on
 -- ANY query failure -- a timeout, a dropped connection, a busy pool -- exactly
--- like server/certifications.lua's RefreshCertificationCache used to. See
+-- like server/certifications/'s RefreshCertificationCache used to. See
 -- tests/certifications_spec.lua's identical section for the full "why"
 -- writeup; proven here against server/permissions.lua's own copy of the
 -- fix. RefreshPermissionCache itself is `local` (unreachable directly), so
@@ -2615,7 +2622,7 @@ end
 
 -- ============================================================================
 -- RESOLUTION ORDER -- end-to-end, through the REAL server/highcommand.lua,
--- server/certifications.lua and server/admin.lua (newIntegrationFixture).
+-- server/certifications/ and server/admin.lua (newIntegrationFixture).
 -- ============================================================================
 
 do

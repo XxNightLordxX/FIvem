@@ -9,7 +9,7 @@
 
       1. runMutation()'s new mutationErrorText() -- every certify/permission
          refusal reason the server can actually return (confirmed against
-         server/certifications.lua's GrantCertificationForTablet/
+         server/certifications/'s GrantCertificationForTablet/
          GrantCertificationOffline and server/permissions.lua's
          GrantPermission/RevokePermission doc comments) now renders its own
          distinct sentence, never the generic "Action failed." this page
@@ -91,7 +91,7 @@ async function openPersonScreen(h) {
 
 // ======================================================================
 // EVERY DISTINCT tablet:certify REFUSAL REASON GETS ITS OWN MESSAGE
-// (every outcome server/certifications.lua's own GrantCertificationForTablet/
+// (every outcome server/certifications/'s own GrantCertificationForTablet/
 // GrantCertificationOffline doc comments list, confirmed by direct read)
 // ======================================================================
 

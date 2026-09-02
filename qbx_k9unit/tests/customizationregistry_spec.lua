@@ -630,7 +630,7 @@ local STRUCTURALLY_EXEMPT_FROM_PERSON_BLOCK = {
     -- name: every CommandTablet surface re-derives caller authority per
     -- call from IsHighCommand / CallerHasConsoleAccess / HasPermission
     -- (server/tablet.lua:656, :825), and the flag itself is only ever read
-    -- at REGISTRATION time (server/certifications.lua:3738,
+    -- at REGISTRATION time (server/certifications/:3738,
     -- server/highcommand.lua:723, server/permissions.lua:328). So
     -- "block this one officer from the tablet" already exists and is
     -- spelled "do not grant them high command, or revoke the permission

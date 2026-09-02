@@ -125,7 +125,7 @@
       intended default use case per Config.K9Medkit.emsJobs). See
       IsMedkitUserAuthorized's own doc comment below.
     - Calls `IsConfiguredK9Model(modelHash)`, resource-global from
-      server/certifications.lua — reused, never re-derived, to verify the
+      server/certifications/ — reused, never re-derived, to verify the
       TARGET really is a configured K9 model server-side.
     - Calls `RestoreInjury(citizenid, amount)`, resource-global from
       server/wellbeing.lua, ONLY IF THAT FUNCTION EXISTS
@@ -502,7 +502,7 @@ end)
 -- tracker never looks at which K9 was treated).
 --
 -- FILE-LOCAL CONSTANT, NOT A CONFIG KEY -- same reasoning as every other
--- *_XP_MINT_COOLDOWN_MS in this codebase (server/certifications.lua's
+-- *_XP_MINT_COOLDOWN_MS in this codebase (server/certifications/'s
 -- CERTIFY_XP_MINT_COOLDOWN_MS, server/search.lua's
 -- COOP_SEARCH_XP_MINT_COOLDOWN_MS, and config.lua's own "THE REAL CEILING...
 -- AND WHY IT IS NOT A SETTING IN THIS FILE" header): this is a security
@@ -514,7 +514,7 @@ end)
 -- KEYED ON THE USING PLAYER'S DURABLE CITIZENID, SURVIVES DISCONNECT/
 -- RECONNECT -- deliberately NOT :RegisterPlayerDropped() (server ids are
 -- recycled; a cooldown keyed by a durable citizenid that reset on reconnect
--- would not be a cooldown at all -- see server/certifications.lua's
+-- would not be a cooldown at all -- see server/certifications/'s
 -- CertifyXpMintCooldown for the identical precedent this mirrors, including
 -- its own "NOT :RegisterPlayerDropped()" reasoning). Bounded instead by its
 -- own independent TTL sweep, same shape as MedkitCooldown's own sweep

@@ -27,10 +27,10 @@ version '0.1.0'
 --     require -- they're consumed purely through their exports/wrapper --
 --     so they only need to appear in `dependencies` below (oxmysql also
 --     gets its `@oxmysql/lib/MySQL.lua` wrapper in server_scripts since
---     server/certifications.lua and server/search.lua do direct SQL work
+--     server/certifications/ and server/search.lua do direct SQL work
 --     -- server/main.lua does not call MySQL.* at all, it only calls
 --     RefreshCertificationCache/HasK9Access, exposed globals owned by
---     server/certifications.lua).
+--     server/certifications/).
 -- ----------------------------------------------------------------------
 ox_lib 'locale'
 
@@ -315,7 +315,7 @@ server_scripts {
     -- PD high command (Config.Features.HighCommand). Grouped with the shared
     -- helpers above rather than with the feature files below, because it is
     -- one: it exposes IsHighCommand(), which server/admin.lua,
-    -- server/certifications.lua and server/bonetool.lua all consult so high
+    -- server/certifications/ and server/bonetool.lua all consult so high
     -- command bypasses their own rank gates. Loading it before its consumers
     -- is a consistency choice, not a hard requirement -- every consumer
     -- guards the call with type(fn) == 'function', this resource's standard
@@ -379,10 +379,10 @@ server_scripts {
     -- doc comments) rather than replacing them, and additionally shares a
     -- cross-file mutex with that file's GrantPermission the same way
     -- server/certtiers.lua's TierEditMutex is shared with
-    -- server/certifications.lua's SetCertificationTier. Placed immediately
+    -- server/certifications/'s SetCertificationTier. Placed immediately
     -- after server/permissions.lua for the same "group with the file it
     -- most directly extends" reason server/certtiers.lua sits immediately
-    -- after server/certifications.lua below -- not a hard requirement,
+    -- after server/certifications/ below -- not a hard requirement,
     -- since every cross-file call in either direction is guarded by
     -- `type(...) == 'function'`/`type(...) == 'table'` and reached only at
     -- runtime, by which point every server_scripts file has already
@@ -390,13 +390,23 @@ server_scripts {
     -- NewCooldown/NewMutex are called at this file's own file-load time.
     'server/permissionkeycatalog.lua',
     'server/main.lua',
-    'server/certifications.lua',
+    -- SPLIT 2026-09-02 (was one 6,012-line server/certifications/ doing
+    -- four jobs). ORDER IS LOAD-BEARING: each file publishes what the later
+    -- ones need onto the shared K9Cert transport at its end, and each later
+    -- file re-binds those names as locals at its top -- so a file loaded out
+    -- of order would re-bind nil and every call through it would fail. The
+    -- dependency flow is strictly one-way, which is what made the split
+    -- safe; see any of the four files' own headers for the full writeup.
+    'server/certifications/core.lua',        -- records, cache, K9 access, grant/revoke
+    'server/certifications/depth.lua',       -- tier ladder, renewal/expiry, specializations
+    'server/certifications/accessors.lua',   -- the read-only public accessors
+    'server/certifications/commands.lua',    -- commands, tablet callbacks, expiry sweeps
     -- Owner-directed reversal of an earlier design decision. Certification
     -- tiers were a hardcoded 3-step ordinal, argued for on the grounds that
     -- an operator could hold the model in their head. The owner asked for
     -- the opposite -- add tiers, rename them, edit what they grant, from
     -- the tablet, at runtime -- so the catalogue is now data. Persists via
-    -- migration 0010. EXTENDS server/certifications.lua's existing tier
+    -- migration 0010. EXTENDS server/certifications/'s existing tier
     -- accessors rather than replacing them; the three shipped keys must
     -- keep their names, since every certification row already in a live
     -- database holds one of them. No hard load-order requirement -- every
@@ -407,7 +417,7 @@ server_scripts {
     -- tabletRevertK9Ped -- assigning someone the K9 role and stripping it
     -- back to a human. It was written and never registered, so every one of
     -- those callbacks silently never answered. Loaded after
-    -- server/permissions.lua and server/certifications.lua, whose
+    -- server/permissions.lua and server/certifications/, whose
     -- IsHighCommand/HasPermission/HasK9Access it consults (21 call sites,
     -- all at runtime, so this is convention rather than a hard requirement).
     'server/tablet.lua',
@@ -415,7 +425,7 @@ server_scripts {
     -- data layer + server logic only; the UI/entry-point work is a
     -- separate, later pass). Two roster LISTS (K9s, Handlers) plus an
     -- explicit "Unassigned" bucket, layered over the certification data
-    -- server/tablet.lua/server/certifications.lua already own -- NOT a
+    -- server/tablet.lua/server/certifications/ already own -- NOT a
     -- second person-detail screen (docs/history/ROSTER_SPEC.md §1's "extend
     -- buildPersonScreen(), do not fork it" decision belongs to that later
     -- UI pass; this file only supplies the data/mutations it will consume).
@@ -429,7 +439,7 @@ server_scripts {
     -- immediately after server/tablet.lua: soft dependencies only
     -- (IsHighCommand from server/highcommand.lua, K9Store from
     -- server/datastore.lua, QueryCertificationRecord/GetXP/GetXPTier from
-    -- server/certifications.lua/server/progression.lua, all already loaded
+    -- server/certifications//server/progression.lua, all already loaded
     -- earlier in this list, all reached only at call time behind this
     -- resource's standard `type(...) == 'function'` guard) -- placed here
     -- purely for topical grouping with the other tablet file, not a hard
@@ -437,7 +447,7 @@ server_scripts {
     'server/roster.lua',
     -- HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7/§12.3
     -- -- loaded after server/cooldowns.lua (NewCooldown/
-    -- NewMutex at this file's own file-load time) and server/certifications.lua
+    -- NewMutex at this file's own file-load time) and server/certifications/
     -- (IsConfiguredK9Model/HasK9Access reuse at runtime inside the
     -- eligibility check below). Per this file's own header note: loaded
     -- AFTER certifications.lua even though certifications.lua's
@@ -458,7 +468,7 @@ server_scripts {
     -- DangerWarn (NEW FILE) -- the reverse direction of HandlerDownDefense
     -- immediately above. HARD load-order dependency on server/cooldowns.lua
     -- (NewCooldown at this file's own file-load time -- already satisfied
-    -- here). Calls HasK9Access (server/certifications.lua) and NotifyPlayer
+    -- here). Calls HasK9Access (server/certifications/) and NotifyPlayer
     -- (server/notify.lua) bare, both already loaded earlier in this list;
     -- GetActivePartnerCitizenId (server/partnership.lua, immediately
     -- above), HasPermission (server/permissions.lua, loaded earlier) and
@@ -545,7 +555,7 @@ server_scripts {
     -- HARD load-order requirement on server/cooldowns.lua: NewCooldown is
     -- called at this file's own file-load time. ResolveNetworkEntity/
     -- ResolveConnectedPlayerFromPed (server/entities.lua) and HasK9Access
-    -- (server/certifications.lua) are all reached only at RUN time, each
+    -- (server/certifications/) are all reached only at RUN time, each
     -- behind this resource's standard `type(fn) == 'function'` soft-
     -- dependency guard -- server/combat.lua's own consumption of this
     -- file's IsApprehensionWarned is the SAME guarded shape, so load order
@@ -601,7 +611,7 @@ server_scripts {
     -- at THIS FILE'S OWN file-load time (twice -- ToggleCooldown and
     -- ActionCooldown), not lazily inside a handler, so cooldowns.lua being
     -- later in this list is a nil-call at start, not a degraded feature.
-    -- HasK9Access (server/certifications.lua) is reached at runtime through a
+    -- HasK9Access (server/certifications/) is reached at runtime through a
     -- type(fn) == 'function' guard that fails CLOSED, so that one is a soft
     -- dependency; it is still listed after certifications.lua so the guard
     -- never actually has to do that job. Mints ZERO XP by construction and
@@ -612,7 +622,7 @@ server_scripts {
     -- after server/cooldowns.lua, a HARD requirement whenever the feature
     -- flag is on -- it calls NewCooldown() at this file's own file-load
     -- time, immediately past its feature gate, not lazily inside the
-    -- command handler. Also after server/certifications.lua, since
+    -- command handler. Also after server/certifications/, since
     -- HasK9Access(source) is the only gate on the command. Reads
     -- k9_progression through the idx_xp index added by SQL migration 0009;
     -- without that index the query is a full table scan plus a filesort on
@@ -662,7 +672,7 @@ server_scripts {
     -- checks from server/datastore.lua (K9Store) and from this same file's
     -- own self-check half, and (at Config.DebugDump.level = 'verbose' only)
     -- wraps the real global HasK9Access/IsHighCommand/HasPermission
-    -- functions defined in server/certifications.lua/server/highcommand.lua/
+    -- functions defined in server/certifications//server/highcommand.lua/
     -- server/permissions.lua respectively -- every one of those must already
     -- be the REAL function, not a stub, at the moment this file's own
     -- top-level code runs. See that file's own header for the full design.

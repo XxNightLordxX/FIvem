@@ -10,7 +10,7 @@
     since this file's own CONFIG-SAFETY GUARD explicitly relies on that
     guard rather than re-checking reFireCooldownMs itself).
 
-    server/certifications.lua is DELIBERATELY NOT loaded -- HasK9Access and
+    server/certifications/ is DELIBERATELY NOT loaded -- HasK9Access and
     IsConfiguredK9Model are stubbed directly instead, same "stub, don't
     load, a function already covered by its own file's spec" convention
     wellbeing_spec.lua's own header already establishes for the identical

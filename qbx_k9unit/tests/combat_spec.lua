@@ -15,7 +15,7 @@
 
     HasK9Access and NotifyPlayer are stubbed directly, same convention
     kennel_spec.lua already established: both are genuinely OTHER files' own
-    logic (server/certifications.lua, server/notify.lua), already covered by
+    logic (server/certifications/, server/notify.lua), already covered by
     their own specs -- this file's job is server/combat.lua's own
     validation/lifecycle/termination logic, not a second copy of those.
     IsHesitating/IsDistracted/AwardXP are the same "runtime existence guard,

@@ -85,6 +85,22 @@ local function ReadFile(relPath)
 end
 
 local function FileExists(relPath)
+    -- A trailing slash means the citation names a DIRECTORY, not a file.
+    -- That became a real shape on 2026-09-02, when server/certifications/
+    -- was split into server/certifications/{core,depth,accessors,commands}
+    -- .lua: dozens of comments across the resource point at "the
+    -- certification code" as a whole rather than at one of its four parts,
+    -- and rewriting each to guess a specific part would have made most of
+    -- them less accurate, not more. `io.open` on a directory succeeds on
+    -- some systems and fails on others, so this is checked explicitly
+    -- instead of relied on.
+    if relPath:sub(-1) == '/' then
+        local probe = io.popen('test -d "../' .. relPath .. '" && echo yes')
+        if not probe then return false end
+        local answer = probe:read('l')
+        probe:close()
+        return answer == 'yes'
+    end
     local fh = io.open('../' .. relPath, 'r')
     if not fh then return false end
     fh:close()

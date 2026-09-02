@@ -409,7 +409,7 @@ already written and tested.
   needed to turn it on."
 - **The real bug it comes from:** this is this project's own
   most-frequently-invoked named rule, appearing in `server/wellbeing.lua`,
-  `server/tracking.lua`, `server/certifications.lua`,
+  `server/tracking.lua`, `server/certifications/`,
   `server/runtimecontrol.lua`, `the removed scent-trail server file`, `client/vehicle.lua`,
   `client/tracking.lua`, `client/vision.lua`, `client/radial.lua`, and
   documented as violated and fixed in commits `3a1aafe` (vest could not be

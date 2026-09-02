@@ -3,7 +3,7 @@
 
     Shared outbound-event helper (FireOutboundEvent), extracted from SIX
     independent, byte-for-byte identical `local function FireOutboundEvent`
-    copies: server/certifications.lua, server/search.lua,
+    copies: server/certifications/, server/search.lua,
     server/partnership.lua, the removed SAR-calls server file, server/progression.lua, and
     server/integrations.lua. Verified by direct grep of every one of those
     six definitions before writing this file -- all six were the exact same

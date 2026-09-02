@@ -905,7 +905,7 @@ local function newScentVisionFixture(opts)
         specializationGrants[citizenid] = {}
         for k, v in pairs(keys) do specializationGrants[citizenid][k] = v end
     end
-    -- Mirrors the REAL server/certifications.lua signature
+    -- Mirrors the REAL server/certifications/ signature
     -- (citizenid, jobName, specializationKey) -- see server/tracking.lua's
     -- own `type(HasSpecialization) == 'function'` soft-dependency call
     -- sites, both the pre-existing one (ResolveEnabledTrackTypesForCitizenId)

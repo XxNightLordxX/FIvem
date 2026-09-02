@@ -138,11 +138,22 @@ end
 --- @param dir string -- '../server' or '../client'
 --- @return string[] filenames
 local function LuaFilesIn(dir)
-    local handle = assert(io.popen('ls ' .. dir .. '/*.lua 2>/dev/null'))
+    -- RECURSIVE, deliberately (`find`, not `ls dir/*.lua`). Commands do not
+    -- only live one level down any more: server/certifications/ was split
+    -- on 2026-09-02 into server/certifications/{core,depth,accessors,
+    -- commands}.lua, and a non-recursive listing silently stopped seeing
+    -- five real commands -- /k9certify, /k9decertify, /k9settier,
+    -- /k9specialize and /k9unspecialize. That is the exact "real but
+    -- undiscovered" direction this file's own header warns about: the
+    -- commands kept working in-game while this guard reported their tablet
+    -- entries as naming commands that do not exist. Returns paths RELATIVE
+    -- to `dir`, so a nested file reads back correctly.
+    local handle = assert(io.popen('find ' .. dir .. ' -name "*.lua" 2>/dev/null'))
     local names = {}
+    local prefix = dir .. '/'
     for line in handle:lines() do
-        local base = line:match('([^/]+%.lua)$')
-        if base then names[#names + 1] = base end
+        local rel = line:sub(1, #prefix) == prefix and line:sub(#prefix + 1) or line:match('([^/]+%.lua)$')
+        if rel then names[#names + 1] = rel end
     end
     handle:close()
     table.sort(names)
@@ -205,7 +216,7 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9grantpermission = 'permissions',
     k9revokepermission = 'permissions',
     -- family #8: online/offline certification pairs (10 -> 5) --
-    -- server/certifications.lua. k9certify/k9decertify/k9settier/
+    -- server/certifications/. k9certify/k9decertify/k9settier/
     -- k9recertify/k9unspecialize keep their own existing canonical names
     -- (no new name introduced -- they now simply also accept the offline
     -- citizenid+job shape) and are NOT in this table; only their five
@@ -274,7 +285,7 @@ local COMMANDS_TAB_CLEANUP_COMPLETE = {
     -- permissions/cert_pairs = true, SET HONESTLY (this pass, coder-backend):
     -- both families' html/tablet.js COMMAND_REFERENCE removals landed in
     -- THIS SAME CHANGE as their server-side merges (server/permissions.lua,
-    -- server/certifications.lua) -- neither was blocked by a hot-file
+    -- server/certifications/) -- neither was blocked by a hot-file
     -- conflict the way k9dog/k9fetch/k9train/k9kennel were (see
     -- PENDING_NEW_CANONICAL_COMMANDS below -- N/A here anyway, since
     -- neither family introduces a genuinely NEW command name; k9permission

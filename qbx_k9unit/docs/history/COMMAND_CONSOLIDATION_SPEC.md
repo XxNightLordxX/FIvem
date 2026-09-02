@@ -67,7 +67,7 @@ instance. Safe to merge with ONE top-of-handler gate check, no
 per-subcommand branching needed for authorization (only for argument shape).
 Lowest-risk family in the batch.
 
-### online/offline certification pairs (10 -> 5) — `server/certifications.lua`
+### online/offline certification pairs (10 -> 5) — `server/certifications/`
 | pair | online gate | offline gate |
 |---|---|---|
 | k9certify / k9certifyoffline | `IsEligibleCertifier` | `IsEligibleCertifier` |
@@ -337,7 +337,7 @@ themselves are harmless, inert leftovers, not something to delete).
 Files an item touches are listed explicitly so a reviewer can see the blast
 radius. Families touching any of `client/tablet.lua`, `server/tablet.lua`,
 `html/tablet.js`, `client/wellbeing.lua`, `server/wellbeing.lua`,
-`server/permissions.lua`, `server/certifications.lua`, `server/certtiers.lua`,
+`server/permissions.lua`, `server/certifications/`, `server/certtiers.lua`,
 `server/progression.lua` are marked **LAST** and pushed to the end
 regardless of their own risk profile, per instruction — other agents are
 live in those files right now.
@@ -351,7 +351,7 @@ live in those files right now.
 | 5 | kennel (additive, not a replace) | `client/kennel.lua`, `client/keybinds.lua` (comment/doc only, no removal), + shared support files | No | Do this AFTER #3/#4 land cleanly once, since it's the one family whose "merge" shape is genuinely different (§1) — easier to get right once the pattern for the others is proven. |
 | 6 | lineup (3->1) | `the removed scent-lineup server file` + shared support files | No | Highest in-family risk (§1's mismatched-gate warning) — sequence after #1-#5 so the hidden-alias + per-subcommand-gate pattern is already well-exercised before tackling the one family where getting it wrong breaks (not widens) access. |
 | 7 | permissions (2->1) | `server/permissions.lua` + shared support files | **YES** (`server/permissions.lua`) | Uniform gate, low design risk — held back purely because the file is hot. |
-| 8 | online/offline pairs (10->5) + the tablet:decertify fix (§6) | `server/certifications.lua`, `client/tablet.lua` + shared support files | **YES** (both) | Biggest win, and now also carries the decertify bugfix. Do this last, in its own commit(s) separate from the bugfix if possible, once `server/certifications.lua`/`client/tablet.lua` are free. |
+| 8 | online/offline pairs (10->5) + the tablet:decertify fix (§6) | `server/certifications/`, `client/tablet.lua` + shared support files | **YES** (both) | Biggest win, and now also carries the decertify bugfix. Do this last, in its own commit(s) separate from the bugfix if possible, once `server/certifications/`/`client/tablet.lua` are free. |
 
 Do #1-#6 as six separate small commits (one family each), landing the
 hidden-alias allowlist mechanism in #1's commit and reusing it unchanged
@@ -373,7 +373,7 @@ worth being precise about what's actually broken:
   (line 2247) — so it's not literally unhandled. But instead of calling a
   `qbx_k9unit:server:tabletDecertify` `lib.callback` (the shape `tablet:certify`
   uses, via `qbx_k9unit:server:tabletCertify` and a real `GrantCertificationForTablet`
-  wrapper in `server/certifications.lua`), it fires the OFFLINE-ONLY chat
+  wrapper in `server/certifications/`), it fires the OFFLINE-ONLY chat
   command directly: `SubmitAllowlistedCommand('k9decertifyoffline', { targetCitizenId, departmentKey })`.
 - `RevokeCertificationOffline` (the function `k9decertifyoffline` calls)
   explicitly **refuses** when the target citizenid resolves to a currently
@@ -384,7 +384,7 @@ worth being precise about what's actually broken:
   documented contract. There is no `GrantCertificationForTablet`-style
   `RevokeCertificationForTablet` wrapper, and no
   `qbx_k9unit:server:tabletDecertify` callback, anywhere in
-  `server/certifications.lua`.
+  `server/certifications/`.
 
 **Where this belongs:** bundled into sequencing item #8 (online/offline
 pairs), not fixed separately or earlier. The exact resolution logic §2
@@ -394,7 +394,7 @@ once, as part of that commit, mirroring `GrantCertificationForTablet`'s
 existing shape, and swap `client/tablet.lua`'s `tablet:decertify` handler
 from the `SubmitAllowlistedCommand` workaround to a direct
 `qbx_k9unit:server:tabletDecertify` callback. Both files it touches
-(`server/certifications.lua`, `client/tablet.lua`) are already the hot
+(`server/certifications/`, `client/tablet.lua`) are already the hot
 files item #8 has to wait for anyway — no separate wait needed.
 
 ---

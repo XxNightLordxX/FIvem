@@ -22,7 +22,7 @@
 
     HOW STEP 1 IS WIRED IN, PER CAPABILITY (this task's own "prefer adding a
     permission check alongside the existing one over rewriting it"): each
-    consuming gate already implements steps 2+3 itself (server/certifications.lua's
+    consuming gate already implements steps 2+3 itself (server/certifications/'s
     HasK9Access/IsEligibleCertifier, server/admin.lua's IsAuthorizedAdmin, and
     server/highcommand.lua's '/k9givexp' handler). This file's OWN job is
     step 1 alone -- HasPermission(citizenid, key) below -- inserted at each of
@@ -86,7 +86,7 @@
     all" (see scope below); there is no separate boolean, a missing key IS
     the false case.
 
-    SCOPE, DELIBERATELY NARROWER than server/certifications.lua's own
+    SCOPE, DELIBERATELY NARROWER than server/certifications/'s own
     Certifications cache: this table is populated ONLY for citizenids that
     are (or very recently were) ONLINE -- warmed on
     'QBCore:Server:PlayerLoaded', on this file's own 'onResourceStart'
@@ -101,7 +101,7 @@
     to keep in sync for a citizenid with no live session, and populating one
     anyway would grow this table forever for every citizenid ever granted a
     permission, whether or not they ever log in again this session (the
-    exact unbounded-growth class server/certifications.lua's own Certifications
+    exact unbounded-growth class server/certifications/'s own Certifications
     table was found to have, and fixed reactively, for cert grants). Cleared
     entirely on 'playerDropped'.
 
@@ -123,7 +123,7 @@
         calling GrantPermission/RevokePermission about themselves -- only
         high command can call these, and self-grant is blocked outright, see
         SELF-GRANT below) -- this is the SAME narrow, previously-disclosed
-        window server/certifications.lua's own Certifications cache has
+        window server/certifications/'s own Certifications cache has
         always had relative to RefreshCertificationCache; not a new class of
         risk this file introduces.
       - For a grant/revoke made by ANY OTHER means (a hand-run SQL
@@ -216,7 +216,7 @@
 
     ======================================================================
     DB ERRORS THROW, NOT NIL -- every MySQL.*.await call below is
-    pcall-guarded, matching server/certifications.lua's own established
+    pcall-guarded, matching server/certifications/'s own established
     discipline. GrantPermission's INSERT mirrors GrantCertification's
     GrantInFlight in-memory TOCTOU lock (keyed `citizenid .. ':' .. permission`)
     plus IsDuplicateKeyError handling for the DB's own
@@ -235,7 +235,7 @@
     COOLDOWN -- PERMISSION_ACTION_COOLDOWN_MS below, via server/cooldowns.lua's
     NewCooldown, ONE shared instance covering both GrantPermission and
     RevokePermission, keyed by the GRANTER'S own source (mirrors
-    server/certifications.lua's CertifyActionCooldown / server/admin.lua's
+    server/certifications/'s CertifyActionCooldown / server/admin.lua's
     AuditCooldown / server/highcommand.lua's HighCommandGrantCooldown shape
     exactly -- one instance per related-action group, not one per action).
     A plain positive LITERAL (1500ms, matching CERTIFY_ACTION_COOLDOWN_MS's
@@ -308,7 +308,7 @@
         RevokePermission(granterSrc, targetCitizenid, permissionKey) -> ok, outcome, stillHasAccess
         ListActivePermissionsForCitizenId(callerSrc, targetCitizenid) -> ok, rowsOrOutcome
         ListPermissionRoster(callerSrc, permissionKey) -> ok, rowsOrOutcome
-      HasPermission is consulted by server/certifications.lua (HasK9Access,
+      HasPermission is consulted by server/certifications/ (HasK9Access,
       IsEligibleCertifier), server/admin.lua (IsAuthorizedAdmin), and
       server/highcommand.lua's '/k9givexp'/tabletGiveXp handler
       (IsAuthorizedForXpGrant, checking the 'k9.givexp' key -- WIRED as of a
@@ -326,7 +326,7 @@
       file-load time -- MUST load after server/cooldowns.lua.
     - THIS FILE calls `NotifyPlayer` (server/notify.lua) at run time only.
     - THIS FILE calls `IsHighCommand` (server/highcommand.lua) and
-      `HasK9Access` (server/certifications.lua) at run time only, both
+      `HasK9Access` (server/certifications/) at run time only, both
       behind `type(...) == 'function'` guards -- genuine soft dependencies,
       no load-order requirement either way.
     - THIS FILE calls `ForceDetachLeashForSource` (server/main.lua),
@@ -337,10 +337,10 @@
       button" writeup) -- all three behind `type(...) == 'function'` guards.
       Genuinely required here, not just defensive style: all three load
       AFTER this file in fxmanifest.lua's server_scripts list, so none can
-      be assumed present by load order the way server/certifications.lua
+      be assumed present by load order the way server/certifications/
       (loaded even later than all three) can assume server/main.lua's
       ForceDetachLeashForSource.
-    - THIS FILE is consulted BY server/certifications.lua and
+    - THIS FILE is consulted BY server/certifications/ and
       server/admin.lua (see above) -- this file does NOT call into either of
       those two, so there is no load-order cycle.
     - THIS FILE does NOT edit server/highcommand.lua, server/kennel.lua,
@@ -357,7 +357,7 @@
       behavior if that file is absent. GrantPermission additionally
       acquires that file's own PermissionKeyEditMutex (a bare global,
       `type(...) == 'table'` guarded) around its own write, mirroring
-      server/certifications.lua's SetCertificationTier / TierEditMutex
+      server/certifications/'s SetCertificationTier / TierEditMutex
       pairing exactly -- see server/permissionkeycatalog.lua's own header
       "THE DELETE-VS-GRANT RACE" for the full writeup. THIS FILE does not
       call into that file for anything else, and that file's own three
@@ -373,7 +373,7 @@
       -- same "authorization-root file, fail loudly on a genuine
       -- misconfiguration instantly rather than only as an inexplicable
       -- 'nobody can ever get any permission'" reasoning
-      -- server/certifications.lua's own HasK9Access config-safety guard
+      -- server/certifications/'s own HasK9Access config-safety guard
       -- already documents for itself, applied here because HasPermission is
       -- consulted from those same always-live gates regardless of whether
       -- PermissionGrants is on.
@@ -507,7 +507,7 @@
 
 -- ======================================================================
 -- CONFIG-SAFETY GUARD -- run UNCONDITIONALLY, at this file's own LOAD
--- time, same reasoning as server/certifications.lua's own guard for
+-- time, same reasoning as server/certifications/'s own guard for
 -- Config.Departments/Config.Peds: HasPermission below is consulted from
 -- always-live gates regardless of Config.Features.PermissionGrants'
 -- current value.
@@ -570,7 +570,7 @@ local PERMISSION_ACTION_COOLDOWN_MS = 1500
 local PermissionActionCooldown = NewCooldown(PERMISSION_ACTION_COOLDOWN_MS)
 PermissionActionCooldown.RegisterPlayerDropped()
 
--- SECURITY (mirrors server/certifications.lua's GrantInFlight EXACTLY --
+-- SECURITY (mirrors server/certifications/'s GrantInFlight EXACTLY --
 -- see that file's own doc comment for the full TOCTOU writeup, not
 -- repeated here): closes GrantPermission's check-then-insert race on its
 -- own terms, independent of whether `uq_one_active_permission_per_citizen`
@@ -661,7 +661,7 @@ end
 --- function changed to close that hole -- the fix is a refusal one layer
 --- up, in the only place a brand-new catalog key can ever be created.
 -- ADMIN-CAPABILITY BLOCK NAMESPACE (security-audit pass, this pass --
--- "assess, then decide" -- see server/certifications.lua's HasK9Access/
+-- "assess, then decide" -- see server/certifications/'s HasK9Access/
 -- IsEligibleCertifier and server/admin.lua's IsAuthorizedAdmin, all three
 -- of which now consult 'block.k9.access'/'block.k9.certify'/'block.k9.audit'
 -- respectively, for the full "why" writeup this table exists to name).
@@ -823,7 +823,7 @@ end
 --- Returns true if `err` (the value pcall caught around the grant INSERT)
 --- represents a MySQL/MariaDB duplicate-key error (1062) on
 --- `uq_one_active_permission_per_citizen`. Same shape-agnostic detection as
---- server/certifications.lua's own IsDuplicateKeyError (duplicated here
+--- server/certifications/'s own IsDuplicateKeyError (duplicated here
 --- rather than shared, matching this resource's own established "each file
 --- keeps its own tiny copy of a genuinely small, self-contained check"
 --- convention -- see server/highcommand.lua's IsValidPositiveFiniteNumber
@@ -861,7 +861,7 @@ local function LogAuditInvocation(granterSrc, action, detail, outcome)
 end
 
 -- COULD-NOT-DETERMINE HANDLING (lifecycle QA pass, this pass) -- mirrors
--- server/certifications.lua's RefreshCertificationCache fix of the
+-- server/certifications/'s RefreshCertificationCache fix of the
 -- identical class of bug (a transient query failure recorded as a
 -- confirmed answer instead of "we don't know"), applied here to
 -- PermissionCache. See RefreshPermissionCache's own doc comment below for
@@ -879,7 +879,7 @@ local PermissionCheckUnresolved = {}
 
 --- Runs `fn()` up to `attempts` times, waiting `backoffMs * attemptNumber`
 --- between tries -- identical shape and reasoning to
---- server/certifications.lua's own PcallWithBoundedRetry, duplicated here
+--- server/certifications/'s own PcallWithBoundedRetry, duplicated here
 --- rather than shared, matching this resource's own established "each file
 --- keeps its own tiny copy of a genuinely small, self-contained helper"
 --- convention (see e.g. that file's own IsDuplicateKeyError, already
@@ -890,7 +890,7 @@ local PermissionCheckUnresolved = {}
 --- @return boolean ok
 --- @return any resultOrErr
 ---
---- `coroutine.isyieldable()` GUARD -- see server/certifications.lua's own
+--- `coroutine.isyieldable()` GUARD -- see server/certifications/'s own
 --- identical guard on its own PcallWithBoundedRetry for the full "why":
 --- every real call site here runs inside an FXServer-managed coroutine
 --- (event handler, command handler, this file's own resync sweep), where
@@ -1076,7 +1076,7 @@ end
 --- Re-checks a SPECIFIC (citizenid, permission) row's `active` column
 --- directly against the DB, independent of RefreshPermissionCache's own
 --- collapsed fail-closed return -- same reasoning as
---- server/certifications.lua's IsCertRowConfirmedActive: RevokePermission
+--- server/certifications/'s IsCertRowConfirmedActive: RevokePermission
 --- needs to tell "the UPDATE genuinely never committed" apart from
 --- "unreadable, true outcome unknown" before deciding whether to report
 --- success.
@@ -1098,7 +1098,7 @@ end
 --- grant at all -- used ONLY by RevokePermission's post-revoke
 --- reconciliation (see this file's header "THE REVOKED BUT STILL HAS IT BY
 --- RANK CASE"). Deliberately duplicates the certifierGrade/auditGrade
---- comparison SHAPE already established in server/certifications.lua's
+--- comparison SHAPE already established in server/certifications/'s
 --- IsEligibleCertifier and server/admin.lua's IsAuthorizedAdmin, rather
 --- than exporting either of those (both `local`, both in files this task
 --- says to edit surgically, not to widen) as new resource-globals purely
@@ -1230,7 +1230,7 @@ end
 --- moment they reconnect while genuinely high command, never over-grant.
 --- Nobody's effective access DEPENDS on this returning true while offline --
 --- grep confirms every real caller (this file's own HasPermission,
---- server/certtiers.lua's TierCapabilityPermits, server/certifications.lua's
+--- server/certtiers.lua's TierCapabilityPermits, server/certifications/'s
 --- HasSpecialization, server/progression.lua's cooldown-multiplier family)
 --- is itself only ever reached from a live, in-session action gate.
 ---
@@ -1258,7 +1258,7 @@ end
 ---   requires the online player's OWN CURRENT `job.name` to equal this
 ---   value before consulting IsHighCommand at all -- so a caller evaluating
 ---   a specific job's own tier/specialization/certification state (server/
----   certtiers.lua's TierCapabilityPermits, server/certifications.lua's
+---   certtiers.lua's TierCapabilityPermits, server/certifications/'s
 ---   HasSpecialization, both of which already take a `jobName` argument for
 ---   exactly this reason) can never have a citizenid's high-command status
 ---   in some OTHER, unrelated department bleed into a check scoped to THIS
@@ -1463,7 +1463,7 @@ function HasPermission(citizenid, permissionKey)
     --     high-command bypass wired at its own SOURCE-based call site (see
     --     this file's header "HOW STEP 1 IS WIRED IN"), and this function's
     --     own doc comment promises "STEP 1 ONLY -- it does not consult high
-    --     command" for exactly that namespace: server/certifications.lua's
+    --     command" for exactly that namespace: server/certifications/'s
     --     RevokePermission reconciliation (LegacyOrHighCommandStillQualifies
     --     above) depends on HasPermission staying a PURE grant-cache read
     --     for those keys to tell "fully revoked" apart from "still has it by
@@ -1616,7 +1616,7 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     -- convention -- this function still works exactly as before (accepting
     -- only this previously-undocumented, now-disclosed, narrow race) if
     -- server/permissionkeycatalog.lua is ever removed. Mirrors
-    -- server/certifications.lua's own SetCertificationTier /
+    -- server/certifications/'s own SetCertificationTier /
     -- TierEditMutex pairing exactly, and cannot deadlock against that
     -- entirely separate mutex (see this new file's own header for why).
     local havePermKeyMutex = type(PermissionKeyEditMutex) == 'table'
@@ -1647,7 +1647,7 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     -- protects -- wrapped in its own closure so it can be pcall'd as a
     -- unit, guaranteeing GrantInFlight[lockKey] is released on every exit
     -- path, including an unexpected thrown error. Mirrors
-    -- server/certifications.lua's GrantCertification/doGrantInsert shape
+    -- server/certifications/'s GrantCertification/doGrantInsert shape
     -- exactly.
     local outcome
     local function doGrantInsert()
@@ -1679,7 +1679,7 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     local grantOk, grantErr = pcall(doGrantInsert)
     GrantInFlight[lockKey] = nil
     -- Released here, immediately after the write's own critical section
-    -- ends, exactly where server/certifications.lua's SetCertificationTier
+    -- ends, exactly where server/certifications/'s SetCertificationTier
     -- releases TierEditMutex relative to its own K9Store.Cert_SetTier call
     -- -- never held across the notification/cache-refresh/appearance-hook
     -- tail below.
@@ -1749,7 +1749,7 @@ end
 --- CONSOLIDATION (this pass, cross-team "four doors, one bug" finding):
 --- this is THIS FILE's own private copy of the exact three-call teardown
 --- sequence (ForceDetachLeashForSource + EndActiveEffectForHolder +
---- ForceBreakPartnershipForCitizenId) that server/certifications.lua's OWN
+--- ForceBreakPartnershipForCitizenId) that server/certifications/'s OWN
 --- identically-shaped local helper of the same name wraps for ALL FIVE of
 --- ITS call sites (RevokeCertification, RevokeCertificationOffline, and
 --- the three OnJobUpdate branches). Deliberately NOT a single shared
@@ -1763,7 +1763,7 @@ end
 --- that: this resource's own spec files are written to load only the
 --- minimal file set the file under test needs -- tests/certifications_spec.lua
 --- never loads server/permissions.lua and tests/permissions_spec.lua never
---- loads server/certifications.lua for these tests -- so even a
+--- loads server/certifications/ for these tests -- so even a
 --- same-name-different-file helper could not be shared without either spec
 --- absorbing a file (and that file's own file-load-time Config assertions)
 --- it otherwise has no reason to load. Given both constraints, this is one
@@ -1932,7 +1932,7 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     local isSelfTarget = targetCitizenid == granterCitizenid
 
     -- DB ERRORS THROW, NOT NIL -- pcall-guarded, reconciled on throw exactly
-    -- like server/certifications.lua's RevokeCertification. A SQL
+    -- like server/certifications/'s RevokeCertification. A SQL
     -- transaction would not resolve the one genuine ambiguity a thrown
     -- error can leave behind here either (this is the only write in this
     -- function) -- same reasoning that file's own comment already gives.
@@ -2030,7 +2030,7 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- their target, and kept an active leash/partnership pairing, for the
     -- rest of that mechanic's own duration -- the exact
     -- leash-holding-a-suspect-for-twenty-seconds shape
-    -- server/certifications.lua's RevokeCertification/
+    -- server/certifications/'s RevokeCertification/
     -- RevokeCertificationOffline/OnJobUpdate already close for a
     -- CERTIFICATION loss; 'k9.access' is a second, independent door into
     -- the identical hold.
@@ -2056,7 +2056,7 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- this file's own EndK9AccessForCitizenId helper above, immediately
     -- before this function -- see that helper's own doc comment for why it
     -- is a private, file-local copy rather than a resource-global shared
-    -- with server/certifications.lua's identically-named, identically-
+    -- with server/certifications/'s identically-named, identically-
     -- shaped helper.
     --
     -- Deliberately does NOT run for `stillHasAccess == 'unknown_target_offline'`
@@ -2232,7 +2232,7 @@ end
 --
 -- `false` as RegisterCommand's third argument (this resource's own
 -- established convention -- matches every RegisterCommand in
--- server/certifications.lua, e.g. k9certifyoffline/k9decertifyoffline)
+-- server/certifications/, e.g. k9certifyoffline/k9decertifyoffline)
 -- leaves this command unrestricted at the FiveM ACE permission layer: the
 -- REAL gate is GrantPermission/RevokePermission's own IsHighCommand check,
 -- run unconditionally on every single invocation. This deliberately
@@ -2253,7 +2253,7 @@ end
 -- "NOTIFICATIONS") a console/chat command has no UI to hand a structured
 -- result to, so THIS section (never GrantPermission/RevokePermission
 -- themselves) is responsible for telling the invoker what happened -- the
--- exact same responsibility split server/certifications.lua's own
+-- exact same responsibility split server/certifications/'s own
 -- RegisterCommand handlers already have relative to
 -- GrantCertification/RevokeCertification. The two lookup tables below
 -- cover every outcome EXCEPT 'invalid_granter' -- GrantPermission/
@@ -2552,13 +2552,13 @@ end)
 
 -- ======================================================================
 -- CACHE LIFECYCLE -- warm on load/reconnect, evict on disconnect. Mirrors
--- server/certifications.lua's own PlayerLoaded/playerDropped handlers and
+-- server/certifications/'s own PlayerLoaded/playerDropped handlers and
 -- server/main.lua's onResourceStart backfill loop exactly.
 -- ======================================================================
 
 --- Warms PermissionCache for a freshly-loaded (or freshly-connected, across
 --- a resource restart -- see the onResourceStart backfill below) player.
---- CONFIDENCE NOTE carried over from server/certifications.lua: this event
+--- CONFIDENCE NOTE carried over from server/certifications/: this event
 --- name is used with medium-high confidence based on established Qbox/
 --- QBCore convention, not independently verified against live qbx_core
 --- source in this sandbox.
@@ -2579,7 +2579,7 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
         -- ORDERING, DISCLOSED: this fires the instant QBCore reports the
         -- player loaded, which this resource's own established convention
         -- (server/appearance.lua's identical PlayerLoaded-time push,
-        -- server/certifications.lua's own confidence note on this same
+        -- server/certifications/'s own confidence note on this same
         -- event) already treats as safe for a push -- client-side resources
         -- start streaming, and run their own top-level RegisterNetEvent
         -- calls, well before a connecting player finishes loading in, so
@@ -2598,7 +2598,7 @@ end)
 --- "CACHING" section: an entry for a now-offline citizenid is never read
 --- again until PlayerLoaded repopulates it fresh, so dropping it here is
 --- purely a bounded-memory concern, same reasoning
---- server/certifications.lua's own playerDropped handler gives for
+--- server/certifications/'s own playerDropped handler gives for
 --- Certifications.
 AddEventHandler('playerDropped', function(_reason)
     local src = source
@@ -2781,7 +2781,7 @@ end)
 
 -- ======================================================================
 -- COULD-NOT-DETERMINE RESYNC SWEEP (lifecycle QA pass, this pass) --
--- mirrors server/certifications.lua's own resync sweep for
+-- mirrors server/certifications/'s own resync sweep for
 -- CertificationCheckUnresolved, applied here to PermissionCheckUnresolved.
 -- See RefreshPermissionCache's own doc comment for the full contract this
 -- closes the loop on: a citizenid left unresolved by a transient query
@@ -2798,7 +2798,7 @@ end)
 -- Matches this resource's own established "a thread governed by something
 -- that can change at runtime starts unconditionally and re-checks that
 -- thing fresh inside the loop" convention -- see
--- server/certifications.lua's own resync sweep and
+-- server/certifications/'s own resync sweep and
 -- server/runtimecontrol.lua's FEATURE_TIERS entry on server/combat.lua's
 -- maintenance threads for the precedent. Cheap on an idle server either
 -- way: the overwhelmingly common case is an EMPTY PermissionCheckUnresolved

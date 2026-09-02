@@ -431,7 +431,7 @@ t.test('StartScentTrack: HasK9Access() false denies access and never even calls 
 end)
 
 -- REGRESSION -- pins the exact bug this pass fixed: a role-holder whose
--- K9 access comes via server/certifications.lua's HasK9Access() High
+-- K9 access comes via server/certifications/'s HasK9Access() High
 -- Command/autoAccessGrade bypass is NOT a member of IsK9Role()'s
 -- deliberately-narrower set (server/appearance.lua's own header), and is
 -- not necessarily on a recognized K9 model either -- so the OLD

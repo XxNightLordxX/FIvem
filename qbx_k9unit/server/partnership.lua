@@ -138,7 +138,7 @@
     registry exists to solve for leash. A citizenid who switches away from
     a K9 model mid-partnership keeps their `k9_citizenid`-role row exactly
     the way a decertified-but-not-yet-revoked handler keeps their
-    certification per server/certifications.lua's own documented tradeoff
+    certification per server/certifications/'s own documented tradeoff
     (see that file's header) -- this is the same category of accepted
     staleness, not a new one invented here.
 
@@ -159,7 +159,7 @@
       Partnerships[recallerCitizenid].partner == heldK9Citizenid`) via a
       safe accessor rather than reaching into `Partnerships` directly --
       that table is `local` to this file, mirroring
-      server/certifications.lua's own `Certifications` table (never
+      server/certifications/'s own `Certifications` table (never
       exposed raw; always go through an accessor function).
     - HandlerDownDefense's trigger should call
         GetActivePartnerCitizenId(handlerCitizenid)
@@ -200,7 +200,7 @@
       Server-authoritative "am I currently partnered, and with whom" read
       for the CALLING player, resolved via a fresh RefreshPartnershipCache
       call (never a stale read, never a client claim) -- modeled directly
-      on server/certifications.lua's 'qbx_k9unit:server:hasK9Access'
+      on server/certifications/'s 'qbx_k9unit:server:hasK9Access'
       callback, this resource's own established precedent for exactly this
       "client-triggerable, server-authoritative status read" shape. Added
       specifically to close client/partnership.lua's own documented
@@ -225,7 +225,7 @@
 
     Resource-global (no `local`) functions exposed for OTHER files:
     - RefreshPartnershipCache(citizenid: string) -> partnerCitizenid: string?, isK9: boolean?
-      Modeled on server/certifications.lua's RefreshCertificationCache --
+      Modeled on server/certifications/'s RefreshCertificationCache --
       SAME pcall/fail-closed discipline, for the SAME reason: this function
       is called from this file's own onResourceStart backfill loop (see
       below), and an unguarded read there would abort that loop for every
@@ -243,7 +243,7 @@
       Citizenid-keyed (NOT source-keyed, unlike server/main.lua's
       ForceDetachLeashForSource) -- see "OFFLINE-CAPABLE BY DESIGN" below
       for why this is a required divergence, not a style choice. Called
-      from server/certifications.lua alongside every existing
+      from server/certifications/ alongside every existing
       ForceDetachLeashForSource/ForceDetachOfficerLeashForSource call site
       (K9-role cert revocation, either party's department change) --
       DEVELOPER_REFERENCE.md §12.0 item 7 point 3's exact instruction: "the exact
@@ -258,12 +258,12 @@
     (server/main.lua) is source-keyed and is a genuine no-op for an
     offline citizenid, because `LeashPairs` is in-memory/ephemeral and an
     offline citizenid cannot have an active pairing in it by construction
-    (server/certifications.lua's own `ForceDetachLeashIfOnline` wrapper
+    (server/certifications/'s own `ForceDetachLeashIfOnline` wrapper
     exists specifically to make this no-op explicit at the call site). A
     K9 partnership is the OPPOSITE by design intent -- DB-backed
     specifically so it survives a disconnect (DEVELOPER_REFERENCE.md §12.0 item 7
     point 2: "session-spanning, plausibly shift-spanning"). This means
-    `RevokeCertificationOffline` (server/certifications.lua) revoking a
+    `RevokeCertificationOffline` (server/certifications/) revoking a
     GENUINELY OFFLINE K9-role citizenid's certification must still be able
     to tear down a real, currently-active, persisted partnership row for
     them -- an online-only teardown function would silently leave that
@@ -282,7 +282,7 @@
     leash pairing on either side disconnecting, since a disconnected party
     cannot remain leashed to anything meaningful). Only the disconnecting
     citizenid's in-memory CACHE entry is dropped -- mirroring
-    server/certifications.lua's own unbounded-growth fix for `Certifications`
+    server/certifications/'s own unbounded-growth fix for `Certifications`
     (harmless, cheaply rebuilt from a fresh DB query on that citizenid's
     next PlayerLoaded) -- the underlying persisted partnership, and the
     still-online partner's own view of it, are left completely untouched.
@@ -323,14 +323,14 @@
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `IsConfiguredK9Model(modelHash)` and
       `HasK9Access(source)`, both resource-global functions exposed by
-      server/certifications.lua -- do not re-implement either check here
+      server/certifications/ -- do not re-implement either check here
       (mirrors server/main.lua's own leash-eligibility reuse of both).
     - THIS FILE calls `NewCooldown`/`NewMutex`, resource-global constructors
       exposed by server/cooldowns.lua, at THIS file's own file-load time --
       per that file's own header, THIS FILE must load after
       server/cooldowns.lua in fxmanifest.lua's server_scripts (confirmed
       there).
-    - server/certifications.lua calls `ForceBreakPartnershipForCitizenId`
+    - server/certifications/ calls `ForceBreakPartnershipForCitizenId`
       from three places (RevokeCertification's online branch,
       RevokeCertificationOffline, and the QBCore:Server:OnJobUpdate
       handler's TWO branches -- department-loss and cert-revoke-due-to-
@@ -338,7 +338,7 @@
       existence check per this resource's established "runtime existence
       guard, not a load-order assumption" convention (see fxmanifest.lua's
       own comment on server/medkit.lua's RestoreInjury reuse for the same
-      precedent), since THIS FILE is loaded AFTER server/certifications.lua
+      precedent), since THIS FILE is loaded AFTER server/certifications/
       in fxmanifest.lua (see that file's own header for why: this file
       also needs `IsConfiguredK9Model`/`HasK9Access` at RUNTIME, inside the
       eligibility check below, which certifications.lua already guarantees
@@ -373,7 +373,7 @@
 -- 7's own cache shape (see the "THE TWO UNIQUE CONSTRAINTS" header section
 -- above for the gap between this single-entry assumption and what the DB
 -- schema alone actually enforces). `local`, exactly like
--- server/certifications.lua's `Certifications` -- nothing outside this file
+-- server/certifications/'s `Certifications` -- nothing outside this file
 -- should read it directly; always go through RefreshPartnershipCache /
 -- GetActivePartnerCitizenId / IsActivePartnerOf below. Populated ONLY by
 -- RefreshPartnershipCache (a fresh DB read each time), never hand-written
@@ -571,7 +571,7 @@ PartnerRequestCooldown.RegisterPlayerDropped()
 --- (an offline party has no client to tell, and will see the correct,
 --- already-updated state the next time RefreshPartnershipCache runs for
 --- them at their own next PlayerLoaded). Mirrors
---- server/certifications.lua's `ForceDetachLeashIfOnline`'s own
+--- server/certifications/'s `ForceDetachLeashIfOnline`'s own
 --- online-resolution pattern, applied here to a notification instead of a
 --- state mutation (the mutation -- the DB UPDATE -- already happened
 --- unconditionally by the time this is called; this only decides whether
@@ -598,7 +598,7 @@ end
 --- Re-queries the active-partnership row for `citizenid` (in EITHER role)
 --- and updates the in-memory cache. Exposed globally (no `local`) -- see
 --- this file's header for the full pcall/fail-closed rationale, mirroring
---- server/certifications.lua's `RefreshCertificationCache` for the exact
+--- server/certifications/'s `RefreshCertificationCache` for the exact
 --- same reason (this file's own onResourceStart backfill loop below calls
 --- this once per already-connected player; an unguarded error on the
 --- first iteration would otherwise abort the whole loop for every
@@ -617,7 +617,7 @@ function RefreshPartnershipCache(citizenid)
         -- FAIL CLOSED: an unreadable partnership row must never be treated
         -- as an active partnership -- same discipline as
         -- RefreshCertificationCache, for the same disclosed reason (see
-        -- that function's own doc comment in server/certifications.lua).
+        -- that function's own doc comment in server/certifications/).
         Partnerships[citizenid] = nil
         return nil, nil
     end
@@ -736,7 +736,7 @@ end
 --- Returns true if `err` (the value pcall caught around the establishing
 --- INSERT) represents a MySQL/MariaDB duplicate-key error (1062) on either
 --- of this table's two UNIQUE KEYs. Duplicated from
---- server/certifications.lua's `IsDuplicateKeyError` rather than shared --
+--- server/certifications/'s `IsDuplicateKeyError` rather than shared --
 --- same tiny, self-contained, no-shared-state helper (unlike NotifyPlayer
 --- above, which WAS one of 12 duplicated copies of the same UI-plumbing
 --- helper across this resource, now consolidated into server/notify.lua --
@@ -1151,7 +1151,7 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- BEFORE PartnershipEstablishMutex.TryAcquire and before this
         -- pcall's own critical section even began -- a real, exploitable
         -- window, not a theoretical one. Concretely: RevokeCertification's
-        -- online branch (server/certifications.lua) runs its UPDATE,
+        -- online branch (server/certifications/) runs its UPDATE,
         -- refreshes ITS OWN certification cache, then calls
         -- ForceBreakPartnershipForCitizenId for the now-decertified
         -- citizenid -- and THAT call's own SELECT (inside
@@ -1383,7 +1383,7 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
     -- find it at all. This is the SINGLE shared teardown core for every
     -- break path this resource has (self-initiated breakPartnership below
     -- AND ForceBreakPartnershipForCitizenId, itself called from
-    -- server/certifications.lua's decertification AND department-change/
+    -- server/certifications/'s decertification AND department-change/
     -- job-switch call sites) -- one call site here covers all of them.
     -- Best-effort, never throws, never aborts/delays this break (see that
     -- function's own doc comment) -- this is a capture for the NEXT
@@ -1529,7 +1529,7 @@ RegisterNetEvent('qbx_k9unit:server:breakPartnership', function()
 end)
 
 --- Server-authoritative "am I currently partnered, and with whom" read for
---- the CALLING player -- modeled directly on server/certifications.lua's
+--- the CALLING player -- modeled directly on server/certifications/'s
 --- `qbx_k9unit:server:hasK9Access` callback (this resource's own
 --- established precedent for a client-triggerable, server-authoritative
 --- status read). Added specifically to close the gap client/partnership.lua's
@@ -1562,7 +1562,7 @@ lib.callback.register('qbx_k9unit:server:getPartnershipState', function(source)
     return true, partnerServerId, isK9
 end)
 
---- Resource-global (no `local`) -- exposed for server/certifications.lua to
+--- Resource-global (no `local`) -- exposed for server/certifications/ to
 --- call alongside every existing ForceDetachLeashForSource/
 --- ForceDetachOfficerLeashForSource call site (K9-role cert revocation,
 --- either party's department change) -- DEVELOPER_REFERENCE.md §12.0 item 7 point
@@ -1627,7 +1627,7 @@ AddEventHandler('playerDropped', function(_reason)
     -- rather than ephemeral (DEVELOPER_REFERENCE.md §12.0 item 7 point 2:
     -- "session-spanning, plausibly shift-spanning"). Only this citizenid's
     -- in-memory CACHE entry is dropped below -- mirroring
-    -- server/certifications.lua's own unbounded-growth fix for its
+    -- server/certifications/'s own unbounded-growth fix for its
     -- `Certifications` table (see that file's own playerDropped handler
     -- and comment) -- harmless, since it's cheaply rebuilt from a fresh DB
     -- query on this citizenid's next PlayerLoaded, and the underlying
@@ -1641,7 +1641,7 @@ AddEventHandler('playerDropped', function(_reason)
 end)
 
 -- STRUCTURAL GAP backfill, mirroring server/main.lua's own identical-purpose
--- onResourceStart loop for RefreshCertificationCache: server/certifications.lua's
+-- onResourceStart loop for RefreshCertificationCache: server/certifications/'s
 -- (and this file's own) cache populates per-player on a player-loaded
 -- event, which only fires for players who connect/load AFTER that handler
 -- is registered. On a `/restart qbx_k9unit` (or a crash-restart) while
@@ -1654,7 +1654,7 @@ end)
 -- below, same pattern as server/main.lua's own loop.
 --
 -- CONFIDENCE NOTE: uses 'QBCore:Server:PlayerLoaded' below with the SAME
--- MEDIUM-HIGH confidence server/certifications.lua's own identical-purpose
+-- MEDIUM-HIGH confidence server/certifications/'s own identical-purpose
 -- hook already carries (see that file's own CONFIDENCE NOTE near its
 -- bottom) -- not re-derived independently here, since it's the exact same
 -- event, already relied on elsewhere in this resource.

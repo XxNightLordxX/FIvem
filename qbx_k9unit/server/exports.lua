@@ -52,7 +52,7 @@
        stack, and a caller passing a malformed argument must never reach
        the wrapped function with it. Bad input returns the same safe
        default this resource already treats as "unknown state" everywhere
-       else (false / 0 / nil) — matching server/certifications.lua's own
+       else (false / 0 / nil) — matching server/certifications/'s own
        "fail closed" convention for an unreadable cert row.
 
     NOTE ON NAMING: several exports below are given the exact same name as
@@ -62,10 +62,10 @@
     FXServer's per-resource export table, NOT the Lua global namespace — it
     does not shadow, rename, or otherwise touch the actual global `HasK9Access`
     function, so a call to the bare identifier `HasK9Access(...)` inside one
-    of this file's export bodies still reaches server/certifications.lua's
+    of this file's export bodies still reaches server/certifications/'s
     real implementation, not this file's own export of the same name. This
     mirrors an already-established convention in this codebase (client/
-    main.lua's `HasK9Access()` and server/certifications.lua's
+    main.lua's `HasK9Access()` and server/certifications/'s
     `HasK9Access(source)` already share a name across the client/server realm
     split — see .luacheckrc's own comment on that pair).
     ======================================================================
@@ -122,7 +122,7 @@
     on these directly; never `TriggerClientEvent`, these are not for this
     resource's own clients).
 
-    Fired from server/certifications.lua, server/partnership.lua,
+    Fired from server/certifications/, server/partnership.lua,
     server/progression.lua, server/search.lua, the removed SAR-calls server file,
     the removed scent-lineup server file, and server/integrations.lua (CORRECTED this
     pass, coder-backend: the removed scent-lineup server file's own scentLineupResolved
@@ -154,14 +154,14 @@
 
     1. 'qbx_k9unit:events:certificationGranted'
        (citizenid: string, jobName: string, grantedByCitizenid: string)
-       Fire from: server/certifications.lua's GrantCertification, right
+       Fire from: server/certifications/'s GrantCertification, right
        after the `RefreshCertificationCache(targetCitizenid, jobName)` call
        that follows a successful INSERT — targetCitizenid/jobName/
        granterCitizenid are already in scope there.
 
     2. 'qbx_k9unit:events:certificationRevoked'
        (citizenid: string, jobName: string, reason: 'manual'|'manual_offline'|'job_changed')
-       Fire from THREE existing success points in server/certifications.lua:
+       Fire from THREE existing success points in server/certifications/:
        RevokeCertification (right after `affectedRows` confirms a real row
        flipped; reason = 'manual'), RevokeCertificationOffline (its
        equivalent UPDATE success point; reason = 'manual_offline'), and the
@@ -246,7 +246,7 @@
        oldTier/newTier are plain tier-KEY strings ('trainee'|'certified'|
        'senior', or any live operator-added key from server/certtiers.lua) —
        NOT table copies, unlike xpTierReached's newTier/oldTier (#6) above.
-       Fire from TWO existing success points in server/certifications.lua:
+       Fire from TWO existing success points in server/certifications/:
        SetCertificationTier (online target) and SetCertificationTierOffline
        (offline target), each right after its own post-write
        RefreshCertificationCache confirms the tier that actually landed.
@@ -259,7 +259,7 @@
        `expiresAtUnix` is read back from the post-write cache, never the
        requested value — `nil` only if that read-back itself could not be
        confirmed fresh (see the call site's own "freshlyVerified" gate).
-       Fire from TWO existing success points in server/certifications.lua:
+       Fire from TWO existing success points in server/certifications/:
        RenewCertification (online target) and RenewCertificationOffline
        (offline target). RenewCertificationForTablet wraps both and has no
        separate fire site of its own.
@@ -267,7 +267,7 @@
     10. 'qbx_k9unit:events:specializationGranted'
         (citizenid: string, jobName: string, specializationKey: string,
          granterCitizenid: string)
-        Fire from: server/certifications.lua's GrantSpecialization, right
+        Fire from: server/certifications/'s GrantSpecialization, right
         after RefreshSpecializationCache following a confirmed INSERT.
         GrantSpecializationForTablet wraps it and has no separate fire site.
 
@@ -275,7 +275,7 @@
         (citizenid: string, jobName: string, specializationKey: string,
          reason: 'manual'|'manual_offline'|'certification_revoked'|
          'department_changed'|'job_changed')
-        Fire from THREE existing success points in server/certifications.lua:
+        Fire from THREE existing success points in server/certifications/:
         RevokeSpecialization (reason='manual'), RevokeSpecializationOffline
         (reason='manual_offline'), and RevokeAllSpecializationsForCitizenJob
         (reason passed through from its own caller — the cascade this
@@ -526,7 +526,7 @@
       own cooldown objects.
     - A generic "list all K9 citizenids" / "list all active partnerships"
       export. Would require iterating internal `local` caches
-      (Certifications in server/certifications.lua, Partnerships in
+      (Certifications in server/certifications/, Partnerships in
       server/partnership.lua, K9XP in server/progression.lua) that this
       file genuinely cannot see — true Lua file-local scope, not just a
       convention this file is choosing to respect. The only honest way to
@@ -591,7 +591,7 @@ exports('GetAPIVersion', function()
 end)
 
 -- ======================================================================
--- CERTIFICATION / ACCESS STATE (wraps server/certifications.lua)
+-- CERTIFICATION / ACCESS STATE (wraps server/certifications/)
 -- ======================================================================
 
 --- Server-authoritative: is `source` (a live, currently-connected player)

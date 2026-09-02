@@ -158,7 +158,7 @@
        (confirmed 404) because it is not a raw native, it is the standard
        FXServer Lua-runtime helper wrapping
        `GetNumPlayerIndices`/`GetPlayerFromIndex`, the same idiom already
-       used elsewhere in this resource (server/certifications.lua,
+       used elsewhere in this resource (server/certifications/,
        server/tracking.lua) — its absence from native-decls is expected, not
        a gap. The open item this confidence grading previously left for
        native-api-assistant is CLOSED: no further native-verification pass
@@ -361,7 +361,7 @@
 
     FILE-TO-FILE CONTRACT:
     - Calls `IsConfiguredK9Model(modelHash)`, resource-global from
-      server/certifications.lua — reused, never re-derived, to verify a
+      server/certifications/ — reused, never re-derived, to verify a
       target/reporting player's ped is really a configured K9 model.
     - SUPERSEDED (coder-architect, adversarial-pass security finding +
       owner directive "I also want everything to work with any ped", this
@@ -2206,7 +2206,7 @@ end
 --- `exports.qbx_core:GetPlayer(source)` is still resolvable here —
 --- `playerDropped` fires before the framework fully tears down the player
 --- object, same timing server/progression.lua's own `K9XP` eviction handler
---- and server/certifications.lua's own playerDropped handler already rely
+--- and server/certifications/'s own playerDropped handler already rely
 --- on.
 AddEventHandler('playerDropped', function(_reason)
     local citizenid = ResolveCitizenid(source)

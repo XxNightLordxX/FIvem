@@ -73,7 +73,7 @@
     - Part B §3's certification half ("MDT relevance" for grant/revoke) --
       already covered by 'qbx_k9unit:events:certificationGranted' /
       'qbx_k9unit:events:certificationRevoked' (EVENT CONTRACT #1/#2, wired
-      in server/certifications.lua).
+      in server/certifications/).
     - Part B §5's ambulance/laststand half -- already covered by
       `Config.Combat.PropDragging.IsPlayerDownedOverride`, per that config
       field's own comment ("Reuses ... rather than adding its own").
@@ -126,17 +126,17 @@
     alert. See Config.K9DownDispatch below for the exact tuning values.
 
     WHO COUNTS: a currently-connected player whose live ped model is a
-    configured K9 model (IsConfiguredK9Model, server/certifications.lua) OR
+    configured K9 model (IsConfiguredK9Model, server/certifications/) OR
     who holds the decoupled K9 ROLE (HasK9Role, server/appearance.lua --
     K9 role/model decoupling) on a model neither of those recognizes
     (a human, a custom streamed ped), AND who currently has K9 access
-    (HasK9Access, server/certifications.lua) -- i.e. a real, on-duty,
+    (HasK9Access, server/certifications/) -- i.e. a real, on-duty,
     certified handler's K9, not merely anyone who happens to be wearing a
     dog skin, and not merely anyone who bypasses HasK9Access without
     actually being the K9 (a high-command tester, or an officer above
     Config.Departments' autoAccessGrade threshold, neither of which
     HasK9Role recognizes). IsConfiguredK9Model/HasK9Access are
-    resource-global functions from server/certifications.lua, called
+    resource-global functions from server/certifications/, called
     directly with no runtime existence guard: unlike a genuinely optional
     soft dependency (a different feature file that might be removed or
     whose flag might be off), certifications.lua is this resource's own
@@ -192,7 +192,7 @@
 if not Config.Features.K9DownDispatch then return end
 
 -- CONFIG-SAFETY GUARD -- run at this file's own LOAD time, NOT deferred into
--- an onResourceStart handler (server/certifications.lua's own header gives
+-- an onResourceStart handler (server/certifications/'s own header gives
 -- the identical reasoning for the identical structural reason): the
 -- K9DownFireCooldown construction a few lines below this guard calls
 -- NewCooldown(...) immediately, at this file's own load time -- by the time

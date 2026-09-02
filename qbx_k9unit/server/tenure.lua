@@ -61,7 +61,7 @@
     expose for exactly this kind of external consumption
     (`GetActivePartnerCitizenId` from server/partnership.lua,
     `AwardXP`/`HasK9Access` from server/progression.lua and
-    server/certifications.lua respectively) plus a direct, read-only SELECT
+    server/certifications/ respectively) plus a direct, read-only SELECT
     against `k9_partnerships` (a real table, not a `local` -- reading it here
     is no different from server/partnership.lua's own SELECTs). This is
     disclosed up front because it is the reason this file's actual mechanic
@@ -201,7 +201,7 @@
     SOME durable marker of "already granted," or a resource/server restart
     -- an ordinary, frequent, non-adversarial event this codebase's OWN
     conventions already treat as something that must never silently lose or
-    duplicate state (see server/certifications.lua's and
+    duplicate state (see server/certifications/'s and
     server/partnership.lua's own `onResourceStart` backfill loops, and
     sql/install.sql's own `k9_progression` header on exactly this class of
     bug) -- would re-grant EVERY already-earned milestone for EVERY
@@ -231,7 +231,7 @@
     ======================================================================
     CONSTRAINT 5 COMPLIANCE -- "AN ESTABLISHED PARTNERSHIP DOES NOT IMPLY
     CURRENTLY-VALID CERTIFICATION": CheckTenureMilestonesForK9 below re-runs
-    `HasK9Access(k9Src)` (server/certifications.lua, resource-global,
+    `HasK9Access(k9Src)` (server/certifications/, resource-global,
     behind the same `type(...) == 'function'` runtime-existence guard this
     resource's convention requires for every soft cross-file dependency)
     and a fresh `Config.Departments[handlerJob.name]` membership check for
@@ -246,7 +246,7 @@
     party's CERTIFICATION is still currently valid (a materially different,
     time-varying fact this file has every reason to re-check, since it is
     about to hand out a real, permanent XP grant). In ordinary operation,
-    server/certifications.lua's own `RevokeCertification`/
+    server/certifications/'s own `RevokeCertification`/
     `RevokeCertificationOffline`/`OnJobUpdate` call sites already call
     `ForceBreakPartnershipForCitizenId` on decertification, which would tear
     the partnership row down (`active = 0`) before this file's own
@@ -352,7 +352,7 @@
             tick -- never trusted as the final word on tenure/role (the
             SELECT inside CheckTenureMilestonesForK9 re-derives k9_citizenid/
             handler_citizenid from the DB row itself, per constraint 5).
-        HasK9Access(source) -- server/certifications.lua, a FRESH re-check
+        HasK9Access(source) -- server/certifications/, a FRESH re-check
             immediately before every grant (see CONSTRAINT 5 COMPLIANCE
             above).
         AwardXP(citizenid, actionKey) -- server/progression.lua, THE
@@ -464,7 +464,7 @@
 -- losing this cache entirely on a restart is harmless and self-healing
 -- (the next tick's SELECT simply reconfirms "already fully collected" from
 -- the DB and repopulates this entry once). Bounded, cheap, unbounded-but-
--- fine growth profile, same accepted shape as server/certifications.lua's
+-- fine growth profile, same accepted shape as server/certifications/'s
 -- own `Certifications` cache and server/progression.lua's own `K9XP`
 -- cache.
 --
@@ -554,7 +554,7 @@
 --        on `DoBreakPartnership`, but on EVERY call site that can flip a
 --        row's `active` flag for a K9-role citizenid: a self-initiated
 --        break, AND every forced-teardown path this file's own header
---        already enumerates from server/certifications.lua
+--        already enumerates from server/certifications/
 --        (`RevokeCertification`/`RevokeCertificationOffline`/
 --        `OnJobUpdate` -> `ForceBreakPartnershipForCitizenId`), AND the
 --        establish path itself (a fresh INSERT reactivating tenure at

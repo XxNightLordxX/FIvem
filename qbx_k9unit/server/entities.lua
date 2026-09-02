@@ -220,7 +220,7 @@ end
 --- belong to a real, currently-connected player?) using only natives
 --- already proven reliable SERVER-side elsewhere in this exact codebase
 --- (`GetPlayers()`/`GetPlayerPed(source)` -- already used in
---- server/certifications.lua and server/main.lua): scan every connected
+--- server/certifications/ and server/main.lua): scan every connected
 --- player's own ped and match by entity handle. This is strictly more
 --- conservative (it can only ever match an entity that IS some connected
 --- player's own ped) and avoids introducing a new, unverified native

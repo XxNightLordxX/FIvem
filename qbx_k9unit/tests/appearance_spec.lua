@@ -9,7 +9,7 @@
     reconciliation calls HasPermission; HasK9Role calls HasPermission too --
     a fake/duplicated permissions layer here would risk silently drifting
     from the real authorization rules it is supposed to be exercising).
-    Deliberately does NOT load server/certifications.lua: it is under heavy,
+    Deliberately does NOT load server/certifications/: it is under heavy,
     fast-moving concurrent development this same session (a certification
     tier/expiry/specialization system landed mid-session, more than
     doubling that file's length) and server/appearance.lua's own
@@ -333,7 +333,7 @@ local function newFixture(opts)
 
     -- K9 IDENTITY (THIS PASS) -- GetActivePartnerCitizenId stand-in.
     -- server/partnership.lua is deliberately NOT loaded into this fixture
-    -- (same "surgical load list" reasoning as server/certifications.lua's
+    -- (same "surgical load list" reasoning as server/certifications/'s
     -- own exclusion, this file's header) -- this is a plain, independent
     -- override, exactly like HasK9Access below, answering ONLY from this
     -- fixture's own fakePartnerships table.
@@ -344,7 +344,7 @@ local function newFixture(opts)
         return row.partner, row.isK9
     end
 
-    -- Minimal, HONEST stand-in for server/certifications.lua's real
+    -- Minimal, HONEST stand-in for server/certifications/'s real
     -- HasK9Access -- NOT loaded in this fixture (see this file's header),
     -- but server/permissions.lua's own LegacyOrHighCommandStillQualifies
     -- calls the real one by name for the 'k9.access' reconciliation branch
@@ -1007,7 +1007,7 @@ t.test('SECURITY: disconnecting mid-revert COMMITS the revert immediately -- doe
 
     -- The target disconnects before ever replying. Real FXServer's own
     -- 'playerDropped' fires BEFORE the framework fully tears down the
-    -- player object (server/certifications.lua's own playerDropped
+    -- player object (server/certifications/'s own playerDropped
     -- handler comment already establishes this for this exact fixture
     -- shape) -- so the handler runs FIRST, exports.qbx_core:GetPlayer(src)
     -- still resolves, and ONLY THEN is the player actually removed from

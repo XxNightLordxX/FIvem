@@ -334,7 +334,7 @@
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
-    - Calls HasK9Access(source) (server/certifications.lua),
+    - Calls HasK9Access(source) (server/certifications/),
       ResolveNetworkEntity(netId, expectedEntityType?) (server/entities.lua),
       and ResolveConnectedPlayerFromPed(entity) (server/entities.lua,
       DEVELOPER_REFERENCE.md item 2b — see the PLAYER-VS-NPC RESOLUTION
@@ -1615,7 +1615,7 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- applies (ask an admin for a feature grant, vs. ask high command to
     -- either promote this handler's tier or grant the tier the
     -- capability). Mirrors the sibling call site landed this same pass,
-    -- server/certifications.lua's GrantSpecialization, which minted its own
+    -- server/certifications/'s GrantSpecialization, which minted its own
     -- distinct 'certifications.specialization_requires_tier_capability' key
     -- rather than reusing 'specialization_requires_active_cert' for the
     -- identical reason.

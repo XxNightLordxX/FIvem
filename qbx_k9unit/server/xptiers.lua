@@ -62,7 +62,7 @@
          this pass added `lib.callback.register(...)` calls to
          server/progression.lua itself (the more obvious "put it next to
          the thing it edits" instinct, matching where server/certtiers.lua
-         sits beside server/certifications.lua), every one of those five
+         sits beside server/certifications/), every one of those five
          other specs would have failed to even LOAD that file in their
          sandbox ("attempt to index a nil value 'lib'") the instant this
          pass landed -- a real, verified regression risk (not a guess:
@@ -320,7 +320,7 @@
     ACQUIRED TOGETHER WITH IT, IN EITHER ORDER, BY ANY CODE PATH IN THIS
     RESOURCE -- confirmed by reading every call site of both: `TierEditMutex`
     guards `k9_certification_tiers`/`k9_certifications.tier` writes only
-    (server/certtiers.lua, server/certifications.lua's SetCertificationTier);
+    (server/certtiers.lua, server/certifications/'s SetCertificationTier);
     `XPTierEditMutex` guards `Config.XPTiers`/`k9_xp_tiers` writes only,
     entirely within this one file. Two disjoint lock domains that never
     nest inside one another cannot deadlock against each other.

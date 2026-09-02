@@ -9,7 +9,7 @@
     handler disconnect."
 
     NEW FILE PAIR (this file + client/kennel.lua), not folded into
-    server/main.lua or server/certifications.lua — same "one responsibility
+    server/main.lua or server/certifications/ — same "one responsibility
     per file, don't let it balloon into an everything-file" convention
     those two files' own headers already establish. DEVELOPER_REFERENCE.md's own
     file-layout table reaches the identical conclusion for the structurally
@@ -244,7 +244,7 @@
     calling a client-side global (see client/vehicle.lua's
     EnterNearestK9Vehicle/ExitK9Vehicle), unlike certify/revoke (which act
     ON another player and so live alongside their own server-side handlers
-    in server/certifications.lua). THIS PASS: that same command now ALSO
+    in server/certifications/). THIS PASS: that same command now ALSO
     means "put down whatever I'm currently carrying" when the requesting
     client is in that state — see client/kennel.lua's own RequestDeployKennel
     doc comment for why one entry point correctly serves both meanings
@@ -260,9 +260,9 @@
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)`, exposed by
-      server/certifications.lua — do not re-derive the job/cert check here.
+      server/certifications/ — do not re-derive the job/cert check here.
     - THIS FILE calls `IsConfiguredK9Model(modelHash)`, exposed by
-      server/certifications.lua, and the soft dependency `HasK9Role(source)`
+      server/certifications/, and the soft dependency `HasK9Role(source)`
       (server/appearance.lua, guarded by `type(HasK9Role) == 'function'`) —
       see ResolveK9PedForKennelRest below, which mirrors
       server/wellbeing.lua's own ResolveK9Ped shape exactly (that function's
@@ -590,7 +590,7 @@ DeployCooldown.RegisterPlayerDropped()
 -- KEYED ON THE DEPLOYING PLAYER'S DURABLE CITIZENID, SURVIVES DISCONNECT/
 -- RECONNECT -- deliberately NOT :RegisterPlayerDropped() (that would defeat
 -- the entire point given the farm shape described above). Bounded instead
--- by its own independent TTL sweep, mirroring server/certifications.lua's
+-- by its own independent TTL sweep, mirroring server/certifications/'s
 -- CertifyXpMintCooldown precedent exactly.
 local KENNEL_DEPLOY_XP_MINT_COOLDOWN_MS = 60 * 60 * 1000 -- 60 real minutes
 local HandlerKennelDeployXpMintCooldown = NewCooldown()
@@ -619,7 +619,7 @@ local KENNEL_INTERACT_DISTANCE_TOLERANCE = 1.0
 -- Precomputed set of allowed kennel prop model hashes (primary +
 -- documented fallback — see config.lua's Config.DeployableKennel comment
 -- for why both are legitimate). Built once at file load, same pattern as
--- server/certifications.lua's K9ModelHashes.
+-- server/certifications/'s K9ModelHashes.
 local KennelModelHashes = {
     [GetHashKey(Config.DeployableKennel.propModel)] = true,
     [GetHashKey(Config.DeployableKennel.fallbackPropModel)] = true,
@@ -1519,7 +1519,7 @@ end)
 -- FORCED EXIT ON ACCESS LOSS -- this file's half of
 -- server/bodyclaims.lua's ForceReleaseBodyClaimForCitizenId dispatcher.
 --
--- Registered at file load so that when server/certifications.lua's
+-- Registered at file load so that when server/certifications/'s
 -- EndK9AccessForCitizenId revokes someone's K9 access while they are
 -- resting inside a kennel, this file -- the only one that owns
 -- KennelOccupants -- performs its own teardown. See
@@ -1823,7 +1823,7 @@ end)
 -- Handler-disconnect cleanup (task requirement: kennels must not leak
 -- permanently into the world). Resolves citizenid for the disconnecting
 -- source BEFORE the framework fully tears down the player object, same
--- established pattern as server/certifications.lua's own playerDropped
+-- established pattern as server/certifications/'s own playerDropped
 -- handler.
 AddEventHandler('playerDropped', function(_reason)
     local src = source

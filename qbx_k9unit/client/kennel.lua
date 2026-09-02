@@ -517,7 +517,7 @@ end
 
 --- Server-initiated forced exit -- the client half of
 --- server/kennel.lua's RegisterBodyClaimReleaser('kennel_rest', ...), which
---- fires when server/certifications.lua's EndK9AccessForCitizenId revokes
+--- fires when server/certifications/'s EndK9AccessForCitizenId revokes
 --- this player's K9 access while they are still resting inside a kennel.
 ---
 --- WHY THE SERVER CANNOT JUST FORGET THEM. The server clearing its own
@@ -1419,7 +1419,7 @@ end)
 --
 -- VISIBILITY VS. AUTHORIZATION: every canInteract below is a UX
 -- convenience only (this resource's established standard,
--- server/certifications.lua's own header: "client-side ox_target option
+-- server/certifications/'s own header: "client-side ox_target option
 -- visibility... [is a] UX convenience only, not access control") —
 -- server/kennel.lua's own handlers independently re-verify real
 -- authorization/ownership/proximity/occupancy and reject (with a

@@ -4,7 +4,7 @@
     Single shared implementation of `NotifyPlayer`, consolidating 12
     independent `local function NotifyPlayer(...)` definitions that had each
     hand-rolled their own `TriggerClientEvent('ox_lib:notify', ...)` body
-    across server/main.lua, server/certifications.lua, server/kennel.lua,
+    across server/main.lua, server/certifications/, server/kennel.lua,
     server/medkit.lua, server/wellbeing.lua, server/combat.lua,
     server/partnership.lua, server/tenure.lua, server/admin.lua,
     the removed recall server file, server/propattachment.lua, and server/bonetool.lua.
@@ -55,7 +55,7 @@
       `notifyType` defaults to `'info'` and `title` defaults to `'K9 Unit'`.
 
       DEFAULT VALUE: all 9 of the 12 original hand-rolled copies
-      (server/main.lua, server/certifications.lua, server/kennel.lua,
+      (server/main.lua, server/certifications/, server/kennel.lua,
       server/medkit.lua, server/wellbeing.lua, server/combat.lua,
       server/partnership.lua, the removed recall server file, server/propattachment.lua)
       hard-coded their own default as the literal string `'inform'`.

@@ -4,7 +4,7 @@
     Phase 1 scaffold only (coder-architect). REWRITTEN after DEVELOPER_REFERENCE.md's
     post-draft correction — the K9 is a player's own persistent character,
     so there is no spawn/despawn/registry concept for this file to own
-    anymore (see server/certifications.lua's header for the full removed
+    anymore (see server/certifications/'s header for the full removed
     list). Later REVISED again once the requester confirmed the leash
     mechanic explicitly (consent-based attach, elastic movement restriction
     while attached, zero-consent detach, safety-valve auto-detach —
@@ -29,11 +29,11 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 1. Certification events are documented
-    in full in server/certifications.lua (kept in sync manually, not
+    in full in server/certifications/ (kept in sync manually, not
     duplicated in full detail here). THIS FILE's own events, in full:
 
     Callbacks: none registered in this file (see
-    server/certifications.lua's 'qbx_k9unit:server:hasK9Access').
+    server/certifications/'s 'qbx_k9unit:server:hasK9Access').
 
     Server events (RegisterNetEvent, client->server):
     - 'qbx_k9unit:server:relayBark' (barkType: string)
@@ -121,25 +121,25 @@
       'partner_died' gets its own specific wording the same way
       'partner_disconnected' already does.
 
-    Commands: both live in server/certifications.lua.
+    Commands: both live in server/certifications/.
 
     Automatic path: QBCore:Server:OnJobUpdate lives in
-    server/certifications.lua (§4.4).
+    server/certifications/ (§4.4).
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)` and `IsConfiguredK9Model(modelHash)`,
-      resource-global functions exposed by server/certifications.lua — do
+      resource-global functions exposed by server/certifications/ — do
       not re-implement either check here.
     - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
       exposed by server/entities.lua (DEVELOPER_REFERENCE.md near-term item 2),
       inside relayDoorScratch below — do not re-implement the
       resolve/existence-guard sequence here.
     - THIS FILE calls `RefreshCertificationCache(citizenid, jobName)`,
-      also exposed by server/certifications.lua, from the resource-start
+      also exposed by server/certifications/, from the resource-start
       backfill loop below.
     - THIS FILE exposes `ForceDetachLeashForSource(src, reason)` (resource-
-      global, no `local`) for server/certifications.lua to call whenever a
+      global, no `local`) for server/certifications/ to call whenever a
       K9-role party's certification transitions from active to revoked
       (manual RevokeCertification, offline RevokeCertificationOffline, or
       the QBCore:Server:OnJobUpdate auto-revoke) while that citizenid
@@ -251,7 +251,7 @@
 -- meant ForceDetachLeashForSource could only key off "is this id a
 -- participant in ANY pairing" and would force-detach regardless of role.
 -- Since HasK9Access deliberately doesn't check ped model (see
--- server/certifications.lua's header — a certified handler keeps their
+-- server/certifications/'s header — a certified handler keeps their
 -- cert after switching away from a K9 model, a documented tradeoff), a
 -- revoked citizenid's stale cert can resolve to a server id that is
 -- CURRENTLY anchoring (officer role) someone else's legitimate, unrelated
@@ -306,7 +306,7 @@ LeashRequestCooldown.RegisterPlayerDropped()
 -- title, which is server/notify.lua's own default.
 
 -- STRUCTURAL GAP backfill (flagged by coder-architect, not explicit in
--- DEVELOPER_REFERENCE.md itself): server/certifications.lua's cache populates per-player
+-- DEVELOPER_REFERENCE.md itself): server/certifications/'s cache populates per-player
 -- on a player-loaded event, which only fires for players who connect/load
 -- AFTER that handler is registered. On a `/restart qbx_k9unit` (or a
 -- crash-restart) while players are already online, nobody re-fires that
@@ -371,7 +371,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- server/k9profiles.lua, simply missed here when it landed for those
     -- four -- see server/datastore.lua's own "BOOT-ORDER SETTLEMENT" header
     -- for the exact race this closes). RefreshCertificationCache below
-    -- (server/certifications.lua) reaches K9Store.Cert_GetActiveId/
+    -- (server/certifications/) reaches K9Store.Cert_GetActiveId/
     -- Cert_GetActiveMeta -- narrower SELECTs than the columns
     -- k9_certifications is checked against -- so without this,
     -- HasK9Access's own root authorization cache could be warmed straight
@@ -431,7 +431,7 @@ AddEventHandler('onResourceStart', function(resourceName)
                 -- player-facing k9certified mirror as if it were one. Skip
                 -- the SetMetaData call entirely rather than stomping it
                 -- with a guessed `false`; the periodic resync sweep in
-                -- server/certifications.lua will correct the real access
+                -- server/certifications/ will correct the real access
                 -- cache (and, on its next successful pass, this mirror too)
                 -- without requiring this officer to reconnect.
                 local isActive, stateKnown = RefreshCertificationCache(citizenid, Player.PlayerData.job.name)
@@ -589,7 +589,7 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     -- otherwise-eligible, on-cooldown account is rejected outright, not just
     -- rate-limited.
     if #barkType > BARK_TYPE_MAX_LENGTH then return end -- silent no-op: oversized payload, never trust client payload shape
-    if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+    if not HasK9Access(src) then return end -- reuse the global from server/certifications/, do not re-derive the job/cert check here
 
     -- PER-PERSON FEATURE CONTROL -- see IsBasicBarkSoundsPermittedForCitizenId
     -- above. Checked BEFORE BarkCooldown.Consume below, matching
@@ -817,7 +817,7 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
 
     if not Config.Features.DoorInteraction then return end -- silent no-op
     if type(doorNetId) ~= 'number' then return end -- defensive: never trust client payload shape
-    if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+    if not HasK9Access(src) then return end -- reuse the global from server/certifications/, do not re-derive the job/cert check here
 
     -- PER-PERSON FEATURE CONTROL -- see IsDoorInteractionPermittedForCitizenId
     -- above. Checked BEFORE either cooldown below is ever consumed, matching
@@ -1407,7 +1407,7 @@ RegisterNetEvent('qbx_k9unit:server:detachLeash', function()
     doDetachLeash(source, 'detached')
 end)
 
---- Resource-global (no `local`) — exposed for server/certifications.lua to
+--- Resource-global (no `local`) — exposed for server/certifications/ to
 --- call when a K9-role party's certification is revoked (manually or via
 --- the QBCore:Server:OnJobUpdate auto-revoke) while they're actively
 --- leashed. DEVELOPER_REFERENCE.md §1/§4.4: losing department employment or certification
@@ -1442,7 +1442,7 @@ function ForceDetachLeashForSource(src, reason)
     return doDetachLeash(src, reason or 'certification_revoked')
 end
 
---- Resource-global (no `local`) — exposed for server/certifications.lua's
+--- Resource-global (no `local`) — exposed for server/certifications/'s
 --- QBCore:Server:OnJobUpdate handler to call as a SECOND, INDEPENDENT check
 --- from ForceDetachLeashForSource above. An officer/handler-role leash
 --- party never holds a K9 certification of their own (DEVELOPER_REFERENCE.md §9 item 9 —
@@ -1716,4 +1716,4 @@ end)
 -- Reserved for future Phase 2+ small, access-gated K9 actions that need
 -- server authority but aren't part of the certification/permission system
 -- itself (e.g. a scent-reveal trigger, a contraband-alert trigger). Keep
--- server/certifications.lua scoped to grant/revoke/check/cache only.
+-- server/certifications/ scoped to grant/revoke/check/cache only.

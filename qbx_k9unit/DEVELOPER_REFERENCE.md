@@ -978,7 +978,7 @@ the primary use case, not an edge case.
 3. **Termination:** either party can break it at will, no consent needed,
    plus automatic teardown on the same triggers that already force-detach a
    leash (added alongside every existing `ForceDetachLeashForSource`/
-   `ForceDetachOfficerLeashForSource` call site in `server/certifications.lua`).
+   `ForceDetachOfficerLeashForSource` call site in `server/certifications/`).
 4. **Authorization:** mutual consent only, no certifier-grade hierarchy —
    partnership is a peer relationship between two already-independently-
    eligible parties, unlike certification granting.
@@ -2469,7 +2469,7 @@ continued concurrent editing:**
 - **Item 3 — `IsEntityModelK9(entity)` / `K9ModelHashes`.** One
   resource-global (`client/main.lua`) replaced six independent client-side
   copies (one, in `client/partnership.lua`, was undocumented until this
-  extraction found it). `server/certifications.lua`'s own server-side
+  extraction found it). `server/certifications/`'s own server-side
   `K9ModelHashes`/`IsConfiguredK9Model` is correctly left alone — it can't
   cross the realm boundary, and was never a duplicate of the client-side
   version.

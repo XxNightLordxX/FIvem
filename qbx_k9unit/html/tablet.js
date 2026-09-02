@@ -307,7 +307,7 @@
         Requires effectivePermissions to include 'k9.certify' (which already
         covers high command and legacy-rank certifiers per config.lua's own
         resolution order) -- re-verified server-side. Both work for an
-        ONLINE or OFFLINE target (server/certifications.lua's
+        ONLINE or OFFLINE target (server/certifications/'s
         GrantCertificationForTablet/RevokeCertificationForTablet resolve
         this themselves) -- this page never needs to know or ask which.
         BUGFIX (docs/history/COMMAND_CONSOLIDATION_SPEC.md §6): tablet:decertify used to
@@ -329,7 +329,7 @@
 
       tablet:grantSpecialization { targetCitizenId: string, departmentKey: string, specialization: string } -> cb({ ok, error?, message? })
         Same 'k9.certify' gate -- but, UNLIKE the four calls immediately
-        above, ONLINE TARGETS ONLY (server/certifications.lua's
+        above, ONLINE TARGETS ONLY (server/certifications/'s
         GrantSpecializationForTablet own header explains why: the
         precondition this gates on -- an active, non-expired base
         certification AND a tier-capability check -- is read from
@@ -2704,7 +2704,7 @@
         capabilities: {},
         maxXpPerGrant: null,
         peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
-        specializations: {}, // Config.K9Specializations, verbatim -- display list only for the person screen's specialization grant picker; server/certifications.lua's GrantSpecialization re-checks this SAME table server-side
+        specializations: {}, // Config.K9Specializations, verbatim -- display list only for the person screen's specialization grant picker; server/certifications/'s GrantSpecialization re-checks this SAME table server-side
         themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
         shopLocationsEnabled: false, // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled
         branding: {}, // { serverName, logo, theme:{4 colors} } -- Config.CommandTablet.branding, verbatim; see buildBrandingElement()/applyBrandingSeedTheme()
@@ -5651,7 +5651,7 @@
         // but each of these four gets its OWN real gate rather than one
         // blanket flag, because each is genuinely different:
         //   - Certify Someone: isHighCommand OR the k9.certify capability
-        //     (server/certifications.lua's own rank-based-certifier-or-grant
+        //     (server/certifications/'s own rank-based-certifier-or-grant
         //     shape -- matches helpSeesAdminCommands()'s own certification
         //     row check).
         //   - Turn Someone Into a K9: TRUE high command only, verified
@@ -7198,7 +7198,7 @@
      * parameter so Hire cannot be submitted without picking K9 or Handler
      * IN THE SAME ACTION. server/roster.lua's own Phase A header
      * explicitly deferred that signature change to "a later, serialized
-     * pass" (it lives in server/certifications.lua, outside this pass's
+     * pass" (it lives in server/certifications/, outside this pass's
      * file list) -- and RosterAssignPersonnelRole's own authorization
      * circle (High Command only) is DELIBERATELY NARROWER than
      * IsEligibleCertifier (the wider certifier-grade/k9.certify circle that
@@ -14153,7 +14153,7 @@
      * mutation on the Person (and My Record) screen goes through. Before
      * this pass it rendered EVERY ONE of the ~30 distinct `error` codes
      * those server callbacks/*ForTablet wrappers can return (confirmed by
-     * reading server/certifications.lua's GrantCertificationForTablet/
+     * reading server/certifications/'s GrantCertificationForTablet/
      * SetCertificationTierForTablet/RenewCertificationForTablet/
      * GrantSpecializationForTablet/RevokeSpecializationForTablet, server/
      * permissions.lua's GrantPermission/RevokePermission, server/

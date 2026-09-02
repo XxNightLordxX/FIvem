@@ -17,7 +17,7 @@
         IsFlashbangImmune, RestoreInjury), called directly since none of
         them is `local`.
 
-    server/certifications.lua is DELIBERATELY NOT loaded here -- only
+    server/certifications/ is DELIBERATELY NOT loaded here -- only
     IsConfiguredK9Model is stubbed directly, same "stub, don't load, a
     function already covered by its own file's spec" convention
     kennel_spec.lua's own header already establishes for HasK9Access/
@@ -796,7 +796,7 @@ end)
 -- bounded by .RegisterPlayerDropped(), so disconnecting wiped the very
 -- entry that was throttling that player, and reconnecting handed them a
 -- fresh source that had never been stamped. A cooldown a relog clears is
--- not a cooldown -- the same wording server/certifications.lua and
+-- not a cooldown -- the same wording server/certifications/ and
 -- server/medkit.lua already use for this exact mistake, and the discipline
 -- HungerFeedCooldown/ThirstReliefCooldown in this same file already
 -- followed. Both are now keyed on the actor's durable citizenid and
