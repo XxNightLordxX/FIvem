@@ -85,6 +85,15 @@ Config = {}
 -- table further down with the same name -- turn something on there, then
 -- search for its name to tune it.
 --
+-- TURNING THINGS ON AND OFF  (start here)
+--   Config.Features ................. the on/off switch for every single
+--                                     feature -- ONE switch each, and this
+--                                     is the one that decides
+--   Config.FeatureGroups ............ a master cut-off per capability
+--                                     family; `enabled = false` forces
+--                                     everything in that family off, and
+--                                     `true` changes nothing
+--
 -- WHO CAN DO WHAT
 --   Config.Departments .............. which jobs count as police, and the
 --                                     rank numbers that unlock things
@@ -123,6 +132,9 @@ Config = {}
 --                                     separate total from Config.XP, above
 --   Config.HandlerXPTiers ........... the handler ranks and what they unlock
 --   Config.Leaderboard .............. the /k9stats table
+--   Config.CertificationExpiryWarningDays . how long before a certification
+--                                     lapses that the handler is warned
+--   Config.CertificationExpiryCheckIntervalMs . how often lapses are checked
 --
 -- THE JOB ITSELF
 --   Config.Tracking ................. scent, blood and gunpowder trails
@@ -144,6 +156,11 @@ Config = {}
 --   Config.K9Inventory .............. the dog's own storage
 --   Config.K9Medkit ................. patching the dog up
 --   Config.K9EquipmentShop .......... the supply shop and its shop dogs
+--   Config.K9Identity ............... the dog's name, breed and callsign
+--   Config.K9Onboarding ............. what a brand-new handler is walked through
+--   Config.K9VehicleRide ............ how the dog rides along
+--   Config.LeashVisual .............. what the leash looks like
+--   Config.CameraFeed ............... the K9 camera picture-in-picture
 --   Config.DeployableKennel ......... putting down a portable kennel
 --   Config.PropAttachments .......... vests and gear on the dog
 --   Config.FetchMechanic ............ fetch
@@ -169,6 +186,12 @@ Config = {}
 --   Config.Database ................. running with or without a database
 --   Config.K9DownDispatch ........... announcing a K9 going down
 --   Config.AdminAudit ............... the read-only audit commands
+--   Config.DiscordWebhook ........... where K9 events are posted (ships off
+--                                     until you paste in a URL)
+--   Config.DebugDump ................ the /k9debug report (ships off)
+--   Config.MaxSpeedScentMultiplier .. the ceiling on per-person speed and
+--                                     scent-range boosts
+--   Config.MaxStaminaDrainPerTick ... the ceiling on stamina drain
 --   Config.BoneSweepTool ............ a developer-only tool; the flag ships
 --                                     `true` but stays unreachable without an
 --                                     operator-set convar -- see

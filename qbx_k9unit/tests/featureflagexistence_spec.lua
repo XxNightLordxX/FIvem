@@ -728,6 +728,49 @@ t.test('COMMENT ROT ALLOWLIST HYGIENE: no allowlist entry has quietly become a r
     end
 end)
 
+t.test('TABLE OF CONTENTS: config.lua\'s own index lists every Config block in the file, and names no block that is not there -- the index is the one navigation aid a non-technical owner has', function()
+    -- WHY THIS IS A REAL GUARD. config.lua is 5,000+ lines and opens with a
+    -- hand-written index ("WHAT IS IN THIS FILE -- a map, so you can stop
+    -- scrolling"). An index that silently misses a block is worse than no
+    -- index: the reader concludes the setting does not exist. Thirteen
+    -- blocks were missing when this was written, INCLUDING Config.Features
+    -- and Config.FeatureGroups -- the two an owner looks for first.
+    --
+    -- CONTROL PERFORMED: deleting the Config.Features line from the index
+    -- turns this red naming Config.Features; adding a line for a
+    -- Config.Nonexistent turns it red the other way.
+    local handle = assert(io.open('../config.lua', 'r'))
+    local text = handle:read('a')
+    handle:close()
+
+    local blocks, order = {}, {}
+    for name in text:gmatch('\nConfig%.([A-Za-z0-9_]+)%s*=') do
+        if not blocks[name] then blocks[name] = true; order[#order + 1] = name end
+    end
+    t.isTrue(#order > 40, ('sanity: expected to find many Config blocks, found %d'):format(#order))
+
+    -- The index sits above the first real assignment.
+    local indexText = text:sub(1, (text:find('\nConfig%.Features%s*=')) or #text)
+    local listed = {}
+    for name in indexText:gmatch('\n%-%-   Config%.([A-Za-z0-9_]+)') do listed[name] = true end
+
+    local unlisted = {}
+    for _, name in ipairs(order) do
+        if not listed[name] then unlisted[#unlisted + 1] = name end
+    end
+    table.sort(unlisted)
+    t.equals(#unlisted, 0, 'config.lua block(s) missing from the file\'s own index: ' .. table.concat(unlisted, ', ')
+        .. '. Add a line for each under the right heading, or an owner searching the index will conclude the setting does not exist.')
+
+    local ghosts = {}
+    for name in pairs(listed) do
+        if not blocks[name] then ghosts[#ghosts + 1] = name end
+    end
+    table.sort(ghosts)
+    t.equals(#ghosts, 0, 'the index names block(s) that are not in the file: ' .. table.concat(ghosts, ', ')
+        .. '. This is how four removed features stayed listed as live settings.')
+end)
+
 t.test('CONSTRAINT: no scenery ped this resource spawns may use a K9 model', function()
     local shippedCfg = env.Config
     t.isNotNil(shippedCfg, 'shipped Config must load')
