@@ -226,12 +226,12 @@
        events, a dispatch alert's entire purpose is a map pin.
 
     CORRECTED (integration-verification pass, 2026-08-26): the "Current full
-    list" table above already named all fourteen events — it was measured by
+    list" table above already named every event — it was measured by
     grepping every real call site, not guessed — but only #1–#7 above had a
-    documented payload shape. The remaining seven were real, already-firing
-    events with no contract entry here at all, which is exactly the kind of
-    gap a resource built against this file from the table alone would not
-    have caught until it tried to read a field that was never documented.
+    documented payload shape. The rest were real, already-firing events
+    with no contract entry here at all, which is exactly the kind of gap a
+    resource built against this file from the table alone would not have
+    caught until it tried to read a field that was never documented.
     Filled in below, each verified directly against its own
     `FireOutboundEvent` call site(s), never guessed from the name:
 
@@ -287,16 +287,14 @@
     DEVELOPER_REFERENCE.md Part B's own "Effort: small" assessment for that
     item; #7 is genuinely new detection logic, scoped to its own file rather
     than any existing one — see server/integrations.lua's own header. #8
-    through #14 are, like #1–#6, all wired at a pre-existing success point in
+    onward are, like #1–#6, all wired at a pre-existing success point in
     a file that already computed every field in their payload for its own
     purposes — none of them required new detection logic either.
     ======================================================================
 
     ======================================================================
-    COVERAGE OF LATER-ADDED FEATURES — six features landed in this resource
-    after this file was first written: Recall (the removed recall server file,
-    the removed recall client file), HandlerDownDefense (the removed handler-down-defense server file,
-    the removed handler-down-defense client file), PropAttachments (server/propattachment.lua,
+    COVERAGE OF LATER-ADDED FEATURES — four features landed in this resource
+    after this file was first written: PropAttachments (server/propattachment.lua,
     client/propattachment.lua), FetchMechanic (server/fetch.lua,
     client/fetch.lua), ProximityAudioFX (client/proximityaudio.lua only —
     no server-side file exists for it), and two more that don't map to a
@@ -305,46 +303,12 @@
     evaluated against this file's own DESIGN PRINCIPLES above (wrap an
     EXISTING resource-global read accessor, never invent one; never add
     SQL; never weaken the "no new mutations" stance). Result for THIS file
-    (server/exports.lua): **zero new exports.** Every one of the six either
+    (server/exports.lua): **zero new exports.** Every one of the four either
     exposes no resource-global function this file could wrap at all, or its
     only resource-global surface is a self-initiated mutation already
     excluded by this file's existing "no new mutations" principle. Decided
     per feature, not defaulted:
 
-    - Recall (the removed recall server file): NOTHING. The file registers exactly one
-      RegisterNetEvent and defines no resource-global (non-`local`)
-      function of its own — verified by direct read, not grep alone, since
-      a false negative here would be the exact "silently stops protecting"
-      failure class this file's CopyTier comment warns about elsewhere.
-      There is no per-citizenid or per-source cached state this file could
-      read (no "is a recall on cooldown" accessor exists, nor would one be
-      safe to add: RecallCooldown is `local` to the removed recall server file and
-      adding a resource-global reader for it is that file's call, not this
-      one's, per DESIGN PRINCIPLE 4). The client-initiated action
-      (`RequestRecall()`) is evaluated in client/exports.lua instead, where
-      it is also excluded — see that file's own reasoning; there is no
-      server-exportable half of Recall period.
-    - HandlerDownDefense (the removed handler-down-defense server file): NOTHING. Confirmed by direct
-      read: this file exposes NO resource-global function — `LastHostile`,
-      `AttackerReportCooldown`, and `DefenseTriggerCooldown` are all
-      `local`, and `IsHandlerDown`/`TryNotifyPartnerK9` are both `local`
-      too. The only state genuinely worth reading externally (does the
-      local K9 currently have a fresh handler-down prompt, and what target
-      did the server suggest) is CLIENT-side ephemeral UI state
-      (`HasFreshDefensePrompt()`/`GetDefenseSuggestedTargetNetId()`,
-      the removed handler-down-defense client file) — added to client/exports.lua instead, not here.
-      Also note for whoever next touches the removed handler-down-defense server file: its own
-      client-facing relay event (`qbx_k9unit:client:handlerDownDefenseTrigger`)
-      uses this resource's `qbx_k9unit:client:`/`qbx_k9unit:server:`
-      namespace, which README.md documents as internal and subject to
-      change — NOT the `qbx_k9unit:events:*` stable-contract namespace
-      the EVENT CONTRACT section above documents. A dispatch/MDT-style
-      resource wanting to know "a handler just went down and their K9 was
-      notified" would be a reasonable FUTURE addition to that stable
-      namespace, but adding it means calling `FireOutboundEvent` from
-      inside the removed handler-down-defense server file itself, which is that file's own owner's
-      call to make, not this file's. Flagged as a genuine gap, not
-      silently dropped.
     - PropAttachments (server/propattachment.lua): NOTHING. That file's own
       header says so explicitly and this was re-confirmed by direct read:
       "THIS FILE exposes NO resource-global functions... no other file in

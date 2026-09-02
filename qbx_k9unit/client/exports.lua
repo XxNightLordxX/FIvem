@@ -78,23 +78,13 @@
     them already has its own consent/proximity/cooldown context tied to
     THIS resource's own UI flow (radial menu selection, ox_target option,
     etc.) that an external resource driving them directly would bypass.
-    This also names the self-initiated actions added by the six features
+    This also names the self-initiated actions added by the features
     audited below (same exclusion, not a new category):
-    `RequestRecall` (the removed recall client file — a termination action deliberately
-    ungated on CanShowK9UI, but still self-initiated by the calling player
-    for their own partner K9; excluding it here does not reopen the "must
-    never gate the termination path" question that file's own header
-    settles, since that question is about THIS resource's OWN UI, not
-    about whether an unrelated external resource should be able to trigger
-    it on a player's behalf), `RequestThrowFetchBall`/`ReleaseFetchBall`/
-    `RequestRecallFetchBall` (client/fetch.lua), `ConfirmHandlerDownDefense`
-    (the removed handler-down-defense client file — the manual confirm step; note its own read-only
-    preconditions, `HasFreshDefensePrompt`/`GetDefenseSuggestedTargetNetId`,
-    ARE exported below, only the action that consumes them is not), and
-    `RequestToggleK9PropAttachment` (client/propattachment.lua). None of
-    these gained a read-only counterpart worth exporting beyond the two
-    named above — see PROPATTACHMENT / PROXIMITY AUDIO note below for why
-    those two features contribute no exports here at all.
+    `RequestThrowFetchBall`/`ReleaseFetchBall`/`RequestRecallFetchBall`
+    (client/fetch.lua) and `RequestToggleK9PropAttachment`
+    (client/propattachment.lua). Neither gained a read-only counterpart
+    worth exporting — see PROPATTACHMENT / PROXIMITY AUDIO note below for
+    why those two features contribute no exports here at all.
 
     PropAttachments (client/propattachment.lua): `IsPropAttachmentEngaged()`
     is a genuine, purpose-built, zero-argument resource-global read
@@ -334,54 +324,6 @@ exports('IsDragEngaged', function()
     local ok, result = pcall(IsDragEngaged)
     if not ok then return false end
     return result == true
-end)
-
--- ======================================================================
--- HANDLER-DOWN DEFENSE STATE (wraps the removed handler-down-defense client file)
--- (Config.Features.HandlerDownDefense, still `false` by default). Both
--- exports below are zero-argument reads of PendingDefensePrompt, a plain
--- in-memory Lua table local to the removed handler-down-defense client file with no game-state
--- counterpart (see that file's own header: "no onResourceStop handler...
--- this file applies NO native side effect to any entity, ever") — exactly
--- the same "read this file's own already-computed local state" shape as
--- IsBiteHoldEngaged/IsDragEngaged above, fitting this file's header
--- justification directly: a HUD/phone resource may want to avoid stacking
--- its own alert UI on top of an already-active handler-down prompt, the
--- same way it already reasonably would for CanShowK9UI(). Neither export
--- gates on Config.Features.HandlerDownDefense beyond what the wrapped
--- global itself already does — the removed handler-down-defense client file returns entirely,
--- defining neither global, when that flag is off, so the `type(...) ==
--- 'function'` guard below already degrades correctly on its own.
--- Deliberately NOT exported: ConfirmHandlerDownDefense(actionType) — the
--- manual confirm step is a self-initiated ACTION, same exclusion class as
--- every other action named in this file's header "NOT IN THIS FILE" list.
--- ======================================================================
-
---- Is there a still-fresh (not yet expired) handler-down prompt pending
---- for the local player's own K9 right now? Wraps HasFreshDefensePrompt()
---- 1:1 — see this file's header TRUST MODEL NOTE: this is local UI state,
---- not a security check, exactly like CanShowK9UI() above.
---- @return boolean
-exports('HasFreshDefensePrompt', function()
-    if type(HasFreshDefensePrompt) ~= 'function' then return false end
-
-    local ok, result = pcall(HasFreshDefensePrompt)
-    if not ok then return false end
-    return result == true
-end)
-
---- The server-suggested hostile netId attached to the current fresh
---- defense prompt, if any. Wraps GetDefenseSuggestedTargetNetId() 1:1 — a
---- plain number (or nil), never a table, so no CopyTier-style copy is
---- needed here (see this file's header DESIGN PRINCIPLES item 3: the copy
---- requirement is about table references, not scalars).
---- @return number? suggestedTargetNetId
-exports('GetDefenseSuggestedTargetNetId', function()
-    if type(GetDefenseSuggestedTargetNetId) ~= 'function' then return nil end
-
-    local ok, result = pcall(GetDefenseSuggestedTargetNetId)
-    if not ok or type(result) ~= 'number' then return nil end
-    return result
 end)
 
 -- ======================================================================

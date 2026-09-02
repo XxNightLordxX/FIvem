@@ -684,8 +684,6 @@ local clientEnv = Sandbox.newEnv({
     IsNightVisionActive = function() return false end,
     IsBiteHoldEngaged = function() return false end,
     IsDragEngaged = function() return false end,
-    HasFreshDefensePrompt = function() return false end,
-    GetDefenseSuggestedTargetNetId = function() return nil end,
     IsFetchCarryEngaged = function() return false end,
     IsPropAttachmentEngaged = function() return false end,
 })
@@ -697,12 +695,11 @@ local CLIENT_EXPORT_NAMES = {
     'GetAPIVersion', 'HasK9Access', 'IsOwnModelK9', 'CanShowK9UI', 'IsLeashed',
     'IsInK9Vehicle', 'IsPartnered', 'GetPartnerServerId', 'GetCurrentXPTier',
     'IsTracking', 'GetActiveTrackType', 'IsThermalVisionActive', 'IsNightVisionActive',
-    'IsBiteHoldEngaged', 'IsDragEngaged', 'HasFreshDefensePrompt',
-    'GetDefenseSuggestedTargetNetId', 'IsFetchCarryEngaged', 'IsPropAttachmentEngaged',
+    'IsBiteHoldEngaged', 'IsDragEngaged', 'IsFetchCarryEngaged', 'IsPropAttachmentEngaged',
 }
 
-t.test('client/exports.lua registers exactly the 19 documented exports, no more, no fewer', function()
-    t.equals(countKeys(ClientExports), 19)
+t.test('client/exports.lua registers exactly the 17 documented exports, no more, no fewer', function()
+    t.equals(countKeys(ClientExports), 17)
     for _, name in ipairs(CLIENT_EXPORT_NAMES) do
         t.equals(type(ClientExports[name]), 'function', name .. ' must be a registered export')
     end
@@ -732,7 +729,7 @@ end)
 -- The 14 zero-argument boolean exports (HasK9Access, IsOwnModelK9,
 -- CanShowK9UI, IsLeashed, IsInK9Vehicle, IsPartnered, IsTracking,
 -- IsThermalVisionActive, IsNightVisionActive, IsBiteHoldEngaged,
--- IsDragEngaged, HasFreshDefensePrompt, IsFetchCarryEngaged,
+-- IsDragEngaged, IsFetchCarryEngaged,
 -- IsPropAttachmentEngaged) all share the IDENTICAL body shape, verified by
 -- direct read of every one of the 14 bodies in client/exports.lua, not
 -- assumed from the first one:
@@ -748,7 +745,7 @@ end)
 local CLIENT_BOOLEAN_EXPORTS = {
     'HasK9Access', 'IsOwnModelK9', 'CanShowK9UI', 'IsLeashed', 'IsInK9Vehicle',
     'IsPartnered', 'IsTracking', 'IsThermalVisionActive', 'IsNightVisionActive',
-    'IsBiteHoldEngaged', 'IsDragEngaged', 'HasFreshDefensePrompt', 'IsFetchCarryEngaged',
+    'IsBiteHoldEngaged', 'IsDragEngaged', 'IsFetchCarryEngaged',
     'IsPropAttachmentEngaged',
 }
 
@@ -798,7 +795,7 @@ t.test('client GetPartnerServerId(): a real server id passes through unmodified'
     t.equals(ClientExports.GetPartnerServerId(), 7)
 end)
 
-t.test('client GetPartnerServerId(): FINDING -- unlike GetDefenseSuggestedTargetNetId below, this export has NO type(result) == \'number\' guard; a non-number return from the wrapped global is passed through raw, contradicting its own @return number? doc comment', function()
+t.test('client GetPartnerServerId(): FINDING -- this export has NO type(result) == \'number\' guard; a non-number return from the wrapped global is passed through raw, contradicting its own @return number? doc comment', function()
     clientEnv.GetPartnerServerId = function() return 'not-a-number' end
     t.equals(ClientExports.GetPartnerServerId(), 'not-a-number', 'this pins the real, currently-observed behavior -- not an endorsement of it')
 end)
@@ -826,31 +823,6 @@ end)
 t.test('client GetActiveTrackType(): FINDING -- no validation against the documented \'scent\'|\'blood\'|\'gunpowder\'|nil enum; any string the wrapped global returns is passed through raw', function()
     clientEnv.GetActiveTrackType = function() return 'not-a-real-track-type' end
     t.equals(ClientExports.GetActiveTrackType(), 'not-a-real-track-type')
-end)
-
--- ----------------------------------------------------------------------
--- GetDefenseSuggestedTargetNetId() -- number? passthrough, WITH an actual
--- type(result) == 'number' guard (unlike the two exports directly above)
--- ----------------------------------------------------------------------
-
-t.test('client GetDefenseSuggestedTargetNetId(): a missing wrapped global returns nil', function()
-    clientEnv.GetDefenseSuggestedTargetNetId = nil
-    t.isNil(ClientExports.GetDefenseSuggestedTargetNetId())
-end)
-
-t.test('client GetDefenseSuggestedTargetNetId(): a throwing wrapped global returns nil (pcall exercised)', function()
-    clientEnv.GetDefenseSuggestedTargetNetId = function() error('boom') end
-    t.isNil(ClientExports.GetDefenseSuggestedTargetNetId())
-end)
-
-t.test('client GetDefenseSuggestedTargetNetId(): a non-number result IS rejected here, returns nil -- inconsistent with GetPartnerServerId/GetActiveTrackType\'s own lack of a matching guard', function()
-    clientEnv.GetDefenseSuggestedTargetNetId = function() return 'not-a-number' end
-    t.isNil(ClientExports.GetDefenseSuggestedTargetNetId())
-end)
-
-t.test('client GetDefenseSuggestedTargetNetId(): a real netId passes through, including a negative/pathological value (no range check, only a type check)', function()
-    clientEnv.GetDefenseSuggestedTargetNetId = function() return -1 end
-    t.equals(ClientExports.GetDefenseSuggestedTargetNetId(), -1)
 end)
 
 -- ----------------------------------------------------------------------
