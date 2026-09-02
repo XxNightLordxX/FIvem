@@ -591,4 +591,60 @@ t.test('k9_permissions.permission (VARCHAR(50)) fits "feature."/"block." + the l
     end
 end)
 
+-- ----------------------------------------------------------------------
+-- THE DIRECTION EVERY TEST ABOVE MISSES: all of them compare one
+-- DECLARATION of the table set against another (install.sql, the
+-- migrations, preflight, rollback, EXPECTED_TABLE_COLUMNS). None of them
+-- looks at the SQL this resource actually executes. A query naming a
+-- table nobody creates is a different, worse failure than a drifted list:
+-- it does not show up as a missing row or an unprotected backup, it
+-- throws at runtime, on the first player who triggers that code path, on
+-- a live server.
+--
+-- The reverse is worth catching too, though it is only a tidiness
+-- finding: a table install.sql creates that no query ever names is dead
+-- schema an operator is asked to carry for nothing.
+--
+-- SCOPE, DELIBERATELY NARROW: this reads real SQL keywords (FROM / INTO /
+-- UPDATE / JOIN / TABLE) followed by a `k9_`-prefixed name, with
+-- whole-line Lua comments stripped first so a table named only in prose
+-- never counts. It does not parse SQL, and it cannot see a table name
+-- built by concatenation at runtime -- server/datastore.lua's own header
+-- rule ("THE ONLY PLACE IN THIS RESOURCE THAT MAY NAME A `k9_*` TABLE OR
+-- CALL `MySQL.*` DIRECTLY") is what keeps that from mattering, and the
+-- CONTROL below fails loudly if this extraction ever stops finding
+-- anything.
+-- ----------------------------------------------------------------------
+t.test('every k9_* table named in real SQL anywhere under server/ is created by install.sql, and every table install.sql creates is named by at least one query', function()
+    local queried = {}
+    local queriedCount = 0
+
+    local handle = assert(io.popen('find ../server -name "*.lua"'))
+    local fileList = handle:read('*a')
+    handle:close()
+
+    for path in fileList:gmatch('[^\n]+') do
+        local text = ReadFile(path:gsub('^%.%./', '../'))
+        -- Drop whole-line Lua comments so a table named in a header or a
+        -- doc comment is never mistaken for a real query.
+        local code = text:gsub('\n%s*%-%-[^\n]*', '\n')
+        for keyword, name in code:gmatch('(%a+)%s+`?(k9_[%w_]+)`?') do
+            local kw = keyword:upper()
+            if kw == 'FROM' or kw == 'INTO' or kw == 'UPDATE' or kw == 'JOIN' or kw == 'TABLE' then
+                if not queried[name] then
+                    queried[name] = true
+                    queriedCount = queriedCount + 1
+                end
+            end
+        end
+    end
+
+    -- CONTROL: if the extraction above ever silently stops matching, every
+    -- assertion below becomes vacuously true. This is the tripwire.
+    t.isTrue(queriedCount >= 20,
+        ('only found %d k9_* tables in real SQL under server/ -- the extraction pattern has probably drifted; fix it rather than deleting this check'):format(queriedCount))
+
+    AssertSameTableSet(queried, installTables, 'real SQL executed under server/')
+end)
+
 os.exit(t.summary())
