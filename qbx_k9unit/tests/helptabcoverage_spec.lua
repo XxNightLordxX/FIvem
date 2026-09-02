@@ -63,9 +63,9 @@ end
 --- @return table<string, boolean> set
 local function ExtractRealTabKeys(text)
     local startPos = text:find('var DEFAULT_STRINGS = {', 1, true)
-    assert(startPos, 'var DEFAULT_STRINGS = { not found in html/tablet.js -- this file must have changed shape')
+    assert(startPos, 'var DEFAULT_STRINGS = { not found in html/tablet.js or html/tablet-catalog.js -- this file must have changed shape')
     local endPos = text:find('\n    };', startPos, true)
-    assert(endPos, 'closing "};" for DEFAULT_STRINGS not found in html/tablet.js')
+    assert(endPos, 'closing "};" for DEFAULT_STRINGS not found in html/tablet.js or html/tablet-catalog.js')
     local body = text:sub(startPos, endPos)
 
     local set = {}
@@ -84,9 +84,9 @@ end
 --- @return table<string, boolean> set
 local function ExtractHelpCatalogTabKeys(text)
     local startPos = text:find('var HELP_TAB_CATALOG = [', 1, true)
-    assert(startPos, 'var HELP_TAB_CATALOG = [ not found in html/tablet.js -- this file must have changed shape')
+    assert(startPos, 'var HELP_TAB_CATALOG = [ not found in html/tablet.js or html/tablet-catalog.js -- this file must have changed shape')
     local endPos = text:find('\n    ];', startPos, true)
-    assert(endPos, 'closing "];" for HELP_TAB_CATALOG not found in html/tablet.js')
+    assert(endPos, 'closing "];" for HELP_TAB_CATALOG not found in html/tablet.js or html/tablet-catalog.js')
     local body = text:sub(startPos, endPos)
 
     local set = {}
@@ -106,7 +106,7 @@ local function SortedKeys(set)
 end
 
 t.test('LOAD-BEARING DRIFT GUARD: every tab_* DEFAULT_STRINGS key has a matching HELP_TAB_CATALOG entry, and vice versa', function()
-    local text = ReadFile('../html/tablet.js')
+    local text = (ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js'))
     local realTabs = ExtractRealTabKeys(text)
     local documented = ExtractHelpCatalogTabKeys(text)
 
@@ -154,11 +154,11 @@ t.test('LOAD-BEARING DRIFT GUARD: every tab_* DEFAULT_STRINGS key has a matching
 end)
 
 t.test('no duplicate tabLabelKey entries within HELP_TAB_CATALOG (a copy-pasted entry would silently mask a genuinely undocumented tab)', function()
-    local text = ReadFile('../html/tablet.js')
+    local text = (ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js'))
     local startPos = text:find('var HELP_TAB_CATALOG = [', 1, true)
-    assert(startPos, 'var HELP_TAB_CATALOG = [ not found in html/tablet.js')
+    assert(startPos, 'var HELP_TAB_CATALOG = [ not found in html/tablet.js or html/tablet-catalog.js')
     local endPos = text:find('\n    ];', startPos, true)
-    assert(endPos, 'closing "];" for HELP_TAB_CATALOG not found in html/tablet.js')
+    assert(endPos, 'closing "];" for HELP_TAB_CATALOG not found in html/tablet.js or html/tablet-catalog.js')
     local body = text:sub(startPos, endPos)
 
     local seen = {}

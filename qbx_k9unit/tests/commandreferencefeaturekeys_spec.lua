@@ -59,9 +59,9 @@ end
 --- @return table<string, boolean> -- set of key names
 local function ExtractGateFeatureKeys(text)
     local startPos = text:find('var COMMAND_REFERENCE = [', 1, true)
-    assert(startPos, 'var COMMAND_REFERENCE = [ not found in html/tablet.js')
+    assert(startPos, 'var COMMAND_REFERENCE = [ not found in html/tablet.js or html/tablet-catalog.js')
     local endPos = text:find('\n    ];', startPos, true)
-    assert(endPos, 'closing "];" for COMMAND_REFERENCE not found in html/tablet.js')
+    assert(endPos, 'closing "];" for COMMAND_REFERENCE not found in html/tablet.js or html/tablet-catalog.js')
     local body = text:sub(startPos, endPos)
 
     local out = {}
@@ -169,7 +169,7 @@ t.test('SYNTHETIC: a featureKey missing from Config.Features is actually detecte
 end)
 
 t.test('every COMMAND_REFERENCE gate.featureKey exists in Config.Features (or is explicitly allowlisted as intentionally absent)', function()
-    local gates = ExtractGateFeatureKeys(ReadFile('../html/tablet.js'))
+    local gates = ExtractGateFeatureKeys((ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js')))
     local cfg = ExtractConfigFeatureKeys(ReadFile('../config.lua'))
 
     local count = 0

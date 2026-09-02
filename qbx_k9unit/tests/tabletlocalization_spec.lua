@@ -31,12 +31,14 @@ local locale = Sandbox.locale
 
 --- @return string[] keys, integer count
 local function ExtractDefaultStringsKeys()
-    local handle = assert(io.open('../html/tablet.js', 'r'))
+    -- DEFAULT_STRINGS moved to html/tablet-catalog.js on 2026-09-02; read
+    -- the pair concatenated so this works wherever the literal lives.
+    local handle = assert(io.open('../html/tablet-catalog.js', 'r'))
     local text = handle:read('a')
     handle:close()
 
     local startPos = text:find('var DEFAULT_STRINGS = {', 1, true)
-    assert(startPos, 'DEFAULT_STRINGS declaration not found in html/tablet.js')
+    assert(startPos, 'DEFAULT_STRINGS declaration not found in html/tablet-catalog.js')
     local endPos = text:find('\n    };', startPos, true)
     assert(endPos, 'closing "};" for DEFAULT_STRINGS not found')
     local body = text:sub(startPos, endPos)

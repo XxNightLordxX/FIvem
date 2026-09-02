@@ -56,7 +56,8 @@ async function settle(times) {
 const fs = require('fs');
 const path = require('path');
 const REAL_COMMAND_REFERENCE_COUNT = (function () {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'tablet.js'), 'utf8');
+    // Reads tablet-catalog.js -- the catalog literals moved there 2026-09-02.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'tablet-catalog.js'), 'utf8');
     const startPos = src.indexOf('var COMMAND_REFERENCE = [');
     if (startPos === -1) throw new Error('tablet_hide_disabled_features_spec: COMMAND_REFERENCE not found in html/tablet.js');
     const body = src.slice(startPos, src.indexOf('\n    ];', startPos));

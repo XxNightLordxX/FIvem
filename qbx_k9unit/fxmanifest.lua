@@ -123,6 +123,11 @@ files {
     -- that the loader swallows, and a tablet that silently never renders
     -- looks exactly like the feature being switched off.
     'html/tablet.html',
+    -- SPLIT 2026-09-02: 1,749 lines of pure catalog data (the string
+    -- table and the command reference) moved out of tablet.js. BOTH must
+    -- be listed -- an unlisted asset 404s silently and the tablet renders
+    -- nothing -- and tablet.html loads the catalog FIRST, on purpose.
+    'html/tablet-catalog.js',
     'html/tablet.js',
     'html/tablet.css',
     'html/tablet-bridge.js',

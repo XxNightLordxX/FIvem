@@ -41,6 +41,10 @@
 </head>
 <body>
     <div id="k9tablet-root" class="k9tablet-root"></div>
+    <!-- ORDER IS LOAD-BEARING: the catalog defines DEFAULT_STRINGS,
+         COMMAND_REFERENCE_CATEGORIES and COMMAND_REFERENCE, which tablet.js
+         re-binds at its top. Swap these two and the tablet renders nothing. -->
+    <script src="tablet-catalog.js"></script>
     <script src="tablet.js"></script>
 </body>
 </html>

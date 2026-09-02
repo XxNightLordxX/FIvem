@@ -39,7 +39,9 @@ const { findByText, findAll } = require('./tablet-dom-stub');
 // countRealCommandReferenceEntries(): reads html/tablet.js's raw source
 // text so this spec's own row-count assertions never need a manual bump
 // when COMMAND_REFERENCE legitimately grows.
-const tabletJsSource = fs.readFileSync(path.join(__dirname, '..', 'tablet.js'), 'utf8');
+// Reads tablet-catalog.js, not tablet.js: the catalog literals moved there
+// on 2026-09-02 (see that file's own header).
+const tabletJsSource = fs.readFileSync(path.join(__dirname, '..', 'tablet-catalog.js'), 'utf8');
 function countCommandReferenceEntriesByAdminOnly(wantAdminOnly) {
     const startPos = tabletJsSource.indexOf('var COMMAND_REFERENCE = [');
     if (startPos === -1) throw new Error('tablet_help_tab_spec: var COMMAND_REFERENCE = [ not found in html/tablet.js');

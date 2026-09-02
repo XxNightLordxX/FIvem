@@ -65,7 +65,9 @@ const { findByText, findAll, findByTag } = require('./tablet-dom-stub');
 // tests/commandreferenceregistry_spec.lua's own Lua-side extractor had,
 // fixed in the same pass. `[a-zA-Z0-9_:]+` matches both the plain `k9x`
 // shape and the namespaced one.
-const tabletJsSourceForCommandCount = fs.readFileSync(path.join(__dirname, '..', 'tablet.js'), 'utf8');
+// Reads tablet-catalog.js, not tablet.js: the catalog literals moved there
+// on 2026-09-02 (see that file's own header).
+const tabletJsSourceForCommandCount = fs.readFileSync(path.join(__dirname, '..', 'tablet-catalog.js'), 'utf8');
 function countRealCommandReferenceEntries() {
     const startPos = tabletJsSourceForCommandCount.indexOf('var COMMAND_REFERENCE = [');
     if (startPos === -1) throw new Error('tablet_command_reference_spec: var COMMAND_REFERENCE = [ not found in html/tablet.js');

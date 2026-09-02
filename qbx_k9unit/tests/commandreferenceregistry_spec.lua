@@ -422,9 +422,9 @@ end
 --- @return table<string, boolean> set
 local function ExtractDocumentedCommandNames(text)
     local startPos = text:find('var COMMAND_REFERENCE = [', 1, true)
-    assert(startPos, 'var COMMAND_REFERENCE = [ not found in html/tablet.js -- this file must have changed shape')
+    assert(startPos, 'var COMMAND_REFERENCE = [ not found in html/tablet.js or html/tablet-catalog.js -- this file must have changed shape')
     local endPos = text:find('\n    ];', startPos, true)
-    assert(endPos, 'closing "];" for COMMAND_REFERENCE not found in html/tablet.js')
+    assert(endPos, 'closing "];" for COMMAND_REFERENCE not found in html/tablet.js or html/tablet-catalog.js')
     local body = text:sub(startPos, endPos)
 
     local set = {}
@@ -582,7 +582,7 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
     for name in pairs(realServer) do real[name] = true end
     for name in pairs(realClient) do real[name] = true end
 
-    local documented = ExtractDocumentedCommandNames(ReadFile('../html/tablet.js'))
+    local documented = ExtractDocumentedCommandNames((ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js')))
 
     local undocumented = {}
     for name in pairs(real) do
@@ -679,7 +679,7 @@ t.test('PENDING_NEW_CANONICAL_COMMANDS GUARD: every name in it is (a) still a re
     for name in pairs(realServer) do real[name] = true end
     for name in pairs(realClient) do real[name] = true end
 
-    local documented = ExtractDocumentedCommandNames(ReadFile('../html/tablet.js'))
+    local documented = ExtractDocumentedCommandNames((ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js')))
 
     local phantomPending, stalePending = {}, {}
     for name in pairs(PENDING_NEW_CANONICAL_COMMANDS) do
@@ -701,7 +701,7 @@ t.test('PENDING_NEW_CANONICAL_COMMANDS GUARD: every name in it is (a) still a re
 end)
 
 t.test('COMMANDS TAB CLEANUP (currently inert, starts enforcing per-family the moment COMMANDS_TAB_CLEANUP_COMPLETE lists that family): once a family is flagged complete, none of its HIDDEN_ALIAS_COMMANDS names may still appear in html/tablet.js\'s COMMAND_REFERENCE', function()
-    local documented = ExtractDocumentedCommandNames(ReadFile('../html/tablet.js'))
+    local documented = ExtractDocumentedCommandNames((ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js')))
 
     local stillDocumented = {}
     for name, family in pairs(HIDDEN_ALIAS_COMMANDS) do
@@ -723,11 +723,11 @@ t.test('COMMANDS TAB CLEANUP (currently inert, starts enforcing per-family the m
 end)
 
 t.test('no duplicate command names within COMMAND_REFERENCE (a copy-pasted entry would silently mask a different, genuinely undocumented command)', function()
-    local text = ReadFile('../html/tablet.js')
+    local text = (ReadFile('../html/tablet.js') .. ReadFile('../html/tablet-catalog.js'))
     local startPos = text:find('var COMMAND_REFERENCE = [', 1, true)
-    assert(startPos, 'var COMMAND_REFERENCE = [ not found in html/tablet.js')
+    assert(startPos, 'var COMMAND_REFERENCE = [ not found in html/tablet.js or html/tablet-catalog.js')
     local endPos = text:find('\n    ];', startPos, true)
-    assert(endPos, 'closing "];" for COMMAND_REFERENCE not found in html/tablet.js')
+    assert(endPos, 'closing "];" for COMMAND_REFERENCE not found in html/tablet.js or html/tablet-catalog.js')
     local body = text:sub(startPos, endPos)
 
     local seen = {}

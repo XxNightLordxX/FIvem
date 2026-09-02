@@ -29,6 +29,13 @@ const path = require('path');
 const vm = require('vm');
 const { buildTabletDocument } = require('./tablet-dom-stub');
 
+// Loaded in the SAME ORDER tablet.html loads them: the catalog defines the
+// three data tables tablet.js re-binds at its top, so a swap here would make
+// every spec fail on undefined rather than on anything real.
+const TABLET_CATALOG_PATH = path.join(__dirname, '..', 'tablet-catalog.js');
+const tabletCatalogSource = fs.readFileSync(TABLET_CATALOG_PATH, 'utf8');
+const tabletCatalogScript = new vm.Script(tabletCatalogSource, { filename: 'tablet-catalog.js' });
+
 const TABLET_JS_PATH = path.join(__dirname, '..', 'tablet.js');
 const tabletJsSource = fs.readFileSync(TABLET_JS_PATH, 'utf8');
 const tabletJsScript = new vm.Script(tabletJsSource, { filename: 'tablet.js' });
@@ -102,6 +109,7 @@ function createHarness(options) {
     };
 
     vm.createContext(sandbox);
+    tabletCatalogScript.runInContext(sandbox);
     tabletJsScript.runInContext(sandbox);
 
     function postMessage(action, data) {

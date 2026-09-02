@@ -469,7 +469,7 @@ end)
 
 t.test('REGRESSION: the three-way locale contract itself is intact (the count comment was wrong, the contract was not)', function()
     local lua = ReadFile('client/tablet.lua')
-    local js = ReadFile('html/tablet.js')
+    local js = (ReadFile('html/tablet.js') .. ReadFile('html/tablet-catalog.js'))
     t.isNotNil(lua)
     t.isNotNil(js)
 
