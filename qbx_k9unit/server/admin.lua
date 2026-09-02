@@ -1486,24 +1486,21 @@ AddEventHandler('onResourceStart', function(resourceName)
     ResolveMaxResultsKey('CatalogAudit', 25)
 
     --- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #1) -- the five
-    --- bodies below are now named LOCAL functions, called from TWO places
-    --- each: (a) the original, single-purpose command name
-    --- ('k9auditcert'/etc, kept registered and fully working forever --
-    --- macros/keybinds/cheat-sheets never break -- but now a HIDDEN ALIAS,
-    --- no longer chat-suggested or tablet-documented, see
-    --- client/commandsuggestions.lua's HIDDEN_ALIAS_COMMANDS /
-    --- html/tablet.js's own matching allowlist), and (b) the new merged
+    --- bodies below are named LOCAL functions, reached through the single
     --- '/k9audit <cert|partner|search|xp|dept> ...' dispatcher further
     --- below, which parses the subcommand keyword FIRST and then forwards
-    --- into the exact same function -- so `IsAuthorizedAdmin(source)` is
-    --- re-checked from inside THIS SAME function body regardless of which
-    --- of the two names reached it, never widened by a single shared gate
-    --- at the merged command's own top. All five happen to share an
-    --- IDENTICAL gate/cooldown already (see COMMAND_CONSOLIDATION_SPEC.md
-    --- §1's own audit table) -- this refactor changes nothing about WHEN or
-    --- HOW that gate runs, only removes four duplicate copies of the
-    --- dispatch-and-forward boilerplate that used to sit directly inside
-    --- each RegisterCommand call.
+    --- into the exact same function.
+    ---
+    --- Each function re-checks `IsAuthorizedAdmin(source)` from inside its
+    --- OWN body rather than relying on a single shared gate at the
+    --- dispatcher's top -- so the gate cannot be widened by a future edit
+    --- to the dispatcher. All five share an IDENTICAL gate/cooldown (see
+    --- COMMAND_CONSOLIDATION_SPEC.md §1's own audit table).
+    ---
+    --- The five original single-purpose names ('k9auditcert' and friends)
+    --- were registered as hidden aliases through 2026-09-02 and are now
+    --- DELETED at the owner's request -- the server had not launched, so
+    --- there were no macros or cheat-sheets to protect.
 
     --- '/k9auditcert [citizenid] [limit]' core -- see this file's header
     --- "COMMAND SURFACE" item 1.
@@ -1542,9 +1539,6 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end
 
-    RegisterCommand('k9auditcert', function(source, args)
-        HandleAuditCert(source, args)
-    end, false)
 
     --- '/k9auditpartner [citizenid] [limit]' core -- see this file's header
     --- "COMMAND SURFACE" item 2.
@@ -1583,9 +1577,6 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end
 
-    RegisterCommand('k9auditpartner', function(source, args)
-        HandleAuditPartner(source, args)
-    end, false)
 
     --- '/k9auditsearch <officer|plate|person|recent> [value] [limit]' core
     --- -- see this file's header "COMMAND SURFACE" item 3. Authorization is
@@ -1661,9 +1652,6 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end
 
-    RegisterCommand('k9auditsearch', function(source, args)
-        HandleAuditSearch(source, args)
-    end, false)
 
     --- '/k9auditxp [citizenid]' core -- see this file's header "COMMAND
     --- SURFACE" item 4 and "COVERAGE RE-CHECK" for the full reasoning. No
@@ -1703,9 +1691,6 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end
 
-    RegisterCommand('k9auditxp', function(source, args)
-        HandleAuditXp(source, args)
-    end, false)
 
     --- '/k9auditdept <job> [limit]' core -- see this file's header "COMMAND
     --- SURFACE" item 5 and "COVERAGE RE-CHECK (this pass, take 2)" for the
@@ -1748,9 +1733,6 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end
 
-    RegisterCommand('k9auditdept', function(source, args)
-        HandleAuditDept(source, args)
-    end, false)
 
     -- ==================================================================
     -- '/k9audit <cert|partner|search|xp|dept> ...' -- COMMAND_CONSOLIDATION_SPEC.md

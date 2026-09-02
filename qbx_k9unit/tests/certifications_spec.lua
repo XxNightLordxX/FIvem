@@ -94,7 +94,7 @@ local PENDING_CERT_LOCALE = {
     ['certifications.self_certification_disabled_hint'] =
         "Self-certification is disabled on this server -- ask another certifying officer to do this for you instead.",
     ['certifications.target_must_be_online_use_offline'] =
-        "Target must be online to be certified this way. If they are offline, use /k9certifyoffline [citizenid] [job] instead.",
+        "Target must be online to be certified this way. If they are offline, use /k9certify [citizenid] [job] instead.",
     ['certifications.target_must_be_online_model_check'] =
         "Target must be online to be certified -- this server requires verifying their current K9 model, which cannot be checked while they are offline. There is no offline path for this while that check is enabled.",
     ['certifications.target_not_in_department_hint'] =
@@ -108,23 +108,23 @@ local PENDING_CERT_LOCALE = {
     ['certifications.target_not_k9_model_hint'] =
         "Target is not playing a recognized K9 model. Ask them to switch to one of this server's configured K9 models before certifying, or ask an operator to turn off Config.K9Appearance.requireK9ModelForRole if that check isn't needed.",
     ['certifications.target_already_certified_hint'] =
-        "Target already holds an active certification for this department. Use /k9settier or /k9specialize to adjust it, or /k9decertify (/k9decertifyoffline if they're offline) and re-certify to start over.",
+        "Target already holds an active certification for this department. Use /k9settier or /k9specialize to adjust it, or /k9decertify and re-certify to start over.",
     ['certifications.invalid_department_hint'] =
         "'%s' is not a configured department. Configured departments: %s.",
     ['certifications.tier_change_target_must_be_online_hint'] =
-        "Target must be online for this action, or use /k9settieroffline [citizenid] [job] [tier] to change their tier while they're offline.",
+        "Target must be online for this action, or use /k9settier [citizenid] [job] [tier] to change their tier while they're offline.",
     ['certifications.renew_target_must_be_online_hint'] =
-        "Target must be online for this action, or use /k9recertifyoffline [citizenid] [job] to renew their certification while they're offline.",
+        "Target must be online for this action, or use /k9certify [citizenid] [job] to renew their certification while they're offline.",
     ['certifications.specialization_target_must_be_online_no_offline'] =
         "Target must be online for this action -- specializations can only be granted while the target is connected; there is no offline path for this one.",
     ['certifications.target_not_actively_certified_needs_cert'] =
-        "Target does not hold an active certification for this department -- certify them first with /k9certify [server id] (or /k9certifyoffline [citizenid] [job] if they're offline).",
+        "Target does not hold an active certification for this department -- certify them first with /k9certify [server id] (or /k9certify [citizenid] [job] if they're offline).",
     ['certifications.tier_change_busy'] =
         'That tier is being edited elsewhere right now -- try again in a moment.',
     ['certifications.invalid_specialization_hint'] =
         'That is not a configured K9 specialization. Configured specializations: %s.',
     ['certifications.specialization_requires_active_cert_hint'] =
-        "That person must hold an active certification for this department before a specialization can be granted -- certify them first with /k9certify (or /k9certifyoffline if they're offline).",
+        "That person must hold an active certification for this department before a specialization can be granted -- certify them first with /k9certify.",
     ['certifications.specialization_requires_tier_capability_hint'] =
         "That person's certification tier does not permit specializations for this department -- change their tier with /k9settier, or ask an operator to grant this capability to their tier from the tablet.",
     ['certifications.grant_success_next_steps'] =
@@ -1051,12 +1051,12 @@ t.test('GrantCertification: an offline target (not currently connected) is rejec
     f.setSource(1)
     f.events['qbx_k9unit:server:certifyHandler'](2) -- source 2 never registered -> offline
     -- Config.K9Appearance is absent in this fixture (requireK9ModelForRole
-    -- not true), so the "point at /k9certifyoffline" variant applies -- see
+    -- not true), so the "point at the offline shape" variant applies -- see
     -- the matching model-check variant test further below.
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_must_be_online_use_offline'), 'error'))
 end)
 
-t.test('GrantCertification: an offline target is told the MODEL-CHECK variant instead when Config.K9Appearance.requireK9ModelForRole is true -- never a false promise that /k9certifyoffline would work', function()
+t.test('GrantCertification: an offline target is told the MODEL-CHECK variant instead when Config.K9Appearance.requireK9ModelForRole is true -- never a false promise that the offline shape would work', function()
     local f = newFixture({ k9Appearance = { requireK9ModelForRole = true } })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
@@ -1252,18 +1252,18 @@ t.test('ECONOMY FIX: re-certifying the SAME (granter, target) pair pays again on
     t.equals(#f.handlerXpAwardCalls, 2, 'a real, distinct re-certification of the same person after a full day is a plausible genuine event and must pay again -- this cooldown throttles a FARM, not every future legitimate re-grant of the same person forever')
 end)
 
-t.test('ECONOMY FIX: the SAME farm loop through /k9certifyoffline + /k9decertifyoffline is closed by the identical CertifyXpMintCooldown', function()
+t.test('ECONOMY FIX: the SAME farm loop through /k9certify + /k9decertify with citizenids is closed by the identical CertifyXpMintCooldown', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
 
-    f.commands['k9certifyoffline'].fn(1, { 'OFFLINE_T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'OFFLINE_T1', 'police' })
     t.equals(#f.handlerXpAwardCalls, 1, 'a genuinely new offline grant still pays')
 
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9decertifyoffline'].fn(1, { 'OFFLINE_T1', 'police' })
+    f.commands['k9decertify'].fn(1, { 'OFFLINE_T1', 'police' })
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9certifyoffline'].fn(1, { 'OFFLINE_T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'OFFLINE_T1', 'police' })
 
     t.equals(#f.handlerXpAwardCalls, 1, 'repeating the SAME (granter, target) pair through the offline grant path must not mint a second time either -- GrantCertification and GrantCertificationOffline share the SAME CertifyXpMintCooldown tracker')
 end)
@@ -1288,7 +1288,7 @@ end)
 -- (granter, target) PAIR, 24h) never caps how many DIFFERENT targets one
 -- granter mints off in a day -- every pair used exactly once always pays,
 -- whether the "different target" is a real alt character or (via
--- /k9certifyoffline, which accepts ANY citizenid string) a plain typed
+-- /k9certify's citizenid shape, which accepts ANY citizenid string) a plain typed
 -- string that never corresponds to a real character at all. These tests
 -- drive that exact command, through the REAL RegisterCommand entry point
 -- captured in f.commands, never a local function directly.
@@ -1304,7 +1304,7 @@ t.test('FARM FIX: a granter minting more DISTINCT new certifications than Config
     -- CertifyXpMintCooldown ALONE would happily pay every single one.
     for i = 1, 9 do
         f.advanceTime(COOLDOWN_MS + 100)
-        f.commands['k9certifyoffline'].fn(1, { 'FAKE' .. i, 'police' })
+        f.commands['k9certify'].fn(1, { 'FAKE' .. i, 'police' })
     end
 
     t.equals(#f.handlerXpAwardCalls, 3, 'exactly Config.CertifyMaxNewGranteesPerDay (3) of the nine distinct-target attempts may mint handlerCertifyK9 XP in one rolling day')
@@ -1319,11 +1319,11 @@ t.test('FARM FIX: a certification refused its handlerCertifyK9 mint by the grant
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
 
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE1', 'police' })
     t.equals(#f.handlerXpAwardCalls, 1, 'sanity: the first mint pays')
 
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE2', 'police' })
     t.equals(#f.handlerXpAwardCalls, 1, 'the second, over-cap certification must NOT mint XP')
 
     local grantedFake2 = false
@@ -1355,7 +1355,7 @@ t.test('FARM FIX: the per-granter daily cap survives the granter disconnecting a
     local f = newFixture({ certifyMaxNewGranteesPerDay = 1 })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE1', 'police' })
     t.equals(#f.handlerXpAwardCalls, 1)
 
     -- Genuine disconnect + reconnect under a DIFFERENT numeric source
@@ -1365,7 +1365,7 @@ t.test('FARM FIX: the per-granter daily cap survives the granter disconnecting a
     f.setSource(99)
 
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9certifyoffline'].fn(99, { 'FAKE2', 'police' })
+    f.commands['k9certify'].fn(99, { 'FAKE2', 'police' })
     t.equals(#f.handlerXpAwardCalls, 1, "a resource restart-free relog cannot reset this citizenid's own daily cap -- it must still refuse the second distinct target")
 end)
 
@@ -1374,7 +1374,7 @@ t.test('FARM FIX: a slot freed by rolling past its OWN 24-hour window frees up e
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
 
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE1', 'police' })
     local slot1StampedAt = f.state.now
     t.equals(#f.handlerXpAwardCalls, 1)
 
@@ -1384,11 +1384,11 @@ t.test('FARM FIX: a slot freed by rolling past its OWN 24-hour window frees up e
     -- does, so "past slot 1's rollover" and "past slot 2's rollover" are
     -- never ambiguous instants).
     f.advanceTime(3600000)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE2', 'police' })
     t.equals(#f.handlerXpAwardCalls, 2, "sanity: both of the cap's 2 slots are now used")
 
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE3', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE3', 'police' })
     t.equals(#f.handlerXpAwardCalls, 2, "still inside slot 1's own 24h window -- a 3rd distinct target must not pay yet")
 
     -- Advance to just past slot 1's OWN 24h mark, measured from when IT was
@@ -1396,11 +1396,11 @@ t.test('FARM FIX: a slot freed by rolling past its OWN 24-hour window frees up e
     -- "pays again once 24h has fully elapsed" test's own style. This lands
     -- comfortably short of slot 2's OWN rollover, a full hour further out.
     f.advanceTime((slot1StampedAt + CERTIFY_XP_MINT_COOLDOWN_MS + 500) - f.state.now)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE4', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE4', 'police' })
     t.equals(#f.handlerXpAwardCalls, 3, "slot 1 has now rolled off its own 24h window -- exactly ONE more mint frees up")
 
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE5', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE5', 'police' })
     t.equals(#f.handlerXpAwardCalls, 3, "slot 2 has not rolled off yet (nearly a full hour still remains on it) -- a second extra mint must still be refused")
 end)
 
@@ -1409,11 +1409,11 @@ t.test("FARM FIX: a NEW target refused its mint only by the granter-level cap is
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
 
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' }) -- uses the ONLY slot
+    f.commands['k9certify'].fn(1, { 'FAKE1', 'police' }) -- uses the ONLY slot
     t.equals(#f.handlerXpAwardCalls, 1)
 
     f.advanceTime(COOLDOWN_MS + 100)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' }) -- refused by the granter cap, not by its own pair-cooldown
+    f.commands['k9certify'].fn(1, { 'FAKE2', 'police' }) -- refused by the granter cap, not by its own pair-cooldown
     t.equals(#f.handlerXpAwardCalls, 1)
 
     -- Free the granter's own slot back up (FAKE1's stamp rolls off 24h
@@ -1421,7 +1421,7 @@ t.test("FARM FIX: a NEW target refused its mint only by the granter-level cap is
     -- OWN pair-cooldown on the earlier, denied attempt, this next call
     -- would incorrectly still be refused for a further 24h.
     f.advanceTime(CERTIFY_XP_MINT_COOLDOWN_MS)
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE2', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE2', 'police' })
     t.equals(#f.handlerXpAwardCalls, 2, "FAKE2 must pay the moment a granter slot is free again -- its own pair-cooldown must never have been consumed by the earlier, denied attempt")
 end)
 
@@ -1432,7 +1432,7 @@ t.test('FARM FIX: Config.CertifyMaxNewGranteesPerDay -- CLAMP AND WARN on an inv
 
     for i = 1, 9 do
         f.advanceTime(COOLDOWN_MS + 100)
-        f.commands['k9certifyoffline'].fn(1, { 'FAKE' .. i, 'police' })
+        f.commands['k9certify'].fn(1, { 'FAKE' .. i, 'police' })
     end
     t.equals(#f.handlerXpAwardCalls, 8, 'an invalid (zero) configured cap must fall back to the built-in default (8) -- never "always refuse" and never "never refuse"')
 
@@ -1448,7 +1448,7 @@ t.test('FARM FIX: Config.CertifyMaxNewGranteesPerDay left UNSET (nil, an un-upgr
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.setSource(1)
 
-    f.commands['k9certifyoffline'].fn(1, { 'FAKE1', 'police' })
+    f.commands['k9certify'].fn(1, { 'FAKE1', 'police' })
     t.equals(#f.handlerXpAwardCalls, 1)
 
     for _, line in ipairs(f.printLog) do
@@ -1463,7 +1463,7 @@ t.test('FARM FIX: a large, validly-configured Config.CertifyMaxNewGranteesPerDay
 
     for i = 1, 20 do
         f.advanceTime(COOLDOWN_MS + 100)
-        f.commands['k9certifyoffline'].fn(1, { 'FAKE' .. i, 'police' })
+        f.commands['k9certify'].fn(1, { 'FAKE' .. i, 'police' })
     end
     t.equals(#f.handlerXpAwardCalls, 20, 'a real, validly-configured cap of 50 must allow more than the built-in fallback of 8 to pay in one rolling day')
 end)
@@ -1597,7 +1597,7 @@ t.test('GrantCertificationOffline: WORKFLOW CLARITY -- the same follow-up is sen
     f.mysql.scalar.await = function() return nil end
     f.mysql.insert.await = function() return 5 end
 
-    f.commands['k9certifyoffline'].fn(1, { 'OFFLINE_CIT', 'police' })
+    f.commands['k9certify'].fn(1, { 'OFFLINE_CIT', 'police' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.grant_success_next_steps', 'certified', 1), 'inform'))
 end)
@@ -1725,14 +1725,14 @@ t.test('GrantCertification: APPEARANCE FIX -- the runtime existence guard genuin
     t.isTrue(f.env.HasK9Access(20), 'the grant itself must still succeed with server/appearance.lua entirely absent')
 end)
 
-t.test('GrantCertificationOffline: APPEARANCE FIX -- with Config.K9Appearance.applyPedModelOnCertify on, a successful offline grant (/k9certifyoffline) calls ApplyK9AppearanceOnGrant(citizenid, granterCitizenid) too -- closes the "only one of the two doors" asymmetry', function()
+t.test('GrantCertificationOffline: APPEARANCE FIX -- with Config.K9Appearance.applyPedModelOnCertify on, a successful offline grant (/k9certify with a citizenid) calls ApplyK9AppearanceOnGrant(citizenid, granterCitizenid) too -- closes the "only one of the two doors" asymmetry', function()
     local f = newFixture({ k9Appearance = { applyPedModelOnCertify = true } })
     f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
     -- TARGET intentionally never registered -- genuinely offline.
 
-    f.commands['k9certifyoffline'].fn(10, { 'TARGET', 'police' })
+    f.commands['k9certify'].fn(10, { 'TARGET', 'police' })
 
-    t.equals(#f.appearanceApplyCalls, 1, 'an offline /k9certifyoffline grant must apply the K9 ped exactly like the online path -- ApplyK9AppearanceOnGrant/SendSwapRequest already handle a currently-offline target on their own')
+    t.equals(#f.appearanceApplyCalls, 1, 'an offline /k9certify grant must apply the K9 ped exactly like the online path -- ApplyK9AppearanceOnGrant/SendSwapRequest already handle a currently-offline target on their own')
     t.equals(f.appearanceApplyCalls[1][1], 'TARGET')
     t.equals(f.appearanceApplyCalls[1][2], 'GRANTER')
 end)
@@ -2101,7 +2101,7 @@ t.test('RevokeCertificationOffline: APPEARANCE FIX -- an offline revoke (/k9dece
     f.mysql.update.await = function() return 1 end
     f.mysql.scalar.await = function() return nil end
 
-    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+    f.commands['k9decertify'].fn(10, { 'REVOKEE', 'police' })
 
     t.equals(#f.appearanceRevertCalls, 1)
     t.equals(f.appearanceRevertCalls[1], 'REVOKEE')
@@ -2260,7 +2260,7 @@ t.test('RevokeCertificationOffline: full offline success path -- UPDATE fires, c
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.scalar.await = function() return nil end -- post-revoke re-cache: no active row
 
-    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+    f.commands['k9decertify'].fn(10, { 'REVOKEE', 'police' })
 
     -- CERTIFICATION DEPTH (this pass, Part A §2): same positional shift as
     -- the online path above.
@@ -2284,7 +2284,7 @@ t.test('RevokeCertificationOffline: SECURITY -- refuses outright when the "offli
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
 
-    f.commands['k9decertifyoffline'].fn(10, { 'ACTUALLY-ONLINE', 'police' })
+    f.commands['k9decertify'].fn(10, { 'ACTUALLY-ONLINE', 'police' })
 
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.target_online_use_decertify_command', 20), 'error'))
     t.isFalse(updateCalled, 'a currently-online target must never be revocable through the proximity-check-free offline path')
@@ -2294,7 +2294,7 @@ t.test('RevokeCertificationOffline: a citizenid with no active cert for that dep
     local f = newFixture()
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
     f.mysql.update.await = function() return 0 end
-    f.commands['k9decertifyoffline'].fn(10, { 'NOBODY', 'police' })
+    f.commands['k9decertify'].fn(10, { 'NOBODY', 'police' })
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.offline_target_not_certified'), 'inform'))
 end)
 
@@ -2303,7 +2303,7 @@ t.test('RevokeCertificationOffline: a typo\'d/unconfigured department is rejecte
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
-    f.commands['k9decertifyoffline'].fn(10, { 'SOMEONE', 'not-a-real-department' })
+    f.commands['k9decertify'].fn(10, { 'SOMEONE', 'not-a-real-department' })
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not-a-real-department', 'police, sheriff'), 'error'))
     t.isFalse(updateCalled)
 end)
@@ -2311,8 +2311,8 @@ end)
 t.test('RevokeCertificationOffline: a missing job argument is rejected with the usage message, matching the command\'s own arg-shape guard', function()
     local f = newFixture()
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
-    f.commands['k9decertifyoffline'].fn(10, { 'SOMEONE' }) -- args[2] missing
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.usage_decertify_offline'), 'error'))
+    f.commands['k9decertify'].fn(10, { 'SOMEONE' }) -- args[2] missing
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.usage_decertify'), 'error'))
 end)
 
 t.test('RevokeCertificationOffline: REGRESSION -- a throwing UPDATE degrades safely (reconciliation confirms still active), never propagates, notifies revoke_error, and leaves the cert untouched', function()
@@ -2329,7 +2329,7 @@ t.test('RevokeCertificationOffline: REGRESSION -- a throwing UPDATE degrades saf
     -- active -- the UPDATE genuinely never committed.
     f.mysql.scalar.await = function() return 5 end
 
-    local ok, err = pcall(f.commands['k9decertifyoffline'].fn, 10, { 'REVOKEE', 'police' })
+    local ok, err = pcall(f.commands['k9decertify'].fn, 10, { 'REVOKEE', 'police' })
     t.isTrue(ok, 'the command handler must never propagate a thrown DB error: ' .. tostring(err))
 
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_error'), 'error'))
@@ -2365,7 +2365,7 @@ t.test('RevokeCertificationOffline: FIX -- ends any active bite-hold/takedown/dr
     end
     f.mysql.scalar.await = function() return nil end
 
-    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+    f.commands['k9decertify'].fn(10, { 'REVOKEE', 'police' })
 
     t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 99)
     t.equals(f.effectEndCalls[#f.effectEndCalls], 99)
@@ -2379,7 +2379,7 @@ t.test('RevokeCertificationOffline: a genuinely offline target (never reconnects
     f.mysql.update.await = function() return 1 end
     f.mysql.scalar.await = function() return nil end
 
-    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+    f.commands['k9decertify'].fn(10, { 'REVOKEE', 'police' })
 
     t.equals(#f.effectEndCalls, 0)
 end)
@@ -2877,7 +2877,7 @@ end)
 -- succeeds -> online branch (unchanged); fails -> offline branch
 -- (GrantCertificationOffline/RevokeCertificationOffline, unchanged). A
 -- non-numeric args[1] is therefore no longer rejected outright -- it is a
--- CITIZENID, treated exactly like a direct /k9certifyoffline call would.
+-- CITIZENID, treated exactly like a direct citizenid call would.
 -- ======================================================================
 
 t.test('/k9certify command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to GrantCertificationOffline unchanged', function()
@@ -2915,7 +2915,11 @@ t.test('/k9certify command: a totally bare command (no args at all) shows the CO
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.commands['k9certify'].fn(1, {})
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certify'), 'error'))
-    t.isFalse(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certifyoffline'), 'error'), 'must not show the narrower offline-only usage for a bare command')
+    -- Since the offline aliases were deleted there is only ONE usage string
+    -- left for this command, and it names both shapes -- so the old "must
+    -- not show the NARROWER offline-only usage" assertion no longer has a
+    -- second string to distinguish. Assert the positive claim it protected.
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certify'), 'error'), 'a bare /k9certify must show the combined usage naming both target shapes')
 end)
 
 -- ======================================================================
@@ -3030,43 +3034,6 @@ t.test('MERGE: routing is NOT authorization -- an ineligible caller is still ref
     t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
-t.test('HIDDEN ALIAS: /k9recertify still works and still goes STRAIGHT to renew, so an explicit "renew or tell me why not" keeps its exact old messages', function()
-    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
-    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.registerPlayer(20, 'T1', { name = 'police', grade = { level = 1 } })
-    f.setPed(1, 1010, vec3(0, 0, 0))
-    f.setPed(20, 1020, vec3(0, 0, 0))
-
-    -- Deliberately NOT certified -- the alias must still report the renew
-    -- path's own "there is nothing to renew" message rather than silently
-    -- certifying them the way the merged /k9certify now would. That
-    -- difference IS the reason the alias keeps its own body.
-    local insertCalled = false
-    f.mysql.insert.await = function() insertCalled = true; return 1 end
-
-    f.commands['k9recertify'].fn(1, { '20' })
-
-    t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.target_not_actively_certified_needs_cert'), 'error'))
-    t.isFalse(insertCalled, 'the alias must never fall through to granting -- that is the merged command\'s job, not this one\'s')
-end)
-
-t.test('HIDDEN ALIAS: /k9certifyoffline still works standalone, byte-identical body, for the digits-only-citizenid escape hatch (§2\'s own disclosed ambiguity)', function()
-    local f = newFixture()
-    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-
-    local insertParams
-    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
-
-    -- A genuinely all-digit citizenid: tonumber() would succeed on this,
-    -- so /k9certify alone could never route it to the offline path --
-    -- /k9certifyoffline staying real and reachable is exactly what makes
-    -- this case reachable at all.
-    f.commands['k9certifyoffline'].fn(1, { '123456', 'police' })
-
-    t.equals(insertParams[1], '123456')
-    t.equals(insertParams[2], 'police')
-end)
-
 t.test('/k9decertify command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to RevokeCertificationOffline unchanged, args shifted by one for the optional reason', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
@@ -3096,7 +3063,7 @@ t.test('HIDDEN ALIAS: /k9decertifyoffline still works standalone, byte-identical
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.scalar.await = function() return nil end
 
-    f.commands['k9decertifyoffline'].fn(1, { 'REVOKEE', 'police' })
+    f.commands['k9decertify'].fn(1, { 'REVOKEE', 'police' })
 
     t.equals(updateParams[3], 'REVOKEE')
     t.equals(updateParams[4], 'police')
@@ -3785,14 +3752,14 @@ t.test('/k9settier command: a totally bare command shows the COMBINED usage stri
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_settier'), 'error'))
 end)
 
-t.test('HIDDEN ALIAS: /k9settieroffline still works standalone, byte-identical body', function()
+t.test('MERGED: /k9settier with a citizenid re-tiers an offline handler', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = nil } end
     local updateParams
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
 
-    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
 
     t.equals(updateParams[2], 'T1')
     t.equals(updateParams[3], 'police')
@@ -3802,29 +3769,43 @@ end)
 -- RenewCertification
 -- ----------------------------------------------------------------------
 
+-- REACHED VIA THE TABLET CALLBACK, not a command. /k9recertify was deleted
+-- in the 2026-09-02 merge, and the merged /k9certify deliberately does NOT
+-- route to renew while expiry is off (it falls through to grant, for the
+-- honest hint -- see the MERGE tests above). The tablet callback is the
+-- surviving entry point to RenewCertification's own gates, so these two
+-- FAIL-CLOSED tests go through it rather than through a command that would
+-- never reach the function they are about.
 t.test('RenewCertification: FAIL-CLOSED -- disabled by default (Config.Features.CertificationExpiry absent) is rejected outright', function()
-    local f = newFixture()
+    -- CommandTablet on so the callback is registered; expiry deliberately
+    -- left OFF, which is the thing under test.
+    local f = newFixture({ features = { CommandTablet = true } })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
-    f.commands['k9recertify'].fn(1, { '2' })
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_feature_disabled'), 'error'))
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](1, 'T1', 'police')
+    t.isFalse(result.ok, 'renewal must be refused outright while the expiry feature is off')
 end)
 
 t.test('RenewCertification: FAIL-CLOSED -- a granter who is not certifier-eligible is rejected even with the feature enabled', function()
-    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    local f = newFixture({ features = { CertificationExpiry = true, CommandTablet = true }, expiryDays = 90 })
     f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } })
-    f.commands['k9recertify'].fn(1, { '2' })
-    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](1, 'T1', 'police')
+    t.isFalse(result.ok, 'a caller who is not certifier-eligible must be refused')
 end)
 
+-- VIA THE TABLET CALLBACK, deliberately. The merged /k9certify routes an
+-- uncertified target to GRANT -- that IS the merge -- so it can no longer
+-- reach this renew-side refusal, and asserting it through the command would
+-- test the grant path while claiming to test renew.
 t.test('RenewCertification: FAIL-CLOSED -- a target with no active certification is rejected', function()
-    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    local f = newFixture({ features = { CertificationExpiry = true, CommandTablet = true }, expiryDays = 90 })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setPed(1, 1010, vec3(0, 0, 0))
     f.setPed(2, 1020, vec3(0, 0, 0))
-    f.commands['k9recertify'].fn(1, { '2' })
-    t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'))
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](1, 'T1', 'police')
+    t.isFalse(result.ok, 'renewing someone who holds no active certification must be refused')
 end)
 
 t.test('RenewCertification: EXPIRY -- full success path extends expires_at via DATE_ADD(NOW(), INTERVAL ? DAY), refreshes the cache, clears the warned/lapsed flags, fires the outbound event', function()
@@ -3841,7 +3822,7 @@ t.test('RenewCertification: EXPIRY -- full success path extends expires_at via D
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- ~90 days out, post-renewal
 
-    f.commands['k9recertify'].fn(10, { '20' })
+    f.commands['k9certify'].fn(10, { '20' })
 
     t.equals(updateParams[1], 90)
     t.equals(updateParams[2], 'TARGET')
@@ -3870,7 +3851,7 @@ t.test('RenewCertification: a thrown UPDATE reports renew_error, never a silent 
     f.env.RefreshCertificationCache('TARGET', 'police')
 
     f.mysql.update.await = function() error('simulated connection drop') end
-    local ok = pcall(f.commands['k9recertify'].fn, 10, { '20' })
+    local ok = pcall(f.commands['k9certify'].fn, 10, { '20' })
     t.isTrue(ok)
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_error'), 'error'))
 end)
@@ -3913,7 +3894,7 @@ t.test('RenewCertification: REGRESSION -- a zero-affected-rows UPDATE (no thrown
     -- row as genuinely gone.
     f.mysql.scalar.await = function() return nil end
 
-    local ok = pcall(f.commands['k9recertify'].fn, 10, { '20' })
+    local ok = pcall(f.commands['k9certify'].fn, 10, { '20' })
     t.isTrue(ok, 'must never propagate')
 
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the renewal did not land, never a bare success')
@@ -3938,21 +3919,14 @@ t.test('RenewCertification: REGRESSION -- a throwing UPDATE that ACTUALLY commit
     -- the client-side error.
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- ~90 days out, post-renewal
 
-    local ok, err = pcall(f.commands['k9recertify'].fn, 10, { '20' })
+    local ok, err = pcall(f.commands['k9certify'].fn, 10, { '20' })
     t.isTrue(ok, 'must not propagate: ' .. tostring(err))
 
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.renew_success_granter_detail', '90'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
     t.isTrue(notifiedExactly(f, 20, localeWithPendingCertKeys('certifications.renew_success_target_detail', '90'), 'success'))
 end)
 
-t.test('/k9recertify command: a totally bare command (no args at all) shows the COMBINED usage string (COMMAND_CONSOLIDATION_SPEC.md §2/§5 item 8)', function()
-    local f = newFixture()
-    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.commands['k9recertify'].fn(1, {})
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_recertify'), 'error'))
-end)
-
-t.test('/k9recertify command: a non-numeric args[1] is treated as an offline citizenid attempt, not rejected -- routes to RenewCertificationOffline unchanged', function()
+t.test('MERGED: /k9certify with a citizenid renews an offline handler', function()
     local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 } end
@@ -3960,20 +3934,7 @@ t.test('/k9recertify command: a non-numeric args[1] is treated as an offline cit
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
 
-    f.commands['k9recertify'].fn(1, { 'OFFLINE_CIT', 'police' })
-
-    t.isTrue(updateCalled)
-end)
-
-t.test('HIDDEN ALIAS: /k9recertifyoffline still works standalone, byte-identical body', function()
-    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
-    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
-    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 } end
-
-    local updateCalled = false
-    f.mysql.update.await = function() updateCalled = true; return 1 end
-
-    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'T1', 'police' })
 
     t.isTrue(updateCalled)
 end)
@@ -4322,7 +4283,7 @@ t.test('RevokeSpecializationOffline: full offline success path -- UPDATE fires, 
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.query.await = function() return {} end
 
-    f.commands['k9unspecializeoffline'].fn(10, { 'TARGET', 'police', 'narcotics' })
+    f.commands['k9unspecialize'].fn(10, { 'TARGET', 'police', 'narcotics' })
 
     t.equals(updateParams[1], 'REVOKER')
     t.equals(updateParams[2], 'TARGET')
@@ -4343,7 +4304,7 @@ t.test('RevokeSpecializationOffline: SECURITY -- refuses outright when the "offl
     f.registerPlayer(20, 'ACTUALLY-ONLINE', { name = 'police', grade = { level = 1 } })
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
-    f.commands['k9unspecializeoffline'].fn(10, { 'ACTUALLY-ONLINE', 'police', 'narcotics' })
+    f.commands['k9unspecialize'].fn(10, { 'ACTUALLY-ONLINE', 'police', 'narcotics' })
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_target_online_use_online_command', 20), 'error'))
     t.isFalse(updateCalled)
 end)
@@ -4351,7 +4312,7 @@ end)
 t.test('RevokeSpecializationOffline: a typo\'d/unconfigured department is rejected outright', function()
     local f = newFixture()
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
-    f.commands['k9unspecializeoffline'].fn(10, { 'SOMEONE', 'not-a-real-department', 'narcotics' })
+    f.commands['k9unspecialize'].fn(10, { 'SOMEONE', 'not-a-real-department', 'narcotics' })
     t.isTrue(notifiedExactly(f, 10, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not-a-real-department', 'police, sheriff'), 'error'))
 end)
 
@@ -4382,25 +4343,25 @@ t.test('/k9unspecialize command: a totally bare command shows the COMBINED usage
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_unspecialize'), 'error'))
 end)
 
-t.test('HIDDEN ALIAS: /k9unspecializeoffline still works standalone, byte-identical body', function()
+t.test('MERGED: /k9unspecialize with a citizenid revokes from an offline handler', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     local updateParams
     f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
     f.mysql.query.await = function() return {} end
 
-    f.commands['k9unspecializeoffline'].fn(1, { 'T1', 'police', 'narcotics' })
+    f.commands['k9unspecialize'].fn(1, { 'T1', 'police', 'narcotics' })
 
     t.equals(updateParams[2], 'T1')
     t.equals(updateParams[3], 'police')
     t.equals(updateParams[4], 'narcotics')
 end)
 
-t.test('/k9unspecializeoffline command: a missing specialization argument is rejected with the usage message', function()
+t.test('/k9unspecialize (offline shape): a missing specialization argument is rejected with the usage message', function()
     local f = newFixture()
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
-    f.commands['k9unspecializeoffline'].fn(10, { 'SOMEONE', 'police' }) -- args[3] missing
-    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.usage_unspecialize_offline'), 'error'))
+    f.commands['k9unspecialize'].fn(10, { 'SOMEONE', 'police' }) -- args[3] missing
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.usage_unspecialize'), 'error'))
 end)
 
 -- ----------------------------------------------------------------------
@@ -4464,7 +4425,7 @@ t.test('RevokeCertificationOffline: CASCADE -- revoking an offline citizenid\'s 
     f.mysql.query.await = function() return { { specialization = 'explosives' } } end
     f.mysql.scalar.await = function() return nil end
 
-    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+    f.commands['k9decertify'].fn(10, { 'REVOKEE', 'police' })
 
     t.isNotNil(specUpdateParams, 'the specialization cascade UPDATE must have fired for the offline path too')
     t.equals(specUpdateParams[1], 'REVOKER')
@@ -4596,7 +4557,7 @@ t.test('RenewCertification: clears the warned/lapsed session flags so a genuinel
     t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_lapsed_notice'), 'error'), 'sanity: lapsed notice sent once')
 
     f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- renewed, far future
-    f.commands['k9recertify'].fn(10, { '20' })
+    f.commands['k9certify'].fn(10, { '20' })
 
     local lapsedCountAfterRenewal = 0
     for _, e in ipairs(f.notifyLog) do
@@ -4767,7 +4728,7 @@ end)
 -- that underlying function's own return value.
 --
 -- LOCALE KEYS: this pass introduced seven new certifications.* keys
--- (usage_settieroffline/usage_recertifyoffline/usage_certifyoffline, the
+-- (the merged usage strings, which name both target shapes -- the
 -- two "target is actually online, use the online command instead"
 -- security-guard messages, and certify_offline_requires_online_model_check)
 -- that did not exist in locales/en.json when this pass's server-side code
@@ -5574,62 +5535,66 @@ t.test('tabletCertify: OFFLINE -- an already-certified target is a distinguishab
     t.isFalse(insertCalled)
 end)
 
-t.test('/k9certifyoffline command: an unconfigured department is rejected, never reaches the INSERT', function()
+t.test('/k9certify (offline shape): an unconfigured department is rejected, never reaches the INSERT', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
 
     local insertCalled = false
     f.mysql.insert.await = function() insertCalled = true; return 1 end
 
-    f.commands['k9certifyoffline'].fn(1, { 'T1', 'not_a_real_department' })
+    f.commands['k9certify'].fn(1, { 'T1', 'not_a_real_department' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.invalid_department_hint', 'not_a_real_department', 'police, sheriff'), 'error'))
     t.isFalse(insertCalled)
 end)
 
-t.test('/k9settieroffline command: a non-certifier is rejected before any lookup', function()
+t.test('/k9settier (offline shape): a non-certifier is rejected before any lookup', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 0 } })
 
-    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.not_authorized_to_certify_hint'), 'error'))
 end)
 
-t.test('/k9recertifyoffline command: disabled-by-default expiry feature is rejected before any citizenid/job validation', function()
-    local f = newFixture() -- Config.Features.CertificationExpiry absent
+-- VIA THE TABLET CALLBACK, same reasoning as the RenewCertification
+-- FAIL-CLOSED test above: with expiry off the merged /k9certify falls
+-- through to GRANT deliberately (see the MERGE tests), so the renew path's
+-- own "this feature is off" refusal is reachable only here.
+t.test('RenewCertificationOffline: disabled-by-default expiry feature is rejected before any citizenid/job validation', function()
+    local f = newFixture({ features = { CommandTablet = true } }) -- CertificationExpiry absent
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
 
-    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+    local result = f.callbacks['qbx_k9unit:server:tabletRenewCertification'](1, 'T1', 'police')
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_feature_disabled'), 'error'))
+    t.isFalse(result.ok, 'renewal must be refused while the expiry feature is off')
 end)
 
-t.test('/k9settieroffline command: a missing job argument shows the usage message', function()
+t.test('/k9settier (offline shape): a missing job argument shows the usage message', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
 
-    f.commands['k9settieroffline'].fn(1, { 'T1' })
+    f.commands['k9settier'].fn(1, { 'T1' })
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_settieroffline'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_settier'), 'error'))
 end)
 
-t.test('/k9recertifyoffline command: a missing job argument shows the usage message (feature enabled, so the usage check itself is reached)', function()
+t.test('/k9certify (offline shape): a missing job argument shows the usage message (feature enabled, so the usage check itself is reached)', function()
     local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
 
-    f.commands['k9recertifyoffline'].fn(1, { 'T1' })
+    f.commands['k9certify'].fn(1, { 'T1' })
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_recertifyoffline'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certify'), 'error'))
 end)
 
-t.test('/k9certifyoffline command: a missing job argument shows the usage message', function()
+t.test('/k9certify (offline shape): a missing job argument shows the usage message', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
 
-    f.commands['k9certifyoffline'].fn(1, { 'T1' })
+    f.commands['k9certify'].fn(1, { 'T1' })
 
-    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certifyoffline'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_certify'), 'error'))
 end)
 
 t.test('SetCertificationTierOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9settier -- closes the identical proximity-check bypass RevokeCertificationOffline already guards against', function()
@@ -5640,7 +5605,7 @@ t.test('SetCertificationTierOffline SECURITY: an "offline" citizenid who is actu
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
 
-    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
 
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_target_online_use_online_action', 99), 'error'))
     t.isFalse(updateCalled)
@@ -5666,7 +5631,7 @@ t.test('SetCertificationTierOffline: REGRESSION -- a zero-affected-rows UPDATE (
     -- nothing, and no error is thrown for that.
     f.mysql.update.await = function() return 0 end
 
-    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the tier change did not land, never a bare success')
     t.equals(#f.outboundEvents, 0, 'no outbound certificationTierChanged event for a tier change that did not actually land')
@@ -5682,7 +5647,7 @@ t.test('SetCertificationTierOffline: REGRESSION -- a throwing UPDATE that genuin
     -- The reconciliation read (QueryCertificationRecord) still sees the
     -- OLD tier -- the UPDATE genuinely never committed.
 
-    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
 
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_error'), 'error'))
 end)
@@ -5695,7 +5660,7 @@ t.test('SetCertificationTierOffline: REGRESSION -- a throwing UPDATE that ACTUAL
 
     f.mysql.update.await = function() error('simulated ack lost after a real commit') end
 
-    f.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_change_error'), 'error'), 'sanity: the reconciliation read still sees the OLD tier this pass, so this run must still report a genuine failure')
 
     -- Re-run with the entry-gate read seeing the OLD tier (so the "already
@@ -5713,19 +5678,25 @@ t.test('SetCertificationTierOffline: REGRESSION -- a throwing UPDATE that ACTUAL
     end
     f2.mysql.update.await = function() error('simulated ack lost after a real commit') end
 
-    f2.commands['k9settieroffline'].fn(1, { 'T1', 'police', 'senior' })
+    f2.commands['k9settier'].fn(1, { 'T1', 'police', 'senior' })
     t.isTrue(notifiedExactly(f2, 1, Sandbox.locale('certifications.tier_change_success_granter', 'senior'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
 end)
 
-t.test('RenewCertificationOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9recertify', function()
+t.test('RenewCertificationOffline SECURITY: an "offline" citizenid who is actually online right now is refused, pointing at /k9certify', function()
     local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.registerPlayer(99, 'T1', { name = 'police', grade = { level = 1 } })
 
+    -- An existing record, so the merged /k9certify's router sends this to
+    -- RENEW rather than GRANT -- otherwise this test would exercise
+    -- GrantCertificationOffline's own (identical, separately tested) guard
+    -- while claiming to test the renew one.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000100 } end
+
     local updateCalled = false
     f.mysql.update.await = function() updateCalled = true; return 1 end
 
-    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'T1', 'police' })
 
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_target_online_use_online_action', 99), 'error'))
     t.isFalse(updateCalled)
@@ -5751,7 +5722,7 @@ t.test('RenewCertificationOffline: REGRESSION -- a zero-affected-rows UPDATE (no
     -- nothing, and no error is thrown for that.
     f.mysql.update.await = function() return 0 end
 
-    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'T1', 'police' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.target_not_actively_certified_needs_cert'), 'error'), 'the granter must be told the renewal did not land, never a bare success')
     t.equals(#f.outboundEvents, 0, 'no outbound certificationRenewed event for a renewal that did not actually land')
@@ -5764,12 +5735,15 @@ t.test('RenewCertificationOffline: REGRESSION -- a throwing UPDATE that ACTUALLY
     local singleAwaitCallCount = 0
     f.mysql.single.await = function()
         singleAwaitCallCount = singleAwaitCallCount + 1
-        if singleAwaitCallCount == 1 then return { tier = 'certified', expires_at_unix = 1700000100 } end -- entry-gate read (near-expiry baseline)
+        -- Call #1 is the merged /k9certify router's own record lookup
+        -- (ShouldRenewOfflineTarget); call #2 is RenewCertificationOffline's
+        -- entry-gate read. Both want the near-expiry baseline.
+        if singleAwaitCallCount <= 2 then return { tier = 'certified', expires_at_unix = 1700000100 } end
         return { tier = 'certified', expires_at_unix = 1707776000 } -- post-throw reconciliation + RefreshCertificationCache reads (extended)
     end
     f.mysql.update.await = function() error('simulated ack lost after a real commit') end
 
-    f.commands['k9recertifyoffline'].fn(1, { 'T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'T1', 'police' })
 
     t.isTrue(notifiedExactly(f, 1, localeWithPendingCertKeys('certifications.renew_success_granter_detail', '90'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
 end)
@@ -5782,7 +5756,7 @@ t.test('GrantCertificationOffline SECURITY: an "offline" citizenid who is actual
     local insertCalled = false
     f.mysql.insert.await = function() insertCalled = true; return 1 end
 
-    f.commands['k9certifyoffline'].fn(1, { 'T1', 'police' })
+    f.commands['k9certify'].fn(1, { 'T1', 'police' })
 
     t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_online_use_certify_command', 99), 'error'))
     t.isFalse(insertCalled)

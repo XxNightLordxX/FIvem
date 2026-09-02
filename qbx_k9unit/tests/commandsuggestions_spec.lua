@@ -119,11 +119,6 @@ local HIDDEN_ALIAS_COMMANDS = {
     -- difference.
     k9debug = true,
     -- family #1: audit (5 -> 1, 'k9audit') -- server/admin.lua
-    k9auditcert = true,
-    k9auditpartner = true,
-    k9auditsearch = true,
-    k9auditxp = true,
-    k9auditdept = true,
     -- family #2: dog record (2 -> 1, 'k9dog') -- server/dogcharacter.lua
     k9setdog = true,
     k9removedog = true,
@@ -147,16 +142,11 @@ local HIDDEN_ALIAS_COMMANDS = {
     -- family #8: online/offline certification pairs (10 -> 5) --
     -- server/certifications.lua. k9certify/k9decertify/k9settier/
     -- k9unspecialize stays its own canonical name (unchanged); k9recertify
+    -- was DELETED in the 2026-09-02 merge, not aliased --
     -- joined this table on 2026-09-02 when it merged into /k9certify
     -- and are NOT in this table -- only their *offline counterparts fold
     -- away. k9specialize has no offline counterpart at all and is
     -- untouched.
-    k9recertify = true, -- merged into /k9certify 2026-09-02 (see the registry spec)
-    k9certifyoffline = true,
-    k9decertifyoffline = true,
-    k9settieroffline = true,
-    k9recertifyoffline = true,
-    k9unspecializeoffline = true,
     -- family #9 (Sensory/vision) -- REVERTED (owner reversal, this pass,
     -- coder-architect): a prior pass had folded
     -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision into a
@@ -488,7 +478,6 @@ t.test('onResourceStart(qbx_k9unit): registers a chat:addSuggestion for every CO
     t.isNil(f.findSuggestion('k9certifyoffline'), 'k9certifyoffline is a hidden alias -- it must never get its own chat:addSuggestion')
     t.isNil(f.findSuggestion('k9decertifyoffline'), 'k9decertifyoffline is a hidden alias')
     t.isNil(f.findSuggestion('k9settieroffline'), 'k9settieroffline is a hidden alias')
-    t.isNil(f.findSuggestion('k9recertifyoffline'), 'k9recertifyoffline is a hidden alias')
     t.isNil(f.findSuggestion('k9unspecializeoffline'), 'k9unspecializeoffline is a hidden alias')
     t.isNil(f.findSuggestion('k9grantpermission'), 'k9grantpermission is a hidden alias')
     t.isNil(f.findSuggestion('k9revokepermission'), 'k9revokepermission is a hidden alias')

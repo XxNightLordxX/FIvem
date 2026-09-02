@@ -2637,7 +2637,7 @@ do
         local lowRankSrc = f.registerPlayer(1004, 'STEP1-CERTIFY', { name = 'police', grade = { level = 0 } }) -- far below certifierGrade 4
         f.env.GrantPermission(granterSrc, 'STEP1-CERTIFY', 'k9.certify')
         f.advanceTime(2000)
-        f.commands.k9decertifyoffline(lowRankSrc, { 'SOMETARGET', 'police' })
+        f.commands.k9decertify(lowRankSrc, { 'SOMETARGET', 'police' })
         local last = f.notifyLog[#f.notifyLog]
         t.isNotNil(last)
         t.notContains(last.message, 'not authorized', 'a k9.certify grant must let this officer past the eligibility gate (the actual revoke result -- "not actively certified" -- is a separate, expected outcome)')
@@ -2648,7 +2648,7 @@ do
         local lowRankSrc = f.registerPlayer(1006, 'STEP1-AUDIT', { name = 'police', grade = { level = 0 } }) -- far below auditGrade 4
         f.env.GrantPermission(granterSrc, 'STEP1-AUDIT', 'k9.audit')
         f.advanceTime(2000)
-        f.commands.k9auditcert(lowRankSrc, { 'ANYCITIZEN' })
+        f.commands.k9audit(lowRankSrc, { 'cert', 'ANYCITIZEN' })
         t.isFalse(lastPrintContains(f, 'denied'), 'a k9.audit grant must let this officer past the authorization gate')
     end)
 
@@ -2659,13 +2659,13 @@ do
 
     t.test('resolution order STEP 3: no grant, not high command, meets the legacy rank gate -- still allows (nothing that worked on rank stops working)', function()
         local src = f.registerPlayer(1008, 'STEP3-RANK', { name = 'police', grade = { level = 4 } }) -- meets certifierGrade/auditGrade exactly
-        f.commands.k9auditcert(src, { 'ANYCITIZEN' })
+        f.commands.k9audit(src, { 'cert', 'ANYCITIZEN' })
         t.isFalse(lastPrintContains(f, 'denied'))
     end)
 
     t.test('resolution order STEP 4: no grant, not high command, below every legacy threshold -- denied', function()
         local src = f.registerPlayer(1009, 'STEP4-NOBODY', { name = 'police', grade = { level = 0 } })
-        f.commands.k9auditcert(src, { 'ANYCITIZEN' })
+        f.commands.k9audit(src, { 'cert', 'ANYCITIZEN' })
         t.isTrue(lastPrintContains(f, 'denied'))
     end)
 
@@ -2681,7 +2681,7 @@ do
         t.equals(stillHasAccess, 'rank_or_high_command', 'the caller must be told this revoke did not actually remove access')
 
         -- Confirm it end-to-end against the REAL IsEligibleCertifier, not just the reconciliation's own verdict.
-        f.commands.k9decertifyoffline(officerSrc, { 'SOMEOTHERTARGET', 'police' })
+        f.commands.k9decertify(officerSrc, { 'SOMEOTHERTARGET', 'police' })
         local last = f.notifyLog[#f.notifyLog]
         t.notContains(last.message, 'not authorized', 'the officer must still pass IsEligibleCertifier via rank alone, exactly as config.lua documents')
     end)

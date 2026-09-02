@@ -2649,7 +2649,7 @@ local function GrantCertificationOffline(granterSrc, citizenid, jobName)
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then
-        NotifyPlayer(granterSrc, locale('certifications.usage_certifyoffline'), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.usage_certify'), 'error')
         return false, 'invalid_target'
     end
 
@@ -3162,7 +3162,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(granterSrc, locale('certifications.usage_decertify_offline'), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.usage_decertify'), 'error')
         return false, 'invalid_target'
     end
 
@@ -3736,7 +3736,7 @@ local function SetCertificationTierOffline(granterSrc, citizenid, jobName, newTi
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then
-        NotifyPlayer(granterSrc, locale('certifications.usage_settieroffline'), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.usage_settier'), 'error')
         return false, 'invalid_target'
     end
 
@@ -4115,7 +4115,7 @@ local function RenewCertificationOffline(granterSrc, citizenid, jobName)
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then
-        NotifyPlayer(granterSrc, locale('certifications.usage_recertifyoffline'), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.usage_certify'), 'error')
         return false, 'invalid_target'
     end
 
@@ -4643,7 +4643,7 @@ local function RevokeSpecializationOffline(granterSrc, citizenid, job, specializ
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == ''
         or type(specializationKey) ~= 'string' or specializationKey == '' then
-        NotifyPlayer(granterSrc, locale('certifications.usage_unspecialize_offline'), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.usage_unspecialize'), 'error')
         return false, 'invalid_args'
     end
 
@@ -5447,6 +5447,46 @@ end)
 ---      "they are already certified" hint GrantCertification gives -- so an
 ---      already-certified target on a server with expiry off deliberately
 ---      still falls through to the grant path.
+--- Decide which SHAPE a certification-family target argument is: a live
+--- server id, or a citizenid to look up in the database.
+---
+--- THE RULE IS DELIBERATELY SIMPLE AND UNCONDITIONAL: all digits means a
+--- server id, anything else means a citizenid. It never consults who is
+--- actually connected, so the same typed argument always takes the same
+--- path and always produces the same error message -- an operator who
+--- types the server id of someone who just disconnected gets the plain
+--- "that target must be online" answer, not a confusing report about a
+--- citizenid they never typed.
+---
+--- THE ALL-DIGIT CITIZENID CASE. A citizenid made entirely of digits is
+--- legal (IsValidCitizenId accepts any non-empty string up to 50 chars), and
+--- this rule cannot reach one from chat -- it would always be read as a
+--- server id. That is not a gap: the TABLET is the unambiguous path for it.
+--- Every tablet certification callback (tabletSetCertificationTier,
+--- tabletRenewCertification, and the certify/revoke pair) takes
+--- `targetCitizenid` and `departmentKey` as SEPARATE, explicitly-typed
+--- arguments, so no digits-versus-id guess happens there at all.
+---
+--- This is why the five `*offline` alias commands could be deleted
+--- (2026-09-02, at the owner's request) without losing reach: they existed
+--- as the chat-side escape hatch for exactly this case, and the tablet
+--- covers it properly.
+---
+--- ROUTING ONLY, NEVER AN AUTHORIZATION DECISION -- the same guarantee
+--- ShouldRenewOnlineTarget makes just below, and for the same reason: both
+--- branches this routes between re-run the FULL eligibility, cooldown,
+--- self-certify, proximity and department checks from the caller's own live
+--- state. Nothing here can grant anyone anything.
+--- @param arg string
+--- @return number? serverId
+--- @return string? citizenid
+local function ResolveCertificationTarget(arg)
+    if type(arg) ~= 'string' or arg == '' then return nil, nil end
+    local asNumber = tonumber(arg)
+    if asNumber then return asNumber, nil end
+    return nil, arg
+end
+
 --- @param targetServerId number
 --- @return boolean
 local function ShouldRenewOnlineTarget(targetServerId)
@@ -5508,7 +5548,7 @@ RegisterCommand('k9certify', function(source, args)
         if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    local targetServerId = tonumber(args[1])
+    local targetServerId, citizenid = ResolveCertificationTarget(args[1])
     if targetServerId then
         if ShouldRenewOnlineTarget(targetServerId) then
             RenewCertification(source, targetServerId)
@@ -5516,25 +5556,14 @@ RegisterCommand('k9certify', function(source, args)
             GrantCertification(source, targetServerId)
         end
     else
-        if ShouldRenewOfflineTarget(args[1], args[2]) then
-            RenewCertificationOffline(source, args[1], args[2])
+        if ShouldRenewOfflineTarget(citizenid, args[2]) then
+            RenewCertificationOffline(source, citizenid, args[2])
         else
-            GrantCertificationOffline(source, args[1], args[2])
+            GrantCertificationOffline(source, citizenid, args[2])
         end
     end
 end, false)
 
--- HIDDEN ALIAS (see block header above) -- body UNCHANGED from before this
--- merge.
-RegisterCommand('k9certifyoffline', function(source, args)
-    local citizenid = args[1]
-    local job = args[2]
-    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(source, locale('certifications.usage_certifyoffline'), 'error')
-        return
-    end
-    GrantCertificationOffline(source, citizenid, job)
-end, false)
 
 RegisterCommand('k9decertify', function(source, args)
     -- DISCOVERABILITY (§4): same "show the combined usage, not the narrower
@@ -5544,7 +5573,7 @@ RegisterCommand('k9decertify', function(source, args)
         if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    local targetServerId = tonumber(args[1])
+    local targetServerId, citizenid = ResolveCertificationTarget(args[1])
     if targetServerId then
         -- CERTIFICATION DEPTH (this pass, Part A §2): args[2], an optional
         -- reason code — nil if omitted, exactly like before this pass.
@@ -5552,23 +5581,10 @@ RegisterCommand('k9decertify', function(source, args)
     else
         -- Offline shape shifts by one position (§2's own "argument-shape
         -- note"): citizenid, job, [reason] -- args[3], not args[2].
-        RevokeCertificationOffline(source, args[1], args[2], args[3])
+        RevokeCertificationOffline(source, citizenid, args[2], args[3])
     end
 end, false)
 
--- HIDDEN ALIAS (see block header above) -- body UNCHANGED from before this
--- merge.
-RegisterCommand('k9decertifyoffline', function(source, args)
-    local citizenid = args[1]
-    local job = args[2]
-    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(source, locale('certifications.usage_decertify_offline'), 'error')
-        return
-    end
-    -- CERTIFICATION DEPTH (this pass, Part A §2): args[3], an optional
-    -- reason code — nil if omitted, exactly like before this pass.
-    RevokeCertificationOffline(source, citizenid, job, args[3])
-end, false)
 
 -- ======================================================================
 -- CERTIFICATION DEPTH (this pass) — commands for tier/renewal/
@@ -5606,71 +5622,82 @@ RegisterCommand('k9settier', function(source, args)
         if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    local targetServerId = tonumber(args[1])
+    local targetServerId, citizenid = ResolveCertificationTarget(args[1])
     if targetServerId then
         SetCertificationTier(source, targetServerId, args[2])
     else
         -- Offline shape shifts by one position: citizenid, job, tier --
         -- args[3], not args[2].
-        SetCertificationTierOffline(source, args[1], args[2], args[3])
+        SetCertificationTierOffline(source, citizenid, args[2], args[3])
     end
 end, false)
 
--- HIDDEN ALIAS (see k9certify's own block header above) -- body UNCHANGED
--- from before this merge. Added alongside the tablet path
--- (SetCertificationTierForTablet) so the same offline-capable re-tiering
--- ability is reachable without the tablet too.
-RegisterCommand('k9settieroffline', function(source, args)
-    local citizenid = args[1]
-    local job = args[2]
-    local newTier = args[3]
-    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(source, locale('certifications.usage_settieroffline'), 'error')
-        return
-    end
-    SetCertificationTierOffline(source, citizenid, job, newTier)
-end, false)
 
 -- COMMAND CONSOLIDATION (§2/§5 item 8) -- same dispatcher shape as
 -- k9certify above.
--- HIDDEN ALIAS (2026-09-02) -- merged into /k9certify, which now routes to
--- renew or grant on its own. Body deliberately UNCHANGED from before the
--- merge: this still goes straight to the renew path, so anyone who
--- explicitly means "renew, and tell me plainly if there is nothing to
--- renew" keeps exactly the behaviour and the error messages they had.
-RegisterCommand('k9recertify', function(source, args)
+
+
+-- COMMAND CONSOLIDATION -- /k9specialize accepts the SAME two target
+-- shapes as every other command in this family (2026-09-02, at the owner's
+-- request): a live server id, or a citizenid + job.
+--
+-- WHAT IS AND IS NOT MERGED HERE, PLAINLY. The COMMAND SURFACE is merged --
+-- you type the same shape you type for /k9certify, /k9settier and
+-- /k9unspecialize, and you no longer have to know which shape this one
+-- wants. The GRANT ITSELF still requires the target to be CONNECTED: a
+-- citizenid is resolved to that person's live server id first, and refused
+-- by name if they are not connected.
+--
+-- WHY THERE IS NO OFFLINE GRANT PATH TO MERGE. GrantSpecialization's two
+-- gates -- `not cached.expired` and TierCapabilityPermits -- both read the
+-- ONLINE-ONLY Certifications/tier cache, which is evicted on playerDropped.
+-- TierCapabilityPermits is cache-based by its own design and cannot resolve
+-- a real tier for a disconnected citizenid at all, so an offline grant path
+-- would FAIL OPEN: it would hand out specializations regardless of the tier
+-- an operator actually configured for that person. Revoking has no such
+-- problem, which is why /k9unspecialize IS fully merged, offline included --
+-- taking a capability away can safely fail closed, handing one out cannot.
+-- So this refuses, clearly and by name, rather than shipping a materially
+-- weaker grant. See GrantSpecializationForTablet's own header.
+RegisterCommand('k9specialize', function(source, args)
     if args[1] == nil or args[1] == '' then
-        local usage = locale('certifications.usage_recertify')
+        local usage = locale('certifications.usage_specialize')
         if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    local targetServerId = tonumber(args[1])
-    if targetServerId then
-        RenewCertification(source, targetServerId)
-    else
-        RenewCertificationOffline(source, args[1], args[2])
-    end
-end, false)
 
--- HIDDEN ALIAS (see k9certify's own block header above) -- body UNCHANGED
--- from before this merge.
-RegisterCommand('k9recertifyoffline', function(source, args)
-    local citizenid = args[1]
-    local job = args[2]
-    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(source, locale('certifications.usage_recertifyoffline'), 'error')
+    local targetServerId, citizenid = ResolveCertificationTarget(args[1])
+    if targetServerId then
+        GrantSpecialization(source, targetServerId, args[2])
         return
     end
-    RenewCertificationOffline(source, citizenid, job)
-end, false)
 
-RegisterCommand('k9specialize', function(source, args)
-    local targetServerId = tonumber(args[1])
-    if not targetServerId then
+    -- Citizenid shape: citizenid, job, specialization -- args[3], not
+    -- args[2], exactly matching /k9unspecialize's own offline shape so the
+    -- two commands never want the arguments in a different order.
+    local jobName, specializationKey = args[2], args[3]
+    if type(jobName) ~= 'string' or jobName == '' or type(specializationKey) ~= 'string' or specializationKey == '' then
         NotifyPlayer(source, locale('certifications.usage_specialize'), 'error')
         return
     end
-    GrantSpecialization(source, targetServerId, args[2])
+
+    local resolvedOk, onlineTarget = pcall(function() return exports.qbx_core:GetPlayerByCitizenId(citizenid) end)
+    local onlineSrc = resolvedOk and onlineTarget and onlineTarget.PlayerData and onlineTarget.PlayerData.source
+    if not onlineSrc then
+        NotifyPlayer(source, locale('certifications.specialization_target_must_be_online_no_offline'), 'error')
+        return
+    end
+
+    -- Same department check GrantSpecializationForTablet makes for the same
+    -- reason: the caller named a department, so a mismatch is a typo worth
+    -- reporting, never something to silently grant past.
+    local liveJob = onlineTarget.PlayerData.job
+    if not liveJob or liveJob.name ~= jobName then
+        NotifyPlayer(source, locale('certifications.invalid_department_hint', tostring(jobName), ConfiguredDepartmentsList()), 'error')
+        return
+    end
+
+    GrantSpecialization(source, onlineSrc, specializationKey)
 end, false)
 
 -- COMMAND CONSOLIDATION (§2/§5 item 8) -- same dispatcher shape as
@@ -5684,29 +5711,16 @@ RegisterCommand('k9unspecialize', function(source, args)
         if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
         return
     end
-    local targetServerId = tonumber(args[1])
+    local targetServerId, citizenid = ResolveCertificationTarget(args[1])
     if targetServerId then
         RevokeSpecialization(source, targetServerId, args[2])
     else
         -- Offline shape shifts by one position: citizenid, job,
         -- specialization -- args[3], not args[2].
-        RevokeSpecializationOffline(source, args[1], args[2], args[3])
+        RevokeSpecializationOffline(source, citizenid, args[2], args[3])
     end
 end, false)
 
--- HIDDEN ALIAS (see k9certify's own block header above) -- body UNCHANGED
--- from before this merge.
-RegisterCommand('k9unspecializeoffline', function(source, args)
-    local citizenid = args[1]
-    local job = args[2]
-    local specializationKey = args[3]
-    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == ''
-        or type(specializationKey) ~= 'string' or specializationKey == '' then
-        NotifyPlayer(source, locale('certifications.usage_unspecialize_offline'), 'error')
-        return
-    end
-    RevokeSpecializationOffline(source, citizenid, job, specializationKey)
-end, false)
 
 --- CERTIFICATION DEPTH (this pass, Part A §9) — see header "EXPIRY" item
 --- 2 for the full design. Sends AT MOST one warn-ahead notice and one

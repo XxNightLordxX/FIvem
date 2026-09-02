@@ -163,11 +163,6 @@ local CLIENT_LUA_FILES = LuaFilesIn('../client')
 -- table for why.
 local HIDDEN_ALIAS_COMMANDS = {
     -- family #1: audit (5 -> 1, 'k9audit') -- server/admin.lua
-    k9auditcert = 'audit',
-    k9auditpartner = 'audit',
-    k9auditsearch = 'audit',
-    k9auditxp = 'audit',
-    k9auditdept = 'audit',
     -- family #2: dog record (2 -> 1, 'k9dog') -- server/dogcharacter.lua.
     -- Unlike audit's five originals, k9setdog/k9removedog have NEVER had a
     -- COMMAND_REFERENCE entry at all (a pre-existing, pre-this-pass gap,
@@ -217,16 +212,10 @@ local HIDDEN_ALIAS_COMMANDS = {
     -- *offline counterparts fold away. Same "landed in the same change,
     -- not deferred" shape as permissions above -- see
     -- COMMANDS_TAB_CLEANUP_COMPLETE.cert_pairs below.
-    k9certifyoffline = 'cert_pairs',
     -- family: certify (2 -> 1, 'k9certify') -- merged 2026-09-02 at the
     -- owner's request. /k9certify now decides between granting and renewing
     -- on its own, so /k9recertify no longer needs its own documented entry;
     -- it keeps working undocumented so no keybind or muscle memory breaks.
-    k9recertify = 'certify_merge',
-    k9decertifyoffline = 'cert_pairs',
-    k9settieroffline = 'cert_pairs',
-    k9recertifyoffline = 'cert_pairs',
-    k9unspecializeoffline = 'cert_pairs',
     -- family #9 (Sensory/vision) -- REVERTED (owner reversal, this pass,
     -- coder-architect): a prior pass folded
     -- qbx_k9unit:toggleThermalVision/qbx_k9unit:toggleNightVision into a

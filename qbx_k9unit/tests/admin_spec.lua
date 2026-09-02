@@ -276,14 +276,14 @@ for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
     handler('qbx_k9unit')
 end
 
-t.isNotNil(registeredCommands.k9auditcert, 'onResourceStart must register k9auditcert')
-t.isNotNil(registeredCommands.k9auditpartner, 'onResourceStart must register k9auditpartner')
-t.isNotNil(registeredCommands.k9auditsearch, 'onResourceStart must register k9auditsearch')
+-- The five single-purpose audit names were deleted in the 2026-09-02
+-- merge; /k9audit is now the only registration, dispatching all five
+-- subcommands into the same Handle* functions.
+t.isNotNil(registeredCommands.k9audit, 'onResourceStart must register the merged k9audit dispatcher')
+
 -- The original 28 cases never asserted these two -- added here (not a
 -- behavior change to any existing case) since this pass adds real coverage
 -- of both commands below.
-t.isNotNil(registeredCommands.k9auditxp, 'onResourceStart must register k9auditxp')
-t.isNotNil(registeredCommands.k9auditdept, 'onResourceStart must register k9auditdept')
 
 -- CALLBACK SURFACE (this pass) -- registered inside the SAME onResourceStart
 -- block, behind the SAME Config.Features.AdminAuditCommands gate, as the
@@ -333,7 +333,7 @@ end
 local function clampLimitViaCommand(limitArg)
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { 'ABCD1234', limitArg })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234', limitArg })
     t.equals(#capturedQueries, 1, 'a valid citizenid + authorized source must reach exactly one query')
     local limitStr = capturedQueries[1].sql:match('LIMIT (%d+)')
     t.isNotNil(limitStr, 'query SQL must contain a plain integer LIMIT: ' .. tostring(capturedQueries[1].sql))
@@ -397,14 +397,14 @@ t.test('ClampLimit: whitespace-padded numeric strings are still parsed', functio
 end)
 
 -- ----------------------------------------------------------------------
--- IsValidCitizenId gating (k9auditcert / k9auditpartner / k9auditsearch
+-- IsValidCitizenId gating (k9audit cert / k9audit partner / k9audit search
 -- officer|person): malformed input must never reach a query at all.
 -- ----------------------------------------------------------------------
 
 t.test('IsValidCitizenId: empty string is rejected before any query runs', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { '' })
+    registeredCommands.k9audit(src, { 'cert', '' })
     t.equals(#capturedQueries, 0, 'an invalid citizenid must never reach MySQL.query.await')
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'Usage:')
@@ -413,32 +413,32 @@ end)
 t.test('IsValidCitizenId: missing arg (nil) is rejected before any query runs', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, {})
+    registeredCommands.k9audit(src, { 'cert' })
     t.equals(#capturedQueries, 0)
 end)
 
 t.test('IsValidCitizenId: a value over 50 chars (VARCHAR(50) column width) is rejected', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { string.rep('x', 51) })
+    registeredCommands.k9audit(src, { 'cert', string.rep('x', 51) })
     t.equals(#capturedQueries, 0)
 end)
 
 t.test('IsValidCitizenId: exactly 50 chars is accepted (boundary)', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { string.rep('x', 50) })
+    registeredCommands.k9audit(src, { 'cert', string.rep('x', 50) })
     t.equals(#capturedQueries, 1)
 end)
 
 -- ----------------------------------------------------------------------
--- NormalizePlateArg gating (k9auditsearch plate)
+-- NormalizePlateArg gating (k9audit search plate)
 -- ----------------------------------------------------------------------
 
 t.test('NormalizePlateArg: whitespace is trimmed and the TRIMMED value reaches the query params', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'plate', '  ABC 123  ' })
+    registeredCommands.k9audit(src, { 'search', 'plate', '  ABC 123  ' })
     t.equals(#capturedQueries, 1)
     t.equals(capturedQueries[1].params[1], 'ABC 123')
 end)
@@ -446,21 +446,21 @@ end)
 t.test('NormalizePlateArg: an all-whitespace plate is rejected, no query runs', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'plate', '   ' })
+    registeredCommands.k9audit(src, { 'search', 'plate', '   ' })
     t.equals(#capturedQueries, 0)
 end)
 
 t.test('NormalizePlateArg: over 15 chars (VARCHAR(15) column width) is rejected', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'plate', string.rep('P', 16) })
+    registeredCommands.k9audit(src, { 'search', 'plate', string.rep('P', 16) })
     t.equals(#capturedQueries, 0)
 end)
 
 t.test('IsValidSearchLogModes: an unrecognized mode is rejected before any query, before even inspecting value', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'DROP TABLE k9_search_log', 'x' })
+    registeredCommands.k9audit(src, { 'search', 'DROP TABLE k9_search_log', 'x' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'Usage:')
 end)
@@ -472,7 +472,7 @@ end)
 t.test('IsAuthorizedAdmin: a source with no resolvable player record is denied, no query ever runs', function()
     resetCaptures()
     local src = 9001
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'not authorized')
@@ -484,7 +484,7 @@ t.test('IsAuthorizedAdmin: denial is checked before argument shape (malformed ar
     -- Deliberately malformed AND unauthorized: if auth were checked after
     -- args, this would fail on citizenid validity with an 'invalid_args'
     -- audit outcome instead of 'denied'.
-    registeredCommands.k9auditcert(src, {})
+    registeredCommands.k9audit(src, { 'cert' })
     t.equals(#capturedPrints, 1)
     t.contains(capturedPrints[1], 'denied')
     t.notContains(capturedPrints[1], 'invalid_args')
@@ -493,7 +493,7 @@ end)
 t.test('IsAuthorizedAdmin: console (source == 0) is denied by default (TrustConsole == false)', function()
     resetCaptures()
     Config.AdminAudit.TrustConsole = false
-    registeredCommands.k9auditcert(0, { 'ABCD1234' })
+    registeredCommands.k9audit(0, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     -- source == 0 has no client to notify -- the denial surfaces via
     -- LogAuditInvocation's print(), not NotifyPlayer.
@@ -504,7 +504,7 @@ end)
 t.test('IsAuthorizedAdmin: console (source == 0) is allowed once TrustConsole is opted in', function()
     resetCaptures()
     Config.AdminAudit.TrustConsole = true
-    registeredCommands.k9auditcert(0, { 'ABCD1234' })
+    registeredCommands.k9audit(0, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
     Config.AdminAudit.TrustConsole = false -- restore for subsequent tests
 end)
@@ -531,7 +531,7 @@ t.test('IsAuthorizedAdmin: a job that is not a configured K9 department is denie
         citizenid = 'CITAMB1',
         job = { name = 'ambulance', grade = { level = 10 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'not authorized')
@@ -546,7 +546,7 @@ t.test('IsAuthorizedAdmin: a configured department at a grade BELOW auditGrade i
         citizenid = 'CITLOW1',
         job = { name = 'police', grade = { level = 3 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'not authorized')
@@ -560,7 +560,7 @@ t.test('IsAuthorizedAdmin: job.isboss authorizes regardless of grade level', fun
         citizenid = 'CITBOSS',
         job = { name = 'police', isboss = true, grade = { level = 0 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
 end)
 
@@ -574,7 +574,7 @@ t.test('IsAuthorizedAdmin: a non-number job.grade.level fails CLOSED, it does no
         citizenid = 'CITBAD1',
         job = { name = 'police', grade = { level = '4' } },
     })
-    local ok, err = pcall(registeredCommands.k9auditcert, src, { 'ABCD1234' })
+    local ok, err = pcall(registeredCommands.k9audit, src, { 'cert', 'ABCD1234' })
     t.isTrue(ok, 'a non-number grade level must not raise: ' .. tostring(err))
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
@@ -587,7 +587,7 @@ t.test('IsAuthorizedAdmin: a job table with no grade sub-table at all fails CLOS
         citizenid = 'CITNOG1',
         job = { name = 'police' },
     })
-    local ok, err = pcall(registeredCommands.k9auditcert, src, { 'ABCD1234' })
+    local ok, err = pcall(registeredCommands.k9audit, src, { 'cert', 'ABCD1234' })
     t.isTrue(ok, 'a missing grade table must not raise: ' .. tostring(err))
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
@@ -597,7 +597,7 @@ end)
 t.test('IsAuthorizedAdmin: a player record with no job at all fails CLOSED', function()
     resetCaptures()
     local src = freshSourceWithPlayerData({ citizenid = 'CITNOJ1' })
-    local ok, err = pcall(registeredCommands.k9auditcert, src, { 'ABCD1234' })
+    local ok, err = pcall(registeredCommands.k9audit, src, { 'cert', 'ABCD1234' })
     t.isTrue(ok, 'a missing job table must not raise: ' .. tostring(err))
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
@@ -628,7 +628,7 @@ t.test('IsAuthorizedAdmin: RequireGrant.AdminAuditCommands = true + no grant hel
         job = { name = 'police', isboss = true, grade = { level = 0 } },
     })
     -- deliberately NOT granted
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'not authorized')
     Config.FeatureControl.RequireGrant.AdminAuditCommands = nil -- restore for subsequent tests
@@ -642,7 +642,7 @@ t.test('IsAuthorizedAdmin: RequireGrant.AdminAuditCommands = true + an active fe
         citizenid = 'CITFC-BOSS-2',
         job = { name = 'police', isboss = true, grade = { level = 0 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
     Config.FeatureControl.RequireGrant.AdminAuditCommands = nil
 end)
@@ -656,7 +656,7 @@ t.test('IsAuthorizedAdmin: BLOCK ALWAYS WINS -- an explicit block.AdminAuditComm
         citizenid = 'CITFC-BOSS-3',
         job = { name = 'police', isboss = true, grade = { level = 0 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'not authorized')
     Config.FeatureControl.RequireGrant.AdminAuditCommands = nil
@@ -673,7 +673,7 @@ t.test('IsAuthorizedAdmin: BLOCK ALSO WINS against an ordinary rank-qualified of
         citizenid = 'CITFC-RANK-1',
         job = { name = 'police', grade = { level = 4 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'not authorized')
 end)
@@ -689,7 +689,7 @@ t.test('IsAuthorizedAdmin: RequireGrant.AdminAuditCommands not listed -- default
         citizenid = 'CITFC-DEFAULT-1',
         job = { name = 'police', grade = { level = 4 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
 end)
 
@@ -700,7 +700,7 @@ t.test('IsAuthorizedAdmin: a block on a DIFFERENT feature key does not affect Ad
         citizenid = 'CITFC-OTHERKEY-1',
         job = { name = 'police', grade = { level = 4 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1, 'AdminAuditCommands must be unaffected by a block on a different feature key')
 end)
 
@@ -723,7 +723,7 @@ t.test('IsAuthorizedAdmin: block.k9.audit denies even job.isboss, independently 
         citizenid = 'CITAUD-BOSS-1',
         job = { name = 'police', isboss = true, grade = { level = 0 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'not authorized')
 end)
@@ -735,7 +735,7 @@ t.test('IsAuthorizedAdmin: block.k9.audit denies an ordinary rank-qualified offi
         citizenid = 'CITAUD-RANK-1',
         job = { name = 'police', grade = { level = 4 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'not authorized')
 end)
@@ -747,7 +747,7 @@ t.test('IsAuthorizedAdmin: block.k9.audit is scoped to that ONE citizenid -- a d
         citizenid = 'CITAUD-UNAFFECTED-1',
         job = { name = 'police', grade = { level = 4 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1, 'a block on a DIFFERENT citizenid must never leak onto this one')
 end)
 
@@ -758,7 +758,7 @@ t.test('IsAuthorizedAdmin: a block on a DIFFERENT capability key (k9.certify) do
         citizenid = 'CITAUD-OTHERKEY-1',
         job = { name = 'police', grade = { level = 4 } },
     })
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1, 'k9.audit must be unaffected by a block on a different capability key')
 end)
 
@@ -771,16 +771,16 @@ t.test('Rate limiting: a second command from the same source inside the cooldown
     resetCaptures()
     local src = freshAuthorizedSource()
     fakeNow = 0
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
 
     fakeNow = 100 -- still within Config.AdminAudit.CommandCooldownMs (300)
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1, 'the rate-limited second call must not reach a query')
     t.contains(capturedPrints[#capturedPrints], 'rate_limited')
 
     fakeNow = 400 -- now past the 300ms cooldown
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 2, 'a call after the cooldown window has elapsed must succeed')
 end)
 
@@ -788,16 +788,16 @@ t.test('Rate limiting: is shared ACROSS commands for the same source, not per-co
     resetCaptures()
     local src = freshAuthorizedSource()
     fakeNow = 1000
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
 
     fakeNow = 1050 -- within cooldown
-    registeredCommands.k9auditpartner(src, { 'ABCD1234' })
-    t.equals(#capturedQueries, 1, 'k9auditpartner must be rate-limited by k9auditcert\'s own recent call from the same source')
+    registeredCommands.k9audit(src, { 'partner', 'ABCD1234' })
+    t.equals(#capturedQueries, 1, 'k9audit partner must be rate-limited by k9audit cert\'s own recent call from the same source')
 end)
 
 -- ----------------------------------------------------------------------
--- MergeSortedByIdDesc (k9auditpartner): two independently-LIMITed row sets,
+-- MergeSortedByIdDesc (k9audit partner): two independently-LIMITed row sets,
 -- one per unique index, merged and re-sorted by id DESC, then truncated.
 -- ----------------------------------------------------------------------
 
@@ -819,7 +819,7 @@ t.test('MergeSortedByIdDesc: merges both role queries, sorts by id DESC, truncat
     end
 
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditpartner(src, { 'ABCD1234', '3' })
+    registeredCommands.k9audit(src, { 'partner', 'ABCD1234', '3' })
 
     t.equals(#capturedQueries, 2, 'one query per unique index, per this file\'s own documented design')
 
@@ -844,8 +844,8 @@ end)
 -- COVERAGE GAP FOUND IN THE ORIGINAL 28 CASES (reported here, not fixed by
 -- silently editing any of those 28 -- see this file's own header and the
 -- task that produced this pass): NONE of them ever populate
--- MySQL.query.await's stubbed return with actual rows for k9auditcert,
--- k9auditsearch, or k9auditxp -- every one of those 28 either stops before
+-- MySQL.query.await's stubbed return with actual rows for k9audit cert,
+-- k9audit search, or k9audit xp -- every one of those 28 either stops before
 -- a query runs (denied/rate_limited/invalid_args) or reaches
 -- PresentRows/PrintRowsToConsole with an EMPTY row set (no fixtureResponder
 -- configured --> MySQLStub returns {}). The one exception is the
@@ -858,27 +858,27 @@ end)
 --     admin.search_log_target_citizenid_label),
 --   - FormatProgressionRow (admin.progression_row_format),
 -- were NEVER exercised by this suite. This is the EXACT SAME SHAPE as the
--- /k9auditdept locale gap this task's brief names by example: a case that
+-- /k9audit dept locale gap this task's brief names by example: a case that
 -- never drives the "render a real row" branch cannot catch a missing or
 -- renamed locale key on that branch.
 --
--- SEPARATELY, and more starkly: k9auditxp was never invoked AT ALL by any
+-- SEPARATELY, and more starkly: k9audit xp was never invoked AT ALL by any
 -- of the 28 (not even once, valid or invalid) -- its entire command surface,
 -- including admin.usage_auditxp and admin.xp_snapshot_label, was untested.
--- k9auditsearch's 'officer', 'person', and 'recent' modes were likewise
+-- k9audit search's 'officer', 'person', and 'recent' modes were likewise
 -- NEVER invoked (only 'plate' and one invalid-mode case were) -- meaning the
 -- `(mode == 'officer') and QuerySearchLogByOfficer(...) or
 -- QuerySearchLogByPerson(...)` dispatch, QuerySearchLogRecent's no-WHERE
 -- shape, and admin.usage_auditsearch_mode were all unexercised. And
--- k9auditpartner's OWN invalid-citizenid branch (admin.usage_auditpartner)
--- was never reached either -- every k9auditpartner invocation in the
+-- k9audit partner's OWN invalid-citizenid branch (admin.usage_auditpartner)
+-- was never reached either -- every k9audit partner invocation in the
 -- original 28 used a valid citizenid.
 --
 -- All closed below with NEW cases. None of the original 28 above are
 -- modified.
 -- ----------------------------------------------------------------------
 
-t.test('COVERAGE GAP CLOSED: k9auditcert with a populated result set renders via FormatCertRow (admin.cert_row_format) -- no case among the original 28 ever populated a row', function()
+t.test('COVERAGE GAP CLOSED: k9audit cert with a populated result set renders via FormatCertRow (admin.cert_row_format) -- no case among the original 28 ever populated a row', function()
     resetCaptures()
     fixtureResponder = function(sql)
         if sql:find('FROM k9_certifications WHERE citizenid = ?', 1, true) then
@@ -889,7 +889,7 @@ t.test('COVERAGE GAP CLOSED: k9auditcert with a populated result set renders via
         return {}
     end
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
     t.isNotNil(capturedNotifications[2], 'expected a formatted-rows notification chunk')
     local body = capturedNotifications[2].description
@@ -901,15 +901,15 @@ t.test('COVERAGE GAP CLOSED: k9auditcert with a populated result set renders via
     t.contains(body, 'revoked_at=N/A')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditpartner invalid-citizenid usage message (admin.usage_auditpartner) -- never reached by the original 28 (every k9auditpartner case there used a valid citizenid)', function()
+t.test('COVERAGE GAP CLOSED: k9audit partner invalid-citizenid usage message (admin.usage_auditpartner) -- never reached by the original 28 (every k9audit partner case there used a valid citizenid)', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditpartner(src, { '' })
+    registeredCommands.k9audit(src, { 'partner', '' })
     t.equals(#capturedQueries, 0)
-    t.contains(capturedNotifications[1].description, 'Usage: /k9auditpartner')
+    t.contains(capturedNotifications[1].description, 'Usage: /k9audit partner')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditsearch "officer" mode -- never invoked by the original 28. Dispatches to QuerySearchLogByOfficer (searcher_citizenid = ?), renders via FormatSearchLogRow using the target_citizenid_label branch', function()
+t.test('COVERAGE GAP CLOSED: k9audit search "officer" mode -- never invoked by the original 28. Dispatches to QuerySearchLogByOfficer (searcher_citizenid = ?), renders via FormatSearchLogRow using the target_citizenid_label branch', function()
     resetCaptures()
     fixtureResponder = function(sql)
         if sql:find('searcher_citizenid = ?', 1, true) then
@@ -920,7 +920,7 @@ t.test('COVERAGE GAP CLOSED: k9auditsearch "officer" mode -- never invoked by th
         return {}
     end
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'officer', 'OFFICER1' })
+    registeredCommands.k9audit(src, { 'search', 'officer', 'OFFICER1' })
     t.equals(#capturedQueries, 1)
     t.contains(capturedQueries[1].sql, 'searcher_citizenid = ?')
     t.equals(capturedQueries[1].params[1], 'OFFICER1')
@@ -932,7 +932,7 @@ t.test('COVERAGE GAP CLOSED: k9auditsearch "officer" mode -- never invoked by th
     t.contains(body, 'tier=N/A')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditsearch "person" mode -- never invoked by the original 28. Dispatches to QuerySearchLogByPerson (target_citizenid = ?), NOT QuerySearchLogByOfficer -- a swapped ternary would fail this case while leaving the "officer" case above green', function()
+t.test('COVERAGE GAP CLOSED: k9audit search "person" mode -- never invoked by the original 28. Dispatches to QuerySearchLogByPerson (target_citizenid = ?), NOT QuerySearchLogByOfficer -- a swapped ternary would fail this case while leaving the "officer" case above green', function()
     resetCaptures()
     fixtureResponder = function(sql)
         if sql:find('target_citizenid = ?', 1, true) then
@@ -943,14 +943,14 @@ t.test('COVERAGE GAP CLOSED: k9auditsearch "person" mode -- never invoked by the
         return {}
     end
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'person', 'SUSPECT2' })
+    registeredCommands.k9audit(src, { 'search', 'person', 'SUSPECT2' })
     t.equals(#capturedQueries, 1)
     t.contains(capturedQueries[1].sql, 'target_citizenid = ?')
     t.notContains(capturedQueries[1].sql, 'searcher_citizenid = ?')
     t.equals(capturedQueries[1].params[1], 'SUSPECT2')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditsearch "plate" mode with a populated result set renders via FormatSearchLogRow, target_plate_label branch (admin.search_log_target_plate_label) -- the original 3 plate cases never populated a row', function()
+t.test('COVERAGE GAP CLOSED: k9audit search "plate" mode with a populated result set renders via FormatSearchLogRow, target_plate_label branch (admin.search_log_target_plate_label) -- the original 3 plate cases never populated a row', function()
     resetCaptures()
     fixtureResponder = function(sql)
         if sql:find('target_plate = ?', 1, true) then
@@ -961,7 +961,7 @@ t.test('COVERAGE GAP CLOSED: k9auditsearch "plate" mode with a populated result 
         return {}
     end
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'plate', 'ABC123' })
+    registeredCommands.k9audit(src, { 'search', 'plate', 'ABC123' })
     t.equals(#capturedQueries, 1)
     local body = capturedNotifications[2].description
     t.contains(body, 'target=vehicle(plate=ABC123)')
@@ -969,33 +969,33 @@ t.test('COVERAGE GAP CLOSED: k9auditsearch "plate" mode with a populated result 
     t.contains(body, 'tier=3')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditsearch "recent" mode -- never invoked by the original 28. No WHERE clause, ordered by id DESC, no bound params', function()
+t.test('COVERAGE GAP CLOSED: k9audit search "recent" mode -- never invoked by the original 28. No WHERE clause, ordered by id DESC, no bound params', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'recent' })
+    registeredCommands.k9audit(src, { 'search', 'recent' })
     t.equals(#capturedQueries, 1)
     t.notContains(capturedQueries[1].sql, 'WHERE')
     t.contains(capturedQueries[1].sql, 'ORDER BY id DESC')
     t.equals(#capturedQueries[1].params, 0, 'recent mode takes no WHERE-bound params')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditsearch officer/person invalid-citizenid usage message (admin.usage_auditsearch_mode) -- never reached by the original 28 (only "plate" and an invalid mode were ever tried)', function()
+t.test('COVERAGE GAP CLOSED: k9audit search officer/person invalid-citizenid usage message (admin.usage_auditsearch_mode) -- never reached by the original 28 (only "plate" and an invalid mode were ever tried)', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditsearch(src, { 'officer', '' })
+    registeredCommands.k9audit(src, { 'search', 'officer', '' })
     t.equals(#capturedQueries, 0)
-    t.contains(capturedNotifications[1].description, 'Usage: /k9auditsearch officer')
+    t.contains(capturedNotifications[1].description, 'Usage: /k9audit search officer')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditxp was never invoked by any of the original 28 cases -- invalid-citizenid usage message (admin.usage_auditxp) exercised here', function()
+t.test('COVERAGE GAP CLOSED: k9audit xp was never invoked by any of the original 28 cases -- invalid-citizenid usage message (admin.usage_auditxp) exercised here', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditxp(src, { '' })
+    registeredCommands.k9audit(src, { 'xp', '' })
     t.equals(#capturedQueries, 0)
-    t.contains(capturedNotifications[1].description, 'Usage: /k9auditxp')
+    t.contains(capturedNotifications[1].description, 'Usage: /k9audit xp')
 end)
 
-t.test('COVERAGE GAP CLOSED: k9auditxp with a populated result renders via FormatProgressionRow (admin.progression_row_format) and admin.xp_snapshot_label', function()
+t.test('COVERAGE GAP CLOSED: k9audit xp with a populated result renders via FormatProgressionRow (admin.progression_row_format) and admin.xp_snapshot_label', function()
     resetCaptures()
     fixtureResponder = function(sql)
         if sql:find('FROM k9_progression', 1, true) then
@@ -1004,7 +1004,7 @@ t.test('COVERAGE GAP CLOSED: k9auditxp with a populated result renders via Forma
         return {}
     end
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditxp(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'xp', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
     t.contains(capturedNotifications[1].description, 'XP snapshot for ABCD1234')
     local body = capturedNotifications[2].description
@@ -1013,7 +1013,7 @@ t.test('COVERAGE GAP CLOSED: k9auditxp with a populated result renders via Forma
 end)
 
 -- ----------------------------------------------------------------------
--- /k9auditdept <job> [limit] -- new command, covered the same way the other
+-- /k9audit dept <job> [limit] -- new command, covered the same way the other
 -- four are covered above: ACE gate + TrustConsole carve-out, shared
 -- cooldown, LogAuditInvocation on every branch, argument validation,
 -- ClampLimit reuse, parameterized/read-only query shape, and every locale
@@ -1024,26 +1024,26 @@ end)
 -- below is what would have caught that).
 -- ----------------------------------------------------------------------
 
-t.test('k9auditdept: a source with no resolvable player record is denied, no query ever runs', function()
+t.test('k9audit dept: a source with no resolvable player record is denied, no query ever runs', function()
     resetCaptures()
     local src = 9101
-    registeredCommands.k9auditdept(src, { 'police' })
+    registeredCommands.k9audit(src, { 'dept', 'police' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'not authorized')
     t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> denied')
 end)
 
-t.test('k9auditdept: console (source == 0) is denied by default (TrustConsole == false)', function()
+t.test('k9audit dept: console (source == 0) is denied by default (TrustConsole == false)', function()
     resetCaptures()
     Config.AdminAudit.TrustConsole = false
-    registeredCommands.k9auditdept(0, { 'police' })
+    registeredCommands.k9audit(0, { 'dept', 'police' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 0, 'source == 0 has no client to notify')
     t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> denied')
 end)
 
-t.test('k9auditdept: console (source == 0) is allowed once TrustConsole is opted in', function()
+t.test('k9audit dept: console (source == 0) is allowed once TrustConsole is opted in', function()
     resetCaptures()
     Config.AdminAudit.TrustConsole = true
     -- Advance the shared fake clock comfortably past CommandCooldownMs (300)
@@ -1052,44 +1052,44 @@ t.test('k9auditdept: console (source == 0) is allowed once TrustConsole is opted
     -- console (source == 0) case in this suite reads and writes, so this
     -- guards against test-order coupling rather than assuming a fresh key.
     fakeNow = fakeNow + 1000
-    registeredCommands.k9auditdept(0, { 'police' })
+    registeredCommands.k9audit(0, { 'dept', 'police' })
     t.equals(#capturedQueries, 1)
     Config.AdminAudit.TrustConsole = false -- restore for subsequent tests
 end)
 
-t.test('Rate limiting: k9auditdept participates in the shared AuditCooldown -- blocked shortly after another command from the same source, recovers once the window elapses', function()
+t.test('Rate limiting: k9audit dept participates in the shared AuditCooldown -- blocked shortly after another command from the same source, recovers once the window elapses', function()
     resetCaptures()
     local src = freshAuthorizedSource()
     fakeNow = 5000
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
 
     fakeNow = 5100 -- within CommandCooldownMs (300)
-    registeredCommands.k9auditdept(src, { 'police' })
-    t.equals(#capturedQueries, 1, 'k9auditdept must be rate-limited by a recent k9auditcert call from the same source')
+    registeredCommands.k9audit(src, { 'dept', 'police' })
+    t.equals(#capturedQueries, 1, 'k9audit dept must be rate-limited by a recent k9audit cert call from the same source')
     t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> rate_limited')
 
     fakeNow = 5500 -- past the 300ms cooldown
-    registeredCommands.k9auditdept(src, { 'police' })
-    t.equals(#capturedQueries, 2, 'a k9auditdept call after the cooldown window has elapsed must succeed')
+    registeredCommands.k9audit(src, { 'dept', 'police' })
+    t.equals(#capturedQueries, 2, 'a k9audit dept call after the cooldown window has elapsed must succeed')
 end)
 
-t.test('Rate limiting: k9auditdept itself feeds the shared AuditCooldown -- blocks a subsequent DIFFERENT command from the same source', function()
+t.test('Rate limiting: k9audit dept itself feeds the shared AuditCooldown -- blocks a subsequent DIFFERENT command from the same source', function()
     resetCaptures()
     local src = freshAuthorizedSource()
     fakeNow = 6000
-    registeredCommands.k9auditdept(src, { 'police' })
+    registeredCommands.k9audit(src, { 'dept', 'police' })
     t.equals(#capturedQueries, 1)
 
     fakeNow = 6100 -- within cooldown
-    registeredCommands.k9auditpartner(src, { 'ABCD1234' })
-    t.equals(#capturedQueries, 1, 'k9auditpartner must be rate-limited by k9auditdept\'s own recent call from the same source')
+    registeredCommands.k9audit(src, { 'partner', 'ABCD1234' })
+    t.equals(#capturedQueries, 1, 'k9audit partner must be rate-limited by k9audit dept\'s own recent call from the same source')
 end)
 
-t.test('k9auditdept: a valid, configured department reaches the query; zero rows renders admin.no_results_found with the admin.dept_roster_label', function()
+t.test('k9audit dept: a valid, configured department reaches the query; zero rows renders admin.no_results_found with the admin.dept_roster_label', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 'police' })
+    registeredCommands.k9audit(src, { 'dept', 'police' })
     t.equals(#capturedQueries, 1)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'Certified handlers for department police')
@@ -1097,51 +1097,51 @@ t.test('k9auditdept: a valid, configured department reaches the query; zero rows
     t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(police) -> ok')
 end)
 
-t.test('k9auditdept: an unconfigured department is rejected as invalid_args, no query runs', function()
+t.test('k9audit dept: an unconfigured department is rejected as invalid_args, no query runs', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 'ambulance' })
+    registeredCommands.k9audit(src, { 'dept', 'ambulance' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'Usage:')
     t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> invalid_args')
 end)
 
-t.test('k9auditdept: a non-string job argument is rejected, no query runs', function()
+t.test('k9audit dept: a non-string job argument is rejected, no query runs', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 42 })
+    registeredCommands.k9audit(src, { 'dept', 42 })
     t.equals(#capturedQueries, 0)
 end)
 
-t.test('k9auditdept: an empty string job argument is rejected, no query runs', function()
+t.test('k9audit dept: an empty string job argument is rejected, no query runs', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { '' })
+    registeredCommands.k9audit(src, { 'dept', '' })
     t.equals(#capturedQueries, 0)
 end)
 
-t.test('k9auditdept: a limit above the hard maximum clamps down to 100', function()
+t.test('k9audit dept: a limit above the hard maximum clamps down to 100', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 'police', '999999' })
+    registeredCommands.k9audit(src, { 'dept', 'police', '999999' })
     t.equals(#capturedQueries, 1)
     local limitStr = capturedQueries[1].sql:match('LIMIT (%d+)')
     t.equals(tonumber(limitStr), 100)
 end)
 
-t.test('k9auditdept: a non-numeric limit falls back to the configured default (Certifications = 50)', function()
+t.test('k9audit dept: a non-numeric limit falls back to the configured default (Certifications = 50)', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 'police', 'not-a-number' })
+    registeredCommands.k9audit(src, { 'dept', 'police', 'not-a-number' })
     t.equals(#capturedQueries, 1)
     local limitStr = capturedQueries[1].sql:match('LIMIT (%d+)')
     t.equals(tonumber(limitStr), 50)
 end)
 
-t.test('k9auditdept: the query is parameterized (job never concatenated into SQL text) and strictly read-only', function()
+t.test('k9audit dept: the query is parameterized (job never concatenated into SQL text) and strictly read-only', function()
     resetCaptures()
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 'police', '10' })
+    registeredCommands.k9audit(src, { 'dept', 'police', '10' })
     t.equals(#capturedQueries, 1)
     local sql = capturedQueries[1].sql
     t.contains(sql, 'WHERE job = ?')
@@ -1155,7 +1155,7 @@ t.test('k9auditdept: the query is parameterized (job never concatenated into SQL
     t.notContains(upperSql, 'DELETE')
 end)
 
-t.test('k9auditdept: a populated roster renders via FormatDeptCertRow (admin.dept_cert_row_format) and admin.result_count -- this IS the regression guard for the three locale keys that shipped missing', function()
+t.test('k9audit dept: a populated roster renders via FormatDeptCertRow (admin.dept_cert_row_format) and admin.result_count -- this IS the regression guard for the three locale keys that shipped missing', function()
     resetCaptures()
     fixtureResponder = function(sql)
         if sql:find('FROM k9_certifications', 1, true) and sql:find('job = ?', 1, true) then
@@ -1168,7 +1168,7 @@ t.test('k9auditdept: a populated roster renders via FormatDeptCertRow (admin.dep
     end
 
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditdept(src, { 'police' })
+    registeredCommands.k9audit(src, { 'dept', 'police' })
 
     t.equals(#capturedQueries, 1)
     t.isNotNil(capturedNotifications[1], 'expected the "N result(s)" summary notification')
@@ -1294,7 +1294,7 @@ t.test('tabletAuditCert: an unresolvable granted_by falls back to the bare citiz
     t.isNil(result.rows[1].revoked_by_name, 'a still-active row has no revoked_by, so no name to resolve either')
 end)
 
-t.test('/k9auditcert chat/console output resolves the SAME name the callback does -- "Name (citizenid)", not the citizenid alone', function()
+t.test('/k9audit cert chat/console output resolves the SAME name the callback does -- "Name (citizenid)", not the citizenid alone', function()
     resetCaptures()
     registerOnlinePlayerByCitizenId('ADMIN1', 501, { firstname = 'Alex', lastname = 'Admin' })
     fixtureResponder = function(sql)
@@ -1306,16 +1306,16 @@ t.test('/k9auditcert chat/console output resolves the SAME name the callback doe
         return {}
     end
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.isNotNil(capturedNotifications[2], 'expected a formatted-rows notification chunk')
     t.contains(capturedNotifications[2].description, 'Alex Admin (ADMIN1)', 'the chat line must show the resolved name alongside the citizenid, not the citizenid alone')
 end)
 
-t.test('/k9auditcert chat/console "Certification history for ..." header ALSO resolves the target citizenid\'s own name', function()
+t.test('/k9audit cert chat/console "Certification history for ..." header ALSO resolves the target citizenid\'s own name', function()
     resetCaptures()
     registerOnlinePlayerByCitizenId('ABCD1234', 502, { firstname = 'Terry', lastname = 'Target' })
     local src = freshAuthorizedSource()
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.contains(capturedNotifications[1].description, 'Terry Target (ABCD1234)')
 end)
 
@@ -1412,7 +1412,7 @@ t.test('tabletAuditCert: rate limiting is the SAME shared AuditCooldown budget t
     resetCaptures()
     local src = freshAuthorizedSource()
     fakeNow = 7000
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1)
 
     fakeNow = 7100 -- within CommandCooldownMs (300)
@@ -1435,7 +1435,7 @@ t.test('tabletAuditCert: a callback call ALSO feeds the shared cooldown -- block
     t.equals(#capturedQueries, 1)
 
     fakeNow = 8100 -- within cooldown
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#capturedQueries, 1, 'the command must be rate-limited by the callback\'s own recent call from the same source')
 end)
 
@@ -1831,7 +1831,7 @@ t.test('tabletAuditCert: rate_limited carries no cap/limit/truncated', function(
     resetCaptures()
     local src = freshAuthorizedSource()
     fakeNow = fakeNow + 100000
-    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    registeredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 999999)
     t.isFalse(result.ok)
     t.equals(result.error, 'rate_limited')
@@ -2115,11 +2115,7 @@ t.test('CONFIG-ABORT REGRESSION: a MISSING Config.AdminAudit.MaxResults.CatalogA
     -- nothing to do with CatalogAudit) must still be registered -- the whole
     -- point of clamp-and-warn over assert is that ONE missing/malformed key
     -- must never take the rest of this file's registration down with it.
-    t.isNotNil(registeredCommands2.k9auditcert, 'k9auditcert must still register')
-    t.isNotNil(registeredCommands2.k9auditpartner, 'k9auditpartner must still register')
-    t.isNotNil(registeredCommands2.k9auditsearch, 'k9auditsearch must still register')
-    t.isNotNil(registeredCommands2.k9auditxp, 'k9auditxp must still register')
-    t.isNotNil(registeredCommands2.k9auditdept, 'k9auditdept must still register')
+    t.isNotNil(registeredCommands2.k9audit, 'the merged k9audit dispatcher must still register')
     t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditCert'], 'tabletAuditCert must still register')
     t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditPartner'], 'tabletAuditPartner must still register')
     t.isNotNil(callbacks2['qbx_k9unit:server:tabletAuditSearch'], 'tabletAuditSearch must still register')
@@ -2227,11 +2223,7 @@ t.test('CONFIG-ABORT REGRESSION: malformed auditGrade (one department), CommandC
 
     -- Every command AND callback must still be registered -- none of these
     -- three malformed values have anything to do with most of them.
-    t.isNotNil(registeredCommands3.k9auditcert, 'k9auditcert must still register')
-    t.isNotNil(registeredCommands3.k9auditpartner, 'k9auditpartner must still register')
-    t.isNotNil(registeredCommands3.k9auditsearch, 'k9auditsearch must still register')
-    t.isNotNil(registeredCommands3.k9auditxp, 'k9auditxp must still register')
-    t.isNotNil(registeredCommands3.k9auditdept, 'k9auditdept must still register')
+    t.isNotNil(registeredCommands3.k9audit, 'the merged k9audit dispatcher must still register')
     t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditCert'], 'tabletAuditCert must still register')
     t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditPartner'], 'tabletAuditPartner must still register')
     t.isNotNil(callbacks3['qbx_k9unit:server:tabletAuditSearch'], 'tabletAuditSearch must still register')
@@ -2257,7 +2249,7 @@ t.test('CONFIG-ABORT REGRESSION: malformed auditGrade (one department), CommandC
     t.isTrue(Config3.AdminAudit.CommandCooldownMs >= 250, 'CommandCooldownMs must have been resolved to a valid, usable cooldown')
     t.equals(Config3.AdminAudit.MaxResults.Certifications, 25, 'the malformed MaxResults.Certifications must be forced to the built-in fallback of 25')
 
-    -- k9auditcert must actually WORK end to end off the corrected values,
+    -- k9audit cert must actually WORK end to end off the corrected values,
     -- not merely "be registered": a sheriff BOSS still qualifies (job.isboss
     -- bypasses auditGrade entirely, unaffected by the fix), a sheriff
     -- NON-boss is now denied (fails closed on the corrected nil
@@ -2271,13 +2263,13 @@ t.test('CONFIG-ABORT REGRESSION: malformed auditGrade (one department), CommandC
     -- if authorization already passed; an unauthorized caller is denied
     -- first and never reaches that check (see IsAuthorizedAdmin's own call
     -- order at the top of this command).
-    registeredCommands3.k9auditcert(701, {})
+    registeredCommands3.k9audit(701, { 'cert' })
     t.contains(printed3[#printed3], 'invalid_args', 'a sheriff BOSS must pass authorization despite the corrected nil auditGrade')
 
-    registeredCommands3.k9auditcert(702, {})
+    registeredCommands3.k9audit(702, { 'cert' })
     t.contains(printed3[#printed3], 'denied', 'a sheriff NON-boss must now be denied -- fails closed on the corrected nil auditGrade')
 
-    registeredCommands3.k9auditcert(703, {})
+    registeredCommands3.k9audit(703, { 'cert' })
     t.contains(printed3[#printed3], 'invalid_args', 'the unrelated police department\'s own valid auditGrade=4 must still authorize its officers exactly as configured')
 end)
 

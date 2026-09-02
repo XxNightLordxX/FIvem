@@ -356,13 +356,13 @@ for _, handler in ipairs(adminEventHandlers['onResourceStart'] or {}) do
     handler('qbx_k9unit')
 end
 
-t.isNotNil(adminRegisteredCommands.k9auditcert, 'onResourceStart must register k9auditcert')
+t.isNotNil(adminRegisteredCommands.k9audit, 'onResourceStart must register the merged k9audit dispatcher')
 
 t.test('admin local NotifyPlayer: delegates to the REAL notify.lua global with its OWN title, no recursion', function()
     adminCapturedClientEvents = {}
     local src = 6001
     adminAceGrants[tostring(src)] = false -- unauthorized -> hits the local NotifyPlayer wrapper
-    adminRegisteredCommands.k9auditcert(src, { 'ABCD1234' })
+    adminRegisteredCommands.k9audit(src, { 'cert', 'ABCD1234' })
     t.equals(#adminCapturedClientEvents, 1)
     local e = adminCapturedClientEvents[1]
     t.equals(e[1], 'ox_lib:notify')

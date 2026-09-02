@@ -222,7 +222,7 @@ t.test('screen rendering: every catalog entry renders, one status badge each, un
     t.isTrue(findByText(h.getRoot(), 'Certification Management').length >= 1, 'a category heading renders');
     t.isTrue(findByText(h.getRoot(), 'Field Gear & Equipment').length >= 1, 'another category heading renders');
     t.equals(statusBadges(h).length, REAL_COMMAND_REFERENCE_COUNT, 'one status badge per real COMMAND_REFERENCE entry (derived from html/tablet.js itself, not a hardcoded count -- see this file\'s own header)');
-    t.isTrue(findByText(h.getRoot(), '/k9auditcert <citizenid> [limit]').length === 1, 'a specific command\'s exact usage string renders verbatim');
+    t.isTrue(findByText(h.getRoot(), '/k9audit <cert|partner|search|xp|dept>').length === 1, 'a specific command\'s exact usage string renders verbatim');
 });
 
 t.test('filtering: typing in the search box narrows to matching rows and hides an emptied category heading; a non-matching query shows the empty-state message', async () => {
@@ -311,7 +311,7 @@ t.test('a HANDLER (certified, no special capability) sees a restricted admin-tie
     });
     await openCommandsScreen(h);
 
-    const auditBadge = statusBadgeFor(h, '/k9auditcert <citizenid> [limit]');
+    const auditBadge = statusBadgeFor(h, '/k9audit <cert|partner|search|xp|dept>');
     t.equals(auditBadge._textContent, 'Requires higher authorization', 'a handler with no k9.audit/k9.certify/k9.givexp/high-command sees the admin-tier reason, not a certification-flavored one');
     t.isTrue(auditBadge.classList.contains('k9tablet-feature-state--requires_grant_missing'), 'reuses the existing amber "needs a grant" CSS bucket -- no new CSS class');
 
@@ -369,7 +369,7 @@ t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge
     // still have their own real, documented row.
     t.equals(adminBadges.length, ADMIN_TIER_COMMAND_REFERENCE_COUNT, 'every admin-tier command carries the (Admin) marker, for high command too');
 
-    const auditBadge = statusBadgeFor(h, '/k9auditcert <citizenid> [limit]');
+    const auditBadge = statusBadgeFor(h, '/k9audit <cert|partner|search|xp|dept>');
     t.equals(auditBadge._textContent, 'Available');
     const certifyBadge = statusBadgeFor(h, '/k9certify <server id>  |  /k9certify <citizenid> <job>');
     t.equals(certifyBadge._textContent, 'Available');
@@ -392,7 +392,7 @@ t.test('a server-wide-disabled feature is HIDDEN outright, even from a high-comm
     await openCommandsScreen(h);
 
     t.equals(
-        findByText(h.getRoot(), '/k9auditcert <citizenid> [limit]').length, 0,
+        findByText(h.getRoot(), '/k9audit <cert|partner|search|xp|dept>').length, 0,
         'the globally-off command is gone from the reference entirely'
     );
     // The control that keeps this honest: a DIFFERENT admin command, whose
@@ -414,7 +414,7 @@ t.test('a per-person block overrides an otherwise-qualifying high-command capabi
     });
     await openCommandsScreen(h);
 
-    const auditBadge = statusBadgeFor(h, '/k9auditcert <citizenid> [limit]');
+    const auditBadge = statusBadgeFor(h, '/k9audit <cert|partner|search|xp|dept>');
     t.equals(auditBadge._textContent, 'Blocked', 'a personal block wins even for a high-command viewer');
 });
 
@@ -521,7 +521,7 @@ t.test('a hostile string arriving via data.strings for a Command Reference key r
             'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, ALL_FEATURES_ON),
         }),
     });
-    h.postMessage('tablet:open', { strings: { cmdref_k9auditcert_does: malicious, cmdref_heading: malicious } });
+    h.postMessage('tablet:open', { strings: { cmdref_k9audit_does: malicious, cmdref_heading: malicious } });
     await settle();
     findByText(h.getRoot(), 'Commands')[0].click();
     await settle();
