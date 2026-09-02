@@ -65,10 +65,6 @@
             // applyDistractionStatus()/applyXPTierStatus() below.
             wellbeing: {
               fatigue:    <number>,   // 0-100, KEY ABSENT unless FatigueSystem is on
-              mood:       <number>,   // 0-100, KEY ABSENT unless MoodSystem is on
-              fearStress: <number>,   // 0-100, KEY ABSENT unless FearStressSystem is on
-              injury:     <number>,   // 0-100, KEY ABSENT unless InjuryLimping is on
-              distracted: <boolean>,  // KEY ABSENT unless DistractionSystem is on
             },
             xpTier: {
               label: <string>,  // KEY ABSENT unless XPProgression is on AND a tier is known
@@ -341,13 +337,13 @@
 (function () {
     'use strict';
 
-    /** @type {Record<'health'|'stamina'|'hunger'|'thirst'|'fatigue'|'mood'|'fearStress'|'injury', { row: HTMLElement, fill: HTMLElement, value: HTMLElement }>} */
+    /** @type {Record<'health'|'stamina'|'hunger'|'thirst'|'fatigue', { row: HTMLElement, fill: HTMLElement, value: HTMLElement }>} */
     var statEls = {};
 
-    /** Status-text rows (distraction, xpTier) — no bar/fill, see
+    /** Status-text rows (xpTier) — no bar/fill, see
      * index.html's own comments on each for why a percentage bar would be
      * misleading for either one.
-     * @type {Record<'distraction'|'xpTier', { row: HTMLElement, value: HTMLElement }>} */
+     * @type {Record<'xpTier', { row: HTMLElement, value: HTMLElement }>} */
     var statusEls = {};
 
     var rootEl = null;
@@ -375,18 +371,16 @@
      * fallback is ALWAYS what renders -- but wiring the lookup this way
      * now, rather than hardcoding the two literals inline, means the day
      * client/hud.lua starts sending locale()-resolved text here (e.g.
-     * `data.strings = { distraction_active = locale('hud.distraction_active'), ... }`,
+     * `data.strings = { <key> = locale('hud.<key>'), ... }`,
      * mirroring client/tablet.lua's own BuildTabletStrings()), this file
      * needs zero changes to pick it up -- only this object needs to stay
      * as the non-authoritative fallback. Reported to the locale owner:
      * locales/en.json has no `hud` group yet; the two keys below
-     * (`distraction_active`/`distraction_clear`) are the ones needed,
+     * are the ones needed,
      * with this exact English text, once client/hud.lua adds a `strings`
      * field to its payload.
      * @type {Record<string,string>} */
     var HUD_DEFAULT_STRINGS = {
-        distraction_active: 'Distracted',
-        distraction_clear: 'Clear',
     };
 
     /**
@@ -455,8 +449,8 @@
      * visible at all already implies — see client/hud.lua's own "GATING"
      * note). Iterated by handleUpdateVitals() below, one applyGatedBarStat()
      * call per entry.
-     * @type {Array<'fatigue'|'mood'|'fearStress'|'injury'>} */
-    var GATED_BAR_STATS = ['fatigue', 'mood', 'fearStress', 'injury'];
+     * @type {Array<'fatigue'>} */
+    var GATED_BAR_STATS = ['fatigue'];
 
     /**
      * Clamp a value into the 0-100 range and coerce anything non-numeric
@@ -479,7 +473,7 @@
 
     /**
      * Applies one stat's value to its bar fill width + numeric readout.
-     * @param {'health'|'stamina'|'hunger'|'thirst'|'fatigue'|'mood'|'fearStress'|'injury'} stat
+     * @param {'health'|'stamina'|'hunger'|'thirst'|'fatigue'} stat
      * @param {*} rawValue
      */
     function applyStat(stat, rawValue) {
@@ -501,7 +495,7 @@
      * when actually visible, mirroring handleUpdateVitals' own
      * "don't bother touching bar DOM while hidden" posture for the
      * original four stats.
-     * @param {'fatigue'|'mood'|'fearStress'|'injury'} stat
+     * @param {'fatigue'} stat
      * @param {*} rawValue -- typeof 'number' means present; anything else (undefined, since Lua omits the key entirely) means absent
      */
     function applyGatedBarStat(stat, rawValue) {
@@ -515,38 +509,7 @@
         applyStat(stat, rawValue);
     }
 
-    /**
-     * Handles the Distraction status row — see index.html's own comment on
-     * why this is text, not a bar: `distracted` is a boolean, not a
-     * continuous magnitude. Absent key (feature off) hides the row
-     * entirely, same as applyGatedBarStat above.
-     * @param {*} rawDistracted
-     * @param {*} [strings] optional `data.strings` from the payload -- see
-     *   hudString()/HUD_DEFAULT_STRINGS' own comments; not part of the
-     *   contract yet, so this is normally undefined and the English
-     *   fallback renders.
-     */
-    function applyDistractionStatus(rawDistracted, strings) {
-        var els = statusEls.distraction;
-        if (!els) return;
-
-        var present = typeof rawDistracted === 'boolean';
-        els.row.classList.toggle('k9hud-row--hidden', !present);
-        if (!present) return;
-
-        // textContent only -- see this file's header "NO SetNuiFocus"
-        // block's sibling rule (not restated there, but followed
-        // identically throughout this file): never innerHTML. hudString()
-        // resolves through a locale-ready fallback table rather than a
-        // literal inline here -- see its own comment -- but the VALUE it
-        // returns is still fixed, code-authored (or code/locale-owner
-        // authored) text, never a value echoed from the network payload
-        // verbatim.
-        els.value.textContent = rawDistracted
-            ? hudString(strings, 'distraction_active')
-            : hudString(strings, 'distraction_clear');
-    }
-
+    
     /**
      * Handles the XP tier status row. `xpTier` is always an object per
      * the contract, but `xpTier.label` (a string) is present only once
@@ -630,7 +593,6 @@
             var stat = GATED_BAR_STATS[i];
             applyGatedBarStat(stat, wellbeing[stat]);
         }
-        applyDistractionStatus(wellbeing.distracted, data.strings);
 
         var xpTier = data.xpTier || {};
         applyXPTierStatus(xpTier.label, xpTier.badge);
@@ -1213,27 +1175,8 @@
                 fill: document.querySelector('[data-fill="fatigue"]'),
                 value: document.querySelector('[data-value="fatigue"]'),
             },
-            mood: {
-                row: document.querySelector('[data-stat-row="mood"]'),
-                fill: document.querySelector('[data-fill="mood"]'),
-                value: document.querySelector('[data-value="mood"]'),
-            },
-            fearStress: {
-                row: document.querySelector('[data-stat-row="fearStress"]'),
-                fill: document.querySelector('[data-fill="fearStress"]'),
-                value: document.querySelector('[data-value="fearStress"]'),
-            },
-            injury: {
-                row: document.querySelector('[data-stat-row="injury"]'),
-                fill: document.querySelector('[data-fill="injury"]'),
-                value: document.querySelector('[data-value="injury"]'),
-            },
         };
         statusEls = {
-            distraction: {
-                row: document.querySelector('[data-stat-row="distraction"]'),
-                value: document.querySelector('[data-status="distraction"]'),
-            },
             xpTier: {
                 row: document.querySelector('[data-stat-row="xpTier"]'),
                 value: document.querySelector('[data-status="xpTier"]'),

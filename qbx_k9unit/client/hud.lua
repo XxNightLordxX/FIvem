@@ -66,10 +66,6 @@
 
         data.wellbeing = {
           fatigue    = <number 0-100>,  -- KEY ABSENT unless Config.Features.FatigueSystem
-          mood       = <number 0-100>,  -- KEY ABSENT unless Config.Features.MoodSystem
-          fearStress = <number 0-100>,  -- KEY ABSENT unless Config.Features.FearStressSystem
-          injury     = <number 0-100>,  -- KEY ABSENT unless Config.Features.InjuryLimping
-          distracted = <boolean>,       -- KEY ABSENT unless Config.Features.DistractionSystem
         }
         data.xpTier = {
           label = <string>,  -- KEY ABSENT unless Config.Features.XPProgression AND a
@@ -101,7 +97,7 @@
     disabled feature's section is inert, not merely quiet).
 
     DATA SOURCE — NO NEW SERVER ROUND TRIP, EITHER FOR WELLBEING OR XP:
-      - Wellbeing (fatigue/mood/fearStress/injury/distracted): this file
+      - Wellbeing (fatigue): this file
         registers its OWN independent RegisterNetEvent handler on
         'qbx_k9unit:client:wellbeingUpdate' — the SAME event
         client/wellbeing.lua's own handler already consumes (FiveM allows
@@ -748,10 +744,6 @@ local WELLBEING_ELEMENT_ENABLED = {
     fatigue = Config.Features.FatigueSystem,
 }
 local ANY_WELLBEING_ELEMENT_ENABLED = WELLBEING_ELEMENT_ENABLED.fatigue
-    or WELLBEING_ELEMENT_ENABLED.mood
-    or WELLBEING_ELEMENT_ENABLED.fearStress
-    or WELLBEING_ELEMENT_ENABLED.injury
-    or WELLBEING_ELEMENT_ENABLED.distraction
 
 -- Same "computed once, not every tick" posture for the XP tier row.
 local XP_TIER_ELEMENT_ENABLED = Config.Features.XPProgression
@@ -773,10 +765,6 @@ local hudState = {
     hunger = 100.0,
     thirst = 100.0,
     fatigue = 100.0,
-    mood = 100.0,
-    fearStress = 0.0,
-    injury = 100.0,
-    distracted = false,
     xpTierLabel = nil, -- string|nil; nil means "no tier known yet" (XPProgression disabled, or no snapshot received this session yet) — rendered as an absent row in that case, per the header's "absence, not blank" rule
     xpTierBadge = nil, -- string|nil; nil means "no badge on the current tier" (same absent-row rule as xpTierLabel above) -- e.g. non-nil for config.lua's Elite row (`badge = 'elite'`), nil for every other shipped tier
     lastPushAt = -HUD_HEARTBEAT_MS, -- forces the very first real push to count as heartbeat-due
@@ -804,10 +792,6 @@ local hudState = {
 -- already relies on for the four core vitals), not a silent gap.
 local wellbeingCache = {
     fatigue = 100.0,
-    mood = 100.0,
-    fearStress = 0.0,
-    injury = 100.0,
-    distractedUntil = 0,
 }
 
 if ANY_WELLBEING_ELEMENT_ENABLED then
@@ -829,10 +813,6 @@ if ANY_WELLBEING_ELEMENT_ENABLED then
         if type(stats) ~= 'table' then return end
 
         wellbeingCache.fatigue = tonumber(stats.fatigue) or wellbeingCache.fatigue
-        wellbeingCache.mood = tonumber(stats.mood) or wellbeingCache.mood
-        wellbeingCache.fearStress = tonumber(stats.fearStress) or wellbeingCache.fearStress
-        wellbeingCache.injury = tonumber(stats.injury) or wellbeingCache.injury
-        wellbeingCache.distractedUntil = tonumber(stats.distractedUntil) or wellbeingCache.distractedUntil
     end)
 end
 
@@ -903,25 +883,13 @@ end
 --- this file's "must be absent, not blank or zeroed" requirement.
 --- @return number|nil fatigue, number|nil mood, number|nil fearStress, number|nil injury, boolean|nil distracted
 local function ReadWellbeingForDisplay()
-    local fatigue, mood, fearStress, injury, distracted = nil, nil, nil, nil, nil
+    local fatigue = nil
 
     if WELLBEING_ELEMENT_ENABLED.fatigue then
         fatigue = clamp01to100(wellbeingCache.fatigue)
     end
-    if WELLBEING_ELEMENT_ENABLED.mood then
-        mood = clamp01to100(wellbeingCache.mood)
-    end
-    if WELLBEING_ELEMENT_ENABLED.fearStress then
-        fearStress = clamp01to100(wellbeingCache.fearStress)
-    end
-    if WELLBEING_ELEMENT_ENABLED.injury then
-        injury = clamp01to100(wellbeingCache.injury)
-    end
-    if WELLBEING_ELEMENT_ENABLED.distraction then
-        distracted = wellbeingCache.distractedUntil > GetGameTimer()
-    end
 
-    return fatigue, mood, fearStress, injury, distracted
+    return fatigue
 end
 
 --- Reads the current XP tier's label and badge, or (nil, nil) if
@@ -974,7 +942,7 @@ end
 --- @param distracted boolean|nil
 --- @param xpTierLabel string|nil
 --- @param xpTierBadge string|nil
-local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel, xpTierBadge)
+local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)
     -- See this file's header "WELLBEING / XP TIER EXTENSION" — any of
     -- these five keys being nil above means it is simply ABSENT here (a
     -- Lua table never stores a nil-valued key), which is exactly the
@@ -1006,10 +974,6 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, moo
     -- consumer (or a future app.js rewrite) could turn it into one.
     local wellbeing = {
         fatigue = fatigue,
-        mood = mood,
-        fearStress = fearStress,
-        injury = injury,
-        distracted = distracted,
     }
     local xpTier = {
         label = xpTierLabel,
@@ -1037,10 +1001,6 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, moo
     hudState.hunger = hunger
     hudState.thirst = thirst
     hudState.fatigue = fatigue
-    hudState.mood = mood
-    hudState.fearStress = fearStress
-    hudState.injury = injury
-    hudState.distracted = distracted
     hudState.xpTierLabel = xpTierLabel
     hudState.xpTierBadge = xpTierBadge
     hudState.lastPushAt = GetGameTimer()
@@ -1060,9 +1020,9 @@ RegisterNUICallback('hud:ready', function(_, cb)
     cb({})
 
     local health, stamina, hunger, thirst = ReadVitals()
-    local fatigue, mood, fearStress, injury, distracted = ReadWellbeingForDisplay()
+    local fatigue = ReadWellbeingForDisplay()
     local xpTierLabel, xpTierBadge = ReadXPTierDisplay()
-    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel, xpTierBadge)
+    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)
 end)
 
 -- ----------------------------------------------------------------------
@@ -1108,14 +1068,14 @@ CreateThread(function()
                 -- extended here to the wellbeing/xpTier fields for the
                 -- identical reason.
                 PushVitals(false, hudState.health, hudState.stamina, hudState.hunger, hudState.thirst,
-                    hudState.fatigue, hudState.mood, hudState.fearStress, hudState.injury, hudState.distracted,
+                    hudState.fatigue,
                     hudState.xpTierLabel, hudState.xpTierBadge)
             end
 
             Wait(HUD_IDLE_TICK_MS) -- design note §5.4: idle backoff while not currently relevant
         else
             local health, stamina, hunger, thirst = ReadVitals()
-            local fatigue, mood, fearStress, injury, distracted = ReadWellbeingForDisplay()
+            local fatigue = ReadWellbeingForDisplay()
             local xpTierLabel, xpTierBadge = ReadXPTierDisplay()
             local becameVisible = not hudState.visible
             local now = GetGameTimer()
@@ -1129,10 +1089,6 @@ CreateThread(function()
                 -- nil, if disabled) slot for that field — see
                 -- WELLBEING_ELEMENT_ENABLED's own comment above.
                 or (WELLBEING_ELEMENT_ENABLED.fatigue and math.abs(fatigue - hudState.fatigue) > HUD_CHANGE_EPSILON)
-                or (WELLBEING_ELEMENT_ENABLED.mood and math.abs(mood - hudState.mood) > HUD_CHANGE_EPSILON)
-                or (WELLBEING_ELEMENT_ENABLED.fearStress and math.abs(fearStress - hudState.fearStress) > HUD_CHANGE_EPSILON)
-                or (WELLBEING_ELEMENT_ENABLED.injury and math.abs(injury - hudState.injury) > HUD_CHANGE_EPSILON)
-                or (WELLBEING_ELEMENT_ENABLED.distraction and distracted ~= hudState.distracted)
                 or xpTierLabel ~= hudState.xpTierLabel
                 or xpTierBadge ~= hudState.xpTierBadge
             local heartbeatDue = (now - hudState.lastPushAt) >= HUD_HEARTBEAT_MS
@@ -1141,7 +1097,7 @@ CreateThread(function()
             -- §5.5's false -> true immediate-push rule), independent of
             -- both the epsilon check and the heartbeat ceiling.
             if becameVisible or changedEnough or heartbeatDue then
-                PushVitals(true, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel, xpTierBadge)
+                PushVitals(true, health, stamina, hunger, thirst, fatigue, xpTierLabel, xpTierBadge)
             end
 
             Wait(HUD_POLL_TICK_MS) -- design note §5.1: active poll cadence while visible

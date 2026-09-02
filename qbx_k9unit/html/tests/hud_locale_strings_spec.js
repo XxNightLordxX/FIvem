@@ -21,7 +21,6 @@
     contract does not carry a `strings` field yet (client/hud.lua is out of
     this pass' file scope -- reported to the locale/backend owners
     separately: a new `hud` locales/en.json group with
-    `distraction_active` = "Distracted" and `distraction_clear` = "Clear"
     is needed, sent the same way client/tablet.lua's BuildTabletStrings()
     already sends the `tablet` group), so today `strings` is always
     absent/undefined and every case below still renders the English
@@ -45,58 +44,9 @@ function baseVitals(extra) {
     return Object.assign({ visible: true, health: 100, stamina: 100, hunger: 100, thirst: 100 }, extra);
 }
 
-t.test('no `strings` field in the payload (today\'s real contract): distracted:true renders the English fallback "Distracted"', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { distracted: true }, xpTier: {} }));
-    t.equals(h.getStatusRow('distraction').value.textContent, 'Distracted');
-});
 
-t.test('no `strings` field in the payload: distracted:false renders the English fallback "Clear"', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { distracted: false }, xpTier: {} }));
-    t.equals(h.getStatusRow('distraction').value.textContent, 'Clear');
-});
 
-t.test('a future `strings.distraction_active`/`strings.distraction_clear` payload overrides the English fallback -- proves the lookup is genuinely locale-ready, not just a renamed literal', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({
-        wellbeing: { distracted: true },
-        xpTier: {},
-        strings: { distraction_active: 'Distrait', distraction_clear: 'Dégagé' },
-    }));
-    t.equals(h.getStatusRow('distraction').value.textContent, 'Distrait');
 
-    const h2 = freshHarnessNoAudio();
-    h2.postMessage('hud:updateVitals', baseVitals({
-        wellbeing: { distracted: false },
-        xpTier: {},
-        strings: { distraction_active: 'Distrait', distraction_clear: 'Dégagé' },
-    }));
-    t.equals(h2.getStatusRow('distraction').value.textContent, 'Dégagé');
-});
 
-t.test('a malformed `strings` entry (wrong type, empty string, or the whole object missing the key) falls back to English per-key, not a blank render', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({
-        wellbeing: { distracted: true },
-        xpTier: {},
-        strings: { distraction_active: 42, distraction_clear: '' },
-    }));
-    t.equals(h.getStatusRow('distraction').value.textContent, 'Distracted', 'non-string value falls back to English');
-
-    const h2 = freshHarnessNoAudio();
-    h2.postMessage('hud:updateVitals', baseVitals({
-        wellbeing: { distracted: false },
-        xpTier: {},
-        strings: { distraction_active: 'Distrait' }, // distraction_clear key entirely absent
-    }));
-    t.equals(h2.getStatusRow('distraction').value.textContent, 'Clear', 'missing key falls back to English, sibling key\'s override is unaffected');
-});
-
-t.test('`strings` present but `data.strings` itself is not an object (e.g. a stray string/number) does not throw and still falls back to English', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { distracted: true }, xpTier: {}, strings: 'not-an-object' }));
-    t.equals(h.getStatusRow('distraction').value.textContent, 'Distracted');
-});
 
 t.run();

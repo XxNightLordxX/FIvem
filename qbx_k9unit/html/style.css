@@ -167,28 +167,13 @@ body {
 /* Wellbeing bar colors — added this pass, same "placeholder guess,
    deliberately distinct hues" posture as the four above (TODO(coder-ui)
    note above still applies to these too). Fatigue/Mood/Injury are
-   higher-is-better stats, same semantic direction as Health/Stamina/
-   Hunger/Thirst above (a full bar is good) — greenish/warm hues chosen
-   only for visual distinction from the core four, not to imply anything
-   about good/bad by hue (the core four already establish that hue here is
-   decorative, not semantic — e.g. Health is red despite full=good).
-   fearStress is the one inverted stat (a FULL bar means highly stressed,
-   the bad direction) — given a distinct amber/red-leaning hue so a glance
-   at a filling Stress bar reads as a warning, not an achievement. */
+   a higher-is-better stat, same semantic direction as Health/Stamina/
+   Hunger/Thirst above (a full bar is good) — a greenish hue chosen only
+   for visual distinction from the core four, not to imply anything about
+   good/bad by hue (the core four already establish that hue here is
+   decorative, not semantic — e.g. Health is red despite full=good). */
 .k9hud-bar-fill--fatigue {
     background: #9bd17f;
-}
-
-.k9hud-bar-fill--mood {
-    background: #d1b37f;
-}
-
-.k9hud-bar-fill--fearStress {
-    background: #e08a5c;
-}
-
-.k9hud-bar-fill--injury {
-    background: #c17fd1;
 }
 
 .k9hud-value {

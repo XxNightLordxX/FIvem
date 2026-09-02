@@ -13,7 +13,7 @@
          client/hud.lua's PushVitals() applies a `setmetatable(..., {
          __jsontype = 'object' })` hint specifically so dkjson encodes an
          empty wellbeing/xpTier table as `{}` on the wire, not `[]` --
-         PROVING html/app.js's own `wellbeing[stat]`/`wellbeing.distracted`
+         PROVING html/app.js's own `wellbeing[stat]`
          bracket/dot property access genuinely tolerates BOTH shapes
          (older Lua without that fix would have sent `[]`), so the fix is
          a wire-hygiene/downstream-consumer improvement, not something
@@ -35,13 +35,14 @@ function freshHarnessNoAudio() {
     return createHarness({ AudioContextCtor: undefined });
 }
 
-const GATED_BAR_STATS = ['fatigue', 'mood', 'fearStress', 'injury'];
+// Only fatigue survives -- mood, fear/stress, distraction and injury were
+// removed on 2026-09-02 along with their HUD rows.
+const GATED_BAR_STATS = ['fatigue'];
 
 function assertAllGatedRowsHidden(h, message) {
     for (const stat of GATED_BAR_STATS) {
         t.isTrue(h.getBarRow(stat).row.classList.contains('k9hud-row--hidden'), `${stat} row hidden: ${message}`);
     }
-    t.isTrue(h.getStatusRow('distraction').row.classList.contains('k9hud-row--hidden'), `distraction row hidden: ${message}`);
     t.isTrue(h.getStatusRow('xpTier').row.classList.contains('k9hud-row--hidden'), `xpTier row hidden: ${message}`);
 }
 
@@ -71,45 +72,7 @@ t.test('wellbeing/xpTier entirely missing from the payload (data.wellbeing/data.
     assertAllGatedRowsHidden(h, 'keys entirely absent from data');
 });
 
-t.test('PARTIAL PRESENCE: only fatigue present as a number shows fatigue alone, everything else stays hidden', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { fatigue: 42 }, xpTier: {} }));
 
-    const fatigue = h.getBarRow('fatigue');
-    t.isFalse(fatigue.row.classList.contains('k9hud-row--hidden'), 'fatigue row shown');
-    t.equals(fatigue.fill.style.width, '42%');
-    t.equals(fatigue.value.textContent, '42');
-
-    for (const stat of ['mood', 'fearStress', 'injury']) {
-        t.isTrue(h.getBarRow(stat).row.classList.contains('k9hud-row--hidden'), `${stat} row still hidden`);
-    }
-    t.isTrue(h.getStatusRow('distraction').row.classList.contains('k9hud-row--hidden'));
-    t.isTrue(h.getStatusRow('xpTier').row.classList.contains('k9hud-row--hidden'));
-});
-
-t.test('FULL PRESENCE: every wellbeing key + xpTier.label present renders every row with the right values', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({
-        wellbeing: { fatigue: 10, mood: 20, fearStress: 30, injury: 40, distracted: true },
-        xpTier: { label: 'Veteran' },
-    }));
-
-    t.equals(h.getBarRow('fatigue').value.textContent, '10');
-    t.equals(h.getBarRow('mood').value.textContent, '20');
-    t.equals(h.getBarRow('fearStress').value.textContent, '30');
-    t.equals(h.getBarRow('injury').value.textContent, '40');
-    for (const stat of GATED_BAR_STATS) {
-        t.isFalse(h.getBarRow(stat).row.classList.contains('k9hud-row--hidden'), `${stat} row shown`);
-    }
-
-    const distraction = h.getStatusRow('distraction');
-    t.isFalse(distraction.row.classList.contains('k9hud-row--hidden'));
-    t.equals(distraction.value.textContent, 'Distracted');
-
-    const xpTier = h.getStatusRow('xpTier');
-    t.isFalse(xpTier.row.classList.contains('k9hud-row--hidden'));
-    t.equals(xpTier.value.textContent, 'Veteran');
-});
 
 t.test('xpTier.badge: absent when the tier carries none -- label renders alone, no trailing separator/badge text', () => {
     const h = freshHarnessNoAudio();
@@ -144,13 +107,6 @@ t.test('xpTier.badge present but xpTier.label absent still hides the whole row -
     t.isTrue(h.getStatusRow('xpTier').row.classList.contains('k9hud-row--hidden'));
 });
 
-t.test('distracted:false renders "Clear" text and still shows the row (false is a valid present boolean, not an absence)', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { distracted: false }, xpTier: {} }));
-    const distraction = h.getStatusRow('distraction');
-    t.isFalse(distraction.row.classList.contains('k9hud-row--hidden'));
-    t.equals(distraction.value.textContent, 'Clear');
-});
 
 t.test('TYPE STRICTNESS: a wellbeing numeric field sent as a numeric STRING is treated as absent (hidden), matching the documented `typeof === number` contract', () => {
     const h = freshHarnessNoAudio();
@@ -158,11 +114,6 @@ t.test('TYPE STRICTNESS: a wellbeing numeric field sent as a numeric STRING is t
     t.isTrue(h.getBarRow('fatigue').row.classList.contains('k9hud-row--hidden'), 'a numeric-string value must not count as "present"');
 });
 
-t.test('TYPE STRICTNESS: distracted sent as a truthy non-boolean (1) is treated as absent, matching the documented `typeof === boolean` contract', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { distracted: 1 }, xpTier: {} }));
-    t.isTrue(h.getStatusRow('distraction').row.classList.contains('k9hud-row--hidden'), 'a truthy-but-non-boolean value must not count as "present"');
-});
 
 t.test('TYPE STRICTNESS: xpTier.label sent as an empty string is treated as absent (row hidden) -- a documented app.js quirk, not a crash', () => {
     const h = freshHarnessNoAudio();
@@ -185,11 +136,5 @@ t.test('a gated row, once shown, correctly HIDES again on a later push where its
     t.isTrue(h.getBarRow('fatigue').row.classList.contains('k9hud-row--hidden'), 'fatigue row re-hides once its key is absent again');
 });
 
-t.test('out-of-range wellbeing numeric values clamp the same way the core four vitals do', () => {
-    const h = freshHarnessNoAudio();
-    h.postMessage('hud:updateVitals', baseVitals({ wellbeing: { fatigue: 250, mood: -50 }, xpTier: {} }));
-    t.equals(h.getBarRow('fatigue').value.textContent, '100');
-    t.equals(h.getBarRow('mood').value.textContent, '0');
-});
 
 t.run();
