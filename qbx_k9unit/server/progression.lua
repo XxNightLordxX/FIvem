@@ -578,8 +578,8 @@ end
 -- server/cooldowns.lua's OWN IsOnCooldown, AND FROM EVERY PER-MECHANIC MINT
 -- COOLDOWN ABOVE.
 --
--- server/cooldowns.lua's own header documents the "Config.Recall footgun"
--- shape at length: a non-positive threshold there silently means
+-- server/cooldowns.lua's own header documents the non-positive-cooldown
+-- footgun at length: a non-positive threshold there silently means
 -- "permanently blocked," never "no cooldown," and that fail-CLOSED choice is
 -- the RIGHT one for a single-mechanic cooldown, because the blast radius of
 -- getting it wrong is contained -- one action, for players who happen to

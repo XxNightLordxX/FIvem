@@ -278,10 +278,10 @@
 --- setting a cooldown Config field to `0` meaning "no throttle" instead
 --- silently got "blocked forever", because `0 or 500`-style fallback
 --- idioms treat 0 as present (0 is truthy in Lua) and this file's own
---- :IsOnCooldown then fails closed on it. the removed recall server file already
---- worked around this independently for Config.Recall.RequestCooldownMs
---- (falls back to a built-in constant and prints a warning rather than
---- trusting a raw non-positive config read) — this constructor-time guard
+--- :IsOnCooldown then fails closed on it. The since-removed recall feature hit
+--- this independently and worked around it in its own file (falling back to
+--- a built-in constant and printing a warning rather than trusting a raw
+--- non-positive config read) — this constructor-time guard
 --- below makes that same class of mistake loud AT RESOURCE START for the
 --- common "NewCooldown(Config.X.cooldownMs)" shape (verified: every
 --- current NewCooldown/NewNestedCooldown call site's shipped config.lua

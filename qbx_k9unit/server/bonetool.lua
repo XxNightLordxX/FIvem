@@ -538,10 +538,10 @@ AddEventHandler('onResourceStart', function(resourceName)
         -- see EVENT CONTRACT above) and MUST stay reachable even for a
         -- caller whose IsAuthorizedBoneSweepDevTool grant is revoked
         -- mid-session (a job change, a demotion, a boss toggling someone's
-        -- isboss flag off) — mirroring this resource's own Recall design
-        -- (config.lua's Config.Recall header: "a handler whose
-        -- certification is revoked mid-bite must still be able to call
-        -- their dog off. Do NOT add an access check... to this path").
+        -- isboss flag off) — mirroring the rule the since-removed recall
+        -- feature was built around: a handler whose certification is revoked
+        -- mid-bite must still be able to call their dog off, so an access
+        -- check must never sit on the escape-hatch path.
         -- Deliberately checked and dispatched BEFORE the authorization gate
         -- below, not merely exempted from it after the fact, so no future
         -- edit can accidentally reorder an authorization check back in

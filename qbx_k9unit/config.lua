@@ -113,7 +113,7 @@ Config = {}
 --   Config.CertifyMaxNewGranteesPerDay . the daily cap on how many
 --                                     DIFFERENT people one officer can be
 --                                     paid handler XP for certifying
---   Config.CertificationExpiry* ..... whether certifications lapse, and the
+--   Config.CertificationExpiryDays .. whether certifications lapse, and the
 --                                     warning before they do
 --
 -- EARNING AND RANKING UP
@@ -147,17 +147,6 @@ Config = {}
 --   Config.DeployableKennel ......... putting down a portable kennel
 --   Config.PropAttachments .......... vests and gear on the dog
 --   Config.FetchMechanic ............ fetch
---
--- TRAINING AND PLAY
---   Config.TrainingZones ............ where the practice yards are
---   Config.Training ................. how the practice drills behave
---   Config.ScentTrailHunt ........... follow-your-nose hunts (switch
---                                     removed, owner-approved -- see
---                                     Config.Features' own comment for
---                                     the full writeup; this tuning table
---                                     is kept, untouched, unused)
---   Config.ScentLineup .............. sniff the row and pick the match
---   Config.SARCalls ................. missing-person and rescue calls
 --
 -- LOOK, SOUND AND FEEL
 --   Config.Wellbeing ................ tiredness (players may say "energy",

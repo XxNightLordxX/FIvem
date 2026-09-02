@@ -582,6 +582,152 @@ end)
 -- and is checked nowhere here.
 -- ======================================================================
 
+-- ========================================================================
+-- COMMENT ROT GUARD -- every Config.<Something> path a COMMENT names must
+-- still resolve in the real, shipped config.
+-- ========================================================================
+--
+-- WHY THIS EXISTS. The citation guard (tests/citationintegrity_spec.lua)
+-- checks that every FILE PATH a comment names exists on disk, and it works
+-- -- it caught the merged-away diagnostics files within minutes. Nothing
+-- checked that a CONFIG BLOCK a comment names still exists. That is how
+-- four comments describing `Config.Recall` as a live setting survived three
+-- separate removal sweeps: one of them listed it in config.lua's own table
+-- of contents, and two told a reader that features deleted at the owner's
+-- request were "now built and consuming" the partnership registry. They
+-- were found by hand, and partly by luck.
+--
+-- A comment that names a config block that no longer exists is worse than
+-- no comment: it sends a reader looking for a setting they will never find,
+-- and it reads as current documentation rather than as history.
+--
+-- HISTORY IS STILL ALLOWED, and often valuable -- "the since-removed recall
+-- feature hit this same footgun" is a real lesson. The rule is only that
+-- history must not be written as a live path. Say what happened in prose;
+-- do not name `Config.Thing` as though a reader could go look at it.
+--
+-- SCOPE. Lua comments in config.lua, client/, server/ and shared/. Only
+-- top-level `Config.<Name>` blocks are resolved -- deeper paths
+-- (`Config.XP.searchFind`) are not walked, because a comment naming a
+-- sub-key that moved is a much weaker signal than one naming a whole block
+-- that is gone, and walking them would trade this guard's precision for
+-- noise. `Config.Features.<Flag>` is covered by the tests above.
+
+--- Names a comment may use that are not real config blocks, each with a
+--- written reason -- same convention, and same anti-rot checks, as
+--- INTENTIONALLY_ABSENT above.
+local COMMENT_CONFIG_ALLOWLIST = {
+    X                      = 'generic placeholder in server/cooldowns.lua prose ("Config.X = 0"), never a real block',
+    Y                      = 'generic placeholder in server/cooldowns.lua prose, never a real block',
+    lua                    = 'the string "Config.lua" -- the filename with a capital C at the start of a sentence, not a table path',
+    Diagnostics            = 'named in server/diagnostics.lua only to say the block is NOT called this, as the example of a rename that would silently disable the feature',
+    FeaturesBeforeGrouping = 'real, but created at runtime by ResolveFeatureGroups rather than authored in config.lua, so it never appears as a `Config.X =` assignment',
+    K9DespawnGraceSeconds  = 'explicitly described as an earlier draft that was superseded -- config.lua and server/certifications.lua both say so in the same sentence',
+    K9BoneIndices          = 'explicitly described as an earlier, more elaborate sketch that was superseded -- client/fetch.lua and server/fetch.lua both say so in the same sentence',
+}
+
+--- Top-level `Config.<Name> =` assignments in the shipped config.
+--- @return table<string, boolean>
+local function ShippedConfigBlocks()
+    local handle = assert(io.open('../config.lua', 'r'))
+    local text = handle:read('a')
+    handle:close()
+    local blocks = {}
+    for name in text:gmatch('\nConfig%.([A-Za-z0-9_]+)%s*=') do blocks[name] = true end
+    return blocks
+end
+
+--- The inverse of ReferencedFeatureFlags' stripper: keeps ONLY comment
+--- text, with true line numbers, so this guard reads exactly what the other
+--- one throws away.
+--- @param text string
+--- @return table[] -- { line = number, text = string }
+local function CommentLines(text)
+    local out = {}
+    local inBlock, level = false, ''
+    local lineNo = 0
+    for line in (text .. '\n'):gmatch('([^\n]*)\n') do
+        lineNo = lineNo + 1
+        if inBlock then
+            out[#out + 1] = { line = lineNo, text = line }
+            if line:find(']' .. level .. ']', 1, true) then inBlock = false end
+        else
+            local openStart, openEnd, lvl = line:find('%-%-%[(=*)%[')
+            if openStart then
+                out[#out + 1] = { line = lineNo, text = line }
+                level = lvl
+                if not line:sub(openEnd + 1):find(']' .. level .. ']', 1, true) then inBlock = true end
+            else
+                local dashes = line:find('%-%-')
+                if dashes then out[#out + 1] = { line = lineNo, text = line:sub(dashes) } end
+            end
+        end
+    end
+    return out
+end
+
+t.test('COMMENT ROT: every Config.<block> a comment names still exists in the shipped config.lua -- the guard that would have caught the four stale Config.Recall comments', function()
+    -- CONTROL PERFORMED: re-adding the deleted "Config.ScentTrailHunt ...
+    -- follow-your-nose hunts" line to config.lua's own table of contents
+    -- turns this red, naming config.lua and the line. Removing it again
+    -- makes it green.
+    local blocks = ShippedConfigBlocks()
+
+    local listing = assert(io.popen('ls ../config.lua ../client/*.lua ../server/*.lua ../shared/*.lua 2>/dev/null'))
+    local paths = {}
+    for line in listing:lines() do paths[#paths + 1] = line end
+    listing:close()
+    t.isTrue(#paths > 20, 'sanity: the file scan must actually find files, or this test passes vacuously')
+
+    local stale = {}
+    for _, path in ipairs(paths) do
+        local handle = io.open(path, 'r')
+        if handle then
+            local text = handle:read('a')
+            handle:close()
+            for _, entry in ipairs(CommentLines(text)) do
+                -- The `[^%w_]` prefix matters: without it this matches the
+                -- tail of `trackingConfig.maxRange` and reports `maxRange`
+                -- as a missing top-level block. Three real comments hit
+                -- that during development of this guard.
+                for name in (' ' .. entry.text):gmatch('[^%w_]Config%.([A-Za-z0-9_]+)') do
+                    if not blocks[name] and not COMMENT_CONFIG_ALLOWLIST[name] then
+                        stale[#stale + 1] = ('%s:%d names Config.%s'):format(path:gsub('^%.%./', ''), entry.line, name)
+                    end
+                end
+            end
+        end
+    end
+    table.sort(stale)
+
+    t.equals(#stale, 0,
+        'comment(s) naming a config block that no longer exists:\n    ' .. table.concat(stale, '\n    ')
+        .. '\n  Either the block was removed and the comment was never updated (say what happened in prose instead of'
+        .. ' naming a path a reader cannot go look at), or add the name to COMMENT_CONFIG_ALLOWLIST with a written reason.')
+end)
+
+t.test('COMMENT ROT ALLOWLIST HYGIENE: no allowlist entry has quietly become a real config block, and none is dead weight', function()
+    local blocks = ShippedConfigBlocks()
+
+    local listing = assert(io.popen('ls ../config.lua ../client/*.lua ../server/*.lua ../shared/*.lua 2>/dev/null'))
+    local allText = {}
+    for line in listing:lines() do
+        local handle = io.open(line, 'r')
+        if handle then allText[#allText + 1] = handle:read('a'); handle:close() end
+    end
+    listing:close()
+    local haystack = table.concat(allText, '\n')
+
+    for name, reason in pairs(COMMENT_CONFIG_ALLOWLIST) do
+        t.isTrue(type(reason) == 'string' and #reason > 20,
+            name .. ' needs a real written reason, not a placeholder')
+        t.isFalse(blocks[name] == true,
+            name .. ' is now a REAL config block -- remove its exemption, the guard should be checking it')
+        t.isTrue(haystack:find('Config%.' .. name) ~= nil,
+            name .. ' is no longer named by any comment -- the exemption is dead weight, remove it')
+    end
+end)
+
 t.test('CONSTRAINT: no scenery ped this resource spawns may use a K9 model', function()
     local shippedCfg = env.Config
     t.isNotNil(shippedCfg, 'shipped Config must load')

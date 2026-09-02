@@ -930,7 +930,8 @@ end)
 ---      throttle, but it is the wrong one for an escape hatch. An operator
 ---      setting `releaseCooldownMs = 0` to mean "no throttle" would instead
 ---      permanently disable voluntary release for every source that had
----      released once — the same shape as the Config.Recall footgun.
+---      released once — the same shape as the non-positive-cooldown footgun
+---      server/cooldowns.lua's own header describes at length.
 --- Spam is already bounded without a cooldown: the CarrierIndex lookup
 --- below returns early for anyone who is not currently a carrier, so a
 --- repeated call after the first release does nothing but a table read.

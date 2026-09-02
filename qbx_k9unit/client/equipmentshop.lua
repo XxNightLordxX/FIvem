@@ -322,8 +322,8 @@ local function BuildConfigOnlyLocations(shopConfig)
 
     for i, entry in ipairs(shopConfig.locations) do
         -- config.lua stores these as plain { x, y, z } tables rather than
-        -- live vector3() calls, matching Config.TrainingZones' own
-        -- convention: config.lua must stay loadable outside the game, and a
+        -- live vector3() calls, matching every other coordinate table in
+        -- config.lua: config.lua must stay loadable outside the game, and a
         -- vector3() call at its top level is not. The conversion belongs
         -- here, at the one place the value is actually handed to a native.
         if type(entry) == 'table' and type(entry.x) == 'number' and type(entry.y) == 'number' and type(entry.z) == 'number' then

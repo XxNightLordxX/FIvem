@@ -1140,9 +1140,8 @@ local TUNABLE_REGISTRY = {
     -- removed alongside the feature's own FEATURE_TIERS entry above and
     -- Config.Features.ScentTrailHunt itself (config.lua's own comment
     -- there has the full writeup) -- the removed scent-trail server file's own top-level
-    -- flag check now returns before Config.ScentTrailHunt's values (still
-    -- intact, untouched, see that table's own comment in config.lua) are
-    -- ever read, so a live tuning slider for them would have controlled
+    -- flag check returned before its tuning values were ever read, so a
+    -- live tuning slider for them would have controlled
     -- nothing. Removed rather than left registered-but-inert, so the
     -- tablet's own Runtime Control screen never offers a knob for a
     -- feature that no longer runs.
@@ -1212,10 +1211,10 @@ local TUNABLE_REGISTRY = {
     ['PursuitSprint.speedMultiplier']           = { path = { 'PursuitSprint', 'speedMultiplier' },                min = 1.0,   max = ResolveMaxSpeedScentMultiplier(), integer = false },
     ['PursuitSprint.durationMs']                = { path = { 'PursuitSprint', 'durationMs' },                     min = 500,   max = 30000,     integer = true },
 
-    -- the removed SAR-calls server file (Config.Features.SARCalls, rawtoplevel).
-    -- `local tuning = Config.SARCalls` is a live reference; RollSarTarget/
-    -- TierForDistance/the tick loop all read straight off `tuning` every
-    -- call. startCooldownMs is EXCLUDED (NewCooldown constructor default).
+    -- the removed SAR-calls server file (rawtoplevel). Its tuning table was
+    -- held as a live reference, so RollSarTarget/TierForDistance/the tick
+    -- loop all read straight off it every call. startCooldownMs was EXCLUDED
+    -- (NewCooldown constructor default).
     -- revealDurationMs/missingPersonPedModel/lostPropertyPropModel are
     -- EXCLUDED -- this file's own CONFIG-SAFETY GUARD comment states outright
     -- those three "are read and validated by the removed SAR-calls client file alone --
