@@ -80,19 +80,8 @@
     EVENT/CALLBACK CONTRACT — see server/wellbeing.lua's header for the full
     contract; this file is the client side of every entry listed there.
 
-    Commands (RegisterCommand):
-    - '/k9calmdown' — always registered; self-only, gated on CanShowK9UI() +
-      LiveFeatureFlags.FearStressSystem (the server's CURRENT
-      Config.Features.FearStressSystem value, not this client's static
-      copy — see "LIVE FEATURE FLAGS" above). Triggers
-      'qbx_k9unit:server:calmDownK9'.
-    - '/k9meatbait' / '/k9whistle' — always registered; deliberately NOT
-      gated on CanShowK9UI(): DEVELOPER_REFERENCE.md §13.4.3.4 open question 2
-      reads this as intentionally open to any player (a fleeing suspect
-      using a whistle/meat-bait against a pursuing K9 is explicitly
-      in-scope per that document's own framing), gated only on
-      LiveFeatureFlags.DistractionSystem and, for real, on server-side item
-      possession.
+    Commands (RegisterCommand): none. This file registered three until
+    2026-09-02, all belonging to subsystems removed at the owner's request.
 
     FILE-TO-FILE CONTRACT:
     - Reads/writes `K9MoveRateModifiers` and calls `RecomputeK9MoveRate()`,
@@ -136,16 +125,6 @@ local K9_CALLBACK_TIMEOUT_MS = 10000
 -- not-yet-known state must be a no-op" default in this codebase.
 local lastStats = {
     fatigue = 100,
-    mood = 100,
-    fearStress = 0,
-    injury = 100,
-    -- HUNGER/THIRST (this pass, coder-backend) -- same "safe default" reasoning
-    -- as every other field here: fully-fed/fully-hydrated until the first
-    -- real snapshot arrives.
-    hunger = 100,
-    thirst = 100,
-    distractedUntil = 0,
-    hesitatingUntil = 0,
 }
 
 -- ======================================================================
@@ -355,20 +334,8 @@ local function ApplyWellbeingSnapshot(stats)
     end
 
     lastStats.fatigue = tonumber(stats.fatigue) or lastStats.fatigue
-    lastStats.mood = tonumber(stats.mood) or lastStats.mood
-    lastStats.fearStress = tonumber(stats.fearStress) or lastStats.fearStress
-    lastStats.injury = tonumber(stats.injury) or lastStats.injury
-    -- HUNGER/THIRST (this pass, coder-backend) -- same tonumber-or-keep-last
-    -- ingest as every other stat above.
-    lastStats.hunger = tonumber(stats.hunger) or lastStats.hunger
-    lastStats.thirst = tonumber(stats.thirst) or lastStats.thirst
-    lastStats.distractedUntil = tonumber(stats.distractedUntil) or lastStats.distractedUntil
-    lastStats.hesitatingUntil = tonumber(stats.hesitatingUntil) or lastStats.hesitatingUntil
 
     ApplyMoveRateModifiers()
-
-
-
 end
 
 --- DEVELOPER_REFERENCE.md §13.4.3.1. Pure tick-driven consumer — server/wellbeing.lua's

@@ -280,7 +280,7 @@ server_scripts {
     -- Shared outbound-event helper (FireOutboundEvent). Extracted after this
     -- exact five-line pcall(TriggerEvent, ...) wrapper was found hand-rolled
     -- SIX separate times, byte-for-byte identical, across
-    -- certifications.lua, search.lua, partnership.lua, sarcalls.lua,
+    -- certifications.lua, search.lua, partnership.lua,
     -- progression.lua and integrations.lua. These fire the documented
     -- qbx_k9unit:events:* public contract, so the risk was never untidiness
     -- -- it was someone improving one copy and not the other five, leaving a

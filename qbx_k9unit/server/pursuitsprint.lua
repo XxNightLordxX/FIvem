@@ -78,7 +78,7 @@
     as this task required.
 
     XP: ZERO, by construction, same decision and same reasoning
-    the removed training server file's own "THE XP DECISION" header already applies to a
+    the "THE XP DECISION" reasoning this resource already applies to a
     much LOWER-friction action than this one. This file contains NO call to
     AwardXP or AwardXPDirect, and reads no field of Config.XP -- verifiable
     by grep. Arithmetic, stated explicitly per this task's own demand: even
@@ -230,7 +230,7 @@
     consult this exact namespace too, confirmed by reading each file.
     config.lua's own Config.FeatureControl.RequireGrant table has also
     since grown well past the original four entries this section described
-    (FindAlerts/ScentTrailHunt/PursuitSprint/ScentLineup/SARCalls have all
+    (FindAlerts/PursuitSprint have all
     been added). This file's own implementation below was written to FAIL
     CLOSED against the older, narrower code and needed no change for any of
     this -- high command's existing tablet:grantFeature/blockFeature NUI
@@ -327,7 +327,7 @@ local function ResolveConfiguredPositiveNumber(value, fallback, keyName, require
 end
 
 -- speedMultiplier and requestRangeMeters have no relationship to any other
--- field here (unlike the removed SAR-calls server file's radius/distance groups) -- each
+-- field here -- each
 -- is resolved independently. Resolved values are written BACK into
 -- Config.PursuitSprint so every later read in this file (requestRangeMeters
 -- is re-read directly off Config, not captured to a local, in the request

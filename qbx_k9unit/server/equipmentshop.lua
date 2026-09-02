@@ -1517,23 +1517,15 @@ end
 --- Command has blocked you" for either of those is not just imprecise,
 --- it is WRONG -- it blames a person for a decision nobody made about
 --- them individually. Every sibling feature with this same three-way
---- shape (server/pursuitsprint.lua, the removed scent-trail server file,
---- the removed SAR-calls server file, the removed scent-lineup server file, server/findalert.lua)
---- already returns a `reason` string so its call sites can word each
---- refusal accurately instead of blaming a person; this function now does
---- the same. (Filename corrected 2026-08-31: this list previously named a
---- `server/sar` file that has never existed -- the real SAR file is
---- `the removed SAR-calls server file`, above. The dead name is not written out in full
---- because tests/citationintegrity_spec.lua sweeps every path in the repo,
---- so quoting one to correct it puts it back. The same pass also checked
---- the claim itself
---- rather than only the spelling: the reason SET is two or three wide
---- depending on the file, not uniformly three. pursuitsprint, sarcalls and
---- scentlineup top-level `return` when their feature flag is off, so a
---- 'feature_disabled' reason is unreachable in their permitted-check and
---- findalert returns only 'blocked'/'not_granted'. This function does need
---- all three, because Config.Features.K9EquipmentShop is re-read per call
---- rather than gating the file's load.)
+--- shape (server/pursuitsprint.lua, server/findalert.lua) already returns
+--- a `reason` string so its call sites can word each refusal accurately
+--- instead of blaming a person; this function now does the same. Note the
+--- reason SET is two or three wide depending on the file, not uniformly
+--- three: pursuitsprint top-level `return`s when its feature flag is off,
+--- so a 'feature_disabled' reason is unreachable in its permitted-check,
+--- and findalert returns only 'blocked'/'not_granted'. This function does
+--- need all three, because Config.Features.K9EquipmentShop is re-read per
+--- call rather than gating the file's load.
 --- @param citizenid string
 --- @return boolean allowed
 --- @return string? reason -- 'feature_disabled' | 'blocked' | 'not_granted', present only when allowed is false

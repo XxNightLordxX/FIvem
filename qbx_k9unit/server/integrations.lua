@@ -106,8 +106,7 @@
 
     WHY A SELF-CONTAINED POLL, NOT A HOOK INSIDE server/wellbeing.lua'S
     EXISTING TickWellbeing LOOP: that loop already iterates every online K9
-    once per Config.Wellbeing.tickIntervalMs and already reads
-    GetEntityHealth(ped) under Config.Features.InjuryLimping -- a textbook
+    once per Config.Wellbeing.tickIntervalMs -- a textbook
     "add one call at an existing success path." server/wellbeing.lua is not
     edited by this file. Part A §7's own text explicitly names the
     alternative used here ("doable even earlier off raw GetEntityHealth
@@ -162,8 +161,8 @@
 
     NOT IN SCOPE: a corresponding "recovered"/"cleared" event. Nothing in
     Part A §7 asks for one, and this resource's own minimalism convention
-    (HandlerDownDefense: "detection only, never enforcement") argues against
-    announcing something nobody asked for. A dispatch resource that wants a
+    ("detection only, never enforcement") argues against announcing
+    something nobody asked for. A dispatch resource that wants a
     "cleared" concept can already infer one from its own timeout, the same
     way a real dispatch board ages out a stale call.
     ======================================================================
@@ -512,8 +511,8 @@ local function PollK9Health()
                                     -- above it. `title` is a plain string, not
                                     -- a locale() call, per dispatch.lua's own
                                     -- header LOCALE NOTE. Guarded the same way
-                                    -- scentlineup.lua guards its own
-                                    -- K9Compat.Get('framework') call -- a
+                                    -- every other K9Compat.Get('framework')
+                                    -- call in this resource is -- a
                                     -- missing K9Compat (e.g. shared/compat/
                                     -- core.lua not yet loaded/registered for any
                                     -- reason) degrades to "this convenience

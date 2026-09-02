@@ -297,7 +297,6 @@ local function newTabletFixture(opts)
         RequestDeployKennel = record('RequestDeployKennel'),
         RequestOpenOwnK9Inventory = record('RequestOpenOwnK9Inventory'),
         RequestTreatNearestK9 = record('RequestTreatNearestK9'),
-        RequestK9CalmDown = record('RequestK9CalmDown'),
     }
 
     -- FindNearestLeashCandidate/FindNearestPartnerCandidate are OMITTED
@@ -1638,14 +1637,6 @@ t.test('K9Inventory NOT-WIDENED PIN: a High Command/autoAccessGrade-bypass holde
     t.equals(result.error, 'not_available')
     t.equals(#(f.calls['RequestOpenOwnK9Inventory'] or {}), 0)
     t.equals(f.denyCalls(), 1)
-end)
-
-t.test('FearStressSystem: fully self-gating passthrough (RequestK9CalmDown already gates+notifies internally)', function()
-    local f = newTabletFixture()
-    local result = f.callNui('tablet:triggerFeature', { feature = 'FearStressSystem' })
-    t.isTrue(result.ok)
-    t.equals(#f.calls['RequestK9CalmDown'], 1)
-    t.equals(f.canShowK9UICalls(), 0)
 end)
 
 t.test('K9Medkit: CanShowK9UI() PRE-CHECK REMOVED -- "Treat K9" is a human-handler, job-only action (server/medkit.lua\'s IsMedkitUserAuthorized never calls HasK9Access, model, or role), so this fires even for a caller with ZERO K9 access/role/model of their own', function()

@@ -297,9 +297,6 @@ local function newCombatFixture(opts)
         awardCalls[#awardCalls + 1] = { citizenid = citizenid, awardKey = awardKey }
     end
 
-    local hesitatingByCid, distractedByCid = {}, {}
-    local function isHesitatingFn(cid) return hesitatingByCid[cid] == true end
-    local function isDistractedFn(cid) return distractedByCid[cid] == true end
 
     -- COMPAT-LAYER (this pass): server/combat.lua's IsTargetDowned now
     -- calls `K9Compat.Get('ambulance').IsDowned(targetSrc)` -- a minimal,
@@ -405,10 +402,6 @@ local function newCombatFixture(opts)
         Config = config,
     }
     if opts.withAwardXP ~= false then envOverrides.AwardXP = awardXPFn end
-    if opts.withWellbeing then
-        envOverrides.IsHesitating = isHesitatingFn
-        envOverrides.IsDistracted = isDistractedFn
-    end
     if opts.withHasPermission then
         envOverrides.HasPermission = opts.hasPermissionFn or defaultHasPermission
     end
@@ -526,8 +519,6 @@ local function newCombatFixture(opts)
         end,
         addOnline = function(id) onlineSet[id] = true end,
         removeOnline = function(id) onlineSet[id] = nil end,
-        setHesitating = function(citizenid, val) hesitatingByCid[citizenid] = val end,
-        setDistracted = function(citizenid, val) distractedByCid[citizenid] = val end,
         dispatchNetEvent = function(eventName, src, ...)
             dispatchStepped(eventName, src, { ... }, nil)
         end,
@@ -1513,26 +1504,8 @@ t.test('requestBiteHold: a WantedStatusCheckOverride that errors fails CLOSED (t
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyBiteHold'), 0)
 end)
 
-t.test('requestBiteHold: a hesitating K9 (server/wellbeing.lua present) is rejected', function()
-    local f = newCombatFixture({ withWellbeing = true })
-    wireK9(f, K9_SRC, { citizenid = 'K9-CID' })
-    wireNpcTarget(f, 500)
-    f.setHesitating('K9-CID', true)
-    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
-    t.equals(#f.clientEvents, 0)
-end)
-
-t.test('requestBiteHold: a distracted K9 (server/wellbeing.lua present) is rejected', function()
-    local f = newCombatFixture({ withWellbeing = true })
-    wireK9(f, K9_SRC, { citizenid = 'K9-CID' })
-    wireNpcTarget(f, 500)
-    f.setDistracted('K9-CID', true)
-    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
-    t.equals(#f.clientEvents, 0)
-end)
-
-t.test('requestBiteHold: server/wellbeing.lua entirely absent (no IsHesitating/IsDistracted) never crashes and proceeds normally', function()
-    local f = newCombatFixture({ withWellbeing = false })
+t.test('requestBiteHold: no wellbeing accessors present -- never crashes and proceeds normally', function()
+    local f = newCombatFixture()
     wireK9(f, K9_SRC)
     wireNpcTarget(f, 500)
     local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:requestBiteHold', K9_SRC, 500)

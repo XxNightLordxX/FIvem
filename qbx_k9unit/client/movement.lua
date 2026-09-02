@@ -16,7 +16,7 @@
     unaffected by DEVELOPER_REFERENCE.md §12.0 item 8's still-open (as of that
     pass) client-relay question, which only concerns effects applied to a
     DIFFERENT entity. Every other Phase 3 sub-feature (BiteAndHold/
-    NonLethalTakedown/PropDragging/HandlerDownDefense) is deliberately NOT
+    NonLethalTakedown/PropDragging) is deliberately NOT
     touched here — see config.lua's own Config.Combat header comment for
     exactly why each one is still blocked.
 
@@ -68,7 +68,7 @@
     the shared K9 move-rate composer, `K9MoveRateModifiers` (table) +
     `RecomputeK9MoveRate()` (function) — DEVELOPER_REFERENCE.md §13.0 Decision 2.
     QA had found client/wellbeing.lua unconditionally writing
-    `K9MoveRateModifiers.fatigue`/`.injury`/`.mood` and calling
+    `K9MoveRateModifiers.fatigue` and calling
     `RecomputeK9MoveRate()` with neither symbol defined anywhere in this
     codebase — latent only because every wellbeing feature flag defaults to
     `false` in config.lua, and a real bug (hard error, "attempt to index a
@@ -888,7 +888,7 @@ local LEASH_TARGET_DISTANCE_FACTOR = 0.5
 --     (IsOwnModelK9()), matching this option's own long-standing "any
 --     nearby player is a plausible prospective handler, let the server
 --     answer with a specific reason" tradeoff (unchanged from before this
---     split — see the removed comment this replaces).
+--     split).
 -- Both still funnel into the exact same RequestLeashAttach(targetServerId)
 -- — this is a display/labeling split only, never a second, divergent
 -- request path, and CheckLeashEligibility (server/main.lua) remains the
@@ -1107,7 +1107,7 @@ end
 -- ======================================================================
 -- MOVE-RATE COMPOSER (DEVELOPER_REFERENCE.md §13.0 Decision 2) -- REAL BUG FIX,
 -- qa-tester finding: client/wellbeing.lua (Phase 4) writes
--- K9MoveRateModifiers.fatigue/.injury/.mood and calls RecomputeK9MoveRate()
+-- K9MoveRateModifiers.fatigue and calls RecomputeK9MoveRate()
 -- unconditionally (no existence guard, unlike client/progression.lua's own
 -- defensive `if K9MoveRateModifiers then`/`type(RecomputeK9MoveRate) ==
 -- 'function'` checks) on the assumption that THIS FILE defines both --
@@ -1415,8 +1415,6 @@ end
 --- @type table<string, number>
 K9MoveRateModifiers = {
     fatigue = 1.0,  -- client/wellbeing.lua, Config.Features.FatigueSystem
-    injury = 1.0,   -- client/wellbeing.lua, Config.Features.InjuryLimping
-    mood = 1.0,     -- client/wellbeing.lua, Config.Features.MoodSystem
     xpTier = 1.0,   -- client/progression.lua, Config.Features.XPProgression
     dragging = 1.0, -- RESERVED for Phase 3's PropDragging (client/combat.lua, DEVELOPER_REFERENCE.md §12.5.4) -- not yet a real contributor; present so that file's eventual composer write has a ready slot without needing to edit this table.
     breed = 1.0,    -- THIS FILE's own contribution -- see "BREED MOVE-RATE WEIGHT" below. Recomputed fresh on every RecomputeK9MoveRate() call from the CALLING client's own current ped model, never left stale across a model change the way a server-pushed modifier (xpTier) could be.
@@ -2166,8 +2164,8 @@ local K9_DOOR_SCRATCH_DEFAULT_SCENARIO = 'WORLD_DOG_BARKING_SHEPHERD' -- fallbac
 -- 'qbx_k9unit_sounds' ships with this resource, or ever has), but that
 -- comment stopped being the whole story once client/audio.lua's real NUI
 -- audio bridge (PlayK9Sound) shipped: client/main.lua's playBark handler,
--- client/search.lua's contraband-alert receiver, the removed scent-trail client file,
--- the removed SAR-calls client file and client/findalert.lua ALL dual-path every one of
+-- client/search.lua's contraband-alert receiver and client/findalert.lua
+-- ALL dual-path every one of
 -- their sound cues through PlaySoundOnNetworkEntity, which tries the dead
 -- native call AND client/audio.lua's PlayK9Sound (the one path that can
 -- actually produce sound today, once an operator drops a matching .ogg into
@@ -2242,7 +2240,7 @@ local function ScratchAtDoor(entity)
     -- Routed through the shared PlaySoundOnNetworkEntity (client/main.lua)
     -- rather than a direct PlaySoundFromEntity call — see
     -- DOOR_SCRATCH_SOUND_NAME's own comment above for why. Own netId, same
-    -- pattern as the removed SAR-calls client file's PlayOwnPedSound/the removed scent-trail client file's
+    -- pattern as every other own-ped sound helper's
     -- PlayPulse (both play a one-shot cue on THIS client's own ped).
     PlaySoundOnNetworkEntity(NetworkGetNetworkIdFromEntity(ped), DOOR_SCRATCH_SOUND_NAME)
 

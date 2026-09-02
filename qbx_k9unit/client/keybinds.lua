@@ -9,9 +9,9 @@
     instead of scattered across the resource -- unlike this codebase's
     OLDER precedent (client/movement.lua's camera toggle,
     client/agility.lua's vault, client/pursuitsprint.lua,
-    client/vision.lua's two toggles, the removed handler-down-defense client file's confirm), which
-    each pair their own RegisterCommand/RegisterKeyMapping call inline next
-    to the function they wrap. Those five are NOT duplicated here -- they
+    client/vision.lua's two toggles), which each pair their own
+    RegisterCommand/RegisterKeyMapping call inline next to the function
+    they wrap. Those are NOT duplicated here -- they
     already have a working command + keybind pair and needed nothing from
     this pass; this file only fills the actual gap: BiteAndHold/
     NonLethalTakedown/PropDragging (client/combat.lua) had ZERO command or
@@ -21,7 +21,7 @@
     menu at a fleeing suspect mid-pursuit").
 
     ======================================================================
-    WHY THESE SIX ACTIONS AND NOT MORE -- THE FULL INVENTORY IS IN THE
+    WHY THESE ACTIONS AND NOT MORE -- THE FULL INVENTORY IS IN THE
     ACCOMPANYING REPORT, NOT REPEATED HERE IN FULL. Short version: every
     K9 action in this resource (radial items, ox_target options, existing
     RegisterCommand entries) was inventoried and split into FAST
@@ -35,16 +35,6 @@
       - Drag / Release          (toggle) -- combat, client/combat.lua
       - Sit                               -- the owner's own named example
       - Bark (basic)                      -- the owner's own named example
-      - Recall                            -- the universal "call your K9
-                                             off NOW" panic button for all
-                                             three combat mechanics above;
-                                             the "release a hold" example
-                                             generalized to its most urgent
-                                             case. RE-USES the EXISTING
-                                             `k9recall` command
-                                             (the removed recall client file) -- see its
-                                             own section below, this file
-                                             adds ONLY the keybind half.
     Pursuit Sprint is the owner's other named example ("sprint") and
     ALREADY has a keybind (client/pursuitsprint.lua, default 'N') -- no
     action needed, listed in the report as "already keybound."
@@ -103,9 +93,6 @@
         client/radial.lua's "Sit" item calls. K9Sit() does its OWN
         CanShowK9UI()/DenyK9UIAccess() gate internally, so this file adds
         no second copy of that check.
-      - k9recall    -> no new function at all; this file adds ONLY the
-        RegisterKeyMapping half for the command the removed recall client file ALREADY
-        registers (`k9recall` -> RequestRecall()). See that section below.
       - k9exitkennel -> ExitKennelRest() (client/kennel.lua) -- THIS PASS.
         The SAME function the new "Exit Kennel" item in client/radial.lua
         calls, and the SAME function the pre-existing "Exit Kennel"
@@ -116,8 +103,8 @@
     assumption -- by the time a player can actually press one of these
     keys, every client_scripts file has already finished loading; the
     guard exists so this file also degrades safely if ever loaded standalone,
-    e.g. under a future test harness, matching the removed handler-down-defense client file's and
-    client/radial.lua's own stated convention for the identical guard).
+    e.g. under a future test harness, matching client/radial.lua's own
+    stated convention for the identical guard).
 
     THE ONE DISCLOSED EXCEPTION: k9bark below has NO existing shared
     global to call into -- client/radial.lua's own flat "Bark" item (the
@@ -238,10 +225,8 @@ if Config.Features.NonLethalTakedown then
         -- NEAREST eligible ped, which client/combat.lua's own comment admits
         -- is "not necessarily the intended one". Pick the wrong person in a
         -- crowd and they were force-ragdolled and damage-immune for the full
-        -- ragdollDurationMs with no way to undo it. The only other thing
-        -- that ends a takedown early is /k9recall -- a HANDLER-side action
-        -- needing HandlerPartnership on and an active partnership, so a solo
-        -- K9 (a documented, supported way to play) had no route at all.
+        -- ragdollDurationMs with no way to undo it, and no route out at
+        -- all for a solo K9 (a documented, supported way to play).
         --
         -- RELEASE BRANCH FIRST, and ungated: this is the STOP half, so it
         -- asks no access question of its own, exactly like the drag toggle

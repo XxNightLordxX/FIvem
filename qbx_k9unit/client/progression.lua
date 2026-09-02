@@ -141,8 +141,7 @@
     unbounded trap this resource's own rules forbid, and the SAME root cause
     (a server-side toggle with literally nothing telling an already-
     connected client) client/wellbeing.lua's own header already documents
-    finding and fixing for FatigueSystem/MoodSystem/FearStressSystem/
-    DistractionSystem/InjuryLimping.
+    finding and fixing for FatigueSystem.
 
     UNLIKE wellbeing, THIS FILE CANNOT FULLY CLOSE THE LOOP ON ITS OWN:
     wellbeing could piggyback a `featureFlags` table onto its own ALREADY-

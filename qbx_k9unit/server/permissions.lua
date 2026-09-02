@@ -2191,7 +2191,7 @@ end
 -- Config.Features.CommandTablet == true. Nine features in config.lua's
 -- own Config.FeatureControl.RequireGrant (BiteAndHold, NonLethalTakedown,
 -- PropDragging, AdminAuditCommands, FindAlerts, ScentTrailHunt,
--- PursuitSprint, ScentLineup, SARCalls) have NO rank-based fallback in
+-- PursuitSprint) have NO rank-based fallback in
 -- their own 4-step resolution (config.lua's own header: step 3 is "ALLOW
 -- ONLY IF THEY HOLD A GRANT", full stop) -- so an operator who turns
 -- CommandTablet off, which config.lua's own Config.CommandTablet header
@@ -2479,7 +2479,7 @@ end
 -- printed half of it, matching this resource's established convention
 -- for an unmissable, actionable operator warning (identical shape to
 -- server/combat.lua's PropDragging override warning and
--- the removed handler-down-defense server file's HandlerDownDefense override warning -- both
+-- another file's own override warning -- both
 -- `AddEventHandler('onResourceStart', ...)`, both filtered to THIS
 -- resource's own restart via `GetCurrentResourceName() ~= resourceName`,
 -- both a single loud `print`, never an `assert`, because turning a

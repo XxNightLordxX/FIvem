@@ -632,9 +632,9 @@ end
 --     "lands on it and refuses" failure mode this shape was explicitly
 --     built to avoid. A partner-dependent action stays its own explicit
 --     entry point (`qbx_k9unit:toggleCameraFeed`, untouched), the same way
---     ScentLineup's pick/cancel stayed outside Detection's merged entry
---     point for an analogous "different precondition, cannot silently
---     inherit a shared gate" reason.
+--     a removed feature's own pick/cancel stayed outside Detection's
+--     merged entry point for an analogous "different precondition, cannot
+--     silently inherit a shared gate" reason.
 --   - ScentVision (client/tracking.lua, out of this file's edit scope
 --     entirely) is a live, continuously-polling nearest-trails overlay
 --     with its own three-way mode (`always`/`keybind`/`off`,

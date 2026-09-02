@@ -523,7 +523,7 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEstablished', function(partnerSer
     -- with an arbitrary player, with zero server contact -- no
     -- server-side capability is granted by this alone today, but
     -- PartnershipState is becoming a capability input for
-    -- HandlerDownDefense/Recall, which makes closing this now rather than
+    -- the features that consumed it, which makes closing this now rather than
     -- after those land the right order. Confidence: MEDIUM-HIGH, the
     -- official documented pattern for distinguishing a genuine
     -- server-sent event from a local self-trigger, not independently
@@ -571,7 +571,7 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     -- state with zero server contact (e.g. a player faking their own
     -- teardown to dodge a future partnership-gated obligation, or an
     -- attacker resetting a target's cached state ahead of
-    -- HandlerDownDefense/Recall consuming it). Confidence: MEDIUM-HIGH,
+    -- its former consumers). Confidence: MEDIUM-HIGH,
     -- the official documented pattern for distinguishing a genuine
     -- server-sent event from a local self-trigger, not independently
     -- verified in-engine.

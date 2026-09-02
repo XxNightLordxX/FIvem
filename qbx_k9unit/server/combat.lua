@@ -348,38 +348,6 @@
       server/cooldowns.lua) — see that call's own comment block and
       cooldowns.lua's header ADDENDUM for why a raw Config read must never
       reach NewCooldown's constructor unguarded in this file specifically.
-    - Calls IsHesitating(citizenid)/IsDistracted(citizenid), resource-globals
-      from server/wellbeing.lua, ONLY IF THOSE FUNCTIONS EXIST (`type(...) ==
-      'function'` guard — same soft-dependency convention as
-      server/medkit.lua's RestoreInjury/server/tracking.lua's AwardXP call
-      sites, never a load-order assumption). server/wellbeing.lua's own
-      header names THIS file's request-validation path as "THE genuine new
-      cross-file dependency" it added these two accessors for — see
-      ValidateCombatRequest below for the actual call site. A K9 whose own
-      character was in one of those states could not have a bite-hold or
-      takedown request granted -- a check on the REQUESTING K9's own
-      wellbeing state, never the target's. Both accessors were removed with
-      their subsystems on 2026-09-02; the guarded-call convention they
-      demonstrate is still how every optional cross-file dependency here
-      works.
-      SECURITY (coder-security, config-audit follow-up pass — see
-      ValidateCombatRequest's own inline comment below and
-      server/wellbeing.lua's IsHesitating doc comment for the full
-      writeup): IsHesitating()'s underlying signal (fearStress, driven by
-      the payload-less/forgeable 'relayWeaponFire' event) is not something
-      this file can independently verify — this call site is a hard reject
-      on a value server/wellbeing.lua itself documents as forgeable by ANY
-      connected player who gets physically near the TARGET K9 (not just by
-      that K9's own actions). server/wellbeing.lua's own
-      HESITATION_MAX_CONTINUOUS_MS bounds the worst case (a forged
-      hesitation episode cannot renew forever — every episode is followed
-      by a guaranteed window where this gate grants normally again), so
-      this is a disclosed, bounded nuisance risk, not an indefinite
-      denial-of-capability. If this call site's trust in IsHesitating() ever
-      changes (e.g. a soft penalty replaces the hard reject, or a
-      corroboration signal is added upstream), update wellbeing.lua's
-      matching disclosure in the same pass — this is exactly the kind of
-      cross-file disclosure that goes stale silently otherwise.
     - Calls AwardXP(citizenid, awardKey), resource-global from
       server/progression.lua, ONLY IF IT EXISTS (same runtime-existence-guard
       convention, mirroring server/tracking.lua's own trackSourceResolved
@@ -1254,8 +1222,6 @@ local COMBAT_REJECT_MESSAGES = {
     -- server/wellbeing.lua-driven — these describe the REQUESTING K9's own
     -- state, never the target's (see this file's header FILE-TO-FILE
     -- CONTRACT entry for IsHesitating/IsDistracted).
-    hesitating         = locale('combat.hesitating'),
-    distracted         = locale('combat.distracted'),
     -- MESSAGE-ROUTING FIX (coder-backend handoff, this pass): 'permission_denied'
     -- used to be the ONE reason both an explicit block.<Name> AND a missing
     -- feature.<Name> grant collapsed into, mapped to the same generic
@@ -1666,59 +1632,6 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
         if holderCitizenid and IsBodyClaimed(holderCitizenid) then
             return false, nil, nil, nil, nil, 'holder_body_claimed'
-        end
-    end
-
-    -- server/wellbeing.lua §13.5 cross-file dependency, wired here for real
-    -- (this file's own header names the exact call site) — a K9 whose OWN
-    -- character is currently hesitating (FearStress) or distracted cannot
-    -- have a request granted at all, checked BEFORE any other state is
-    -- resolved/mutated, same "read-only precondition first" discipline this
-    -- function already documents above. Runtime existence guard: neither
-    -- accessor is assumed to exist by load order (server/wellbeing.lua may
-    -- be absent, or its features disabled) — see server/medkit.lua's
-    -- RestoreInjury for the identical guard shape. pcall-wrapped: an error
-    -- inside either accessor must fail this specific request closed (never
-    -- granted), not bubble up and abort the whole event handler for an
-    -- unrelated reason.
-    --
-    -- SECURITY, READ BEFORE CHANGING THIS BLOCK (coder-security, config-audit
-    -- follow-up pass): this is a HARD reject driven by the removed hesitation check, and
-    -- the removed hesitation check is driven by a payload-less, forgeable client event
-    -- (server/wellbeing.lua's own header, 'relayWeaponFire') — CONFIRMED
-    -- this pass to be forgeable by ANY connected player who is merely
-    -- physically near the K9 whose hesitation they want to force, not just
-    -- by that K9's own client or by a real combat participant. That was
-    -- true, and disclosed, before this call site existed; it became a real
-    -- targeted denial-of-capability (not a self-only nuisance) the moment
-    -- this hard reject started consuming it, because a forged report here
-    -- blocks THIS specific K9's bite-hold/takedown, not the forger's own.
-    -- server/wellbeing.lua's TickWellbeing now caps how long any one
-    -- hesitation episode can keep renewing (HESITATION_MAX_CONTINUOUS_MS)
-    -- specifically so this reject can never become an indefinite lock —
-    -- every episode is guaranteed to be followed by a window where this
-    -- check passes again. That bound lives entirely in server/wellbeing.lua;
-    -- this file does not need its own copy of that logic, only needs to
-    -- keep trusting the removed hesitation check's return value at face value, same as
-    -- today. If this reject is ever softened into a penalty instead of an
-    -- outright denial, or the removed hesitation check gains real corroboration, update
-    -- server/wellbeing.lua's own IsHesitating doc comment in the same pass.
-    if type(IsHesitating) == 'function' or type(IsDistracted) == 'function' then
-        local k9Player = exports.qbx_core:GetPlayer(src)
-        local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
-        if k9Citizenid then
-            if type(IsHesitating) == 'function' then
-                local ok, hesitating = pcall(IsHesitating, k9Citizenid)
-                if ok and hesitating then
-                    return false, nil, nil, nil, nil, 'hesitating'
-                end
-            end
-            if type(IsDistracted) == 'function' then
-                local ok, distracted = pcall(IsDistracted, k9Citizenid)
-                if ok and distracted then
-                    return false, nil, nil, nil, nil, 'distracted'
-                end
-            end
         end
     end
 
@@ -2643,14 +2556,14 @@ local ExcludeVehicleSeatedTargetsMidHold = Config.Combat.ExcludeVehicleSeatedTar
 
 -- CONFIRMED LIVE-FLIP BUG, FIXED (this pass, coder-backend) — this thread
 -- used to be wrapped in `if Config.Features.BiteAndHold or
--- Config.Features.NonLethalTakedown or Config.Features.PropDragging or
--- Config.Features.HandlerDownDefense then CreateThread(...) end`, a
--- boot-time snapshot of four flags read exactly once, at this file's own
--- load time. The stated justification ("ActiveHolds cannot receive an
--- entry unless one of these is on, so with all four false the table is
--- provably always empty, so not running this thread is behaviorally
--- identical to running it forever against an empty table") was true only
--- for as long as all four flags stayed exactly what they were at boot —
+-- Config.Features.NonLethalTakedown or Config.Features.PropDragging then
+-- CreateThread(...) end`, a boot-time snapshot of those flags read exactly
+-- once, at this file's own load time. The stated justification
+-- ("ActiveHolds cannot receive an entry unless one of these is on, so with
+-- all of them false the table is provably always empty, so not running
+-- this thread is behaviorally identical to running it forever against an
+-- empty table") was true only for as long as those flags stayed exactly
+-- what they were at boot —
 -- server/runtimecontrol.lua's own FEATURE_TIERS registry lists
 -- BiteAndHold/NonLethalTakedown/PropDragging as `tier = 'live'`, and
 -- ApplyFeatureOverride mutates Config.Features.* immediately and

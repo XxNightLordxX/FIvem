@@ -1048,13 +1048,10 @@ function HasK9Access(source)
     -- EXIT/OFF path (server/combat.lua's releaseBiteHold/releaseTakedown/
     -- releaseDrag, server/kennel.lua's requestExitKennel/requestPutDownKennel,
     -- server/propattachment.lua's own remove branch, server/fetch.lua's
-    -- releaseFetchBall, server/main.lua's detachLeash,
-    -- the removed training server file's setTrainingMode(false), the removed SAR-calls server file's
-    -- abandonSarCall, the removed scent-lineup server file's k9lineupcancel,
-    -- the removed scent-trail server file's stopScentHunt) is UNCONDITIONAL and never
-    -- calls HasK9Access (or any block check) at all -- "gate the START of
-    -- a thing, never the STOP", stated in those exact words across at
-    -- least eight of those files' own comments. This block therefore
+    -- releaseFetchBall, server/main.lua's detachLeash) is UNCONDITIONAL
+    -- and never calls HasK9Access (or any block check) at all -- "gate the
+    -- START of a thing, never the STOP", stated in those exact words
+    -- across every one of those files' own comments. This block therefore
     -- cannot strand anyone mid-action: it can only ever prevent a NEW
     -- action from starting, exactly like every OTHER way HasK9Access can
     -- already flip false mid-session (a job change, a decertification, a

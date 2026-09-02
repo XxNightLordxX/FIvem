@@ -1289,7 +1289,7 @@ local TABLET_STRING_KEYS = {
     'cmdref_admin_badge', 'cmdref_status_insufficient_authorization',
     -- Keybinds handoff (this pass, client/keybinds.lua's five new
     -- RegisterCommand entries + the new `defaultKeybind` display field on
-    -- k9recall/these five) -- shown once, not per-row, see
+    -- these five) -- shown once, not per-row, see
     -- html/tablet.js's own buildCommandReferenceRow() comment.
     'cmdref_default_keybind_template', 'cmdref_keybind_caveat',
     'cmdref_category_basic_commands', 'cmdref_category_combat',
@@ -1379,7 +1379,7 @@ local TABLET_STRING_KEYS = {
     -- Integration-sweep fix (this pass): seven REAL, working keybind
     -- commands (RegisterCommand + RegisterKeyMapping, confirmed in
     -- client/agility.lua, client/pursuitsprint.lua, client/movement.lua,
-    -- client/vision.lua, the removed handler-down-defense client file) that had ZERO
+    -- client/vision.lua) that had ZERO
     -- COMMAND_REFERENCE entry in html/tablet.js before this pass -- see
     -- tests/commandreferenceregistry_spec.lua's own header "WIDENED, THIS
     -- PASS" for why the drift guard never caught this, and
@@ -1570,7 +1570,7 @@ end
 --- DISCIPLINE and, for the two arguments themselves, "CROSS-RESOURCE FOCUS
 --- INTEROP" above. No access/state check beyond "is it open" -- a
 --- close/termination path must never be gated (this codebase's "no
---- unbounded trap" rule; see the removed recall client file's header) -- that rule is
+--- unbounded trap" rule) -- that rule is
 --- unchanged and unconditional; only WHICH two booleans this one call
 --- passes depends on `tabletHadForeignFocusOnOpen`, captured once per open
 --- by OpenTablet() below. `true` -- another resource already held focus
@@ -1881,8 +1881,7 @@ end
 --
 -- DISCLOSED SIMPLIFICATION: three Config.Features keys cover MORE than
 -- one distinct action in client/radial.lua (HandlerPartnership: Partner
--- Up vs Break Partnership; HandlerDownDefense: confirm-bite vs
--- confirm-takedown; FetchMechanic: throw/release vs recall) -- this
+-- Up vs Break Partnership; FetchMechanic: throw/release vs recall) -- this
 -- contract's `{feature}`-only payload (no extra args) has room for
 -- exactly ONE behavior per key. Each is given the single most defensible
 -- default below (documented per entry) rather than left unreachable; a
@@ -2236,13 +2235,6 @@ local FEATURE_TRIGGERS = {
     -- authority regardless.
     K9Medkit = function()
         if type(RequestTreatNearestK9) == 'function' then RequestTreatNearestK9() end
-        return true
-    end,
-    -- NOT YET in client/radial.lua (client/wellbeing.lua's own header:
-    -- "a future radial menu entry should call this"). the removed calm-down request
-    -- is FULLY self-gating internally -- call straight through.
-    FearStressSystem = function()
-        if type(RequestK9CalmDown) == 'function' then RequestK9CalmDown() end
         return true
     end,
 }

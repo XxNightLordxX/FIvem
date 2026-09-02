@@ -178,11 +178,7 @@
                     handler re-checks the flag inside itself afterward.
       rawtoplevel -- FetchMechanic (server/fetch.lua: "the entire file is
                     inert... while the flag is off", its own words),
-                    HandlerDownDefense (the removed handler-down-defense server file: "this file must
-                    never flip it", config.lua's own words, referring to
-                    exactly this file-top gate), Recall (the removed recall server file
-                    -- the one termination path in this resource, see "A
-                    NOTE ON Recall" below), PropAttachments
+                    PropAttachments
                     (server/propattachment.lua wraps its entire back half
                     in `if Config.Features.PropAttachments then ... end`),
                     CommandTablet (server/permissions.lua's own two tablet
@@ -236,8 +232,8 @@
     who shipped such a feature OFF and expects a runtime toggle to turn it
     on mid-session would otherwise be told "done" while nothing changed.
     SetFeature refuses to imply that -- see `configEditRequired` below.
-    (The recall feature this note was originally written about was removed
-    on 2026-09-02; the rule outlives it and applies to every escape hatch.)
+    (The feature this note was originally written about was removed on
+    2026-09-02; the rule outlives it and applies to every escape hatch.)
 
     ======================================================================
     PART 1B -- TUNING. Config.Features.RuntimeFeatureControl.
@@ -414,8 +410,8 @@
       dependencies; this file may load before either.
     - THIS FILE MUST load before every `onstart`/`rawtoplevel`-tier file
       named above (server/admin.lua, server/bonetool.lua,
-      server/fetch.lua, the removed handler-down-defense server file, the removed recall server file,
-      server/propattachment.lua, server/permissions.lua, and in practice
+      server/fetch.lua, server/propattachment.lua, server/permissions.lua,
+      and in practice
       every other server/*.lua feature file) for the "persisted override
       survives a restart" property described above to hold for the
       `onstart` tier at all. See FXMANIFEST PLACEMENT below for the exact
@@ -564,17 +560,14 @@ local FEATURE_TIERS = {
     FatigueSystem          = { tier = 'live' },
     PartnershipTenureBonus = { tier = 'live', note = 'The milestone check itself re-verifies HandlerPartnership/XPProgression/PartnershipTenureBonus fresh every tick. The tick thread only starts if all three were already true when server/tenure.lua loaded -- if it was off at boot, turning it on mid-session has nothing polling to notice a milestone until this resource restarts.' },
     -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
+    -- Entries for features removed on 2026-09-02 were taken out here
+    -- alongside their TUNABLE_REGISTRY entries further below. An orphaned
+    -- FEATURE_TIERS entry for a feature that no longer exists has zero
+    -- behavioural consequence either way (see
+    -- tests/runtimefeaturetiers_spec.lua's own documented guarantee of
+    -- that) -- removed anyway, so no stale trace is left in a file this
+    -- pass could reach.
     FindAlerts             = { tier = 'live', note = 'server/findalert.lua registers both AddEventHandlers (qbx_k9unit:events:searchCompleted, qbx_k9unit:server:reportTrackSourceArrival) unconditionally at file-load time -- no raw top-level gate exists in this file at all. The shared DispatchFindAlertReaction helper both handlers funnel through re-checks Config.Features.FindAlerts fresh on every single call (its own first line: "if not Config.Features.FindAlerts then return end -- real no-op, not just hidden"), so toggling this off/on stops/starts the bark-on-find reaction genuinely and immediately, with nothing captured once at registration time.' },
-    -- ScentTrailHunt's own entry was removed here alongside the feature
-    -- itself (owner-approved removal -- see config.lua's own comment where
-    -- Config.Features.ScentTrailHunt used to be defined for the full
-    -- writeup and exactly how to bring it back). An orphaned FEATURE_TIERS
-    -- entry for a feature that no longer exists has zero behavioural
-    -- consequence either way (see tests/runtimefeaturetiers_spec.lua's own
-    -- documented guarantee of that) -- removed anyway, alongside its
-    -- TUNABLE_REGISTRY entries further below, for a clean, single-commit,
-    -- easy-to-revert change rather than leaving three separate stale
-    -- traces in a file this pass could reach.
     -- ADDED post-2026-08-26 (coder-frontend/coder-architect's ScentVision
     -- feature, landed concurrently with this pass -- classified here per
     -- their own analysis, independently re-confirmed by direct read of
@@ -871,8 +864,8 @@ end
 --     see e.g. EndActiveEffectForHolder's own doc comment in that same
 --     file), NEVER trusted to exist (runtime-existence-guarded +
 --     pcall-wrapped exactly like every other soft cross-file dependency in
---     this resource -- see the removed recall server file's own EndActiveEffectForHolder
---     guard for the identical shape) so this file's own test sandbox
+--     this resource -- see server/combat.lua's own EndActiveEffectForHolder
+--     doc comment for the identical shape) so this file's own test sandbox
 --     (tests/runtimecontrol_spec.lua, which loads ONLY
 --     server/cooldowns.lua + server/runtimecontrol.lua by that spec's own
 --     header) keeps working with no active-usage count available at all,
@@ -1129,7 +1122,7 @@ local TUNABLE_REGISTRY = {
     -- The four ScentTrailHunt.* tunables that used to live here were
     -- removed alongside the feature's own FEATURE_TIERS entry above and
     -- the feature flag itself (config.lua's own comment
-    -- there has the full writeup) -- the removed scent-trail server file's own top-level
+    -- there has the full writeup) -- that feature's own top-level
     -- flag check returned before its tuning values were ever read, so a
     -- live tuning slider for them would have controlled
     -- nothing. Removed rather than left registered-but-inert, so the
@@ -1201,15 +1194,6 @@ local TUNABLE_REGISTRY = {
     ['PursuitSprint.speedMultiplier']           = { path = { 'PursuitSprint', 'speedMultiplier' },                min = 1.0,   max = ResolveMaxSpeedScentMultiplier(), integer = false },
     ['PursuitSprint.durationMs']                = { path = { 'PursuitSprint', 'durationMs' },                     min = 500,   max = 30000,     integer = true },
 
-    -- the removed SAR-calls server file (rawtoplevel). Its tuning table was
-    -- held as a live reference, so RollSarTarget/TierForDistance/the tick
-    -- loop all read straight off it every call. startCooldownMs was EXCLUDED
-    -- (NewCooldown constructor default).
-    -- revealDurationMs/missingPersonPedModel/lostPropertyPropModel are
-    -- EXCLUDED -- this file's own CONFIG-SAFETY GUARD comment states outright
-    -- those three "are read and validated by the removed SAR-calls client file alone --
-    -- this file never touches them."
-
     -- server/combat.lua (Config.Features.BiteAndHold / NonLethalTakedown /
     -- PropDragging, all `live`). Every entry below is read straight off
     -- `Config.Combat.*` inline, inside the request handler or the shared
@@ -1250,12 +1234,9 @@ local TUNABLE_REGISTRY = {
     ['Combat.PropDragging.maxDragDistance']     = { path = { 'Combat', 'PropDragging', 'maxDragDistance' },      min = 5.0,   max = 200.0,     integer = false },
     ['Combat.PropDragging.maxDragDurationMs']   = { path = { 'Combat', 'PropDragging', 'maxDragDurationMs' },    min = 5000,  max = 60000,     integer = true },
 
-    -- the removed handler-down-defense server file (Config.Features.HandlerDownDefense, live).
-    -- handlerHealthThreshold/triggerRadius/hostileLookbackSeconds are each
-    -- read directly off the handler-down-defense tuning table inline, inside
-    -- IsHandlerDown/TryNotifyPartnerK9, called fresh every maintenance-tick
-    -- pass. pollIntervalMs is EXCLUDED -- that file's own comment states
-    -- outright it is "still captured once into a local (not re-read from
+    -- A removed feature's three tuning entries lived here until
+    -- 2026-09-02. Its pollIntervalMs was EXCLUDED -- that file's own
+    -- comment stated outright it was "still captured once into a local (not re-read from
     -- Config every loop iteration)". retriggerCooldownMs/
     -- attackerReportCooldownMs are EXCLUDED (each baked into its own
     -- NewCooldown constructor). promptTtlMs/confirmKey are EXCLUDED -- never
@@ -1461,18 +1442,12 @@ local TUNABLE_REGISTRY = {
     -- read independently by the client for its own HUD gauge scaling, and a
     -- server-only change here would desync the server's clamp ceiling from
     -- the client's displayed one with no mechanism to keep them in sync.
-    -- FearStress.gunfireRadius/gunfireLookbackSeconds/
-    -- risePerNearbyShotPerTick/hesitationThreshold/hesitationDurationMs are
-    -- ALL EXCLUDED on purpose -- these are the exact values this file's own
-    -- header documents as the live, disclosed, FORGEABLE lever behind a
-    -- real combat-lockout interaction (a forged relayWeaponFire chain
-    -- driving the removed hesitation check, which server/combat.lua's
-    -- ValidateCombatRequest checks): loosening any one of them shifts the
-    -- balance of an already-tricky, already-documented security tradeoff,
-    -- which this pass is not confident stating a universally safe range
-    -- for. calmDownReduceAmount/calmDownCooldownMs are the RECOVERY side of
-    -- that same mechanic (a handler calming their OWN K9) and are kept --
-    -- widening them only ever helps the victim of that exploit, never the
+    -- A removed subsystem's gunfire/hesitation tunables were ALL EXCLUDED
+    -- on purpose while they existed -- they were the live, disclosed,
+    -- FORGEABLE lever behind a real combat-lockout interaction, and
+    -- loosening any one of them shifted the balance of an already-tricky
+    -- security tradeoff. Its recovery-side tunables were kept for the
+    -- opposite reason: widening one only ever helped the victim, never the
     -- forger.
     ['Wellbeing.Fatigue.speedPenaltyThreshold']  = { path = { 'Wellbeing', 'Fatigue', 'speedPenaltyThreshold' },  min = 1,     max = 99,        integer = false },
     ['Wellbeing.Fatigue.speedPenaltyMultiplier'] = { path = { 'Wellbeing', 'Fatigue', 'speedPenaltyMultiplier' }, min = 0.1,   max = 1.0,       integer = false },
@@ -2727,7 +2702,7 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
     -- Config.FeatureGroups does not exist at all -- there is no parent
     -- concept to consult, so this gate can never fire for an install that
     -- has not adopted the grouped format. Also never fires for one of the
-    -- six standalone flags (Recall/HighCommand/PermissionGrants/
+    -- standalone flags (HighCommand/PermissionGrants/
     -- AdminAuditCommands/BoneSweepDevTool/RadialMenu) -- none of those has
     -- a parent to be disabled by, by design.
     if newValue == true and type(IsFeatureGroupParentEnabled) == 'function' and not IsFeatureGroupParentEnabled(name) then

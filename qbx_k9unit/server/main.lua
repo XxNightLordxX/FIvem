@@ -163,7 +163,7 @@
       `K9Compat.Get('ambulance').IsDowned(src)` (shared/compat/core.lua,
       via shared/compat/ambulance.lua's registered adapters) and reads
       `Config.Combat.PropDragging.IsPlayerDownedOverride` — the SAME
-      override/adapter pair the removed handler-down-defense server file's own `IsHandlerDown`
+      override/adapter pair another file's own `IsHandlerDown`
       already established for the identical "is this specific connected
       player currently down" question, reused here rather than
       reinvented. See `IsLeashPartyDead`'s own doc comment (near the
@@ -1485,13 +1485,13 @@ end
 --- client/movement.lua's constrained side, silently persisted — a mechanic
 --- with nothing on screen to show for it.
 ---
---- DETECTION METHOD — mirrors the removed handler-down-defense server file's own `IsHandlerDown`
+--- DETECTION METHOD — mirrors the `IsHandlerDown`
 --- precedence EXACTLY (same override, same K9Compat ambulance-adapter
 --- fallback, same metadata/health floor), not reinvented: both LeashPairs
 --- roles are ALWAYS a real connected player (never an NPC, unlike
 --- server/combat.lua's targets), so the SAME "is this specific connected
---- player currently down" signal the removed handler-down-defense server file already built for
---- HandlerDownDefense is the right, idiomatic tool here too — a raw
+--- player currently down" signal a sibling file already built is the
+--- right, idiomatic tool here too — a raw
 --- GetEntityHealth-only threshold (server/combat.lua's own
 --- PED_DEAD_HEALTH_THRESHOLD approach, correct THERE because an NPC target
 --- has no framework metadata to read at all) would false-positive on an
@@ -1501,9 +1501,9 @@ end
 --- WHOLE consent handshake again, not just a quick re-request.
 --- `Config.Combat.PropDragging.IsPlayerDownedOverride` is REUSED here
 --- DELIBERATELY, a third time (server/combat.lua's own PropDragging is the
---- first consumer, the removed handler-down-defense server file's HandlerDownDefense is the second,
+--- first consumer,
 --- both already reusing this SAME field rather than each adding a
---- dedicated one — see the removed handler-down-defense server file's own header for the "one shared
+--- dedicated one — see this resource's own established "one shared
 --- per-server integration point" rationale this follows) — an operator who
 --- has already wired this once, for either existing mechanic, gets correct
 --- leash-death detection for free, with nothing new to configure.
@@ -1530,7 +1530,7 @@ local function IsLeashPartyDead(src, ped)
     if ambulanceDowned == true then return true end
 
     -- Metadata half is skipped when the adapter already confirmed `false`
-    -- (provably redundant — see the removed handler-down-defense server file's own IsHandlerDown doc
+    -- (provably redundant — see the IsHandlerDown doc
     -- comment for why, identical reasoning applies verbatim here), never
     -- the raw-health half below.
     local player = exports.qbx_core:GetPlayer(src)
