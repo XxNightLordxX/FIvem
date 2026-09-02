@@ -126,42 +126,6 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 local locale = Sandbox.locale
 
 -- ----------------------------------------------------------------------
--- PENDING LOCALE KEYS -- TEMPORARY, see this pass's own report for the
--- exact addition needed to locales/en.json (five new keys under the
--- existing "radial" group, English text below). This file's own hard rule
--- is "never edit locales/en.json" -- Sandbox.locale (fixtures/sandbox.lua)
--- deliberately RAISES on a key that genuinely doesn't exist there yet
--- (exactly the drift-detection behaviour this suite wants), which would
--- otherwise turn every test in this file red the instant
--- client/radial.lua's own load-time table construction reaches the new
--- Search & Rescue Call / Training items below (both flags ship `true` in
--- the real config.lua, so they run on every fixture that doesn't
--- explicitly turn them off).
---
--- pendingLocale(key, ...) tries the REAL Sandbox.locale FIRST and only
--- substitutes the placeholder text below when that genuinely raises --
--- the moment the real keys land in locales/en.json, this table becomes
--- silently unused (Sandbox.locale succeeds on its own, this fallback never
--- triggers) with no follow-up edit required here, and any OTHER, unrelated
--- missing key still raises exactly as before (never silently swallowed).
--- REMOVE this table and pendingLocale, and switch every call site below
--- back to plain `locale(...)`, once the real keys land.
-local PENDING_LOCALE_KEYS = {
-    ['radial.sar_call_toggle_label'] = 'Search & Rescue Call',
-    ['radial.training_menu_label'] = 'Training',
-    ['radial.training_toggle_label'] = 'Start/Stop Training',
-    ['radial.training_search_label'] = 'Practice Search',
-    ['radial.training_bite_label'] = 'Practice Bite & Hold',
-}
-local function pendingLocale(key, ...)
-    local ok, value = pcall(Sandbox.locale, key, ...)
-    if ok then return value end
-    local pending = PENDING_LOCALE_KEYS[key]
-    if pending then return pending end
-    error(value, 0) -- a genuinely unrelated missing key -- never silently swallow it
-end
-
--- ----------------------------------------------------------------------
 -- Vector3-alike stub -- see header comment above.
 -- ----------------------------------------------------------------------
 local Vec3MT = {}
@@ -252,7 +216,6 @@ local function newRadialFixture(opts)
     local queryState = {
         isLeashed = false, isInK9Vehicle = false, activeTrackType = nil, isTracking = false,
         isBiteHoldEngaged = false, isDragEngaged = false, isFetchCarryEngaged = false,
-        isSarCallActive = false, isTrainingModeActive = false,
         -- Top-level icon access gate (this pass) -- see this file's header
         -- addition for the same section.
         isPartnered = false, isDragTargetEngaged = false,
@@ -268,30 +231,6 @@ local function newRadialFixture(opts)
 
     local notifyCalls = {}
     local function lib_notify(payload) notifyCalls[#notifyCalls + 1] = payload end
-
-    -- lib.callback.await stub -- SHARED FOUND MARKER / RADIAL JOIN ENTRY
-    -- item in this whole file to await a server callback directly from its
-    -- own onSelect (every other item either records a plain cross-file
-    -- global call, per `record`/`queryFn` above, or fires TriggerServerEvent
-    -- directly) -- see client/radial.lua's own comment on that item for why
-    -- it is self-contained rather than routed through a new
-    -- the removed SAR-calls client file resource-global. Same controllable-response-queue
-    -- + FAIL-CLOSED-throw shape as the removed SAR-calls client spec's own
-    -- callbackAwait fixture, trimmed to what this one item needs (no
-    -- reentrancy/generation concerns here -- this item never awaits twice in
-    -- flight the way RequestStartSarCall's own in-flight guard has to worry
-    -- about).
-    local callbackCallLog = {}
-    local callbackResponses = {}
-    local shouldThrowNextCallback = false
-    local function callbackAwait(eventName, _timeout, ...)
-        callbackCallLog[#callbackCallLog + 1] = { event = eventName, args = { ... } }
-        if shouldThrowNextCallback then
-            shouldThrowNextCallback = false
-            error('simulated lib.callback.await timeout/rejection')
-        end
-        return table.remove(callbackResponses, 1)
-    end
 
     -- LIVE ox_lib STATE MODEL -- see this file's header ("LIVE-STATE
     -- MODELING") for why this exists alongside the raw call-log arrays
@@ -444,8 +383,6 @@ local function newRadialFixture(opts)
         RequestDrag = record('RequestDrag'),
         BreakPartnership = record('BreakPartnership'),
         RequestPartnerUp = record('RequestPartnerUp'),
-        RequestRecall = record('RequestRecall'),
-        ConfirmHandlerDownDefense = record('ConfirmHandlerDownDefense'),
         IsFetchCarryEngaged = queryFn('IsFetchCarryEngaged', 'isFetchCarryEngaged'),
         ReleaseFetchBall = record('ReleaseFetchBall'),
         RequestThrowFetchBall = record('RequestThrowFetchBall'),
@@ -459,13 +396,6 @@ local function newRadialFixture(opts)
         RequestKennelContextual = record('RequestKennelContextual'),
         RequestOpenOwnK9Inventory = record('RequestOpenOwnK9Inventory'),
         RequestTreatNearestK9 = record('RequestTreatNearestK9'),
-        IsSarCallActive = queryFn('IsSarCallActive', 'isSarCallActive'),
-        RequestStartSarCall = record('RequestStartSarCall'),
-        RequestAbandonSarCall = record('RequestAbandonSarCall'),
-        IsTrainingModeActive = queryFn('IsTrainingModeActive', 'isTrainingModeActive'),
-        RequestSetTrainingMode = record('RequestSetTrainingMode'),
-        RequestTrainingSearchDrill = record('RequestTrainingSearchDrill'),
-        RequestTrainingBiteDrill = record('RequestTrainingBiteDrill'),
         -- Top-level icon access gate (this pass) -- consulted by
         -- IsK9RadialIconNeededForOngoingEngagement(), not by any onSelect
         -- closure.
@@ -515,14 +445,7 @@ local function newRadialFixture(opts)
         GetPlayerServerId = GetPlayerServerId,
         AddEventHandler = AddEventHandler,
         GetCurrentResourceName = GetCurrentResourceName,
-        lib = { registerRadial = lib_registerRadial, addRadialItem = lib_addRadialItem, notify = lib_notify, callback = { await = callbackAwait } },
-        -- TEMPORARY -- see this file's own "PENDING LOCALE KEYS" header
-        -- comment. Overrides Sandbox.newEnv's own default `env.locale =
-        -- Sandbox.locale` assignment (the overrides loop in
-        -- fixtures/sandbox.lua's newEnv runs AFTER that default, so this
-        -- wins) with a wrapper that only ever differs from the real thing
-        -- for the five keys named there.
-        locale = pendingLocale,
+        lib = { registerRadial = lib_registerRadial, addRadialItem = lib_addRadialItem, notify = lib_notify },
         -- Top-level icon access gate (this pass) -- department membership
         -- check reads QBX.PlayerData.job.name directly. Defaults to no job
         -- at all (nil) -- a test wanting a department member sets
@@ -566,18 +489,8 @@ local function newRadialFixture(opts)
         BiteAndHold = false, NonLethalTakedown = false, PropDragging = false, HandlerPartnership = false,
         FetchMechanic = false, PropAttachments = false,
         DeployableKennel = false, K9Inventory = false, K9Medkit = false,
-        -- SARCalls/TrainingMode -- ADDED THIS PASS, closing the exact gap
-        -- this baseline's own header comment already worries about: both
-        -- flags landed in the real config.lua (shipping `true`) AFTER this
-        -- baseline table was first written, and neither was added here at
-        -- the time -- so every test in this file that doesn't explicitly
-        -- request one of them was silently inheriting `true` from the real,
-        -- live file instead of a stable, spec-owned value, exactly the
-        -- "flap for a reason that has nothing to do with client/radial.lua"
-        -- failure mode this baseline exists to prevent.
-        -- NightVision/ThermalVision -- ADDED THIS PASS (vision merge,
-        -- coder-architect), same reasoning as SARCalls/TrainingMode above:
-        -- both ship `true` in the real, live config.lua, and the new
+        -- NightVision/ThermalVision -- both ship `true` in the real, live
+        -- config.lua, and the
         -- k9_vision_cycle item is gated on an OR of the two -- left
         -- unpinned here, every "absent under baseline" test in this file
         -- would flap depending on the real file's live values, exactly the
@@ -680,12 +593,6 @@ local function newRadialFixture(opts)
 
         setCanShowK9UI = function(v) canShowK9UI = v end,
         setHasK9Access = function(v) hasK9Access = v end,
-        -- lib.callback.await helpers -- see this fixture's own
-        -- "lib.callback.await stub" comment above.
-        queueCallbackResponse = function(v) callbackResponses[#callbackResponses + 1] = v end,
-        setThrowNextCallback = function() shouldThrowNextCallback = true end,
-        callbackCallCount = function() return #callbackCallLog end,
-        lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
         canShowK9UICallCount = function() return canShowK9UICalls end,
         denyCallCount = function() return denyCalls end,
         lastDenyReason = function() return denyReasons[#denyReasons] end,
@@ -850,14 +757,12 @@ t.test('DISPLAY ORDER: with every optional feature on, the whole-menu order grou
     t.isTrue(order.k9_camera_feed < order.k9_vision_cycle, 'Cycle Vision stays last in the family, as the catch-all convenience it has always been')
     t.isTrue(order.k9_vision_cycle < order.k9_bite_hold, 'the whole Perception family must precede Combat')
 
-    -- Combat family, grouped together. NARROWED 2026-09-02: this used to end
-    -- on Recall, with Handler-Down Defense and Danger Warn between Drag and
-    -- it, and then the SAR-call pair and Training after Kennel. All five of
-    -- those items were removed with their features, so the family now ends
-    -- at Drag and Kennel is last. The ordering PROPERTY this test exists for
-    -- -- related items stay adjacent, in a deliberate order, rather than
-    -- accreting -- is unchanged and still asserted across every item that
-    -- remains.
+    -- Combat family, grouped together. NARROWED 2026-09-02: several items
+    -- that used to sit inside and after this family went away with the
+    -- features that owned them, so the family now ends at Drag and Kennel
+    -- is last. The ordering PROPERTY this test exists for -- related items
+    -- stay adjacent, in a deliberate order, rather than accreting -- is
+    -- unchanged and still asserted across every item that remains.
     t.isTrue(order.k9_bite_hold < order.k9_takedown)
     t.isTrue(order.k9_takedown < order.k9_drag)
     t.isTrue(order.k9_drag < order.k9_fetch, 'Combat precedes the lighter, non-combat items after it')
@@ -872,8 +777,8 @@ end)
 -- termination half worth protecting from an extra menu level (see
 -- client/radial.lua's own "REGROUPING PASS" header for the full safety
 -- reasoning this follows). Command Tablet and every termination-capable
--- toggle (Leash/Vehicle/Bite & Hold/Takedown/Drag/SAR Call/Recall/Break
--- Partnership/Kennel) stay flat at the TOP level on purpose -- NOT folded
+-- toggle (Leash/Vehicle/Bite & Hold/Takedown/Drag/Break Partnership/
+-- Kennel) stay flat at the TOP level on purpose -- NOT folded
 -- in here, despite the task's own illustrative "Utility (kennel/inventory/
 -- vehicle/medkit/vest)" suggestion naming kennel and vehicle too; deviation
 -- documented at each of those items' own call sites in client/radial.lua.
@@ -1110,12 +1015,8 @@ t.test('HandlerPartnership true: both k9_break_partnership and k9_partner_up app
 end)
 
 -- ----------------------------------------------------------------------
--- HandlerDownDefense -- gates a whole SEPARATE registerRadial('k9unit_defense')
--- submenu (two terminal actions) PLUS the k9_defense link item inside k9unit.
--- ----------------------------------------------------------------------
-
--- ----------------------------------------------------------------------
--- FetchMechanic -- same nested-submenu shape as HandlerDownDefense above.
+-- FetchMechanic -- gates a whole SEPARATE registerRadial('k9unit_fetch')
+-- submenu PLUS the k9_fetch link item inside k9unit.
 -- ----------------------------------------------------------------------
 
 t.test('FetchMechanic explicitly false: neither the k9unit_fetch submenu nor its k9unit link item exists', function()
@@ -1335,9 +1236,9 @@ end)
 
 -- ----------------------------------------------------------------------
 -- onSelect targets: the `type(fn) == 'function'` guard -- present for
--- every item wired to client/partnership.lua, the removed recall client file,
--- the removed handler-down-defense client file, client/fetch.lua, client/propattachment.lua,
--- client/kennel.lua, client/inventory.lua, client/medkit.lua (per this
+-- every item wired to client/partnership.lua, client/fetch.lua,
+-- client/propattachment.lua, client/kennel.lua, client/inventory.lua and
+-- client/medkit.lua (per this
 -- file's own header: "Every cross-file global added after this file's own
 -- initial Phase 1 pass is called behind a type(fn) == 'function' runtime
 -- existence guard"). Each case below proves the guard actually holds --
@@ -1390,24 +1291,6 @@ t.test('k9_partner_up: no candidate in range notifies radial.no_partner_candidat
     t.equals(f.notifyCalls[1].description, locale('radial.no_partner_candidate'))
 end)
 
--- UPDATED (three-surfaces-agree pass, this pass): this test used to pin
--- the exact bug it was meant to prevent. It asserted the submenu REFUSES
--- when CanShowK9UI() is false and never reaches ConfirmHandlerDownDefense.
--- But the removed handler-down-defense confirm function (the removed handler-down-defense client file) was itself widened
--- to HasK9Access() alone earlier today, matching server/combat.lua's
--- shared ValidateCombatRequest (the same widening already proven above for
--- Bite & Hold/Non-Lethal Takedown/Drag, and elsewhere in this file for
--- Bark/Track/Vehicle Enter/SAR Call/Training Start) -- the pre-check here
--- was never updated to match, so it sat ABOVE an already-correct callee and
--- became the one thing still refusing a High Command/autoAccessGrade-bypass
--- holder in the exact emergency this feature exists for (the tablet button
--- and the keybind both already reached the widened callee). See
--- client/radial.lua's own comment on this submenu for the full writeup.
---
--- What this test pins now: BOTH sub-items always reach the callee
--- regardless of CanShowK9UI() -- the callee alone is trusted to apply its
--- own, now-correct HasK9Access() gate. the removed handler-down-defense client spec owns
--- proving the removed handler-down-defense confirm function's own gate itself.
 -- UPDATED: this test used to pin the exact bug it was meant to prevent.
 -- It asserted that the vest item REFUSES when CanShowK9UI() is false and
 -- never reaches RequestToggleK9PropAttachment. But that function is the one
@@ -1526,36 +1409,6 @@ t.test('k9_fetch_throw: while already carrying, selecting it releases instead of
     t.isNil(f.calls.RequestThrowFetchBall)
     t.equals(f.hasK9AccessCallCount(), 0, 'the release branch must return before ever consulting HasK9Access')
 end)
-
--- ----------------------------------------------------------------------
--- RESOLVED this pass: Search & Rescue Call -- closes the exact disclosed
--- gap the removed SAR-calls client file's own header used to name. Same context-sensitive
--- toggle shape as Leash/Bite & Hold/Drag -- full treatment mirrors those.
--- ----------------------------------------------------------------------
-
--- GATE WIDENED TO HasK9Access() ALONE, NOT CanShowK9UI() (permission audit
--- finding, this pass) -- the removed SAR-calls server file's requestSarCall callback
--- gates on HasK9Access(source) alone. `hasK9Access = false` (not
--- `canShowK9UI = false`) is therefore the real denial case now.
--- ----------------------------------------------------------------------
--- '/k9sarcall join <serverId>' was the ONLY way to join someone else's
--- call; a radial item cannot take an argument, so this item resolves the
--- NEAREST joinable call server-side (the removed SAR-calls server file's own
--- findNearestJoinableSarCall, exercised directly in the removed SAR-calls spec
--- -- this file only proves THIS item's own half: gating, the await, and
--- what it does with the result). This is the FIRST item in this whole file
--- to await a server callback directly rather than delegate through a
--- the removed SAR-calls client file resource-global -- see client/radial.lua's own
--- comment on the item for the full "why self-contained" writeup.
--- ----------------------------------------------------------------------
-
--- ----------------------------------------------------------------------
--- RESOLVED this pass: Training -- closes the exact disclosed gap that used
--- to leave Training Mode and its two drills reachable only via
--- '/k9training <on|off>'/'/k9trainsearch'/'/k9trainbite'. Nested submenu,
--- same treatment shape as FetchMechanic above (presence/absence of the
--- whole submenu, then guard + gating + happy-path per item).
--- ----------------------------------------------------------------------
 
 -- ----------------------------------------------------------------------
 -- HEADER/CODE DRIFT FIX (dependency-verification pass): Sit, Leash,
@@ -2266,9 +2119,8 @@ end)
 -- It matters because RequestTakedown() picks the NEAREST eligible ped,
 -- which client/combat.lua's own comment admits is "not necessarily the
 -- intended one". Take down the wrong person and they stayed ragdolled and
--- damage-immune for the full configured duration. The only other early end
--- is /k9recall, a handler-side action needing an active partnership, so a
--- solo K9 had no route at all.
+-- damage-immune for the full configured duration, with no route out at
+-- all for a solo K9.
 -- ========================================================================
 t.test('k9_takedown: NOT engaged -> requests a takedown, exactly as before', function()
     local f = newRadialFixture({ features = { NonLethalTakedown = true } })

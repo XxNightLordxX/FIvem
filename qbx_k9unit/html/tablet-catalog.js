@@ -849,10 +849,6 @@
         cmdref_category_combat: 'Combat & Restraint',
         cmdref_category_vision: 'Cameras & Vision',
         cmdref_category_field_gear: 'Field Gear & Equipment',
-        cmdref_category_calling_off: 'Calling Your K9 Off',
-        cmdref_category_scent_games: 'Scent Games',
-        cmdref_category_search_rescue: 'Search & Rescue',
-        cmdref_category_training: 'Training',
         cmdref_category_records: 'Records & Progress',
         cmdref_category_certification: 'Certification Management',
         cmdref_category_xp: 'XP Management',
@@ -939,32 +935,8 @@
         cmdref_k9fetch_does: 'Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.',
         cmdref_k9fetch_needs: 'An active K9 certification to throw. Recalling or dropping is always available. Only one ball may be in play for you at a time. This feature must be turned on for your server.',
 
-        cmdref_k9calmdown_usage: '/k9calmdown',
-        cmdref_k9calmdown_does: 'Calms your K9 down, reducing fear and stress.',
-        cmdref_k9calmdown_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
-        cmdref_k9meatbait_usage: '/k9meatbait',
-        cmdref_k9meatbait_does: 'Uses meat bait to distract any K9 nearby, yours or someone else\'s.',
-        cmdref_k9meatbait_needs: 'You must be holding the item this server has configured for meat bait. Open to any player, not just certified handlers. This feature must be turned on for your server.',
-        cmdref_k9whistle_usage: '/k9whistle',
-        cmdref_k9whistle_does: 'Uses a whistle to distract any K9 nearby.',
-        cmdref_k9whistle_needs: 'You must be holding the item this server has configured for a whistle. Open to any player, not just certified handlers. This feature must be turned on for your server.',
-        cmdref_k9eat_usage: '/k9eat',
-        cmdref_k9eat_does: 'Feeds your K9 from your own carried food, restoring Hunger.',
-        cmdref_k9eat_needs: 'You must currently be controlling your K9, and be holding the item this server has configured for K9 food. This feature must be turned on for your server.',
-        cmdref_k9drink_usage: '/k9drink',
-        cmdref_k9drink_does: 'Gives your K9 water from your own carried supply, restoring Thirst.',
-        cmdref_k9drink_needs: 'You must currently be controlling your K9, and be holding the item this server has configured for K9 water. This feature must be turned on for your server.',
-
-        cmdref_k9nosehunt_usage: '/k9nosehunt [stop]',
-        cmdref_k9nosehunt_does: 'Starts a scent-trail hunt for your K9 (a follow-the-growl guessing game, no marker). Add "stop" to abandon a hunt already running.',
-        cmdref_k9nosehunt_needs: 'An active K9 certification, and you must currently be controlling your K9 -- IF this feature were switched on. It is not: Scent Trail Hunt was removed from this server\'s configuration entirely (judged redundant with the scent-tracking action above), not merely toggled off, and there is currently no setting anywhere to bring it back. This also means "stop" is not available either -- neither form of this command currently does anything.',
 
 
-        // k9train -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point.
-        // does/usage from client/commandsuggestions.lua's own
-        // PENDING_LOCALE_KEYS; needs mirrors k9training's own above (the
-        // START half this command's gate documents -- turning off, unlike
-        // turning on, is always available).
 
         cmdref_k9stats_usage: '/k9stats [limit]',
         cmdref_k9stats_does: 'Shows the server\'s K9 XP leaderboard.',
@@ -1002,15 +974,6 @@
         cmdref_k9audit_usage: '/k9audit <cert|partner|search|xp|dept>',
         cmdref_k9audit_does: 'Shows a K9 audit report. One command for all five: certifications, partnerships, searches, XP and department totals.',
         cmdref_k9audit_needs: 'High Command, the audit permission, or your department\'s audit rank. The Audit Trail feature must be turned on for your server.',
-        cmdref_danger_warn_alert_usage: '/qbx_k9unit:dangerWarnAlert',
-        cmdref_danger_warn_alert_does: 'Tells your partnered handler you have spotted trouble, with a rough direction and distance.',
-        cmdref_danger_warn_alert_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
-        // qbx_k9unit:dangerWarnThreat -- menu-parity pass. Same
-        // the removed danger-warn request function as Alert above, same gate, only the
-        // warning type and urgency differ.
-        cmdref_danger_warn_threat_usage: '/qbx_k9unit:dangerWarnThreat',
-        cmdref_danger_warn_threat_does: 'Tells your partnered handler your K9 is barking at a real, active threat, with a rough direction and distance.',
-        cmdref_danger_warn_threat_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
         cmdref_k9track_usage: '/k9track',
         cmdref_k9track_does: 'Starts a track. Your dog follows whichever trail it is trained to find -- you do not pick the type.',
         cmdref_k9track_needs: 'K9 access. Which trails your dog can follow depends on its specializations.',
@@ -1048,9 +1011,6 @@
         cmdref_pursuitsprint_usage: '/qbx_k9unit:pursuitsprint',
         cmdref_pursuitsprint_does: 'Gives your K9 a short burst of real speed so it can catch up with a fleeing suspect it is already chasing.',
         cmdref_pursuitsprint_needs: 'K9 access, and Pursuit Sprint enabled on this server. There must be a fleeing suspect nearby for your K9 to chase.',
-        cmdref_confirm_handler_down_defense_usage: '/qbx_k9unit:confirmHandlerDownDefense',
-        cmdref_confirm_handler_down_defense_does: 'Confirms your K9 should defend its handler after a Handler-Down alert appears on your screen. Your K9 never acts on its own without this.',
-        cmdref_confirm_handler_down_defense_needs: 'K9 access, an active Handler-Down alert currently showing, and Handler-Down Defense enabled on this server.',
         cmdref_toggle_camera_usage: '/qbx_k9unit:toggleCamera',
         cmdref_toggle_camera_does: 'Switches your view between looking through your K9\'s own eyes (first-person) and the normal camera behind it (third-person). Press again to switch back.',
         cmdref_toggle_camera_needs: 'You must be controlling your K9. Nothing else -- no certification and no server setting can turn this off.',
@@ -1534,10 +1494,10 @@
     // `RegisterCommand('...')` name (the
     // `RegisterCommand\('[a-zA-Z0-9_:]+'` shape -- widened this pass to
     // also catch a command namespaced under this resource's own
-    // `qbx_k9unit:` prefix, the exact gap that let seven real keybind
+    // `qbx_k9unit:` prefix, the exact gap that let six real keybind
     // commands -- qbx_k9unit:vault/pursuitsprint/toggleCamera/
-    // toggleCameraFeed/toggleThermalVision/toggleNightVision/
-    // confirmHandlerDownDefense -- go undocumented here until this pass)
+    // toggleCameraFeed/toggleThermalVision/toggleNightVision -- go
+    // undocumented here until that pass)
     // and fails LOUDLY, naming the exact command, if that set and this
     // catalog's own `command` field set ever diverge in EITHER direction
     // -- a command added here with no real RegisterCommand behind it, or a
@@ -1576,8 +1536,7 @@
         // Listed FIRST, ahead of every other category (this pass, keybinds
         // handoff): these are the everyday, split-second actions a brand
         // new handler is most likely to look for first -- see
-        // client/keybinds.lua's own header for why these five (plus
-        // k9recall, already in Calling Your K9 Off below) are the ones
+        // client/keybinds.lua's own header for why these are the ones
         // that got a rebindable key at all.
         { key: 'basic_commands', labelKey: 'cmdref_category_basic_commands' },
         { key: 'combat', labelKey: 'cmdref_category_combat' },
@@ -1615,22 +1574,21 @@
         { command: 'k9bitehold', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9bitehold_usage', doesKey: 'cmdref_k9bitehold_does', needsKey: 'cmdref_k9bitehold_needs', gate: { kind: 'access', featureKey: 'BiteAndHold' }, defaultKeybind: 'B' },
         { command: 'k9takedown', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9takedown_usage', doesKey: 'cmdref_k9takedown_does', needsKey: 'cmdref_k9takedown_needs', gate: { kind: 'access', featureKey: 'NonLethalTakedown' }, defaultKeybind: 'T' },
         { command: 'k9dragtoggle', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9dragtoggle_usage', doesKey: 'cmdref_k9dragtoggle_does', needsKey: 'cmdref_k9dragtoggle_needs', gate: { kind: 'access', featureKey: 'PropDragging' }, defaultKeybind: 'Y' },
-        // qbx_k9unit:vault/qbx_k9unit:pursuitsprint/
-        // qbx_k9unit:confirmHandlerDownDefense (this pass -- integration-
-        // sweep fix): three REAL, working keybind commands that had ZERO
-        // COMMAND_REFERENCE entry before this pass -- see
+        // qbx_k9unit:vault/qbx_k9unit:pursuitsprint (integration-sweep
+        // fix): two REAL, working keybind commands that had ZERO
+        // COMMAND_REFERENCE entry before that pass -- see
         // tests/commandreferenceregistry_spec.lua's own header "WIDENED,
         // THIS PASS" for exactly why the drift guard never caught this.
         // Grouped into Combat & Restraint, not a new category, because
         // config.lua's own "COMBAT & ADVANCED AGILITY" section already
-        // groups AgilityAdvanced/HandlerDownDefense alongside BiteAndHold/
-        // NonLethalTakedown/PropDragging as one family, and Pursuit Sprint
-        // is a chase-support ability for the same apprehension workflow.
-        // command names use this resource's OWN `qbx_k9unit:` prefix, not
-        // a bare `k9x` name -- both RegisterCommand calls in
-        // client/agility.lua/client/pursuitsprint.lua/the removed handler-down-defense client file
-        // pair a RegisterKeyMapping, whose own id must be globally unique
-        // across every resource a server loads, unlike a chat-only command.
+        // groups AgilityAdvanced alongside BiteAndHold/NonLethalTakedown/
+        // PropDragging as one family, and Pursuit Sprint is a chase-support
+        // ability for the same apprehension workflow. Both command names
+        // use this resource's OWN `qbx_k9unit:` prefix, not a bare `k9x`
+        // name -- both RegisterCommand calls in client/agility.lua and
+        // client/pursuitsprint.lua pair a RegisterKeyMapping, whose own id
+        // must be globally unique across every resource a server loads,
+        // unlike a chat-only command.
         { command: 'qbx_k9unit:vault', category: 'combat', adminOnly: false, usageKey: 'cmdref_vault_usage', doesKey: 'cmdref_vault_does', needsKey: 'cmdref_vault_needs', gate: { kind: 'access', featureKey: 'AgilityAdvanced' }, defaultKeybind: 'X' },
         { command: 'qbx_k9unit:pursuitsprint', category: 'combat', adminOnly: false, usageKey: 'cmdref_pursuitsprint_usage', doesKey: 'cmdref_pursuitsprint_does', needsKey: 'cmdref_pursuitsprint_needs', gate: { kind: 'access', featureKey: 'PursuitSprint' }, defaultKeybind: 'N' },
         { command: 'qbx_k9unit:toggleCamera', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_usage', doesKey: 'cmdref_toggle_camera_does', needsKey: 'cmdref_toggle_camera_needs', gate: { kind: 'open' }, defaultKeybind: 'L' },

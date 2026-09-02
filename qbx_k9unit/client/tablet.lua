@@ -1293,8 +1293,8 @@ local TABLET_STRING_KEYS = {
     -- html/tablet.js's own buildCommandReferenceRow() comment.
     'cmdref_default_keybind_template', 'cmdref_keybind_caveat',
     'cmdref_category_basic_commands', 'cmdref_category_combat',
-    'cmdref_category_field_gear', 'cmdref_category_calling_off', 'cmdref_category_scent_games',
-    'cmdref_category_search_rescue', 'cmdref_category_training', 'cmdref_category_records',
+    'cmdref_category_field_gear',
+    'cmdref_category_records',
     'cmdref_category_certification', 'cmdref_category_xp', 'cmdref_category_audit',
     'cmdref_category_devtools', 'cmdref_category_permissions',
     'cmdref_k9sit_usage', 'cmdref_k9sit_does', 'cmdref_k9sit_needs',
@@ -1339,12 +1339,6 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9recallfetchball_usage', 'cmdref_k9recallfetchball_does', 'cmdref_k9recallfetchball_needs',
     -- k9fetch -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #3's merged entry point.
     'cmdref_k9fetch_usage', 'cmdref_k9fetch_does', 'cmdref_k9fetch_needs',
-    'cmdref_k9eat_usage', 'cmdref_k9eat_does', 'cmdref_k9eat_needs',
-    'cmdref_k9drink_usage', 'cmdref_k9drink_does', 'cmdref_k9drink_needs',
-    'cmdref_k9calmdown_usage', 'cmdref_k9calmdown_does', 'cmdref_k9calmdown_needs',
-    'cmdref_k9meatbait_usage', 'cmdref_k9meatbait_does', 'cmdref_k9meatbait_needs',
-    'cmdref_k9whistle_usage', 'cmdref_k9whistle_does', 'cmdref_k9whistle_needs',
-    'cmdref_k9nosehunt_usage', 'cmdref_k9nosehunt_does', 'cmdref_k9nosehunt_needs',
     'cmdref_k9stats_usage', 'cmdref_k9stats_does', 'cmdref_k9stats_needs',
     'cmdref_k9certify_usage', 'cmdref_k9certify_does', 'cmdref_k9certify_needs',
     'cmdref_k9decertify_usage', 'cmdref_k9decertify_does', 'cmdref_k9decertify_needs',
@@ -1352,14 +1346,12 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9specialize_usage', 'cmdref_k9specialize_does', 'cmdref_k9specialize_needs',
     'cmdref_k9unspecialize_usage', 'cmdref_k9unspecialize_does', 'cmdref_k9unspecialize_needs',
     'cmdref_k9givexp_usage', 'cmdref_k9givexp_does', 'cmdref_k9givexp_needs',
-    'cmdref_danger_warn_alert_usage', 'cmdref_danger_warn_alert_does', 'cmdref_danger_warn_alert_needs',
     -- Threat, added 2026-08-27 alongside its new command. Alert had a
     -- command AND a keybind while Threat had neither, so the two halves of
     -- one feature were reachable in completely different ways -- Threat is
     -- now a command, and deliberately NOT a keybind, because every letter
     -- this resource ships is already taken and the gap that mattered was
     -- discoverability rather than a missing key.
-    'cmdref_danger_warn_threat_usage', 'cmdref_danger_warn_threat_does', 'cmdref_danger_warn_threat_needs',
     'cmdref_k9audit_usage', 'cmdref_k9audit_does', 'cmdref_k9audit_needs',
     'cmdref_k9track_usage', 'cmdref_k9track_does', 'cmdref_k9track_needs',
     -- ADDED 2026-08-27, for the five commands that close the owner's
@@ -1397,7 +1389,6 @@ local TABLET_STRING_KEYS = {
     -- label (cmdref_category_vision) this same fix also added.
     'cmdref_vault_usage', 'cmdref_vault_does', 'cmdref_vault_needs',
     'cmdref_pursuitsprint_usage', 'cmdref_pursuitsprint_does', 'cmdref_pursuitsprint_needs',
-    'cmdref_confirm_handler_down_defense_usage', 'cmdref_confirm_handler_down_defense_does', 'cmdref_confirm_handler_down_defense_needs',
     'cmdref_toggle_camera_usage', 'cmdref_toggle_camera_does', 'cmdref_toggle_camera_needs',
     'cmdref_toggle_camera_feed_usage', 'cmdref_toggle_camera_feed_does', 'cmdref_toggle_camera_feed_needs',
     'cmdref_toggle_thermal_vision_usage', 'cmdref_toggle_thermal_vision_does', 'cmdref_toggle_thermal_vision_needs',
