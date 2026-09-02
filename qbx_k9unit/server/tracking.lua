@@ -390,7 +390,7 @@
 -- once at the cap -- an O(n)-per-write shape that, at this resource's own
 -- documented worst case (128 players bleeding, 500ms relay floor), cost
 -- roughly 2 million slot copies per second purely from eviction. The ring
--- shape here follows server/debugdump.lua's own DecisionTrail ring-index
+-- shape here follows server/diagnostics.lua's own DecisionTrail ring-index
 -- pattern (`writeIndex = (writeIndex % CAP) + 1`) exactly, per that pass's
 -- own explicit instruction to reuse the in-repo pattern rather than invent a
 -- new one -- see AppendTrackableLogEntry below.
@@ -893,7 +893,7 @@ local TRACKABLE_LOG_MAX_ENTRIES = {
 --- case (128 players bleeding, Blood's 500ms relay floor) that was roughly 2
 --- million slot copies per second purely from eviction.
 ---
---- Follows server/debugdump.lua's own DecisionTrail ring-index pattern
+--- Follows server/diagnostics.lua's own DecisionTrail ring-index pattern
 --- exactly (`writeIndex = (writeIndex % CAP) + 1`) -- the SAME formula is
 --- correct whether `ringLog` is still filling up for the first time
 --- (`count < maxEntries`) or has already wrapped and is now overwriting old

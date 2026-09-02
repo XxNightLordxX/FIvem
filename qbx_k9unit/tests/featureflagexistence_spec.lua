@@ -9,7 +9,7 @@
     defines resolves to `nil`. `if not Config.Features.Foo then return end`
     then fires on every client, forever, and the entire feature goes dark --
     silently. No error, no warning, no failing test. luacheck cannot see it
-    (a table lookup is valid Lua whatever the key). server/selfcheck.lua
+    (a table lookup is valid Lua whatever the key). server/diagnostics.lua
     catches the OPPOSITE direction (a config key nothing recognises) but not
     this one. Every spec in this suite that touches feature flags builds its
     own fixture Config, so none of them read the shipped file to find out

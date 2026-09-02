@@ -1,8 +1,8 @@
 --[[
-    qbx_k9unit/client/debugdump.lua
+    qbx_k9unit/client/diagnostics.lua
 
-    NEW FILE. The `/k9debug` command itself is registered SERVER-SIDE
-    (server/debugdump.lua, RegisterCommand('k9debug', ...)), matching this
+    The client half of /k9debug. The command itself is registered SERVER-SIDE
+    (server/diagnostics.lua, RegisterCommand('k9debug', ...)), matching this
     resource's own established convention for every other chat command
     (k9setdog, k9audit, k9givexp, ...) -- see that file's own header. This
     file's job is narrower and purely additive: report a small set of facts
@@ -16,7 +16,7 @@
     removed, thermal vision stuck on, a K9 shut in a vehicle, a kennel that
     would not release). NUI focus stuck open after the tablet should have
     closed, or a ped stuck ragdolled/in a vehicle it should have exited, is
-    invisible to server/debugdump.lua no matter how comprehensive its own
+    invisible to server/diagnostics.lua no matter how comprehensive its own
     checks are -- the server genuinely does not know. This file's small,
     period self-report closes exactly that blind spot, for the reporting
     player's own state only.
@@ -35,7 +35,7 @@
     (`qbx_k9unit:server:debugDumpClientHeartbeat`, a TriggerServerEvent, no
     different in kind from the many other one already in this resource),
     sent once shortly after this file loads and again every 5 seconds while
-    Config.DebugDump.enabled stays true. server/debugdump.lua caches only
+    Config.DebugDump.enabled stays true. server/diagnostics.lua caches only
     the MOST RECENT report per source (never accumulates), and reports its
     age plainly (`clientSelfReport.ageMs`) in any dump it writes -- honest
     about being a snapshot from up to ~5 seconds ago, never pretending to
@@ -48,8 +48,8 @@
     ======================================================================
     SHIPS OFF, DOES NOTHING AT ALL, NO THREAD EVEN STARTS, UNLESS
     Config.DebugDump.enabled IS EXACTLY `true` -- same posture as
-    server/debugdump.lua. This file does NOT itself clamp-and-warn
-    Config.DebugDump's other fields (server/debugdump.lua already owns that
+    server/diagnostics.lua. This file does NOT itself clamp-and-warn
+    Config.DebugDump's other fields (server/diagnostics.lua already owns that
     responsibility and runs first, since config.lua/shared_scripts load
     before client_scripts) -- this file only ever reads `.enabled`, which
     needs no clamping to be read safely (a non-boolean here is simply
@@ -62,7 +62,7 @@
     beyond what the server already knows from `source` alone, nothing that
     could be used for any authorization decision (the server never treats
     this payload as anything but display text in the requesting player's
-    OWN dump file -- see server/debugdump.lua's own validation of every
+    OWN dump file -- see server/diagnostics.lua's own validation of every
     field on receipt). Every native call below is wrapped in a single
     `pcall` around the whole snapshot-building function, so a native
     throwing on an unusual client state (e.g. mid-respawn) degrades to
@@ -78,7 +78,7 @@ end
 --- its only caller below -- never assumed safe to call unconditionally
 --- (PlayerPedId()/GetEntityModel() etc. are ordinary, always-available
 --- client natives, but "must never break what it observes" applies to this
---- file exactly as much as it does to server/debugdump.lua).
+--- file exactly as much as it does to server/diagnostics.lua).
 --- @return table
 local function BuildSelfReport()
     local ped = PlayerPedId()

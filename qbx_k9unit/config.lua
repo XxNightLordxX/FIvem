@@ -1966,7 +1966,7 @@ Config.K9Specializations = {
 --   vision, the scent lineup, everything unrelated to this table are all
 --   completely unaffected), but NONE of them can Track Blood or Track
 --   Gunpowder until you grant 'patrol'/'explosives' to them via the
---   certification tablet. server/selfcheck.lua prints a one-line boot
+--   certification tablet. server/diagnostics.lua prints a one-line boot
 --   warning naming this exact situation so it is never a silent surprise
 --   discovered mid-shift. HIGH COMMAND OFFICERS ARE UNAFFECTED --
 --   HasSpecialization's own High Command bypass (server/certifications.lua)
@@ -5410,7 +5410,7 @@ Config.PursuitSprint = {
 
 
 -- ======================================================================
--- DEBUG DUMP (server/debugdump.lua, client/debugdump.lua) -- owner's own
+-- DEBUG DUMP (server/diagnostics.lua, client/diagnostics.lua) -- owner's own
 -- words: "I want a debug mode setup... so that way when I am testing I can
 -- give you the information for fixes etc", later extended twice in the
 -- same conversation: "I also want that debug super comprehensive so it
@@ -5422,11 +5422,11 @@ Config.PursuitSprint = {
 -- anyone but the player who ran it, re-runs this resource's OWN
 -- already-tested boot-time checks (the Config.Features/Config.FeatureGroups
 -- disagreement detector immediately above ResolveFeatureGroups() in this
--- file, server/selfcheck.lua's dependency-version check) on demand instead
+-- file, server/diagnostics.lua's dependency-version check) on demand instead
 -- of only once at boot to a console nobody is watching, and writes ONE
 -- timestamped file per run under this resource's own `diagnostics/` folder
 -- -- never the chat box, never the F8 console -- so it can be attached
--- whole rather than scrolled and retyped. See server/debugdump.lua's own
+-- whole rather than scrolled and retyped. See server/diagnostics.lua's own
 -- header for the full three-tier report shape (findings, worth-checking,
 -- full state) and DIAGNOSTIC_CHECKS.md for exactly which checks this
 -- performs and why each one is scoped the way it is.
@@ -5435,7 +5435,7 @@ Config.PursuitSprint = {
 -- kill-switch" posture as Config.LeashVisual.enabled/Config.K9Onboarding.
 -- enabled elsewhere in this file: this is a standalone diagnostic tool with
 -- no runtime-control-tablet exposure, no feature-group family, and no
--- per-person block/grant of its own (see server/debugdump.lua's own header
+-- per-person block/grant of its own (see server/diagnostics.lua's own header
 -- for why "own state only" makes a permission gate unnecessary rather than
 -- adding one). Putting it in Config.Features would require the full
 -- governance wiring (Config.FeatureGroups membership, FEATURE_TIERS in
@@ -5454,7 +5454,7 @@ Config.DebugDump = {
 
     -- 'normal' or 'verbose'. Any other value falls back to 'normal' with a
     -- console warning naming the bad value (clamp-and-warn, never a bare
-    -- assert -- see server/debugdump.lua's own header).
+    -- assert -- see server/diagnostics.lua's own header).
     --
     -- 'normal' costs nothing beyond the command itself running: no
     -- wrapping of any other file's functions, no ongoing bookkeeping
@@ -5475,7 +5475,7 @@ Config.DebugDump = {
     -- `diagnostics/` folder. This is a testing tool an owner may run many
     -- times in one session, so this caps how many of those files this
     -- resource keeps meaningful content in before it starts clearing out
-    -- the oldest ones to make room -- see server/debugdump.lua's own
+    -- the oldest ones to make room -- see server/diagnostics.lua's own
     -- header "WHY EMPTYING, NOT DELETING" for exactly what "clearing out"
     -- means (there is no native this resource could verify for deleting a
     -- resource file outright). A non-positive or non-number value falls

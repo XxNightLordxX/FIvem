@@ -162,6 +162,14 @@ local EXTERNAL_PATH_ALLOWLIST = {
     ['tests/README.md']      = 'deleted in the 2026-08-25 consolidation; its coverage table became DEVELOPER_REFERENCE.md §20',
     ['sql/README.md']        = 'deleted in the 2026-08-25 consolidation; folded into README.md',
     ['dev/bone_sweep.lua']   = 'throwaway dev tool, never added to fxmanifest.lua (see DEVELOPER_REFERENCE.md §14.3)',
+    -- Files consumed by the 2026-09-02 diagnostics merge. server/diagnostics.lua
+    -- is the two of them joined; its header, its two section banners and
+    -- fxmanifest.lua's own entry for it name the originals BY NAME so a reader
+    -- of a five-year-old comment can still tell where a paragraph came from.
+    -- Same category as the 2026-08-25 entries above: a record of a merge, not a
+    -- live pointer.
+    ['server/selfcheck.lua'] = 'merged into server/diagnostics.lua on 2026-09-02; named in that file and in fxmanifest.lua as one of its two origins',
+    ['server/debugdump.lua'] = 'merged into server/diagnostics.lua on 2026-09-02; named in that file and in fxmanifest.lua as one of its two origins',
 }
 
 --- Directory prefixes worth scanning for. Anything outside these is not a

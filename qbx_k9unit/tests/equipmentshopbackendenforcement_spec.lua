@@ -52,7 +52,7 @@
       task asked to weigh ("refuse to register gated shop items... so the
       items simply do not appear"), generalized to the WHOLE shop rather
       than only the gated items within it -- see
-      server/selfcheck.lua's own new "PART 3" header for the full writeup of
+      server/diagnostics.lua's own new "PART 3" header for the full writeup of
       why "strip only the gated items, sell the rest" was considered and
       REJECTED (the SAME two hooks also back the per-person
       block.K9EquipmentShop/feature.K9EquipmentShop gate, which stripping

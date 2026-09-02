@@ -1312,7 +1312,7 @@ local TABLET_STRING_KEYS = {
     -- fails when two sides DISAGREE, so a key missing from TWO of them
     -- passes silently forever.
     'cmdref_k9kennel_usage', 'cmdref_k9kennel_does', 'cmdref_k9kennel_needs',
-    -- k9debug -- server/debugdump.lua's diagnostic dump command.
+    -- k9debug -- server/diagnostics.lua's diagnostic dump command.
     'cmdref_k9debug_usage', 'cmdref_k9debug_does', 'cmdref_k9debug_needs',
     -- Progression screen (owner-directed progression pass).
     'tab_progression',

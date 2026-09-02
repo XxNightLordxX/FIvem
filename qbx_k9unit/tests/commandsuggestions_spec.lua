@@ -102,7 +102,7 @@ local CLIENT_LUA_FILES = LuaFilesIn('../client')
 -- command from hiding in here forever instead of being caught.
 local HIDDEN_ALIAS_COMMANDS = {
     -- NOT AN ALIAS -- REGISTERED DYNAMICALLY, so the static-table scan
-    -- below cannot see it. server/debugdump.lua's /k9debug IS suggested to
+    -- below cannot see it. server/diagnostics.lua's /k9debug IS suggested to
     -- the player, but from client/commandsuggestions.lua's live block at
     -- the bottom of that file rather than from its COMMAND_SUGGESTIONS
     -- table, because its switch is Config.DebugDump.enabled -- not a
@@ -629,7 +629,7 @@ t.test('CONTROL: with a gated feature ON, its commands ARE advertised -- proves 
     t.isNotNil(f.findSuggestion('k9fetch'), 'FetchMechanic on must advertise /k9fetch')
 end)
 
-t.test('/k9debug follows the same rule through a DIFFERENT switch: server/debugdump.lua returns at its top unless Config.DebugDump.enabled is exactly true, and that is not a Config.Features key', function()
+t.test('/k9debug follows the same rule through a DIFFERENT switch: server/diagnostics.lua returns at its top unless Config.DebugDump.enabled is exactly true, and that is not a Config.Features key', function()
     local off = newFixture({ configFields = { DebugDump = { enabled = false } } })
     off.fireResourceStart('qbx_k9unit')
     t.isNil(off.findSuggestion('k9debug'), 'ships off, so the command is never registered -- do not advertise it')

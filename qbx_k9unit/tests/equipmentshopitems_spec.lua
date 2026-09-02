@@ -895,7 +895,7 @@ end)
 -- appearing and being free") in its strongest form: the WHOLE shop, not
 -- just the gated items, since the SAME two hooks also back the per-person
 -- block.K9EquipmentShop/feature.K9EquipmentShop gate -- see
--- server/selfcheck.lua's own new "PART 3" header for why stripping only the
+-- server/diagnostics.lua's own new "PART 3" header for why stripping only the
 -- gated items and leaving the rest for sale was considered and REJECTED
 -- (it would leave that per-person block completely unenforced on this
 -- backend).

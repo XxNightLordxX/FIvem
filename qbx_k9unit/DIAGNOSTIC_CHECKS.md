@@ -17,8 +17,8 @@
 > is worse than an admitted set of wrong ones.
 
 
-This file is input for whoever builds `server/debugdump.lua` /
-`client/debugdump.lua`. It is not a generic "is the server healthy"
+This file is input for whoever builds `server/diagnostics.lua` /
+`client/diagnostics.lua`. It is not a generic "is the server healthy"
 checklist. Every check below is either (a) tied to a bug that actually
 shipped in this resource — cited by commit, file, or `KNOWN_ISSUES.md`
 entry — or (b) explicitly marked speculative because I could not tie it to
@@ -155,14 +155,14 @@ already written and tested.
   resource depends on (`ox_lib`, `ox_target`, `oxmysql`, `qbx_core`) is
   older than the version this was tested against, which can cause odd,
   hard-to-explain behavior."
-- **The real bug it comes from:** `server/selfcheck.lua`'s own header
+- **The real bug it comes from:** `server/diagnostics.lua`'s own header
   ("PART 1 -- DEPENDENCY VERSION CHECK") — written specifically because
   "A server running an older dependency got no warning at all; just
   divergent behaviour somewhere downstream, later, with nothing pointing
-  at the cause." This is a real, tested mechanism (`tests/selfcheck_spec.lua`),
+  at the cause." This is a real, tested mechanism (`tests/diagnostics_selfcheck_spec.lua`),
   again boot-time-only.
 - **How to detect it, concretely:** call the same `K9SelfCheck` functions
-  (`ParseSemver`/`CompareSemver`, `server/selfcheck.lua`) against
+  (`ParseSemver`/`CompareSemver`, `server/diagnostics.lua`) against
   currently-installed resource metadata (`GetResourceMetadata`) on demand
   instead of only at boot.
 - **Tier:** STATE. A slightly old dependency is not necessarily broken —

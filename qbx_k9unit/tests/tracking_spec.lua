@@ -2068,7 +2068,7 @@ end)
 -- 500ms relay floor, Blood's own 8000-entry cap) that was roughly 2 million
 -- slot copies per second purely from eviction. Converted to a real
 -- circular buffer (head/tail indices, O(1) per write) following
--- server/debugdump.lua's own DecisionTrail ring-index pattern -- see
+-- server/diagnostics.lua's own DecisionTrail ring-index pattern -- see
 -- AppendTrackableLogEntry's own doc comment in server/tracking.lua for the
 -- full writeup.
 --
@@ -2376,7 +2376,7 @@ t.test('an EMPTY Config.SpecializationTracking (owner deletes both entries) leav
     -- "held" -- and it still doesn't matter, because nothing in
     -- Config.SpecializationTracking maps ANY specialization to blood or
     -- gunpowder anymore. This is the loud, documented, intentional
-    -- consequence server/selfcheck.lua's own boot warning exists for.
+    -- consequence server/diagnostics.lua's own boot warning exists for.
     t.isFalse(f.findTrackableSource(1, 'blood').found)
     t.isFalse(f.findTrackableSource(1, 'gunpowder').found)
 end)

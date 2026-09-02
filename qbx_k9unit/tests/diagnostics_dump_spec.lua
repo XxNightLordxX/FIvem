@@ -1,13 +1,13 @@
 --[[
-    tests/debugdump_spec.lua
+    tests/diagnostics_dump_spec.lua
 
-    Tests server/debugdump.lua -- the `/k9debug` command -- against the
+    Tests server/diagnostics.lua -- the `/k9debug` command -- against the
     REAL, unmodified production file, loaded alongside the REAL
-    server/selfcheck.lua (so A4's re-surfaced K9SelfCheck.EvaluateDependencyVersion/
+    server/diagnostics.lua (so A4's re-surfaced K9SelfCheck.EvaluateDependencyVersion/
     FormatDependencyWarning behavior is genuine, not a second, hand-written
     copy of that logic).
 
-    Everything in server/debugdump.lua is `local` except the deliberate
+    Everything in server/diagnostics.lua is `local` except the deliberate
     `_G[name] = wrapper` reassignment of HasK9Access/IsHighCommand/
     HasPermission at verbose level -- there is no other public API surface
     at all, on purpose (see that file's own header). So this spec reaches
@@ -22,7 +22,7 @@
     function directly.
 
     LoadResourceFile, BY DEFAULT, reads the REAL files off disk
-    ('../server/datastore.lua', '../server/selfcheck.lua') -- so the A3/A4
+    ('../server/datastore.lua', '../server/diagnostics.lua') -- so the A3/A4
     table-name/dependency EXTRACTION regexes are exercised against the
     ACTUAL current production files by every test that does not explicitly
     override `resourceFiles[...]`, the same "read the real source, don't
@@ -65,7 +65,7 @@ end
 -- Minimal, REAL (not stubbed-to-a-fixed-answer) JSON encode/decode,
 -- sufficient for the one thing this file's own manifest logic needs: a
 -- flat JSON array of strings. Deliberately tiny -- this is test
--- infrastructure proving server/debugdump.lua's OWN retention logic
+-- infrastructure proving server/diagnostics.lua's OWN retention logic
 -- degrades correctly when `json` is unavailable AND behaves correctly
 -- when it is, not a general-purpose JSON library.
 -- ----------------------------------------------------------------------
@@ -105,11 +105,11 @@ local function newFixture(opts)
     local function GetGameTimer() return fakeNow end
 
     -- Minimal stand-in for server/cooldowns.lua's real NewCooldown --
-    -- server/debugdump.lua is not loaded alongside the real cooldowns.lua
-    -- here (this spec is scoped to server/debugdump.lua + server/selfcheck.lua
+    -- server/diagnostics.lua is not loaded alongside the real cooldowns.lua
+    -- here (this spec is scoped to server/diagnostics.lua + server/diagnostics.lua
     -- only, matching this suite's own "stub genuinely other files' logic"
     -- convention -- see e.g. propattachment_spec.lua's own header). Only
-    -- the two methods server/debugdump.lua actually calls are provided:
+    -- the two methods server/diagnostics.lua actually calls are provided:
     -- `.Consume(key)` (uses the SAME fake GetGameTimer clock above, so
     -- fakeNow()/setNow() below drive it exactly like the real one would)
     -- and `.RegisterPlayerDropped()` (a real no-op is faithful: this fake
@@ -155,7 +155,7 @@ local function newFixture(opts)
     -- SaveResourceFile above (the manifest, an earlier dump this same run
     -- emptied) -- a real SaveResourceFile/LoadResourceFile pair round-trips
     -- through the SAME real disk, so this fixture's fake filesystem must
-    -- too, or server/debugdump.lua's own manifest-based retention could
+    -- too, or server/diagnostics.lua's own manifest-based retention could
     -- never be exercised at all; (2) an explicit per-test override via
     -- resourceFiles[relativePath] = <string|false>; (3) the REAL file off
     -- disk (tests run with cwd = tests/) -- see this file's own header.
@@ -277,15 +277,18 @@ local function newFixture(opts)
         GetHashKey = GetHashKey,
         Config = Config,
         json = opts.noJson and nil or jsonStub,
-        CreateThread = function() end, -- never called by server/debugdump.lua; present only so a stray reference never errors
+        CreateThread = function() end, -- never called by server/diagnostics.lua; present only so a stray reference never errors
     })
 
-    -- server/debugdump.lua loads LAST in fxmanifest.lua specifically so
+    -- server/diagnostics.lua loads LAST in fxmanifest.lua specifically so
     -- K9SelfCheck already exists as a real global by the time it wraps/reads
-    -- anything -- reproduced here by loading the REAL server/selfcheck.lua
+    -- anything -- reproduced here by loading the REAL server/diagnostics.lua
     -- into this SAME env first.
-    Sandbox.loadInto('../server/selfcheck.lua', env)
-    Sandbox.loadInto('../server/debugdump.lua', env)
+    -- ONE load since the 2026-09-02 merge: server/diagnostics.lua and
+    -- server/diagnostics.lua are now server/diagnostics.lua, sections 1 and 2
+    -- of the same file. Loading it twice, as this used to, would have
+    -- re-registered the command.
+    Sandbox.loadInto('../server/diagnostics.lua', env)
 
     return {
         env = env,
@@ -507,9 +510,15 @@ end)
 -- A4 -- dependency versions, via the REAL K9SelfCheck
 -- ======================================================================
 
+-- No source-file pinning here any more. This test used to load the real
+-- server file's text into the fixture, because the dependency list reached
+-- the dump by being pattern-matched back out of that text. Since the
+-- diagnostics merge the dump reads the REAL, in-scope DEPENDENCIES table
+-- directly (see DependencyList in server/diagnostics.lua), so this test is
+-- now pinned to the real minimums by construction and cannot be fooled by a
+-- fixture whose text has drifted from the table the boot check enforces.
 t.test('A4: a dependency below its minimum version is reported', function()
     local f = newFixture()
-    f.setResourceFile('server/selfcheck.lua', io.open('../server/selfcheck.lua', 'r'):read('a')) -- pin to the real file's own DEPENDENCIES block, explicitly, so this test does not depend on the ambient default
     f.setResourceState('ox_lib', 'started')
     f.setResourceVersion('ox_lib', '0.0.1')
     f.setPlayer(7, 'ABC123')
@@ -518,36 +527,38 @@ t.test('A4: a dependency below its minimum version is reported', function()
 end)
 
 -- ======================================================================
--- PERFORMANCE FIX (load audit, this pass) -- ExtractDatastoreTableNames
--- (A3) and ExtractSelfcheckDependencies (A4) used to call LoadResourceFile
--- and re-parse the FULL text of server/datastore.lua (~238KB) and
--- server/selfcheck.lua (~45KB) on EVERY /k9debug run, even though neither
--- file can change while this resource is running -- pure waste past the
--- first call. Both are now memoized, module-level, nil-checked (see each
--- function's own doc comment in server/debugdump.lua).
+-- PERFORMANCE FIX (load audit) -- ExtractDatastoreTableNames (A3) used to
+-- call LoadResourceFile and re-parse the FULL text of server/datastore.lua
+-- (~238KB) on EVERY /k9debug run, even though that file cannot change while
+-- this resource is running -- pure waste past the first call. It is now
+-- memoized, module-level, nil-checked (see its own doc comment in
+-- server/diagnostics.lua).
 --
--- RED-THEN-GREEN PROOF PERFORMED FOR THIS PASS: the test below
--- ("re-read on a second run") was run against the PRE-FIX source (both
--- extraction functions with their memoization guard removed, restored to
--- unconditionally re-reading and re-parsing on every call) and failed --
--- server/datastore.lua's and server/selfcheck.lua's own call counts both
+-- RED-THEN-GREEN PROOF PERFORMED: the test below ("re-read on a second run")
+-- was run against the PRE-FIX source (the extraction function with its
+-- memoization guard removed, restored to unconditionally re-reading and
+-- re-parsing on every call) and failed -- server/datastore.lua's call count
 -- DOUBLED on the second /k9debug run instead of staying flat. Restoring the
--- real, memoized functions made it pass again. The safety test just below
--- it was written specifically to catch the WRONG way to fix this (caching
--- based on "have we tried" rather than "did we succeed") -- see that test's
--- own comment.
--- ======================================================================
-
-t.test('PERFORMANCE: ExtractDatastoreTableNames/ExtractSelfcheckDependencies are memoized -- a second /k9debug run (even by a DIFFERENT player) never re-reads either file', function()
+-- real, memoized function made it pass again. The safety test just below it
+-- was written specifically to catch the WRONG way to fix this (caching based
+-- on "have we tried" rather than "did we succeed") -- see that test's own
+-- comment.
+--
+-- A4's dependency list used to be the SECOND memoized extraction here, read
+-- and parsed out of server/diagnostics.lua's source text for exactly the same
+-- reason. The diagnostics merge put the self-check and the dump in one file,
+-- so that list is now an ordinary in-scope table reference -- no read, no
+-- parse, no cache, nothing left to memoize. The second assertion below
+-- therefore now proves the read never happens AT ALL, rather than that it
+-- happens only once.
+t.test('PERFORMANCE: server/datastore.lua is read at most once per session, and server/diagnostics.lua is never read at all', function()
     local f = newFixture()
     f.setPlayer(7, 'ABC123')
     f.setPlayer(8, 'DEF456')
 
     runCommandAndGetLastDump(f, 7)
     local firstDatastoreReads = f.loadResourceFileCallCounts['server/datastore.lua'] or 0
-    local firstSelfcheckReads = f.loadResourceFileCallCounts['server/selfcheck.lua'] or 0
     t.isTrue(firstDatastoreReads >= 1, 'the first run must actually read server/datastore.lua at least once -- otherwise this test proves nothing')
-    t.isTrue(firstSelfcheckReads >= 1, 'the first run must actually read server/selfcheck.lua at least once -- otherwise this test proves nothing')
 
     -- A DIFFERENT player, deliberately -- the cache is module-level (the
     -- extraction result is invariant for the whole resource's uptime, not
@@ -555,8 +566,12 @@ t.test('PERFORMANCE: ExtractDatastoreTableNames/ExtractSelfcheckDependencies are
     runCommandAndGetLastDump(f, 8)
     t.equals(f.loadResourceFileCallCounts['server/datastore.lua'], firstDatastoreReads,
         'a second /k9debug run must NEVER re-read server/datastore.lua once the table-name extraction has already succeeded once this session')
-    t.equals(f.loadResourceFileCallCounts['server/selfcheck.lua'], firstSelfcheckReads,
-        'a second /k9debug run must NEVER re-read server/selfcheck.lua once the dependency-list extraction has already succeeded once this session')
+
+    -- Post-merge: the dependency list is an in-scope table, so no run should
+    -- ever open the diagnostics source at all. A non-zero count here means
+    -- someone reintroduced the read-and-parse-my-own-source approach.
+    t.equals(f.loadResourceFileCallCounts['server/diagnostics.lua'] or 0, 0,
+        '/k9debug must never read its own source file -- the dependency list it reports IS the DEPENDENCIES table the boot check enforces, in scope, not a re-parse of the text around it')
 end)
 
 t.test('PERFORMANCE FIX SAFETY: a transient read failure on the first run is never cached as success -- a LATER run with the file readable again still extracts the real data', function()
@@ -660,7 +675,7 @@ t.test('a citizenid containing path-escape characters is sanitized before ever r
 end)
 
 -- ======================================================================
--- RETENTION -- emptying, not deleting (see server/debugdump.lua's own
+-- RETENTION -- emptying, not deleting (see server/diagnostics.lua's own
 -- header "WHY EMPTYING, NOT DELETING").
 -- ======================================================================
 
@@ -751,7 +766,7 @@ t.test('verbose decision trail: an own HasK9Access/HasPermission call appears in
     local f
     do
         -- Build the env by hand (not newFixture) so HasK9Access/HasPermission
-        -- exist as real globals BEFORE server/debugdump.lua's own
+        -- exist as real globals BEFORE server/diagnostics.lua's own
         -- InstallDecisionWrapping runs at that file's load time.
         local fakeNow = 0
         local eventHandlers, commands, savedFiles, notifyCalls = {}, {}, {}, {}
@@ -790,8 +805,7 @@ t.test('verbose decision trail: an own HasK9Access/HasPermission call appears in
                 K9Medkit = {}, HighCommand = {}, FeatureControl = {},
             },
         })
-        Sandbox.loadInto('../server/selfcheck.lua', env)
-        Sandbox.loadInto('../server/debugdump.lua', env)
+        Sandbox.loadInto('../server/diagnostics.lua', env)
 
         -- Pass-through correctness: the wrapped functions must still return
         -- exactly what the real ones do.
@@ -815,5 +829,5 @@ t.test('verbose decision trail: an own HasK9Access/HasPermission call appears in
 end)
 
 print('')
-print(('debugdump_spec.lua: %d passed, %d failed'):format(t.passed, t.failed))
+print(('diagnostics_dump_spec.lua: %d passed, %d failed'):format(t.passed, t.failed))
 os.exit(t.summary())

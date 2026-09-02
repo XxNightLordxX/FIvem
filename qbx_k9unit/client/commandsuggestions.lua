@@ -458,11 +458,11 @@ local function RegisterAllCommandSuggestions()
         end
     end
 
-    -- server/debugdump.lua's /k9debug. Kept OUT of the static table above
+    -- server/diagnostics.lua's /k9debug. Kept OUT of the static table above
     -- and read live here for the same reason the tablet's own commands are:
     -- its switch is Config.DebugDump.enabled, which is not a
     -- Config.Features key, so the featureFlag lookup above cannot express
-    -- it. Same defect class either way -- server/debugdump.lua returns at
+    -- it. Same defect class either way -- server/diagnostics.lua returns at
     -- its top unless that flag is exactly `true`, so with it off the
     -- command is never registered at all and advertising it would promise
     -- something typing it cannot deliver. `~= true`, not `== false`: an

@@ -1,9 +1,9 @@
 --[[
-    tests/clientdebugdump_spec.lua
+    tests/diagnostics_client_spec.lua
 
-    Tests client/debugdump.lua -- the small, periodic client-only self-
+    Tests client/diagnostics.lua -- the small, periodic client-only self-
     report heartbeat that closes the "server cannot see this" blind spot
-    server/debugdump.lua's own header names (NUI focus stuck open, a ped
+    server/diagnostics.lua's own header names (NUI focus stuck open, a ped
     stuck ragdolled/in a vehicle). See that file's own header for the full
     design (deliberately NOT a synchronous server-asks-client round trip).
 
@@ -66,7 +66,7 @@ local function newFixture(opts)
         GetGameTimer = function() return state.gameTimer end,
     })
 
-    Sandbox.loadInto('../client/debugdump.lua', env)
+    Sandbox.loadInto('../client/diagnostics.lua', env)
 
     return { env = env, state = state, step = threadRunner.step, sentEvents = sentEvents }
 end
@@ -155,5 +155,5 @@ t.test('a second step (one more full loop pass) sends a second heartbeat -- this
 end)
 
 print('')
-print(('clientdebugdump_spec.lua: %d passed, %d failed'):format(t.passed, t.failed))
+print(('diagnostics_client_spec.lua: %d passed, %d failed'):format(t.passed, t.failed))
 os.exit(t.summary())

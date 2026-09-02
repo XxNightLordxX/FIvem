@@ -1,22 +1,22 @@
 --[[
-    tests/selfcheck_spec.lua
+    tests/diagnostics_selfcheck_spec.lua
 
-    Tests server/selfcheck.lua -- the boot-time dependency-version check and
+    Tests server/diagnostics.lua -- the boot-time dependency-version check and
     the Config.Features unrecognized-key check (see that file's own header
     for the full design reasoning). Structured the same way as
     tests/cooldowns_spec.lua/tests/runtimefeaturetiers_spec.lua: pure logic
     exercised directly with fabricated inputs, PLUS at least one test that
-    loads the REAL, unmodified server/selfcheck.lua (and, for the
+    loads the REAL, unmodified server/diagnostics.lua (and, for the
     Config.Features check, the REAL config.lua + server/runtimecontrol.lua)
     so this suite proves the wiring, not just the helper functions in
     isolation.
 
     RED/GREEN PROOF PERFORMED FOR THIS PASS (both checks, as required):
-    after writing every test below, server/selfcheck.lua's two real fixes
+    after writing every test below, server/diagnostics.lua's two real fixes
     were each temporarily neutralized in turn (CompareSemver forced to
     compare version strings lexically instead of numerically; then
     FindUnrecognizedFeatureKeys forced to always return an empty list) and
-    `lua5.4 selfcheck_spec.lua` was re-run against each broken copy. Both
+    `lua5.4 diagnostics_selfcheck_spec.lua` was re-run against each broken copy. Both
     breaks turned the exact tests that name them red (never a whole-suite
     crash -- each failure was a clean, named assertion failure), confirming
     those tests actually exercise the fix and are not vacuously passing.
@@ -28,7 +28,7 @@ local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
 
 -- ----------------------------------------------------------------------
--- Load the real, unmodified server/selfcheck.lua into a bare sandbox with
+-- Load the real, unmodified server/diagnostics.lua into a bare sandbox with
 -- NO FiveM natives stubbed at all, to get at K9SelfCheck's pure functions
 -- directly. Since every native touch in that file is guarded (`type(...)
 -- == 'function'`), loading it here registers nothing and calls nothing --
@@ -37,7 +37,7 @@ local Sandbox = dofile('fixtures/sandbox.lua')
 -- ----------------------------------------------------------------------
 local function loadPureModule()
     local env = Sandbox.newEnv({})
-    Sandbox.loadInto('../server/selfcheck.lua', env)
+    Sandbox.loadInto('../server/diagnostics.lua', env)
     return env.K9SelfCheck
 end
 
@@ -286,7 +286,7 @@ t.test('BuildBootSummaryLine: a boot with warnings still reports honest counts o
 end)
 
 -- ----------------------------------------------------------------------
--- FULL BOOT WIRING -- loads the REAL server/selfcheck.lua with every
+-- FULL BOOT WIRING -- loads the REAL server/diagnostics.lua with every
 -- native it touches stubbed, fires the real 'onResourceStart' handler it
 -- registers, and asserts on what it actually prints. Same shape as
 -- tests/runtimefeaturetiers_spec.lua's own boot() helper.
@@ -327,7 +327,7 @@ local function boot(overrides)
         K9Compat = overrides.k9Compat,
     })
 
-    Sandbox.loadInto('../server/selfcheck.lua', env)
+    Sandbox.loadInto('../server/diagnostics.lua', env)
 
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
         handler('qbx_k9unit')
@@ -489,7 +489,7 @@ t.test('SAFETY: with no FiveM natives available at all (plain Lua), loading the 
     local env = Sandbox.newEnv({})
     -- No AddEventHandler, no GetResourceState/GetResourceMetadata/LoadResourceFile,
     -- no Config, no K9Store -- the exact shape of a plain lua5.4 process.
-    Sandbox.loadInto('../server/selfcheck.lua', env)
+    Sandbox.loadInto('../server/diagnostics.lua', env)
     t.isNotNil(env.K9SelfCheck)
 end)
 

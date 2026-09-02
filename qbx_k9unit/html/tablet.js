@@ -1601,7 +1601,7 @@
         cmdref_k9kennel_usage: '/k9kennel',
         cmdref_k9kennel_does: 'Deploys, enters, or exits your kennel -- whichever one makes sense right now. Old names /k9deploykennel and /k9exitkennel still work too.',
         cmdref_k9kennel_needs: 'An active K9 certification, and you must currently be controlling your K9, to deploy or enter. Exiting is always available. This feature must be turned on for your server.',
-        // k9debug -- server/debugdump.lua. The one command whose gate is
+        // k9debug -- server/diagnostics.lua. The one command whose gate is
         // NOT a Config.Features key: it is switched by Config.DebugDump
         // .enabled, which the tablet's predictive-availability logic has no
         // way to read, so its COMMAND_REFERENCE row below is deliberately
