@@ -49,7 +49,7 @@
     for its duplicate of server/exports.lua's ShallowCopyTier).
 
     DELIBERATELY REPORTS THE RAW `xp` INTEGER ONLY, NEVER A DERIVED TIER --
-    same reasoning server/admin.lua's own `/k9auditxp` already documents for
+    same reasoning server/admin.lua's own `/k9audit xp` already documents for
     the identical table: recomputing server/progression.lua's `ResolveTier`
     threshold walk here would be a SECOND, driftable copy of that logic
     (and a real correctness trap ruled out deliberately -- see "WHY NOT

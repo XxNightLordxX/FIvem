@@ -1031,7 +1031,7 @@ t.test('k9audit dept: a source with no resolvable player record is denied, no qu
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'not authorized')
-    t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> denied')
+    t.contains(capturedPrints[#capturedPrints], 'ran k9audit dept(n/a) -> denied')
 end)
 
 t.test('k9audit dept: console (source == 0) is denied by default (TrustConsole == false)', function()
@@ -1040,7 +1040,7 @@ t.test('k9audit dept: console (source == 0) is denied by default (TrustConsole =
     registeredCommands.k9audit(0, { 'dept', 'police' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 0, 'source == 0 has no client to notify')
-    t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> denied')
+    t.contains(capturedPrints[#capturedPrints], 'ran k9audit dept(n/a) -> denied')
 end)
 
 t.test('k9audit dept: console (source == 0) is allowed once TrustConsole is opted in', function()
@@ -1067,7 +1067,7 @@ t.test('Rate limiting: k9audit dept participates in the shared AuditCooldown -- 
     fakeNow = 5100 -- within CommandCooldownMs (300)
     registeredCommands.k9audit(src, { 'dept', 'police' })
     t.equals(#capturedQueries, 1, 'k9audit dept must be rate-limited by a recent k9audit cert call from the same source')
-    t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> rate_limited')
+    t.contains(capturedPrints[#capturedPrints], 'ran k9audit dept(n/a) -> rate_limited')
 
     fakeNow = 5500 -- past the 300ms cooldown
     registeredCommands.k9audit(src, { 'dept', 'police' })
@@ -1094,7 +1094,7 @@ t.test('k9audit dept: a valid, configured department reaches the query; zero row
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'Certified handlers for department police')
     t.contains(capturedNotifications[1].description, 'no results found')
-    t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(police) -> ok')
+    t.contains(capturedPrints[#capturedPrints], 'ran k9audit dept(police) -> ok')
 end)
 
 t.test('k9audit dept: an unconfigured department is rejected as invalid_args, no query runs', function()
@@ -1103,7 +1103,7 @@ t.test('k9audit dept: an unconfigured department is rejected as invalid_args, no
     registeredCommands.k9audit(src, { 'dept', 'ambulance' })
     t.equals(#capturedQueries, 0)
     t.contains(capturedNotifications[1].description, 'Usage:')
-    t.contains(capturedPrints[#capturedPrints], 'ran k9auditdept(n/a) -> invalid_args')
+    t.contains(capturedPrints[#capturedPrints], 'ran k9audit dept(n/a) -> invalid_args')
 end)
 
 t.test('k9audit dept: a non-string job argument is rejected, no query runs', function()

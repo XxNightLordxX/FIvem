@@ -930,7 +930,7 @@
      * -- a rank/permission/High-Command gate, not a certification one; see
      * commandReferenceStatus()'s own doc comment for why these are kept
      * distinct rather than reusing 'state_not_certified', which would be
-     * simply WRONG for e.g. /k9auditcert). */
+     * simply WRONG for e.g. /k9audit cert). */
     function commandReferenceStatusLabel(status) {
         if (status === 'unknown') return S('cmdref_status_unknown');
         if (status === 'insufficient_authorization') return S('cmdref_status_insufficient_authorization');
@@ -8689,8 +8689,8 @@
     // ---- K9 Audit Trail viewer screen (see canViewAudit()) ----
 
     /** Fixed order the first five mode buttons render in -- matches
-     * server/admin.lua's own COMMAND SURFACE listing (k9auditcert,
-     * k9auditpartner, k9auditsearch, k9auditxp, k9auditdept). 'catalog' is
+     * server/admin.lua's own COMMAND SURFACE listing (k9audit cert,
+     * k9audit partner, k9audit search, k9audit xp, k9audit dept). 'catalog' is
      * the SIXTH mode (this pass), appended rather than interleaved -- it
      * has no k9audit* command counterpart at all (bridges
      * tabletAuditCatalog directly, see this file's own NUI CONTRACT note),
@@ -8919,7 +8919,7 @@
      * the id must stay on screen and traceable, but a bare id where a name
      * belongs was the actual complaint, so both are shown together. Mirrors
      * server/admin.lua's own NameWithCitizenId format EXACTLY so the tablet
-     * never disagrees with the '/k9auditcert' etc. chat-command output for
+     * never disagrees with the '/k9audit cert' etc. chat-command output for
      * the same row: id missing/blank -> auditText's S('audit_na'); name
      * resolved to something OTHER than the id -> "Name (id)"; name nil OR
      * (per ResolveAuditDisplayName's own documented "nothing resolved"

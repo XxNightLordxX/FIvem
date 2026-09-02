@@ -1333,7 +1333,6 @@ local TABLET_STRING_KEYS = {
     -- siblings purely because these four landed as one change; the list
     -- itself is order-insensitive (it is read as a set).
     'cmdref_k9dog_usage', 'cmdref_k9dog_does', 'cmdref_k9dog_needs',
-    'cmdref_k9train_usage', 'cmdref_k9train_does', 'cmdref_k9train_needs',
     'cmdref_k9propattach_usage', 'cmdref_k9propattach_does', 'cmdref_k9propattach_needs',
     'cmdref_k9throwfetchball_usage', 'cmdref_k9throwfetchball_does', 'cmdref_k9throwfetchball_needs',
     'cmdref_k9dropfetchball_usage', 'cmdref_k9dropfetchball_does', 'cmdref_k9dropfetchball_needs',
@@ -1342,18 +1341,10 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9fetch_usage', 'cmdref_k9fetch_does', 'cmdref_k9fetch_needs',
     'cmdref_k9eat_usage', 'cmdref_k9eat_does', 'cmdref_k9eat_needs',
     'cmdref_k9drink_usage', 'cmdref_k9drink_does', 'cmdref_k9drink_needs',
-    'cmdref_k9recall_usage', 'cmdref_k9recall_does', 'cmdref_k9recall_needs',
     'cmdref_k9calmdown_usage', 'cmdref_k9calmdown_does', 'cmdref_k9calmdown_needs',
     'cmdref_k9meatbait_usage', 'cmdref_k9meatbait_does', 'cmdref_k9meatbait_needs',
     'cmdref_k9whistle_usage', 'cmdref_k9whistle_does', 'cmdref_k9whistle_needs',
-    'cmdref_k9lineup_usage', 'cmdref_k9lineup_does', 'cmdref_k9lineup_needs',
-    'cmdref_k9lineuppick_usage', 'cmdref_k9lineuppick_does', 'cmdref_k9lineuppick_needs',
-    'cmdref_k9lineupcancel_usage', 'cmdref_k9lineupcancel_does', 'cmdref_k9lineupcancel_needs',
     'cmdref_k9nosehunt_usage', 'cmdref_k9nosehunt_does', 'cmdref_k9nosehunt_needs',
-    'cmdref_k9sarcall_usage', 'cmdref_k9sarcall_does', 'cmdref_k9sarcall_needs',
-    'cmdref_k9training_usage', 'cmdref_k9training_does', 'cmdref_k9training_needs',
-    'cmdref_k9trainsearch_usage', 'cmdref_k9trainsearch_does', 'cmdref_k9trainsearch_needs',
-    'cmdref_k9trainbite_usage', 'cmdref_k9trainbite_does', 'cmdref_k9trainbite_needs',
     'cmdref_k9stats_usage', 'cmdref_k9stats_does', 'cmdref_k9stats_needs',
     'cmdref_k9certify_usage', 'cmdref_k9certify_does', 'cmdref_k9certify_needs',
     'cmdref_k9decertify_usage', 'cmdref_k9decertify_does', 'cmdref_k9decertify_needs',
@@ -1361,7 +1352,6 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9specialize_usage', 'cmdref_k9specialize_does', 'cmdref_k9specialize_needs',
     'cmdref_k9unspecialize_usage', 'cmdref_k9unspecialize_does', 'cmdref_k9unspecialize_needs',
     'cmdref_k9givexp_usage', 'cmdref_k9givexp_does', 'cmdref_k9givexp_needs',
-    'cmdref_k9announce_usage', 'cmdref_k9announce_does', 'cmdref_k9announce_needs',
     'cmdref_danger_warn_alert_usage', 'cmdref_danger_warn_alert_does', 'cmdref_danger_warn_alert_needs',
     -- Threat, added 2026-08-27 alongside its new command. Alert had a
     -- command AND a keybind while Threat had neither, so the two halves of
@@ -3358,7 +3348,7 @@ local function OptionalNumericLimit(data)
     return (type(data.limit) == 'number') and data.limit or nil
 end
 
---- 'tablet:auditCert' -- mirrors server/admin.lua's '/k9auditcert'. `rows`
+--- 'tablet:auditCert' -- mirrors server/admin.lua's '/k9audit cert'. `rows`
 --- shape: one row per k9_certifications grant/revoke event for this
 --- citizenid, across every department (job, granted_by, granted_at,
 --- revoked_by, revoked_at, active) -- see that file's own
@@ -3372,7 +3362,7 @@ RegisterNUICallback('tablet:auditCert', function(data, cb)
     cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditCert', data.targetCitizenId, OptionalNumericLimit(data)))
 end)
 
---- 'tablet:auditPartner' -- mirrors '/k9auditpartner'. `rows` shape: this
+--- 'tablet:auditPartner' -- mirrors '/k9audit partner'. `rows` shape: this
 --- citizenid's full partnership history in EITHER role (id, k9_citizenid,
 --- handler_citizenid, established_by, established_at, ended_by, ended_at,
 --- active) -- see QueryPartnershipHistory's own doc comment.
@@ -3384,7 +3374,7 @@ RegisterNUICallback('tablet:auditPartner', function(data, cb)
     cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditPartner', data.targetCitizenId, OptionalNumericLimit(data)))
 end)
 
---- 'tablet:auditSearch' -- mirrors '/k9auditsearch'. `data.mode` is
+--- 'tablet:auditSearch' -- mirrors '/k9audit search'. `data.mode` is
 --- forwarded VERBATIM, unchecked against server/admin.lua's own
 --- VALID_SEARCH_LOG_MODES whitelist here -- that file's own callback
 --- already whitelist-checks it before `value` is even inspected and
@@ -3413,7 +3403,7 @@ RegisterNUICallback('tablet:auditSearch', function(data, cb)
     cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditSearch', data.mode, value, OptionalNumericLimit(data)))
 end)
 
---- 'tablet:auditXp' -- mirrors '/k9auditxp'. NO `limit` argument --
+--- 'tablet:auditXp' -- mirrors '/k9audit xp'. NO `limit` argument --
 --- citizenid is k9_progression's own PRIMARY KEY, so `rows` is always 0
 --- or 1 elements ({ xp, updated_at }) regardless of what any caller
 --- supplies -- see QueryProgressionSnapshot's own doc comment.
@@ -3425,7 +3415,7 @@ RegisterNUICallback('tablet:auditXp', function(data, cb)
     cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditXp', data.targetCitizenId))
 end)
 
---- 'tablet:auditDept' -- mirrors '/k9auditdept'. `departmentKey` is
+--- 'tablet:auditDept' -- mirrors '/k9audit dept'. `departmentKey` is
 --- forwarded VERBATIM as the server's own `job` argument -- server-side
 --- IsValidDepartment (a `Config.Departments[job] ~= nil` lookup) is the
 --- real gate; this file does not hardcode or duplicate the configured

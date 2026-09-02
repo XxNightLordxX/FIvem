@@ -344,8 +344,8 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9settier', keySuffix = 'k9settier' },
     { command = 'k9specialize', keySuffix = 'k9specialize' },
     { command = 'k9unspecialize', keySuffix = 'k9unspecialize' },
-    -- server/admin.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #1: k9auditcert/
-    -- k9auditpartner/k9auditsearch/k9auditxp/k9auditdept are now HIDDEN
+    -- server/admin.lua -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #1: k9audit cert/
+    -- k9audit partner/k9audit search/k9audit xp/k9audit dept are now HIDDEN
     -- ALIASES of 'k9audit' (still real, working RegisterCommand calls in
     -- server/admin.lua -- see that file's own comment -- just no longer
     -- chat-suggested). See HIDDEN_ALIAS_COMMANDS in

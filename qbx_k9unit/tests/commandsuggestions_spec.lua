@@ -483,13 +483,12 @@ t.test('onResourceStart(qbx_k9unit): registers a chat:addSuggestion for every CO
     t.equals(decertify.params[5].name, 'reason')
     t.equals(decertify.params[5].help, 'Optional.')
 
-    -- docs/history/COMMAND_CONSOLIDATION_SPEC.md §3 -- HIDDEN ALIASES never appear in
-    -- autocomplete at all, even though every one of them is still a real,
-    -- working RegisterCommand call (confirmed elsewhere in this file).
-    t.isNil(f.findSuggestion('k9certifyoffline'), 'k9certifyoffline is a hidden alias -- it must never get its own chat:addSuggestion')
-    t.isNil(f.findSuggestion('k9decertifyoffline'), 'k9decertifyoffline is a hidden alias')
-    t.isNil(f.findSuggestion('k9settieroffline'), 'k9settieroffline is a hidden alias')
-    t.isNil(f.findSuggestion('k9unspecializeoffline'), 'k9unspecializeoffline is a hidden alias')
+    -- HIDDEN ALIASES never appear in autocomplete, even though each is a
+    -- real, working RegisterCommand call. The certification family's five
+    -- *offline twins used to be checked here too; they were DELETED on
+    -- 2026-09-02, so there is nothing left to assert about them -- the
+    -- HIDDEN_ALIAS_COMMANDS guard in this same file now fails if a name is
+    -- allowlisted without a live registration behind it.
     t.isNil(f.findSuggestion('k9grantpermission'), 'k9grantpermission is a hidden alias')
     t.isNil(f.findSuggestion('k9revokepermission'), 'k9revokepermission is a hidden alias')
 
@@ -615,10 +614,10 @@ t.test('THE SAME PROTECTION COVERS EVERY OTHER GATED FAMILY, not just the one th
 end)
 
 t.test('CONTROL: an UNGATED command is still advertised while other features are off -- proves the skip is per-entry and did not simply silence the whole table', function()
-    local f = newFixture({ configFields = { Features = { FetchMechanic = false, TrainingMode = false } } })
+    local f = newFixture({ configFields = { Features = { FetchMechanic = false } } })
     f.fireResourceStart('qbx_k9unit')
 
-    t.isNotNil(f.findSuggestion('k9recall') or f.findSuggestion('k9bitehold') or f.findSuggestion('k9track'),
+    t.isNotNil(f.findSuggestion('k9bitehold') or f.findSuggestion('k9track'),
         'at least one ungated command must still be suggested')
 end)
 

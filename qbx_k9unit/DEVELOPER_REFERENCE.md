@@ -226,7 +226,7 @@ an unhandled error.**
 |---|---|---|
 | Grant | Certifier via ox_target or `/k9certify [id]` | eligibility check (§4.2) → INSERT → cache update → notify both |
 | Revoke, online | Certifier via ox_target or `/k9decertify [id]` | eligibility check → UPDATE → cache update → notify |
-| Revoke, offline | `/k9decertifyoffline [citizenid] [job]` (command-only — no numeric server id exists for a disconnected target) | UPDATE by citizenid+job, no proximity/model check possible |
+| Revoke, offline | `/k9decertify [citizenid] [job]` — the same command, which routes on the argument's shape (all digits means a server id) | UPDATE by citizenid+job, no proximity/model check possible |
 | Revoke, automatic | System, on leaving the department | `QBCore:Server:OnJobUpdate` (§4.4) |
 | Check | Any gated action | `hasK9Access` callback: job ∈ Departments AND (cache OR autoAccessGrade) |
 | Display only | Client HUD | own `metadata.k9certified` mirror, never used for authorization |
@@ -305,13 +305,12 @@ Config.Features = {
     ThermalVision = false, NightVision = false, DoorInteraction = false,
 
     -- Phase 3 (combat & action)
-    BiteAndHold = false, NonLethalTakedown = false, HandlerDownDefense = false,
+    BiteAndHold = false, NonLethalTakedown = false,
     PropDragging = false, AgilityAdvanced = false,
 
     -- Phase 4 (inventory, progression, vitality)
     K9Inventory = false, XPProgression = false, HealthStaminaHUD = false,
-    FatigueSystem = false, MoodSystem = false, FearStressSystem = false,
-    DistractionSystem = false, InjuryLimping = false, K9Medkit = false,
+    FatigueSystem = false, K9Medkit = false,
     ContrabandScreenFX = false,
 
     -- Phase 5 (audio/props/advanced vision R&D)
@@ -850,6 +849,13 @@ combat is **not** a §2 non-goal.
 
 #### 2. HandlerDownDefense's "aggressive state" — DECIDED: UI/auto-targeting convenience, not AI takeover
 
+> **REMOVED 2026-09-02, at the owner's request.** The design below was
+> built and shipped, then taken out. It is kept as a record of why it was
+> shaped this way -- it does NOT describe anything in the resource today,
+> and nothing here should be implemented from without deciding to bring
+> the feature back first.
+
+
 The K9's bite-and-hold/takedown actions become available through a single
 simplified, pre-targeted input instead of the radial menu — the K9 player
 still steers their own ped and still confirms manually. A fully autonomous,
@@ -1225,6 +1231,13 @@ resource can consume — not decided here.
 
 ### 12.5.3 Handler-down defense (`Config.Features.HandlerDownDefense`)
 
+> **REMOVED 2026-09-02, at the owner's request.** The design below was
+> built and shipped, then taken out. It is kept as a record of why it was
+> shaped this way -- it does NOT describe anything in the resource today,
+> and nothing here should be implemented from without deciding to bring
+> the feature back first.
+
+
 Trigger: a certified handler's health drops below `handlerHealthThreshold`,
 detected via Phase 2's damage-event log. "Nearest hostile" = whoever the
 log attributes as the source of the handler's most recent damage within
@@ -1332,7 +1345,14 @@ no candidate clip found.
 
 ## 13.0 — Cross-cutting architectural decisions
 
-### Decision 1: `FatigueSystem`/`MoodSystem`/`FearStressSystem`/`DistractionSystem`/`InjuryLimping` are ONE subsystem, not five
+### Decision 1: the five wellbeing stats are ONE subsystem, not five
+
+> **Four of the five are gone.** `MoodSystem`, `FearStressSystem`,
+> `DistractionSystem` and `InjuryLimping` were removed on 2026-09-02 at the
+> owner's request. Only `FatigueSystem` remains. The decision below is why
+> they shared one table, one file pair and one tick -- which is also why
+> removing four of them left the fifth working.
+
 
 All five ship as one `client/wellbeing.lua` + `server/wellbeing.lua` pair,
 one `Config.Wellbeing` table, one per-citizenid stat store — each
@@ -1564,6 +1584,13 @@ also gate a Phase 3 combat action (recommend not, without an explicit ask).
 
 #### 13.4.3.2 Mood (`Config.Features.MoodSystem`)
 
+> **REMOVED 2026-09-02, at the owner's request.** The design below was
+> built and shipped, then taken out. It is kept as a record of why it was
+> shaped this way -- it does NOT describe anything in the resource today,
+> and nothing here should be implemented from without deciding to bring
+> the feature back first.
+
+
 Decrements by `damageDecayAmount` on a logged damage event where the K9 is
 the victim (a second, independent consumer of Phase 2's relay, not a change
 to what `server/tracking.lua` does with it); increments via "Pet K9"
@@ -1579,6 +1606,13 @@ here. Also open: whether petting requires the interactor to hold a
 `Config.Departments` job, or is open to any nearby player.
 
 #### 13.4.3.3 Fear/Stress (`Config.Features.FearStressSystem`)
+
+> **REMOVED 2026-09-02, at the owner's request.** The design below was
+> built and shipped, then taken out. It is kept as a record of why it was
+> shaped this way -- it does NOT describe anything in the resource today,
+> and nothing here should be implemented from without deciding to bring
+> the feature back first.
+
 
 Rises by `risePerNearbyShotPerTick` per tick for each weapon-fire event in
 Phase 2's existing log within `gunfireRadius`/`gunfireLookbackSeconds` —
@@ -1602,6 +1636,13 @@ issuable by a partnered handler on someone else's K9. **See `KNOWN_ISSUES.md`'s
 fear/stress entry for the still-open, repeatable-griefing angle on this stat.**
 
 #### 13.4.3.4 Distraction (`Config.Features.DistractionSystem`)
+
+> **REMOVED 2026-09-02, at the owner's request.** The design below was
+> built and shipped, then taken out. It is kept as a record of why it was
+> shaped this way -- it does NOT describe anything in the resource today,
+> and nothing here should be implemented from without deciding to bring
+> the feature back first.
+
 
 Two independent halves. **Item-triggered distraction** (fully native-only):
 a thrown "meat bait" or used "ultrasonic whistle" item, within its radius
@@ -1629,6 +1670,13 @@ should require any particular job/permission or be open to anyone
 wording as intentionally open, not asserted as certain.
 
 #### 13.4.3.5 Injury/Limping (`Config.Features.InjuryLimping`)
+
+> **REMOVED 2026-09-02, at the owner's request.** The design below was
+> built and shipped, then taken out. It is kept as a record of why it was
+> shaped this way -- it does NOT describe anything in the resource today,
+> and nothing here should be implemented from without deciding to bring
+> the feature back first.
+
 
 Decrements by `damageDecayAmount` per logged damage event (same relay reuse
 as Mood), regenerates very slowly passively — `K9Medkit` is the intended

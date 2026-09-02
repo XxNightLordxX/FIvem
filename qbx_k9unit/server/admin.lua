@@ -24,9 +24,9 @@
         a genuine, undocumented GAP: a real table this resource has
         written to since Phase 4, with no query surface here at all — the
         same class of gap this file's own brief warns is "worse than one
-        that admits its scope." CLOSED this pass: `/k9auditxp` below.
+        that admits its scope." CLOSED this pass: `/k9audit xp` below.
       - `tenure_bonus_tier_granted` needs no new command: it is a column on
-        `k9_partnerships`, already fully returned by `/k9auditpartner`
+        `k9_partnerships`, already fully returned by `/k9audit partner`
         (QueryPartnershipHistory selects every column via its own `columns`
         local, which already includes it) — an admin auditing a
         partnership's history sees its current tenure-tier progress for
@@ -38,7 +38,7 @@
         (partnershipEstablished/Ended), `k9_search_log`
         (searchCompleted), or, as of this pass, `k9_progression`
         (xpTierReached). Nothing further to add here; the underlying data
-        each event reports on is fully covered once `/k9auditxp` lands.
+        each event reports on is fully covered once `/k9audit xp` lands.
       - K9Inventory.allowedItems enforcement (server/inventory.lua) rejects
         a mutation against ox_inventory's own stash contents — it writes
         no row to any `k9_*` table this file (or this resource) owns.
@@ -65,7 +65,7 @@
     `citizenid`, using `idx_citizen_job_active` as a prefix scan, never
     `idx_job_active`. The index has been paying its write-amplification
     cost on every INSERT/UPDATE to `k9_certifications` since it was added,
-    for a read path nothing exercised. CLOSED this pass: `/k9auditdept`
+    for a read path nothing exercised. CLOSED this pass: `/k9audit dept`
     below, whose query is sql/install.sql's own documented `idx_job_active`
     shape verbatim (`SELECT citizenid, granted_by, granted_at FROM
     k9_certifications WHERE job = ? AND active = 1`), plus the same
@@ -122,7 +122,7 @@
 
     NOT SCOPED TO THE CALLER'S OWN DEPARTMENT: passing IsAuthorizedAdmin at
     all (senior enough in ANY configured Config.Departments job) authorizes
-    every command in this file, including `/k9auditdept` against a
+    every command in this file, including `/k9audit dept` against a
     DIFFERENT department's roster than the caller's own. This mirrors an
     existing precedent already established in this resource —
     GrantCertification explicitly allows cross-department certification
@@ -176,7 +176,7 @@
         QueryCertificationHistory:1, QueryPartnershipHistory:2,
         QuerySearchLogBy{Officer,Plate,Person}/QuerySearchLogRecent:4,
         QueryProgressionSnapshot:1, QueryDepartmentRoster:1 (new,
-        `/k9auditdept`) — verified by
+        `/k9audit dept`) — verified by
         re-reading every `:format(`/literal-string call site below, not
         re-counted from memory). The security property that matters (every
         one of them is 100% hardcoded text, never built from a
@@ -201,7 +201,7 @@
         attacker-reachable string in that position — only a number this
         file's own clamping code produced) and sidesteps that unconfirmed
         compatibility question entirely.
-      - `/k9auditsearch`'s `mode` argument is checked against a fixed
+      - `/k9audit search`'s `mode` argument is checked against a fixed
         whitelist table (VALID_SEARCH_LOG_MODES) and used ONLY to select
         which of four separately hardcoded query functions runs — never
         concatenated into a query, never used to select a column/table name
@@ -232,14 +232,14 @@
     runtime no-op; see the onResourceStart block at the bottom of this
     file):
 
-    1. '/k9auditcert <citizenid>'
+    1. '/k9audit cert <citizenid>'
        Full certification grant/revoke history for one citizenid, across
        every department, most recently GRANTED first. Uses
        idx_citizen_job_active's leading `citizenid` column as a prefix scan
        — sql/install.sql's own comment on that index names this exact
        "full cert history for citizenid X across all jobs" query shape.
 
-    2. '/k9auditpartner <citizenid>'
+    2. '/k9audit partner <citizenid>'
        Full partnership history (active and historical) for one citizenid,
        in EITHER role. Two separate equality queries — one per unique index
        (idx_k9_citizenid_active / idx_handler_citizenid_active) — merged
@@ -247,7 +247,7 @@
        work hits its own purpose-built index instead of forcing an
        index-merge access plan on a single OR'd WHERE clause.
 
-    3. '/k9auditsearch <mode> [value] [limit]'
+    3. '/k9audit search <mode> [value] [limit]'
        mode ∈ {'officer', 'plate', 'person', 'recent'} — STRICT WHITELIST,
        see VALID_SEARCH_LOG_MODES:
          officer <citizenid> [limit] — searches PERFORMED BY citizenid,
@@ -268,7 +268,7 @@
            rather than add a new one for a "recent window" query
            sql/install.sql's own header never anticipated.
 
-    4. '/k9auditxp <citizenid>'
+    4. '/k9audit xp <citizenid>'
        Current persisted XP total for one citizenid, from `k9_progression`
        (server/progression.lua) — added this pass, see this file's own
        header "COVERAGE RE-CHECK" section for why. `citizenid` is that
@@ -283,7 +283,7 @@
        resource-global) here as a second, driftable copy; an admin can
        compare the reported total against Config.XPTiers directly.
 
-    5. '/k9auditdept <job> [limit]'
+    5. '/k9audit dept <job> [limit]'
        Current ACTIVE certified-handler roster for one department (a
        Config.Departments key), most recently GRANTED first. Added this
        pass — see this file's header "COVERAGE RE-CHECK (this pass, take
@@ -309,12 +309,12 @@
        not just "the index says so": (1) `idx_job_active`'s own
        sql/install.sql doc comment names this exact query as "list all
        certified handlers in department X" — a present-tense ROSTER
-       question, not a historical one; (2) `/k9auditcert` above already
+       question, not a historical one; (2) `/k9audit cert` above already
        covers full grant/revoke history (including every department) for
        one citizenid — a second, department-scoped full-history view
        would duplicate that command's job rather than serve the roster
        use case this index exists for; (3) a revoked-history view keyed
-       by department, unlike `/k9auditcert`'s per-citizenid view, would
+       by department, unlike `/k9audit cert`'s per-citizenid view, would
        accumulate EVERY citizenid ever certified-then-revoked in that
        department with no natural per-target scope to bound it — the
        roster framing keeps this a small, bounded, genuinely useful
@@ -323,7 +323,7 @@
        RESULT CAP: reuses `Config.AdminAudit.MaxResults.Certifications`
        (still clamped into `[1, HARD_MAX_RESULTS]` by ClampLimit either
        way) rather than a new dedicated config key — this queries the
-       exact same `k9_certifications` table `/k9auditcert` already caps
+       exact same `k9_certifications` table `/k9audit cert` already caps
        under that same key, and a roster is naturally smaller than a
        full per-citizenid history in the common case (one row per
        currently-certified handler, not one row per grant/revoke event
@@ -334,7 +334,7 @@
        `idx_job_active`'s own doc comment names — `citizenid, granted_by,
        granted_at` — nothing wider. Deliberately does NOT also return
        `revoked_by`/`revoked_at` (always NULL for an active-only row
-       anyway) or any column `/k9auditcert` does not already expose for
+       anyway) or any column `/k9audit cert` does not already expose for
        the very same table; this command widens WHO the query is scoped
        by (department instead of citizenid), never WHAT is disclosed.
     ======================================================================
@@ -505,7 +505,7 @@ local DEFAULT_COMMAND_COOLDOWN_MS = 3000
 -- text, and so multiple short toasts don't spam the screen either.
 local ROWS_PER_NOTIFY_CHUNK = 5
 
--- Fixed whitelist of valid `/k9auditsearch` modes — see this file's header
+-- Fixed whitelist of valid `/k9audit search` modes — see this file's header
 -- "SQL SAFETY" section for why this is a strict table lookup, never a
 -- value that reaches SQL text directly.
 local VALID_SEARCH_LOG_MODES = { officer = true, plate = true, person = true, recent = true }
@@ -656,7 +656,7 @@ local function IsAuthorizedAdmin(source)
     --   3. ANY other resource on this server, via the `ExecuteCommand` native.
     --      These commands are registered with `restricted = false`, so nothing
     --      at the native layer stops a compromised, malicious or merely buggy
-    --      co-located resource from running `k9auditsearch recent 100` and
+    --      co-located resource from running `k9audit search recent 100` and
     --      reading the entire privacy-sensitive audit trail with no ACE grant
     --      of its own.
     -- So the blanket bypass trusted a far broader and weaker set of actors than
@@ -1217,7 +1217,7 @@ local function EnrichDeptRosterRows(rows)
     return rows
 end
 
---- '/k9auditcert' query. Uses idx_citizen_job_active's leading `citizenid`
+--- '/k9audit cert' query. Uses idx_citizen_job_active's leading `citizenid`
 --- column as a prefix scan (sql/install.sql's own comment on that index
 --- names this exact "full cert history for citizenid X" shape). Ordered by
 --- `granted_at DESC` — MySQL sorts this server-side; this file never
@@ -1229,7 +1229,7 @@ local function QueryCertificationHistory(citizenid, limit)
     return EnrichCertHistoryRows(K9Store.Cert_GetHistory(citizenid, limit))
 end
 
---- '/k9auditpartner' query. Two separate equality queries — one per unique
+--- '/k9audit partner' query. Two separate equality queries — one per unique
 --- index (idx_k9_citizenid_active / idx_handler_citizenid_active) — merged
 --- in Lua by MergeSortedByIdDesc above, rather than one OR'd WHERE clause
 --- forcing an index-merge plan across two independent indexes. Each
@@ -1249,7 +1249,7 @@ local function QueryPartnershipHistory(citizenid, limit)
     return EnrichPartnershipHistoryRows(MergeSortedByIdDesc(asK9, asHandler, limit))
 end
 
---- '/k9auditsearch officer' query — searches PERFORMED BY citizenid, most
+--- '/k9audit search officer' query — searches PERFORMED BY citizenid, most
 --- recent first. Uses idx_searcher_searched_at, exactly matching
 --- sql/install.sql's own documented query for that index.
 --- @param citizenid string
@@ -1259,7 +1259,7 @@ local function QuerySearchLogByOfficer(citizenid, limit)
     return EnrichSearchLogRows(K9Store.SearchLog_GetByOfficer(citizenid, limit))
 end
 
---- '/k9auditsearch plate' query — searches OF a vehicle plate, most recent
+--- '/k9audit search plate' query — searches OF a vehicle plate, most recent
 --- first. Uses idx_target_plate_searched_at, exactly matching
 --- sql/install.sql's own documented query for that index.
 --- @param plate string -- already normalized by NormalizePlateArg
@@ -1269,7 +1269,7 @@ local function QuerySearchLogByPlate(plate, limit)
     return EnrichSearchLogRows(K9Store.SearchLog_GetByPlate(plate, limit))
 end
 
---- '/k9auditsearch person' query — searches OF a person citizenid, most
+--- '/k9audit search person' query — searches OF a person citizenid, most
 --- recent first. Uses idx_target_citizenid_searched_at, exactly matching
 --- sql/install.sql's own documented query for that index.
 --- @param citizenid string
@@ -1279,7 +1279,7 @@ local function QuerySearchLogByPerson(citizenid, limit)
     return EnrichSearchLogRows(K9Store.SearchLog_GetByPerson(citizenid, limit))
 end
 
---- '/k9auditsearch recent' query — the N most recently logged searches of
+--- '/k9audit search recent' query — the N most recently logged searches of
 --- ANY kind, no WHERE clause. Ordered by `id DESC` (InnoDB's own clustered
 --- primary-key order), NOT `searched_at` — reading the tail of the
 --- clustered index is cheap and needs no dedicated index of its own; see
@@ -1290,7 +1290,7 @@ local function QuerySearchLogRecent(limit)
     return EnrichSearchLogRows(K9Store.SearchLog_GetRecent(limit))
 end
 
---- '/k9auditxp' query — see this file's header "COMMAND SURFACE" item 4
+--- '/k9audit xp' query — see this file's header "COMMAND SURFACE" item 4
 --- and "COVERAGE RE-CHECK" for the full reasoning. `citizenid` is
 --- k9_progression's own PRIMARY KEY (sql/install.sql) — a plain,
 --- unclamped `LIMIT 1` literal is correct here, NOT a caller-influenced
@@ -1302,7 +1302,7 @@ local function QueryProgressionSnapshot(citizenid)
     return K9Store.XP_GetSnapshotRows(citizenid)
 end
 
---- '/k9auditdept' query — see this file's header "COMMAND SURFACE" item 5
+--- '/k9audit dept' query — see this file's header "COMMAND SURFACE" item 5
 --- and "COVERAGE RE-CHECK (this pass, take 2)" for the full reasoning.
 --- Uses `idx_job_active` (`job`, `active`) — this is sql/install.sql's own
 --- documented query for that index, verbatim, with only ORDER BY/LIMIT
@@ -1497,30 +1497,30 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- to the dispatcher. All five share an IDENTICAL gate/cooldown (see
     --- docs/history/COMMAND_CONSOLIDATION_SPEC.md §1's own audit table).
     ---
-    --- The five original single-purpose names ('k9auditcert' and friends)
+    --- The five original single-purpose command names
     --- were registered as hidden aliases through 2026-09-02 and are now
     --- DELETED at the owner's request -- the server had not launched, so
     --- there were no macros or cheat-sheets to protect.
 
-    --- '/k9auditcert [citizenid] [limit]' core -- see this file's header
+    --- '/k9audit cert [citizenid] [limit]' core -- see this file's header
     --- "COMMAND SURFACE" item 1.
     --- @param source number
     --- @param args string[]
     local function HandleAuditCert(source, args)
         if not IsAuthorizedAdmin(source) then
-            LogAuditInvocation(source, 'k9auditcert', 'n/a', 'denied')
+            LogAuditInvocation(source, 'k9audit cert', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
         if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
-            LogAuditInvocation(source, 'k9auditcert', 'n/a', 'rate_limited')
+            LogAuditInvocation(source, 'k9audit cert', 'n/a', 'rate_limited')
             return -- silent no-op: rate-limited, not an error worth notifying about (matches this resource's bark/leash-request/certify-action convention)
         end
 
         local citizenid = args[1]
         if not IsValidCitizenId(citizenid) then
-            LogAuditInvocation(source, 'k9auditcert', 'n/a', 'invalid_args')
+            LogAuditInvocation(source, 'k9audit cert', 'n/a', 'invalid_args')
             local usage = locale('admin.usage_auditcert')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
@@ -1530,7 +1530,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         local rows = QueryCertificationHistory(citizenid, limit)
         local label = locale('admin.cert_history_label', AuditDisplayLabel(citizenid))
 
-        LogAuditInvocation(source, 'k9auditcert', citizenid, 'ok')
+        LogAuditInvocation(source, 'k9audit cert', citizenid, 'ok')
 
         if source == 0 then
             PrintRowsToConsole(label, rows, FormatCertRow)
@@ -1540,25 +1540,25 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 
 
-    --- '/k9auditpartner [citizenid] [limit]' core -- see this file's header
+    --- '/k9audit partner [citizenid] [limit]' core -- see this file's header
     --- "COMMAND SURFACE" item 2.
     --- @param source number
     --- @param args string[]
     local function HandleAuditPartner(source, args)
         if not IsAuthorizedAdmin(source) then
-            LogAuditInvocation(source, 'k9auditpartner', 'n/a', 'denied')
+            LogAuditInvocation(source, 'k9audit partner', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
         if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
-            LogAuditInvocation(source, 'k9auditpartner', 'n/a', 'rate_limited')
+            LogAuditInvocation(source, 'k9audit partner', 'n/a', 'rate_limited')
             return
         end
 
         local citizenid = args[1]
         if not IsValidCitizenId(citizenid) then
-            LogAuditInvocation(source, 'k9auditpartner', 'n/a', 'invalid_args')
+            LogAuditInvocation(source, 'k9audit partner', 'n/a', 'invalid_args')
             local usage = locale('admin.usage_auditpartner')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
@@ -1568,7 +1568,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         local rows = QueryPartnershipHistory(citizenid, limit)
         local label = locale('admin.partnership_history_label', AuditDisplayLabel(citizenid))
 
-        LogAuditInvocation(source, 'k9auditpartner', citizenid, 'ok')
+        LogAuditInvocation(source, 'k9audit partner', citizenid, 'ok')
 
         if source == 0 then
             PrintRowsToConsole(label, rows, FormatPartnershipRow)
@@ -1578,7 +1578,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 
 
-    --- '/k9auditsearch <officer|plate|person|recent> [value] [limit]' core
+    --- '/k9audit search <officer|plate|person|recent> [value] [limit]' core
     --- -- see this file's header "COMMAND SURFACE" item 3. Authorization is
     --- checked BEFORE the `mode` argument is even inspected — an
     --- unauthorized caller learns nothing about argument validity, not
@@ -1595,19 +1595,19 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param args string[]
     local function HandleAuditSearch(source, args)
         if not IsAuthorizedAdmin(source) then
-            LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'denied')
+            LogAuditInvocation(source, 'k9audit search', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
         if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
-            LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'rate_limited')
+            LogAuditInvocation(source, 'k9audit search', 'n/a', 'rate_limited')
             return
         end
 
         local mode = args[1]
         if not VALID_SEARCH_LOG_MODES[mode] then
-            LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'invalid_args')
+            LogAuditInvocation(source, 'k9audit search', 'n/a', 'invalid_args')
             local usage = locale('admin.usage_auditsearch')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
@@ -1618,7 +1618,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         if mode == 'officer' or mode == 'person' then
             local citizenid = args[2]
             if not IsValidCitizenId(citizenid) then
-                LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'invalid_args')
+                LogAuditInvocation(source, 'k9audit search', 'n/a', 'invalid_args')
                 local usage = locale('admin.usage_auditsearch_mode', mode)
                 if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
                 return
@@ -1629,7 +1629,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         elseif mode == 'plate' then
             local plate = NormalizePlateArg(args[2])
             if not plate then
-                LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'invalid_args')
+                LogAuditInvocation(source, 'k9audit search', 'n/a', 'invalid_args')
                 local usage = locale('admin.usage_auditsearch_plate')
                 if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
                 return
@@ -1643,7 +1643,7 @@ AddEventHandler('onResourceStart', function(resourceName)
             label = locale('admin.search_log_label_recent')
         end
 
-        LogAuditInvocation(source, 'k9auditsearch', label, 'ok')
+        LogAuditInvocation(source, 'k9audit search', label, 'ok')
 
         if source == 0 then
             PrintRowsToConsole(label, rows, FormatSearchLogRow)
@@ -1653,7 +1653,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 
 
-    --- '/k9auditxp [citizenid]' core -- see this file's header "COMMAND
+    --- '/k9audit xp [citizenid]' core -- see this file's header "COMMAND
     --- SURFACE" item 4 and "COVERAGE RE-CHECK" for the full reasoning. No
     --- `[limit]` argument — `citizenid` is k9_progression's own PRIMARY
     --- KEY, so there is never more than one row to bound.
@@ -1661,19 +1661,19 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param args string[]
     local function HandleAuditXp(source, args)
         if not IsAuthorizedAdmin(source) then
-            LogAuditInvocation(source, 'k9auditxp', 'n/a', 'denied')
+            LogAuditInvocation(source, 'k9audit xp', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
         if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
-            LogAuditInvocation(source, 'k9auditxp', 'n/a', 'rate_limited')
+            LogAuditInvocation(source, 'k9audit xp', 'n/a', 'rate_limited')
             return
         end
 
         local citizenid = args[1]
         if not IsValidCitizenId(citizenid) then
-            LogAuditInvocation(source, 'k9auditxp', 'n/a', 'invalid_args')
+            LogAuditInvocation(source, 'k9audit xp', 'n/a', 'invalid_args')
             local usage = locale('admin.usage_auditxp')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
@@ -1682,7 +1682,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         local rows = QueryProgressionSnapshot(citizenid)
         local label = locale('admin.xp_snapshot_label', AuditDisplayLabel(citizenid))
 
-        LogAuditInvocation(source, 'k9auditxp', citizenid, 'ok')
+        LogAuditInvocation(source, 'k9audit xp', citizenid, 'ok')
 
         if source == 0 then
             PrintRowsToConsole(label, rows, FormatProgressionRow)
@@ -1692,7 +1692,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 
 
-    --- '/k9auditdept <job> [limit]' core -- see this file's header "COMMAND
+    --- '/k9audit dept <job> [limit]' core -- see this file's header "COMMAND
     --- SURFACE" item 5 and "COVERAGE RE-CHECK (this pass, take 2)" for the
     --- full reasoning (idx_job_active, specified/indexed for but never
     --- queried until now). Reuses Config.AdminAudit.MaxResults.Certifications
@@ -1702,19 +1702,19 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param args string[]
     local function HandleAuditDept(source, args)
         if not IsAuthorizedAdmin(source) then
-            LogAuditInvocation(source, 'k9auditdept', 'n/a', 'denied')
+            LogAuditInvocation(source, 'k9audit dept', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
         if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
-            LogAuditInvocation(source, 'k9auditdept', 'n/a', 'rate_limited')
+            LogAuditInvocation(source, 'k9audit dept', 'n/a', 'rate_limited')
             return
         end
 
         local job = args[1]
         if not IsValidDepartment(job) then
-            LogAuditInvocation(source, 'k9auditdept', 'n/a', 'invalid_args')
+            LogAuditInvocation(source, 'k9audit dept', 'n/a', 'invalid_args')
             local usage = locale('admin.usage_auditdept')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
@@ -1724,7 +1724,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         local rows = QueryDepartmentRoster(job, limit)
         local label = locale('admin.dept_roster_label', job)
 
-        LogAuditInvocation(source, 'k9auditdept', job, 'ok')
+        LogAuditInvocation(source, 'k9audit dept', job, 'ok')
 
         if source == 0 then
             PrintRowsToConsole(label, rows, FormatDeptCertRow)
@@ -1750,7 +1750,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- state to guess FROM. An explicit subcommand keyword stays required;
     -- the no-argument path below still just prints the subcommand list
     -- (docs/history/COMMAND_CONSOLIDATION_SPEC.md §4's own established convention,
-    -- reused verbatim from '/k9auditsearch' with no bad-subcommand args at
+    -- reused verbatim from '/k9audit search' with no bad-subcommand args at
     -- all).
     --
     -- PARSE THE SUBCOMMAND FIRST, then forward into that ONE subcommand's
@@ -1791,7 +1791,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         if not handler then
             -- NO-ARGUMENT / UNRECOGNIZED-SUBCOMMAND DISCOVERABILITY
             -- (docs/history/COMMAND_CONSOLIDATION_SPEC.md §4) -- the exact convention
-            -- '/k9auditsearch' already established, reused verbatim. Never
+            -- '/k9audit search' already established, reused verbatim. Never
             -- an error for a bare invocation -- this IS the "what are my
             -- options" answer for a non-technical owner.
             local usage = locale('admin.usage_audit')
@@ -1887,7 +1887,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --     passing IsAuthorizedAdmin.
     -- A callback NEVER exposes a wider column set than its command
     -- counterpart already prints -- e.g. tabletAuditDept's rows are the
-    -- SAME `citizenid, granted_by, granted_at` triple `/k9auditdept`'s own
+    -- SAME `citizenid, granted_by, granted_at` triple `/k9audit dept`'s own
     -- "DISPLAY BOUNDARY" header section documents, nothing wider.
     --
     -- AUDIT-OF-THE-AUDIT still applies unchanged -- every callback
@@ -1912,7 +1912,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- block next.
     -- ======================================================================
 
-    --- 'qbx_k9unit:server:tabletAuditCert' -- mirrors '/k9auditcert'. See
+    --- 'qbx_k9unit:server:tabletAuditCert' -- mirrors '/k9audit cert'. See
     --- QueryCertificationHistory above for the exact row shape returned.
     --- @param source number
     --- @param citizenid string?
@@ -1947,7 +1947,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
-    --- 'qbx_k9unit:server:tabletAuditPartner' -- mirrors '/k9auditpartner'.
+    --- 'qbx_k9unit:server:tabletAuditPartner' -- mirrors '/k9audit partner'.
     --- See QueryPartnershipHistory above for the exact row shape returned
     --- (already merged across both roles and sorted/truncated by
     --- MergeSortedByIdDesc).
@@ -1980,12 +1980,12 @@ AddEventHandler('onResourceStart', function(resourceName)
         return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
-    --- 'qbx_k9unit:server:tabletAuditSearch' -- mirrors '/k9auditsearch'.
+    --- 'qbx_k9unit:server:tabletAuditSearch' -- mirrors '/k9audit search'.
     --- `mode` is checked against the SAME VALID_SEARCH_LOG_MODES whitelist
     --- BEFORE `value` is even inspected -- same "an unauthorized/malformed
     --- caller learns nothing about argument validity, not even whether
     --- their chosen mode string was recognized" posture this file's own
-    --- '/k9auditsearch' command comment already documents. See
+    --- '/k9audit search' command comment already documents. See
     --- QuerySearchLogByOfficer/ByPlate/ByPerson/Recent above for the exact
     --- row shape returned (identical across all four modes).
     --- @param source number
@@ -2045,7 +2045,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = effectiveLimit, truncated = wasTruncated }
     end)
 
-    --- 'qbx_k9unit:server:tabletAuditXp' -- mirrors '/k9auditxp'. No
+    --- 'qbx_k9unit:server:tabletAuditXp' -- mirrors '/k9audit xp'. No
     --- `limit` argument -- `citizenid` is k9_progression's own PRIMARY KEY
     --- (see QueryProgressionSnapshot's own doc comment above), so `rows` is
     --- always an array of 0 or 1 elements regardless of what any caller
@@ -2083,7 +2083,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS }
     end)
 
-    --- 'qbx_k9unit:server:tabletAuditDept' -- mirrors '/k9auditdept'. See
+    --- 'qbx_k9unit:server:tabletAuditDept' -- mirrors '/k9audit dept'. See
     --- QueryDepartmentRoster above for the exact row shape returned
     --- (active roster only, same three columns idx_job_active's own doc
     --- comment names -- nothing wider).
@@ -2231,5 +2231,5 @@ AddEventHandler('onResourceStart', function(resourceName)
         return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
-    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept); audit callbacks registered (tabletAuditCert, tabletAuditPartner, tabletAuditSearch, tabletAuditXp, tabletAuditDept, tabletAuditCatalog).')
+    print('[qbx_k9unit] admin.lua: audit command registered (/k9audit, with subcommands cert/partner/search/xp/dept); audit callbacks registered (tabletAuditCert, tabletAuditPartner, tabletAuditSearch, tabletAuditXp, tabletAuditDept, tabletAuditCatalog).')
 end)

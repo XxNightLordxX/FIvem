@@ -160,10 +160,9 @@
                     expiry" effect; the courtesy-warning SWEEP THREAD is
                     only started if the flag was already true when
                     certifications.lua loaded -- disclosed per-feature,
-                    same reasoning as ScentTracking above), FatigueSystem /
-                    MoodSystem / FearStressSystem / DistractionSystem /
-                    InjuryLimping (server/wellbeing.lua, each re-checked
-                    inside the functions its own tick/relay handlers call),
+                    same reasoning as ScentTracking above), FatigueSystem
+                    (server/wellbeing.lua, re-checked inside the functions
+                    its own tick/relay handlers call),
                     PartnershipTenureBonus (server/tenure.lua's
                     TickPartnershipTenure re-checks all three of
                     HandlerPartnership/XPProgression/PartnershipTenureBonus
@@ -229,17 +228,16 @@
                     genuinely has no safe path to being opened at all --
                     just currently unused.
 
-    A NOTE ON Recall, specifically, because it is this resource's one
-    termination/escape-hatch path and this file's own "no unbounded trap"
-    review habit applies to it directly: Recall being `rawtoplevel` does
-    NOT make toggling it dangerous in the "traps someone" direction -- if
-    it was ON at boot (the shipped default), it stays reachable all session
-    regardless of what this file's override says, so a handler can always
-    call their K9 off. The risk this file actually guards against is the
-    OPPOSITE and much smaller one: an operator who deliberately shipped
-    Recall OFF and expects a runtime toggle to turn it on mid-session would
-    otherwise be told "done" while nothing changed. SetFeature refuses to
-    imply that -- see `configEditRequired` below.
+    THE ESCAPE-HATCH RULE THIS PART EXISTS FOR. A `rawtoplevel` feature
+    that was ON at boot stays reachable all session regardless of what an
+    override says, so a termination or escape-hatch path can never be
+    taken away from a player mid-session by a runtime toggle. The risk this
+    file guards against is the OPPOSITE and much smaller one: an operator
+    who shipped such a feature OFF and expects a runtime toggle to turn it
+    on mid-session would otherwise be told "done" while nothing changed.
+    SetFeature refuses to imply that -- see `configEditRequired` below.
+    (The recall feature this note was originally written about was removed
+    on 2026-09-02; the rule outlives it and applies to every escape hatch.)
 
     ======================================================================
     PART 1B -- TUNING. Config.Features.RuntimeFeatureControl.

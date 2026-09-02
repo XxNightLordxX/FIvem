@@ -690,7 +690,7 @@ local function newIntegrationFixture()
     Sandbox.loadInto('../server/admin.lua', env)           -- real IsAuthorizedAdmin
     Sandbox.loadInto('../server/permissions.lua', env)     -- real HasPermission / GrantPermission / RevokePermission
 
-    -- Register admin.lua's commands (k9auditcert etc.) -- gated on
+    -- Register admin.lua's commands (k9audit cert etc.) -- gated on
     -- Config.Features.AdminAuditCommands, already true above.
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
         handler('qbx_k9unit')
@@ -2368,7 +2368,7 @@ do
         t.equals(lastRevoke.message, 'You are not authorized to grant or revoke K9 permissions.')
     end)
 
-    t.test('k9permission: an unrecognized/missing subcommand prints this command\'s own usage string (admin.lua\'s k9auditsearch convention), reaching neither GrantPermission nor RevokePermission -- DESTRUCTIVE ACTIONS NEED AN EXPLICIT WORD, never contextual guessing', function()
+    t.test('k9permission: an unrecognized/missing subcommand prints this command\'s own usage string (admin.lua\'s k9audit search convention), reaching neither GrantPermission nor RevokePermission -- DESTRUCTIVE ACTIONS NEED AN EXPLICIT WORD, never contextual guessing', function()
         f.advanceTime(2000)
         f.commands.k9permission(hcSrc, {})
         local last = lastNotifyFor(f, hcSrc)
@@ -2650,7 +2650,7 @@ do
         t.notContains(last.message, 'not authorized', 'a k9.certify grant must let this officer past the eligibility gate (the actual revoke result -- "not actively certified" -- is a separate, expected outcome)')
     end)
 
-    t.test('resolution order STEP 1 (k9.audit): a bare grant lets a low-rank officer pass IsAuthorizedAdmin, reached via /k9auditcert', function()
+    t.test('resolution order STEP 1 (k9.audit): a bare grant lets a low-rank officer pass IsAuthorizedAdmin, reached via /k9audit cert', function()
         local granterSrc = f.registerPlayer(1005, 'STEP1-GRANTER3', { name = 'police', isboss = true, grade = { level = 0 } })
         local lowRankSrc = f.registerPlayer(1006, 'STEP1-AUDIT', { name = 'police', grade = { level = 0 } }) -- far below auditGrade 4
         f.env.GrantPermission(granterSrc, 'STEP1-AUDIT', 'k9.audit')

@@ -487,7 +487,7 @@
       EXPORT. Still deliberately not added here. No resource-global accessor
       this file could wrap exists — server/search.lua's own LogSearchAttempt
       remains `local`. server/admin.lua has since added its own direct,
-      ACE-gated `/k9auditsearch` SELECT against this table — so an absolute
+      ACE-gated `/k9audit search` SELECT against this table — so an absolute
       "nothing in this resource ever reads it back" framing is no longer
       true (check `sql/install.sql`'s own schema comment directly rather
       than assuming it needs the identical correction). That does not

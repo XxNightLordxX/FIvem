@@ -939,9 +939,6 @@
         cmdref_k9fetch_does: 'Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.',
         cmdref_k9fetch_needs: 'An active K9 certification to throw. Recalling or dropping is always available. Only one ball may be in play for you at a time. This feature must be turned on for your server.',
 
-        cmdref_k9recall_usage: '/k9recall',
-        cmdref_k9recall_does: 'Calls your K9 partner back from whatever it is doing (a bite hold, a takedown, a drag).',
-        cmdref_k9recall_needs: 'Nothing. This is deliberately never blocked, so you can always call your own K9 off. This feature must be turned on for your server.',
         cmdref_k9calmdown_usage: '/k9calmdown',
         cmdref_k9calmdown_does: 'Calms your K9 down, reducing fear and stress.',
         cmdref_k9calmdown_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server.',
@@ -958,40 +955,16 @@
         cmdref_k9drink_does: 'Gives your K9 water from your own carried supply, restoring Thirst.',
         cmdref_k9drink_needs: 'You must currently be controlling your K9, and be holding the item this server has configured for K9 water. This feature must be turned on for your server.',
 
-        cmdref_k9lineup_usage: '/k9lineup <server id> <server id> ...',
-        cmdref_k9lineup_does: 'Starts a scent line-up: invites several players to stand in a row so your K9 can pick the one real match out of them.',
-        cmdref_k9lineup_needs: 'An active K9 certification, and, on some servers, a specific grant for this feature. Needs at least the server\'s configured minimum number of participants. This feature must be turned on for your server.',
-        cmdref_k9lineuppick_usage: '/k9lineuppick <position number>',
-        cmdref_k9lineuppick_does: 'Makes your K9\'s one guess, once everyone invited has accepted.',
-        cmdref_k9lineuppick_needs: 'You must already be running a locked line-up (started with /k9lineup).',
-        cmdref_k9lineupcancel_usage: '/k9lineupcancel',
-        cmdref_k9lineupcancel_does: 'Leaves or cancels your current scent line-up, whether you started it or were invited.',
-        cmdref_k9lineupcancel_needs: 'Nothing -- always available, so nobody is ever stuck in a line-up.',
         cmdref_k9nosehunt_usage: '/k9nosehunt [stop]',
         cmdref_k9nosehunt_does: 'Starts a scent-trail hunt for your K9 (a follow-the-growl guessing game, no marker). Add "stop" to abandon a hunt already running.',
         cmdref_k9nosehunt_needs: 'An active K9 certification, and you must currently be controlling your K9 -- IF this feature were switched on. It is not: Scent Trail Hunt was removed from this server\'s configuration entirely (judged redundant with the scent-tracking action above), not merely toggled off, and there is currently no setting anywhere to bring it back. This also means "stop" is not available either -- neither form of this command currently does anything.',
 
-        cmdref_k9sarcall_usage: '/k9sarcall [stop]',
-        cmdref_k9sarcall_does: 'Starts a search-and-rescue call for your K9 to work (a missing person or lost property). Add "stop" to abandon a call already running.',
-        cmdref_k9sarcall_needs: 'An active K9 certification, and you must currently be controlling your K9. This feature must be turned on for your server. ("stop" is always available.)',
 
-        cmdref_k9training_usage: '/k9training <on|off>',
-        cmdref_k9training_does: 'Turns Training Mode on or off, for practice drills.',
-        cmdref_k9training_needs: 'An active K9 certification, you must currently be controlling your K9, and you must be standing in one of this server\'s configured training areas.',
-        cmdref_k9trainsearch_usage: '/k9trainsearch',
-        cmdref_k9trainsearch_does: 'Runs a practice search drill (no real consequences, just reps).',
-        cmdref_k9trainsearch_needs: 'Training Mode must already be switched on for you (see /k9training).',
-        cmdref_k9trainbite_usage: '/k9trainbite',
-        cmdref_k9trainbite_does: 'Runs a practice bite-hold drill.',
-        cmdref_k9trainbite_needs: 'Training Mode must already be switched on for you (see /k9training).',
         // k9train -- docs/history/COMMAND_CONSOLIDATION_SPEC.md #4's merged entry point.
         // does/usage from client/commandsuggestions.lua's own
         // PENDING_LOCALE_KEYS; needs mirrors k9training's own above (the
         // START half this command's gate documents -- turning off, unlike
         // turning on, is always available).
-        cmdref_k9train_usage: '/k9train',
-        cmdref_k9train_does: 'Turns Training Mode on or off (whichever it isn\'t right now). Use /k9train search or /k9train bite for a specific drill. Old names /k9training, /k9trainsearch and /k9trainbite still work too.',
-        cmdref_k9train_needs: 'An active K9 certification, you must currently be controlling your K9, and you must be standing in one of this server\'s configured training areas, to turn it ON. Turning it off is always available.',
 
         cmdref_k9stats_usage: '/k9stats [limit]',
         cmdref_k9stats_does: 'Shows the server\'s K9 XP leaderboard.',
@@ -1029,9 +1002,6 @@
         cmdref_k9audit_usage: '/k9audit <cert|partner|search|xp|dept>',
         cmdref_k9audit_does: 'Shows a K9 audit report. One command for all five: certifications, partnerships, searches, XP and department totals.',
         cmdref_k9audit_needs: 'High Command, the audit permission, or your department\'s audit rank. The Audit Trail feature must be turned on for your server.',
-        cmdref_k9announce_usage: '/k9announce',
-        cmdref_k9announce_does: 'Warns the person in front of you that a dog will be released if they do not comply.',
-        cmdref_k9announce_needs: 'K9 access. This feature has no on/off switch in this server\'s configuration at all right now -- it is unavailable on every install until server staff add one, not merely switched off.',
         cmdref_danger_warn_alert_usage: '/qbx_k9unit:dangerWarnAlert',
         cmdref_danger_warn_alert_does: 'Tells your partnered handler you have spotted trouble, with a rough direction and distance.',
         cmdref_danger_warn_alert_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
@@ -1579,7 +1549,7 @@
     // registers it, or that spec turns red.
     //
     // Each entry:
-    //   command    string   -- the exact RegisterCommand name, e.g. 'k9auditcert'
+    //   command    string   -- the exact RegisterCommand name, e.g. 'k9audit cert'
     //   category   string   -- a COMMAND_REFERENCE_CATEGORIES key, grouping by
     //                          WHAT THE PLAYER IS TRYING TO DO, never by which
     //                          file registers it

@@ -267,8 +267,8 @@ local HIDDEN_ALIAS_COMMANDS = {
 local COMMANDS_TAB_CLEANUP_COMPLETE = {
     -- audit = true, -- flip once html/tablet.js's COMMAND_REFERENCE (and
     -- its own DEFAULT_STRINGS/TABLET_STRING_KEYS/locales/en.json
-    -- three-way-contract siblings) no longer list k9auditcert/
-    -- k9auditpartner/k9auditsearch/k9auditxp/k9auditdept as their own
+    -- three-way-contract siblings) no longer list k9audit cert/
+    -- k9audit partner/k9audit search/k9audit xp/k9audit dept as their own
     -- separate entries.
 
     -- dog_record = true, set HONESTLY (not a placeholder): k9setdog/

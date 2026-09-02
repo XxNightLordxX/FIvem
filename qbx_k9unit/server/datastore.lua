@@ -698,7 +698,7 @@ function K9Store.Cert_GetActiveRecord(citizenid, job)
 end
 
 --- Mirrors the SafeQuery contract server/admin.lua's own
---- QueryCertificationHistory ('/k9auditcert') used (fixed here to actually
+--- QueryCertificationHistory ('/k9audit cert') used (fixed here to actually
 --- match it -- this function used to call MySQL.query.await un-pcalled,
 --- which would have thrown a raw Lua error out of a migrated call site
 --- where the original always degraded to zero rows; see this file's own
@@ -731,7 +731,7 @@ function K9Store.Cert_GetHistory(citizenid, limit)
 end
 
 --- Mirrors the SafeQuery contract server/admin.lua's own
---- QueryDepartmentRoster ('/k9auditdept') used -- CURRENT roster only. See
+--- QueryDepartmentRoster ('/k9audit dept') used -- CURRENT roster only. See
 --- Cert_GetHistory's own doc comment immediately above for why this needs
 --- the pcall wrap (same fix, same reasoning).
 --- @return table rows -- always a table, empty on failure
@@ -1468,7 +1468,7 @@ function K9Store.XP_GetTop(limit)
 end
 
 --- Mirrors the SafeQuery contract server/admin.lua's own
---- QueryProgressionSnapshot ('/k9auditxp') uses -- an array of 0 or 1 rows.
+--- QueryProgressionSnapshot ('/k9audit xp') uses -- an array of 0 or 1 rows.
 function K9Store.XP_GetSnapshotRows(citizenid)
     if DatabaseEnabled('k9_progression') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT xp, updated_at FROM k9_progression WHERE citizenid = ? LIMIT 1', { citizenid })
@@ -1693,7 +1693,7 @@ local function SearchLogColumns(row)
 end
 
 --- Mirrors the SafeQuery contract server/admin.lua's SafeQuery uses.
---- Replaces QuerySearchLogByOfficer ('/k9auditsearch officer').
+--- Replaces QuerySearchLogByOfficer ('/k9audit search officer').
 function K9Store.SearchLog_GetByOfficer(citizenid, limit)
     limit = SanitizeLimit(limit)
     if DatabaseEnabled('k9_search_log') then
@@ -1715,7 +1715,7 @@ function K9Store.SearchLog_GetByOfficer(citizenid, limit)
     return out
 end
 
---- Replaces QuerySearchLogByPlate ('/k9auditsearch plate').
+--- Replaces QuerySearchLogByPlate ('/k9audit search plate').
 function K9Store.SearchLog_GetByPlate(plate, limit)
     limit = SanitizeLimit(limit)
     if DatabaseEnabled('k9_search_log') then
@@ -1737,7 +1737,7 @@ function K9Store.SearchLog_GetByPlate(plate, limit)
     return out
 end
 
---- Replaces QuerySearchLogByPerson ('/k9auditsearch person').
+--- Replaces QuerySearchLogByPerson ('/k9audit search person').
 function K9Store.SearchLog_GetByPerson(citizenid, limit)
     limit = SanitizeLimit(limit)
     if DatabaseEnabled('k9_search_log') then
@@ -1759,7 +1759,7 @@ function K9Store.SearchLog_GetByPerson(citizenid, limit)
     return out
 end
 
---- Replaces QuerySearchLogRecent ('/k9auditsearch recent') -- ordered by
+--- Replaces QuerySearchLogRecent ('/k9audit search recent') -- ordered by
 --- `id DESC`, not `searched_at`, matching the real query exactly (see
 --- that function's own doc comment for why).
 function K9Store.SearchLog_GetRecent(limit)

@@ -2437,7 +2437,7 @@ if type(RegisterCommand) == 'function' then
     -- shape/type the way the online/offline certification pairs infer
     -- online-vs-offline. An unrecognized/missing subcommand prints this
     -- command's own usage string, reusing admin.lua's own
-    -- k9auditsearch/k9auditxp convention verbatim (`if source == 0 then
+    -- k9audit search/k9audit xp convention verbatim (`if source == 0 then
     -- print(...) else NotifyPlayer(...) end`) rather than inventing a new
     -- one.
     RegisterCommand('k9permission', function(source, args)

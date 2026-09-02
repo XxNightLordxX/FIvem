@@ -304,7 +304,7 @@ K9, opening `/k9tablet`, reading its Help tab, and using every
 single-player ability (search, tracking, vision, wellbeing, the radial
 menu, and so on).
 
-**Four features are built around two separate people and cannot be
+**Two features are built around two separate people and cannot be
 exercised alone, on purpose — nothing is broken if they do nothing while
 you are the only one connected:**
 
@@ -312,21 +312,8 @@ you are the only one connected:**
   player to accept. With nobody else on the server (or nobody close
   enough), the game says so plainly: "No nearby player to leash to." /
   "No nearby player to partner with."
-- **Handler-Down Defense** only ever fires when a K9's own *partnered
-  handler* is actually attacked. With no partner, there is nothing to
-  attack — pressing its key by yourself correctly reports "No active
-  handler-down alert." That means exactly what it says, not that
-  anything is broken.
-- **Scent Lineup** (`/k9lineup`) needs at least two other connected
-  players, and you name them explicitly — it is not proximity-based.
-  The command takes their server IDs (`/k9lineup 12 47`), each of whom
-  then gets an invite to accept, with a 30-second window. Running it
-  bare by yourself shows the usage line, not a "not enough players"
-  error: "Usage: /k9lineup <serverId1> <serverId2> ...> (2-6 other
-  players)". You only see "A lineup needs at least 2 other player(s)."
-  if you supply too few IDs.
 
-None of the four above will ever work with only one person connected, no
+Neither will ever work with only one person connected, no
 matter how the server is configured. To actually try them, bring in a
 second account, a friend, or your first real recruit — everything else
 above is safe to check solo first.
@@ -372,20 +359,9 @@ Work through all of these first:
   `Config.CommandTablet.openMode` to `'item'` or `'both'` (default is
   `'both'`, so you need it either way unless you change that).
 
-  **`k9_food` and `k9_water` are the two most important ones on that
-  list**, and they were missing from it until now. The hunger and thirst
-  system (`Config.Features.HungerThirstSystem`) ships **on**, and those
-  two are the only way to feed or water a K9 — the supply shop does not
-  sell them and nothing else grants them. Skip them and your K9 gets
-  hungry and thirsty forever, takes the movement-speed penalty that comes
-  with it, and sees "You do not have any dog food." every time they try
-  `/k9eat` — which reads as "go buy some", not "the server owner never
-  created this item." Either create both items, or turn
-  `Config.Features.HungerThirstSystem` off until you have.
-- **One of the confirmed-real rest/bowl props** (`Config.Wellbeing.Fatigue
-  .restSources` / `Config.Wellbeing.Thirst.bowlSources` in `config.lua`),
-  placed somewhere on your map, if you want the K9 wellbeing system's
-  faster near-a-rest-source recovery or the "Drink from Bowl" ox_target
+- **One of the confirmed-real rest props** (`Config.Wellbeing.Fatigue
+  .restSources` in `config.lua`), placed somewhere on your map, if you
+  want the K9 wellbeing system's faster near-a-rest-source recovery
   option. These used to ship a single unverified guess (`'water_bowl'`,
   which turned out not to exist); that's since been replaced with props
   confirmed real against the game's own object list. The three dog-bowl
@@ -429,32 +405,24 @@ place on a live server.
 
 ### `CertificationExpiry` and `CameraFeedPiP` — the two flags whose names need a word of explanation
 
-**Four features ship switched off, and each one is a policy call rather
-than a default.** They are `CertificationExpiry`, `DiscordWebhook`,
-`DangerWarn` and `ApprehensionAnnouncement`. Nothing is wrong with any
-of them; each just decides something about how your server runs that
-you should decide on purpose rather than inherit.
+**One feature ships switched off**, and it is a policy call rather than a
+default: `DiscordWebhook`. Nothing is wrong with it; it just decides
+something about how your server runs that you should decide on purpose
+rather than inherit.
 
-- **`CertificationExpiry`** — turning it on is *not* destructive. Every
-  certification that already exists keeps no expiry date, ever, unless a
-  certifier explicitly renews it; only new grants and renewals get one.
-  It is off because starting a recertification schedule at all is worth
-  choosing deliberately.
 - **`DiscordWebhook`** — off because it needs a webhook address from you
   before it can do anything, and because sending your server's activity
   to an outside service is your call to make.
-- **`DangerWarn`** — lets a K9 signal its handler that something is
-  wrong. Off pending your own review of how it fits your roleplay.
-- **`ApprehensionAnnouncement`** — requires a warning before a dog can
-  be released on somebody. See the note further down.
 
-Remember that a feature switch lives in **two** places: `Config.Features`
-and `Config.FeatureGroups`. If they disagree, the second one silently
-wins — so turn a feature on in both. The resource prints a plain-English
-warning at startup naming any pair that disagrees.
+**A feature has exactly ONE switch**: its entry in `Config.Features`.
+`Config.FeatureGroups` is a separate, one-way master cut-off per capability
+family — setting a family's `enabled` to `false` forces everything in it off
+and says so by name in the server console, while `true` changes nothing. It
+can never quietly disagree with the switch you set.
 
-*This section used to say `CertificationExpiry` was the only feature
-shipping off, and never mentioned `DangerWarn` at all.*
+*This used to be two switches that had to agree, with the second silently
+winning. That is what left the handler rank ladder dead while `config.lua`
+said it was on. Collapsed to one on 2026-09-02.*
 
 **`CameraFeedPiP` ships on, but its name overpromises.** A true
 picture-in-picture — two live camera views on screen at once — isn't
@@ -753,35 +721,6 @@ a stopgap only.
   already-earned milestone bonus a second time. It cannot be farmed
   repeatedly, and it takes a restart landing at exactly the wrong
   moment — but it is a real, narrow gap, not a fully closed one.
-- **A player can repeatedly frighten someone else's K9** by faking a
-  "gunfire nearby" signal, forcing that K9 to refuse Bite & Hold/
-  Takedown for about a minute at a time (`FearStressSystem`, on by
-  default) — at no cost to the player doing it, and repeatably. This
-  has been narrowed (a single episode can't last forever, and resets
-  after roughly 64 seconds), but the repeatable part can't be closed in
-  code — there is no way to verify who actually fired a gun. It's a
-  policy call about the kind of server you want, not a bug.
-- **Apprehension Announcement (`/k9announce`) ships switched off, and
-  that is a choice you get to make.** Requiring a warning before a dog
-  can be released is a decision about how use of force works on your
-  server, not a safety default, so it is off until you say otherwise.
-  Set `Config.Features.ApprehensionAnnouncement` to `true` — and its
-  matching entry under `Config.FeatureGroups.Combat`, because a feature
-  switch lives in two places here and the second one silently wins if
-  they disagree. `Config.Combat.ApprehensionAnnouncement` holds the
-  three numbers you can tune (how close you must be, how long the
-  warning lasts, how often it can be given); leaving that table alone
-  keeps the sensible defaults.
-
-  *This entry used to say the opposite — that the feature was fully
-  built but impossible to enable, because its switch had never existed.
-  That was true, and was fixed on 2026-08-27 when the switch and its
-  tuning table were added. The note is corrected here rather than
-  deleted, because if you read the old version you were told to go and
-  ask a developer for something you can now do yourself in two lines.*
-
----
-
 ## Decisions that need you, not more code
 
 Three things on this server today are switched on and working as
@@ -797,12 +736,7 @@ development:
    production" above. Run that test yourself, accept the risk as-is, or
    turn `BiteAndHold`/`NonLethalTakedown`/`PropDragging` off until it's
    been done.
-2. **Is the fear/stress griefing tradeoff acceptable for your
-   players?** See the repeatable-frightening limitation just above.
-   Leave `FearStressSystem` on for the emergent chaos, turn it off, or
-   ask for its cooldowns to be tightened — it can't be made airtight,
-   only slower to repeat.
-3. **Do you actually need QBCore or ESX support?** Auto-detection
+2. **Do you actually need QBCore or ESX support?** Auto-detection
    genuinely works for inventory and targeting. It does not work for
    your core framework: adapters for qb-core/ESX exist in the code, but
    only one file in the whole resource actually uses them — everything

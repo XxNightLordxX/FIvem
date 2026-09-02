@@ -1339,7 +1339,6 @@ local COMBAT_REJECT_MESSAGES = {
     -- mapping in" discipline -- tier_capability_denied's own history above
     -- names why), so this table never risks referencing a key that does not
     -- exist yet.
-    not_warned = locale('combat.not_warned'),
     -- EXCLUSIVE BODY-CLAIM REGISTRY denial (server/bodyclaims.lua, this
     -- pass — see ValidateCombatRequest's own call site for the full
     -- writeup). Kept as an explicit mapping here, same "a reader of this
@@ -1929,46 +1928,6 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'not_eligible_target'
     end
 
-    -- APPREHENSION ANNOUNCEMENT GATE (this pass -- WIRING FIX). See this
-    -- file's own header FILE-TO-FILE CONTRACT entry for IsApprehensionWarned
-    -- for the full "was defined, tested, and called by nothing" writeup this
-    -- closes. the removed apprehension-announcement server file's own header, points 4-6, is the design
-    -- authority this implements:
-    --   - BiteAndHold/NonLethalTakedown ONLY, via the SAME featureKey guard
-    --     TierCapabilityPermits above already uses for an identical
-    --     distinction. PropDragging is deliberately EXCLUDED: a drag target
-    --     must already be downed (opts.requireAlive == false, PropDragging's
-    --     own precondition) -- pulling an already-subdued person is not a
-    --     fresh use-of-force decision a verbal warning is meant to precede,
-    --     and folding it in here would silently widen what the removed apprehension-announcement server file's
-    --     own header calls a purely restrictive, apprehension-specific check
-    --     into a mechanic its design was never scoped to cover.
-    --   - PLACED LAST, deliberately, not alongside the early TierCapabilityPermits
-    --     floor above: every other reason to refuse THIS target (invalid,
-    --     dead, vehicle-seated, too far, already held, not wanted-eligible)
-    --     is checked first, so "you forgot to warn them" is only ever the
-    --     reported reason once every other fact about the target would
-    --     otherwise have allowed the request -- telling someone to go warn a
-    --     target that was never going to be a legal one anyway would teach
-    --     the wrong lesson.
-    --   - Soft dependency (`type(IsApprehensionWarned) == 'function'`), same
-    --     convention as IsHesitating/IsDistracted above -- an absent
-    --     the removed apprehension-announcement server file is "no restriction," never an error.
-    --   - REQUEST-TIME ONLY, exactly like every other check in this
-    --     function (see this function's own doc comment) -- ValidateCombatRequest
-    --     is only ever called to OPEN a hold, never from EndHold,
-    --     EndActiveEffectForHolder, the maintenance expiry sweep, or
-    --     releaseBiteHold/releaseTakedown. A warning window that lapses
-    --     WHILE a hold is already open can therefore never strand that hold
-    --     or block releasing it -- this is the gate-the-start-never-the-stop
-    --     rule this resource has shipped violations of before, and the
-    --     control this pass's own tests/combat_spec.lua tests are built
-    --     specifically to pin.
-    if (featureKey == 'BiteAndHold' or featureKey == 'NonLethalTakedown')
-        and type(IsApprehensionWarned) == 'function'
-        and not IsApprehensionWarned(targetNetId) then
-        return false, nil, nil, nil, nil, 'not_warned'
-    end
 
     -- EXCLUSIVE BODY-CLAIM REGISTRY (server/bodyclaims.lua, this pass) --
     -- a PLAYER target already resting inside a kennel (attached to it,
