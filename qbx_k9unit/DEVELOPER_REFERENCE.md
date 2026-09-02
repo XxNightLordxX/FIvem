@@ -3043,6 +3043,39 @@ change a value, change the reasoning here too.
 
 ---
 
+### `Config.Tracking.ScentVision.palette`
+
+One fixed, curated swatch per `maxVisibleTrails` slot, rather than a hash into
+an arbitrarily large colour space. Chosen for maximum hue and lightness
+separation at a glance -- NOT a rigorous colour-vision-deficiency-optimised
+set, which would need its own pass if that guarantee is ever wanted.
+
+Colour is assigned DETERMINISTICALLY from the trail owner's own durable
+citizenid (a stable hash into this array), not from a per-observer
+first-come slot the way it originally was. The owner asked for this directly:
+"hold a colour stable... the same person is the same colour... for every
+handler looking." It is stronger than the old behaviour in that the same
+person is now the same colour to every observer and across sessions, and
+weaker in one: two people can hash to the same slot, where first-come
+assignment guaranteed distinctness among however many trails were visible at
+once. That trade was the point of the request.
+
+### Keybind defaults, and the collision that shipped
+
+`Config.Tracking.ScentVision.keybind` defaults to `'Z'`, not `'B'`. A first
+pass shipped `'B'` without noticing that the bite-and-hold toggle further down
+the same file also defaults to `'B'` -- a real, ship-blocking collision found
+while wiring the tablet's Commands page.
+
+The reason the file's own header claimed every default had been checked, and
+was still wrong, is worth remembering: that check only ever looked at LITERAL
+keys typed directly into a `RegisterKeyMapping(...)` call, which are
+grep-visible. A config-driven default like this one is not. A config value has
+to be RESOLVED, not grepped, to know what key it actually is.
+
+Every `RegisterKeyMapping` default across the resource was then re-checked by
+reading its resolved value rather than its call site.
+
 ### `Config.ScentVision` -- which edits need a restart, and which do not
 
 Server-side, every field here is read fresh at the point of use rather than

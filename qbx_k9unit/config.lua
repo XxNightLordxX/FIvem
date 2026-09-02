@@ -2673,78 +2673,24 @@ Config.Tracking = {
         -- clamp-and-warn promise every other setting in this file makes.
         mode = 'keybind',
 
-        -- KEYBIND (client/keybinds.lua). A DEFAULT only, per this
-        -- resource's standing RegisterKeyMapping convention -- a player who
-        -- rebinds this in Settings keeps their own choice across a config
-        -- edit or a resource update.
+        -- KEYBIND. A DEFAULT only -- a player who rebinds this in their own
+        -- FiveM Settings keeps their choice across a config edit or an
+        -- update.
         --
-        -- 'Z' -- NOT 'B'. A first pass shipped 'B' here without checking
-        -- that Config.Combat.BiteAndHold.toggleKeybind (further down this
-        -- same file) ALSO defaults to 'B' -- a real, ship-blocking
-        -- collision found by the coordinator while wiring the tablet's
-        -- Commands page entry for this command, not caught by this file's
-        -- own header claim of having checked every existing
-        -- RegisterKeyMapping default: that check only ever looked at
-        -- LITERAL keys typed directly into a RegisterKeyMapping(...) call
-        -- (grep-visible), never at a config-driven default like this one or
-        -- BiteAndHold's own -- a config value has to be resolved, not
-        -- grepped, to know what key it actually is. VERIFIED THIS TIME by
-        -- reading the RESOLVED VALUE (not just the call site) of every
-        -- RegisterKeyMapping default across this whole resource: 'X' (vault,
-        -- client/agility.lua), 'N' (pursuit sprint, client/pursuitsprint.lua),
-        -- 'L' (camera, client/movement.lua), 'H' (camera feed,
-        -- Config.CameraFeed.toggleKey above), 'K'/'J' (thermal/night vision,
-        -- Config.Vision.Thermal/.Night.toggleKey above), 'G' (handler-down
-        -- confirm), 'V'/
-        -- 'C'/'U' (sit/bark/recall, literals in client/keybinds.lua), 'B'
-        -- (BiteAndHold.toggleKeybind, below), 'T' (NonLethalTakedown.keybind,
-        -- below), 'Y' (PropDragging.toggleKeybind, below). 'Z' is not among
-        -- them. If this file's own set of RegisterKeyMapping defaults grows
-        -- again, re-verify by resolving every config-driven default's real
-        -- value, not by grepping for literal single-quoted keys alone.
-        --
-        -- IF THIS CHANGES AGAIN: html/tablet.js's Commands page entry for
-        -- `/k9scentvision` hardcodes `defaultKeybind: 'Z'` to match -- update
-        -- both together, or the tablet teaches players the wrong key, which
-        -- is worse than not mentioning one at all.
+        -- IF YOU CHANGE IT: check it does not collide with another default
+        -- in this file. Reading the RegisterKeyMapping calls is not enough,
+        -- because several defaults live in config values rather than in the
+        -- call -- a collision shipped here once for exactly that reason.
+        -- The resolved defaults in use are listed in
+        -- DEVELOPER_REFERENCE.md §22.
         keybind = 'Z',
 
-        -- One fixed, curated swatch per `maxVisibleTrails` slot -- NOT a
-        -- hash into an arbitrarily large colour space. Chosen for maximum
-        -- hue/lightness separation at a glance, not a rigorous
-        -- colour-vision-deficiency-optimised set -- flagged for a
-        -- coder-ui/native-api-assistant pass if that guarantee is ever
-        -- needed.
-        --
-        -- UPDATE (owner-directed follow-up, 2026-08-26 -- "hold a colour
-        -- stable... the same person is the same colour... for every handler
-        -- looking"): colour is now assigned DETERMINISTICALLY from the
-        -- trail owner's own durable citizenid (a stable hash into this same
-        -- array), not from a per-observer "first-come" slot the way it used
-        -- to be -- see server/tracking.lua's own HashStringToIndex/
-        -- ResolveScentVisionColors for the resolution. This is STRONGER
-        -- than before in one way (the SAME person is now the SAME colour
-        -- for every handler watching, and across the whole session, not
-        -- just "stable for as long as one handler keeps them in view") and
-        -- WEAKER in another, disclosed honestly rather than silently
-        -- swapped: the OLD per-observer-slot scheme made a colour collision
-        -- between two people SIMULTANEOUSLY shown to the same K9
-        -- structurally impossible as long as this array was at least
-        -- `maxVisibleTrails` long (each slot got its own untouched swatch).
-        -- The NEW hash-based scheme cannot promise that -- two different
-        -- citizenids can hash to the same swatch and, if both happen to be
-        -- in range of the same K9 at once, show the SAME colour even though
-        -- there are only a "handful" of them and plenty of unused swatches
-        -- below. This is the SAME "colours repeat once there are more
-        -- distinct people than swatches" limitation `maxVisibleTrails`'s
-        -- own comment above already discloses for this feature, just
-        -- arriving via a hash collision instead of literally running out of
-        -- slots -- accepted for the same reason: telling two trails apart
-        -- most of the time, with a real handful-sized palette, is the
-        -- actual ask, not a cryptographic no-collision guarantee. More
-        -- entries below lowers the odds of that coincidence; it can never
-        -- fully remove it once hashing (rather than slot order) decides the
-        -- colour.
+        -- One colour per visible trail. A person's colour is derived from
+        -- their own citizenid, so the same person looks the same to every
+        -- handler and across sessions -- at the cost that two people can
+        -- occasionally draw the same colour. Chosen for separation at a
+        -- glance, not tested for colour blindness. See
+        -- DEVELOPER_REFERENCE.md §22.
         palette = {
             { r = 230, g = 25,  b = 75  }, -- red
             { r = 60,  g = 180, b = 75  }, -- green
