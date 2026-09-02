@@ -5,28 +5,27 @@
     Owns the "K9 partnership" registry -- a persistent, DB-backed,
     mutually-consented "who is my ongoing handler/K9 partner" relationship,
     independent of momentary leash state (server/main.lua's `LeashPairs`).
-    This file was originally a FOUNDATION ONLY: it established/persisted/
-    tore down a partnership and exposed read accessors, wiring no combat
-    consequence of its own. At that point `BiteAndHold`'s Recall actor and
-    `HandlerDownDefense` (the two features DEVELOPER_REFERENCE.md §12.0 item 7
-    names as blocked on this file existing) were explicitly OUT OF SCOPE
-    and unimplemented. Both are now built and consuming this file's
-    accessors for real: the removed recall server file's Recall actor and
-    the removed handler-down-defense server file's HandlerDownDefense trigger both call
-    GetActivePartnerCitizenId directly (confirmed by direct read of both
-    files) -- see "FUTURE CONSUMERS" below, and each accessor's own doc
-    comment, for the exact current wiring.
+    This file was originally a FOUNDATION ONLY: it established, persisted
+    and tore down a partnership and exposed read accessors, wiring no combat
+    consequence of its own. The two features it was built to unblock -- the
+    recall actor and the handler-down defense -- were both built, then
+    REMOVED on 2026-09-02 at the owner's request.
+
+    The registry outlived them, and is load-bearing today: server/tenure.lua
+    reads it for the partnership tenure bonus, and the tablet reads it to
+    show who is partnered with whom. See each accessor's own doc comment for
+    the current wiring.
 
     ======================================================================
     WHY OPTION B (THIS FILE), NOT LeashPairs -- one-paragraph restatement,
     full reasoning in DEVELOPER_REFERENCE.md §12.0 item 7: `LeashPairs` is
     explicitly ephemeral, session-scoped state for a movement-restriction
     mechanic (server/main.lua's own header: "a live session mechanic, not
-    part of the certification/permission system"). `HandlerDownDefense`'s
-    own motivating scenario is an off-leash foot chase -- the pair is
-    DELIBERATELY unleashed at exactly the moment a defense trigger would
-    matter most -- so reusing `LeashPairs` would leave that feature
-    non-functional for its own primary use case. This registry exists
+    part of the certification/permission system"). The motivating scenario
+    was an off-leash foot chase -- the pair is DELIBERATELY unleashed at
+    exactly the moment a defense trigger would matter most -- so reusing
+    `LeashPairs` would have left that feature non-functional for its own
+    primary use case. This registry exists
     specifically to answer "who is this K9's handler right now" at moments
     `LeashPairs` cannot, including across a resource restart (no leash's own
     game state could ever hint at reconstructing a partnership the way it
@@ -143,33 +142,24 @@
     staleness, not a new one invented here.
 
     ======================================================================
-    FUTURE CONSUMERS, AS ORIGINALLY WRITTEN (both explicitly OUT OF SCOPE
-    for this file at the time this section was written -- read
-    DEVELOPER_REFERENCE.md §12.0 item 7's "Consumers, made concrete" block for
-    the original design). Both are now LANDED -- see
-    GetActivePartnerCitizenId's and IsActivePartnerOf's own doc comments
-    below for exactly how each is consumed today, which diverges in one
-    place from the plan below (Recall derives its target directly via
-    GetActivePartnerCitizenId rather than validating an alleged partner
-    through IsActivePartnerOf):
-    - BiteAndHold's Recall actor should call
-        IsActivePartnerOf(recallerCitizenid, heldK9Citizenid)
-      which returns exactly the boolean expression DEVELOPER_REFERENCE.md §12.0
-      item 7 specifies (`Partnerships[recallerCitizenid].active and
-      Partnerships[recallerCitizenid].partner == heldK9Citizenid`) via a
-      safe accessor rather than reaching into `Partnerships` directly --
-      that table is `local` to this file, mirroring
-      server/certifications/'s own `Certifications` table (never
-      exposed raw; always go through an accessor function).
-    - HandlerDownDefense's trigger should call
-        GetActivePartnerCitizenId(handlerCitizenid)
-      which returns `(partnerCitizenid, isK9)` or `(nil, nil)` if no active
-      partnership exists for that citizenid -- a silent no-op per
-      DEVELOPER_REFERENCE.md §12.0 item 7's own "never partnered, or partnership
-      broken: silent no-op" framing. The caller is still responsible for
-      separately checking the resolved K9 citizenid is CURRENTLY ONLINE
-      (e.g. via exports.qbx_core:GetPlayerByCitizenId) before notifying --
-      this file only answers "who," never "are they online right now."
+    HOW TO CONSUME THIS REGISTRY. Never reach into `Partnerships` directly
+    -- it is `local` to this file, mirroring the certification system's own
+    `Certifications` table. Two accessors:
+
+    - `IsActivePartnerOf(citizenidA, citizenidB)` -- the boolean "are these
+      two actively partnered", for validating an ALLEGED partner.
+    - `GetActivePartnerCitizenId(citizenid)` -- returns
+      `(partnerCitizenid, isK9)`, or `(nil, nil)` when no active partnership
+      exists, for deriving a target directly. The caller is still
+      responsible for separately checking that citizenid is CURRENTLY
+      ONLINE before notifying: this file answers "who", never "are they
+      online right now".
+
+    The two features this section was originally written for -- the
+    bite-and-hold recall actor and the handler-down defense trigger -- were
+    both built against these accessors and then removed on 2026-09-02. The
+    accessors are unchanged and still in use by server/tenure.lua and the
+    tablet.
     ======================================================================
 
     EVENT/CALLBACK CONTRACT:
@@ -634,11 +624,9 @@ function RefreshPartnershipCache(citizenid)
 end
 
 --- Read-only accessor over the `local` `Partnerships` cache -- see
---- "FUTURE CONSUMERS" in this file's header for the originally-intended
---- caller. LANDED: both the removed handler-down-defense server file's HandlerDownDefense trigger
---- and the removed recall server file's Recall actor now call this directly (confirmed
---- by direct read of both files), each behind their own
---- `type(GetActivePartnerCitizenId) == 'function'` runtime guard.
+--- "HOW TO CONSUME THIS REGISTRY" in this file's header. Callers reach it
+--- behind a `type(GetActivePartnerCitizenId) == 'function'` runtime guard,
+--- never a load-order assumption.
 --- @param citizenid string
 --- @return string? partnerCitizenid
 --- @return boolean? isK9
@@ -650,7 +638,7 @@ end
 
 --- Read-only accessor over the `local` `Partnerships` cache, expressing
 --- exactly the boolean check DEVELOPER_REFERENCE.md §12.0 item 7 specifies for
---- BiteAndHold's Recall actor -- see "FUTURE CONSUMERS" in this file's
+--- See "HOW TO CONSUME THIS REGISTRY" in this file's
 --- header for the originally-intended caller. STILL not called that way:
 --- the removed recall server file (confirmed by direct read) never takes an
 --- "alleged partner" from anywhere to validate against this function --
@@ -1648,9 +1636,9 @@ end)
 -- players are already online, nobody re-fires that event for them, so
 -- their partnership cache entry would sit empty (= "no active partnership
 -- known") until their next reconnect -- a genuinely-partnered pair could
--- silently see BiteAndHold's Recall / HandlerDownDefense's trigger (once
--- either is built) treat them as unpartnered for the remainder of their
--- session. GetPlayers() returns connected player ids as strings; tonumber'd
+-- silently be treated as unpartnered by every reader of this cache for the
+-- remainder of their session.
+-- GetPlayers() returns connected player ids as strings; tonumber'd
 -- below, same pattern as server/main.lua's own loop.
 --
 -- CONFIDENCE NOTE: uses 'QBCore:Server:PlayerLoaded' below with the SAME
@@ -1667,8 +1655,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- server where the flag has never been enabled this loop was doing a
     -- real MySQL.single.await per connected player (RefreshPartnershipCache)
     -- to warm a cache that no code path can ever populate with a real row
-    -- and that HandlerDownDefense/Recall (its only in-resource readers,
-    -- each independently flag-gated) cannot be online to consume anyway.
+    -- and that nothing can be online to consume anyway.
     -- Gated here the same way the creation path already is.
     --
     -- KNOWN TRADE-OFF, disclosed rather than silently accepted: this cache
@@ -1699,7 +1686,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- against a foreign `k9_partnerships` the full probe would correctly
     -- reject as a collision, during the one window before that probe's own
     -- yielding query has returned -- merging a stranger's rows straight
-    -- into a live partnership cache that gates HandlerDownDefense/Recall.
+    -- into a live partnership cache that other features read as truth.
     -- On a `false` return (the probe genuinely had not settled within the
     -- wait budget), this loop skips every citizenid below rather than trust
     -- an unconfirmed database state -- their cache entry simply stays

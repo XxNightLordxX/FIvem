@@ -10,7 +10,7 @@
     PHASE 3 ADDITION (this pass, coder-architect): also owns
     `PropDragging` (DEVELOPER_REFERENCE.md §12.5.4, §12.0 item 6's downed-check
     contract, §12.0 item 8's "mixed Category A/B" split for this
-    specific mechanic). `HandlerDownDefense` remains OUT OF SCOPE for this
+    specific mechanic). The handler-down defense remained OUT OF SCOPE for this
     file — still blocked on `server/partnership.lua` (§12.0 item 7) not
     existing yet, see config.lua's own Config.Combat header comment.
     PropDragging reuses this file's existing `ActiveHolds`/`K9ActiveEffect`/
@@ -356,9 +356,12 @@
       header names THIS file's request-validation path as "THE genuine new
       cross-file dependency" it added these two accessors for — see
       ValidateCombatRequest below for the actual call site. A K9 whose own
-      character is currently hesitating (FearStress) or distracted cannot
-      have a bite-hold/takedown request granted; this is a check on the
-      REQUESTING K9's own wellbeing state, never the target's.
+      character was in one of those states could not have a bite-hold or
+      takedown request granted -- a check on the REQUESTING K9's own
+      wellbeing state, never the target's. Both accessors were removed with
+      their subsystems on 2026-09-02; the guarded-call convention they
+      demonstrate is still how every optional cross-file dependency here
+      works.
       SECURITY (coder-security, config-audit follow-up pass — see
       ValidateCombatRequest's own inline comment below and
       server/wellbeing.lua's IsHesitating doc comment for the full
@@ -386,30 +389,6 @@
       .takedownSuccess (config.lua) are the two award keys this file owns;
       searchContrabandFound/trackSourceResolved belong to
       server/search.lua/server/tracking.lua respectively, not here.
-    - Calls IsApprehensionWarned(targetNetId), resource-global from
-      the removed apprehension-announcement server file, ONLY IF IT EXISTS (same runtime-existence-guard
-      convention as IsHesitating/IsDistracted immediately above — an absent
-      the removed apprehension-announcement server file, or one that failed to load, must mean "no
-      restriction," never an error; this matches IsApprehensionWarned's own
-      documented behavior of being fully permissive whenever
-      Config.Features.ApprehensionAnnouncement is false, so a genuinely
-      absent function and a present-but-disabled one both degrade the same
-      way). WIRED THIS PASS — see ValidateCombatRequest's own inline comment,
-      immediately before its final `return true`, for the actual call site.
-      the removed apprehension-announcement server file's own header (points 4-6) is the authority for
-      this feature's design; this file's ONLY job is to consult it at
-      REQUEST time, for BiteAndHold/NonLethalTakedown alone (see that call
-      site's own comment for why PropDragging is excluded) — never from
-      EndHold, EndActiveEffectForHolder, the maintenance expiry sweep, or
-      releaseBiteHold/releaseTakedown/releaseDrag, so a warning window
-      lapsing mid-hold can never strand an already-open hold or block a
-      release. BEFORE THIS PASS: IsApprehensionWarned existed, was fully
-      tested in isolation (the removed apprehension-announcement spec), and was called by
-      NOTHING — turning Config.Features.ApprehensionAnnouncement on had zero
-      effect on whether a bite/takedown actually succeeded. Found and fixed
-      this pass, reported upstream as a real user-facing gap (an owner who
-      enabled the feature believing it was enforced was not being told the
-      truth).
     - Loaded in fxmanifest.lua's server_scripts after cooldowns.lua,
       entities.lua, and certifications.lua (all three are load-time
       dependencies of this file). No ordering dependency on
